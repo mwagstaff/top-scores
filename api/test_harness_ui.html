@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Match Simulator - Test Harness</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .subtitle {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: #667eea;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #555;
+            font-size: 0.9rem;
+        }
+
+        input, select {
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin-top: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+        }
+
+        .checkbox-group label {
+            margin: 0;
+            cursor: pointer;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-danger {
+            background: #e74c3c;
+        }
+
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+
+        .btn-success {
+            background: #27ae60;
+        }
+
+        .btn-success:hover {
+            background: #229954;
+        }
+
+        .btn-warning {
+            background: #f39c12;
+        }
+
+        .btn-warning:hover {
+            background: #d68910;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .scoreboard {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .scoreboard .teams {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            margin: 20px 0;
+        }
+
+        .scoreboard .team {
+            flex: 1;
+        }
+
+        .scoreboard .team-name {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .scoreboard .score {
+            font-size: 4rem;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .scoreboard .separator {
+            font-size: 3rem;
+            opacity: 0.5;
+        }
+
+        .scoreboard .status {
+            font-size: 1.2rem;
+            background: rgba(255,255,255,0.2);
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            margin-top: 15px;
+        }
+
+        .scoreboard .status.live {
+            background: #e74c3c;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .match-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .match-info p {
+            margin: 5px 0;
+            color: #666;
+        }
+
+        .events-timeline {
+            margin-top: 16px;
+            padding: 0 4px;
+        }
+
+        .events-timeline-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #999;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+
+        .event-row {
+            display: grid;
+            grid-template-columns: 1fr 60px 1fr;
+            align-items: center;
+            min-height: 26px;
+            margin-bottom: 4px;
+            font-size: 0.8rem;
+            gap: 4px;
+        }
+
+        .event-home {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            justify-content: flex-end;
+            text-align: right;
+        }
+
+        .event-away {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            justify-content: flex-start;
+            text-align: left;
+        }
+
+        .event-minute {
+            font-size: 0.72rem;
+            color: #999;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .event-icon {
+            font-size: 0.85rem;
+            flex-shrink: 0;
+        }
+
+        .event-text {
+            color: #555;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .event-text .assist {
+            color: #999;
+        }
+
+        .no-events {
+            text-align: center;
+            color: #bbb;
+            font-size: 0.8rem;
+            padding: 12px 0 4px;
+        }
+
+        .no-match {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .no-match p {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .info-badge {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            margin-left: 10px;
+        }
+
+        .manual-controls {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .manual-controls h3 {
+            color: #856404;
+            margin-bottom: 15px;
+        }
+
+        .input-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: end;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚽ Match Simulator</h1>
+            <p class="subtitle">Test Harness for Top Scores App</p>
+        </header>
+
+        <!-- Match Status Display -->
+        <div id="matchStatus" class="hidden">
+            <div class="scoreboard">
+                <div class="teams">
+                    <div class="team">
+                        <div class="team-name" id="homeTeamName">Home</div>
+                        <div class="score" id="homeScore">0</div>
+                    </div>
+                    <div class="separator">-</div>
+                    <div class="team">
+                        <div class="team-name" id="awayTeamName">Away</div>
+                        <div class="score" id="awayScore">0</div>
+                    </div>
+                </div>
+                <div class="status" id="matchStatusBadge">Not Started</div>
+                <div class="match-info">
+                    <p><strong>League:</strong> <span id="leagueName">-</span></p>
+                    <p><strong>Kick-off:</strong> <span id="kickoffTime">-</span></p>
+                    <p><strong>Match Speed:</strong> <span id="matchSpeed">-</span></p>
+                    <p><strong>Match Details:</strong> <a id="matchDetailsLink" href="#" target="_blank" style="color: #667eea; text-decoration: none; font-weight: 600;">-</a></p>
+                </div>
+            </div>
+
+            <!-- Events Timeline -->
+            <div id="eventsTimeline" class="card" style="display:none; padding: 20px 25px;">
+                <h2 style="font-size: 1rem; margin-bottom: 14px; padding-bottom: 8px;">Match Events</h2>
+                <div id="eventsTimelineRows"></div>
+            </div>
+
+            <!-- Match Controls -->
+            <div class="card">
+                <h2>Match Controls</h2>
+                <div class="btn-group">
+                    <button id="startBtn" onclick="startMatch()">▶️ Start Match</button>
+                    <button id="pauseBtn" onclick="pauseMatch()" class="btn-warning hidden">⏸ Pause</button>
+                    <button id="resumeBtn" onclick="resumeMatch()" class="btn-success hidden">▶️ Resume</button>
+                    <button onclick="jumpToHT()" class="btn-warning">⏩ Jump to HT</button>
+                    <button onclick="jumpToFT()" class="btn-warning">⏩ Jump to FT</button>
+                    <button onclick="restartMatch()" class="btn-warning">🔄 Restart</button>
+                    <button onclick="deleteMatch()" class="btn-danger">🗑️ Delete Match</button>
+                </div>
+
+                <!-- Speed Control -->
+                <div class="manual-controls" style="margin-top: 15px; background: #e8f4f8; border-color: #5dade2;">
+                    <h3 style="color: #1a6a8a;">Match Speed</h3>
+                    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                        <label for="liveMatchSpeed" style="white-space: nowrap;">Seconds per match minute:</label>
+                        <input type="number" id="liveMatchSpeed" min="1" max="60" style="width: 80px;">
+                        <button onclick="setMatchSpeed()" class="btn-success" style="white-space: nowrap;">⚡ Apply</button>
+                    </div>
+                </div>
+
+                <!-- Manual Event Controls -->
+                <div class="manual-controls">
+                    <h3>Manual Event Controls</h3>
+
+                    <div class="input-row">
+                        <input type="text" id="homeGoalScorer" placeholder="Home goal scorer (optional)">
+                        <input type="text" id="homeAssister" placeholder="Assister (optional)">
+                        <button onclick="addGoal('home')" class="btn-success">⚽ Home Goal</button>
+                    </div>
+
+                    <div class="input-row">
+                        <input type="text" id="awayGoalScorer" placeholder="Away goal scorer (optional)">
+                        <input type="text" id="awayAssister" placeholder="Assister (optional)">
+                        <button onclick="addGoal('away')" class="btn-success">⚽ Away Goal</button>
+                    </div>
+
+                    <div class="input-row">
+                        <input type="text" id="homeRedCardPlayer" placeholder="Home player name (optional)">
+                        <div></div>
+                        <button onclick="addRedCard('home')" class="btn-danger">🟥 Home Red Card</button>
+                    </div>
+
+                    <div class="input-row">
+                        <input type="text" id="awayRedCardPlayer" placeholder="Away player name (optional)">
+                        <div></div>
+                        <button onclick="addRedCard('away')" class="btn-danger">🟥 Away Red Card</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Match Creation Form -->
+        <div id="createForm" class="card">
+            <h2>Create Test Match</h2>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="homeTeam">Home Team</label>
+                    <input type="text" id="homeTeam" value="Arsenal" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="awayTeam">Away Team</label>
+                    <input type="text" id="awayTeam" value="Liverpool" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="league">Competition</label>
+                    <select id="league">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="leagueSubcategory">Competition Sub-heading</label>
+                    <input type="text" id="leagueSubcategory" placeholder="e.g., Round of 16">
+                </div>
+
+                <div class="form-group">
+                    <label for="homeStartScore">Home Starting Score</label>
+                    <input type="number" id="homeStartScore" value="0" min="0">
+                </div>
+
+                <div class="form-group">
+                    <label for="awayStartScore">Away Starting Score</label>
+                    <input type="number" id="awayStartScore" value="0" min="0">
+                </div>
+
+                <div class="form-group">
+                    <label for="homeXG">Home Expected Goals (xG)</label>
+                    <input type="number" id="homeXG" value="2" step="0.1" min="0">
+                </div>
+
+                <div class="form-group">
+                    <label for="awayXG">Away Expected Goals (xG)</label>
+                    <input type="number" id="awayXG" value="2" step="0.1" min="0">
+                </div>
+
+                <div class="form-group">
+                    <label for="matchSpeed">Match Speed (seconds per match minute)</label>
+                    <input type="number" id="matchSpeed" value="10" min="1" max="60">
+                </div>
+
+                <div class="form-group">
+                    <label for="firstHalfStoppage">1st Half Stoppage Time (mins)</label>
+                    <input type="number" id="firstHalfStoppage" placeholder="Random 0-5" min="0" max="10">
+                </div>
+
+                <div class="form-group">
+                    <label for="secondHalfStoppage">2nd Half Stoppage Time (mins)</label>
+                    <input type="number" id="secondHalfStoppage" placeholder="Random 0-10" min="0" max="15">
+                </div>
+            </div>
+
+            <div class="form-grid">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="kickoffNow" checked>
+                    <label for="kickoffNow">Kick off immediately (now)</label>
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="simulateET">
+                    <label for="simulateET">Simulate Extra Time if level at FT</label>
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="simulatePens">
+                    <label for="simulatePens">Simulate Penalties if level after ET</label>
+                </div>
+            </div>
+
+            <div class="btn-group" style="margin-top: 20px;">
+                <button onclick="createMatch()" class="btn-success">🎮 Create & Configure Match</button>
+            </div>
+        </div>
+
+        <!-- No Match Message -->
+        <div id="noMatch" class="card no-match hidden">
+            <p>No active test match</p>
+            <button onclick="showCreateForm()" class="btn-success">Create New Match</button>
+        </div>
+    </div>
+
+    <script>
+        let pollInterval = null;
+
+        async function loadCompetitions() {
+            const select = document.getElementById('league');
+
+            // Default competitions as fallback
+            const defaultCompetitions = [
+                'Premier League',
+                'Champions League',
+                'Europa League',
+                'FA Cup',
+                'EFL Cup',
+                'La Liga',
+                'Bundesliga',
+                'Serie A',
+                'Ligue 1',
+                'Championship'
+            ];
+
+            try {
+                const response = await fetch('/api/competitions', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API returned ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data && Array.isArray(data) && data.length > 0) {
+                    select.innerHTML = '';
+                    data.forEach(comp => {
+                        const option = document.createElement('option');
+                        // Handle both string arrays and object arrays
+                        const name = typeof comp === 'string' ? comp : comp.name;
+                        option.value = name;
+                        option.textContent = name;
+                        // Select Premier League by default
+                        if (name === 'Premier League') {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+                    console.log(`Loaded ${data.length} competitions from API`);
+                } else {
+                    throw new Error('Empty or invalid response');
+                }
+            } catch (err) {
+                console.warn('Failed to load competitions from API, using defaults:', err.message);
+                select.innerHTML = '';
+                defaultCompetitions.forEach(name => {
+                    const option = document.createElement('option');
+                    option.value = name;
+                    option.textContent = name;
+                    // Select Premier League by default
+                    if (name === 'Premier League') {
+                        option.selected = true;
+                    }
+                    select.appendChild(option);
+                });
+                console.log(`Loaded ${defaultCompetitions.length} default competitions`);
+            }
+        }
+
+        async function loadMatchStatus() {
+            try {
+                const response = await fetch('/api/test-match');
+                const data = await response.json();
+
+                if (data.active) {
+                    updateMatchDisplay(data.match, data);
+                    document.getElementById('matchStatus').classList.remove('hidden');
+                    document.getElementById('createForm').classList.add('hidden');
+                    document.getElementById('noMatch').classList.add('hidden');
+                } else {
+                    document.getElementById('matchStatus').classList.add('hidden');
+                    document.getElementById('createForm').classList.remove('hidden');
+                    document.getElementById('noMatch').classList.add('hidden');
+                }
+            } catch (err) {
+                console.error('Failed to load match status:', err);
+            }
+        }
+
+        function updateMatchDisplay(match, data) {
+            document.getElementById('homeTeamName').textContent = match.home_team;
+            document.getElementById('awayTeamName').textContent = match.away_team;
+            document.getElementById('homeScore').textContent = match.home_score || 0;
+            document.getElementById('awayScore').textContent = match.away_score || 0;
+
+            const statusBadge = document.getElementById('matchStatusBadge');
+            if (match.in_progress) {
+                statusBadge.textContent = `LIVE - ${match.score_status || 'Starting...'}`;
+                statusBadge.classList.add('live');
+            } else if (match.score_status) {
+                statusBadge.textContent = match.score_status;
+                statusBadge.classList.remove('live');
+            } else {
+                statusBadge.textContent = 'Not Started';
+                statusBadge.classList.remove('live');
+            }
+
+            document.getElementById('leagueName').textContent = match.league_subcategory
+                ? `${match.league}: ${match.league_subcategory}`
+                : match.league;
+            document.getElementById('kickoffTime').textContent = `${match.date} ${match.time}`;
+            const speedSecs = (data.config.matchSpeedMs / 1000).toFixed(0);
+            document.getElementById('matchSpeed').textContent = `1 match min = ${speedSecs}s real-time`;
+
+            // Sync the live speed input if the user isn't currently editing it
+            const liveSpeedInput = document.getElementById('liveMatchSpeed');
+            if (liveSpeedInput && document.activeElement !== liveSpeedInput) {
+                liveSpeedInput.value = speedSecs;
+            }
+
+            // Update match details link
+            const matchDetailsLink = document.getElementById('matchDetailsLink');
+            if (match.match_details_id) {
+                const apiUrl = `http://localhost:3000/api/v1/matches/${match.match_details_id}`;
+                matchDetailsLink.href = apiUrl;
+                matchDetailsLink.textContent = apiUrl;
+            } else {
+                matchDetailsLink.href = '#';
+                matchDetailsLink.textContent = '-';
+            }
+
+            // Update button states
+            const startBtn = document.getElementById('startBtn');
+            const pauseBtn = document.getElementById('pauseBtn');
+            const resumeBtn = document.getElementById('resumeBtn');
+
+            if (match.in_progress) {
+                startBtn.classList.add('hidden');
+                if (data.isPaused) {
+                    pauseBtn.classList.add('hidden');
+                    resumeBtn.classList.remove('hidden');
+                } else {
+                    pauseBtn.classList.remove('hidden');
+                    resumeBtn.classList.add('hidden');
+                }
+            } else {
+                if (match.score_status === 'FT' || match.score_status === 'AET' || match.score_status === 'PENS') {
+                    startBtn.classList.add('hidden');
+                } else {
+                    startBtn.classList.remove('hidden');
+                }
+                pauseBtn.classList.add('hidden');
+                resumeBtn.classList.add('hidden');
+            }
+
+            renderEventsTimeline(match);
+        }
+
+        function parseMinute(raw) {
+            if (!raw) return null;
+            const isPenalty = /pen/i.test(raw);
+            // Handles: "45'", "45+1'", "45 + 1'", "45" etc.
+            const m = raw.match(/(\d{1,3})\s*(?:\+\s*(\d{1,2}))?\s*'?/);
+            if (!m) return null;
+            const base = parseInt(m[1]);
+            const extra = m[2] ? parseInt(m[2]) : 0;
+            const display = extra > 0 ? `${base}+${extra}'` : `${base}'`;
+            return { base, extra, display, isPenalty };
+        }
+
+        function abbreviateName(fullName) {
+            if (!fullName) return '';
+            const parts = fullName.trim().split(/\s+/);
+            if (parts.length <= 1) return fullName;
+            const initials = parts.slice(0, -1).map(p => p[0] + '.');
+            return [...initials, parts[parts.length - 1]].join(' ');
+        }
+
+        function buildTimeline(match) {
+            // Build assist lookup: minute key -> assister name
+            function buildAssistLookup(assists) {
+                const exact = {}, base = {}, conflicting = new Set();
+                for (const a of (assists || [])) {
+                    const name = abbreviateName(a.player);
+                    if (!name) continue;
+                    for (const raw of (a.assist_times || [])) {
+                        const m = parseMinute(raw);
+                        if (!m) continue;
+                        const key = m.extra > 0 ? `${m.base}+${m.extra}` : `${m.base}`;
+                        exact[key] = name;
+                        if (base[m.base] && base[m.base] !== name) {
+                            conflicting.add(m.base);
+                            delete base[m.base];
+                        } else if (!conflicting.has(m.base)) {
+                            base[m.base] = name;
+                        }
+                    }
+                }
+                return { exact, base };
+            }
+
+            function getAssist(lookup, minute) {
+                const key = minute.extra > 0 ? `${minute.base}+${minute.extra}` : `${minute.base}`;
+                return lookup.exact[key] || lookup.base[minute.base] || null;
+            }
+
+            function teamEvents(goals, assists, redCards, side) {
+                const lookup = buildAssistLookup(assists);
+                const events = [];
+                for (const scorer of (goals || [])) {
+                    const player = abbreviateName(scorer.player);
+                    if (!player) continue;
+                    for (const raw of (scorer.goal_times || [])) {
+                        const min = parseMinute(raw);
+                        if (!min) continue;
+                        const assist = min.isPenalty ? null : getAssist(lookup, min);
+                        events.push({ kind: 'goal', side, minute: min, player, assist, isPenalty: min.isPenalty });
+                    }
+                    for (const raw of (scorer.own_goal_times || [])) {
+                        const min = parseMinute(raw);
+                        if (!min) continue;
+                        events.push({ kind: 'owngoal', side, minute: min, player, assist: null, isPenalty: false });
+                    }
+                }
+                for (const card of (redCards || [])) {
+                    const player = abbreviateName(card.player);
+                    if (!player) continue;
+                    for (const raw of (card.red_card_times || [])) {
+                        const min = parseMinute(raw);
+                        if (!min) continue;
+                        events.push({ kind: 'redcard', side, minute: min, player, assist: null, isPenalty: false });
+                    }
+                }
+                return events;
+            }
+
+            const home = teamEvents(match.home_goal_scorers, match.home_assists, match.home_red_cards, 'home');
+            const away = teamEvents(match.away_goal_scorers, match.away_assists, match.away_red_cards, 'away');
+
+            return [...home, ...away].sort((a, b) => {
+                if (a.minute.base !== b.minute.base) return a.minute.base - b.minute.base;
+                if (a.minute.extra !== b.minute.extra) return a.minute.extra - b.minute.extra;
+                // home before away at same minute
+                if (a.side !== b.side) return a.side === 'home' ? -1 : 1;
+                return 0;
+            });
+        }
+
+        function renderEventsTimeline(match) {
+            const timeline = buildTimeline(match);
+            const container = document.getElementById('eventsTimeline');
+            const rowsEl = document.getElementById('eventsTimelineRows');
+
+            if (timeline.length === 0) {
+                container.style.display = 'none';
+                rowsEl.innerHTML = '';
+                return;
+            }
+
+            container.style.display = 'block';
+
+            const headerRow = `<div class="event-row" style="margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 6px;">
+                <div style="text-align:right; font-weight:600; font-size:0.8rem; color:#444; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${match.home_team}</div>
+                <div></div>
+                <div style="text-align:left; font-weight:600; font-size:0.8rem; color:#444; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${match.away_team}</div>
+            </div>`;
+
+            const eventRows = timeline.map(ev => {
+                const icon = ev.kind === 'redcard' ? '🟥' : '⚽';
+                const ownGoalSuffix = ev.kind === 'owngoal' ? ' <span class="assist">(OG)</span>' : '';
+                const penSuffix = ev.isPenalty ? ' <span class="assist">(pen)</span>' : '';
+                const assistText = ev.assist ? ` <span class="assist">(${ev.assist})</span>` : '';
+                const playerHtml = `${ev.player}${ownGoalSuffix}${penSuffix}${assistText}`;
+
+                if (ev.side === 'home') {
+                    return `<div class="event-row">
+                        <div class="event-home">
+                            <span class="event-icon">${icon}</span>
+                            <span class="event-text">${playerHtml}</span>
+                        </div>
+                        <div class="event-minute">${ev.minute.display}</div>
+                        <div></div>
+                    </div>`;
+                } else {
+                    return `<div class="event-row">
+                        <div></div>
+                        <div class="event-minute">${ev.minute.display}</div>
+                        <div class="event-away">
+                            <span class="event-text">${playerHtml}</span>
+                            <span class="event-icon">${icon}</span>
+                        </div>
+                    </div>`;
+                }
+            }).join('');
+
+            rowsEl.innerHTML = headerRow + eventRows;
+        }
+
+        async function createMatch() {
+            const formData = {
+                kickoffNow: document.getElementById('kickoffNow').checked,
+                league: document.getElementById('league').value,
+                leagueSubcategory: document.getElementById('leagueSubcategory').value,
+                homeTeam: document.getElementById('homeTeam').value,
+                awayTeam: document.getElementById('awayTeam').value,
+                homeScore: document.getElementById('homeStartScore').value,
+                awayScore: document.getElementById('awayStartScore').value,
+                matchSpeedMs: document.getElementById('matchSpeed').value * 1000,
+                homeExpectedGoals: document.getElementById('homeXG').value,
+                awayExpectedGoals: document.getElementById('awayXG').value,
+                firstHalfStoppageTime: document.getElementById('firstHalfStoppage').value,
+                secondHalfStoppageTime: document.getElementById('secondHalfStoppage').value,
+                simulateExtraTime: document.getElementById('simulateET').checked,
+                simulatePenalties: document.getElementById('simulatePens').checked,
+            };
+
+            try {
+                const response = await fetch('/api/test-match/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                if (response.ok) {
+                    await loadMatchStatus();
+                    startPolling();
+                } else {
+                    alert('Failed to create match');
+                }
+            } catch (err) {
+                console.error('Failed to create match:', err);
+                alert('Failed to create match');
+            }
+        }
+
+        async function startMatch() {
+            try {
+                await fetch('/api/test-match/start', { method: 'POST' });
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to start match:', err);
+            }
+        }
+
+        async function pauseMatch() {
+            try {
+                await fetch('/api/test-match/pause', { method: 'POST' });
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to pause match:', err);
+            }
+        }
+
+        async function resumeMatch() {
+            try {
+                await fetch('/api/test-match/resume', { method: 'POST' });
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to resume match:', err);
+            }
+        }
+
+        async function setMatchSpeed() {
+            const input = document.getElementById('liveMatchSpeed');
+            const secs = parseInt(input.value);
+            if (isNaN(secs) || secs < 1) {
+                alert('Please enter a valid speed (1-60 seconds)');
+                return;
+            }
+            try {
+                const response = await fetch('/api/test-match/set-speed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ speedMs: secs * 1000 })
+                });
+                if (response.ok) {
+                    await loadMatchStatus();
+                } else {
+                    alert('Failed to set match speed');
+                }
+            } catch (err) {
+                console.error('Failed to set match speed:', err);
+                alert('Failed to set match speed');
+            }
+        }
+
+        async function addGoal(team) {
+            const playerInput = team === 'home' ? 'homeGoalScorer' : 'awayGoalScorer';
+            const assisterInput = team === 'home' ? 'homeAssister' : 'awayAssister';
+
+            const formData = {
+                team: team,
+                playerName: document.getElementById(playerInput).value || null,
+                assisterName: document.getElementById(assisterInput).value || null,
+            };
+
+            try {
+                await fetch('/api/test-match/add-goal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                document.getElementById(playerInput).value = '';
+                document.getElementById(assisterInput).value = '';
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to add goal:', err);
+            }
+        }
+
+        async function addRedCard(team) {
+            const playerInput = team === 'home' ? 'homeRedCardPlayer' : 'awayRedCardPlayer';
+
+            const formData = {
+                team: team,
+                playerName: document.getElementById(playerInput).value || null,
+            };
+
+            try {
+                await fetch('/api/test-match/add-red-card', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                document.getElementById(playerInput).value = '';
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to add red card:', err);
+            }
+        }
+
+        async function jumpToHT() {
+            try {
+                await fetch('/api/test-match/jump-to-ht', { method: 'POST' });
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to jump to HT:', err);
+            }
+        }
+
+        async function jumpToFT() {
+            try {
+                await fetch('/api/test-match/jump-to-ft', { method: 'POST' });
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to jump to FT:', err);
+            }
+        }
+
+        async function restartMatch() {
+            if (!confirm('Are you sure you want to restart the match? This will reset all scores and events.')) {
+                return;
+            }
+
+            try {
+                await fetch('/api/test-match/restart', { method: 'POST' });
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to restart match:', err);
+            }
+        }
+
+        async function deleteMatch() {
+            if (!confirm('Are you sure you want to delete the test match?')) {
+                return;
+            }
+
+            try {
+                await fetch('/api/test-match/delete', { method: 'POST' });
+                stopPolling();
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to delete match:', err);
+            }
+        }
+
+        function showCreateForm() {
+            document.getElementById('noMatch').classList.add('hidden');
+            document.getElementById('createForm').classList.remove('hidden');
+        }
+
+        function startPolling() {
+            if (pollInterval) return;
+            pollInterval = setInterval(loadMatchStatus, 2000); // Poll every 2 seconds
+        }
+
+        function stopPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
+
+        // Initialize on page load
+        window.addEventListener('load', async () => {
+            await loadCompetitions();
+            await loadMatchStatus();
+            startPolling();
+        });
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', stopPolling);
+    </script>
+</body>
+</html>

@@ -1,0 +1,1162 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		E70D65572F3E413E00E38737 /* Top Scores Watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = E70D65372F3E413C00E38737 /* Top Scores Watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		E7F0A0012F40400100E38737 /* Top Scores Widgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = E7F0A0042F40400100E38737 /* Top Scores Widgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		E70D51E32F3C957D00E38737 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E70D51CD2F3C957B00E38737 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E70D51D42F3C957B00E38737;
+			remoteInfo = "Top Scores";
+		};
+		E70D51ED2F3C957D00E38737 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E70D51CD2F3C957B00E38737 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E70D51D42F3C957B00E38737;
+			remoteInfo = "Top Scores";
+		};
+		E70D65442F3E413E00E38737 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E70D51CD2F3C957B00E38737 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E70D65362F3E413C00E38737;
+			remoteInfo = "Top Scores Watch Watch App";
+		};
+		E70D654E2F3E413E00E38737 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E70D51CD2F3C957B00E38737 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E70D65362F3E413C00E38737;
+			remoteInfo = "Top Scores Watch Watch App";
+		};
+		E70D65552F3E413E00E38737 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E70D51CD2F3C957B00E38737 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E70D65362F3E413C00E38737;
+			remoteInfo = "Top Scores Watch Watch App";
+		};
+		E7F0A0022F40400100E38737 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E70D51CD2F3C957B00E38737 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E7F0A0072F40400100E38737;
+			remoteInfo = "Top Scores Widgets";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		E70D655B2F3E413E00E38737 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				E70D65572F3E413E00E38737 /* Top Scores Watch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E7F0A0032F40400100E38737 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				E7F0A0012F40400100E38737 /* Top Scores Widgets.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		E70D51D52F3C957B00E38737 /* Top Scores.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Top Scores.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E70D51E22F3C957D00E38737 /* Top ScoresTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Top ScoresTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E70D51EC2F3C957D00E38737 /* Top ScoresUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Top ScoresUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E70D65372F3E413C00E38737 /* Top Scores Watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Top Scores Watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E70D65432F3E413E00E38737 /* Top Scores Watch Watch AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Top Scores Watch Watch AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E70D654D2F3E413E00E38737 /* Top Scores Watch Watch AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Top Scores Watch Watch AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E7F0A0042F40400100E38737 /* Top Scores Widgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Top Scores Widgets.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		E70D51D72F3C957B00E38737 /* Top Scores */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			explicitFolders = (
+				"tv-logos",
+			);
+			path = "Top Scores";
+			sourceTree = "<group>";
+		};
+		E70D51E52F3C957D00E38737 /* Top ScoresTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Top ScoresTests";
+			sourceTree = "<group>";
+		};
+		E70D51EF2F3C957D00E38737 /* Top ScoresUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Top ScoresUITests";
+			sourceTree = "<group>";
+		};
+		E70D65382F3E413C00E38737 /* Top Scores Watch Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Top Scores Watch Watch App";
+			sourceTree = "<group>";
+		};
+		E70D65462F3E413E00E38737 /* Top Scores Watch Watch AppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Top Scores Watch Watch AppTests";
+			sourceTree = "<group>";
+		};
+		E70D65502F3E413E00E38737 /* Top Scores Watch Watch AppUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Top Scores Watch Watch AppUITests";
+			sourceTree = "<group>";
+		};
+		E7F0A0052F40400100E38737 /* Top Scores Widgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Top Scores Widgets";
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E70D51D22F3C957B00E38737 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D51DF2F3C957D00E38737 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D51E92F3C957D00E38737 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D65342F3E413C00E38737 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D65402F3E413E00E38737 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D654A2F3E413E00E38737 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E7F0A0062F40400100E38737 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		E70D51CC2F3C957B00E38737 = {
+			isa = PBXGroup;
+			children = (
+				E70D51D72F3C957B00E38737 /* Top Scores */,
+				E70D51E52F3C957D00E38737 /* Top ScoresTests */,
+				E70D51EF2F3C957D00E38737 /* Top ScoresUITests */,
+				E70D65382F3E413C00E38737 /* Top Scores Watch Watch App */,
+				E70D65462F3E413E00E38737 /* Top Scores Watch Watch AppTests */,
+				E70D65502F3E413E00E38737 /* Top Scores Watch Watch AppUITests */,
+				E7F0A0052F40400100E38737 /* Top Scores Widgets */,
+				E70D51D62F3C957B00E38737 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E70D51D62F3C957B00E38737 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				E70D51D52F3C957B00E38737 /* Top Scores.app */,
+				E70D51E22F3C957D00E38737 /* Top ScoresTests.xctest */,
+				E70D51EC2F3C957D00E38737 /* Top ScoresUITests.xctest */,
+				E70D65372F3E413C00E38737 /* Top Scores Watch Watch App.app */,
+				E70D65432F3E413E00E38737 /* Top Scores Watch Watch AppTests.xctest */,
+				E70D654D2F3E413E00E38737 /* Top Scores Watch Watch AppUITests.xctest */,
+				E7F0A0042F40400100E38737 /* Top Scores Widgets.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E70D51D42F3C957B00E38737 /* Top Scores */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E70D51F62F3C957D00E38737 /* Build configuration list for PBXNativeTarget "Top Scores" */;
+			buildPhases = (
+				E70D51D12F3C957B00E38737 /* Sources */,
+				E70D51D22F3C957B00E38737 /* Frameworks */,
+				E70D51D32F3C957B00E38737 /* Resources */,
+				E7F0A0032F40400100E38737 /* Embed App Extensions */,
+				E70D655B2F3E413E00E38737 /* Embed Watch Content */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E7F0A00A2F40400100E38737 /* PBXTargetDependency */,
+				E70D65562F3E413E00E38737 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E70D51D72F3C957B00E38737 /* Top Scores */,
+			);
+			name = "Top Scores";
+			packageProductDependencies = (
+			);
+			productName = "Top Scores";
+			productReference = E70D51D52F3C957B00E38737 /* Top Scores.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E70D51E12F3C957D00E38737 /* Top ScoresTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E70D51F92F3C957D00E38737 /* Build configuration list for PBXNativeTarget "Top ScoresTests" */;
+			buildPhases = (
+				E70D51DE2F3C957D00E38737 /* Sources */,
+				E70D51DF2F3C957D00E38737 /* Frameworks */,
+				E70D51E02F3C957D00E38737 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E70D51E42F3C957D00E38737 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E70D51E52F3C957D00E38737 /* Top ScoresTests */,
+			);
+			name = "Top ScoresTests";
+			packageProductDependencies = (
+			);
+			productName = "Top ScoresTests";
+			productReference = E70D51E22F3C957D00E38737 /* Top ScoresTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		E70D51EB2F3C957D00E38737 /* Top ScoresUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E70D51FC2F3C957D00E38737 /* Build configuration list for PBXNativeTarget "Top ScoresUITests" */;
+			buildPhases = (
+				E70D51E82F3C957D00E38737 /* Sources */,
+				E70D51E92F3C957D00E38737 /* Frameworks */,
+				E70D51EA2F3C957D00E38737 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E70D51EE2F3C957D00E38737 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E70D51EF2F3C957D00E38737 /* Top ScoresUITests */,
+			);
+			name = "Top ScoresUITests";
+			packageProductDependencies = (
+			);
+			productName = "Top ScoresUITests";
+			productReference = E70D51EC2F3C957D00E38737 /* Top ScoresUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		E70D65362F3E413C00E38737 /* Top Scores Watch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E70D65582F3E413E00E38737 /* Build configuration list for PBXNativeTarget "Top Scores Watch Watch App" */;
+			buildPhases = (
+				E70D65332F3E413C00E38737 /* Sources */,
+				E70D65342F3E413C00E38737 /* Frameworks */,
+				E70D65352F3E413C00E38737 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				E70D65382F3E413C00E38737 /* Top Scores Watch Watch App */,
+			);
+			name = "Top Scores Watch Watch App";
+			packageProductDependencies = (
+			);
+			productName = "Top Scores Watch Watch App";
+			productReference = E70D65372F3E413C00E38737 /* Top Scores Watch Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E70D65422F3E413E00E38737 /* Top Scores Watch Watch AppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E70D655C2F3E413E00E38737 /* Build configuration list for PBXNativeTarget "Top Scores Watch Watch AppTests" */;
+			buildPhases = (
+				E70D653F2F3E413E00E38737 /* Sources */,
+				E70D65402F3E413E00E38737 /* Frameworks */,
+				E70D65412F3E413E00E38737 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E70D65452F3E413E00E38737 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E70D65462F3E413E00E38737 /* Top Scores Watch Watch AppTests */,
+			);
+			name = "Top Scores Watch Watch AppTests";
+			packageProductDependencies = (
+			);
+			productName = "Top Scores Watch Watch AppTests";
+			productReference = E70D65432F3E413E00E38737 /* Top Scores Watch Watch AppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		E70D654C2F3E413E00E38737 /* Top Scores Watch Watch AppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E70D655F2F3E413E00E38737 /* Build configuration list for PBXNativeTarget "Top Scores Watch Watch AppUITests" */;
+			buildPhases = (
+				E70D65492F3E413E00E38737 /* Sources */,
+				E70D654A2F3E413E00E38737 /* Frameworks */,
+				E70D654B2F3E413E00E38737 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E70D654F2F3E413E00E38737 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E70D65502F3E413E00E38737 /* Top Scores Watch Watch AppUITests */,
+			);
+			name = "Top Scores Watch Watch AppUITests";
+			packageProductDependencies = (
+			);
+			productName = "Top Scores Watch Watch AppUITests";
+			productReference = E70D654D2F3E413E00E38737 /* Top Scores Watch Watch AppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		E7F0A0072F40400100E38737 /* Top Scores Widgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E7F0A00D2F40400100E38737 /* Build configuration list for PBXNativeTarget "Top Scores Widgets" */;
+			buildPhases = (
+				E7F0A0092F40400100E38737 /* Sources */,
+				E7F0A0062F40400100E38737 /* Frameworks */,
+				E7F0A0082F40400100E38737 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				E7F0A0052F40400100E38737 /* Top Scores Widgets */,
+			);
+			name = "Top Scores Widgets";
+			packageProductDependencies = (
+			);
+			productName = "Top Scores Widgets";
+			productReference = E7F0A0042F40400100E38737 /* Top Scores Widgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E70D51CD2F3C957B00E38737 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					E70D51D42F3C957B00E38737 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					E70D51E12F3C957D00E38737 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = E70D51D42F3C957B00E38737;
+					};
+					E70D51EB2F3C957D00E38737 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = E70D51D42F3C957B00E38737;
+					};
+					E70D65362F3E413C00E38737 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					E70D65422F3E413E00E38737 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = E70D65362F3E413C00E38737;
+					};
+					E70D654C2F3E413E00E38737 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = E70D65362F3E413C00E38737;
+					};
+					E7F0A0072F40400100E38737 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+				};
+			};
+			buildConfigurationList = E70D51D02F3C957B00E38737 /* Build configuration list for PBXProject "Top Scores" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = E70D51CC2F3C957B00E38737;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = E70D51D62F3C957B00E38737 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E70D51D42F3C957B00E38737 /* Top Scores */,
+				E70D51E12F3C957D00E38737 /* Top ScoresTests */,
+				E70D51EB2F3C957D00E38737 /* Top ScoresUITests */,
+				E70D65362F3E413C00E38737 /* Top Scores Watch Watch App */,
+				E70D65422F3E413E00E38737 /* Top Scores Watch Watch AppTests */,
+				E70D654C2F3E413E00E38737 /* Top Scores Watch Watch AppUITests */,
+				E7F0A0072F40400100E38737 /* Top Scores Widgets */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E70D51D32F3C957B00E38737 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D51E02F3C957D00E38737 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D51EA2F3C957D00E38737 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D65352F3E413C00E38737 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D65412F3E413E00E38737 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D654B2F3E413E00E38737 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E7F0A0082F40400100E38737 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		E70D51D12F3C957B00E38737 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D51DE2F3C957D00E38737 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D51E82F3C957D00E38737 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D65332F3E413C00E38737 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D653F2F3E413E00E38737 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E70D65492F3E413E00E38737 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E7F0A0092F40400100E38737 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E70D51E42F3C957D00E38737 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E70D51D42F3C957B00E38737 /* Top Scores */;
+			targetProxy = E70D51E32F3C957D00E38737 /* PBXContainerItemProxy */;
+		};
+		E70D51EE2F3C957D00E38737 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E70D51D42F3C957B00E38737 /* Top Scores */;
+			targetProxy = E70D51ED2F3C957D00E38737 /* PBXContainerItemProxy */;
+		};
+		E70D65452F3E413E00E38737 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E70D65362F3E413C00E38737 /* Top Scores Watch Watch App */;
+			targetProxy = E70D65442F3E413E00E38737 /* PBXContainerItemProxy */;
+		};
+		E70D654F2F3E413E00E38737 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E70D65362F3E413C00E38737 /* Top Scores Watch Watch App */;
+			targetProxy = E70D654E2F3E413E00E38737 /* PBXContainerItemProxy */;
+		};
+		E70D65562F3E413E00E38737 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E70D65362F3E413C00E38737 /* Top Scores Watch Watch App */;
+			targetProxy = E70D65552F3E413E00E38737 /* PBXContainerItemProxy */;
+		};
+		E7F0A00A2F40400100E38737 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E7F0A0072F40400100E38737 /* Top Scores Widgets */;
+			targetProxy = E7F0A0022F40400100E38737 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		E70D51F42F3C957D00E38737 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		E70D51F52F3C957D00E38737 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		E70D51F72F3C957D00E38737 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Top Scores/Top ScoresDebug.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = topscores.dev.skynolimit;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E70D51F82F3C957D00E38737 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Top Scores/Top ScoresDebug.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = topscores.dev.skynolimit;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E70D51FA2F3C957D00E38737 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.skynolimit.Top-ScoresTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Top Scores.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Top Scores";
+			};
+			name = Debug;
+		};
+		E70D51FB2F3C957D00E38737 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.skynolimit.Top-ScoresTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Top Scores.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Top Scores";
+			};
+			name = Release;
+		};
+		E70D51FD2F3C957D00E38737 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.skynolimit.Top-ScoresUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "Top Scores";
+			};
+			name = Debug;
+		};
+		E70D51FE2F3C957D00E38737 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.skynolimit.Top-ScoresUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "Top Scores";
+			};
+			name = Release;
+		};
+		E70D65592F3E413E00E38737 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Top Scores Watch Watch App/Top Scores Watch Watch AppDebug.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Top Scores Watch";
+				INFOPLIST_KEY_CLKComplicationPrincipalClass = "$(PRODUCT_MODULE_NAME).MatchComplicationController";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Top Scores Watch to add matches to your calendar.";
+				INFOPLIST_KEY_NSRemindersUsageDescription = "Allow Top Scores Watch to add match reminders.";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = topscores.dev.skynolimit;
+				INFOPLIST_KEY_WKSupportsComplications = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = topscores.dev.skynolimit.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		E70D655A2F3E413E00E38737 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Top Scores Watch Watch App/Top Scores Watch Watch AppDebug.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Top Scores Watch";
+				INFOPLIST_KEY_CLKComplicationPrincipalClass = "$(PRODUCT_MODULE_NAME).MatchComplicationController";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Top Scores Watch to add matches to your calendar.";
+				INFOPLIST_KEY_NSRemindersUsageDescription = "Allow Top Scores Watch to add match reminders.";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = topscores.dev.skynolimit;
+				INFOPLIST_KEY_WKSupportsComplications = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = topscores.dev.skynolimit.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
+		E70D655D2F3E413E00E38737 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.skynolimit.Top-Scores-Watch-Watch-AppTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Top Scores Watch Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Top Scores Watch Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		E70D655E2F3E413E00E38737 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.skynolimit.Top-Scores-Watch-Watch-AppTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Top Scores Watch Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Top Scores Watch Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
+		E70D65602F3E413E00E38737 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.skynolimit.Top-Scores-Watch-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "Top Scores Watch Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		E70D65612F3E413E00E38737 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.skynolimit.Top-Scores-Watch-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "Top Scores Watch Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
+		E7F0A00B2F40400100E38737 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "Top Scores Widgets/Top Scores Widgets.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Top Scores Widgets-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = topscores.dev.skynolimit.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E7F0A00C2F40400100E38737 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "Top Scores Widgets/Top Scores Widgets.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Top Scores Widgets-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = topscores.dev.skynolimit.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		E70D51D02F3C957B00E38737 /* Build configuration list for PBXProject "Top Scores" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E70D51F42F3C957D00E38737 /* Debug */,
+				E70D51F52F3C957D00E38737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E70D51F62F3C957D00E38737 /* Build configuration list for PBXNativeTarget "Top Scores" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E70D51F72F3C957D00E38737 /* Debug */,
+				E70D51F82F3C957D00E38737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E70D51F92F3C957D00E38737 /* Build configuration list for PBXNativeTarget "Top ScoresTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E70D51FA2F3C957D00E38737 /* Debug */,
+				E70D51FB2F3C957D00E38737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E70D51FC2F3C957D00E38737 /* Build configuration list for PBXNativeTarget "Top ScoresUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E70D51FD2F3C957D00E38737 /* Debug */,
+				E70D51FE2F3C957D00E38737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E70D65582F3E413E00E38737 /* Build configuration list for PBXNativeTarget "Top Scores Watch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E70D65592F3E413E00E38737 /* Debug */,
+				E70D655A2F3E413E00E38737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E70D655C2F3E413E00E38737 /* Build configuration list for PBXNativeTarget "Top Scores Watch Watch AppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E70D655D2F3E413E00E38737 /* Debug */,
+				E70D655E2F3E413E00E38737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E70D655F2F3E413E00E38737 /* Build configuration list for PBXNativeTarget "Top Scores Watch Watch AppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E70D65602F3E413E00E38737 /* Debug */,
+				E70D65612F3E413E00E38737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E7F0A00D2F40400100E38737 /* Build configuration list for PBXNativeTarget "Top Scores Widgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E7F0A00B2F40400100E38737 /* Debug */,
+				E7F0A00C2F40400100E38737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = E70D51CD2F3C957B00E38737 /* Project object */;
+}

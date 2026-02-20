@@ -1,0 +1,18 @@
+{
+  "name": "football-on-tv",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "fetch": "node fetch_live_footballontv.js",
+    "fetch:epl": "node fetch_bbc_premier_league_table.js",
+    "test:bbc-details": "node test_bbc_match_details.js",
+    "start": "node server.js",
+    "test-harness": "node test_harness_server.js"
+  },
+  "dependencies": {
+    "@parse/node-apn": "^6.0.1",
+    "cheerio": "^1.0.0",
+    "express": "^4.19.2",
+    "redis": "^5.11.0"
+  }
+}

@@ -1,0 +1,809 @@
+import Foundation
+import Combine
+
+struct MatchDay: Identifiable, Hashable {
+    let id: String
+    let dateKey: String
+    let displayDate: String
+    let isToday: Bool
+    let isTomorrow: Bool
+    let leagues: [MatchLeague]
+}
+
+enum MatchScoreResolver {
+    private struct NameVariant: Hashable {
+        let key: String
+        let tokens: [String]
+    }
+
+    private struct ScoreCandidate {
+        let match: BbcMatch
+        let confidence: Double
+        let minTeamConfidence: Double
+    }
+
+    private static let minCombinedConfidence = 0.82
+    private static let minTeamConfidence = 0.70
+    private static let swappedPenalty = 0.08
+    private static let prefixBoost = 0.35
+    private static let singleTokenPenalty = 0.12
+
+    static func applyScores(to matches: [Match], using bbcMatches: [BbcMatch]) -> [Match] {
+        guard !bbcMatches.isEmpty else { return matches }
+        let calendar = Calendar.current
+
+        return matches.map { match in
+            if let dateOnly = match.dateOnly, !calendar.isDateInToday(dateOnly) {
+                return match
+            }
+
+            guard let candidate = bestCandidate(for: match, in: bbcMatches) else { return match }
+
+            // Check for stale BBC data - reject if time or scores have regressed
+            let matchTime = parseMatchTimeMinutes(match.scoreStatus)
+            let bbcTime = parseMatchTimeMinutes(candidate.match.matchTime)
+
+            NSLog("[DEBUG applyScores] Comparing times for %@ vs %@ - matchStatus=\"%@\" parsed=%@ bbcStatus=\"%@\" parsed=%@",
+                  match.homeTeam, match.awayTeam,
+                  match.scoreStatus ?? "nil", matchTime.map(String.init) ?? "nil",
+                  candidate.match.matchTime, bbcTime.map(String.init) ?? "nil")
+
+            if let matchTime = matchTime, let bbcTime = bbcTime, bbcTime < matchTime {
+                NSLog("[STALE DATA] Rejecting stale BBC Live data for %@ vs %@ - time regressed from %d' to %d'",
+                      match.homeTeam, match.awayTeam, matchTime, bbcTime)
+                return match // Keep existing data
+            }
+
+            // Check for score regression
+            if let matchHome = match.homeScore, let matchAway = match.awayScore {
+                let matchTotal = matchHome + matchAway
+                let bbcTotal = candidate.match.homeScore + candidate.match.awayScore
+
+                if bbcTotal < matchTotal && (bbcTime ?? Int.max) <= (matchTime ?? Int.max) {
+                    NSLog("[STALE DATA] Rejecting stale BBC Live data for %@ vs %@ - scores regressed from %d-%d to %d-%d",
+                          match.homeTeam, match.awayTeam, matchHome, matchAway,
+                          candidate.match.homeScore, candidate.match.awayScore)
+                    return match // Keep existing data
+                }
+            }
+
+            // Prefer AET over Pens when applying scores - if match already has AET and BBC has Pens, keep AET
+            let matchStatus = match.scoreStatus?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            let bbcStatus = candidate.match.matchTime.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+
+            let finalStatus: String?
+            if matchStatus == "AET" && (bbcStatus == "PENS" || bbcStatus == "PEN" || bbcStatus == "PEN.") {
+                NSLog("[DEBUG applyScores] Keeping AET from match (matchStatus=%@ bbcStatus=%@) for %@ vs %@", match.scoreStatus ?? "nil", candidate.match.matchTime, match.homeTeam, match.awayTeam)
+                finalStatus = match.scoreStatus
+            } else {
+                finalStatus = candidate.match.matchTime
+            }
+
+            return match.withScore(
+                home: candidate.match.homeScore,
+                away: candidate.match.awayScore,
+                status: finalStatus
+            )
+        }
+    }
+
+    private static func parseMatchTimeMinutes(_ matchTime: String?) -> Int? {
+        guard let matchTime = matchTime?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+
+        // Extract minute value (e.g., "45+2" -> 47, "90" -> 90)
+        if let match = matchTime.range(of: #"^(\d+)(?:\+(\d+))?[']?$"#, options: .regularExpression) {
+            let components = matchTime[match].split(separator: "+")
+            let base = Int(components[0].trimmingCharacters(in: CharacterSet(charactersIn: "'"))) ?? 0
+            let added = components.count > 1 ? Int(components[1].trimmingCharacters(in: CharacterSet(charactersIn: "'"))) ?? 0 : 0
+            return base + added
+        }
+
+        // Handle special statuses
+        let upper = matchTime.uppercased()
+        if upper.contains("HT") || upper.contains("HALF") { return 45 }
+        if upper.contains("FT") || upper.contains("FULL") { return 90 }
+        if upper == "AET" { return 120 }
+        if upper == "PENS" || upper == "PEN" || upper == "PEN." { return 120 }
+
+        return nil
+    }
+
+    private static func bestCandidate(for match: Match, in bbcMatches: [BbcMatch]) -> ScoreCandidate? {
+        var best: ScoreCandidate?
+
+        for bbc in bbcMatches {
+            let direct = score(
+                home: match.homeTeam,
+                away: match.awayTeam,
+                bbcHome: bbc.homeTeam,
+                bbcAway: bbc.awayTeam,
+                penalty: 0
+            )
+            let swapped = score(
+                home: match.homeTeam,
+                away: match.awayTeam,
+                bbcHome: bbc.awayTeam,
+                bbcAway: bbc.homeTeam,
+                penalty: swappedPenalty
+            )
+
+            let chosen = direct.confidence >= swapped.confidence ? direct : swapped
+            let candidate = ScoreCandidate(
+                match: bbc,
+                confidence: chosen.confidence,
+                minTeamConfidence: chosen.minTeamConfidence
+            )
+
+            if best == nil || candidate.confidence > (best?.confidence ?? 0) {
+                best = candidate
+            }
+        }
+
+        guard let best,
+              best.confidence >= minCombinedConfidence,
+              best.minTeamConfidence >= minTeamConfidence
+        else {
+            return nil
+        }
+
+        return best
+    }
+
+    private static func score(
+        home: String,
+        away: String,
+        bbcHome: String,
+        bbcAway: String,
+        penalty: Double
+    ) -> (confidence: Double, minTeamConfidence: Double) {
+        let homeScore = similarityScore(home, bbcHome)
+        let awayScore = similarityScore(away, bbcAway)
+        let combined = max(0, ((homeScore + awayScore) / 2) - penalty)
+        return (combined, min(homeScore, awayScore))
+    }
+
+    private static func similarityScore(_ lhs: String, _ rhs: String) -> Double {
+        let leftVariants = variants(for: lhs)
+        let rightVariants = variants(for: rhs)
+        var best = 0.0
+
+        for left in leftVariants {
+            for right in rightVariants {
+                let base = similarity(left.key, right.key)
+                let dice = diceCoefficient(left.tokens, right.tokens)
+                let prefix = prefixScore(left, right)
+                var candidate = max(base, dice, prefix)
+
+                if left.tokens.count >= 2 && right.tokens.count >= 2 {
+                    let intersection = tokenIntersectionCount(left.tokens, right.tokens)
+                    if intersection == 1 {
+                        candidate = max(0, candidate - singleTokenPenalty)
+                    }
+                }
+
+                best = max(best, candidate)
+            }
+        }
+
+        return min(1, best)
+    }
+
+    private static func variants(for name: String) -> [NameVariant] {
+        let lowered = name.lowercased()
+        var candidates: [String] = [lowered]
+        if let alias = aliasMap[lowered] {
+            candidates.append(alias)
+        }
+
+        var variants: [NameVariant] = []
+        for candidate in candidates {
+            let tokens = normalizedTokens(candidate)
+            let key = tokens.joined()
+            guard !key.isEmpty else { continue }
+            let variant = NameVariant(key: key, tokens: tokens)
+            if !variants.contains(variant) {
+                variants.append(variant)
+            }
+        }
+
+        return variants
+    }
+
+    private static func normalizedTokens(_ value: String) -> [String] {
+        let lowered = value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .replacingOccurrences(of: "&", with: " and ")
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+
+        return lowered
+            .split { !$0.isLetter && !$0.isNumber }
+            .map { String($0) }
+            .filter { !stopWords.contains($0) }
+    }
+
+    private static func diceCoefficient(_ lhs: [String], _ rhs: [String]) -> Double {
+        guard !lhs.isEmpty || !rhs.isEmpty else { return 1 }
+        let intersection = tokenIntersectionCount(lhs, rhs)
+        return (2 * Double(intersection)) / Double(lhs.count + rhs.count)
+    }
+
+    private static func tokenIntersectionCount(_ lhs: [String], _ rhs: [String]) -> Int {
+        let left = Set(lhs)
+        let right = Set(rhs)
+        return left.intersection(right).count
+    }
+
+    private static func prefixScore(_ lhs: NameVariant, _ rhs: NameVariant) -> Double {
+        guard min(lhs.tokens.count, rhs.tokens.count) == 1 else { return 0 }
+        if lhs.key.hasPrefix(rhs.key) || rhs.key.hasPrefix(lhs.key) {
+            let minLength = min(lhs.key.count, rhs.key.count)
+            let maxLength = max(lhs.key.count, rhs.key.count)
+            guard maxLength > 0 else { return 1 }
+            return min(1, (Double(minLength) / Double(maxLength)) + prefixBoost)
+        }
+        return 0
+    }
+
+    private static func similarity(_ lhs: String, _ rhs: String) -> Double {
+        let distance = levenshtein(lhs, rhs)
+        let maxLength = max(lhs.count, rhs.count)
+        guard maxLength > 0 else { return 1 }
+        return 1 - (Double(distance) / Double(maxLength))
+    }
+
+    private static func levenshtein(_ lhs: String, _ rhs: String) -> Int {
+        let lhsChars = Array(lhs)
+        let rhsChars = Array(rhs)
+
+        var previous = Array(0...rhsChars.count)
+        var current = Array(repeating: 0, count: rhsChars.count + 1)
+
+        for (i, lhsChar) in lhsChars.enumerated() {
+            current[0] = i + 1
+            for (j, rhsChar) in rhsChars.enumerated() {
+                let cost = lhsChar == rhsChar ? 0 : 1
+                current[j + 1] = min(
+                    previous[j + 1] + 1,
+                    current[j] + 1,
+                    previous[j] + cost
+                )
+            }
+            previous = current
+        }
+
+        return previous[rhsChars.count]
+    }
+
+    private static let stopWords: Set<String> = [
+        "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk",
+        "club", "de", "the", "and"
+    ]
+
+    private static let aliasMap: [String: String] = [
+        "manchester united": "man united",
+        "manchester city": "man city",
+        "tottenham hotspur": "tottenham",
+        "wolverhampton wanderers": "wolves",
+        "sheffield united": "sheff utd",
+        "sheffield wednesday": "sheff wed",
+        "nottingham forest": "nottm forest",
+        "brighton & hove albion": "brighton",
+        "brighton and hove albion": "brighton",
+        "borussia dortmund": "dortmund",
+        "borussia m'gladbach": "m'gladbach",
+        "athletic club": "athletic",
+        "real betis": "betis",
+        "fc copenhagen": "copenhagen",
+        "fc porto": "porto",
+        "paok thessaloniki": "paok",
+        "paok thessaloniki fc": "paok",
+        "inter milan": "inter",
+        "ac milan": "ac milan"
+    ]
+}
+
+struct MatchLeague: Identifiable, Hashable {
+    let id: String
+    let league: String
+    let matches: [Match]
+}
+
+@MainActor
+final class MatchesStore: ObservableObject {
+    @Published private(set) var matches: [Match] = []
+    @Published private(set) var groupedMatches: [MatchDay] = []
+    @Published var isLoading = false
+    @Published var errorMessage: String?
+    @Published var lastUpdated: Date?
+    @Published var isUsingCache = false
+
+    private struct ModeState {
+        var matches: [Match] = []
+        var unfilteredMatches: [Match] = []
+        var page: Int = 0
+        var hasMore: Bool = true
+        var isLoading: Bool = false
+        var lastUpdated: Date?
+        var isUsingCache: Bool = false
+        var errorMessage: String?
+    }
+
+    private var refreshTimer: Timer?
+    private var currentSnapshot: PreferencesSnapshot?
+    private var activeMode: MatchesViewMode = .fixtures
+    private var modeStates: [MatchesViewMode: ModeState] = [
+        .fixtures: ModeState(),
+        .results: ModeState(),
+    ]
+    private var cachedBbcLiveMatches: [BbcMatch] = []
+    private var bbcLiveLastFetchedAt: Date?
+    private var bbcLiveRefreshTask: Task<Void, Never>?
+
+    private let liveRefreshInterval: TimeInterval = 30
+    private let bbcLiveRefreshInterval: TimeInterval = 90
+    private let pageSize = 120
+    private let prefetchThreshold = 20
+
+    var hasInProgressMatches: Bool {
+        modeStates.values.contains { state in
+            state.matches.contains(where: \.isInProgress)
+        }
+    }
+
+    func configure(with snapshot: PreferencesSnapshot) {
+        configure(with: snapshot, mode: activeMode)
+    }
+
+    func configure(with snapshot: PreferencesSnapshot, mode: MatchesViewMode) {
+        let snapshotChanged = currentSnapshot != snapshot
+        currentSnapshot = snapshot
+        activeMode = mode
+
+        if snapshotChanged {
+            loadCache(snapshot: snapshot)
+            Task { await refresh(preferences: snapshot, mode: mode) }
+        } else if state(for: mode).matches.isEmpty {
+            Task { await refresh(preferences: snapshot, mode: mode) }
+        }
+
+        publishState(for: mode)
+        updateRefreshTimer(using: snapshot, matches: combinedLoadedMatches())
+    }
+
+    func stopAutoRefresh() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        bbcLiveRefreshTask?.cancel()
+        bbcLiveRefreshTask = nil
+    }
+
+    func refresh(preferences: PreferencesSnapshot) async {
+        await refresh(preferences: preferences, mode: activeMode)
+    }
+
+    func refresh(preferences: PreferencesSnapshot, mode: MatchesViewMode) async {
+        await fetchPage(preferences: preferences, mode: mode, reset: true)
+    }
+
+    func prefetchIfNeeded(
+        currentMatch: Match,
+        preferences: PreferencesSnapshot,
+        mode: MatchesViewMode
+    ) async {
+        guard mode == activeMode else { return }
+        let currentState = state(for: mode)
+        guard !currentState.isLoading, currentState.hasMore else { return }
+        guard let index = currentState.matches.firstIndex(where: { $0.id == currentMatch.id }) else { return }
+        let triggerIndex = max(0, currentState.matches.count - prefetchThreshold)
+        guard index >= triggerIndex else { return }
+        await fetchPage(preferences: preferences, mode: mode, reset: false)
+    }
+
+    private func fetchPage(preferences: PreferencesSnapshot, mode: MatchesViewMode, reset: Bool) async {
+        guard let baseURL = URL(string: preferences.apiBaseURL) else {
+            setError("Invalid API base URL.", for: mode)
+            return
+        }
+
+        var current = state(for: mode)
+        if current.isLoading { return }
+        if !reset && !current.hasMore { return }
+
+        current.isLoading = true
+        current.errorMessage = nil
+        if reset {
+            current.page = 0
+            current.hasMore = true
+        }
+        modeStates[mode] = current
+        if mode == activeMode {
+            publishState(for: mode)
+        }
+
+        do {
+            let nextPage = reset ? 1 : max(1, current.page + 1)
+            let client = APIClient(baseURL: baseURL)
+            let pageResponse = try await client.fetchMatchesPage(
+                preferences: preferences,
+                mode: mode,
+                page: nextPage,
+                pageSize: pageSize
+            )
+
+            var incoming = pageResponse.matches
+
+            // Filter out test matches in non-DEBUG builds
+            #if !DEBUG
+            incoming = incoming.filter { $0.isTestMatch != true }
+            #endif
+
+            // Debug log for Birmingham vs Leeds match
+            if let birdsMatch = incoming.first(where: { $0.homeTeam.contains("Birmingham") && $0.awayTeam.contains("Leeds") }) {
+                NSLog("[DEBUG fetchPage] Birmingham vs Leeds decoded with status=%@ hasScore=%d", birdsMatch.scoreStatus ?? "nil", birdsMatch.hasScore)
+            }
+            if mode == .fixtures {
+                incoming = MatchScoreResolver.applyScores(to: incoming, using: cachedBbcLiveMatches)
+                scheduleBbcLiveRefreshIfNeeded(client: client, force: cachedBbcLiveMatches.isEmpty)
+            }
+
+            let competitionFiltered = Self.applyCompetitionFilters(
+                to: incoming,
+                selectedLeagues: preferences.selectedLeagues,
+                isEnabled: preferences.competitionFilterEnabled
+            )
+
+            let dateFiltered = Self.filterMatches(competitionFiltered, for: mode)
+
+            let modeFiltered: [Match]
+            if mode == .fixtures && preferences.channelFilterEnabled {
+                modeFiltered = Self.applyChannelFilters(
+                    to: dateFiltered,
+                    selectedChannels: preferences.selectedChannels
+                )
+            } else {
+                modeFiltered = dateFiltered
+            }
+
+            var nextState = state(for: mode)
+            nextState.matches = reset
+                ? modeFiltered
+                : Self.mergePages(existing: nextState.matches, incoming: modeFiltered)
+            nextState.unfilteredMatches = reset
+                ? incoming
+                : Self.mergePages(existing: nextState.unfilteredMatches, incoming: incoming)
+            nextState.page = pageResponse.page
+            nextState.hasMore = pageResponse.hasMore
+            if let updated = pageResponse.lastUpdated {
+                nextState.lastUpdated = updated
+            }
+            nextState.isLoading = false
+            nextState.isUsingCache = false
+            nextState.errorMessage = nil
+
+            modeStates[mode] = nextState
+            persistCombinedCacheAndSync(snapshot: preferences)
+
+            if mode == activeMode {
+                publishState(for: mode)
+            }
+            updateRefreshTimer(using: preferences, matches: combinedLoadedMatches())
+        } catch {
+            if Self.isCancellationError(error) {
+                var cancelledState = state(for: mode)
+                cancelledState.isLoading = false
+                cancelledState.errorMessage = nil
+                modeStates[mode] = cancelledState
+                if mode == activeMode {
+                    publishState(for: mode)
+                }
+                NSLog("Matches refresh cancelled for mode=%@", mode.rawValue)
+                return
+            }
+            NSLog("Matches refresh failed for mode=%@ error=%@", mode.rawValue, String(describing: error))
+            setError("Unable to load matches. Check your API URL or connection.", for: mode)
+        }
+    }
+
+    private static func isCancellationError(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    private func scheduleBbcLiveRefreshIfNeeded(client: APIClient, force: Bool = false) {
+        guard shouldRefreshBbcLive(force: force) else { return }
+        guard bbcLiveRefreshTask == nil else { return }
+
+        bbcLiveRefreshTask = Task {
+            let fresh = (try? await client.fetchBbcLiveMatches()) ?? []
+            await MainActor.run {
+                if !fresh.isEmpty {
+                    self.cachedBbcLiveMatches = fresh
+                }
+                self.bbcLiveLastFetchedAt = Date()
+                self.bbcLiveRefreshTask = nil
+                self.rescoreVisibleFixtures()
+            }
+        }
+    }
+
+    private func shouldRefreshBbcLive(force: Bool = false, now: Date = Date()) -> Bool {
+        if force { return true }
+        if cachedBbcLiveMatches.isEmpty { return true }
+        guard let last = bbcLiveLastFetchedAt else { return true }
+        return now.timeIntervalSince(last) >= bbcLiveRefreshInterval
+    }
+
+    private func rescoreVisibleFixtures() {
+        var fixtureState = state(for: .fixtures)
+        guard !fixtureState.matches.isEmpty else { return }
+        let rescored = MatchScoreResolver.applyScores(to: fixtureState.matches, using: cachedBbcLiveMatches)
+        fixtureState.matches = rescored
+        modeStates[.fixtures] = fixtureState
+        if activeMode == .fixtures {
+            publishState(for: .fixtures)
+        }
+    }
+
+    private func loadCache(snapshot: PreferencesSnapshot) {
+        guard let payload = MatchCache.load(for: snapshot) else {
+            modeStates = [.fixtures: ModeState(), .results: ModeState()]
+            publishState(for: activeMode)
+            return
+        }
+
+        let cachedMatches = payload.matches
+        let competitionFiltered = Self.applyCompetitionFilters(
+            to: cachedMatches,
+            selectedLeagues: snapshot.selectedLeagues,
+            isEnabled: snapshot.competitionFilterEnabled
+        )
+        let fixturesBase = Self.filterMatches(competitionFiltered, for: .fixtures)
+        let fixtures = snapshot.channelFilterEnabled
+            ? Self.applyChannelFilters(to: fixturesBase, selectedChannels: snapshot.selectedChannels)
+            : fixturesBase
+        let results = Self.filterMatches(competitionFiltered, for: .results)
+
+        let unfilteredFixtures = Self.filterMatches(cachedMatches, for: .fixtures)
+        let unfilteredResults = Self.filterMatches(cachedMatches, for: .results)
+
+        var fixtureState = ModeState()
+        fixtureState.matches = Self.sortedMatches(fixtures)
+        fixtureState.unfilteredMatches = Self.sortedMatches(unfilteredFixtures)
+        fixtureState.lastUpdated = payload.lastUpdated
+        fixtureState.isUsingCache = true
+
+        var resultState = ModeState()
+        resultState.matches = Array(Self.sortedMatches(results).reversed())
+        resultState.unfilteredMatches = Array(Self.sortedMatches(unfilteredResults).reversed())
+        resultState.lastUpdated = payload.lastUpdated
+        resultState.isUsingCache = true
+
+        modeStates = [.fixtures: fixtureState, .results: resultState]
+        bbcLiveLastFetchedAt = nil
+        publishState(for: activeMode)
+
+        let combinedFiltered = Self.sortedMatches(fixtures + results)
+        let combinedUnfiltered = Self.sortedMatches(cachedMatches)
+        SharedMatchesBridge.saveAndSync(
+            matches: combinedFiltered,
+            unfilteredMatches: combinedUnfiltered,
+            lastUpdated: payload.lastUpdated,
+            snapshot: snapshot
+        )
+    }
+
+    private func persistCombinedCacheAndSync(snapshot: PreferencesSnapshot) {
+        let combined = Self.sortedMatches(combinedLoadedMatches())
+        let unfilteredCombined = Self.sortedMatches(combinedUnfilteredMatches())
+        guard !combined.isEmpty else { return }
+        let latestUpdated = latestLastUpdatedAcrossModes()
+        MatchCache.save(matches: unfilteredCombined, lastUpdated: latestUpdated, snapshot: snapshot)
+        SharedMatchesBridge.saveAndSync(
+            matches: combined,
+            unfilteredMatches: unfilteredCombined,
+            lastUpdated: latestUpdated,
+            snapshot: snapshot
+        )
+    }
+
+    private func latestLastUpdatedAcrossModes() -> Date? {
+        let updates = modeStates.values.compactMap(\.lastUpdated)
+        return updates.max()
+    }
+
+    private func combinedLoadedMatches() -> [Match] {
+        let allMatches = modeStates.values.flatMap(\.matches)
+        return Self.mergePages(existing: [], incoming: allMatches)
+    }
+
+    private func combinedUnfilteredMatches() -> [Match] {
+        let allMatches = modeStates.values.flatMap(\.unfilteredMatches)
+        return Self.mergePages(existing: [], incoming: allMatches)
+    }
+
+    private func setError(_ message: String, for mode: MatchesViewMode) {
+        var current = state(for: mode)
+        current.isLoading = false
+        current.errorMessage = message
+        modeStates[mode] = current
+        if mode == activeMode {
+            publishState(for: mode)
+        }
+    }
+
+    private func state(for mode: MatchesViewMode) -> ModeState {
+        modeStates[mode] ?? ModeState()
+    }
+
+    private func publishState(for mode: MatchesViewMode) {
+        activeMode = mode
+        let current = state(for: mode)
+        matches = current.matches
+        groupedMatches = Self.groupMatches(current.matches, descendingDates: mode == .results)
+        isLoading = current.isLoading
+        errorMessage = current.errorMessage
+        lastUpdated = current.lastUpdated
+        isUsingCache = current.isUsingCache
+    }
+
+    private func updateRefreshTimer(using snapshot: PreferencesSnapshot, matches: [Match]? = nil) {
+        scheduleTimer(interval: effectiveRefreshInterval(for: snapshot, matches: matches ?? self.matches))
+    }
+
+    private func effectiveRefreshInterval(for snapshot: PreferencesSnapshot, matches: [Match]) -> TimeInterval {
+        let configuredInterval = TimeInterval(max(1, snapshot.refreshIntervalMinutes) * 60)
+        guard matches.contains(where: \.isInProgress) else { return configuredInterval }
+        return min(configuredInterval, liveRefreshInterval)
+    }
+
+    private func scheduleTimer(interval: TimeInterval) {
+        let boundedInterval = max(1, interval)
+
+        if let refreshTimer, abs(refreshTimer.timeInterval - boundedInterval) < 1 {
+            return
+        }
+
+        refreshTimer?.invalidate()
+        let timer = Timer(timeInterval: boundedInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let snapshot = self.currentSnapshot else { return }
+                await self.refresh(preferences: snapshot, mode: self.activeMode)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
+    }
+
+    private static func mergePages(existing: [Match], incoming: [Match]) -> [Match] {
+        var merged = existing
+        var seen = Set(existing.map(\.id))
+        for match in incoming where !seen.contains(match.id) {
+            seen.insert(match.id)
+            merged.append(match)
+        }
+        return merged
+    }
+
+    private static func filterMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        return matches.filter { match in
+            guard let date = match.dateOnly else {
+                return mode == .fixtures
+            }
+            let day = calendar.startOfDay(for: date)
+            switch mode {
+            case .fixtures:
+                return day >= today
+            case .results:
+                if day < today { return true }
+                if day > today { return false }
+                return match.isInProgress || match.isFinished
+            }
+        }
+    }
+
+    private static func sortedMatches(_ matches: [Match]) -> [Match] {
+        matches.sorted {
+            let leftDate = $0.dateTime ?? MatchDateParser.shared.parse(date: $0.date, time: "00:00") ?? .distantFuture
+            let rightDate = $1.dateTime ?? MatchDateParser.shared.parse(date: $1.date, time: "00:00") ?? .distantFuture
+            if leftDate != rightDate {
+                return leftDate < rightDate
+            }
+
+            let leagueCompare = $0.league.localizedCaseInsensitiveCompare($1.league)
+            if leagueCompare != .orderedSame {
+                return leagueCompare == .orderedAscending
+            }
+
+            let homeCompare = $0.homeTeam.localizedCaseInsensitiveCompare($1.homeTeam)
+            if homeCompare != .orderedSame {
+                return homeCompare == .orderedAscending
+            }
+
+            return $0.awayTeam.localizedCaseInsensitiveCompare($1.awayTeam) == .orderedAscending
+        }
+    }
+
+    private static func applyChannelFilters(to matches: [Match], selectedChannels: [String]) -> [Match] {
+        guard !selectedChannels.isEmpty else { return matches }
+
+        return matches.compactMap { match in
+            let relevantChannels = ChannelSelection.filterChannels(match.tvChannels, selectedOptions: selectedChannels)
+            guard !relevantChannels.isEmpty else { return nil }
+            return match.withTvChannels(relevantChannels)
+        }
+    }
+
+    private static func applyCompetitionFilters(
+        to matches: [Match],
+        selectedLeagues: [String],
+        isEnabled: Bool
+    ) -> [Match] {
+        guard isEnabled else { return matches }
+        guard !selectedLeagues.isEmpty else { return matches }
+
+        let selected = Set(selectedLeagues.map {
+            $0.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+        })
+
+        return matches.filter { match in
+            selected.contains(
+                match.league
+                    .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+            )
+        }
+    }
+
+    private static func groupMatches(_ matches: [Match], descendingDates: Bool = false) -> [MatchDay] {
+        let groupedByDate = Dictionary(grouping: matches) { $0.date }
+        var dateKeys = groupedByDate.keys.sorted()
+        if descendingDates {
+            dateKeys.reverse()
+        }
+        let calendar = Calendar.current
+
+        let dateDays: [MatchDay] = dateKeys.compactMap { dateKey -> MatchDay? in
+            guard let matchesForDate = groupedByDate[dateKey] else { return nil }
+            let displayDate: String
+            let parsedDate = MatchDateParser.shared.parse(date: dateKey, time: "00:00")
+            let isToday = parsedDate.map { calendar.isDateInToday($0) } ?? false
+            let isTomorrow = parsedDate.map { calendar.isDateInTomorrow($0) } ?? false
+            if let parsedDate {
+                displayDate = MatchDateParser.shared.displayDateWithRelative(parsedDate)
+            } else {
+                displayDate = dateKey
+            }
+
+            let groupedByLeague = Dictionary(grouping: matchesForDate) { $0.league }
+            let leagues = groupedByLeague.keys.sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            }
+
+            let leagueSections = leagues.compactMap { league -> MatchLeague? in
+                guard let leagueMatches = groupedByLeague[league] else { return nil }
+                return MatchLeague(id: "\(dateKey)|\(league)", league: league, matches: leagueMatches)
+            }
+
+            return MatchDay(
+                id: dateKey,
+                dateKey: dateKey,
+                displayDate: displayDate,
+                isToday: isToday,
+                isTomorrow: isTomorrow,
+                leagues: leagueSections
+            )
+        }
+
+        return dateDays
+    }
+}

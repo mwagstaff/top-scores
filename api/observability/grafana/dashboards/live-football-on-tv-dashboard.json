@@ -1,0 +1,126 @@
+{
+  "title": "Live Football On TV Source Health",
+  "schemaVersion": 38,
+  "version": 3,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Successful Updates - req/sec",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(source_fetches_total{source=\"live_football_on_tv\",status=\"success\"}[$__rate_interval]))",
+          "legendFormat": "success req/sec"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Successful Updates by Status - req/sec",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(source_fetches_total{source=\"live_football_on_tv\"}[$__rate_interval])) by (status)",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Failed Updates - req/sec",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#E02F44"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(source_fetches_total{source=\"live_football_on_tv\",status=\"failure\"}[$__rate_interval]))",
+          "legendFormat": "failure req/sec"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache Size",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "source_cache_size{source=\"live_football_on_tv\"}",
+          "legendFormat": "cached records"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Top Statuses by Count",
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "expr": "sort_desc(topk(10, sum(increase(source_fetches_total{source=\"live_football_on_tv\"}[$__range])) by (status)))",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "Metric": true,
+              "metric": true
+            },
+            "indexByName": {
+              "status": 0,
+              "Value": 1,
+              "Value #A": 1
+            },
+            "renameByName": {
+              "status": "Status",
+              "Value": "Count",
+              "Value #A": "Count"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "P95 Duration",
+      "gridPos": { "x": 0, "y": 26, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "1000 * histogram_quantile(0.95, sum(rate(source_fetch_duration_seconds_bucket{source=\"live_football_on_tv\",status=\"success\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Failure Rate (% of Updates)",
+      "gridPos": { "x": 12, "y": 26, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(source_fetches_total{source=\"live_football_on_tv\",status=\"failure\"}[$__rate_interval])) / clamp_min(sum(rate(source_fetches_total{source=\"live_football_on_tv\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "failure %"
+        }
+      ]
+    }
+  ]
+}

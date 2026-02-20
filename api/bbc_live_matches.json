@@ -1,0 +1,131 @@
+[
+  {
+    "home_team": "2 de Mayo",
+    "home_score": 2,
+    "away_team": "Sporting Cristal",
+    "away_score": 2,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cx2dwegzr9gt",
+    "home_goal_scorers": [
+      {
+        "player": "M. Cáceres",
+        "goal_times": [
+          "83'"
+        ]
+      },
+      {
+        "player": "Cristiano",
+        "own_goal_times": [
+          "84'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "Y. Yotún",
+        "goal_times": [
+          "62' pen"
+        ]
+      },
+      {
+        "player": "A. Martínez",
+        "own_goal_times": [
+          "87'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [
+      {
+        "player": "L. Iberico",
+        "red_card_times": [
+          "39'"
+        ]
+      }
+    ],
+    "home_assists": [
+      {
+        "player": "B. Ayala",
+        "assist_times": [
+          "83'"
+        ]
+      }
+    ],
+    "away_assists": []
+  },
+  {
+    "home_team": "Liverpool",
+    "home_score": 1,
+    "away_team": "Independiente Medellín",
+    "away_score": 2,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c78x635033wt",
+    "home_goal_scorers": [
+      {
+        "player": "S. Strasorier",
+        "goal_times": [
+          "64'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "F. Fydriszewski",
+        "goal_times": [
+          "52'"
+        ]
+      },
+      {
+        "player": "H. Palacios",
+        "goal_times": [
+          "90'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "D. Romero",
+        "assist_times": [
+          "64'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "J. Ortiz",
+        "assist_times": [
+          "52'"
+        ]
+      },
+      {
+        "player": "F. Fabra",
+        "assist_times": [
+          "90'"
+        ]
+      }
+    ]
+  },
+  {
+    "home_team": "Kwara United",
+    "home_score": 1,
+    "away_team": "Rivers United",
+    "away_score": 1,
+    "match_time": "FT"
+  },
+  {
+    "home_team": "Real Madrid",
+    "home_score": 3,
+    "away_team": "Paris FC",
+    "away_score": 2,
+    "match_time": "3"
+  },
+  {
+    "home_team": "Arsenal",
+    "home_score": 4,
+    "away_team": "OH Leuven",
+    "away_score": 0,
+    "match_time": "4"
+  }
+]
