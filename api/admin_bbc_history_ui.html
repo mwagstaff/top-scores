@@ -1,0 +1,1473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BBC Match Event History</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --ink: #0f1720;
+      --muted: #4b5563;
+      --line: #d8dee6;
+      --accent: #0f766e;
+      --accent-soft: #d5f4f0;
+      --warn: #b45309;
+      --fail: #b91c1c;
+      --ok: #166534;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #eef4f7 0%, #f6f8fa 100%);
+      color: var(--ink);
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 32, 0.05);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    form {
+      display: grid;
+      gap: 12px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .row.mode {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    input,
+    select,
+    button {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    input:focus,
+    select:focus {
+      outline: 2px solid rgba(15, 118, 110, 0.25);
+      border-color: var(--accent);
+    }
+
+    button {
+      border: 0;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover {
+      filter: brightness(0.95);
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    button.danger {
+      background: #b91c1c;
+    }
+
+    .subheading {
+      margin: 0 0 6px;
+      font-size: 1.2rem;
+    }
+
+    .realtime-inline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.82rem;
+    }
+
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .warning {
+      color: var(--warn);
+      font-weight: 600;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #f9fbfc;
+    }
+
+    .stat .label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .stat .value {
+      font-size: 1.2rem;
+      margin-top: 2px;
+      font-weight: 700;
+    }
+
+    .match-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .match-head {
+      padding: 12px;
+      background: var(--accent-soft);
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 4px;
+    }
+
+    .match-head .title {
+      font-size: 1rem;
+      font-weight: 700;
+    }
+
+    .match-head .title a {
+      color: inherit;
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+
+    .match-head .title a:hover {
+      color: #0b5e58;
+    }
+
+    .match-head .meta {
+      font-size: 0.82rem;
+      color: #134e4a;
+    }
+
+    .match-body {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+    }
+
+    .section {
+      padding: 12px;
+      border-right: 1px solid var(--line);
+    }
+
+    .section:last-child {
+      border-right: 0;
+    }
+
+    .section h3 {
+      margin: 0 0 10px;
+      font-size: 0.95rem;
+    }
+
+    .item-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: #fafcfe;
+      font-size: 0.86rem;
+    }
+
+    .item .line1 {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .item .line2,
+    .item .line3 {
+      margin-top: 3px;
+      color: var(--muted);
+      word-break: break-word;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .subsection-title {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 700;
+    }
+
+    details.raw {
+      margin-top: 8px;
+    }
+
+    details.raw summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    pre.raw-json {
+      margin: 8px 0 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      color: #0f1720;
+      font-size: 0.76rem;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .pill {
+      border-radius: 999px;
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      display: inline-block;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .pill.success {
+      color: var(--ok);
+      border-color: rgba(22, 101, 52, 0.3);
+      background: rgba(22, 101, 52, 0.1);
+    }
+
+    .pill.failure {
+      color: var(--fail);
+      border-color: rgba(185, 28, 28, 0.3);
+      background: rgba(185, 28, 28, 0.1);
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .error {
+      color: var(--fail);
+      font-weight: 600;
+    }
+
+    @media (max-width: 960px) {
+      .row,
+      .summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .match-body {
+        grid-template-columns: 1fr;
+      }
+
+      .section {
+        border-right: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .section:first-child {
+        border-top: 0;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .row,
+      .summary,
+      .row.mode {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="panel">
+      <h1>BBC Event and Notification History</h1>
+      <p>Admin view of score/event changes and notification sends, with cleanup/backfill maintenance tools.</p>
+    </section>
+
+    <section class="panel">
+      <form id="query-form">
+        <div class="row mode">
+          <div>
+            <label for="mode">Time Mode</label>
+            <select id="mode" name="mode">
+              <option value="relative" selected>Last N hours</option>
+              <option value="absolute">Absolute start/end</option>
+            </select>
+          </div>
+          <div>
+            <label for="hours">Hours (max 168)</label>
+            <select id="hours" name="hours">
+              <option value="1">1 hour</option>
+              <option value="6">6 hours</option>
+              <option value="12">12 hours</option>
+              <option value="24" selected>24 hours</option>
+              <option value="48">48 hours</option>
+              <option value="72">72 hours</option>
+              <option value="168">168 hours (1 week)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row" id="absolute-row" style="display:none;">
+          <div>
+            <label for="start">Start</label>
+            <input id="start" name="start" type="datetime-local">
+          </div>
+          <div>
+            <label for="end">End</label>
+            <input id="end" name="end" type="datetime-local">
+          </div>
+          <div>
+            <label for="match_id">Match Id (optional)</label>
+            <input id="match_id" name="match_id" type="text" placeholder="c043pne0q3kt">
+          </div>
+          <div>
+            <label for="device_token">Device Token (optional)</label>
+            <input id="device_token" name="device_token" type="text" placeholder="device token filter">
+          </div>
+        </div>
+
+        <div class="row" id="relative-row">
+          <div>
+            <label for="match_id_rel">Match Id (optional)</label>
+            <input id="match_id_rel" type="text" placeholder="c043pne0q3kt">
+          </div>
+          <div>
+            <label for="device_token_rel">Device Token (optional)</label>
+            <input id="device_token_rel" type="text" placeholder="device token filter">
+          </div>
+          <div></div>
+          <div></div>
+        </div>
+
+        <div>
+          <button type="submit">Load History</button>
+        </div>
+        <div class="hint">Absolute mode supports up to 7 days between start and end.</div>
+        <div>
+          <label for="client_filter">Filter Results (client-side)</label>
+          <input
+            id="client_filter"
+            type="text"
+            placeholder="Type 3+ chars: team, competition, scorer, assister, red card..."
+          >
+          <div class="hint">Applies automatically after 500ms. Minimum 3 characters.</div>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel" id="status-panel">
+      <div id="status-text">No query executed yet.</div>
+    </section>
+
+    <section class="panel">
+      <div class="summary" id="summary"></div>
+    </section>
+
+    <section class="panel">
+      <div id="results" class="item-list"></div>
+    </section>
+
+    <section class="panel">
+      <h2 class="subheading">Realtime Redis Snapshot</h2>
+      <p>Read-only live view of retained BBC history records plus operational Redis match data.</p>
+      <form id="realtime-form">
+        <div class="row">
+          <div>
+            <label for="rt_match_id">Match Id (optional)</label>
+            <input id="rt_match_id" type="text" placeholder="c043pne0q3kt">
+          </div>
+          <div>
+            <label for="rt_device_token">Device Token (optional)</label>
+            <input id="rt_device_token" type="text" placeholder="device token filter">
+          </div>
+          <div>
+            <label for="rt_limit_matches">Match Limit (0 = all, max 1000)</label>
+            <input id="rt_limit_matches" type="number" min="0" max="1000" step="1" value="0">
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button type="submit">Load Realtime Snapshot</button>
+          </div>
+        </div>
+        <div class="row mode">
+          <div>
+            <label for="rt_auto_refresh">Auto refresh</label>
+            <select id="rt_auto_refresh">
+              <option value="on" selected>On</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <div>
+            <label for="rt_refresh_interval">Refresh interval</label>
+            <select id="rt_refresh_interval">
+              <option value="5000" selected>5 seconds</option>
+              <option value="10000">10 seconds</option>
+              <option value="30000">30 seconds</option>
+              <option value="60000">60 seconds</option>
+            </select>
+          </div>
+        </div>
+      </form>
+      <div id="realtime-status" class="realtime-inline">No realtime snapshot loaded yet.</div>
+    </section>
+
+    <section class="panel">
+      <h2 class="subheading">Cleanup Redis History</h2>
+      <p>Admin cleanup tool for polluted records. Use dry-run first; non-dry-run deletes records from Redis indexes and history entries.</p>
+      <form id="cleanup-form">
+        <div class="row">
+          <div>
+            <label for="cleanup_match_ids">Match Id(s) (optional)</label>
+            <input id="cleanup_match_ids" type="text" placeholder="c043pne0q3kt, cj4zn52vpygt">
+          </div>
+          <div>
+            <label for="cleanup_device_token">Device Token (optional)</label>
+            <input id="cleanup_device_token" type="text" placeholder="device token filter">
+          </div>
+          <div>
+            <label for="cleanup_dry_run">Mode</label>
+            <select id="cleanup_dry_run">
+              <option value="true" selected>Dry run (no delete)</option>
+              <option value="false">Delete matched records</option>
+            </select>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="cleanup-submit" type="submit" class="danger">Run Cleanup</button>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="cleanup_start">Start (optional)</label>
+            <input id="cleanup_start" type="datetime-local">
+          </div>
+          <div>
+            <label for="cleanup_end">End (optional)</label>
+            <input id="cleanup_end" type="datetime-local">
+          </div>
+          <div>
+            <label for="cleanup_allow_all">Allow all records</label>
+            <select id="cleanup_allow_all">
+              <option value="false" selected>No</option>
+              <option value="true">Yes (no filters)</option>
+            </select>
+          </div>
+          <div class="hint">Absolute cleanup range max is 7 days. If one of start/end is set, both are required.</div>
+        </div>
+      </form>
+      <div id="cleanup-status" class="realtime-inline">No cleanup run yet.</div>
+      <div class="hint warning">`device_token`-only cleanup deletes notification records only (event history is shared by match).</div>
+    </section>
+
+    <section class="panel">
+      <h2 class="subheading">BBC Date-Range Backfill</h2>
+      <p>Fetch BBC scores/fixtures for a specific date range and merge into Redis operational state.</p>
+      <form id="range-backfill-form">
+        <div class="row">
+          <div>
+            <label for="backfill_start_date">Start date</label>
+            <input id="backfill_start_date" type="date">
+          </div>
+          <div>
+            <label for="backfill_end_date">End date</label>
+            <input id="backfill_end_date" type="date">
+          </div>
+          <div>
+            <label for="backfill_concurrency">Concurrency (1-50)</label>
+            <input id="backfill_concurrency" type="number" min="1" max="50" step="1" value="20">
+          </div>
+          <div>
+            <label for="backfill_apply">Apply to Redis range cache</label>
+            <select id="backfill_apply">
+              <option value="true" selected>Yes</option>
+              <option value="false">No (fetch only)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div></div>
+          <div></div>
+          <div></div>
+          <div>
+            <label>&nbsp;</label>
+            <button type="submit" class="secondary">Run Date-Range Backfill</button>
+          </div>
+        </div>
+      </form>
+      <div id="range-backfill-status" class="realtime-inline">No date-range backfill run yet.</div>
+      <div class="hint">Max range is 366 days per request.</div>
+    </section>
+
+    <section class="panel">
+      <div class="summary" id="realtime-summary"></div>
+    </section>
+
+    <section class="panel">
+      <div id="realtime-results" class="item-list"></div>
+    </section>
+  </div>
+
+  <script>
+    function buildApiBasePrefix() {
+      const pathname = String(window.location.pathname || '');
+      const adminSuffixPattern = /\/admin\/bbc-history\/?$/;
+      const basePrefix = pathname.replace(adminSuffixPattern, '');
+      return basePrefix && basePrefix !== '/' ? basePrefix : '';
+    }
+
+    const API_BASE_PREFIX = buildApiBasePrefix();
+    const HISTORY_API_URL = `${API_BASE_PREFIX}/api/v1/admin/bbc-history`;
+    const REALTIME_API_URL = `${API_BASE_PREFIX}/api/v1/admin/bbc-history/realtime`;
+    const CLEANUP_API_URL = `${API_BASE_PREFIX}/api/v1/admin/bbc-history/cleanup`;
+    const RANGE_BACKFILL_API_URL = `${API_BASE_PREFIX}/api/v1/admin/bbc-state/backfill-range`;
+
+    const form = document.getElementById('query-form');
+    const modeInput = document.getElementById('mode');
+    const absoluteRow = document.getElementById('absolute-row');
+    const relativeRow = document.getElementById('relative-row');
+    const statusText = document.getElementById('status-text');
+    const summary = document.getElementById('summary');
+    const results = document.getElementById('results');
+    const clientFilterInput = document.getElementById('client_filter');
+    const realtimeForm = document.getElementById('realtime-form');
+    const realtimeMatchIdInput = document.getElementById('rt_match_id');
+    const realtimeDeviceTokenInput = document.getElementById('rt_device_token');
+    const realtimeLimitMatchesInput = document.getElementById('rt_limit_matches');
+    const realtimeAutoRefreshInput = document.getElementById('rt_auto_refresh');
+    const realtimeRefreshIntervalInput = document.getElementById('rt_refresh_interval');
+    const realtimeStatusText = document.getElementById('realtime-status');
+    const realtimeSummary = document.getElementById('realtime-summary');
+    const realtimeResults = document.getElementById('realtime-results');
+    const cleanupForm = document.getElementById('cleanup-form');
+    const cleanupMatchIdsInput = document.getElementById('cleanup_match_ids');
+    const cleanupDeviceTokenInput = document.getElementById('cleanup_device_token');
+    const cleanupDryRunInput = document.getElementById('cleanup_dry_run');
+    const cleanupStartInput = document.getElementById('cleanup_start');
+    const cleanupEndInput = document.getElementById('cleanup_end');
+    const cleanupAllowAllInput = document.getElementById('cleanup_allow_all');
+    const cleanupStatusText = document.getElementById('cleanup-status');
+    const rangeBackfillForm = document.getElementById('range-backfill-form');
+    const rangeBackfillStartInput = document.getElementById('backfill_start_date');
+    const rangeBackfillEndInput = document.getElementById('backfill_end_date');
+    const rangeBackfillConcurrencyInput = document.getElementById('backfill_concurrency');
+    const rangeBackfillApplyInput = document.getElementById('backfill_apply');
+    const rangeBackfillStatusText = document.getElementById('range-backfill-status');
+
+    let latestResponseData = null;
+    let latestRealtimeData = null;
+    let activeClientFilterQuery = '';
+    let filterDebounceTimer = null;
+    let realtimeRefreshTimer = null;
+    let realtimeLoading = false;
+    let latestHistoryQueryString = 'hours=24';
+    let latestRealtimeQueryString = '';
+
+    function formatTimestamp(ms) {
+      if (!Number.isFinite(ms)) return '-';
+      return new Date(ms).toLocaleString();
+    }
+
+    function shortToken(value) {
+      const text = String(value || '');
+      if (text.length <= 18) return text;
+      return text.slice(0, 8) + '...' + text.slice(-6);
+    }
+
+    function formatDurationSeconds(totalSeconds) {
+      const seconds = Number(totalSeconds);
+      if (!Number.isFinite(seconds) || seconds <= 0) return '-';
+
+      const day = 24 * 60 * 60;
+      const hour = 60 * 60;
+      const minute = 60;
+
+      if (seconds % day === 0) return `${seconds / day}d`;
+      if (seconds % hour === 0) return `${seconds / hour}h`;
+      if (seconds % minute === 0) return `${seconds / minute}m`;
+      return `${seconds}s`;
+    }
+
+    function formatTtlSeconds(ttl) {
+      const numeric = Number(ttl);
+      if (!Number.isFinite(numeric)) return '-';
+      if (numeric === -2) return 'missing';
+      if (numeric === -1) return 'no expiry';
+      return formatDurationSeconds(numeric);
+    }
+
+    function escapeHtml(text) {
+      return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function buildBbcLiveUrl(matchId) {
+      const normalizedMatchId = String(matchId || '').trim();
+      if (!normalizedMatchId) return null;
+      return `https://www.bbc.co.uk/sport/football/live/${encodeURIComponent(normalizedMatchId)}`;
+    }
+
+    function toggleMode() {
+      const mode = modeInput.value;
+      if (mode === 'absolute') {
+        absoluteRow.style.display = 'grid';
+        relativeRow.style.display = 'none';
+      } else {
+        absoluteRow.style.display = 'none';
+        relativeRow.style.display = 'grid';
+      }
+    }
+
+    function buildSummaryCards(data) {
+      return `
+        <div class="stat">
+          <div class="label">Matches</div>
+          <div class="value">${data.count_matches || 0}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Events</div>
+          <div class="value">${data.count_events || 0}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Notifications</div>
+          <div class="value">${data.count_notifications || 0}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Window End</div>
+          <div class="value" style="font-size:0.95rem;">${formatTimestamp(data.end_ms)}</div>
+        </div>
+      `;
+    }
+
+    function buildRealtimeSummaryCards(data) {
+      const keyMetrics = data && data.key_metrics ? data.key_metrics : {};
+      const keyTtl = data && data.key_ttl_seconds ? data.key_ttl_seconds : {};
+      const retention = data && data.retention_policy ? data.retention_policy : {};
+      const operational = data && data.operational ? data.operational : {};
+      const datasetCounts = operational && operational.dataset_counts ? operational.dataset_counts : {};
+
+      return `
+        <div class="stat">
+          <div class="label">Matches (shown/total)</div>
+          <div class="value">${data.count_matches || 0} / ${data.count_matches_total || 0}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Events</div>
+          <div class="value">${data.count_events || 0}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Notifications</div>
+          <div class="value">${data.count_notifications || 0}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Redis Keys</div>
+          <div class="value">${keyMetrics.preferences_keys || 0} prefs / ${keyMetrics.idempotency_keys || 0} idempotency</div>
+        </div>
+        <div class="stat">
+          <div class="label">Index Entries</div>
+          <div class="value">${keyMetrics.events_index_entries || 0} ev / ${keyMetrics.notifications_index_entries || 0} notif</div>
+        </div>
+        <div class="stat">
+          <div class="label">Index TTL</div>
+          <div class="value">${formatTtlSeconds(keyTtl.events_index)} / ${formatTtlSeconds(keyTtl.notifications_index)}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Retention</div>
+          <div class="value">${formatDurationSeconds(retention.event_ttl_seconds)} ev / ${formatDurationSeconds(retention.notification_ttl_seconds)} notif</div>
+        </div>
+        <div class="stat">
+          <div class="label">Snapshot At</div>
+          <div class="value" style="font-size:0.95rem;">${data.generated_at ? escapeHtml(new Date(data.generated_at).toLocaleString()) : '-'}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Operational Match Details</div>
+          <div class="value">${operational.count_matches || 0} / ${operational.count_match_details_total || 0}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Operational Datasets</div>
+          <div class="value">${datasetCounts.merged_matches || 0} merged / ${datasetCounts.bbc_live_matches || 0} live</div>
+        </div>
+      `;
+    }
+
+    function aggregateCounts(matches) {
+      let eventCount = 0;
+      let notificationCount = 0;
+      (Array.isArray(matches) ? matches : []).forEach((match) => {
+        eventCount += Array.isArray(match.events) ? match.events.length : 0;
+        notificationCount += Array.isArray(match.notifications) ? match.notifications.length : 0;
+      });
+      return {
+        count_matches: Array.isArray(matches) ? matches.length : 0,
+        count_events: eventCount,
+        count_notifications: notificationCount,
+      };
+    }
+
+    function normalizeSearchText(value) {
+      return String(value || '').trim().toLowerCase();
+    }
+
+    function matchSearchText(match) {
+      const parts = [
+        match.home_team,
+        match.away_team,
+        match.league,
+        match.match_id,
+      ];
+
+      (Array.isArray(match.events) ? match.events : []).forEach((event) => {
+        parts.push(
+          event.event_type,
+          event.title,
+          event.body,
+          event.scorer,
+          event.assister,
+          event.player,
+          event.goal_time,
+          event.red_card_time,
+          event.event_key
+        );
+      });
+
+      (Array.isArray(match.notifications) ? match.notifications : []).forEach((notification) => {
+        parts.push(
+          notification.event_type,
+          notification.title,
+          notification.body,
+          notification.status,
+          notification.error
+        );
+      });
+
+      return parts
+        .map(normalizeSearchText)
+        .filter(Boolean)
+        .join(' ');
+    }
+
+    function filterMatchesByQuery(matches, query) {
+      const normalizedQuery = normalizeSearchText(query);
+      const normalizedMatches = Array.isArray(matches) ? matches : [];
+
+      if (!normalizedQuery) {
+        return {
+          matches: normalizedMatches,
+          query: '',
+          isFiltering: false,
+          tooShort: false,
+        };
+      }
+
+      if (normalizedQuery.length < 3) {
+        return {
+          matches: normalizedMatches,
+          query: normalizedQuery,
+          isFiltering: false,
+          tooShort: true,
+        };
+      }
+
+      return {
+        matches: normalizedMatches.filter((match) => matchSearchText(match).includes(normalizedQuery)),
+        query: normalizedQuery,
+        isFiltering: true,
+        tooShort: false,
+      };
+    }
+
+    function renderEventItem(event) {
+      const type = escapeHtml(event.event_type || event.type || 'unknown');
+      const title = escapeHtml(event.title || '-');
+      const body = escapeHtml(event.body || '-');
+      const details = [
+        event.goal_time ? `goal_time=${escapeHtml(event.goal_time)}` : '',
+        event.red_card_time ? `red_card_time=${escapeHtml(event.red_card_time)}` : '',
+        event.scorer ? `scorer=${escapeHtml(event.scorer)}` : '',
+        event.player ? `player=${escapeHtml(event.player)}` : '',
+        event.event_key ? `key=${escapeHtml(event.event_key)}` : ''
+      ].filter(Boolean).join(' | ');
+
+      return `
+        <div class="item">
+          <div class="line1">
+            <span>${title}</span>
+            <span class="pill">${type}</span>
+          </div>
+          <div class="line2">${body}</div>
+          <div class="line3">${formatTimestamp(Number(event.timestamp_ms))}${details ? ' | ' + details : ''}</div>
+        </div>
+      `;
+    }
+
+    function renderNotificationItem(notification) {
+      const status = String(notification.status || 'unknown').toLowerCase();
+      const statusClass = status === 'sent' ? 'success' : 'failure';
+      const eventType = escapeHtml(notification.event_type || 'unknown');
+      const title = escapeHtml(notification.title || '-');
+      const body = escapeHtml(notification.body || '-');
+      const device = escapeHtml(shortToken(notification.device_token || 'unknown-device'));
+      const extra = [
+        `device=${device}`,
+        notification.delay_minutes !== undefined ? `delay=${escapeHtml(notification.delay_minutes)}m` : '',
+        notification.environment ? `env=${escapeHtml(notification.environment)}` : '',
+        notification.error ? `error=${escapeHtml(notification.error)}` : ''
+      ].filter(Boolean).join(' | ');
+
+      return `
+        <div class="item">
+          <div class="line1">
+            <span>${title}</span>
+            <span class="pill ${statusClass}">${escapeHtml(status)}</span>
+          </div>
+          <div class="line2">${body}</div>
+          <div class="line3">${formatTimestamp(Number(notification.timestamp_ms))} | ${eventType} | ${extra}</div>
+        </div>
+      `;
+    }
+
+    function renderMatches(matches) {
+      if (!Array.isArray(matches) || matches.length === 0) {
+        return '<div class="empty">No records in the selected window.</div>';
+      }
+
+      return matches.map((match) => {
+        const home = escapeHtml(match.home_team || 'Unknown Home');
+        const away = escapeHtml(match.away_team || 'Unknown Away');
+        const league = escapeHtml(match.league || '-');
+        const kickoffDate = escapeHtml(match.kickoff_date || '-');
+        const kickoffTime = escapeHtml(match.kickoff_time || '-');
+        const matchId = escapeHtml(match.match_id || '-');
+        const bbcLiveUrl = buildBbcLiveUrl(match.match_id);
+        const titleContent = bbcLiveUrl
+          ? `<a href="${escapeHtml(bbcLiveUrl)}" target="_blank" rel="noopener noreferrer">${home} vs ${away}</a>`
+          : `${home} vs ${away}`;
+
+        const events = Array.isArray(match.events) ? match.events : [];
+        const notifications = Array.isArray(match.notifications) ? match.notifications : [];
+
+        return `
+          <article class="match-card">
+            <div class="match-head">
+              <div class="title">${titleContent}</div>
+              <div class="meta">${league} | Kick-off ${kickoffDate} ${kickoffTime} | match_id=${matchId}</div>
+              <div class="meta">First: ${formatTimestamp(match.first_timestamp_ms)} | Last: ${formatTimestamp(match.last_timestamp_ms)}</div>
+            </div>
+            <div class="match-body">
+              <section class="section">
+                <h3>Events (${events.length})</h3>
+                ${events.length ? events.map(renderEventItem).join('') : '<div class="empty">No events for this match in snapshot.</div>'}
+              </section>
+              <section class="section">
+                <h3>Notifications (${notifications.length})</h3>
+                ${notifications.length ? notifications.map(renderNotificationItem).join('') : '<div class="empty">No notification sends for this match in snapshot.</div>'}
+              </section>
+            </div>
+          </article>
+        `;
+      }).join('');
+    }
+
+    function renderOperationalMatches(matches) {
+      if (!Array.isArray(matches) || matches.length === 0) {
+        return '<div class="empty">No operational Redis match records for this filter.</div>';
+      }
+
+      return matches.map((match) => {
+        const home = escapeHtml(match.home_team || 'Unknown Home');
+        const away = escapeHtml(match.away_team || 'Unknown Away');
+        const league = escapeHtml(match.league || '-');
+        const kickoffDate = escapeHtml(match.date || '-');
+        const kickoffTime = escapeHtml(match.time || '-');
+        const matchId = escapeHtml(match.match_id || match.id || '-');
+        const status = escapeHtml(match.score_status || '-');
+        const homeScore = Number.isFinite(Number(match.home_score))
+          ? escapeHtml(String(match.home_score))
+          : '-';
+        const awayScore = Number.isFinite(Number(match.away_score))
+          ? escapeHtml(String(match.away_score))
+          : '-';
+        const bbcLiveUrl = buildBbcLiveUrl(match.match_id || match.id);
+        const titleContent = bbcLiveUrl
+          ? `<a href="${escapeHtml(bbcLiveUrl)}" target="_blank" rel="noopener noreferrer">${home} vs ${away}</a>`
+          : `${home} vs ${away}`;
+        const rawJson = escapeHtml(JSON.stringify(match, null, 2));
+
+        return `
+          <article class="match-card">
+            <div class="match-head">
+              <div class="title">${titleContent}</div>
+              <div class="meta">${league} | Kick-off ${kickoffDate} ${kickoffTime} | match_id=${matchId}</div>
+              <div class="meta">Score: ${homeScore} - ${awayScore} | Status: ${status} | Updated: ${match.updated_at ? escapeHtml(new Date(match.updated_at).toLocaleString()) : '-'}</div>
+            </div>
+            <div class="section">
+              <details class="raw">
+                <summary>Show full operational Redis payload (goal scorers, assists, cards, status, metadata)</summary>
+                <pre class="raw-json">${rawJson}</pre>
+              </details>
+            </div>
+          </article>
+        `;
+      }).join('');
+    }
+
+    async function loadHistory(queryString) {
+      latestHistoryQueryString = String(queryString || '');
+      statusText.textContent = 'Loading...';
+      summary.innerHTML = '';
+      results.innerHTML = '';
+
+      try {
+        const response = await fetch(`${HISTORY_API_URL}?${queryString}`);
+        const rawBody = await response.text();
+        let data = null;
+        try {
+          data = rawBody ? JSON.parse(rawBody) : {};
+        } catch (_parseError) {
+          if (!response.ok) {
+            statusText.innerHTML =
+              `<span class="error">Request failed (${response.status}). ${escapeHtml(rawBody || 'No response body.')}</span>`;
+            return;
+          }
+          statusText.innerHTML = '<span class="error">Received non-JSON response from history API.</span>';
+          return;
+        }
+
+        if (!response.ok || !data.success) {
+          const message = data && data.error ? data.error : 'Failed to load data.';
+          statusText.innerHTML = `<span class="error">${escapeHtml(message)}</span>`;
+          return;
+        }
+
+        statusText.textContent =
+          `Loaded ${data.count_events || 0} events and ${data.count_notifications || 0} notifications ` +
+          `across ${data.count_matches || 0} match(es).`;
+        latestResponseData = data;
+        renderFilteredView();
+      } catch (error) {
+        statusText.innerHTML = `<span class="error">${escapeHtml(error.message || String(error))}</span>`;
+      }
+    }
+
+    function renderFilteredView() {
+      if (!latestResponseData) return;
+
+      const baseMatches = Array.isArray(latestResponseData.matches) ? latestResponseData.matches : [];
+      const filterResult = filterMatchesByQuery(baseMatches, activeClientFilterQuery);
+      const visibleCounts = aggregateCounts(filterResult.matches);
+
+      summary.innerHTML = buildSummaryCards({
+        ...latestResponseData,
+        ...visibleCounts,
+      });
+      results.innerHTML = renderMatches(filterResult.matches);
+
+      if (filterResult.tooShort) {
+        statusText.textContent =
+          `Loaded ${latestResponseData.count_matches || 0} match(es). ` +
+          `Enter at least 3 characters to filter.`;
+        return;
+      }
+
+      if (filterResult.isFiltering) {
+        statusText.textContent =
+          `Filter "${filterResult.query}" applied: showing ${visibleCounts.count_matches} of ` +
+          `${latestResponseData.count_matches || 0} match(es).`;
+        return;
+      }
+
+      statusText.textContent =
+        `Loaded ${latestResponseData.count_events || 0} events and ` +
+        `${latestResponseData.count_notifications || 0} notifications across ` +
+        `${latestResponseData.count_matches || 0} match(es).`;
+    }
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+
+      const params = new URLSearchParams();
+      const mode = modeInput.value;
+      let requestedMatchId = '';
+
+      if (mode === 'absolute') {
+        const start = document.getElementById('start').value;
+        const end = document.getElementById('end').value;
+        const matchId = document.getElementById('match_id').value.trim();
+        const deviceToken = document.getElementById('device_token').value.trim();
+
+        if (!start || !end) {
+          statusText.innerHTML = '<span class="error">Start and end are required in absolute mode.</span>';
+          return;
+        }
+
+        const startDate = new Date(start);
+        const endDate = new Date(end);
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+          statusText.innerHTML = '<span class="error">Invalid absolute datetime input.</span>';
+          return;
+        }
+
+        const diffMs = endDate.getTime() - startDate.getTime();
+        const maxRangeMs = 7 * 24 * 60 * 60 * 1000;
+        if (diffMs < 0) {
+          statusText.innerHTML = '<span class="error">End must be after start.</span>';
+          return;
+        }
+        if (diffMs > maxRangeMs) {
+          statusText.innerHTML = '<span class="error">Absolute range must be 7 days or less.</span>';
+          return;
+        }
+
+        params.set('start', startDate.toISOString());
+        params.set('end', endDate.toISOString());
+        if (matchId) params.set('match_id', matchId);
+        if (deviceToken) params.set('device_token', deviceToken);
+        requestedMatchId = matchId;
+      } else {
+        const hours = document.getElementById('hours').value;
+        const matchId = document.getElementById('match_id_rel').value.trim();
+        const deviceToken = document.getElementById('device_token_rel').value.trim();
+
+        params.set('hours', hours);
+        if (matchId) params.set('match_id', matchId);
+        if (deviceToken) params.set('device_token', deviceToken);
+        requestedMatchId = matchId;
+      }
+
+      loadHistory(params.toString());
+
+      // UX: when history is scoped to a match id, auto-load the realtime panel for the same id
+      // so operational Redis data is visible even when history events are empty.
+      if (requestedMatchId) {
+        realtimeMatchIdInput.value = requestedMatchId;
+        loadRealtimeSnapshot(buildRealtimeQueryString(), false);
+        configureRealtimeAutoRefresh();
+      }
+    });
+
+    clientFilterInput.addEventListener('input', () => {
+      if (filterDebounceTimer) {
+        clearTimeout(filterDebounceTimer);
+      }
+      filterDebounceTimer = setTimeout(() => {
+        activeClientFilterQuery = clientFilterInput.value || '';
+        renderFilteredView();
+      }, 500);
+    });
+
+    function buildRealtimeQueryString() {
+      const params = new URLSearchParams();
+      const matchId = String(realtimeMatchIdInput.value || '').trim();
+      const deviceToken = String(realtimeDeviceTokenInput.value || '').trim();
+      const limitMatches = Number(realtimeLimitMatchesInput.value || 0);
+
+      if (matchId) params.set('match_id', matchId);
+      if (deviceToken) params.set('device_token', deviceToken);
+      if (Number.isFinite(limitMatches) && limitMatches > 0) {
+        params.set('limit_matches', String(Math.min(1000, Math.floor(limitMatches))));
+      }
+
+      return params.toString();
+    }
+
+    function parseBooleanInput(value, fallback = false) {
+      if (value === undefined || value === null) return fallback;
+      const normalized = String(value).trim().toLowerCase();
+      if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+      if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+      return fallback;
+    }
+
+    function parseCleanupMatchIds(rawValue) {
+      if (!rawValue) return [];
+      const output = [];
+      rawValue
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .forEach((value) => {
+          if (!output.includes(value)) output.push(value);
+        });
+      return output;
+    }
+
+    function renderRealtimeView() {
+      if (!latestRealtimeData) return;
+
+      const data = latestRealtimeData;
+      const historyMatches = Array.isArray(data.matches) ? data.matches : [];
+      const operational = data.operational && typeof data.operational === 'object'
+        ? data.operational
+        : { matches: [] };
+      const operationalMatches = Array.isArray(operational.matches) ? operational.matches : [];
+
+      realtimeSummary.innerHTML = buildRealtimeSummaryCards(data);
+      realtimeResults.innerHTML = `
+        <div class="stack">
+          <section>
+            <h3 class="subsection-title">BBC History Keys (events + notifications)</h3>
+            ${renderMatches(historyMatches)}
+          </section>
+          <section>
+            <h3 class="subsection-title">Operational Redis Match Data</h3>
+            ${renderOperationalMatches(operationalMatches)}
+          </section>
+        </div>
+      `;
+
+      const retention = data.retention_policy || {};
+      realtimeStatusText.innerHTML =
+        `Realtime snapshot loaded at <span class="mono">${escapeHtml(
+          data.generated_at ? new Date(data.generated_at).toLocaleString() : '-'
+        )}</span>. ` +
+        `Retention: events=${escapeHtml(formatDurationSeconds(retention.event_ttl_seconds))}, ` +
+        `notifications=${escapeHtml(formatDurationSeconds(retention.notification_ttl_seconds))}, ` +
+        `idempotency=${escapeHtml(formatDurationSeconds(retention.notification_idempotency_ttl_seconds))}, ` +
+        `preferences=${escapeHtml(formatDurationSeconds(retention.user_preferences_ttl_seconds))}. ` +
+        `Operational matches shown: ${escapeHtml(String(operational.count_matches || 0))} ` +
+        `of ${escapeHtml(String(operational.count_match_details_total || 0))}.`;
+    }
+
+    async function loadRealtimeSnapshot(queryString = '', isAutoRefresh = false) {
+      if (realtimeLoading) return;
+      latestRealtimeQueryString = String(queryString || '');
+      realtimeLoading = true;
+      if (!isAutoRefresh) {
+        realtimeStatusText.textContent = 'Loading realtime snapshot...';
+      }
+
+      try {
+        const suffix = queryString ? `?${queryString}` : '';
+        const response = await fetch(`${REALTIME_API_URL}${suffix}`);
+        const rawBody = await response.text();
+        let data = null;
+        try {
+          data = rawBody ? JSON.parse(rawBody) : {};
+        } catch (_parseError) {
+          if (!response.ok) {
+            realtimeStatusText.innerHTML =
+              `<span class="error">Realtime request failed (${response.status}). ${escapeHtml(rawBody || 'No response body.')}</span>`;
+            return;
+          }
+          realtimeStatusText.innerHTML =
+            '<span class="error">Received non-JSON response from realtime API.</span>';
+          return;
+        }
+
+        if (!response.ok || !data.success) {
+          const message = data && data.error ? data.error : 'Failed to load realtime snapshot.';
+          realtimeStatusText.innerHTML = `<span class="error">${escapeHtml(message)}</span>`;
+          return;
+        }
+
+        latestRealtimeData = data;
+        renderRealtimeView();
+      } catch (error) {
+        realtimeStatusText.innerHTML = `<span class="error">${escapeHtml(error.message || String(error))}</span>`;
+      } finally {
+        realtimeLoading = false;
+      }
+    }
+
+    function configureRealtimeAutoRefresh() {
+      if (realtimeRefreshTimer) {
+        clearInterval(realtimeRefreshTimer);
+        realtimeRefreshTimer = null;
+      }
+
+      if (realtimeAutoRefreshInput.value !== 'on') {
+        return;
+      }
+
+      const intervalMs = Number(realtimeRefreshIntervalInput.value || 5000);
+      if (!Number.isFinite(intervalMs) || intervalMs < 1000) {
+        return;
+      }
+
+      realtimeRefreshTimer = setInterval(() => {
+        loadRealtimeSnapshot(buildRealtimeQueryString(), true);
+      }, intervalMs);
+    }
+
+    realtimeForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      loadRealtimeSnapshot(buildRealtimeQueryString(), false);
+      configureRealtimeAutoRefresh();
+    });
+
+    realtimeAutoRefreshInput.addEventListener('change', () => {
+      configureRealtimeAutoRefresh();
+    });
+
+    realtimeRefreshIntervalInput.addEventListener('change', () => {
+      configureRealtimeAutoRefresh();
+    });
+
+    cleanupForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const matchIds = parseCleanupMatchIds(cleanupMatchIdsInput.value || '');
+      const deviceToken = String(cleanupDeviceTokenInput.value || '').trim();
+      const dryRun = parseBooleanInput(cleanupDryRunInput.value, true);
+      const allowAll = parseBooleanInput(cleanupAllowAllInput.value, false);
+      const startRaw = String(cleanupStartInput.value || '').trim();
+      const endRaw = String(cleanupEndInput.value || '').trim();
+
+      if ((startRaw && !endRaw) || (!startRaw && endRaw)) {
+        cleanupStatusText.innerHTML =
+          '<span class="error">Start and end are both required when using an absolute cleanup range.</span>';
+        return;
+      }
+
+      let startIso = '';
+      let endIso = '';
+      if (startRaw && endRaw) {
+        const startDate = new Date(startRaw);
+        const endDate = new Date(endRaw);
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+          cleanupStatusText.innerHTML =
+            '<span class="error">Invalid cleanup start/end datetime.</span>';
+          return;
+        }
+
+        const diffMs = endDate.getTime() - startDate.getTime();
+        const maxRangeMs = 7 * 24 * 60 * 60 * 1000;
+        if (diffMs < 0) {
+          cleanupStatusText.innerHTML =
+            '<span class="error">Cleanup end must be after start.</span>';
+          return;
+        }
+        if (diffMs > maxRangeMs) {
+          cleanupStatusText.innerHTML =
+            '<span class="error">Cleanup absolute range must be 7 days or less.</span>';
+          return;
+        }
+
+        startIso = startDate.toISOString();
+        endIso = endDate.toISOString();
+      }
+
+      const hasFilters = matchIds.length > 0 || Boolean(deviceToken) || Boolean(startIso && endIso);
+      if (!hasFilters && !allowAll) {
+        cleanupStatusText.innerHTML =
+          '<span class="error">Cleanup needs at least one filter (match_ids, device_token, or start/end), or allow_all=yes.</span>';
+        return;
+      }
+
+      if (!dryRun) {
+        const confirmText =
+          'Delete matching Redis history records now? This cannot be undone.';
+        if (!window.confirm(confirmText)) {
+          cleanupStatusText.textContent = 'Cleanup cancelled.';
+          return;
+        }
+      }
+
+      const payload = {
+        dry_run: dryRun,
+      };
+      if (matchIds.length > 0) payload.match_ids = matchIds;
+      if (deviceToken) payload.device_token = deviceToken;
+      if (startIso && endIso) {
+        payload.start = startIso;
+        payload.end = endIso;
+      }
+      if (allowAll) payload.allow_all = true;
+
+      cleanupStatusText.textContent = dryRun
+        ? 'Running cleanup dry run...'
+        : 'Running cleanup delete...';
+
+      try {
+        const response = await fetch(CLEANUP_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+        const rawBody = await response.text();
+        let data = null;
+        try {
+          data = rawBody ? JSON.parse(rawBody) : {};
+        } catch (_parseError) {
+          cleanupStatusText.innerHTML =
+            `<span class="error">Cleanup returned non-JSON response: ${escapeHtml(rawBody || 'empty body')}</span>`;
+          return;
+        }
+
+        if (!response.ok || !data.success) {
+          const message = data && data.error ? data.error : 'Cleanup failed.';
+          cleanupStatusText.innerHTML = `<span class="error">${escapeHtml(message)}</span>`;
+          return;
+        }
+
+        const cleanup = data.cleanup || {};
+        const matched = cleanup.matched || {};
+        const deleted = cleanup.deleted || {};
+        const modeLabel = cleanup.dry_run ? 'Dry run complete' : 'Cleanup complete';
+        cleanupStatusText.textContent =
+          `${modeLabel}: matched ${matched.events || 0} events and ${matched.notifications || 0} notifications; ` +
+          `deleted ${deleted.events || 0} events and ${deleted.notifications || 0} notifications.`;
+
+        await loadHistory(latestHistoryQueryString || 'hours=24');
+        await loadRealtimeSnapshot(latestRealtimeQueryString || buildRealtimeQueryString(), false);
+      } catch (error) {
+        cleanupStatusText.innerHTML =
+          `<span class="error">${escapeHtml(error.message || String(error))}</span>`;
+      }
+    });
+
+    rangeBackfillForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const startDate = String(rangeBackfillStartInput.value || '').trim();
+      const endDate = String(rangeBackfillEndInput.value || '').trim();
+      const concurrencyRaw = Number(rangeBackfillConcurrencyInput.value || 20);
+      const concurrency = Number.isFinite(concurrencyRaw)
+        ? Math.max(1, Math.min(50, Math.floor(concurrencyRaw)))
+        : 20;
+      const applyToRangeCache = parseBooleanInput(rangeBackfillApplyInput.value, true);
+
+      if (!startDate || !endDate) {
+        rangeBackfillStatusText.innerHTML =
+          '<span class="error">Start and end dates are required.</span>';
+        return;
+      }
+      if (startDate > endDate) {
+        rangeBackfillStatusText.innerHTML =
+          '<span class="error">Start date must be on or before end date.</span>';
+        return;
+      }
+
+      rangeBackfillStatusText.textContent = 'Running BBC date-range backfill...';
+
+      try {
+        const response = await fetch(RANGE_BACKFILL_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            start_date: startDate,
+            end_date: endDate,
+            concurrency,
+            apply_to_range_cache: applyToRangeCache,
+          }),
+        });
+
+        const rawBody = await response.text();
+        let data = null;
+        try {
+          data = rawBody ? JSON.parse(rawBody) : {};
+        } catch (_parseError) {
+          rangeBackfillStatusText.innerHTML =
+            `<span class="error">Backfill returned non-JSON response: ${escapeHtml(rawBody || 'empty body')}</span>`;
+          return;
+        }
+
+        if (!response.ok || !data.success) {
+          const message = data && data.error ? data.error : 'Date-range backfill failed.';
+          rangeBackfillStatusText.innerHTML = `<span class="error">${escapeHtml(message)}</span>`;
+          return;
+        }
+
+        const backfill = data.backfill || {};
+        rangeBackfillStatusText.textContent =
+          `Backfill complete: fetched ${backfill.fetched_matches || 0} matches for ` +
+          `${backfill.start_date || startDate} to ${backfill.end_date || endDate} ` +
+          `in ${backfill.duration_ms || 0}ms. Range cache now has ${backfill.updated_range_matches || 0} matches.`;
+
+        await loadRealtimeSnapshot(latestRealtimeQueryString || buildRealtimeQueryString(), false);
+        await loadHistory(latestHistoryQueryString || 'hours=24');
+      } catch (error) {
+        rangeBackfillStatusText.innerHTML =
+          `<span class="error">${escapeHtml(error.message || String(error))}</span>`;
+      }
+    });
+
+    modeInput.addEventListener('change', toggleMode);
+    toggleMode();
+    loadHistory('hours=24');
+    loadRealtimeSnapshot(buildRealtimeQueryString(), false);
+    configureRealtimeAutoRefresh();
+  </script>
+</body>
+</html>

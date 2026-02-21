@@ -105,7 +105,7 @@ const MATCH_DETAILS_BACKFILL_BATCH_SIZE = Number.isFinite(parsedMatchDetailsBack
 
 const app = express();
 const API_PREFIX = "/api/v1";
-const APP_DATA_SOURCE = "cache-memory";
+const APP_DATA_SOURCE = "redis-operational";
 const DEVICE_TOKEN_HEADER = "x-device-token";
 const parsedAppMetricsActiveWindowHours = Number(
   process.env.APP_METRICS_ACTIVE_DEVICE_WINDOW_HOURS || 24 * 30
@@ -149,6 +149,13 @@ const SOURCE_BBC_RANGE = "bbc_scores_fixtures_range";
 const SOURCE_BBC_PREMIER_LEAGUE = "bbc_premier_league_table";
 const SOURCE_BBC_MATCH_DETAILS = "bbc_match_details";
 const SOURCE_RECENT_CACHE = "recent_matches_cache";
+const OP_DATASET_LIVE_MATCHES = "live_matches";
+const OP_DATASET_BBC_LIVE_MATCHES = "bbc_live_matches";
+const OP_DATASET_BBC_RANGE_MATCHES = "bbc_range_matches";
+const OP_DATASET_RECENT_MATCHES = "recent_matches";
+const OP_DATASET_MERGED_MATCHES = "merged_matches";
+const OP_DATASET_PREMIER_LEAGUE_TEAMS = "premier_league_teams";
+const OP_DATASET_MISSING_TEAM_LOGOS = "missing_team_logos";
 const eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
 eventLoopDelayMonitor.enable();
 
@@ -838,7 +845,12 @@ function ingestMissingTeamLogoNames(teamNames) {
 
   if (addedCount > 0) {
     missingTeamLogosLastUpdated = new Date().toISOString();
-    writeMissingTeamLogos(MISSING_TEAM_LOGOS_OUTPUT_PATH, sortedMissingTeamLogoNames());
+    const names = sortedMissingTeamLogoNames();
+    writeMissingTeamLogos(MISSING_TEAM_LOGOS_OUTPUT_PATH, names);
+    void persistOperationalDatasetSafe(OP_DATASET_MISSING_TEAM_LOGOS, names, {
+      updated_at: missingTeamLogosLastUpdated,
+      source: "missing_team_logos_ingest",
+    });
   }
 
   return {
@@ -871,7 +883,12 @@ function removeMissingTeamLogoNames(teamNames) {
 
   if (removedCount > 0) {
     missingTeamLogosLastUpdated = new Date().toISOString();
-    writeMissingTeamLogos(MISSING_TEAM_LOGOS_OUTPUT_PATH, sortedMissingTeamLogoNames());
+    const names = sortedMissingTeamLogoNames();
+    writeMissingTeamLogos(MISSING_TEAM_LOGOS_OUTPUT_PATH, names);
+    void persistOperationalDatasetSafe(OP_DATASET_MISSING_TEAM_LOGOS, names, {
+      updated_at: missingTeamLogosLastUpdated,
+      source: "missing_team_logos_remove",
+    });
   }
 
   return {
@@ -888,6 +905,10 @@ function clearMissingTeamLogos() {
   missingTeamLogosByKey = new Map();
   missingTeamLogosLastUpdated = new Date().toISOString();
   writeMissingTeamLogos(MISSING_TEAM_LOGOS_OUTPUT_PATH, []);
+  void persistOperationalDatasetSafe(OP_DATASET_MISSING_TEAM_LOGOS, [], {
+    updated_at: missingTeamLogosLastUpdated,
+    source: "missing_team_logos_clear",
+  });
 
   return {
     removedCount,
@@ -1492,12 +1513,33 @@ function indexMatchDetailsFromMatches(matches, updatedAtIso = new Date().toISOSt
   return inserted;
 }
 
-function rebuildMatchDetailsCache() {
+function collectMatchDetailsSubsetByMatches(matches) {
+  const subset = {};
+  (Array.isArray(matches) ? matches : []).forEach((match) => {
+    const detailsId =
+      matchDetailsIdFromUrl(match && match.details_url) ||
+      normalizeMatchDetailsId(match && match.match_details_id);
+    if (!detailsId) return;
+    const payload = matchDetailsById.get(detailsId);
+    if (payload && typeof payload === "object") {
+      subset[detailsId] = payload;
+    }
+  });
+  return subset;
+}
+
+async function rebuildMatchDetailsCache(source = "match_details_rebuild") {
   const nowIso = new Date().toISOString();
   indexMatchDetailsFromMatches(cachedMergedMatches, nowIso);
   indexMatchDetailsFromMatches(cachedBbcMatches, nowIso);
   indexMatchDetailsFromMatches(cachedRecentMatches, nowIso);
+  matchDetailsLastUpdated = nowIso;
   setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, matchDetailsById.size);
+  await persistOperationalMatchDetailsSafe(Object.fromEntries(matchDetailsById), {
+    replace: true,
+    updated_at: nowIso,
+    source,
+  });
 }
 
 function collectInProgressMatchDetailTargets() {
@@ -1537,6 +1579,7 @@ async function refreshInProgressMatchDetails() {
       return;
     }
     const nowIso = new Date().toISOString();
+    const refreshedDetailsIds = new Set();
 
     await mapWithConcurrency(
       targets,
@@ -1550,7 +1593,8 @@ async function refreshInProgressMatchDetails() {
             ...fetched,
             details_url: target.details_url,
           };
-          upsertMatchDetailsFromMatch(combined, nowIso);
+          const detailsId = upsertMatchDetailsFromMatch(combined, nowIso);
+          if (detailsId) refreshedDetailsIds.add(detailsId);
         } catch (err) {
           console.warn(
             `Failed to refresh match details for ${target.details_url}:`,
@@ -1564,6 +1608,20 @@ async function refreshInProgressMatchDetails() {
     success = true;
     matchDetailsLastUpdated = nowIso;
     setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, matchDetailsById.size);
+    const updatedDetailsSubset = {};
+    refreshedDetailsIds.forEach((detailsId) => {
+      const payload = matchDetailsById.get(detailsId);
+      if (payload && typeof payload === "object") {
+        updatedDetailsSubset[detailsId] = payload;
+      }
+    });
+    if (Object.keys(updatedDetailsSubset).length > 0) {
+      await persistOperationalMatchDetailsSafe(updatedDetailsSubset, {
+        replace: false,
+        updated_at: nowIso,
+        source: SOURCE_BBC_MATCH_DETAILS,
+      });
+    }
     console.log(
       `Refreshed in-progress match details (${targets.length}) at ${nowIso}`
     );
@@ -1640,7 +1698,7 @@ function normalizeMatchRecord(match) {
   return record;
 }
 
-function toMatchListPayload(match) {
+function toMatchListPayload(match, options = {}) {
   const normalized = normalizeMatchRecord(match);
   if (!normalized) return null;
 
@@ -1678,10 +1736,16 @@ function toMatchListPayload(match) {
     payload.match_details_id = detailsId;
   }
 
+  const matchDetailsLookup =
+    options && options.matchDetailsLookup ? options.matchDetailsLookup : null;
+
   // Check if we have enriched match details (including penalty_result) in the cache
   let penaltyResult = normalized.penalty_result;
-  if (!penaltyResult && detailsId) {
-    const matchDetails = matchDetailsById.get(detailsId);
+  if (!penaltyResult && detailsId && matchDetailsLookup) {
+    const matchDetails =
+      matchDetailsLookup instanceof Map
+        ? matchDetailsLookup.get(detailsId)
+        : matchDetailsLookup[detailsId];
     if (matchDetails) {
       // CRITICAL FIX: Only use penalty_result if the cached details match this actual match
       if (matchDetails.penalty_result &&
@@ -1901,7 +1965,7 @@ function mergeBbcAndLiveMatches(liveMatches, bbcMatches) {
   return Array.from(byPrimaryKey.values()).sort(compareMatches);
 }
 
-function rebuildMergedMatchesCache() {
+async function rebuildMergedMatchesCache(source = "cache_rebuild") {
   // Include test matches in the merged cache
   const allTestMatches = testMatchState.getAllMatches();
   const testMatchesForMerge = allTestMatches.map(testMatch => ({
@@ -1936,6 +2000,21 @@ function rebuildMergedMatchesCache() {
 
   cachedMergedMatches = mergeBbcAndLiveMatches(allMatches, []);
   indexMatchDetailsFromMatches(cachedMergedMatches);
+
+  const updatedAt =
+    newestIsoTimestamp([bbcRangeLastUpdated, lastUpdated, bbcLastUpdated, recentLastUpdated]) ||
+    new Date().toISOString();
+  await Promise.all([
+    persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
+      updated_at: updatedAt,
+      source,
+    }),
+    persistOperationalMatchDetailsSafe(Object.fromEntries(matchDetailsById), {
+      replace: true,
+      updated_at: matchDetailsLastUpdated || updatedAt,
+      source,
+    }),
+  ]);
 }
 
 function newestIsoTimestamp(values) {
@@ -2302,7 +2381,376 @@ function writeMissingTeamLogos(outputPath, teamNames) {
   }
 }
 
-function updateRecentCache() {
+async function persistOperationalDatasetSafe(name, payload, options = {}) {
+  if (!name) return null;
+  try {
+    return await saveOperationalDataset(name, payload, options);
+  } catch (error) {
+    console.warn(
+      `[OperationalState] Failed to persist dataset ${name}:`,
+      error.message || error
+    );
+    return null;
+  }
+}
+
+async function loadOperationalDatasetSafe(name) {
+  if (!name) return null;
+  try {
+    return await getOperationalDataset(name);
+  } catch (error) {
+    console.warn(
+      `[OperationalState] Failed to load dataset ${name}:`,
+      error.message || error
+    );
+    return null;
+  }
+}
+
+async function persistOperationalMatchDetailsSafe(recordsById, options = {}) {
+  try {
+    return await saveOperationalMatchDetailsRecords(recordsById, options);
+  } catch (error) {
+    console.warn(
+      "[OperationalState] Failed to persist match details to Redis:",
+      error.message || error
+    );
+    return null;
+  }
+}
+
+async function hydrateOperationalStateFromRedis() {
+  try {
+    const datasetRecords = await getOperationalDatasets([
+      OP_DATASET_LIVE_MATCHES,
+      OP_DATASET_BBC_LIVE_MATCHES,
+      OP_DATASET_BBC_RANGE_MATCHES,
+      OP_DATASET_RECENT_MATCHES,
+      OP_DATASET_MERGED_MATCHES,
+      OP_DATASET_PREMIER_LEAGUE_TEAMS,
+      OP_DATASET_MISSING_TEAM_LOGOS,
+    ]);
+    const matchDetailsSnapshot = await getAllOperationalMatchDetails();
+
+    const liveRecord = datasetRecords[OP_DATASET_LIVE_MATCHES];
+    if (liveRecord && Array.isArray(liveRecord.payload)) {
+      cachedMatches = filterMatchesByCompetition(liveRecord.payload);
+      lastUpdated = liveRecord.updated_at || lastUpdated;
+      setSourceCacheSize(SOURCE_LIVE_FOOTBALL, cachedMatches.length);
+    }
+
+    const bbcLiveRecord = datasetRecords[OP_DATASET_BBC_LIVE_MATCHES];
+    if (bbcLiveRecord && Array.isArray(bbcLiveRecord.payload)) {
+      cachedBbcMatches = bbcLiveRecord.payload;
+      bbcLastUpdated = bbcLiveRecord.updated_at || bbcLastUpdated;
+      setSourceCacheSize(SOURCE_BBC_LIVE, cachedBbcMatches.length);
+    }
+
+    const bbcRangeRecord = datasetRecords[OP_DATASET_BBC_RANGE_MATCHES];
+    if (bbcRangeRecord && Array.isArray(bbcRangeRecord.payload)) {
+      cachedBbcRangeMatches = filterMatchesByCompetition(bbcRangeRecord.payload);
+      bbcRangeLastUpdated = bbcRangeRecord.updated_at || bbcRangeLastUpdated;
+      setSourceCacheSize(SOURCE_BBC_RANGE, cachedBbcRangeMatches.length);
+    }
+
+    const recentRecord = datasetRecords[OP_DATASET_RECENT_MATCHES];
+    if (recentRecord && Array.isArray(recentRecord.payload)) {
+      cachedRecentMatches = filterMatchesByCompetition(recentRecord.payload);
+      recentLastUpdated = recentRecord.updated_at || recentLastUpdated;
+      setSourceCacheSize(SOURCE_RECENT_CACHE, cachedRecentMatches.length);
+    }
+
+    const mergedRecord = datasetRecords[OP_DATASET_MERGED_MATCHES];
+    if (mergedRecord && Array.isArray(mergedRecord.payload)) {
+      cachedMergedMatches = filterMatchesByCompetition(mergedRecord.payload);
+    }
+
+    const teamsRecord = datasetRecords[OP_DATASET_PREMIER_LEAGUE_TEAMS];
+    if (teamsRecord && Array.isArray(teamsRecord.payload)) {
+      cachedPremierLeagueTeams = teamsRecord.payload
+        .map((team) => String(team || "").trim())
+        .filter(Boolean);
+      eplLastUpdated = teamsRecord.updated_at || eplLastUpdated;
+      setSourceCacheSize(SOURCE_BBC_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
+    }
+
+    const missingLogosRecord = datasetRecords[OP_DATASET_MISSING_TEAM_LOGOS];
+    if (missingLogosRecord && Array.isArray(missingLogosRecord.payload)) {
+      missingTeamLogosByKey = new Map();
+      missingLogosRecord.payload.forEach((teamName) => {
+        const normalized = normalizeMissingTeamLogoName(teamName);
+        if (!normalized) return;
+        missingTeamLogosByKey.set(missingTeamLogoKey(normalized), normalized);
+      });
+      missingTeamLogosLastUpdated = missingLogosRecord.updated_at || missingTeamLogosLastUpdated;
+    }
+
+    if (matchDetailsSnapshot && matchDetailsSnapshot.records) {
+      const entries = Object.entries(matchDetailsSnapshot.records);
+      matchDetailsById = new Map(entries);
+      if (matchDetailsSnapshot.updated_at) {
+        matchDetailsLastUpdated = matchDetailsSnapshot.updated_at;
+      }
+      setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, matchDetailsById.size);
+    }
+
+    console.log(
+      "[OperationalState] Hydrated from Redis:",
+      JSON.stringify({
+        live_matches: cachedMatches.length,
+        bbc_live_matches: cachedBbcMatches.length,
+        bbc_range_matches: cachedBbcRangeMatches.length,
+        merged_matches: cachedMergedMatches.length,
+        recent_matches: cachedRecentMatches.length,
+        match_details: matchDetailsById.size,
+      })
+    );
+  } catch (error) {
+    console.warn("[OperationalState] Failed to hydrate from Redis:", error.message || error);
+  }
+}
+
+async function persistStartupOperationalStateFromDisk() {
+  await Promise.all([
+    persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, cachedMatches, {
+      updated_at: lastUpdated || new Date().toISOString(),
+      source: "startup_disk_seed",
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_BBC_LIVE_MATCHES, cachedBbcMatches, {
+      updated_at: bbcLastUpdated || new Date().toISOString(),
+      source: "startup_disk_seed",
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches, {
+      updated_at: bbcRangeLastUpdated || new Date().toISOString(),
+      source: "startup_disk_seed",
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_RECENT_MATCHES, cachedRecentMatches, {
+      updated_at: recentLastUpdated || new Date().toISOString(),
+      source: "startup_disk_seed",
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
+      updated_at: newestIsoTimestamp([bbcRangeLastUpdated, lastUpdated, bbcLastUpdated]) || new Date().toISOString(),
+      source: "startup_disk_seed",
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_PREMIER_LEAGUE_TEAMS, cachedPremierLeagueTeams, {
+      updated_at: eplLastUpdated || new Date().toISOString(),
+      source: "startup_disk_seed",
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_MISSING_TEAM_LOGOS, sortedMissingTeamLogoNames(), {
+      updated_at: missingTeamLogosLastUpdated || new Date().toISOString(),
+      source: "startup_disk_seed",
+    }),
+    persistOperationalMatchDetailsSafe(Object.fromEntries(matchDetailsById), {
+      replace: true,
+      updated_at: matchDetailsLastUpdated || new Date().toISOString(),
+      source: "startup_disk_seed",
+    }),
+  ]);
+}
+
+async function getOperationalArrayDataset(name, fallback = []) {
+  const record = await loadOperationalDatasetSafe(name);
+  if (record && Array.isArray(record.payload)) {
+    return {
+      items: record.payload,
+      updated_at: record.updated_at || null,
+      source: "redis",
+    };
+  }
+  return {
+    items: [],
+    updated_at: null,
+    source: "redis_missing",
+  };
+}
+
+async function getOperationalMatchDetailsByIdSafe(matchId) {
+  const payload = await getOperationalMatchDetails(matchId);
+  if (payload && typeof payload === "object") {
+    return { payload, source: "redis" };
+  }
+  return {
+    payload: null,
+    source: "redis_missing",
+  };
+}
+
+async function getOperationalMatchDetailsSnapshotSafe() {
+  const snapshot = await getAllOperationalMatchDetails();
+  if (snapshot && snapshot.records && typeof snapshot.records === "object") {
+    return {
+      ...snapshot,
+      source: "redis",
+    };
+  }
+  return {
+    updated_at: null,
+    total: 0,
+    records: {},
+    source: "redis_missing",
+    error: snapshot && snapshot.error ? snapshot.error : null,
+  };
+}
+
+const ADMIN_OPERATIONAL_DATASET_NAMES = [
+  OP_DATASET_MERGED_MATCHES,
+  OP_DATASET_LIVE_MATCHES,
+  OP_DATASET_BBC_LIVE_MATCHES,
+  OP_DATASET_BBC_RANGE_MATCHES,
+  OP_DATASET_RECENT_MATCHES,
+  OP_DATASET_PREMIER_LEAGUE_TEAMS,
+];
+
+function toOperationalAdminMatchPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const matchId = normalizeMatchDetailsId(payload.id) || null;
+  if (!matchId) return null;
+  return {
+    match_id: matchId,
+    id: matchId,
+    details_url: payload.details_url || null,
+    date: payload.date || null,
+    time: payload.time || null,
+    league: payload.league || null,
+    home_team: payload.home_team || null,
+    away_team: payload.away_team || null,
+    home_score:
+      payload.home_score !== undefined && payload.home_score !== null ? payload.home_score : null,
+    away_score:
+      payload.away_score !== undefined && payload.away_score !== null ? payload.away_score : null,
+    score_status: payload.score_status || null,
+    in_progress: Boolean(payload.in_progress),
+    penalty_result: payload.penalty_result || null,
+    home_goal_scorers: Array.isArray(payload.home_goal_scorers) ? payload.home_goal_scorers : [],
+    away_goal_scorers: Array.isArray(payload.away_goal_scorers) ? payload.away_goal_scorers : [],
+    home_assists: Array.isArray(payload.home_assists) ? payload.home_assists : [],
+    away_assists: Array.isArray(payload.away_assists) ? payload.away_assists : [],
+    home_red_cards: Array.isArray(payload.home_red_cards) ? payload.home_red_cards : [],
+    away_red_cards: Array.isArray(payload.away_red_cards) ? payload.away_red_cards : [],
+    updated_at: payload.updated_at || null,
+  };
+}
+
+function operationalMatchSortDesc(lhs, rhs) {
+  const lhsUpdated = Date.parse(lhs && lhs.updated_at ? lhs.updated_at : "");
+  const rhsUpdated = Date.parse(rhs && rhs.updated_at ? rhs.updated_at : "");
+  if (Number.isFinite(lhsUpdated) || Number.isFinite(rhsUpdated)) {
+    const leftValue = Number.isFinite(lhsUpdated) ? lhsUpdated : 0;
+    const rightValue = Number.isFinite(rhsUpdated) ? rhsUpdated : 0;
+    if (rightValue !== leftValue) return rightValue - leftValue;
+  }
+  const lhsKickoff = Date.parse(
+    `${String(lhs && lhs.date ? lhs.date : "").trim()}T${String(
+      lhs && lhs.time ? lhs.time : "00:00"
+    ).trim()}:00Z`
+  );
+  const rhsKickoff = Date.parse(
+    `${String(rhs && rhs.date ? rhs.date : "").trim()}T${String(
+      rhs && rhs.time ? rhs.time : "00:00"
+    ).trim()}:00Z`
+  );
+  if (Number.isFinite(lhsKickoff) || Number.isFinite(rhsKickoff)) {
+    const leftValue = Number.isFinite(lhsKickoff) ? lhsKickoff : 0;
+    const rightValue = Number.isFinite(rhsKickoff) ? rhsKickoff : 0;
+    if (rightValue !== leftValue) return rightValue - leftValue;
+  }
+  const lhsId = String(lhs && lhs.match_id ? lhs.match_id : "");
+  const rhsId = String(rhs && rhs.match_id ? rhs.match_id : "");
+  return lhsId.localeCompare(rhsId);
+}
+
+async function getOperationalRealtimeSnapshot(options = {}) {
+  const matchIdFilter = normalizeMatchDetailsId(options.match_id || "");
+  const limitMatches = parsePositiveInt(options.limit_matches, 0, 0, 1000);
+  const nowIso = new Date().toISOString();
+
+  try {
+    const [datasetRecords, matchDetailsSummary] = await Promise.all([
+      getOperationalDatasets(ADMIN_OPERATIONAL_DATASET_NAMES),
+      getOperationalMatchDetailsSummary(),
+    ]);
+
+    let matches = [];
+    let matchDetailsSource = matchDetailsSummary && matchDetailsSummary.source
+      ? matchDetailsSummary.source
+      : null;
+
+    if (matchIdFilter) {
+      const payload = await getOperationalMatchDetails(matchIdFilter);
+      if (payload && typeof payload === "object") {
+        const normalizedPayload = toOperationalAdminMatchPayload(payload);
+        if (normalizedPayload) {
+          matches = [normalizedPayload];
+        }
+      }
+    } else {
+      const snapshot = await getAllOperationalMatchDetails();
+      if (snapshot && snapshot.records && typeof snapshot.records === "object") {
+        matches = Object.values(snapshot.records)
+          .map((payload) => toOperationalAdminMatchPayload(payload))
+          .filter(Boolean)
+          .sort(operationalMatchSortDesc);
+        if (limitMatches > 0) {
+          matches = matches.slice(0, limitMatches);
+        }
+        if (snapshot.source) {
+          matchDetailsSource = snapshot.source;
+        }
+      }
+    }
+
+    const datasetCounts = {};
+    const datasetMeta = {};
+    ADMIN_OPERATIONAL_DATASET_NAMES.forEach((name) => {
+      const record = datasetRecords && datasetRecords[name] ? datasetRecords[name] : null;
+      const payload = record && Array.isArray(record.payload) ? record.payload : [];
+      datasetCounts[name] = payload.length;
+      datasetMeta[name] = {
+        updated_at: record && record.updated_at ? record.updated_at : null,
+        source: record && record.source ? record.source : null,
+      };
+    });
+
+    return {
+      generated_at: nowIso,
+      filters: {
+        match_id: matchIdFilter || null,
+        limit_matches: limitMatches > 0 ? limitMatches : null,
+      },
+      count_matches: matches.length,
+      count_match_details_total: Number(matchDetailsSummary && matchDetailsSummary.total
+        ? matchDetailsSummary.total
+        : 0),
+      match_details_updated_at:
+        matchDetailsSummary && matchDetailsSummary.updated_at
+          ? matchDetailsSummary.updated_at
+          : null,
+      match_details_source: matchDetailsSource,
+      dataset_counts: datasetCounts,
+      dataset_meta: datasetMeta,
+      matches,
+    };
+  } catch (error) {
+    console.error("[API] Error building operational realtime snapshot:", error);
+    return {
+      generated_at: nowIso,
+      filters: {
+        match_id: matchIdFilter || null,
+        limit_matches: limitMatches > 0 ? limitMatches : null,
+      },
+      count_matches: 0,
+      count_match_details_total: 0,
+      match_details_updated_at: null,
+      match_details_source: null,
+      dataset_counts: {},
+      dataset_meta: {},
+      matches: [],
+      error: error.message || String(error),
+    };
+  }
+}
+
+async function updateRecentCache(source = "recent_cache_refresh") {
   const now = new Date();
   const live = Array.isArray(cachedMatches) ? cachedMatches : [];
   const bbc = Array.isArray(cachedBbcMatches) ? cachedBbcMatches : [];
@@ -2335,13 +2783,14 @@ function updateRecentCache() {
   setSourceCacheSize(SOURCE_RECENT_CACHE, cachedRecentMatches.length);
   writeRecentMatches(RECENT_OUTPUT_PATH, cachedRecentMatches);
   indexMatchDetailsFromMatches(cachedRecentMatches, recentLastUpdated);
+  await persistOperationalDatasetSafe(OP_DATASET_RECENT_MATCHES, cachedRecentMatches, {
+    updated_at: recentLastUpdated,
+    source,
+  });
 }
 
 function mergedMatchesForResponse() {
-  if (!Array.isArray(cachedMergedMatches) || cachedMergedMatches.length === 0) {
-    rebuildMergedMatchesCache();
-  }
-  return cachedMergedMatches;
+  return Array.isArray(cachedMergedMatches) ? cachedMergedMatches : [];
 }
 
 async function updateMatches() {
@@ -2357,8 +2806,12 @@ async function updateMatches() {
     setSourceCacheSize(SOURCE_LIVE_FOOTBALL, matches.length);
     lastUpdated = new Date().toISOString();
     writeMatches(OUTPUT_PATH, matches);
-    updateRecentCache();
-    rebuildMergedMatchesCache();
+    await persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, matches, {
+      updated_at: lastUpdated,
+      source: SOURCE_LIVE_FOOTBALL,
+    });
+    await updateRecentCache(SOURCE_LIVE_FOOTBALL);
+    await rebuildMergedMatchesCache(SOURCE_LIVE_FOOTBALL);
     success = true;
     console.log(`Updated ${matches.length} matches at ${lastUpdated}`);
   } catch (err) {
@@ -2476,8 +2929,18 @@ async function updateBbcMatches() {
     setSourceCacheSize(SOURCE_BBC_LIVE, filteredMatches.length);
     bbcLastUpdated = new Date().toISOString();
     writeBbcFixtures(BBC_OUTPUT_PATH, filteredMatches);
-    updateRecentCache();
+    await persistOperationalDatasetSafe(OP_DATASET_BBC_LIVE_MATCHES, filteredMatches, {
+      updated_at: bbcLastUpdated,
+      source: SOURCE_BBC_LIVE,
+    });
+    await updateRecentCache(SOURCE_BBC_LIVE);
     indexMatchDetailsFromMatches(filteredMatches, bbcLastUpdated);
+    const detailsSubset = collectMatchDetailsSubsetByMatches(filteredMatches);
+    await persistOperationalMatchDetailsSafe(detailsSubset, {
+      replace: false,
+      updated_at: bbcLastUpdated,
+      source: SOURCE_BBC_LIVE,
+    });
     success = true;
     console.log(`Updated BBC live matches (${filteredMatches.length}) at ${bbcLastUpdated}`);
   } catch (err) {
@@ -2514,7 +2977,11 @@ async function updateBbcRangeMatches() {
     setSourceCacheSize(SOURCE_BBC_RANGE, matches.length);
     bbcRangeLastUpdated = new Date().toISOString();
     writeBbcRangeMatches(BBC_RANGE_OUTPUT_PATH, matches);
-    rebuildMergedMatchesCache();
+    await persistOperationalDatasetSafe(OP_DATASET_BBC_RANGE_MATCHES, matches, {
+      updated_at: bbcRangeLastUpdated,
+      source: SOURCE_BBC_RANGE,
+    });
+    await rebuildMergedMatchesCache(SOURCE_BBC_RANGE);
     success = true;
     console.log(
       `Updated BBC date-range matches (${matches.length}) at ${bbcRangeLastUpdated} ` +
@@ -2551,6 +3018,14 @@ async function updatePremierLeagueTeams() {
     setSourceCacheSize(SOURCE_BBC_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
     eplLastUpdated = new Date().toISOString();
     writePremierLeagueTeams(EPL_OUTPUT_PATH, cachedPremierLeagueTeams);
+    await persistOperationalDatasetSafe(
+      OP_DATASET_PREMIER_LEAGUE_TEAMS,
+      cachedPremierLeagueTeams,
+      {
+        updated_at: eplLastUpdated,
+        source: SOURCE_BBC_PREMIER_LEAGUE,
+      }
+    );
     success = true;
     console.log(`Updated Premier League teams (${cachedPremierLeagueTeams.length}) at ${eplLastUpdated}`);
   } catch (err) {
@@ -2589,6 +3064,51 @@ function parsePositiveInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGE
   return Math.min(max, normalized);
 }
 
+const MAX_BBC_HISTORY_QUERY_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_BBC_HISTORY_QUERY_HOURS = Math.max(1, Math.floor(MAX_BBC_HISTORY_QUERY_MS / (60 * 60 * 1000)));
+
+function parseBbcHistoryWindow(query) {
+  const rawStart = query.start ? String(query.start).trim() : "";
+  const rawEnd = query.end ? String(query.end).trim() : "";
+  const nowMs = Date.now();
+
+  if (rawStart || rawEnd) {
+    if (!rawStart || !rawEnd) {
+      return {
+        error: "When using absolute range, both start and end are required (ISO datetime).",
+      };
+    }
+    const startMs = Date.parse(rawStart);
+    const endMs = Date.parse(rawEnd);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      return {
+        error: "Invalid start/end datetime. Use ISO format, e.g. 2026-02-21T10:00:00Z.",
+      };
+    }
+    if (endMs < startMs) {
+      return { error: "Invalid date range. end must be greater than or equal to start." };
+    }
+    if (endMs - startMs > MAX_BBC_HISTORY_QUERY_MS) {
+      return {
+        error: `Maximum query range is ${MAX_BBC_HISTORY_QUERY_HOURS} hours (7 days).`,
+      };
+    }
+    return {
+      startMs: Math.floor(startMs),
+      endMs: Math.floor(endMs),
+      mode: "absolute",
+    };
+  }
+
+  const hours = parsePositiveInt(query.hours, 24, 1, MAX_BBC_HISTORY_QUERY_HOURS);
+  return {
+    startMs: nowMs - hours * 60 * 60 * 1000,
+    endMs: nowMs,
+    mode: "relative",
+    hours,
+  };
+}
+
 function setCacheOnlyHeaders(res) {
   res.set("X-Data-Source", APP_DATA_SOURCE);
   res.set("X-External-Dependency", "none");
@@ -2598,6 +3118,10 @@ app.get("/", (_req, res) => {
   res
     .type("text/plain")
     .send("Football on TV API. Try /api/v1/matches?start=YYYY-MM-DD&end=YYYY-MM-DD");
+});
+
+app.get("/admin/bbc-history", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_bbc_history_ui.html"));
 });
 
 app.get(["/healthcheck", `${API_PREFIX}/healthcheck`], (_req, res) => {
@@ -2660,7 +3184,7 @@ app.get("/metrics", (_req, res) => {
   res.send(buildPrometheusMetricsText());
 });
 
-app.get(`${API_PREFIX}/matches`, (req, res) => {
+app.get(`${API_PREFIX}/matches`, async (req, res) => {
   setCacheOnlyHeaders(res);
   try {
     const range = parseRequiredDateRange(req.query);
@@ -2669,12 +3193,28 @@ app.get(`${API_PREFIX}/matches`, (req, res) => {
       return;
     }
 
-    const latestUpdated = newestIsoTimestamp([bbcRangeLastUpdated, lastUpdated, bbcLastUpdated]);
+    const [mergedDataset, premierLeagueDataset, matchDetailsSnapshot] = await Promise.all([
+      getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
+      getOperationalArrayDataset(OP_DATASET_PREMIER_LEAGUE_TEAMS, cachedPremierLeagueTeams),
+      getOperationalMatchDetailsSnapshotSafe(),
+    ]);
+
+    const latestUpdated = newestIsoTimestamp([
+      mergedDataset.updated_at,
+      bbcRangeLastUpdated,
+      lastUpdated,
+      bbcLastUpdated,
+    ]);
     if (latestUpdated) {
       res.set("X-Last-Updated", latestUpdated);
     }
+    res.set("X-Operational-Source", mergedDataset.source || "unknown");
+    res.set(
+      "X-Operational-Match-Details-Source",
+      matchDetailsSnapshot.source || "unknown"
+    );
 
-    const mergedMatches = mergedMatchesForResponse();
+    const mergedMatches = Array.isArray(mergedDataset.items) ? mergedDataset.items : [];
     const leagues = normalizeListParam(req.query.league).map(normalizeLeagueName);
     const teams = normalizeListParam(req.query.team);
     const channels = normalizeListParam(req.query.channel);
@@ -2699,7 +3239,7 @@ app.get(`${API_PREFIX}/matches`, (req, res) => {
 
     if (eplOnly) {
       filtered = filtered.filter((match) =>
-        matchIncludesPremierLeagueTeam(match, cachedPremierLeagueTeams)
+        matchIncludesPremierLeagueTeam(match, premierLeagueDataset.items)
       );
     }
 
@@ -2757,7 +3297,13 @@ app.get(`${API_PREFIX}/matches`, (req, res) => {
     res.set("X-Has-More", hasMore ? "true" : "false");
     res.set("X-Sort-Order", sortOrder);
 
-    const payload = paged.map(toMatchListPayload).filter(Boolean);
+    const payload = paged
+      .map((match) =>
+        toMatchListPayload(match, {
+          matchDetailsLookup: matchDetailsSnapshot.records || {},
+        })
+      )
+      .filter(Boolean);
     res.json(payload);
   } catch (err) {
     console.warn("Failed to serve /matches from cache:", err.message || err);
@@ -2802,11 +3348,13 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     return;
   }
 
-  let payload = matchDetailsById.get(matchId);
+  let detailsLookup = await getOperationalMatchDetailsByIdSafe(matchId);
+  let payload = detailsLookup.payload;
   if (!payload) {
     res.status(404).json({ error: "No cached match details found for match id." });
     return;
   }
+  res.set("X-Operational-Source", detailsLookup.source || "unknown");
 
   if (matchDetailsNeedsEnrichment(payload) && payload.details_url) {
     try {
@@ -2818,8 +3366,20 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
           ...fetched,
           details_url: payload.details_url,
         };
-        upsertMatchDetailsFromMatch(combined, nowIso);
+        const upsertedMatchId = upsertMatchDetailsFromMatch(combined, nowIso);
         payload = matchDetailsById.get(matchId);
+        if (upsertedMatchId && payload) {
+          await persistOperationalMatchDetailsSafe(
+            {
+              [upsertedMatchId]: payload,
+            },
+            {
+              replace: false,
+              updated_at: nowIso,
+              source: "lazy_match_details_backfill",
+            }
+          );
+        }
         console.log(`Lazy backfilled match details for ${matchId} at ${nowIso}`);
       }
     } catch (err) {
@@ -2838,28 +3398,49 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   res.json(payload);
 });
 
-app.get(`${API_PREFIX}/competitions`, (_req, res) => {
+app.get(`${API_PREFIX}/competitions`, async (_req, res) => {
   setCacheOnlyHeaders(res);
-  res.json(buildLeagueList(mergedMatchesForResponse()));
+  const dataset = await getOperationalArrayDataset(
+    OP_DATASET_MERGED_MATCHES,
+    mergedMatchesForResponse()
+  );
+  res.set("X-Operational-Source", dataset.source || "unknown");
+  res.json(buildLeagueList(dataset.items));
 });
 
-app.get(`${API_PREFIX}/teams`, (req, res) => {
+app.get(`${API_PREFIX}/teams`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const leagueFilter = req.query.league ? String(req.query.league) : null;
-  res.json(buildTeamList(mergedMatchesForResponse(), leagueFilter));
+  const dataset = await getOperationalArrayDataset(
+    OP_DATASET_MERGED_MATCHES,
+    mergedMatchesForResponse()
+  );
+  res.set("X-Operational-Source", dataset.source || "unknown");
+  res.json(buildTeamList(dataset.items, leagueFilter));
 });
 
-app.get(`${API_PREFIX}/teams/premier-league`, (_req, res) => {
+app.get(`${API_PREFIX}/teams/premier-league`, async (_req, res) => {
   setCacheOnlyHeaders(res);
-  if (eplLastUpdated) {
-    res.set("X-Last-Updated", eplLastUpdated);
+  const dataset = await getOperationalArrayDataset(
+    OP_DATASET_PREMIER_LEAGUE_TEAMS,
+    cachedPremierLeagueTeams
+  );
+  const updatedAt = dataset.updated_at || eplLastUpdated;
+  if (updatedAt) {
+    res.set("X-Last-Updated", updatedAt);
   }
-  res.json(cachedPremierLeagueTeams);
+  res.set("X-Operational-Source", dataset.source || "unknown");
+  res.json(dataset.items);
 });
 
-app.get(`${API_PREFIX}/channels`, (_req, res) => {
+app.get(`${API_PREFIX}/channels`, async (_req, res) => {
   setCacheOnlyHeaders(res);
-  res.json(buildChannelList(mergedMatchesForResponse()));
+  const dataset = await getOperationalArrayDataset(
+    OP_DATASET_MERGED_MATCHES,
+    mergedMatchesForResponse()
+  );
+  res.set("X-Operational-Source", dataset.source || "unknown");
+  res.json(buildChannelList(dataset.items));
 });
 
 app.post(`${API_PREFIX}/audit/missing-team-logos`, (req, res) => {
@@ -2938,19 +3519,29 @@ app.get(`${API_PREFIX}/audit/missing-team-logos`, (_req, res) => {
   res.json(sortedMissingTeamLogoNames());
 });
 
-app.get(`${API_PREFIX}/bbc/live`, (_req, res) => {
+app.get(`${API_PREFIX}/bbc/live`, async (_req, res) => {
   setCacheOnlyHeaders(res);
-  if (bbcLastUpdated) {
-    res.set("X-Last-Updated", bbcLastUpdated);
+  const [bbcLiveDataset, matchDetailsSnapshot] = await Promise.all([
+    getOperationalArrayDataset(OP_DATASET_BBC_LIVE_MATCHES, cachedBbcMatches),
+    getOperationalMatchDetailsSnapshotSafe(),
+  ]);
+
+  const updatedAt = bbcLiveDataset.updated_at || bbcLastUpdated;
+  if (updatedAt) {
+    res.set("X-Last-Updated", updatedAt);
   }
+  res.set("X-Operational-Source", bbcLiveDataset.source || "unknown");
 
   // Transform "Pens" to "AET" for completed penalty shootouts in BBC Live matches
-  const transformedMatches = cachedBbcMatches.map((match) => {
+  const transformedMatches = bbcLiveDataset.items.map((match) => {
     // If match has Pens status and we have match details with penalty_result, change to AET
     if (match.match_time === "Pens" || match.match_time === "PEN" || match.match_time === "PEN.") {
       const detailsId = matchDetailsIdFromUrl(match.details_url);
       if (detailsId) {
-        const matchDetails = matchDetailsById.get(detailsId);
+        const matchDetails =
+          matchDetailsSnapshot && matchDetailsSnapshot.records
+            ? matchDetailsSnapshot.records[detailsId]
+            : null;
         if (matchDetails && matchDetails.penalty_result) {
           return { ...match, match_time: "AET" };
         }
@@ -2962,7 +3553,7 @@ app.get(`${API_PREFIX}/bbc/live`, (_req, res) => {
   res.json(transformedMatches);
 });
 
-app.get(`${API_PREFIX}/bbc/details`, (req, res) => {
+app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const detailsUrl = req.query.url ? String(req.query.url).trim() : "";
   if (!detailsUrl) {
@@ -2976,11 +3567,13 @@ app.get(`${API_PREFIX}/bbc/details`, (req, res) => {
     return;
   }
 
-  const payload = matchDetailsById.get(detailsId);
+  const detailsLookup = await getOperationalMatchDetailsByIdSafe(detailsId);
+  const payload = detailsLookup.payload;
   if (!payload) {
     res.status(404).json({ error: "No cached match details found for provided details URL" });
     return;
   }
+  res.set("X-Operational-Source", detailsLookup.source || "unknown");
   if (payload.updated_at) {
     res.set("X-Last-Updated", payload.updated_at);
   }
@@ -2997,8 +3590,11 @@ app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
     500
   );
 
+  const detailsSnapshot = await getOperationalMatchDetailsSnapshotSafe();
+  res.set("X-Operational-Source", detailsSnapshot.source || "unknown");
+
   const candidates = [];
-  matchDetailsById.forEach((payload, matchId) => {
+  Object.entries(detailsSnapshot.records || {}).forEach(([matchId, payload]) => {
     if (matchDetailsNeedsEnrichment(payload) && payload.details_url) {
       candidates.push({ matchId, payload });
     }
@@ -3022,8 +3618,12 @@ app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
             ...fetched,
             details_url: candidate.payload.details_url,
           };
-          upsertMatchDetailsFromMatch(combined, nowIso);
-          enriched.push(candidate.matchId);
+          const upsertedMatchId = upsertMatchDetailsFromMatch(combined, nowIso);
+          if (upsertedMatchId) {
+            enriched.push(upsertedMatchId);
+          } else {
+            failed.push(candidate.matchId);
+          }
         } else {
           failed.push(candidate.matchId);
         }
@@ -3041,6 +3641,23 @@ app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
     `Batch backfilled ${enriched.length} matches, ${failed.length} failed, ${skipped} skipped at ${nowIso}`
   );
 
+  if (enriched.length > 0) {
+    const updatedSubset = {};
+    enriched.forEach((matchId) => {
+      const payload = matchDetailsById.get(matchId);
+      if (payload && typeof payload === "object") {
+        updatedSubset[matchId] = payload;
+      }
+    });
+    if (Object.keys(updatedSubset).length > 0) {
+      await persistOperationalMatchDetailsSafe(updatedSubset, {
+        replace: false,
+        updated_at: nowIso,
+        source: "admin_backfill_matches",
+      });
+    }
+  }
+
   res.json({
     enriched_count: enriched.length,
     enriched_ids: enriched,
@@ -3053,32 +3670,61 @@ app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
   });
 });
 
-app.get(`${API_PREFIX}/status`, (_req, res) => {
+app.get(`${API_PREFIX}/status`, async (_req, res) => {
   setCacheOnlyHeaders(res);
-  const mergedLastUpdated = newestIsoTimestamp([bbcRangeLastUpdated, lastUpdated, bbcLastUpdated]);
+  const [
+    mergedDataset,
+    liveDataset,
+    bbcLiveDataset,
+    bbcRangeDataset,
+    recentDataset,
+    teamsDataset,
+    matchDetailsSummary,
+    matchDetailsSnapshot,
+  ] = await Promise.all([
+    getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, cachedMergedMatches),
+    getOperationalArrayDataset(OP_DATASET_LIVE_MATCHES, cachedMatches),
+    getOperationalArrayDataset(OP_DATASET_BBC_LIVE_MATCHES, cachedBbcMatches),
+    getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
+    getOperationalArrayDataset(OP_DATASET_RECENT_MATCHES, cachedRecentMatches),
+    getOperationalArrayDataset(OP_DATASET_PREMIER_LEAGUE_TEAMS, cachedPremierLeagueTeams),
+    getOperationalMatchDetailsSummary(),
+    getOperationalMatchDetailsSnapshotSafe(),
+  ]);
+
+  const mergedLastUpdated = newestIsoTimestamp([
+    mergedDataset.updated_at,
+    bbcRangeDataset.updated_at,
+    liveDataset.updated_at,
+    bbcLiveDataset.updated_at,
+    bbcRangeLastUpdated,
+    lastUpdated,
+    bbcLastUpdated,
+  ]);
 
   let needsEnrichmentCount = 0;
-  matchDetailsById.forEach((payload) => {
+  const detailsRecords = matchDetailsSnapshot.records || {};
+  Object.values(detailsRecords).forEach((payload) => {
     if (matchDetailsNeedsEnrichment(payload) && payload.details_url) {
       needsEnrichmentCount += 1;
     }
   });
 
   res.json({
-    count: cachedMergedMatches.length,
+    count: mergedDataset.items.length,
     last_updated: mergedLastUpdated,
-    live_count: cachedMatches.length,
-    live_last_updated: lastUpdated,
+    live_count: liveDataset.items.length,
+    live_last_updated: liveDataset.updated_at || lastUpdated,
     source_url: SOURCE_URL,
     output_path: path.resolve(OUTPUT_PATH),
     interval_ms: INTERVAL_MS,
-    bbc_count: cachedBbcMatches.length,
-    bbc_last_updated: bbcLastUpdated,
+    bbc_count: bbcLiveDataset.items.length,
+    bbc_last_updated: bbcLiveDataset.updated_at || bbcLastUpdated,
     bbc_source_url: BBC_SOURCE_URL,
     bbc_output_path: path.resolve(BBC_OUTPUT_PATH),
     bbc_interval_ms: BBC_INTERVAL_MS,
-    bbc_range_count: cachedBbcRangeMatches.length,
-    bbc_range_last_updated: bbcRangeLastUpdated,
+    bbc_range_count: bbcRangeDataset.items.length,
+    bbc_range_last_updated: bbcRangeDataset.updated_at || bbcRangeLastUpdated,
     bbc_range_base_url: BBC_RANGE_BASE_URL,
     bbc_range_output_path: path.resolve(BBC_RANGE_OUTPUT_PATH),
     bbc_range_interval_ms: BBC_RANGE_INTERVAL_MS,
@@ -3086,18 +3732,22 @@ app.get(`${API_PREFIX}/status`, (_req, res) => {
     bbc_range_future_days: BBC_RANGE_FUTURE_DAYS,
     bbc_range_concurrency: BBC_RANGE_CONCURRENCY,
     bbc_range_match_timezone: BBC_RANGE_MATCH_TIMEZONE,
-    epl_count: cachedPremierLeagueTeams.length,
-    epl_last_updated: eplLastUpdated,
+    epl_count: teamsDataset.items.length,
+    epl_last_updated: teamsDataset.updated_at || eplLastUpdated,
     epl_source_url: EPL_SOURCE_URL,
     epl_output_path: path.resolve(EPL_OUTPUT_PATH),
     epl_interval_ms: EPL_INTERVAL_MS,
     epl_team_min_confidence: EPL_TEAM_MIN_CONFIDENCE,
-    recent_count: cachedRecentMatches.length,
-    recent_last_updated: recentLastUpdated,
+    recent_count: recentDataset.items.length,
+    recent_last_updated: recentDataset.updated_at || recentLastUpdated,
     recent_output_path: path.resolve(RECENT_OUTPUT_PATH),
     recent_cache_hours: RECENT_CACHE_HOURS,
-    match_details_count: matchDetailsById.size,
-    match_details_last_updated: matchDetailsLastUpdated,
+    match_details_count:
+      Number.isFinite(matchDetailsSummary.total) && matchDetailsSummary.total > 0
+        ? matchDetailsSummary.total
+        : matchDetailsSnapshot.total,
+    match_details_last_updated:
+      matchDetailsSummary.updated_at || matchDetailsSnapshot.updated_at || matchDetailsLastUpdated,
     match_details_poll_interval_ms: MATCH_DETAILS_POLL_INTERVAL_MS,
     match_details_poll_concurrency: MATCH_DETAILS_POLL_CONCURRENCY,
     match_details_updating: matchDetailsUpdating,
@@ -3118,6 +3768,15 @@ app.get(`${API_PREFIX}/status`, (_req, res) => {
     api_requests_with_device_token_total: appUsageMetrics.apiRequestsWithDeviceTokenTotal,
     api_requests_without_device_token_total: appUsageMetrics.apiRequestsWithoutDeviceTokenTotal,
     competition_allowlist: SERVER_CONFIG.competitionAllowlist,
+    operational_state_source: {
+      merged_matches: mergedDataset.source,
+      live_matches: liveDataset.source,
+      bbc_live_matches: bbcLiveDataset.source,
+      bbc_range_matches: bbcRangeDataset.source,
+      recent_matches: recentDataset.source,
+      premier_league_teams: teamsDataset.source,
+      match_details: matchDetailsSnapshot.source,
+    },
   });
 });
 
@@ -3132,6 +3791,17 @@ const {
   getUserPreferences,
   deleteUserPreferences,
   getAllUserPreferences,
+  getBbcMatchHistoryGrouped,
+  getBbcRealtimeSnapshot,
+  cleanupBbcHistory,
+  saveOperationalDataset,
+  getOperationalDataset,
+  getOperationalDatasets,
+  saveOperationalMatchDetailsRecords,
+  getOperationalMatchDetails,
+  getAllOperationalMatchDetails,
+  getOperationalMatchDetailsSummary,
+  __historyConfig: bbcHistoryConfig,
 } = require("./redis_client");
 
 // Save user preferences
@@ -3261,6 +3931,391 @@ app.get(`${API_PREFIX}/preferences`, async (_req, res) => {
   }
 });
 
+app.get(`${API_PREFIX}/admin/bbc-history`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const historyWindow = parseBbcHistoryWindow(req.query || {});
+  if (historyWindow.error) {
+    res.status(400).json({ error: historyWindow.error });
+    return;
+  }
+
+  const rawMatchId = req.query.match_id ? String(req.query.match_id).trim() : "";
+  const normalizedMatchId = rawMatchId ? normalizeMatchDetailsId(rawMatchId) : null;
+  if (rawMatchId && !normalizedMatchId) {
+    res.status(400).json({
+      error: "Invalid match_id. Expected BBC details id (e.g. c043pne0q3kt).",
+    });
+    return;
+  }
+
+  const rawDeviceToken = req.query.device_token ? String(req.query.device_token).trim() : "";
+  const normalizedDeviceToken = rawDeviceToken ? normalizeDeviceToken(rawDeviceToken) : "";
+  if (rawDeviceToken && !normalizedDeviceToken) {
+    res.status(400).json({
+      error: "Invalid device_token filter.",
+    });
+    return;
+  }
+
+  try {
+    const groupedHistory = await getBbcMatchHistoryGrouped({
+      start_ms: historyWindow.startMs,
+      end_ms: historyWindow.endMs,
+      match_id: normalizedMatchId || undefined,
+      device_token: normalizedDeviceToken || undefined,
+    });
+
+    const statusCode = groupedHistory.error ? 500 : 200;
+    res.status(statusCode).json({
+      success: !groupedHistory.error,
+      window: {
+        mode: historyWindow.mode,
+        start_ms: historyWindow.startMs,
+        end_ms: historyWindow.endMs,
+        start: new Date(historyWindow.startMs).toISOString(),
+        end: new Date(historyWindow.endMs).toISOString(),
+        hours: historyWindow.hours || null,
+        max_hours: MAX_BBC_HISTORY_QUERY_HOURS,
+      },
+      filters: {
+        match_id: normalizedMatchId || null,
+        device_token: normalizedDeviceToken || null,
+      },
+      history_config: {
+        event_ttl_seconds: bbcHistoryConfig.event_ttl_seconds,
+        notification_ttl_seconds: bbcHistoryConfig.notification_ttl_seconds,
+        notification_idempotency_ttl_seconds:
+          bbcHistoryConfig.notification_idempotency_ttl_seconds,
+        user_preferences_ttl_seconds: bbcHistoryConfig.user_preferences_ttl_seconds,
+      },
+      ...groupedHistory,
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving BBC history:", error);
+    res.status(500).json({
+      error: "Failed to retrieve BBC history",
+      message: error.message,
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/admin/bbc-history/realtime`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const rawMatchId = req.query.match_id ? String(req.query.match_id).trim() : "";
+  const normalizedMatchId = rawMatchId ? normalizeMatchDetailsId(rawMatchId) : null;
+  if (rawMatchId && !normalizedMatchId) {
+    res.status(400).json({
+      error: "Invalid match_id. Expected BBC details id (e.g. c043pne0q3kt).",
+    });
+    return;
+  }
+
+  const rawDeviceToken = req.query.device_token ? String(req.query.device_token).trim() : "";
+  const normalizedDeviceToken = rawDeviceToken ? normalizeDeviceToken(rawDeviceToken) : "";
+  if (rawDeviceToken && !normalizedDeviceToken) {
+    res.status(400).json({
+      error: "Invalid device_token filter.",
+    });
+    return;
+  }
+
+  const limitMatches = parsePositiveInt(req.query.limit_matches, 0, 0, 1000);
+
+  try {
+    const [snapshot, operationalSnapshot] = await Promise.all([
+      getBbcRealtimeSnapshot({
+        match_id: normalizedMatchId || undefined,
+        device_token: normalizedDeviceToken || undefined,
+        limit_matches: limitMatches || undefined,
+      }),
+      getOperationalRealtimeSnapshot({
+        match_id: normalizedMatchId || undefined,
+        limit_matches: limitMatches || undefined,
+      }),
+    ]);
+
+    const hasError = Boolean(
+      (snapshot && snapshot.error) ||
+      (operationalSnapshot && operationalSnapshot.error)
+    );
+    const statusCode = hasError ? 500 : 200;
+    res.status(statusCode).json({
+      success: !hasError,
+      realtime: true,
+      ...snapshot,
+      operational: operationalSnapshot,
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving BBC realtime snapshot:", error);
+    res.status(500).json({
+      error: "Failed to retrieve BBC realtime snapshot",
+      message: error.message,
+    });
+  }
+});
+
+app.post(`${API_PREFIX}/admin/bbc-history/cleanup`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const payload =
+    req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? req.body
+      : {};
+
+  const parseBoolean = (value, fallback = false) => {
+    if (value === undefined || value === null) return fallback;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+    return fallback;
+  };
+
+  const rawMatchIds = [];
+  if (payload.match_id !== undefined && payload.match_id !== null) {
+    rawMatchIds.push(payload.match_id);
+  }
+  if (Array.isArray(payload.match_ids)) {
+    payload.match_ids.forEach((value) => rawMatchIds.push(value));
+  } else if (typeof payload.match_ids === "string") {
+    payload.match_ids
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .forEach((value) => rawMatchIds.push(value));
+  }
+
+  const normalizedMatchIds = [];
+  const invalidMatchIds = [];
+  rawMatchIds
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .forEach((value) => {
+      const normalized = normalizeMatchDetailsId(value);
+      if (!normalized) {
+        invalidMatchIds.push(value);
+        return;
+      }
+      if (!normalizedMatchIds.includes(normalized)) normalizedMatchIds.push(normalized);
+    });
+
+  if (invalidMatchIds.length > 0) {
+    res.status(400).json({
+      error: "Invalid match_ids. Expected BBC details ids (e.g. c043pne0q3kt).",
+      invalid_match_ids: invalidMatchIds,
+    });
+    return;
+  }
+
+  const rawDeviceToken =
+    payload.device_token !== undefined && payload.device_token !== null
+      ? String(payload.device_token).trim()
+      : "";
+  const normalizedDeviceToken = rawDeviceToken ? normalizeDeviceToken(rawDeviceToken) : "";
+  if (rawDeviceToken && !normalizedDeviceToken) {
+    res.status(400).json({
+      error: "Invalid device_token filter.",
+    });
+    return;
+  }
+
+  const rawStart = payload.start ? String(payload.start).trim() : "";
+  const rawEnd = payload.end ? String(payload.end).trim() : "";
+  let startMs = null;
+  let endMs = null;
+  if (rawStart || rawEnd) {
+    if (!rawStart || !rawEnd) {
+      res.status(400).json({
+        error: "When using absolute range cleanup, both start and end are required (ISO datetime).",
+      });
+      return;
+    }
+    startMs = Date.parse(rawStart);
+    endMs = Date.parse(rawEnd);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      res.status(400).json({
+        error: "Invalid cleanup start/end datetime. Use ISO format.",
+      });
+      return;
+    }
+    if (endMs < startMs) {
+      res.status(400).json({
+        error: "Invalid cleanup date range. end must be greater than or equal to start.",
+      });
+      return;
+    }
+    if (endMs - startMs > MAX_BBC_HISTORY_QUERY_MS) {
+      res.status(400).json({
+        error: `Maximum cleanup query range is ${MAX_BBC_HISTORY_QUERY_HOURS} hours (7 days).`,
+      });
+      return;
+    }
+  }
+
+  const dryRun = parseBoolean(payload.dry_run, true);
+  const allowAll = parseBoolean(payload.allow_all, false);
+  const hasAnyFilter = normalizedMatchIds.length > 0 || Boolean(normalizedDeviceToken) || rawStart || rawEnd;
+  if (!hasAnyFilter && !allowAll) {
+    res.status(400).json({
+      error:
+        "Cleanup requires at least one filter (match_id(s), device_token, or start/end) unless allow_all=true.",
+    });
+    return;
+  }
+
+  try {
+    const cleanupResult = await cleanupBbcHistory({
+      match_ids: normalizedMatchIds,
+      device_token: normalizedDeviceToken || undefined,
+      start_ms: Number.isFinite(startMs) ? startMs : undefined,
+      end_ms: Number.isFinite(endMs) ? endMs : undefined,
+      dry_run: dryRun,
+    });
+
+    const statusCode = cleanupResult.error ? 500 : 200;
+    res.status(statusCode).json({
+      success: !cleanupResult.error,
+      cleanup: cleanupResult,
+      history_config: bbcHistoryConfig,
+    });
+  } catch (error) {
+    console.error("[API] Error cleaning BBC history:", error);
+    res.status(500).json({
+      error: "Failed to cleanup BBC history",
+      message: error.message,
+    });
+  }
+});
+
+app.post(`${API_PREFIX}/admin/bbc-state/backfill-range`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const payload =
+    req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? req.body
+      : {};
+
+  const parseBoolean = (value, fallback = false) => {
+    if (value === undefined || value === null) return fallback;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+    return fallback;
+  };
+
+  const startDate = String(payload.start_date || payload.start || "").trim();
+  const endDate = String(payload.end_date || payload.end || "").trim();
+  if (!startDate || !endDate) {
+    res.status(400).json({
+      error: "Missing required fields: start_date and end_date (YYYY-MM-DD).",
+    });
+    return;
+  }
+  if (!isDateOnly(startDate) || !isDateOnly(endDate)) {
+    res.status(400).json({
+      error: "Invalid date format. Expected YYYY-MM-DD for start_date and end_date.",
+    });
+    return;
+  }
+  if (startDate > endDate) {
+    res.status(400).json({
+      error: "Invalid date range. start_date must be on or before end_date.",
+    });
+    return;
+  }
+
+  const startMs = Date.parse(`${startDate}T00:00:00.000Z`);
+  const endMs = Date.parse(`${endDate}T23:59:59.999Z`);
+  const spanDays = Math.floor((endMs - startMs) / (24 * 60 * 60 * 1000)) + 1;
+  const maxSpanDays = 366;
+  if (spanDays > maxSpanDays) {
+    res.status(400).json({
+      error: `Date range too large. Maximum span is ${maxSpanDays} days.`,
+    });
+    return;
+  }
+
+  const concurrency = parsePositiveInt(
+    payload.concurrency,
+    BBC_RANGE_CONCURRENCY,
+    1,
+    50
+  );
+  const applyToRangeCache = parseBoolean(payload.apply_to_range_cache, true);
+  const startedAtMs = Date.now();
+
+  try {
+    const fetchedMatches = filterMatchesByCompetition(
+      await fetchBbcScoresFixturesByDateRange({
+        baseUrl: BBC_RANGE_BASE_URL,
+        startDate,
+        endDate,
+        concurrency,
+        timeZone: BBC_RANGE_MATCH_TIMEZONE,
+      })
+    );
+
+    let nextRangeMatches = fetchedMatches;
+    let existingRangeCount = cachedBbcRangeMatches.length;
+    if (applyToRangeCache) {
+      const rangeDataset = await getOperationalArrayDataset(
+        OP_DATASET_BBC_RANGE_MATCHES,
+        cachedBbcRangeMatches
+      );
+      const existingRangeMatches = Array.isArray(rangeDataset.items) ? rangeDataset.items : [];
+      existingRangeCount = existingRangeMatches.length;
+      const outsideRequestedWindow = existingRangeMatches.filter((match) => {
+        const date = String(match && match.date ? match.date : "").trim();
+        if (!date || !isDateOnly(date)) return true;
+        return date < startDate || date > endDate;
+      });
+      nextRangeMatches = mergeBbcAndLive(
+        [...outsideRequestedWindow, ...fetchedMatches],
+        []
+      );
+      nextRangeMatches = filterMatchesByCompetition(nextRangeMatches);
+
+      cachedBbcRangeMatches = nextRangeMatches;
+      bbcRangeLastUpdated = new Date().toISOString();
+      setSourceCacheSize(SOURCE_BBC_RANGE, nextRangeMatches.length);
+      writeBbcRangeMatches(BBC_RANGE_OUTPUT_PATH, nextRangeMatches);
+      await persistOperationalDatasetSafe(OP_DATASET_BBC_RANGE_MATCHES, nextRangeMatches, {
+        updated_at: bbcRangeLastUpdated,
+        source: "admin_bbc_range_backfill",
+      });
+      await rebuildMergedMatchesCache("admin_bbc_range_backfill");
+    }
+
+    res.status(200).json({
+      success: true,
+      backfill: {
+        start_date: startDate,
+        end_date: endDate,
+        span_days: spanDays,
+        concurrency,
+        apply_to_range_cache: applyToRangeCache,
+        fetched_matches: fetchedMatches.length,
+        existing_range_matches: existingRangeCount,
+        updated_range_matches: nextRangeMatches.length,
+        duration_ms: Date.now() - startedAtMs,
+      },
+      state: {
+        bbc_range_last_updated: bbcRangeLastUpdated,
+        bbc_range_count: cachedBbcRangeMatches.length,
+      },
+    });
+  } catch (error) {
+    console.error("[API] Error backfilling BBC range state:", error);
+    res.status(500).json({
+      error: "Failed to backfill BBC range state",
+      message: error.message,
+    });
+  }
+});
+
 // ===== Push Notification Testing Endpoints =====
 const { sendNotification } = require("./apns_client");
 
@@ -3348,15 +4403,46 @@ app.post(`${API_PREFIX}/notifications/test`, async (req, res) => {
 
 // ===== End User Preferences Endpoints =====
 
-loadMissingTeamLogosFromDisk();
-updateRecentCache();
-rebuildMergedMatchesCache();
-rebuildMatchDetailsCache();
-refreshInProgressMatchDetails();
-updateMatches();
-updateBbcMatches();
-updateBbcRangeMatches();
-updatePremierLeagueTeams();
+async function seedOperationalStateFromDiskIfNeeded() {
+  const [mergedDataset, matchDetailsSummary] = await Promise.all([
+    loadOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES),
+    getOperationalMatchDetailsSummary(),
+  ]);
+  const hasMergedState =
+    mergedDataset && Array.isArray(mergedDataset.payload) && mergedDataset.payload.length > 0;
+  const hasMatchDetails = Number(matchDetailsSummary && matchDetailsSummary.total) > 0;
+  if (hasMergedState && hasMatchDetails) {
+    return { seeded: false, reason: "redis_has_state" };
+  }
+
+  await persistStartupOperationalStateFromDisk();
+  return { seeded: true, reason: "redis_was_empty_or_partial" };
+}
+
+async function bootstrapOperationalState() {
+  loadMissingTeamLogosFromDisk();
+
+  await hydrateOperationalStateFromRedis();
+  const seedResult = await seedOperationalStateFromDiskIfNeeded();
+  if (seedResult.seeded) {
+    await hydrateOperationalStateFromRedis();
+  }
+
+  await updateRecentCache("startup_bootstrap");
+  await rebuildMergedMatchesCache("startup_bootstrap");
+  await rebuildMatchDetailsCache("startup_bootstrap");
+
+  // Run network refresh tasks in background after bootstrapping cached state.
+  void refreshInProgressMatchDetails();
+  void updateMatches();
+  void updateBbcMatches();
+  void updateBbcRangeMatches();
+  void updatePremierLeagueTeams();
+}
+
+const operationalBootstrapPromise = bootstrapOperationalState().catch((error) => {
+  console.warn("[Startup] Operational bootstrap failed:", error.message || error);
+});
 
 const interval = Number.isFinite(INTERVAL_MS) && INTERVAL_MS > 0 ? INTERVAL_MS : 30 * 60 * 1000;
 setInterval(updateMatches, interval);
@@ -3530,7 +4616,8 @@ app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
 
   // Start match monitoring after server is ready
-  setTimeout(() => {
+  setTimeout(async () => {
+    await operationalBootstrapPromise;
     matchMonitor.startMonitoring();
   }, 2000); // Wait 2 seconds for server to fully initialize
 });

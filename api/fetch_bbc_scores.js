@@ -175,7 +175,9 @@ function stripHiddenText($node, $) {
 
 function extractMinuteTokens(text) {
   if (!text) return [];
-  const normalized = normalizeText(text).replace(/'/g, "'");
+  const normalized = normalizeText(text)
+    .replace(/(\d{1,3})\s*'\s*\+\s*(\d{1,2})/g, "$1+$2'")
+    .replace(/(\d{1,3})\s*minutes?\s*plus\s*(\d{1,2})/gi, "$1+$2 minutes");
   const minutes = [];
   const seen = new Set();
 
@@ -201,7 +203,7 @@ function extractMinuteTokens(text) {
   let minuteWordMatch = minuteWordRegex.exec(normalized);
   while (minuteWordMatch) {
     const isPenalty = minuteWordMatch[1];
-    const minute = minuteWordMatch[2];
+    const minute = String(minuteWordMatch[2] || "").replace(/\s+/g, "");
     const key = minute;
     if (!seen.has(key)) {
       seen.add(key);
@@ -469,7 +471,7 @@ function extractStatusFromText(text) {
   const statusMatch = cleaned.match(/\b(HT|FT|AET|ET|Pens?)\b/i);
   if (statusMatch) return normalizeStatusToken(statusMatch[1]);
 
-  const minuteNormalized = cleaned.replace(/(\d)'\+(\d)/g, "$1+$2");
+  const minuteNormalized = cleaned.replace(/(\d{1,3})'\+(\d{1,2})/g, "$1+$2");
   const minuteMatch = minuteNormalized.match(/\b\d{1,3}(?:\+\d{1,2})?'?\b/);
   if (minuteMatch) return minuteMatch[0].replace(/'$/, "");
 
@@ -1885,12 +1887,22 @@ async function fetchBbcFixtures(url = DEFAULT_BBC_URL) {
   return enrichMatchesWithDetails(deduped);
 }
 
+function selectMatchCandidateByDetailsUrl(candidates, normalizedTarget) {
+  if (!Array.isArray(candidates) || !normalizedTarget) return null;
+  return (
+    candidates.find((candidate) => {
+      const validated = normalizeDetailsUrl(candidate && candidate.details_url);
+      return normalizeDetailsUrlKey(validated) === normalizedTarget;
+    }) || null
+  );
+}
+
 async function fetchBbcMatchByDetailsUrl(detailsUrl) {
   const validatedTarget = normalizeDetailsUrl(detailsUrl);
   const normalizedTarget = normalizeDetailsUrlKey(validatedTarget);
   if (!normalizedTarget) return null;
 
-  const html = await fetchHtml(detailsUrl);
+  const html = await fetchHtml(validatedTarget);
   const $ = cheerio.load(html);
   const fromDom = parseMatchesFromDom($);
   const fromJson = parseMatchesFromJson(html);
@@ -1900,17 +1912,24 @@ async function fetchBbcMatchByDetailsUrl(detailsUrl) {
     away_score: toScoreValue(match.away_score),
   }));
 
-  let match = candidates.find((candidate) => {
-    const validated = normalizeDetailsUrl(candidate.details_url);
-    return normalizeDetailsUrlKey(validated) === normalizedTarget;
-  });
-  if (!match) {
-    match = candidates[0] || null;
-  }
-  if (!match) return null;
+  let match = selectMatchCandidateByDetailsUrl(candidates, normalizedTarget);
 
-  // Pass team names to parseMatchDetailsFromHtml for penalty result validation
-  const detailsFromPage = parseMatchDetailsFromHtml(html, match.home_team, match.away_team);
+  // Parse details from the dedicated match page even when summary candidate extraction fails.
+  // This avoids incorrectly falling back to an unrelated fixture from shared JSON blobs.
+  const detailsFromPage = parseMatchDetailsFromHtml(
+    html,
+    match ? match.home_team : null,
+    match ? match.away_team : null
+  );
+
+  if (!match) {
+    if (!detailsFromPage) return null;
+    return {
+      details_url: validatedTarget,
+      ...detailsFromPage,
+    };
+  }
+
   if (detailsFromPage) {
     match = {
       ...match,
@@ -1918,7 +1937,7 @@ async function fetchBbcMatchByDetailsUrl(detailsUrl) {
     };
   }
   if (!match.details_url) {
-    match.details_url = detailsUrl;
+    match.details_url = validatedTarget;
   }
 
   return match;
@@ -1965,5 +1984,6 @@ module.exports = {
     normalizeDetailsUrl,
     normalizeDetailsUrlKey,
     pickCompetitionName,
+    selectMatchCandidateByDetailsUrl,
   },
 };

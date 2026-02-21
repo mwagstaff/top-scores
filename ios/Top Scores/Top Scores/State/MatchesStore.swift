@@ -345,6 +345,8 @@ final class MatchesStore: ObservableObject {
     private let liveRefreshInterval: TimeInterval = 30
     private let bbcLiveRefreshInterval: TimeInterval = 90
     private let pageSize = 120
+    // Results are filtered client-side after paging; advance a few pages to avoid empty-first-page windows.
+    private let resultsAutoAdvancePageLimit = 8
     private let prefetchThreshold = 20
 
     var hasInProgressMatches: Bool {
@@ -424,59 +426,88 @@ final class MatchesStore: ObservableObject {
         }
 
         do {
-            let nextPage = reset ? 1 : max(1, current.page + 1)
             let client = APIClient(baseURL: baseURL)
-            let pageResponse = try await client.fetchMatchesPage(
-                preferences: preferences,
-                mode: mode,
-                page: nextPage,
-                pageSize: pageSize
-            )
+            var requestedPage = reset ? 1 : max(1, current.page + 1)
+            var pagesFetched = 0
+            var nextHasMore = false
+            var newestLastUpdated: Date?
+            var mergedIncoming: [Match] = []
+            var mergedModeFiltered: [Match] = []
 
-            var incoming = pageResponse.matches
-
-            // Filter out test matches in non-DEBUG builds
-            #if !DEBUG
-            incoming = incoming.filter { $0.isTestMatch != true }
-            #endif
-
-            // Debug log for Birmingham vs Leeds match
-            if let birdsMatch = incoming.first(where: { $0.homeTeam.contains("Birmingham") && $0.awayTeam.contains("Leeds") }) {
-                NSLog("[DEBUG fetchPage] Birmingham vs Leeds decoded with status=%@ hasScore=%d", birdsMatch.scoreStatus ?? "nil", birdsMatch.hasScore)
-            }
-            if mode == .fixtures {
-                incoming = MatchScoreResolver.applyScores(to: incoming, using: cachedBbcLiveMatches)
-                scheduleBbcLiveRefreshIfNeeded(client: client, force: cachedBbcLiveMatches.isEmpty)
-            }
-
-            let competitionFiltered = Self.applyCompetitionFilters(
-                to: incoming,
-                selectedLeagues: preferences.selectedLeagues,
-                isEnabled: preferences.competitionFilterEnabled
-            )
-
-            let dateFiltered = Self.filterMatches(competitionFiltered, for: mode)
-
-            let modeFiltered: [Match]
-            if mode == .fixtures && preferences.channelFilterEnabled {
-                modeFiltered = Self.applyChannelFilters(
-                    to: dateFiltered,
-                    selectedChannels: preferences.selectedChannels
+            repeat {
+                let pageResponse = try await client.fetchMatchesPage(
+                    preferences: preferences,
+                    mode: mode,
+                    page: requestedPage,
+                    pageSize: pageSize
                 )
-            } else {
-                modeFiltered = dateFiltered
-            }
+
+                var incoming = pageResponse.matches
+
+                // Filter out test matches in non-DEBUG builds
+                #if !DEBUG
+                incoming = incoming.filter { $0.isTestMatch != true }
+                #endif
+
+                // Debug log for Birmingham vs Leeds match
+                if let birdsMatch = incoming.first(where: { $0.homeTeam.contains("Birmingham") && $0.awayTeam.contains("Leeds") }) {
+                    NSLog("[DEBUG fetchPage] Birmingham vs Leeds decoded with status=%@ hasScore=%d", birdsMatch.scoreStatus ?? "nil", birdsMatch.hasScore)
+                }
+                if mode == .fixtures {
+                    incoming = MatchScoreResolver.applyScores(to: incoming, using: cachedBbcLiveMatches)
+                    scheduleBbcLiveRefreshIfNeeded(client: client, force: cachedBbcLiveMatches.isEmpty)
+                }
+
+                let competitionFiltered = Self.applyCompetitionFilters(
+                    to: incoming,
+                    selectedLeagues: preferences.selectedLeagues,
+                    isEnabled: preferences.competitionFilterEnabled
+                )
+
+                let dateFiltered = Self.filterMatches(competitionFiltered, for: mode)
+
+                let modeFiltered: [Match]
+                if mode == .fixtures && preferences.channelFilterEnabled {
+                    modeFiltered = Self.applyChannelFilters(
+                        to: dateFiltered,
+                        selectedChannels: preferences.selectedChannels
+                    )
+                } else {
+                    modeFiltered = dateFiltered
+                }
+
+                mergedIncoming = Self.mergePages(existing: mergedIncoming, incoming: incoming)
+                mergedModeFiltered = Self.mergePages(existing: mergedModeFiltered, incoming: modeFiltered)
+
+                if let updated = pageResponse.lastUpdated {
+                    if let currentNewest = newestLastUpdated {
+                        newestLastUpdated = max(currentNewest, updated)
+                    } else {
+                        newestLastUpdated = updated
+                    }
+                }
+
+                requestedPage = pageResponse.page + 1
+                nextHasMore = pageResponse.hasMore
+                pagesFetched += 1
+            } while (
+                reset &&
+                mode == .results &&
+                mergedModeFiltered.isEmpty &&
+                nextHasMore &&
+                pagesFetched < resultsAutoAdvancePageLimit
+            )
 
             var nextState = state(for: mode)
             nextState.matches = reset
-                ? modeFiltered
-                : Self.mergePages(existing: nextState.matches, incoming: modeFiltered)
+                ? mergedModeFiltered
+                : Self.mergePages(existing: nextState.matches, incoming: mergedModeFiltered)
             nextState.unfilteredMatches = reset
-                ? incoming
-                : Self.mergePages(existing: nextState.unfilteredMatches, incoming: incoming)
-            nextState.page = pageResponse.page
-            nextState.hasMore = pageResponse.hasMore
-            if let updated = pageResponse.lastUpdated {
+                ? mergedIncoming
+                : Self.mergePages(existing: nextState.unfilteredMatches, incoming: mergedIncoming)
+            nextState.page = max(0, requestedPage - 1)
+            nextState.hasMore = nextHasMore
+            if let updated = newestLastUpdated {
                 nextState.lastUpdated = updated
             }
             nextState.isLoading = false

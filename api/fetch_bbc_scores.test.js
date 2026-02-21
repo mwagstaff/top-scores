@@ -1,7 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { parseMatchDetailsFromHtml, __private } = require("./fetch_bbc_scores");
+const {
+  parseMatchDetailsFromHtml,
+  __private,
+} = require("./fetch_bbc_scores");
 
 test("parseMatchDetailsFromHtml parses own goals and red cards from key events", () => {
   const html = `
@@ -60,7 +63,7 @@ test("parseMatchDetailsFromHtml parses own goals and red cards from key events",
     },
     {
       player: "J. Alvarez",
-      goal_times: ["45'"],
+      goal_times: ["45+2'"],
     },
   ]);
   assert.deepStrictEqual(parsed.away_goal_scorers, []);
@@ -99,6 +102,29 @@ test("parseMatchDetailsFromHtml keeps normal goal objects backward-compatible", 
   assert.deepStrictEqual(parsed.away_red_cards, []);
 });
 
+test("parseMatchDetailsFromHtml preserves stoppage-time goals in apostrophe-plus format", () => {
+  const html = `
+    <div class="KeyEventsHome">
+      <ul>
+        <li>
+          <span role="text">Z. Flemming </span>
+          <span aria-hidden="true"><span>(90'+3)</span></span>
+          <span class="visually-hidden">Goal 90 minutes plus 3</span>
+        </li>
+      </ul>
+    </div>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.deepStrictEqual(parsed.home_goal_scorers, [
+    {
+      player: "Z. Flemming",
+      goal_times: ["90+3'"],
+    },
+  ]);
+});
+
 test("pickCompetitionName disambiguates non-English Premier League competitions", () => {
   const node = {
     competitionName: "Premier League",
@@ -116,4 +142,21 @@ test("normalizeDetailsUrl rejects non-football BBC URLs", () => {
 
   assert.equal(valid, "https://www.bbc.co.uk/sport/football/live/cm247jz3p05t");
   assert.equal(invalid, null);
+});
+
+test("selectMatchCandidateByDetailsUrl only returns exact details-url matches", () => {
+  const candidates = [
+    {
+      home_team: "Aston Villa",
+      away_team: "Leeds United",
+      details_url: "https://www.bbc.co.uk/sport/football/live/ceqvjrgl5x5t",
+    },
+  ];
+  const normalizedTarget =
+    __private.normalizeDetailsUrlKey(
+      __private.normalizeDetailsUrl("https://www.bbc.co.uk/sport/football/live/c1kgj4ve3jkt")
+    );
+
+  const selected = __private.selectMatchCandidateByDetailsUrl(candidates, normalizedTarget);
+  assert.equal(selected, null);
 });
