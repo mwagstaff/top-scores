@@ -23,16 +23,21 @@ struct ContentView: View {
                         Label("Results", systemImage: "clock.arrow.circlepath")
                     }
                     .tag(1)
+                TablesView()
+                    .tabItem {
+                        Label("Tables", systemImage: "tablecells")
+                    }
+                    .tag(2)
                 PreferencesView()
                     .tabItem {
                         Label("Preferences", systemImage: "slider.horizontal.3")
                     }
-                    .tag(2)
+                    .tag(3)
                 AboutView()
                     .tabItem {
                         Label("About", systemImage: "info.circle")
                     }
-                    .tag(3)
+                    .tag(4)
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .background(Color(.systemBackground))

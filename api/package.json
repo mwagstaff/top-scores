@@ -5,9 +5,11 @@
   "scripts": {
     "fetch": "node fetch_live_footballontv.js",
     "fetch:epl": "node fetch_bbc_premier_league_table.js",
+    "fetch:tables": "node fetch_bbc_league_tables.js",
     "test:bbc-details": "node test_bbc_match_details.js",
     "start": "node server.js",
-    "test-harness": "node test_harness_server.js"
+    "test-harness": "node test_harness_server.js",
+    "live-activity:harness": "./live_activity_test_harness.sh"
   },
   "dependencies": {
     "@parse/node-apn": "^6.0.1",

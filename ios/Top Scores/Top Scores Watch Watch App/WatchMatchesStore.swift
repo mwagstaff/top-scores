@@ -83,12 +83,19 @@ final class WatchMatchesStore: NSObject, ObservableObject {
             return
         }
 
-        let sorted = WatchMatchGrouping.sortedMatches(payload.matches)
+        let sourceMatches: [WatchMatch]
+        if !payload.unfilteredMatches.isEmpty {
+            sourceMatches = payload.unfilteredMatches
+        } else {
+            sourceMatches = payload.matches
+        }
+
+        let sorted = WatchMatchGrouping.sortedMatches(sourceMatches)
         let grouped = WatchMatchGrouping.groupedDays(sorted)
         let todaysCount = WatchMatchGrouping.todaysMatchCount(sorted)
 
         DispatchQueue.main.async {
-            self.filteredMatches = payload.matches
+            self.filteredMatches = sourceMatches
             self.unfilteredMatches = payload.unfilteredMatches
             self.groupedDays = grouped
             self.lastUpdated = payload.lastUpdated

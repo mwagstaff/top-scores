@@ -5,18 +5,25 @@ final class WatchTeamLogoResolver {
     static let shared = WatchTeamLogoResolver()
 
     private let fallbackName = "_noTeamLogo"
+    private let bundlesToSearch: [Bundle]
     private var normalizedLookup: [String: URL] = [:]
     private var coreLookup: [String: [URL]] = [:]
     private var originalLookup: [String: URL] = [:]
     private var cache: [String: UIImage] = [:]
 
     private init() {
+        bundlesToSearch = Self.buildBundlesToSearch()
         loadLogos()
     }
 
     func image(for teamName: String) -> UIImage? {
         if let cached = cache[teamName] {
             return cached
+        }
+
+        if let assetImage = resolveAssetImage(for: teamName) ?? resolveAssetFallbackImage() {
+            cache[teamName] = assetImage
+            return assetImage
         }
 
         let url = resolveURL(for: teamName) ?? resolveURL(for: fallbackName)
@@ -50,7 +57,7 @@ final class WatchTeamLogoResolver {
         }
     }
 
-    private var bundlesToSearch: [Bundle] {
+    private static func buildBundlesToSearch() -> [Bundle] {
         var output: [Bundle] = []
         var seenURLs = Set<URL>()
 
@@ -62,6 +69,85 @@ final class WatchTeamLogoResolver {
         }
 
         return output
+    }
+
+    private func resolveAssetImage(for teamName: String) -> UIImage? {
+        let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        for candidate in assetNameCandidates(for: trimmed) {
+            if let image = UIImage(named: candidate) {
+                return image
+            }
+        }
+
+        return nil
+    }
+
+    private func resolveAssetFallbackImage() -> UIImage? {
+        for candidate in [fallbackName, "\(fallbackName) 1"] {
+            if let image = UIImage(named: candidate) {
+                return image
+            }
+        }
+        return nil
+    }
+
+    private func assetNameCandidates(for teamName: String) -> [String] {
+        var candidates: [String] = []
+        var seen = Set<String>()
+
+        func add(_ value: String?) {
+            guard let value else { return }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { return }
+            candidates.append(trimmed)
+        }
+
+        add(teamName)
+        add(teamName.replacingOccurrences(of: "’", with: "'"))
+        add(teamName.replacingOccurrences(of: "'", with: ""))
+
+        let lowered = teamName.lowercased()
+        if let alias = Self.aliasMap[lowered] {
+            add(alias)
+            add(Self.displayName(forAlias: alias))
+        }
+
+        for (fullName, alias) in Self.aliasMap where alias == lowered {
+            add(fullName)
+            add(Self.displayName(forAlias: fullName))
+        }
+
+        return candidates
+    }
+
+    private static func displayName(forAlias alias: String) -> String {
+        alias
+            .split(separator: " ")
+            .map { token in
+                switch token {
+                case "fc":
+                    return "FC"
+                case "ac":
+                    return "AC"
+                case "sv":
+                    return "SV"
+                case "vfl":
+                    return "VfL"
+                case "vfb":
+                    return "VfB"
+                case "paok":
+                    return "PAOK"
+                case "psv":
+                    return "PSV"
+                default:
+                    return token.prefix(1).uppercased() + String(token.dropFirst())
+                }
+            }
+            .joined(separator: " ")
     }
 
     private func resolveURL(for teamName: String) -> URL? {
@@ -229,16 +315,23 @@ final class WatchTvLogoResolver {
     static let shared = WatchTvLogoResolver()
 
     private let fallbackName = "_noLogo"
+    private let bundlesToSearch: [Bundle]
     private var normalizedLookup: [String: URL] = [:]
     private var cache: [String: UIImage] = [:]
 
     private init() {
+        bundlesToSearch = Self.buildBundlesToSearch()
         loadLogos()
     }
 
     func image(for channelName: String) -> UIImage? {
         if let cached = cache[channelName] {
             return cached
+        }
+
+        if let assetImage = resolveAssetImage(for: channelName) ?? resolveAssetFallbackImage() {
+            cache[channelName] = assetImage
+            return assetImage
         }
 
         let url = resolveURL(for: channelName) ?? resolveURL(for: fallbackName)
@@ -254,18 +347,14 @@ final class WatchTvLogoResolver {
 
     func images(for channels: [String]) -> [UIImage] {
         var output: [UIImage] = []
-        var seenFiles = Set<String>()
+        var seenChannels = Set<String>()
 
         for channel in channels {
-            guard let url = resolveURL(for: channel) ?? resolveURL(for: fallbackName) else { continue }
-            let fileKey = url.deletingPathExtension().lastPathComponent.lowercased()
-            guard !seenFiles.contains(fileKey) else { continue }
-            seenFiles.insert(fileKey)
-
-            if let image = UIImage(contentsOfFile: url.path) {
-                cache[channel] = image
-                output.append(image)
-            }
+            let dedupeKey = Self.normalizedKey(channel)
+            guard !seenChannels.contains(dedupeKey) else { continue }
+            guard let image = image(for: channel) else { continue }
+            seenChannels.insert(dedupeKey)
+            output.append(image)
         }
 
         return output
@@ -286,7 +375,7 @@ final class WatchTvLogoResolver {
         }
     }
 
-    private var bundlesToSearch: [Bundle] {
+    private static func buildBundlesToSearch() -> [Bundle] {
         var output: [Bundle] = []
         var seenURLs = Set<URL>()
 
@@ -298,6 +387,49 @@ final class WatchTvLogoResolver {
         }
 
         return output
+    }
+
+    private func resolveAssetImage(for channelName: String) -> UIImage? {
+        for candidate in assetNameCandidates(for: channelName) {
+            if let image = UIImage(named: candidate) {
+                return image
+            }
+        }
+        return nil
+    }
+
+    private func resolveAssetFallbackImage() -> UIImage? {
+        for candidate in [fallbackName, "\(fallbackName) 1"] {
+            if let image = UIImage(named: candidate) {
+                return image
+            }
+        }
+        return nil
+    }
+
+    private func assetNameCandidates(for channelName: String) -> [String] {
+        var candidates: [String] = []
+        var seen = Set<String>()
+
+        func add(_ value: String?) {
+            guard let value else { return }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { return }
+            candidates.append(trimmed)
+        }
+
+        add(channelName)
+
+        let normalized = Self.normalizedKey(channelName)
+        for (keyword, logoKey) in aliasKeywords where normalized.contains(keyword) {
+            add(logoKey)
+            add(logoKey.uppercased())
+            add(logoKey.capitalized)
+        }
+
+        return candidates
     }
 
     private func resolveURL(for channelName: String) -> URL? {

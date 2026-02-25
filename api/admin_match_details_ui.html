@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Result Match Details Admin</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --ink: #0f1720;
+      --muted: #4b5563;
+      --line: #d8dee6;
+      --accent: #0f766e;
+      --accent-soft: #d5f4f0;
+      --ok: #166534;
+      --fail: #b91c1c;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #eef4f7 0%, #f6f8fa 100%);
+      color: var(--ink);
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 32, 0.05);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 1.1rem;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #0b5e58;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.86rem;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .meta-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f9fbfc;
+      padding: 10px;
+    }
+
+    .meta-card .label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .meta-card .value {
+      margin-top: 2px;
+      font-size: 1.02rem;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .status {
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .error {
+      color: var(--fail);
+      font-weight: 700;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+      display: grid;
+      gap: 4px;
+    }
+
+    .item .line1 {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .item .line2,
+    .item .line3 {
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .pill {
+      border-radius: 999px;
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      display: inline-block;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      color: var(--ok);
+      border-color: rgba(22, 101, 52, 0.3);
+      background: rgba(22, 101, 52, 0.1);
+    }
+
+    .pill.fail {
+      color: var(--fail);
+      border-color: rgba(185, 28, 28, 0.3);
+      background: rgba(185, 28, 28, 0.1);
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 4px 0;
+    }
+
+    details {
+      margin-top: 4px;
+    }
+
+    details summary {
+      cursor: pointer;
+      color: #0b5e58;
+      font-weight: 600;
+      font-size: 0.86rem;
+    }
+
+    .token-list {
+      margin-top: 8px;
+      display: grid;
+      gap: 4px;
+      max-height: 220px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .token-list code {
+      display: block;
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      font-size: 0.78rem;
+      color: #0f1720;
+      word-break: break-all;
+    }
+
+    @media (max-width: 960px) {
+      .meta-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .meta-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .item .line1 {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="panel">
+      <h1 id="title">Result Match Details</h1>
+      <p id="subtitle">Loading...</p>
+      <div class="links">
+        <a id="back-results" class="chip" href="./results">Back to Results</a>
+        <a id="link-fixtures" class="chip" href="./fixtures">Fixtures</a>
+        <a id="link-preferences" class="chip" href="./preferences">Preferences</a>
+        <a id="link-history" class="chip" href="./bbc-history">BBC History</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div id="status" class="status">No request made yet.</div>
+      <div id="meta" class="meta-grid"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Match Timeline</h2>
+      <div id="timeline" class="stack"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Monitor Event History (Redis)</h2>
+      <div id="events" class="stack"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Notification Dispatches (Newest First)</h2>
+      <div id="notifications" class="stack"></div>
+    </section>
+  </div>
+
+  <script>
+    function buildApiBasePrefix(pathname) {
+      const normalized = String(pathname || "");
+      const match = normalized.match(/^(.*)\/admin\/results\/[^/]+\/?$/);
+      if (!match) return "";
+      const prefix = match[1];
+      return prefix && prefix !== "/" ? prefix : "";
+    }
+
+    function extractMatchId(pathname) {
+      const match = String(pathname || "").match(/\/admin\/results\/([^/?#]+)/);
+      if (!match) return "";
+      try {
+        return decodeURIComponent(match[1]);
+      } catch (_error) {
+        return String(match[1] || "");
+      }
+    }
+
+    const pathname = String(window.location.pathname || "");
+    const apiBasePrefix = buildApiBasePrefix(pathname);
+    const matchId = extractMatchId(pathname);
+
+    const titleNode = document.getElementById("title");
+    const subtitleNode = document.getElementById("subtitle");
+    const statusNode = document.getElementById("status");
+    const metaNode = document.getElementById("meta");
+    const timelineNode = document.getElementById("timeline");
+    const eventsNode = document.getElementById("events");
+    const notificationsNode = document.getElementById("notifications");
+    const backResultsNode = document.getElementById("back-results");
+    const fixturesNode = document.getElementById("link-fixtures");
+    const preferencesNode = document.getElementById("link-preferences");
+    const historyNode = document.getElementById("link-history");
+
+    let latestPayload = null;
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function formatTimestamp(ms) {
+      const numeric = Number(ms);
+      if (!Number.isFinite(numeric) || numeric <= 0) return "-";
+      return new Date(numeric).toLocaleString();
+    }
+
+    function shortStatus(status) {
+      const text = String(status || "").trim();
+      if (!text) return "-";
+      if (/^\d{1,3}(?:\+\d{1,2})?'?$/.test(text)) {
+        return `${text.replace(/'/g, "")}'`;
+      }
+      return text;
+    }
+
+    function renderMeta(match, history) {
+      const score = Number.isFinite(Number(match.home_score)) && Number.isFinite(Number(match.away_score))
+        ? `${match.home_score} - ${match.away_score}`
+        : "-";
+      const status = shortStatus(match.display_score_status || match.score_status);
+      const kickoff = Number.isFinite(Number(match.kickoff_ts_ms))
+        ? new Date(Number(match.kickoff_ts_ms)).toLocaleString()
+        : `${match.date || "-"} ${match.time || ""}`;
+      const channels = Array.isArray(match.tv_channels) && match.tv_channels.length > 0
+        ? match.tv_channels.join(" | ")
+        : "TV TBA";
+
+      metaNode.innerHTML = [
+        { label: "Competition", value: match.league || "-" },
+        { label: "Kickoff", value: kickoff },
+        { label: "Score", value: score },
+        { label: "Status", value: status },
+        { label: "Timeline Events", value: String((latestPayload.match_timeline || []).length) },
+        { label: "Monitor Events", value: String(history.count_events || 0) },
+        { label: "Notifications", value: String(history.count_notifications || 0) },
+        { label: "Channels", value: channels },
+      ].map((item) => `
+        <div class="meta-card">
+          <div class="label">${escapeHtml(item.label)}</div>
+          <div class="value">${escapeHtml(item.value)}</div>
+        </div>
+      `).join("");
+    }
+
+    function renderTimelineItem(item) {
+      const type = String(item.event_type || "unknown").toLowerCase();
+      const typeLabel = type === "red_card" ? "Red Card" : item.own_goal ? "Own Goal" : "Goal";
+      const side = String(item.team_side || "unknown");
+      const teamName = String(item.team_name || side);
+      const player = String(item.player || "Unknown player");
+      const assister = String(item.assister || "").trim();
+      const timeLabel = String(item.time_label || "?");
+
+      const detailParts = [
+        `Team: ${teamName}`,
+        `Player: ${player}`,
+        `Time: ${timeLabel}`,
+      ];
+      if (assister && type !== "red_card") {
+        detailParts.push(`Assist: ${assister}`);
+      }
+
+      return `
+        <div class="item">
+          <div class="line1">
+            <strong>${escapeHtml(typeLabel)}</strong>
+            <span class="pill">${escapeHtml(side)}</span>
+          </div>
+          <div class="line2">${escapeHtml(detailParts.join(" | "))}</div>
+        </div>
+      `;
+    }
+
+    function renderEventItem(item) {
+      const eventType = String(item.event_type || "unknown");
+      const title = String(item.title || "-");
+      const body = String(item.body || "-");
+      const extra = [
+        item.scorer ? `scorer=${item.scorer}` : "",
+        item.assister ? `assister=${item.assister}` : "",
+        item.player ? `player=${item.player}` : "",
+        item.goal_time ? `goal_time=${item.goal_time}` : "",
+        item.red_card_time ? `red_card_time=${item.red_card_time}` : "",
+      ].filter(Boolean).join(" | ");
+
+      return `
+        <div class="item">
+          <div class="line1">
+            <strong>${escapeHtml(title)}</strong>
+            <span class="pill">${escapeHtml(eventType)}</span>
+          </div>
+          <div class="line2">${escapeHtml(body)}</div>
+          <div class="line3">
+            ${escapeHtml(formatTimestamp(item.timestamp_ms))}
+            ${extra ? ` | ${escapeHtml(extra)}` : ""}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderNotificationDispatch(item) {
+      const statuses = item && item.statuses && typeof item.statuses === "object"
+        ? item.statuses
+        : {};
+      const sentCount = Number(statuses.sent || 0);
+      const failedCount = Number(statuses.failed || 0);
+      const skippedCount = Number(statuses.dedupe_skipped || 0);
+
+      const statusPills = [
+        sentCount > 0 ? `<span class="pill ok">sent ${sentCount}</span>` : "",
+        failedCount > 0 ? `<span class="pill fail">failed ${failedCount}</span>` : "",
+        skippedCount > 0 ? `<span class="pill">dedupe ${skippedCount}</span>` : "",
+      ].filter(Boolean).join(" ");
+
+      const tokens = Array.isArray(item.devices) ? item.devices : [];
+      const tokenSummary = `${tokens.length} device token${tokens.length === 1 ? "" : "s"}`;
+
+      return `
+        <div class="item">
+          <div class="line1">
+            <strong>${escapeHtml(item.title || item.event_type || "Notification")}</strong>
+            <span class="pill">${escapeHtml(shortStatus(item.event_type || "unknown"))}</span>
+          </div>
+          <div class="line2">${escapeHtml(item.body || "-")}</div>
+          <div class="line3">
+            ${escapeHtml(formatTimestamp(item.last_timestamp_ms))}
+            | ${escapeHtml(item.dispatch_mode || "unknown mode")}
+            | delay=${escapeHtml(String(item.delay_minutes || 0))}m
+          </div>
+          <div>${statusPills || '<span class="pill">status unknown</span>'}</div>
+          <details>
+            <summary>${escapeHtml(tokenSummary)}</summary>
+            <div class="token-list">
+              ${tokens.length
+                ? tokens.map((device) => `<code>${escapeHtml(device.label || device.short_token || device.token || "unknown-device")}</code>`).join("")
+                : '<div class="empty">No associated device tokens retained.</div>'}
+            </div>
+          </details>
+        </div>
+      `;
+    }
+
+    function renderPayload(payload) {
+      latestPayload = payload;
+      const match = payload.match || {};
+      const history = payload.history || {};
+      const home = String(match.home_team || "Unknown Home");
+      const away = String(match.away_team || "Unknown Away");
+
+      titleNode.textContent = `${home} vs ${away}`;
+      subtitleNode.textContent =
+        `match_id=${payload.match_id || match.match_details_id || "unknown"}` +
+        (match.penalty_result ? ` | ${match.penalty_result}` : "");
+
+      renderMeta(match, history);
+
+      const timeline = Array.isArray(payload.match_timeline) ? payload.match_timeline : [];
+      timelineNode.innerHTML = timeline.length
+        ? timeline.map(renderTimelineItem).join("")
+        : '<div class="empty">No scorer/red-card timeline data available.</div>';
+
+      const events = Array.isArray(history.events) ? history.events : [];
+      eventsNode.innerHTML = events.length
+        ? events.map(renderEventItem).join("")
+        : '<div class="empty">No monitor events retained for this match id in Redis history.</div>';
+
+      const dispatches = Array.isArray(history.notification_dispatches)
+        ? history.notification_dispatches
+        : [];
+      notificationsNode.innerHTML = dispatches.length
+        ? dispatches.map(renderNotificationDispatch).join("")
+        : '<div class="empty">No notifications retained for this match id in Redis history.</div>';
+
+      const generatedAt = payload.generated_at ? new Date(payload.generated_at).toLocaleString() : "-";
+      statusNode.textContent =
+        `Loaded match details. Generated: ${generatedAt}. ` +
+        `History source: ${history.source || "unknown"}.`;
+      statusNode.classList.remove("error");
+    }
+
+    async function load() {
+      if (!matchId) {
+        statusNode.textContent = "No match id found in URL.";
+        statusNode.classList.add("error");
+        return;
+      }
+
+      backResultsNode.href = `${apiBasePrefix}/admin/results`;
+      fixturesNode.href = `${apiBasePrefix}/admin/fixtures`;
+      preferencesNode.href = `${apiBasePrefix}/admin/preferences`;
+      historyNode.href = `${apiBasePrefix}/admin/bbc-history`;
+
+      const apiUrl = `${apiBasePrefix}/api/v1/admin/results/${encodeURIComponent(matchId)}`;
+      statusNode.textContent = "Loading match details...";
+      statusNode.classList.remove("error");
+
+      try {
+        const response = await fetch(apiUrl, {
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+        });
+
+        const payload = await response.json();
+        if (!response.ok || !payload || payload.success !== true || !payload.match) {
+          const message = payload && payload.error ? payload.error : `Request failed (${response.status})`;
+          throw new Error(message);
+        }
+
+        renderPayload(payload);
+      } catch (error) {
+        statusNode.textContent = `Error loading match details: ${error.message || String(error)}`;
+        statusNode.classList.add("error");
+        timelineNode.innerHTML = '<div class="empty">No data loaded.</div>';
+        eventsNode.innerHTML = '<div class="empty">No data loaded.</div>';
+        notificationsNode.innerHTML = '<div class="empty">No data loaded.</div>';
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

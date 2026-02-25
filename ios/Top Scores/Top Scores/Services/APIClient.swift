@@ -135,6 +135,24 @@ struct APIClient {
         return try JSONDecoder().decode([BbcMatch].self, from: data)
     }
 
+    func fetchLeagueTables() async throws -> LeagueTablesResponse {
+        let request = try buildRequest(path: "tables", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "league_tables")
+        try validateSuccess(http, data: data, operation: "league_tables")
+        let payload = try JSONDecoder().decode(LeagueTablesEnvelope.self, from: data)
+
+        let formatter = ISO8601DateFormatter()
+        let headerUpdatedAt = http
+            .value(forHTTPHeaderField: "X-Last-Updated")
+            .flatMap { formatter.date(from: $0) }
+        let bodyUpdatedAt = payload.updatedAt.flatMap { formatter.date(from: $0) }
+
+        return LeagueTablesResponse(
+            leagues: payload.leagues,
+            lastUpdated: headerUpdatedAt ?? bodyUpdatedAt
+        )
+    }
+
     func fetchMatchDetails(matchId: String) async throws -> MatchDetailsPayload {
         guard let normalizedID = Self.normalizedMatchDetailsID(matchId) else {
             throw APIClientError.invalidMatchDetailsID(matchId)
@@ -508,6 +526,11 @@ struct MatchPageResponse {
     let pageSize: Int
     let totalCount: Int
     let hasMore: Bool
+}
+
+struct LeagueTablesResponse {
+    let leagues: [LeagueTable]
+    let lastUpdated: Date?
 }
 
 private extension MatchesViewMode {

@@ -1,0 +1,12 @@
+{
+  "data" : [
+    {
+      "filename" : "Activate.ps1",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

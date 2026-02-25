@@ -81,9 +81,35 @@ struct WatchRedCardEvent: Codable, Hashable {
 struct WatchPreferencesSnapshot: Codable, Equatable {
     let selectedLeagues: [String]
     let selectedChannels: [String]
+    let competitionFilterEnabled: Bool
+    let channelFilterEnabled: Bool
     let englishPremierLeagueTeamsOnly: Bool
     let apiBaseURL: String
     let refreshIntervalMinutes: Int
+    let showAllMatches: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case selectedLeagues
+        case selectedChannels
+        case competitionFilterEnabled
+        case channelFilterEnabled
+        case englishPremierLeagueTeamsOnly
+        case apiBaseURL
+        case refreshIntervalMinutes
+        case showAllMatches
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectedLeagues = try container.decodeIfPresent([String].self, forKey: .selectedLeagues) ?? []
+        selectedChannels = try container.decodeIfPresent([String].self, forKey: .selectedChannels) ?? []
+        competitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .competitionFilterEnabled) ?? true
+        channelFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .channelFilterEnabled) ?? true
+        englishPremierLeagueTeamsOnly = try container.decodeIfPresent(Bool.self, forKey: .englishPremierLeagueTeamsOnly) ?? false
+        apiBaseURL = try container.decodeIfPresent(String.self, forKey: .apiBaseURL) ?? ""
+        refreshIntervalMinutes = try container.decodeIfPresent(Int.self, forKey: .refreshIntervalMinutes) ?? 10
+        showAllMatches = try container.decodeIfPresent(Bool.self, forKey: .showAllMatches) ?? false
+    }
 }
 
 struct WatchMatch: Identifiable, Codable, Hashable {
@@ -135,7 +161,7 @@ struct WatchMatch: Identifiable, Codable, Hashable {
 
     var displayLeague: String {
         if let subcategory = leagueSubcategory, !subcategory.isEmpty {
-            return "\(league) -> \(subcategory)"
+            return "\(league): \(subcategory)"
         }
         return league
     }
@@ -234,24 +260,30 @@ struct WatchMatchDay: Identifiable, Hashable {
 
 enum WatchMatchGrouping {
     static func sortedMatches(_ matches: [WatchMatch]) -> [WatchMatch] {
-        matches.sorted {
-            let leftDate = $0.dateTime ?? WatchMatchDateParser.shared.parse(date: $0.date, time: "00:00") ?? .distantFuture
-            let rightDate = $1.dateTime ?? WatchMatchDateParser.shared.parse(date: $1.date, time: "00:00") ?? .distantFuture
+        matches.sorted { lhs, rhs in
+            let leftDate = matchSortDate(for: lhs)
+            let rightDate = matchSortDate(for: rhs)
             if leftDate != rightDate {
                 return leftDate < rightDate
             }
 
-            let leagueCompare = $0.league.localizedCaseInsensitiveCompare($1.league)
+            let leftWeight = competitionWeight(for: lhs)
+            let rightWeight = competitionWeight(for: rhs)
+            if leftWeight != rightWeight {
+                return leftWeight > rightWeight
+            }
+
+            let leagueCompare = lhs.displayLeague.localizedCaseInsensitiveCompare(rhs.displayLeague)
             if leagueCompare != .orderedSame {
                 return leagueCompare == .orderedAscending
             }
 
-            let homeCompare = $0.homeTeam.localizedCaseInsensitiveCompare($1.homeTeam)
+            let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
             if homeCompare != .orderedSame {
                 return homeCompare == .orderedAscending
             }
 
-            return $0.awayTeam.localizedCaseInsensitiveCompare($1.awayTeam) == .orderedAscending
+            return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
         }
     }
 
@@ -261,15 +293,57 @@ enum WatchMatchGrouping {
 
         let dateDays: [WatchMatchDay] = dateKeys.compactMap { dateKey -> WatchMatchDay? in
             guard let dateMatches = byDate[dateKey] else { return nil }
+            let sortedDateMatches = sortedMatches(dateMatches)
             let displayDate: String
             if let parsed = WatchMatchDateParser.shared.parse(date: dateKey, time: "00:00") {
                 displayDate = WatchMatchDateParser.shared.displayDateWithRelative(parsed)
             } else {
                 displayDate = dateKey
             }
-            return WatchMatchDay(id: dateKey, displayDate: displayDate, matches: dateMatches)
+
+            let groupedByLeague = Dictionary(grouping: sortedDateMatches) { $0.displayLeague }
+            let orderedMatches = groupedByLeague.compactMap { entry -> (league: String, matches: [WatchMatch], firstKickoff: Date, weight: Double)? in
+                let (league, leagueMatches) = entry
+                let sortedLeagueMatches = sortedMatches(leagueMatches)
+                guard let firstMatch = sortedLeagueMatches.first else { return nil }
+                return (
+                    league: league,
+                    matches: sortedLeagueMatches,
+                    firstKickoff: matchSortDate(for: firstMatch),
+                    weight: competitionWeight(forCompetitionName: league)
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.firstKickoff != rhs.firstKickoff {
+                    return lhs.firstKickoff < rhs.firstKickoff
+                }
+
+                if lhs.weight != rhs.weight {
+                    return lhs.weight > rhs.weight
+                }
+
+                return lhs.league.localizedCaseInsensitiveCompare(rhs.league) == .orderedAscending
+            }
+            .flatMap(\.matches)
+
+            return WatchMatchDay(id: dateKey, displayDate: displayDate, matches: orderedMatches)
         }
         return dateDays
+    }
+
+    private static func matchSortDate(for match: WatchMatch) -> Date {
+        match.dateTime ?? WatchMatchDateParser.shared.parse(date: match.date, time: "00:00") ?? .distantFuture
+    }
+
+    private static func competitionWeight(for match: WatchMatch) -> Double {
+        if let displayWeight = WatchCompetitionWeightConfig.weight(for: match.displayLeague) {
+            return displayWeight
+        }
+        return WatchCompetitionWeightConfig.weight(for: match.league) ?? 0
+    }
+
+    private static func competitionWeight(forCompetitionName competitionName: String) -> Double {
+        WatchCompetitionWeightConfig.weight(for: competitionName) ?? 0
     }
 
     static func todaysMatchCount(_ matches: [WatchMatch]) -> Int {
@@ -279,6 +353,50 @@ enum WatchMatchGrouping {
             if calendar.isDateInToday(matchDate) {
                 count += 1
             }
+        }
+    }
+}
+
+private enum WatchCompetitionWeightConfig {
+    private static let fileName = "competition_weights"
+    private static let fileExtension = "json"
+    private static let weightsByName: [String: Double] = loadWeights()
+
+    static func weight(for competitionName: String) -> Double? {
+        let normalized = normalizeCompetitionName(competitionName)
+        guard !normalized.isEmpty else { return nil }
+        return weightsByName[normalized]
+    }
+
+    private static func normalizeCompetitionName(_ competitionName: String) -> String {
+        competitionName
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    private static func loadWeights() -> [String: Double] {
+        guard let fileURL = Bundle.main.url(forResource: fileName, withExtension: fileExtension) else {
+            return [:]
+        }
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let json = try JSONSerialization.jsonObject(with: data, options: [])
+            guard let rawWeights = json as? [String: Any] else {
+                return [:]
+            }
+
+            var normalizedWeights: [String: Double] = [:]
+            for (competitionName, rawValue) in rawWeights {
+                guard let number = rawValue as? NSNumber else { continue }
+                let normalized = normalizeCompetitionName(competitionName)
+                guard !normalized.isEmpty else { continue }
+                normalizedWeights[normalized] = number.doubleValue
+            }
+            return normalizedWeights
+        } catch {
+            return [:]
         }
     }
 }

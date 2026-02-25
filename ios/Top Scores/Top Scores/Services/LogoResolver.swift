@@ -4,11 +4,35 @@ import UIKit
 final class LogoResolver {
     static let shared = LogoResolver()
 
+    private enum ImageSource: Hashable {
+        case file(URL)
+        case asset(String)
+
+        var identifier: String {
+            switch self {
+            case let .file(url):
+                return "file:\(url.path)"
+            case let .asset(name):
+                return "asset:\(name)"
+            }
+        }
+
+        var displayName: String {
+            switch self {
+            case let .file(url):
+                return url.deletingPathExtension().lastPathComponent
+            case let .asset(name):
+                return name
+            }
+        }
+    }
+
     private let fallbackName = "_noTeamLogo"
-    private var normalizedLookup: [String: URL] = [:]
-    private var coreLookup: [String: [URL]] = [:]
-    private var originalLookup: [String: URL] = [:]
+    private var normalizedLookup: [String: ImageSource] = [:]
+    private var coreLookup: [String: [ImageSource]] = [:]
+    private var originalLookup: [String: ImageSource] = [:]
     private var cache: [String: UIImage] = [:]
+    private var fallbackSource: ImageSource?
 
     private init() {
         loadLogos()
@@ -19,9 +43,9 @@ final class LogoResolver {
             return cached
         }
 
-        let url = resolveURL(for: teamName) ?? resolveURL(for: fallbackName)
-        guard let url else { return nil }
-        let image = UIImage(contentsOfFile: url.path)
+        let source = resolveSource(for: teamName) ?? fallbackSource
+        guard let source else { return nil }
+        let image = image(from: source)
         if let image {
             cache[teamName] = image
         }
@@ -29,8 +53,8 @@ final class LogoResolver {
     }
 
     func hasDedicatedLogo(for teamName: String) -> Bool {
-        guard let resolved = resolveURL(for: teamName) else { return false }
-        return !isFallbackURL(resolved)
+        guard let resolved = resolveSource(for: teamName) else { return false }
+        return !isFallbackSource(resolved)
     }
 
     func missingTeamNames(in teamNames: [String]) -> [String] {
@@ -60,17 +84,48 @@ final class LogoResolver {
         }
         for url in urls {
             let fileName = url.deletingPathExtension().lastPathComponent
-            let normalized = Self.normalizedKey(fileName)
-            normalizedLookup[normalized] = url
-            let core = Self.normalizedCoreKey(fileName)
-            if !core.isEmpty {
-                coreLookup[core, default: []].append(url)
+            register(source: .file(url), forName: fileName)
+        }
+
+        loadAssetCatalogLogos()
+
+        if fallbackSource == nil {
+            fallbackSource = originalLookup[fallbackName.lowercased()]
+            if fallbackSource == nil {
+                fallbackSource = originalLookup.first(where: { Self.isFallbackName($0.key) })?.value
             }
-            originalLookup[fileName.lowercased()] = url
         }
     }
 
-    private func resolveURL(for teamName: String) -> URL? {
+    private func loadAssetCatalogLogos() {
+        guard let manifestURL = Bundle.main.url(forResource: "team_logo_assets", withExtension: "json"),
+              let data = try? Data(contentsOf: manifestURL),
+              let assetNames = try? JSONDecoder().decode([String].self, from: data) else {
+            return
+        }
+
+        for name in assetNames {
+            register(source: .asset(name), forName: name)
+        }
+    }
+
+    private func register(source: ImageSource, forName name: String) {
+        let normalized = Self.normalizedKey(name)
+        normalizedLookup[normalized] = source
+
+        let core = Self.normalizedCoreKey(name)
+        if !core.isEmpty {
+            coreLookup[core, default: []].append(source)
+        }
+
+        originalLookup[name.lowercased()] = source
+
+        if Self.isFallbackName(name) {
+            fallbackSource = source
+        }
+    }
+
+    private func resolveSource(for teamName: String) -> ImageSource? {
         let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -79,10 +134,20 @@ final class LogoResolver {
             return direct
         }
 
+        if let directAsset = directAssetSource(for: trimmed) {
+            return directAsset
+        }
+
         for alias in Self.aliases(for: trimmed) {
+            if let directAlias = originalLookup[alias] {
+                return directAlias
+            }
             let aliasKey = Self.normalizedKey(alias)
             if let match = normalizedLookup[aliasKey] {
                 return match
+            }
+            if let directAsset = directAssetSource(for: alias) {
+                return directAsset
             }
         }
 
@@ -99,17 +164,24 @@ final class LogoResolver {
         return fuzzyMatch(normalizedTeam: normalized)
     }
 
-    private func uniqueCoreMatch(for coreKey: String) -> URL? {
+    private func directAssetSource(for name: String) -> ImageSource? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard UIImage(named: trimmed) != nil else { return nil }
+        return .asset(trimmed)
+    }
+
+    private func uniqueCoreMatch(for coreKey: String) -> ImageSource? {
         guard !coreKey.isEmpty else { return nil }
         guard let candidates = coreLookup[coreKey], !candidates.isEmpty else { return nil }
 
-        var seenPaths = Set<String>()
-        let unique = candidates.filter { seenPaths.insert($0.path).inserted }
+        var seenIDs = Set<String>()
+        let unique = candidates.filter { seenIDs.insert($0.identifier).inserted }
         guard unique.count == 1 else { return nil }
         return unique[0]
     }
 
-    private func fuzzyMatch(normalizedTeam: String) -> URL? {
+    private func fuzzyMatch(normalizedTeam: String) -> ImageSource? {
         guard !normalizedTeam.isEmpty else { return nil }
 
         var bestKey: String?
@@ -130,9 +202,23 @@ final class LogoResolver {
         return nil
     }
 
-    private func isFallbackURL(_ url: URL) -> Bool {
-        let fileName = url.deletingPathExtension().lastPathComponent.lowercased()
-        return fileName == fallbackName.lowercased()
+    private func image(from source: ImageSource) -> UIImage? {
+        switch source {
+        case let .file(url):
+            return UIImage(contentsOfFile: url.path)
+        case let .asset(name):
+            return UIImage(named: name)
+        }
+    }
+
+    private func isFallbackSource(_ source: ImageSource) -> Bool {
+        Self.isFallbackName(source.displayName)
+    }
+
+    private static func isFallbackName(_ name: String) -> Bool {
+        let fallback = normalizedKey("_noTeamLogo")
+        let normalized = normalizedKey(name)
+        return normalized == fallback || normalized.hasPrefix(fallback)
     }
 
     private static func normalizedDisplayName(_ value: String) -> String {

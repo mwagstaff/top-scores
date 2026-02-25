@@ -227,3 +227,62 @@ This means:
 - `server.js` - Main API (modified to inject test match)
 - `ios/Top Scores/Top Scores/Models/Match.swift` - Swift model (supports `is_test_match` field)
 - `ios/Top Scores/Top Scores/State/MatchesStore.swift` - Filters test matches in Release builds
+
+## Live Activity CLI Harness
+
+You can also test Live Activity pushes directly from terminal without waiting for real match events.
+
+### Prerequisites
+
+1. API server running (default: `http://localhost:3011`).
+2. iOS app has already uploaded:
+   - `pushToStartToken` (for start)
+   - `currentActivityPushToken` (for update/end, after start)
+3. You know the app user device token (`X-Device-Token` value).
+
+### Commands
+
+```bash
+cd api
+
+# Inspect stored live activity token/state
+./live_activity_test_harness.sh state <USER_DEVICE_TOKEN>
+
+# Send a test START push
+./live_activity_test_harness.sh start <USER_DEVICE_TOKEN> http://localhost:3011/api/v1 single_live
+
+# Send a test START push against production API
+./live_activity_test_harness.sh start <USER_DEVICE_TOKEN> prod single_live
+
+# Force a brand new START push even if an activity already exists (debug only)
+./live_activity_test_harness.sh start <USER_DEVICE_TOKEN> prod single_live true
+
+# Send a test UPDATE push
+./live_activity_test_harness.sh update <USER_DEVICE_TOKEN> http://localhost:3011/api/v1 single_live
+
+# Send a test END push
+./live_activity_test_harness.sh end <USER_DEVICE_TOKEN>
+```
+
+Supported modes:
+- `single_upcoming`
+- `single_live`
+- `multi_upcoming`
+- `multi_live`
+
+Supported API target aliases:
+- `local` (default) -> `http://localhost:3011/api/v1`
+- `prod` -> `https://api.skynolimit.dev/top-scores/api/v1`
+
+`start` behavior:
+- Default: upsert (updates existing Live Activity if activity token exists; starts new only when none exists)
+- Optional `FORCE_START=true` to explicitly create a new activity for debugging
+
+### Raw API endpoints (if you prefer curl directly)
+
+- `GET /api/v1/live-activity/test/state`
+- `POST /api/v1/live-activity/test/start`
+- `POST /api/v1/live-activity/test/update`
+- `POST /api/v1/live-activity/test/end`
+
+All accept `X-Device-Token` as the user device identity.

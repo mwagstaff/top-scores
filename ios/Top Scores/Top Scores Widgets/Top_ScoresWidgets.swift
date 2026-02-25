@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import WidgetKit
+import ActivityKit
 
 private enum WidgetAppGroupConfig {
     static let identifier = "group.dev.skynolimit.topscores"
@@ -10,9 +11,35 @@ private enum WidgetAppGroupConfig {
 private struct WidgetPreferencesSnapshot: Codable, Equatable {
     let selectedLeagues: [String]
     let selectedChannels: [String]
+    let competitionFilterEnabled: Bool
+    let channelFilterEnabled: Bool
     let englishPremierLeagueTeamsOnly: Bool
     let apiBaseURL: String
     let refreshIntervalMinutes: Int
+    let showAllMatches: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case selectedLeagues
+        case selectedChannels
+        case competitionFilterEnabled
+        case channelFilterEnabled
+        case englishPremierLeagueTeamsOnly
+        case apiBaseURL
+        case refreshIntervalMinutes
+        case showAllMatches
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectedLeagues = try container.decodeIfPresent([String].self, forKey: .selectedLeagues) ?? []
+        selectedChannels = try container.decodeIfPresent([String].self, forKey: .selectedChannels) ?? []
+        competitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .competitionFilterEnabled) ?? true
+        channelFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .channelFilterEnabled) ?? true
+        englishPremierLeagueTeamsOnly = try container.decodeIfPresent(Bool.self, forKey: .englishPremierLeagueTeamsOnly) ?? false
+        apiBaseURL = try container.decodeIfPresent(String.self, forKey: .apiBaseURL) ?? ""
+        refreshIntervalMinutes = try container.decodeIfPresent(Int.self, forKey: .refreshIntervalMinutes) ?? 10
+        showAllMatches = try container.decodeIfPresent(Bool.self, forKey: .showAllMatches) ?? false
+    }
 }
 
 private struct WidgetMatch: Identifiable, Codable, Hashable {
@@ -21,6 +48,7 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
     let homeTeam: String
     let awayTeam: String
     let league: String
+    let leagueSubcategory: String?
     let tvChannels: [String]
     let homeScore: Int?
     let awayScore: Int?
@@ -38,6 +66,13 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         homeScore != nil && awayScore != nil
     }
 
+    var displayLeague: String {
+        if let subcategory = leagueSubcategory, !subcategory.isEmpty {
+            return "\(league): \(subcategory)"
+        }
+        return league
+    }
+
     var isInProgress: Bool {
         guard let scoreStatus else { return false }
         let normalized = scoreStatus.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -49,8 +84,11 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
 
     var isFinished: Bool {
         guard let scoreStatus else { return false }
-        let normalized = scoreStatus.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        return normalized == "FT" || normalized == "AET"
+        let normalized = scoreStatus
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .replacingOccurrences(of: ".", with: "")
+        return normalized.hasPrefix("FT") || normalized.hasPrefix("AET")
     }
 
     var displayScoreStatus: String? {
@@ -72,6 +110,7 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
             homeTeam: homeTeam,
             awayTeam: awayTeam,
             league: league,
+            leagueSubcategory: leagueSubcategory,
             tvChannels: channels,
             homeScore: homeScore,
             awayScore: awayScore,
@@ -85,6 +124,7 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         case homeTeam = "home_team"
         case awayTeam = "away_team"
         case league
+        case leagueSubcategory = "league_subcategory"
         case tvChannels = "tv_channels"
         case homeScore = "home_score"
         case awayScore = "away_score"
@@ -95,8 +135,56 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
 private struct WidgetSharedMatchesPayload: Codable {
     let snapshot: WidgetPreferencesSnapshot
     let matches: [WidgetMatch]
+    let unfilteredMatches: [WidgetMatch]
     let lastUpdated: Date?
     let generatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case snapshot
+        case matches
+        case unfilteredMatches
+        case lastUpdated
+        case generatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        snapshot = try container.decode(WidgetPreferencesSnapshot.self, forKey: .snapshot)
+        matches = try container.decodeIfPresent([WidgetMatch].self, forKey: .matches) ?? []
+        unfilteredMatches = try container.decodeIfPresent([WidgetMatch].self, forKey: .unfilteredMatches) ?? []
+        lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+struct TopScoresLiveActivityMatchState: Codable, Hashable {
+    let matchId: String
+    let date: String
+    let time: String
+    let league: String
+    let leagueSubcategory: String?
+    let homeTeam: String
+    let awayTeam: String
+    let homeScore: Int?
+    let awayScore: Int?
+    let aggregateHomeScore: Int?
+    let aggregateAwayScore: Int?
+    let matchTime: String?
+    let tvChannels: [String]
+}
+
+@available(iOSApplicationExtension 16.1, *)
+struct TopScoresLiveActivityAttributes: ActivityAttributes {
+    struct ContentState: Codable, Hashable {
+        let mode: String
+        let generatedAtEpochSeconds: Int
+        let delayMinutes: Int
+        let delayLabel: String?
+        let matches: [TopScoresLiveActivityMatchState]
+    }
+
+    let appScope: String
 }
 
 private struct WidgetMatchDay: Identifiable, Hashable {
@@ -184,18 +272,54 @@ private enum WidgetChannelSelection {
 }
 
 private enum WidgetMatchDataLoader {
+    private static let iso8601WithFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let iso8601Basic: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
     static func loadPayload() -> WidgetSharedMatchesPayload? {
-        guard let url = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: WidgetAppGroupConfig.identifier)?
-            .appendingPathComponent(WidgetAppGroupConfig.sharedMatchesFileName),
-            let data = try? Data(contentsOf: url)
+        guard let containerURL = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: WidgetAppGroupConfig.identifier)
         else {
+            NSLog("[Widget] app group container URL missing")
             return nil
         }
 
+        let url = containerURL.appendingPathComponent(WidgetAppGroupConfig.sharedMatchesFileName)
+        guard let data = try? Data(contentsOf: url) else {
+            NSLog("[Widget] shared payload missing at %@", url.path)
+            return nil
+        }
+
+        NSLog("[Widget] loaded shared payload bytes=\(data.count) path=\(url.path)")
+
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(WidgetSharedMatchesPayload.self, from: data)
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+
+            if let date = Self.iso8601WithFractional.date(from: value) ?? Self.iso8601Basic.date(from: value) {
+                return date
+            }
+
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid ISO8601 date: \(value)"
+            )
+        }
+        do {
+            return try decoder.decode(WidgetSharedMatchesPayload.self, from: data)
+        } catch {
+            NSLog("[Widget] payload decode failed: %@", error.localizedDescription)
+            return nil
+        }
     }
 }
 
@@ -203,50 +327,62 @@ private enum WidgetMatchPipeline {
     static func groupedDays(from payload: WidgetSharedMatchesPayload?) -> [WidgetMatchDay] {
         guard let payload else { return [] }
 
-        let leagueFiltered = applyLeagueFilters(to: payload.matches, selectedLeagues: payload.snapshot.selectedLeagues)
-        let channelFiltered = applyChannelFilters(to: leagueFiltered, selectedChannels: payload.snapshot.selectedChannels)
-        let sorted = sortedMatches(channelFiltered)
+        // The phone app payload is already filtered by the current preference snapshot.
+        // Re-filtering inside the widget can diverge from what the app is showing.
+        let sourceMatches: [WidgetMatch]
+        if payload.snapshot.showAllMatches, !payload.unfilteredMatches.isEmpty {
+            sourceMatches = payload.unfilteredMatches
+        } else {
+            sourceMatches = payload.matches
+        }
+
+        // Widgets are fixtures-first surfaces; keep today onwards to match the app's Fixtures view.
+        let upcomingFixtures = filterFixtures(sourceMatches)
+        let sorted = sortedMatches(upcomingFixtures)
         return groupMatches(sorted)
     }
 
-    private static func applyLeagueFilters(to matches: [WidgetMatch], selectedLeagues: [String]) -> [WidgetMatch] {
-        guard !selectedLeagues.isEmpty else { return matches }
-        let leagueSet = Set(selectedLeagues.map(normalized))
+    private static func filterFixtures(_ matches: [WidgetMatch]) -> [WidgetMatch] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
 
         return matches.filter { match in
-            leagueSet.contains(normalized(match.league))
-        }
-    }
+            // Widget is fixtures-focused; exclude completed matches.
+            guard !match.isFinished else { return false }
 
-    private static func applyChannelFilters(to matches: [WidgetMatch], selectedChannels: [String]) -> [WidgetMatch] {
-        guard !selectedChannels.isEmpty else { return matches }
-
-        return matches.compactMap { match in
-            let relevantChannels = WidgetChannelSelection.filterChannels(match.tvChannels, selectedOptions: selectedChannels)
-            guard !relevantChannels.isEmpty else { return nil }
-            return match.withTvChannels(relevantChannels)
+            guard let date = WidgetMatchDateParser.shared.parse(date: match.date, time: "00:00") else {
+                // Drop stale legacy result entries with non-ISO dates (e.g. "Sun, Jan 25").
+                return false
+            }
+            return calendar.startOfDay(for: date) >= today
         }
     }
 
     private static func sortedMatches(_ matches: [WidgetMatch]) -> [WidgetMatch] {
-        matches.sorted {
-            let leftDate = $0.dateTime ?? WidgetMatchDateParser.shared.parse(date: $0.date, time: "00:00") ?? .distantFuture
-            let rightDate = $1.dateTime ?? WidgetMatchDateParser.shared.parse(date: $1.date, time: "00:00") ?? .distantFuture
+        matches.sorted { lhs, rhs in
+            let leftDate = matchSortDate(for: lhs)
+            let rightDate = matchSortDate(for: rhs)
             if leftDate != rightDate {
                 return leftDate < rightDate
             }
 
-            let leagueCompare = $0.league.localizedCaseInsensitiveCompare($1.league)
+            let leftWeight = competitionWeight(for: lhs)
+            let rightWeight = competitionWeight(for: rhs)
+            if leftWeight != rightWeight {
+                return leftWeight > rightWeight
+            }
+
+            let leagueCompare = lhs.displayLeague.localizedCaseInsensitiveCompare(rhs.displayLeague)
             if leagueCompare != .orderedSame {
                 return leagueCompare == .orderedAscending
             }
 
-            let homeCompare = $0.homeTeam.localizedCaseInsensitiveCompare($1.homeTeam)
+            let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
             if homeCompare != .orderedSame {
                 return homeCompare == .orderedAscending
             }
 
-            return $0.awayTeam.localizedCaseInsensitiveCompare($1.awayTeam) == .orderedAscending
+            return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
         }
     }
 
@@ -256,6 +392,7 @@ private enum WidgetMatchPipeline {
 
         return dateKeys.compactMap { dateKey in
             guard let matchesForDate = groupedByDate[dateKey], !matchesForDate.isEmpty else { return nil }
+            let sortedDateMatches = sortedMatches(matchesForDate)
 
             let heading: String
             if let parsed = WidgetMatchDateParser.shared.parse(date: dateKey, time: "00:00") {
@@ -264,26 +401,105 @@ private enum WidgetMatchPipeline {
                 heading = dateKey
             }
 
+            let groupedByLeague = Dictionary(grouping: sortedDateMatches) { $0.displayLeague }
+            let orderedMatches = groupedByLeague.compactMap { entry -> (league: String, matches: [WidgetMatch], firstKickoff: Date, weight: Double)? in
+                let (league, leagueMatches) = entry
+                let sortedLeagueMatches = sortedMatches(leagueMatches)
+                guard let firstMatch = sortedLeagueMatches.first else { return nil }
+                return (
+                    league: league,
+                    matches: sortedLeagueMatches,
+                    firstKickoff: matchSortDate(for: firstMatch),
+                    weight: competitionWeight(forCompetitionName: league)
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.firstKickoff != rhs.firstKickoff {
+                    return lhs.firstKickoff < rhs.firstKickoff
+                }
+
+                if lhs.weight != rhs.weight {
+                    return lhs.weight > rhs.weight
+                }
+
+                return lhs.league.localizedCaseInsensitiveCompare(rhs.league) == .orderedAscending
+            }
+            .flatMap(\.matches)
+
             return WidgetMatchDay(
                 id: dateKey,
                 dateKey: dateKey,
                 heading: heading,
-                matches: matchesForDate
+                matches: orderedMatches
             )
         }
     }
 
-    nonisolated private static func normalized(_ value: String) -> String {
-        value
+    private static func matchSortDate(for match: WidgetMatch) -> Date {
+        match.dateTime ?? WidgetMatchDateParser.shared.parse(date: match.date, time: "00:00") ?? .distantFuture
+    }
+
+    private static func competitionWeight(for match: WidgetMatch) -> Double {
+        if let displayWeight = WidgetCompetitionWeightConfig.weight(for: match.displayLeague) {
+            return displayWeight
+        }
+        return WidgetCompetitionWeightConfig.weight(for: match.league) ?? 0
+    }
+
+    private static func competitionWeight(forCompetitionName competitionName: String) -> Double {
+        WidgetCompetitionWeightConfig.weight(for: competitionName) ?? 0
+    }
+
+}
+
+private enum WidgetCompetitionWeightConfig {
+    private static let fileName = "competition_weights"
+    private static let fileExtension = "json"
+    private static let weightsByName: [String: Double] = loadWeights()
+
+    static func weight(for competitionName: String) -> Double? {
+        let normalized = normalizeCompetitionName(competitionName)
+        guard !normalized.isEmpty else { return nil }
+        return weightsByName[normalized]
+    }
+
+    private static func normalizeCompetitionName(_ competitionName: String) -> String {
+        competitionName
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    private static func loadWeights() -> [String: Double] {
+        guard let fileURL = Bundle.main.url(forResource: fileName, withExtension: fileExtension) else {
+            return [:]
+        }
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let json = try JSONSerialization.jsonObject(with: data, options: [])
+            guard let rawWeights = json as? [String: Any] else {
+                return [:]
+            }
+
+            var normalizedWeights: [String: Double] = [:]
+            for (competitionName, rawValue) in rawWeights {
+                guard let number = rawValue as? NSNumber else { continue }
+                let normalized = normalizeCompetitionName(competitionName)
+                guard !normalized.isEmpty else { continue }
+                normalizedWeights[normalized] = number.doubleValue
+            }
+            return normalizedWeights
+        } catch {
+            return [:]
+        }
     }
 }
 
 private final class WidgetMatchDateParser {
     static let shared = WidgetMatchDateParser()
 
+    private let lock = NSLock()
     private let dateTimeFormatter: DateFormatter
     private let headingFormatter: DateFormatter
 
@@ -302,7 +518,9 @@ private final class WidgetMatchDateParser {
     }
 
     func parse(date: String, time: String) -> Date? {
-        dateTimeFormatter.date(from: "\(date) \(time)")
+        lock.lock()
+        defer { lock.unlock() }
+        return dateTimeFormatter.date(from: "\(date) \(time)")
     }
 
     func displayDateWithRelative(_ date: Date) -> String {
@@ -313,6 +531,8 @@ private final class WidgetMatchDateParser {
         if calendar.isDateInTomorrow(date) {
             return "Tomorrow"
         }
+        lock.lock()
+        defer { lock.unlock() }
         return headingFormatter.string(from: date)
     }
 }
@@ -329,10 +549,12 @@ private struct TopScoresWidgetProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (TopScoresWidgetEntry) -> Void) {
+        NSLog("[Widget] getSnapshot family=\(context.family.rawValue) isPreview=\(context.isPreview)")
         completion(makeEntry(fallbackToSample: context.isPreview))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<TopScoresWidgetEntry>) -> Void) {
+        NSLog("[Widget] getTimeline family=\(context.family.rawValue)")
         let entry = makeEntry(fallbackToSample: false)
 
         // Determine refresh interval based on whether there are live matches
@@ -350,7 +572,14 @@ private struct TopScoresWidgetProvider: TimelineProvider {
 
     private func makeEntry(fallbackToSample: Bool) -> TopScoresWidgetEntry {
         let payload = WidgetMatchDataLoader.loadPayload()
+        if let payload {
+            let firstDate = payload.matches.first?.date ?? "none"
+            NSLog("[Widget] payload loaded: matches=\(payload.matches.count) unfiltered=\(payload.unfilteredMatches.count) firstDate=\(firstDate) lastUpdated=\(payload.lastUpdated?.description ?? "nil")")
+        } else {
+            NSLog("[Widget] payload missing (shared-matches.json not available)")
+        }
         let days = WidgetMatchPipeline.groupedDays(from: payload)
+        NSLog("[Widget] grouped days=\(days.count) firstDay=\(days.first?.dateKey ?? "none")")
 
         if days.isEmpty, fallbackToSample {
             return TopScoresWidgetEntry(date: Date(), days: sampleDays, lastUpdated: nil)
@@ -372,6 +601,7 @@ private struct TopScoresWidgetProvider: TimelineProvider {
                         homeTeam: "Arsenal",
                         awayTeam: "Chelsea",
                         league: "Premier League",
+                        leagueSubcategory: nil,
                         tvChannels: ["Sky Sports Main Event", "Sky Sports Football"],
                         homeScore: nil,
                         awayScore: nil,
@@ -383,6 +613,7 @@ private struct TopScoresWidgetProvider: TimelineProvider {
                         homeTeam: "Real Madrid",
                         awayTeam: "Barcelona",
                         league: "La Liga",
+                        leagueSubcategory: nil,
                         tvChannels: ["ITV1"],
                         homeScore: nil,
                         awayScore: nil,
@@ -402,12 +633,99 @@ private struct TopScoresWidgetEntryView: View {
     var body: some View {
         switch family {
         case .systemSmall:
-            SmallMatchesWidgetView(entry: entry)
-        case .systemMedium, .systemLarge:
-            LargeMatchesWidgetView(entry: entry, compact: family == .systemMedium)
+            CompactMatchesWidgetView(entry: entry, maxRows: 2, showDayHeading: true)
+        case .systemMedium:
+            CompactMatchesWidgetView(entry: entry, maxRows: 5, showDayHeading: true)
+        case .systemLarge:
+            LargeMatchesWidgetView(entry: entry, compact: false)
         default:
-            SmallMatchesWidgetView(entry: entry)
+            CompactMatchesWidgetView(entry: entry, maxRows: 2, showDayHeading: true)
         }
+    }
+}
+
+private struct CompactMatchesWidgetView: View {
+    let entry: TopScoresWidgetEntry
+    let maxRows: Int
+    let showDayHeading: Bool
+
+    private var firstHeading: String? {
+        entry.days.first?.heading
+    }
+
+    private var visibleMatches: [WidgetMatch] {
+        entry.days
+            .flatMap(\.matches)
+            .prefix(maxRows)
+            .map { $0 }
+    }
+
+    var body: some View {
+        Group {
+            if visibleMatches.isEmpty {
+                EmptyMatchesWidgetView()
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    if showDayHeading, let firstHeading {
+                        Text(firstHeading)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    ForEach(visibleMatches) { match in
+                        CompactMatchRow(match: match)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(10)
+            }
+        }
+        .containerBackground(.fill.tertiary, for: .widget)
+        .overlay(alignment: .bottomTrailing) {
+            WidgetDebugBadge(label: "W-C")
+        }
+    }
+
+}
+
+private struct CompactMatchRow: View {
+    let match: WidgetMatch
+
+    private let logoSize: CGFloat = 11
+    private let centerColumnWidth: CGFloat = 38
+
+    var body: some View {
+        HStack(spacing: 4) {
+            WidgetTeamLogo(teamName: match.homeTeam, size: logoSize)
+
+            Text(WidgetNameFormatter.abbreviated(match.homeTeam, length: 7))
+                .font(.caption2)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(centerText)
+                .font(.caption2.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(width: centerColumnWidth, alignment: .center)
+
+            Text(WidgetNameFormatter.abbreviated(match.awayTeam, length: 7))
+                .font(.caption2)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            WidgetTeamLogo(teamName: match.awayTeam, size: logoSize)
+        }
+    }
+
+    private var centerText: String {
+        if let homeScore = match.homeScore, let awayScore = match.awayScore {
+            return "\(homeScore)-\(awayScore)"
+        }
+        return match.time
     }
 }
 
@@ -453,6 +771,9 @@ private struct LargeMatchesWidgetView: View {
             }
         }
         .containerBackground(.fill.tertiary, for: .widget)
+        .overlay(alignment: .bottomTrailing) {
+            WidgetDebugBadge(label: "W-L")
+        }
     }
 }
 
@@ -499,6 +820,28 @@ private struct SmallMatchesWidgetView: View {
             }
         }
         .containerBackground(.fill.tertiary, for: .widget)
+        .overlay(alignment: .bottomTrailing) {
+            WidgetDebugBadge(label: "W-S")
+        }
+    }
+}
+
+private struct WidgetDebugBadge: View {
+    let label: String
+
+    var body: some View {
+#if DEBUG
+        Text(label)
+            .font(.system(size: 7, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.secondary.opacity(0.75))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(6)
+            .unredacted()
+#else
+        EmptyView()
+#endif
     }
 }
 
@@ -863,18 +1206,31 @@ private final class WidgetTeamLogoResolver {
     static let shared = WidgetTeamLogoResolver()
 
     private let fallbackName = "_noTeamLogo"
+    private let lock = NSLock()
+    private let bundles: [Bundle]
     private var normalizedLookup: [String: URL] = [:]
     private var coreLookup: [String: [URL]] = [:]
     private var originalLookup: [String: URL] = [:]
     private var cache: [String: UIImage] = [:]
 
     private init() {
+        bundles = Self.logoBundles()
         loadLogos()
     }
 
     func image(for teamName: String) -> UIImage? {
+        lock.lock()
         if let cached = cache[teamName] {
+            lock.unlock()
             return cached
+        }
+        lock.unlock()
+
+        if let image = resolveAssetImage(for: teamName) ?? resolveAssetFallbackImage() {
+            lock.lock()
+            cache[teamName] = image
+            lock.unlock()
+            return image
         }
 
         let url = resolveURL(for: teamName) ?? resolveURL(for: fallbackName)
@@ -882,35 +1238,34 @@ private final class WidgetTeamLogoResolver {
 
         let image = UIImage(contentsOfFile: url.path)
         if let image {
+            lock.lock()
             cache[teamName] = image
+            lock.unlock()
         }
 
         return image
     }
 
     private func loadLogos() {
-        for bundle in bundlesToSearch {
-            var urls = bundle.urls(forResourcesWithExtension: "png", subdirectory: "team-logos") ?? []
-            if urls.isEmpty {
-                urls = bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []
-            }
-
-            for url in urls {
-                let fileName = url.deletingPathExtension().lastPathComponent
-                let normalized = Self.normalizedKey(fileName)
-                normalizedLookup[normalized] = normalizedLookup[normalized] ?? url
-                let core = Self.normalizedCoreKey(fileName)
-                if !core.isEmpty {
-                    coreLookup[core, default: []].append(url)
-                }
-                originalLookup[fileName.lowercased()] = originalLookup[fileName.lowercased()] ?? url
-            }
+        let urls = bundles.flatMap { bundle in
+            bundle.urls(forResourcesWithExtension: "png", subdirectory: "team-logos") ?? []
         }
+        for url in urls {
+            let fileName = url.deletingPathExtension().lastPathComponent
+            let normalized = Self.normalizedKey(fileName)
+            normalizedLookup[normalized] = normalizedLookup[normalized] ?? url
+            let core = Self.normalizedCoreKey(fileName)
+            if !core.isEmpty {
+                coreLookup[core, default: []].append(url)
+            }
+            originalLookup[fileName.lowercased()] = originalLookup[fileName.lowercased()] ?? url
+        }
+
+        NSLog("[Widget] team logos file fallback loaded count=\(urls.count)")
     }
 
-    private var bundlesToSearch: [Bundle] {
+    private static func logoBundles() -> [Bundle] {
         var bundles: [Bundle] = [Bundle.main]
-
         let bundleURL = Bundle.main.bundleURL
         if bundleURL.pathExtension == "appex" {
             let containingAppURL = bundleURL.deletingLastPathComponent().deletingLastPathComponent()
@@ -918,8 +1273,90 @@ private final class WidgetTeamLogoResolver {
                 bundles.append(containingAppBundle)
             }
         }
-
         return bundles
+    }
+
+    private func resolveAssetImage(for teamName: String) -> UIImage? {
+        let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        for candidate in assetNameCandidates(for: trimmed) {
+            for bundle in bundles {
+                if let image = UIImage(named: candidate, in: bundle, compatibleWith: nil) {
+                    return image
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func resolveAssetFallbackImage() -> UIImage? {
+        for candidate in [fallbackName, "\(fallbackName) 1"] {
+            for bundle in bundles {
+                if let image = UIImage(named: candidate, in: bundle, compatibleWith: nil) {
+                    return image
+                }
+            }
+        }
+        return nil
+    }
+
+    private func assetNameCandidates(for teamName: String) -> [String] {
+        var candidates: [String] = []
+        var seen = Set<String>()
+
+        func add(_ value: String?) {
+            guard let value else { return }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { return }
+            candidates.append(trimmed)
+        }
+
+        add(teamName)
+        add(teamName.replacingOccurrences(of: "’", with: "'"))
+        add(teamName.replacingOccurrences(of: "'", with: ""))
+
+        let lowered = teamName.lowercased()
+        if let alias = Self.aliasMap[lowered] {
+            add(alias)
+            add(Self.displayName(forAlias: alias))
+        }
+
+        for (fullName, alias) in Self.aliasMap where alias == lowered {
+            add(fullName)
+            add(Self.displayName(forAlias: fullName))
+        }
+
+        return candidates
+    }
+
+    private static func displayName(forAlias alias: String) -> String {
+        alias
+            .split(separator: " ")
+            .map { token in
+                switch token {
+                case "fc":
+                    return "FC"
+                case "ac":
+                    return "AC"
+                case "sv":
+                    return "SV"
+                case "vfl":
+                    return "VfL"
+                case "vfb":
+                    return "VfB"
+                case "paok":
+                    return "PAOK"
+                case "psv":
+                    return "PSV"
+                default:
+                    return token.prefix(1).uppercased() + String(token.dropFirst())
+                }
+            }
+            .joined(separator: " ")
     }
 
     private func resolveURL(for teamName: String) -> URL? {
@@ -1087,6 +1524,7 @@ private final class WidgetTvLogoResolver {
     static let shared = WidgetTvLogoResolver()
 
     private let fallbackName = "_noLogo"
+    private let lock = NSLock()
     private var normalizedLookup: [String: URL] = [:]
     private var cache: [String: UIImage] = [:]
 
@@ -1095,39 +1533,41 @@ private final class WidgetTvLogoResolver {
     }
 
     func image(for channelName: String) -> UIImage? {
+        lock.lock()
         if let cached = cache[channelName] {
+            lock.unlock()
             return cached
         }
+        lock.unlock()
 
         let url = resolveURL(for: channelName) ?? resolveURL(for: fallbackName)
         guard let url else { return nil }
 
         let image = UIImage(contentsOfFile: url.path)
         if let image {
+            lock.lock()
             cache[channelName] = image
+            lock.unlock()
         }
 
         return image
     }
 
     private func loadLogos() {
-        for bundle in bundlesToSearch {
-            var urls = bundle.urls(forResourcesWithExtension: "png", subdirectory: "tv-logos") ?? []
-            if urls.isEmpty {
-                urls = bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []
-            }
-
-            for url in urls {
-                let fileName = url.deletingPathExtension().lastPathComponent
-                let normalized = Self.normalizedKey(fileName)
-                normalizedLookup[normalized] = normalizedLookup[normalized] ?? url
-            }
+        let urls = logoBundles().flatMap { bundle in
+            bundle.urls(forResourcesWithExtension: "png", subdirectory: "tv-logos") ?? []
         }
+        for url in urls {
+            let fileName = url.deletingPathExtension().lastPathComponent
+            let normalized = Self.normalizedKey(fileName)
+            normalizedLookup[normalized] = normalizedLookup[normalized] ?? url
+        }
+
+        NSLog("[Widget] tv logos loaded count=\(urls.count)")
     }
 
-    private var bundlesToSearch: [Bundle] {
+    private func logoBundles() -> [Bundle] {
         var bundles: [Bundle] = [Bundle.main]
-
         let bundleURL = Bundle.main.bundleURL
         if bundleURL.pathExtension == "appex" {
             let containingAppURL = bundleURL.deletingLastPathComponent().deletingLastPathComponent()
@@ -1135,7 +1575,6 @@ private final class WidgetTvLogoResolver {
                 bundles.append(containingAppBundle)
             }
         }
-
         return bundles
     }
 
@@ -1237,6 +1676,413 @@ private final class WidgetTvLogoResolver {
     ]
 }
 
+@available(iOSApplicationExtension 16.1, *)
+private struct TopScoresLiveActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: TopScoresLiveActivityAttributes.self) { context in
+            TopScoresLiveActivityLockScreenView(state: context.state)
+                .activityBackgroundTint(Color(red: 0.03, green: 0.04, blue: 0.09))
+                .activitySystemActionForegroundColor(.white)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.center) {
+                    TopScoresLiveActivityExpandedView(state: context.state)
+                }
+            } compactLeading: {
+                Text(compactLeadingText(state: context.state))
+                    .font(.caption2.weight(.semibold))
+            } compactTrailing: {
+                Text(compactTrailingText(state: context.state))
+                    .font(.caption2.weight(.semibold))
+            } minimal: {
+                Text("TS")
+                    .font(.caption2.weight(.bold))
+            }
+        }
+    }
+
+    private func compactLeadingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
+        guard let first = state.matches.first else { return "TS" }
+        return String(first.homeTeam.prefix(3)).uppercased()
+    }
+
+    private func compactTrailingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
+        guard let first = state.matches.first else { return "" }
+        if state.mode.contains("live"),
+           let home = first.homeScore,
+           let away = first.awayScore {
+            return "\(home)-\(away)"
+        }
+        return first.time
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct TopScoresLiveActivityLockScreenView: View {
+    let state: TopScoresLiveActivityAttributes.ContentState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                switch state.mode {
+                case "single_upcoming":
+                    if let match = state.matches.first {
+                        SingleUpcomingMatchView(match: match)
+                    } else {
+                        EmptyLiveActivityView()
+                    }
+                case "single_live":
+                    if let match = state.matches.first {
+                        SingleLiveMatchView(match: match)
+                    } else {
+                        EmptyLiveActivityView()
+                    }
+                case "multi_upcoming":
+                    MultiMatchListView(matches: state.matches, live: false)
+                case "multi_live":
+                    MultiMatchListView(matches: state.matches, live: true)
+                default:
+                    EmptyLiveActivityView()
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            if let bannerText = delayBannerText {
+                HStack {
+                    Spacer(minLength: 0)
+                    Text(bannerText)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity)
+                .background(topScoresBlue)
+            }
+        }
+    }
+
+    private var delayBannerText: String? {
+        guard let delayLabel = state.delayLabel, !delayLabel.isEmpty else { return nil }
+        return "\(delayLabel) | Tap to open"
+    }
+
+    private var topScoresBlue: Color {
+        Color(red: 0.00, green: 0.48, blue: 1.00)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct TopScoresLiveActivityExpandedView: View {
+    let state: TopScoresLiveActivityAttributes.ContentState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TopScoresLiveActivityLockScreenView(state: state)
+        }
+    }
+
+    private var title: String {
+        switch state.mode {
+        case "single_live", "multi_live":
+            return "Live Matches"
+        case "single_upcoming", "multi_upcoming":
+            return "Kick-off in 15m"
+        default:
+            return "Top Scores"
+        }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct SingleUpcomingMatchView: View {
+    let match: TopScoresLiveActivityMatchState
+
+    var body: some View {
+        SingleMatchCardChrome {
+            VStack(alignment: .leading, spacing: 8) {
+                CompetitionHeaderRow(
+                    league: match.league,
+                    subheading: match.leagueSubcategory ?? "Kick-off in 15m"
+                )
+
+                HStack(spacing: 10) {
+                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
+                    Spacer(minLength: 8)
+                    Text(match.time)
+                        .font(.subheadline.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.white)
+                    Spacer(minLength: 8)
+                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
+                }
+
+                TeamNamesWithAggregateRow(
+                    homeTeam: match.homeTeam,
+                    awayTeam: match.awayTeam,
+                    aggregateInfo: "Kick-off"
+                )
+
+                ChannelInfoRow(channels: match.tvChannels)
+            }
+        }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct SingleLiveMatchView: View {
+    let match: TopScoresLiveActivityMatchState
+
+    var body: some View {
+        SingleMatchCardChrome {
+            VStack(alignment: .leading, spacing: 8) {
+                CompetitionHeaderRow(
+                    league: match.league,
+                    subheading: match.leagueSubcategory ?? "Live now"
+                )
+
+                HStack(spacing: 10) {
+                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
+                    Spacer(minLength: 8)
+                    HStack(spacing: 9) {
+                        Text("\(match.homeScore ?? 0)")
+                            .font(.title3.monospacedDigit().weight(.bold))
+                            .foregroundStyle(.white)
+                        Text(match.matchTime ?? "LIVE")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.75))
+                        Text("\(match.awayScore ?? 0)")
+                            .font(.title3.monospacedDigit().weight(.bold))
+                            .foregroundStyle(.white)
+                    }
+                    Spacer(minLength: 8)
+                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
+                }
+
+                TeamNamesWithAggregateRow(
+                    homeTeam: match.homeTeam,
+                    awayTeam: match.awayTeam,
+                    aggregateInfo: aggregateInfoText
+                )
+
+                ChannelInfoRow(channels: match.tvChannels)
+            }
+        }
+    }
+
+    private var aggregateInfoText: String {
+        if let aggregateHome = match.aggregateHomeScore, let aggregateAway = match.aggregateAwayScore {
+            return "Agg \(aggregateHome)-\(aggregateAway)"
+        }
+        return " "
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct SingleMatchCardChrome<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(.horizontal, 11)
+            .padding(.vertical, 10)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct CompetitionHeaderRow: View {
+    let league: String
+    let subheading: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(league)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(subheading)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.55))
+                .lineLimit(1)
+        }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct TeamNamesWithAggregateRow: View {
+    let homeTeam: String
+    let awayTeam: String
+    let aggregateInfo: String
+
+    var body: some View {
+        ZStack {
+            HStack(spacing: 8) {
+                Text(homeTeam)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(awayTeam)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+            }
+
+            if !aggregateInfo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(aggregateInfo)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct MultiMatchListView: View {
+    let matches: [TopScoresLiveActivityMatchState]
+    let live: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(Array(chunkedMatches.enumerated()), id: \.offset) { _, rowMatches in
+                HStack(spacing: 10) {
+                    ForEach(rowMatches, id: \.matchId) { match in
+                        MultiMatchCell(match: match, live: live)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private var chunkedMatches: [[TopScoresLiveActivityMatchState]] {
+        let limit = Array(matches.prefix(10))
+        return stride(from: 0, to: limit.count, by: 2).map { index in
+            Array(limit[index..<min(index + 2, limit.count)])
+        }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct MultiMatchCell: View {
+    let match: TopScoresLiveActivityMatchState
+    let live: Bool
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(match.time)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            LiveActivityTeamLogo(teamName: match.homeTeam, size: 12)
+            if live {
+                Text("\(match.homeScore ?? 0)")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                if let matchTime = match.matchTime {
+                    Text(matchTime)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Text("\(match.awayScore ?? 0)")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+            } else {
+                Text("vs")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            LiveActivityTeamLogo(teamName: match.awayTeam, size: 12)
+        }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct ChannelInfoRow: View {
+    let channels: [String]
+
+    var body: some View {
+        if let primary = channels.first {
+            HStack(spacing: 4) {
+                Text(primary)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .foregroundStyle(.white.opacity(0.7))
+                Spacer(minLength: 4)
+                LiveActivityChannelLogo(channelName: primary, size: 15)
+            }
+        }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct LiveActivityTeamLogo: View {
+    let teamName: String
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let image = WidgetTeamLogoResolver.shared.image(for: teamName) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Circle()
+                    .fill(Color.gray.opacity(0.25))
+                    .overlay(
+                        Text(String(teamName.prefix(1)).uppercased())
+                            .font(.system(size: max(8, size * 0.5), weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    )
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct LiveActivityChannelLogo: View {
+    let channelName: String
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let image = WidgetTvLogoResolver.shared.image(for: channelName) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.gray.opacity(0.2))
+                    .overlay(
+                        Text("TV")
+                            .font(.system(size: max(7, size * 0.45), weight: .medium))
+                            .foregroundStyle(.secondary)
+                    )
+            }
+        }
+        .frame(width: size * 1.8, height: size)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct EmptyLiveActivityView: View {
+    var body: some View {
+        Text("No matches currently")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+}
+
 struct TopScoresWidget: Widget {
     let kind: String = "TopScoresWidget"
 
@@ -1245,7 +2091,7 @@ struct TopScoresWidget: Widget {
             TopScoresWidgetEntryView(entry: entry)
         }
         .configurationDisplayName("Top Scores")
-        .description("Upcoming televised matches based on your app preferences.")
+        .description("Upcoming televised fixtures based on your app preferences.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -1254,5 +2100,8 @@ struct TopScoresWidget: Widget {
 struct Top_ScoresWidgetsBundle: WidgetBundle {
     var body: some Widget {
         TopScoresWidget()
+        if #available(iOSApplicationExtension 16.1, *) {
+            TopScoresLiveActivityWidget()
+        }
     }
 }

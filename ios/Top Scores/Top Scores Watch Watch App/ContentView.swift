@@ -106,7 +106,14 @@ struct ContentView: View {
 
         let filtered = sourceDays.compactMap { day -> WatchMatchDay? in
             guard let parsedDay = WatchMatchDateParser.shared.parse(date: day.id, time: "00:00") else {
-                return selectedScope.isResultsView ? nil : day
+                if selectedScope.isResultsView {
+                    return nil
+                }
+                let unresolvedMatches = day.matches.filter { match in
+                    !(isMatchFinished(match) && !match.isInProgress)
+                }
+                guard !unresolvedMatches.isEmpty else { return nil }
+                return WatchMatchDay(id: day.id, displayDate: day.displayDate, matches: unresolvedMatches)
             }
             let dayStart = calendar.startOfDay(for: parsedDay)
 
@@ -134,8 +141,11 @@ struct ContentView: View {
 
     private func isMatchFinished(_ match: WatchMatch) -> Bool {
         guard let status = match.scoreStatus else { return false }
-        let normalized = status.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        return normalized == "FT" || normalized == "AET"
+        let normalized = status
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .replacingOccurrences(of: ".", with: "")
+        return normalized.hasPrefix("FT") || normalized.hasPrefix("AET")
     }
 }
 

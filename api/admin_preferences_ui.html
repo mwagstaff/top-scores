@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>User Preferences Admin</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --ink: #0f1720;
+      --muted: #4b5563;
+      --line: #d8dee6;
+      --accent: #0f766e;
+      --accent-soft: #d5f4f0;
+      --warn: #b45309;
+      --fail: #b91c1c;
+      --ok: #166534;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #eef4f7 0%, #f6f8fa 100%);
+      color: var(--ink);
+    }
+
+    .container {
+      max-width: 1360px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 32, 0.05);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .header-links {
+      margin-top: 8px;
+      font-size: 0.9rem;
+    }
+
+    .header-links a {
+      color: #0b5e58;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+
+    form {
+      display: grid;
+      gap: 12px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    input,
+    button {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    input:focus {
+      outline: 2px solid rgba(15, 118, 110, 0.25);
+      border-color: var(--accent);
+    }
+
+    button {
+      border: 0;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover {
+      filter: brightness(0.95);
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .status {
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .error {
+      color: var(--fail);
+      font-weight: 700;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #f9fbfc;
+    }
+
+    .stat .label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .stat .value {
+      font-size: 1.2rem;
+      margin-top: 2px;
+      font-weight: 700;
+    }
+
+    .list-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      min-width: 1080px;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #f8fafc;
+      border-bottom: 1px solid var(--line);
+      padding: 10px;
+      text-align: left;
+      color: #334155;
+      font-weight: 700;
+      z-index: 1;
+    }
+
+    tbody td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px;
+      vertical-align: top;
+    }
+
+    tbody tr:hover {
+      background: rgba(15, 118, 110, 0.04);
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.8rem;
+    }
+
+    .pill {
+      border-radius: 999px;
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      display: inline-block;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .pill.success {
+      color: var(--ok);
+      border-color: rgba(22, 101, 52, 0.3);
+      background: rgba(22, 101, 52, 0.1);
+    }
+
+    .pill.failure {
+      color: var(--fail);
+      border-color: rgba(185, 28, 28, 0.3);
+      background: rgba(185, 28, 28, 0.1);
+    }
+
+    .token {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .copy-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      border-radius: 6px;
+      font-size: 0.72rem;
+      padding: 4px 8px;
+      cursor: pointer;
+      width: auto;
+    }
+
+    .copy-btn:hover {
+      background: #f3f4f6;
+      color: var(--ink);
+    }
+
+    details {
+      margin-top: 4px;
+    }
+
+    details summary {
+      cursor: pointer;
+      color: #0b5e58;
+      font-weight: 600;
+    }
+
+    pre {
+      margin: 8px 0 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      color: #0f1720;
+      font-size: 0.76rem;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .pref-list {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 4px;
+    }
+
+    .pref-list.nested {
+      margin-top: 4px;
+      padding-left: 18px;
+      gap: 3px;
+    }
+
+    .pref-key {
+      font-weight: 700;
+      color: #0f1720;
+    }
+
+    .muted-inline {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 12px;
+    }
+
+    @media (max-width: 1100px) {
+      .row,
+      .summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .row,
+      .summary {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="panel">
+      <h1>User Preferences Admin</h1>
+      <p>View all stored user preferences with server-side and client-side filtering.</p>
+      <div class="header-links">
+        <a href="./bbc-history">Open BBC History Admin</a> |
+        <a href="./fixtures">Open Fixtures Admin</a> |
+        <a href="./results">Open Results Admin</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <form id="query-form">
+        <div class="row">
+          <div>
+            <label for="device_token">Device token contains</label>
+            <input id="device_token" type="text" placeholder="uuid fragment">
+          </div>
+          <div>
+            <label for="preference_text">Preference string contains</label>
+            <input id="preference_text" type="text" placeholder="Premier League, notificationsEnabled, etc">
+          </div>
+          <div>
+            <label for="global_search">General search</label>
+            <input id="global_search" type="text" placeholder="device token, APNS token, preference text">
+          </div>
+          <div>
+            <label for="limit">Result limit (1-2000)</label>
+            <input id="limit" type="number" min="1" max="2000" step="1" value="500">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="client_filter">Client filter on loaded rows</label>
+            <input id="client_filter" type="text" placeholder="local filter without refetch">
+          </div>
+          <div></div>
+          <div></div>
+          <div style="display:flex;align-items:flex-end;gap:10px;">
+            <button type="submit">Load Preferences</button>
+            <button id="clear-btn" type="button" class="secondary">Clear Filters</button>
+          </div>
+        </div>
+      </form>
+      <div class="hint">Server filters use query params: <span class="mono">device_token</span>, <span class="mono">preference_text</span>, <span class="mono">q</span>, <span class="mono">limit</span>.</div>
+    </section>
+
+    <section class="panel">
+      <div id="status" class="status">No query executed yet.</div>
+    </section>
+
+    <section class="panel">
+      <div class="summary" id="summary"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Preferences</h2>
+      <div class="list-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Device Token</th>
+              <th>Updated</th>
+              <th>APNS Token</th>
+              <th>Build</th>
+              <th>Preferences (Friendly)</th>
+              <th>Raw</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div id="empty" class="empty" style="display:none;">No preferences matched the filters.</div>
+    </section>
+  </div>
+
+  <script>
+    function buildApiBasePrefix() {
+      const pathname = String(window.location.pathname || "");
+      const adminSuffixPattern = /\/admin\/preferences\/?$/;
+      const basePrefix = pathname.replace(adminSuffixPattern, "");
+      return basePrefix && basePrefix !== "/" ? basePrefix : "";
+    }
+
+    const API_BASE_PREFIX = buildApiBasePrefix();
+    const PREFERENCES_API_URL = `${API_BASE_PREFIX}/api/v1/admin/preferences`;
+
+    const queryForm = document.getElementById("query-form");
+    const deviceTokenInput = document.getElementById("device_token");
+    const preferenceTextInput = document.getElementById("preference_text");
+    const globalSearchInput = document.getElementById("global_search");
+    const limitInput = document.getElementById("limit");
+    const clientFilterInput = document.getElementById("client_filter");
+    const clearBtn = document.getElementById("clear-btn");
+    const statusNode = document.getElementById("status");
+    const summaryNode = document.getElementById("summary");
+    const rowsNode = document.getElementById("rows");
+    const emptyNode = document.getElementById("empty");
+
+    let latestPayload = null;
+    let localFilterTimer = null;
+
+    function escapeHTML(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function shortToken(token, visible = 10) {
+      const raw = String(token || "");
+      if (!raw) return "-";
+      if (raw.length <= visible * 2 + 3) return raw;
+      return `${raw.slice(0, visible)}...${raw.slice(-visible)}`;
+    }
+
+    function formatDateTime(value) {
+      const ts = Date.parse(String(value || ""));
+      if (!Number.isFinite(ts)) return "-";
+      return new Date(ts).toLocaleString();
+    }
+
+    function compareAlpha(lhs, rhs) {
+      return String(lhs).localeCompare(String(rhs), undefined, { sensitivity: "base" });
+    }
+
+    function humanizeKey(key) {
+      return String(key || "")
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/_/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/^./, (first) => first.toUpperCase());
+    }
+
+    function normalizeScalar(value) {
+      if (value === null || value === undefined) return "None";
+      if (typeof value === "boolean") return value ? "Yes" : "No";
+      return String(value);
+    }
+
+    function sortedArrayForDisplay(values) {
+      return values
+        .slice()
+        .map((value) => {
+          if (value === null || value === undefined) return "None";
+          if (typeof value === "object") {
+            try {
+              return JSON.stringify(value);
+            } catch (_error) {
+              return String(value);
+            }
+          }
+          return String(value);
+        })
+        .sort(compareAlpha);
+    }
+
+    function renderFriendlyValue(value) {
+      if (Array.isArray(value)) {
+        if (!value.length) return "<span class=\"muted-inline\">None</span>";
+        const sortedValues = sortedArrayForDisplay(value);
+        return `<ul class="pref-list nested">${sortedValues.map((entry) => `<li>${escapeHTML(entry)}</li>`).join("")}</ul>`;
+      }
+
+      if (value && typeof value === "object") {
+        const keys = Object.keys(value).sort(compareAlpha);
+        if (!keys.length) return "<span class=\"muted-inline\">None</span>";
+        return `<ul class="pref-list nested">${
+          keys
+            .map((key) => `<li><span class="pref-key">${escapeHTML(humanizeKey(key))}</span>: ${renderFriendlyValue(value[key])}</li>`)
+            .join("")
+        }</ul>`;
+      }
+
+      return `<span>${escapeHTML(normalizeScalar(value))}</span>`;
+    }
+
+    function renderFriendlyPreferences(record) {
+      const prefs = record && record.preferences && typeof record.preferences === "object" && !Array.isArray(record.preferences)
+        ? record.preferences
+        : null;
+
+      if (!prefs) return "<span class=\"muted-inline\">No preferences</span>";
+
+      const keys = Object.keys(prefs).sort(compareAlpha);
+      if (!keys.length) return "<span class=\"muted-inline\">No preferences</span>";
+
+      return `<ul class="pref-list">${
+        keys
+          .map((key) => `<li><span class="pref-key">${escapeHTML(humanizeKey(key))}</span>: ${renderFriendlyValue(prefs[key])}</li>`)
+          .join("")
+      }</ul>`;
+    }
+
+    function preferenceSearchText(record) {
+      const deviceToken = String(record && record.deviceToken ? record.deviceToken : "").toLowerCase();
+      const apnsToken = String(record && record.apnsToken ? record.apnsToken : "").toLowerCase();
+      const updatedAt = String(record && record.updatedAt ? record.updatedAt : "").toLowerCase();
+      let preferencesText = "";
+      try {
+        preferencesText = JSON.stringify(record && record.preferences ? record.preferences : {}).toLowerCase();
+      } catch (_error) {
+        preferencesText = "";
+      }
+      return `${deviceToken} ${apnsToken} ${updatedAt} ${preferencesText}`;
+    }
+
+    function parseLimit() {
+      const parsed = Number(limitInput.value);
+      if (!Number.isFinite(parsed)) return 500;
+      return Math.max(1, Math.min(2000, Math.floor(parsed)));
+    }
+
+    function buildRequestURL() {
+      const params = new URLSearchParams();
+      const deviceToken = String(deviceTokenInput.value || "").trim();
+      const preferenceText = String(preferenceTextInput.value || "").trim();
+      const globalSearch = String(globalSearchInput.value || "").trim();
+      const limit = parseLimit();
+
+      params.set("limit", String(limit));
+      if (deviceToken) params.set("device_token", deviceToken);
+      if (preferenceText) params.set("preference_text", preferenceText);
+      if (globalSearch) params.set("q", globalSearch);
+
+      return `${PREFERENCES_API_URL}?${params.toString()}`;
+    }
+
+    function summaryStat(label, value) {
+      return `<div class="stat"><div class="label">${escapeHTML(label)}</div><div class="value">${escapeHTML(value)}</div></div>`;
+    }
+
+    function renderSummary(records, payloadMeta) {
+      const totalMatched = Number(payloadMeta && payloadMeta.totalMatched ? payloadMeta.totalMatched : records.length) || 0;
+      const totalAvailable = Number(payloadMeta && payloadMeta.totalAvailable ? payloadMeta.totalAvailable : records.length) || 0;
+      const returned = records.length;
+      const withApns = records.filter((item) => item && item.apnsToken).length;
+      const devBuild = records.filter((item) => Boolean(item && item.isDevelopmentBuild)).length;
+      const withNotificationsEnabled = records.filter((item) => {
+        const prefs = item && item.preferences ? item.preferences : null;
+        return Boolean(prefs && prefs.notificationsEnabled === true);
+      }).length;
+
+      summaryNode.innerHTML = [
+        summaryStat("Returned", String(returned)),
+        summaryStat("Matched", String(totalMatched)),
+        summaryStat("Available", String(totalAvailable)),
+        summaryStat("With APNS", String(withApns)),
+        summaryStat("Dev Build", String(devBuild)),
+        summaryStat("Notifications On", String(withNotificationsEnabled)),
+      ].join("");
+    }
+
+    function rowHTML(record, index) {
+      const rawToken = String(record && record.deviceToken ? record.deviceToken : "");
+      const displayToken = shortToken(rawToken);
+      const rawApns = String(record && record.apnsToken ? record.apnsToken : "");
+      const displayApns = rawApns ? shortToken(rawApns, 8) : "-";
+      const isDevBuild = Boolean(record && record.isDevelopmentBuild);
+      const friendlyPreferences = renderFriendlyPreferences(record);
+      const prettyJSON = escapeHTML(JSON.stringify(record, null, 2));
+      const recordId = `pref-record-${index}`;
+
+      return `
+        <tr data-record-id="${recordId}">
+          <td>
+            <div class="token">
+              <span class="mono" title="${escapeHTML(rawToken)}">${escapeHTML(displayToken)}</span>
+              ${rawToken ? `<button class="copy-btn" data-copy="${escapeHTML(rawToken)}" type="button">Copy</button>` : ""}
+            </div>
+          </td>
+          <td>${escapeHTML(formatDateTime(record && record.updatedAt))}</td>
+          <td>
+            <span class="mono" title="${escapeHTML(rawApns)}">${escapeHTML(displayApns)}</span>
+            <div style="margin-top:4px;">${rawApns ? "<span class=\"pill success\">present</span>" : "<span class=\"pill failure\">missing</span>"}</div>
+          </td>
+          <td>${isDevBuild ? '<span class="pill success">development</span>' : '<span class="pill">production</span>'}</td>
+          <td>${friendlyPreferences}</td>
+          <td>
+            <details>
+              <summary>JSON</summary>
+              <pre>${prettyJSON}</pre>
+            </details>
+          </td>
+        </tr>
+      `;
+    }
+
+    function renderRows(records, payloadMeta) {
+      renderSummary(records, payloadMeta);
+
+      if (!records.length) {
+        rowsNode.innerHTML = "";
+        emptyNode.style.display = "block";
+        return;
+      }
+
+      emptyNode.style.display = "none";
+      rowsNode.innerHTML = records.map((record, index) => rowHTML(record, index)).join("");
+      installCopyHandlers();
+    }
+
+    function installCopyHandlers() {
+      const buttons = rowsNode.querySelectorAll("button[data-copy]");
+      buttons.forEach((button) => {
+        button.addEventListener("click", async () => {
+          const value = button.getAttribute("data-copy") || "";
+          if (!value) return;
+          try {
+            await navigator.clipboard.writeText(value);
+            const previous = button.textContent;
+            button.textContent = "Copied";
+            window.setTimeout(() => {
+              button.textContent = previous;
+            }, 900);
+          } catch (_error) {
+            // no-op
+          }
+        });
+      });
+    }
+
+    function applyClientFilter() {
+      if (!latestPayload || !Array.isArray(latestPayload.data)) {
+        renderRows([], latestPayload);
+        return;
+      }
+
+      const filter = String(clientFilterInput.value || "").trim().toLowerCase();
+      if (!filter) {
+        renderRows(latestPayload.data, latestPayload);
+        return;
+      }
+
+      const filtered = latestPayload.data.filter((record) => preferenceSearchText(record).includes(filter));
+      renderRows(filtered, latestPayload);
+      statusNode.textContent = `Loaded ${latestPayload.data.length} rows from server. ${filtered.length} rows match local filter.`;
+    }
+
+    async function loadPreferences(event) {
+      if (event) event.preventDefault();
+
+      const url = buildRequestURL();
+      statusNode.textContent = "Loading preferences...";
+      statusNode.classList.remove("error");
+
+      try {
+        const response = await fetch(url, {
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+        });
+
+        const payload = await response.json();
+        if (!response.ok || !payload || payload.success !== true || !Array.isArray(payload.data)) {
+          const message = payload && payload.error ? payload.error : `Request failed with status ${response.status}`;
+          throw new Error(message);
+        }
+
+        latestPayload = payload;
+        renderRows(payload.data, payload);
+        statusNode.textContent = `Loaded ${payload.count} row(s). Matched ${payload.totalMatched} of ${payload.totalAvailable} total preference record(s).`;
+      } catch (error) {
+        latestPayload = null;
+        renderRows([], null);
+        statusNode.textContent = `Error loading preferences: ${error.message}`;
+        statusNode.classList.add("error");
+      }
+    }
+
+    function clearFilters() {
+      deviceTokenInput.value = "";
+      preferenceTextInput.value = "";
+      globalSearchInput.value = "";
+      clientFilterInput.value = "";
+      limitInput.value = "500";
+      loadPreferences();
+    }
+
+    queryForm.addEventListener("submit", loadPreferences);
+    clearBtn.addEventListener("click", clearFilters);
+    clientFilterInput.addEventListener("input", () => {
+      if (localFilterTimer) window.clearTimeout(localFilterTimer);
+      localFilterTimer = window.setTimeout(applyClientFilter, 250);
+    });
+
+    loadPreferences();
+  </script>
+</body>
+</html>

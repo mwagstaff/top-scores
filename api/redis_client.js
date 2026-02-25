@@ -272,7 +272,69 @@ async function getClient() {
   return client;
 }
 
-async function saveUserPreferences(deviceToken, preferences, apnsToken = null, isDevelopmentBuild = false) {
+function normalizeOptionalToken(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeLiveActivityStatePatch(patch = {}) {
+  const normalized = {};
+  if (!patch || typeof patch !== "object") return normalized;
+
+  if (Object.prototype.hasOwnProperty.call(patch, "pushToStartToken")) {
+    normalized.pushToStartToken = normalizeOptionalToken(patch.pushToStartToken);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "currentActivityId")) {
+    normalized.currentActivityId = normalizeOptionalToken(patch.currentActivityId);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "currentActivityPushToken")) {
+    normalized.currentActivityPushToken = normalizeOptionalToken(patch.currentActivityPushToken);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "pendingStartAt")) {
+    normalized.pendingStartAt = normalizeOptionalToken(patch.pendingStartAt);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "lastPayloadHash")) {
+    normalized.lastPayloadHash = normalizeOptionalToken(patch.lastPayloadHash);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "lastMode")) {
+    normalized.lastMode = normalizeOptionalToken(patch.lastMode);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "lastDispatchAt")) {
+    normalized.lastDispatchAt = normalizeOptionalToken(patch.lastDispatchAt);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "lastStartAt")) {
+    normalized.lastStartAt = normalizeOptionalToken(patch.lastStartAt);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "pushToStartTokenUpdatedAt")) {
+    normalized.pushToStartTokenUpdatedAt = normalizeOptionalToken(patch.pushToStartTokenUpdatedAt);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "currentActivityTokenUpdatedAt")) {
+    normalized.currentActivityTokenUpdatedAt = normalizeOptionalToken(
+      patch.currentActivityTokenUpdatedAt
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "lastEndedAt")) {
+    normalized.lastEndedAt = normalizeOptionalToken(patch.lastEndedAt);
+  }
+  return normalized;
+}
+
+function mergedLiveActivityState(existingState = {}, patch = {}) {
+  const existing = existingState && typeof existingState === "object" ? existingState : {};
+  return {
+    ...existing,
+    ...normalizeLiveActivityStatePatch(patch),
+  };
+}
+
+async function saveUserPreferences(
+  deviceToken,
+  preferences,
+  apnsToken = null,
+  isDevelopmentBuild = false,
+  options = {}
+) {
   if (!deviceToken || typeof deviceToken !== "string" || !deviceToken.trim()) {
     throw new Error("Invalid device token");
   }
@@ -280,19 +342,50 @@ async function saveUserPreferences(deviceToken, preferences, apnsToken = null, i
   const normalizedToken = deviceToken.trim();
   const key = `${USER_PREFERENCES_PREFIX}${normalizedToken}`;
 
-  const data = {
-    deviceToken: normalizedToken,
-    apnsToken: apnsToken ? apnsToken.trim() : null,
-    isDevelopmentBuild: isDevelopmentBuild,
-    preferences: preferences || {},
-    updatedAt: new Date().toISOString(),
-  };
-
   try {
     const redisClient = await getClient();
+    let existing = null;
+    if (options && options.mergeExisting !== false) {
+      const rawExisting = await redisClient.get(key);
+      existing = rawExisting ? safeJsonParse(rawExisting, `user preferences ${normalizedToken}`) : null;
+    }
+
+    const resolvedAPNSToken = apnsToken !== undefined
+      ? normalizeOptionalToken(apnsToken)
+      : normalizeOptionalToken(existing && existing.apnsToken);
+    const resolvedIsDevelopmentBuild = typeof isDevelopmentBuild === "boolean"
+      ? isDevelopmentBuild
+      : Boolean(existing && existing.isDevelopmentBuild);
+    const resolvedPreferences =
+      preferences && typeof preferences === "object"
+        ? preferences
+        : existing && typeof existing.preferences === "object"
+          ? existing.preferences
+          : {};
+    const liveActivityPatch = options && options.liveActivity
+      ? normalizeLiveActivityStatePatch(options.liveActivity)
+      : {};
+    const existingLiveActivity =
+      existing && existing.liveActivity && typeof existing.liveActivity === "object"
+        ? existing.liveActivity
+        : {};
+
+    const data = {
+      ...(existing && typeof existing === "object" ? existing : {}),
+      deviceToken: normalizedToken,
+      apnsToken: resolvedAPNSToken,
+      isDevelopmentBuild: resolvedIsDevelopmentBuild,
+      preferences: resolvedPreferences,
+      liveActivity: {
+        ...existingLiveActivity,
+        ...liveActivityPatch,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+
     await redisClient.set(key, JSON.stringify(data), { EX: USER_PREFERENCES_TTL_SECONDS });
     console.log(
-      `[Redis] Saved preferences for device: ${normalizedToken.substring(0, 12)}... (APNS: ${apnsToken ? "Yes" : "No"}, Dev: ${isDevelopmentBuild})`
+      `[Redis] Saved preferences for device: ${normalizedToken.substring(0, 12)}... (APNS: ${resolvedAPNSToken ? "Yes" : "No"}, Dev: ${resolvedIsDevelopmentBuild})`
     );
     return data;
   } catch (error) {
@@ -379,6 +472,47 @@ async function getAllUserPreferences() {
   } catch (error) {
     console.error("[Redis] Error retrieving all user preferences:", error);
     return [];
+  }
+}
+
+async function updateUserLiveActivityState(deviceToken, liveActivityPatch = {}, options = {}) {
+  if (!deviceToken || typeof deviceToken !== "string" || !deviceToken.trim()) {
+    throw new Error("Invalid device token");
+  }
+
+  const normalizedToken = deviceToken.trim();
+  const key = `${USER_PREFERENCES_PREFIX}${normalizedToken}`;
+  const nowIso = new Date().toISOString();
+
+  try {
+    const redisClient = await getClient();
+    const raw = await redisClient.get(key);
+    const existing = raw ? safeJsonParse(raw, `user preferences ${normalizedToken}`) : null;
+    const existingPreferences =
+      existing && typeof existing.preferences === "object" ? existing.preferences : {};
+    const existingLiveActivity =
+      existing && existing.liveActivity && typeof existing.liveActivity === "object"
+        ? existing.liveActivity
+        : {};
+    const data = {
+      ...(existing && typeof existing === "object" ? existing : {}),
+      deviceToken: normalizedToken,
+      apnsToken: normalizeOptionalToken(existing && existing.apnsToken),
+      isDevelopmentBuild:
+        typeof options.isDevelopmentBuild === "boolean"
+          ? options.isDevelopmentBuild
+          : Boolean(existing && existing.isDevelopmentBuild),
+      preferences: existingPreferences,
+      liveActivity: mergedLiveActivityState(existingLiveActivity, liveActivityPatch),
+      updatedAt: nowIso,
+    };
+
+    await redisClient.set(key, JSON.stringify(data), { EX: USER_PREFERENCES_TTL_SECONDS });
+    console.log(`[Redis] Updated live activity state for device: ${normalizedToken.substring(0, 12)}...`);
+    return data;
+  } catch (error) {
+    console.error("[Redis] Error updating live activity state:", error);
+    throw error;
   }
 }
 
@@ -1300,6 +1434,7 @@ async function closeRedisConnection() {
 module.exports = {
   getClient,
   saveUserPreferences,
+  updateUserLiveActivityState,
   getUserPreferences,
   deleteUserPreferences,
   getAllUserPreferences,

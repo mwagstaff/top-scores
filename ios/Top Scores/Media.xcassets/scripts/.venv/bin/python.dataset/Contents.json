@@ -1,0 +1,12 @@
+{
+  "data" : [
+    {
+      "filename" : "python",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

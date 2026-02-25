@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const cheerio = require("cheerio");
 
 const {
   parseMatchDetailsFromHtml,
@@ -123,6 +124,65 @@ test("parseMatchDetailsFromHtml preserves stoppage-time goals in apostrophe-plus
       goal_times: ["90+3'"],
     },
   ]);
+});
+
+test("parseMatchDetailsFromHtml parses aggregate score when only aggregate markup is present", () => {
+  const html = `
+    <div class="ssrcss-xxm013-MatchProgressContainer">
+      <div class="ssrcss-m3fdxs-MatchProgressWrapper">
+        <span class="visually-hidden">Aggregate score Atletico Madrid 3 , Club Brugge 3</span>
+        <div data-testid="agg-score" class="ssrcss-smi1ab-AggregateScore">(Agg 3-3)</div>
+      </div>
+    </div>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.equal(parsed.aggregate_home_score, "3");
+  assert.equal(parsed.aggregate_away_score, "3");
+  assert.deepStrictEqual(parsed.home_goal_scorers, []);
+  assert.deepStrictEqual(parsed.away_goal_scorers, []);
+});
+
+test("extractStatusFromText does not treat aggregate text as live minute", () => {
+  assert.equal(__private.extractStatusFromText("(Agg 3-3)"), null);
+  assert.equal(
+    __private.extractStatusFromText("Aggregate score Atletico Madrid 3 , Club Brugge 3"),
+    null
+  );
+  assert.equal(__private.extractStatusFromText("3'"), "3");
+});
+
+test("parseMatchesFromDom ignores aggregate-only fixture cards", () => {
+  const html = `
+    <article data-event-id="cdxzkljkjxkt">
+      <div data-participant-id="home">
+        <div class="TeamNameWrapper">
+          <span>Atletico Madrid</span>
+        </div>
+      </div>
+      <div class="WithInlineFallback-Scores">
+        <div class="StyledCentre">
+          <time class="StyledTime">17:45</time>
+        </div>
+      </div>
+      <div data-participant-id="away">
+        <div class="TeamNameWrapper">
+          <span>Club Brugge</span>
+        </div>
+      </div>
+      <div class="MatchProgressContainer">
+        <div class="MatchProgressWrapper">
+          <span class="visually-hidden">Aggregate score Atletico Madrid 3 , Club Brugge 3</span>
+          <div data-testid="agg-score" class="AggregateScore">(Agg 3-3)</div>
+        </div>
+      </div>
+    </article>
+  `;
+
+  const $ = cheerio.load(html);
+  const parsed = __private.parseMatchesFromDom($);
+  assert.deepStrictEqual(parsed, []);
 });
 
 test("pickCompetitionName disambiguates non-English Premier League competitions", () => {

@@ -22,6 +22,8 @@ const BBC_SCORE_CONTAINER_SELECTOR = "[data-testid='score']";
 const BBC_HOME_SCORE_SELECTOR = "[class*='HomeScore']";
 const BBC_AWAY_SCORE_SELECTOR = "[class*='AwayScore']";
 const BBC_STATUS_SELECTOR = "[class*='MatchProgress'] [class*='StyledPeriod']";
+const BBC_AGGREGATE_SCORE_SELECTOR = "[data-testid='agg-score'], [class*='AggregateScore']";
+const BBC_KICKOFF_TIME_SELECTOR = "time, [class*='StyledTime']";
 const BBC_PENALTIES_SELECTOR = "[class*='PenaltiesText']";
 const BBC_DETAILS_LINK_SELECTOR = "a[href*='/sport/football/']";
 const BBC_KEY_EVENTS_HOME_SELECTOR = "[class$='-KeyEventsHome'], [class*='KeyEventsHome']";
@@ -390,6 +392,19 @@ function parseScorePair(text) {
   return null;
 }
 
+function parseAggregateScoreText(text) {
+  const cleaned = normalizeText(text).replace(/[–—]/g, "-");
+  if (!cleaned) return null;
+
+  const aggTextMatch = cleaned.match(/\(?(?:agg(?:regate)?\.?\s*:?)\s*(\d+)\s*-\s*(\d+)\)?/i);
+  if (aggTextMatch) return [aggTextMatch[1], aggTextMatch[2]];
+
+  const hiddenTextMatch = cleaned.match(/aggregate\s+score[^0-9]*(\d+)\s*,[^0-9]*(\d+)/i);
+  if (hiddenTextMatch) return [hiddenTextMatch[1], hiddenTextMatch[2]];
+
+  return null;
+}
+
 function extractScoresFromAttributes($node) {
   const attrs = [
     ["data-home-score", "data-away-score"],
@@ -445,6 +460,34 @@ function extractScores($node, $) {
   return null;
 }
 
+function extractAggregateFromBbcNode($node, $) {
+  const aggText = normalizeText($node.find(BBC_AGGREGATE_SCORE_SELECTOR).first().text());
+  const direct = parseAggregateScoreText(aggText);
+  if (direct) return direct;
+
+  let hidden = null;
+  $node.find(BBC_HIDDEN_TEXT_SELECTOR).each((_, el) => {
+    if (hidden) return;
+    hidden = parseAggregateScoreText(normalizeText($(el).text()));
+  });
+  if (hidden) return hidden;
+
+  return parseAggregateScoreText(normalizeText($node.text()));
+}
+
+function extractAggregateFromDocument($) {
+  const aggText = normalizeText($(BBC_AGGREGATE_SCORE_SELECTOR).first().text());
+  const direct = parseAggregateScoreText(aggText);
+  if (direct) return direct;
+
+  let hidden = null;
+  $(BBC_HIDDEN_TEXT_SELECTOR).each((_, el) => {
+    if (hidden) return;
+    hidden = parseAggregateScoreText(normalizeText($(el).text()));
+  });
+  return hidden;
+}
+
 function normalizeStatusToken(token) {
   if (!token) return null;
   const upper = token.toUpperCase();
@@ -472,8 +515,11 @@ function extractStatusFromText(text) {
   if (statusMatch) return normalizeStatusToken(statusMatch[1]);
 
   const minuteNormalized = cleaned.replace(/(\d{1,3})'\+(\d{1,2})/g, "$1+$2");
-  const minuteMatch = minuteNormalized.match(/\b\d{1,3}(?:\+\d{1,2})?'?\b/);
-  if (minuteMatch) return minuteMatch[0].replace(/'$/, "");
+  if (/^\d{1,3}(?:\+\d{1,2})?'?$/.test(minuteNormalized)) {
+    return minuteNormalized.replace(/'$/, "");
+  }
+  const minuteApostropheMatch = minuteNormalized.match(/\b(\d{1,3}(?:\+\d{1,2})?)'/);
+  if (minuteApostropheMatch) return minuteApostropheMatch[1];
 
   return null;
 }
@@ -513,6 +559,21 @@ function extractStatusFromBbcNode($node, $) {
   const candidate = extractStatusFromText(statusText);
   if (candidate && !isKickoffTime(candidate)) {
     return candidate;
+  }
+  return null;
+}
+
+function extractKickoffTimeFromBbcNode($node, $) {
+  const candidates = [];
+  $node.find(BBC_KICKOFF_TIME_SELECTOR).each((_, el) => {
+    const $el = $(el);
+    uniquePush(candidates, normalizeText($el.attr("datetime")));
+    uniquePush(candidates, normalizeText($el.text()));
+  });
+
+  for (const candidate of candidates) {
+    const kickoff = normalizeKickoffTimeToken(candidate);
+    if (kickoff) return kickoff;
   }
   return null;
 }
@@ -692,11 +753,25 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   if ($status.length) {
     const statusText = normalizeText($status.text());
     if (statusText) {
-      matchTime = statusText;
+      const parsedStatus = extractStatusFromText(statusText);
+      if (parsedStatus) {
+        matchTime = parsedStatus;
+      } else if (isKickoffTime(statusText)) {
+        matchTime = statusText;
+      }
     }
   }
 
-  if (!$homeGoals.length && !$awayGoals.length && !$homeAssists.length && !$awayAssists.length && !matchTime) {
+  const aggregate = extractAggregateFromDocument($);
+
+  if (
+    !$homeGoals.length &&
+    !$awayGoals.length &&
+    !$homeAssists.length &&
+    !$awayAssists.length &&
+    !matchTime &&
+    !aggregate
+  ) {
     return null;
   }
 
@@ -712,6 +787,12 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   // Include match time/status if parsed
   if (matchTime) {
     result.match_time = matchTime;
+    result.score_status = matchTime;
+  }
+
+  if (aggregate) {
+    result.aggregate_home_score = aggregate[0];
+    result.aggregate_away_score = aggregate[1];
   }
 
   // Only parse penalty result if we have team names to validate against
@@ -894,9 +975,18 @@ function parseMatchesFromDom($) {
     const bbcTeams = extractTeamsFromBbcNode($node, $);
     const teams = bbcTeams.length ? bbcTeams : extractTeams($node, $);
     if (teams.length < 2) return;
-    const scores = extractScoresFromBbcNode($node, $) || extractScores($node, $);
+    const aggregate = extractAggregateFromBbcNode($node, $);
+    const bbcScores = extractScoresFromBbcNode($node, $);
+    const scores = bbcScores || (aggregate ? null : extractScores($node, $));
     if (!scores || scores.length < 2) return;
-    const status = extractStatusFromBbcNode($node, $) || extractStatus($node, $);
+    const kickoffTime = extractKickoffTimeFromBbcNode($node, $);
+    let status = extractStatusFromBbcNode($node, $) || extractStatus($node, $);
+    if ((!status || isKickoffTime(status)) && kickoffTime) {
+      status = kickoffTime;
+    }
+    if (aggregate && !bbcScores && kickoffTime) {
+      status = kickoffTime;
+    }
     if (!status) return;
     const detailsUrl = extractDetailsUrl($node, $, BBC_BASE_URL);
 
@@ -908,9 +998,58 @@ function parseMatchesFromDom($) {
       match_time: status,
     };
     if (detailsUrl) parsedMatch.details_url = detailsUrl;
+    if (aggregate) {
+      parsedMatch.aggregate_home_score = aggregate[0];
+      parsedMatch.aggregate_away_score = aggregate[1];
+    }
     results.push(parsedMatch);
   });
   return results;
+}
+
+function collectAggregateTextCandidates(value, output, depth = 0) {
+  if (value === null || value === undefined || depth > 4) return;
+  if (typeof value === "string" || typeof value === "number") {
+    const normalized = normalizeText(String(value));
+    if (normalized) output.push(normalized);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.slice(0, 24).forEach((item) => collectAggregateTextCandidates(item, output, depth + 1));
+    return;
+  }
+  if (typeof value !== "object") return;
+
+  Object.entries(value).forEach(([key, nested]) => {
+    if (/(agg|aggregate|status|comment|label|text|value|description)/i.test(key)) {
+      collectAggregateTextCandidates(nested, output, depth + 1);
+    }
+  });
+}
+
+function extractAggregateFromObject(node) {
+  if (!node || typeof node !== "object") return null;
+  const candidates = [];
+  [
+    node.aggregate,
+    node.aggregateScore,
+    node.aggregate_score,
+    node.agg,
+    node.aggScore,
+    node.matchProgress,
+    node.statusComment,
+    node.periodLabel,
+    node.status,
+    node.statusText,
+    node.description,
+  ].forEach((value) => collectAggregateTextCandidates(value, candidates));
+
+  for (const candidate of candidates) {
+    const parsed = parseAggregateScoreText(candidate);
+    if (parsed) return parsed;
+  }
+
+  return null;
 }
 
 function extractWindowStringLiteral(html, varName) {
@@ -1060,6 +1199,11 @@ function extractMatchFromEvent(event) {
     away_score: String(awayScore),
     match_time: status,
   };
+  const aggregate = extractAggregateFromObject(event);
+  if (aggregate) {
+    match.aggregate_home_score = aggregate[0];
+    match.aggregate_away_score = aggregate[1];
+  }
   const detailsUrl = pickDetailsUrlFromObject(event);
   if (detailsUrl) match.details_url = detailsUrl;
   return match;
@@ -1151,6 +1295,11 @@ function extractMatchFromObject(node) {
     away_score: score[1],
     match_time: status,
   };
+  const aggregate = extractAggregateFromObject(node);
+  if (aggregate) {
+    match.aggregate_home_score = aggregate[0];
+    match.aggregate_away_score = aggregate[1];
+  }
   const detailsUrl = pickDetailsUrlFromObject(node);
   if (detailsUrl) match.details_url = detailsUrl;
   return match;
@@ -1615,6 +1764,12 @@ function extractScheduledMatchFromEvent(event, options = {}) {
     match.score_status = status;
   }
 
+  const aggregate = extractAggregateFromObject(event);
+  if (aggregate) {
+    match.aggregate_home_score = aggregate[0];
+    match.aggregate_away_score = aggregate[1];
+  }
+
   const detailsUrl = pickDetailsUrlFromObject(event);
   if (detailsUrl) {
     match.details_url = detailsUrl;
@@ -1638,6 +1793,12 @@ function mergeScheduledMatch(existing, incoming) {
   }
   if (incoming.score_status) merged.score_status = incoming.score_status;
   if (incoming.details_url) merged.details_url = incoming.details_url;
+  if (incoming.aggregate_home_score !== undefined && incoming.aggregate_home_score !== null) {
+    merged.aggregate_home_score = incoming.aggregate_home_score;
+  }
+  if (incoming.aggregate_away_score !== undefined && incoming.aggregate_away_score !== null) {
+    merged.aggregate_away_score = incoming.aggregate_away_score;
+  }
 
   const existingChannels = safeArray(existing.tv_channels);
   const incomingChannels = safeArray(incoming.tv_channels);
@@ -1751,6 +1912,105 @@ function parseScheduledMatchesFromJson(html, options = {}) {
   return dedupeScheduledMatches(matches);
 }
 
+function aggregateTeamsKey(homeTeam, awayTeam, time = "") {
+  const normalizedTime = normalizeKickoffTimeToken(time) || "";
+  return [
+    normalizeText(homeTeam).toLowerCase(),
+    normalizeText(awayTeam).toLowerCase(),
+    normalizedTime,
+  ].join("|");
+}
+
+function parseScheduledAggregateEntriesFromDom($) {
+  const entries = [];
+  const nodes = findFixtureNodes($);
+  nodes.forEach((node) => {
+    const $node = $(node);
+    const aggregate = extractAggregateFromBbcNode($node, $);
+    if (!aggregate) return;
+
+    const bbcTeams = extractTeamsFromBbcNode($node, $);
+    const teams = bbcTeams.length ? bbcTeams : extractTeams($node, $);
+    if (teams.length < 2) return;
+
+    const entry = {
+      home_team: teams[0],
+      away_team: teams[1],
+      aggregate_home_score: aggregate[0],
+      aggregate_away_score: aggregate[1],
+    };
+
+    const kickoffTime = extractKickoffTimeFromBbcNode($node, $);
+    if (kickoffTime) entry.time = kickoffTime;
+
+    const detailsUrl = extractDetailsUrl($node, $, BBC_BASE_URL);
+    if (detailsUrl) entry.details_url = detailsUrl;
+
+    entries.push(entry);
+  });
+  return entries;
+}
+
+function applyAggregateScoresToScheduledMatches(matches, aggregateEntries) {
+  if (!Array.isArray(matches) || matches.length === 0) return matches;
+  if (!Array.isArray(aggregateEntries) || aggregateEntries.length === 0) return matches;
+
+  const output = matches.map((match) => ({ ...match }));
+  const byDetailsUrl = new Map();
+  const byTeamTime = new Map();
+  const byTeamsOnly = new Map();
+
+  output.forEach((match, index) => {
+    const detailsUrl = normalizeDetailsUrlKey(match && match.details_url);
+    if (detailsUrl) byDetailsUrl.set(detailsUrl, index);
+
+    const teamTimeKey = aggregateTeamsKey(match.home_team, match.away_team, match.time || "");
+    if (!byTeamTime.has(teamTimeKey)) byTeamTime.set(teamTimeKey, []);
+    byTeamTime.get(teamTimeKey).push(index);
+
+    const teamsOnlyKey = aggregateTeamsKey(match.home_team, match.away_team, "");
+    if (!byTeamsOnly.has(teamsOnlyKey)) byTeamsOnly.set(teamsOnlyKey, []);
+    byTeamsOnly.get(teamsOnlyKey).push(index);
+  });
+
+  aggregateEntries.forEach((aggregateEntry) => {
+    let targetIndex;
+    const detailsUrl = normalizeDetailsUrlKey(aggregateEntry && aggregateEntry.details_url);
+    if (detailsUrl && byDetailsUrl.has(detailsUrl)) {
+      targetIndex = byDetailsUrl.get(detailsUrl);
+    }
+
+    if (targetIndex === undefined) {
+      const byTimeKey = aggregateTeamsKey(
+        aggregateEntry.home_team,
+        aggregateEntry.away_team,
+        aggregateEntry.time || ""
+      );
+      const byTimeMatches = byTeamTime.get(byTimeKey) || [];
+      if (byTimeMatches.length === 1) {
+        targetIndex = byTimeMatches[0];
+      }
+    }
+
+    if (targetIndex === undefined) {
+      const teamsOnlyKey = aggregateTeamsKey(aggregateEntry.home_team, aggregateEntry.away_team, "");
+      const teamsOnlyMatches = byTeamsOnly.get(teamsOnlyKey) || [];
+      if (teamsOnlyMatches.length === 1) {
+        targetIndex = teamsOnlyMatches[0];
+      }
+    }
+
+    if (targetIndex === undefined) return;
+
+    if (isScoreValue(aggregateEntry.aggregate_home_score) && isScoreValue(aggregateEntry.aggregate_away_score)) {
+      output[targetIndex].aggregate_home_score = aggregateEntry.aggregate_home_score;
+      output[targetIndex].aggregate_away_score = aggregateEntry.aggregate_away_score;
+    }
+  });
+
+  return output;
+}
+
 function normalizeDateOnly(value) {
   const text = normalizeText(value);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text || "")) {
@@ -1835,8 +2095,11 @@ async function fetchBbcScoresFixturesByDate(dateString, options = {}) {
     fallbackDate,
     timeZone,
   });
+  const $ = cheerio.load(html);
+  const aggregateEntries = parseScheduledAggregateEntriesFromDom($);
+  const matchesWithAggregate = applyAggregateScoresToScheduledMatches(matches, aggregateEntries);
 
-  return matches.map((match) => ({
+  return matchesWithAggregate.map((match) => ({
     ...match,
     home_score:
       match.home_score !== undefined && match.home_score !== null
@@ -1846,6 +2109,14 @@ async function fetchBbcScoresFixturesByDate(dateString, options = {}) {
       match.away_score !== undefined && match.away_score !== null
         ? toScoreValue(match.away_score)
         : match.away_score,
+    aggregate_home_score:
+      match.aggregate_home_score !== undefined && match.aggregate_home_score !== null
+        ? toScoreValue(match.aggregate_home_score)
+        : match.aggregate_home_score,
+    aggregate_away_score:
+      match.aggregate_away_score !== undefined && match.aggregate_away_score !== null
+        ? toScoreValue(match.aggregate_away_score)
+        : match.aggregate_away_score,
   }));
 }
 
@@ -1883,6 +2154,14 @@ async function fetchBbcFixtures(url = DEFAULT_BBC_URL) {
     ...match,
     home_score: toScoreValue(match.home_score),
     away_score: toScoreValue(match.away_score),
+    aggregate_home_score:
+      match.aggregate_home_score !== undefined && match.aggregate_home_score !== null
+        ? toScoreValue(match.aggregate_home_score)
+        : match.aggregate_home_score,
+    aggregate_away_score:
+      match.aggregate_away_score !== undefined && match.aggregate_away_score !== null
+        ? toScoreValue(match.aggregate_away_score)
+        : match.aggregate_away_score,
   }));
   return enrichMatchesWithDetails(deduped);
 }
@@ -1910,6 +2189,14 @@ async function fetchBbcMatchByDetailsUrl(detailsUrl) {
     ...match,
     home_score: toScoreValue(match.home_score),
     away_score: toScoreValue(match.away_score),
+    aggregate_home_score:
+      match.aggregate_home_score !== undefined && match.aggregate_home_score !== null
+        ? toScoreValue(match.aggregate_home_score)
+        : match.aggregate_home_score,
+    aggregate_away_score:
+      match.aggregate_away_score !== undefined && match.aggregate_away_score !== null
+        ? toScoreValue(match.aggregate_away_score)
+        : match.aggregate_away_score,
   }));
 
   let match = selectMatchCandidateByDetailsUrl(candidates, normalizedTarget);
@@ -1924,10 +2211,17 @@ async function fetchBbcMatchByDetailsUrl(detailsUrl) {
 
   if (!match) {
     if (!detailsFromPage) return null;
-    return {
+    const fallbackMatch = {
       details_url: validatedTarget,
       ...detailsFromPage,
     };
+    if (!fallbackMatch.score_status && fallbackMatch.match_time) {
+      fallbackMatch.score_status = fallbackMatch.match_time;
+    }
+    if (!fallbackMatch.match_time && fallbackMatch.score_status) {
+      fallbackMatch.match_time = fallbackMatch.score_status;
+    }
+    return fallbackMatch;
   }
 
   if (detailsFromPage) {
@@ -1938,6 +2232,12 @@ async function fetchBbcMatchByDetailsUrl(detailsUrl) {
   }
   if (!match.details_url) {
     match.details_url = validatedTarget;
+  }
+  if (!match.score_status && match.match_time) {
+    match.score_status = match.match_time;
+  }
+  if (!match.match_time && match.score_status) {
+    match.match_time = match.score_status;
   }
 
   return match;
@@ -1981,8 +2281,10 @@ module.exports = {
   resolveScoresFixturesDateUrl,
   writeBbcFixtures,
   __private: {
+    extractStatusFromText,
     normalizeDetailsUrl,
     normalizeDetailsUrlKey,
+    parseMatchesFromDom,
     pickCompetitionName,
     selectMatchCandidateByDetailsUrl,
   },

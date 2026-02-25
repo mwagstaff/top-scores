@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Matches Admin</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --ink: #0f1720;
+      --muted: #4b5563;
+      --line: #d8dee6;
+      --accent: #0f766e;
+      --accent-soft: #d5f4f0;
+      --ok: #166534;
+      --warn: #b45309;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #eef4f7 0%, #f6f8fa 100%);
+      color: var(--ink);
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 32, 0.05);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .tabs {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tab,
+    .link-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #0b5e58;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.86rem;
+    }
+
+    .tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 180px 1fr auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    label {
+      display: block;
+      font-size: 0.84rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    input,
+    button {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    input:focus {
+      outline: 2px solid rgba(15, 118, 110, 0.25);
+      border-color: var(--accent);
+    }
+
+    button {
+      border: 0;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      width: auto;
+      min-width: 130px;
+    }
+
+    button:hover {
+      filter: brightness(0.95);
+    }
+
+    .status {
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .error {
+      color: #b91c1c;
+      font-weight: 700;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #f9fbfc;
+    }
+
+    .stat .label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .stat .value {
+      font-size: 1.2rem;
+      margin-top: 2px;
+      font-weight: 700;
+    }
+
+    .list-stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .day-group {
+      display: grid;
+      gap: 8px;
+    }
+
+    .day-heading {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 700;
+      color: #0f1720;
+    }
+
+    .match-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .match-link {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .match-link:hover .match-main {
+      background: rgba(15, 118, 110, 0.06);
+    }
+
+    .match-main {
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      transition: background 120ms ease;
+    }
+
+    .meta {
+      font-size: 0.82rem;
+      color: #0f766e;
+      font-weight: 600;
+    }
+
+    .teams-row {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .team {
+      font-size: 1rem;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+
+    .team.home {
+      text-align: right;
+    }
+
+    .team.away {
+      text-align: left;
+    }
+
+    .center {
+      text-align: center;
+      min-width: 110px;
+    }
+
+    .center .primary {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #111827;
+    }
+
+    .center .secondary {
+      margin-top: 2px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    .channels {
+      margin-top: 2px;
+      font-size: 0.84rem;
+      color: var(--muted);
+      border-top: 1px dashed var(--line);
+      padding-top: 8px;
+      line-height: 1.35;
+    }
+
+    .pill {
+      border-radius: 999px;
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      display: inline-block;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .pill.live {
+      color: #991b1b;
+      border-color: rgba(185, 28, 28, 0.3);
+      background: rgba(185, 28, 28, 0.08);
+    }
+
+    .pill.finished {
+      color: var(--ok);
+      border-color: rgba(22, 101, 52, 0.3);
+      background: rgba(22, 101, 52, 0.1);
+    }
+
+    .pill.warn {
+      color: var(--warn);
+      border-color: rgba(180, 83, 9, 0.3);
+      background: rgba(180, 83, 9, 0.1);
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.92rem;
+      padding: 8px 4px;
+    }
+
+    @media (max-width: 900px) {
+      .summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .row {
+        grid-template-columns: 1fr;
+      }
+
+      button {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .teams-row {
+        grid-template-columns: 1fr;
+      }
+
+      .team.home,
+      .team.away,
+      .center {
+        text-align: left;
+      }
+
+      .center {
+        min-width: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="panel">
+      <h1 id="page-title">Matches Admin</h1>
+      <p id="page-subtitle"></p>
+      <div class="tabs">
+        <a id="tab-fixtures" class="tab" href="./fixtures">Fixtures</a>
+        <a id="tab-results" class="tab" href="./results">Results</a>
+        <a class="link-chip" href="./preferences">Preferences</a>
+        <a class="link-chip" href="./bbc-history">BBC History</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <form id="query-form">
+        <div class="row">
+          <div>
+            <label for="limit">Rows (1-5000)</label>
+            <input id="limit" type="number" min="1" max="5000" step="1" value="500">
+          </div>
+          <div>
+            <label for="client-filter">Client filter</label>
+            <input id="client-filter" type="text" placeholder="team, competition, channel, status">
+          </div>
+          <div>
+            <button type="submit">Reload</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div id="status" class="status">No request made yet.</div>
+    </section>
+
+    <section class="panel">
+      <div id="summary" class="summary"></div>
+    </section>
+
+    <section class="panel">
+      <h2 id="list-heading"></h2>
+      <div id="results" class="list-stack"></div>
+    </section>
+  </div>
+
+  <script>
+    function buildApiBasePrefix() {
+      const pathname = String(window.location.pathname || "");
+      const adminSuffixPattern = /\/admin\/(fixtures|results)\/?$/;
+      const basePrefix = pathname.replace(adminSuffixPattern, "");
+      return basePrefix && basePrefix !== "/" ? basePrefix : "";
+    }
+
+    function currentMode() {
+      const pathname = String(window.location.pathname || "");
+      if (/\/admin\/results\/?$/.test(pathname)) {
+        return "results";
+      }
+      return "fixtures";
+    }
+
+    const mode = currentMode();
+    const apiBasePrefix = buildApiBasePrefix();
+    const listApiUrl = `${apiBasePrefix}/api/v1/admin/${mode}`;
+
+    const pageTitle = document.getElementById("page-title");
+    const pageSubtitle = document.getElementById("page-subtitle");
+    const listHeading = document.getElementById("list-heading");
+    const statusNode = document.getElementById("status");
+    const summaryNode = document.getElementById("summary");
+    const resultsNode = document.getElementById("results");
+    const queryForm = document.getElementById("query-form");
+    const limitInput = document.getElementById("limit");
+    const clientFilterInput = document.getElementById("client-filter");
+
+    const tabFixtures = document.getElementById("tab-fixtures");
+    const tabResults = document.getElementById("tab-results");
+
+    let latestPayload = null;
+    let filterTimer = null;
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function formatTimestamp(ms) {
+      const numeric = Number(ms);
+      if (!Number.isFinite(numeric) || numeric <= 0) return "TBD";
+      return new Date(numeric).toLocaleString();
+    }
+
+    function formatDateHeading(dateKey) {
+      const raw = String(dateKey || "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || "Unknown date";
+
+      const parsed = new Date(`${raw}T00:00:00`);
+      if (Number.isNaN(parsed.getTime())) return raw;
+
+      const today = new Date();
+      const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const tomorrow = new Date(dayStart);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const parsedDay = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+
+      const display = parsed.toLocaleDateString(undefined, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+
+      if (parsedDay.getTime() === dayStart.getTime()) return `${display} (Today)`;
+      if (parsedDay.getTime() === tomorrow.getTime()) return `${display} (Tomorrow)`;
+      return display;
+    }
+
+    function shortStatus(status) {
+      const text = String(status || "").trim();
+      if (!text) return "-";
+      if (/^\d{1,3}(?:\+\d{1,2})?'?$/.test(text)) {
+        return `${text.replace(/'/g, "")}'`;
+      }
+      return text;
+    }
+
+    function statusPill(match) {
+      if (match.in_progress) {
+        return '<span class="pill live">Live</span>';
+      }
+      if (match.finished) {
+        return '<span class="pill finished">Finished</span>';
+      }
+      return '<span class="pill warn">Upcoming</span>';
+    }
+
+    function kickoffPrimary(match) {
+      if (mode === "fixtures") {
+        return shortStatus(match.display_score_status || match.time || "TBD");
+      }
+
+      if (match.has_score) {
+        const home = Number.isFinite(Number(match.home_score)) ? String(match.home_score) : "-";
+        const away = Number.isFinite(Number(match.away_score)) ? String(match.away_score) : "-";
+        return `${home} - ${away}`;
+      }
+
+      return shortStatus(match.display_score_status || match.time || "-");
+    }
+
+    function kickoffSecondary(match) {
+      const rawStatus = String(match.display_score_status || "").trim();
+      const status = rawStatus ? shortStatus(rawStatus) : "";
+      if (mode === "fixtures") {
+        return status && status !== shortStatus(match.time || "")
+          ? status
+          : formatTimestamp(match.kickoff_ts_ms);
+      }
+      return status || formatTimestamp(match.kickoff_ts_ms);
+    }
+
+    function detailLink(match) {
+      const matchId = String(match.match_details_id || "").trim();
+      if (!matchId) return null;
+      return `${apiBasePrefix}/admin/results/${encodeURIComponent(matchId)}`;
+    }
+
+    function cardContent(match) {
+      const league = escapeHtml(match.league || "Unknown competition");
+      const home = escapeHtml(match.home_team || "Home");
+      const away = escapeHtml(match.away_team || "Away");
+      const centerPrimary = escapeHtml(kickoffPrimary(match));
+      const centerSecondary = escapeHtml(kickoffSecondary(match));
+      const channels = Array.isArray(match.tv_channels) && match.tv_channels.length > 0
+        ? match.tv_channels.join(" | ")
+        : "TV TBA";
+      const penalty = String(match.penalty_result || "").trim();
+
+      return `
+        <div class="match-main">
+          <div class="meta">${league} | ${escapeHtml(match.date || "Unknown date")} ${escapeHtml(match.time || "")}</div>
+          <div class="teams-row">
+            <div class="team home">${home}</div>
+            <div class="center">
+              <div class="primary">${centerPrimary}</div>
+              <div class="secondary">${centerSecondary}</div>
+            </div>
+            <div class="team away">${away}</div>
+          </div>
+          ${penalty ? `<div class="meta">${escapeHtml(penalty)}</div>` : ""}
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            ${statusPill(match)}
+            ${match.match_details_id ? `<span class="pill">ID: ${escapeHtml(match.match_details_id)}</span>` : '<span class="pill">No match id</span>'}
+          </div>
+          <div class="channels">${escapeHtml(channels)}</div>
+        </div>
+      `;
+    }
+
+    function matchCard(match) {
+      const link = mode === "results" ? detailLink(match) : null;
+      if (link) {
+        return `<article class="match-card"><a class="match-link" href="${escapeHtml(link)}">${cardContent(match)}</a></article>`;
+      }
+      return `<article class="match-card">${cardContent(match)}</article>`;
+    }
+
+    function groupByDate(matches) {
+      const grouped = new Map();
+      (Array.isArray(matches) ? matches : []).forEach((match) => {
+        const key = String(match && match.date ? match.date : "Unknown date");
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(match);
+      });
+      return grouped;
+    }
+
+    function renderSummary(matches, payload) {
+      const competitions = new Set();
+      const channels = new Set();
+      let liveCount = 0;
+
+      (Array.isArray(matches) ? matches : []).forEach((match) => {
+        if (match && match.league) competitions.add(String(match.league));
+        if (match && match.in_progress) liveCount += 1;
+        (Array.isArray(match && match.tv_channels) ? match.tv_channels : []).forEach((channel) => channels.add(String(channel)));
+      });
+
+      summaryNode.innerHTML = [
+        { label: mode === "fixtures" ? "Fixtures" : "Results", value: String(matches.length) },
+        { label: "Competitions", value: String(competitions.size) },
+        { label: "Channels", value: String(channels.size) },
+        { label: "Live Matches", value: String(liveCount) },
+      ].map((stat) => `
+        <div class="stat">
+          <div class="label">${escapeHtml(stat.label)}</div>
+          <div class="value">${escapeHtml(stat.value)}</div>
+        </div>
+      `).join("");
+
+      const updatedText = payload && payload.updated_at
+        ? new Date(payload.updated_at).toLocaleString()
+        : "unknown";
+      const source = payload && payload.source ? payload.source : "unknown";
+      const totalAvailable = payload && Number.isFinite(Number(payload.total_available))
+        ? Number(payload.total_available)
+        : matches.length;
+
+      statusNode.textContent =
+        `Loaded ${matches.length} row(s) (${totalAvailable} total). ` +
+        `Updated: ${updatedText}. Source: ${source}.`;
+    }
+
+    function renderMatches(matches, payload) {
+      renderSummary(matches, payload);
+
+      if (!Array.isArray(matches) || matches.length === 0) {
+        resultsNode.innerHTML = `<div class="empty">No ${mode} rows for this filter.</div>`;
+        return;
+      }
+
+      const grouped = groupByDate(matches);
+      const orderedKeys = Array.from(grouped.keys()).sort();
+      if (mode === "results") orderedKeys.reverse();
+
+      resultsNode.innerHTML = orderedKeys.map((dateKey) => {
+        const rows = grouped.get(dateKey) || [];
+        return `
+          <section class="day-group">
+            <h3 class="day-heading">${escapeHtml(formatDateHeading(dateKey))}</h3>
+            ${rows.map(matchCard).join("")}
+          </section>
+        `;
+      }).join("");
+    }
+
+    function localFilter(matches) {
+      const query = String(clientFilterInput.value || "").trim().toLowerCase();
+      if (!query) return matches;
+
+      return matches.filter((match) => {
+        const channels = Array.isArray(match && match.tv_channels) ? match.tv_channels.join(" ") : "";
+        const haystack = [
+          match && match.home_team,
+          match && match.away_team,
+          match && match.league,
+          match && match.score_status,
+          match && match.display_score_status,
+          match && match.penalty_result,
+          channels,
+        ]
+          .map((value) => String(value || "").toLowerCase())
+          .join(" ");
+        return haystack.includes(query);
+      });
+    }
+
+    function renderFiltered() {
+      if (!latestPayload || !Array.isArray(latestPayload.matches)) {
+        renderMatches([], latestPayload);
+        return;
+      }
+      renderMatches(localFilter(latestPayload.matches), latestPayload);
+    }
+
+    async function loadMatches(event) {
+      if (event) event.preventDefault();
+
+      const limit = Math.min(5000, Math.max(1, Number(limitInput.value || 500)));
+      const params = new URLSearchParams();
+      params.set("limit", String(limit));
+
+      statusNode.textContent = `Loading ${mode}...`;
+      statusNode.classList.remove("error");
+
+      try {
+        const response = await fetch(`${listApiUrl}?${params.toString()}`, {
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+        });
+
+        const payload = await response.json();
+        if (!response.ok || !payload || payload.success !== true || !Array.isArray(payload.matches)) {
+          const message = payload && payload.error ? payload.error : `Request failed (${response.status})`;
+          throw new Error(message);
+        }
+
+        latestPayload = payload;
+        renderFiltered();
+      } catch (error) {
+        latestPayload = null;
+        summaryNode.innerHTML = "";
+        resultsNode.innerHTML = "<div class=\"empty\">No data loaded.</div>";
+        statusNode.textContent = `Error loading ${mode}: ${error.message || String(error)}`;
+        statusNode.classList.add("error");
+      }
+    }
+
+    function initializePage() {
+      pageTitle.textContent = mode === "fixtures" ? "Fixtures" : "Results";
+      pageSubtitle.textContent = mode === "fixtures"
+        ? "Redis-backed upcoming fixtures list in app-style card format."
+        : "Redis-backed results list. Click a match with an id to open match details and notification fan-out.";
+      listHeading.textContent = mode === "fixtures" ? "Upcoming Fixtures" : "Recent Results";
+
+      if (mode === "fixtures") {
+        tabFixtures.classList.add("active");
+      } else {
+        tabResults.classList.add("active");
+      }
+    }
+
+    queryForm.addEventListener("submit", loadMatches);
+    clientFilterInput.addEventListener("input", () => {
+      if (filterTimer) window.clearTimeout(filterTimer);
+      filterTimer = window.setTimeout(renderFiltered, 250);
+    });
+
+    initializePage();
+    loadMatches();
+  </script>
+</body>
+</html>

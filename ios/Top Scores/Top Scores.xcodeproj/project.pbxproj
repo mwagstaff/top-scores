@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		E70D65572F3E413E00E38737 /* Top Scores Watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = E70D65372F3E413C00E38737 /* Top Scores Watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		E77994E52F4F8AF90063BB9C /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E77994E42F4F8AF90063BB9C /* Media.xcassets */; };
+		E77994E62F4F8AF90063BB9C /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E77994E42F4F8AF90063BB9C /* Media.xcassets */; };
+		E77994E72F4F8AF90063BB9C /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E77994E42F4F8AF90063BB9C /* Media.xcassets */; };
 		E7F0A0012F40400100E38737 /* Top Scores Widgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = E7F0A0042F40400100E38737 /* Top Scores Widgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -88,15 +91,13 @@
 		E70D65372F3E413C00E38737 /* Top Scores Watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Top Scores Watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E70D65432F3E413E00E38737 /* Top Scores Watch Watch AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Top Scores Watch Watch AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E70D654D2F3E413E00E38737 /* Top Scores Watch Watch AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Top Scores Watch Watch AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E77994E42F4F8AF90063BB9C /* Media.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Media.xcassets; sourceTree = "<group>"; };
 		E7F0A0042F40400100E38737 /* Top Scores Widgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Top Scores Widgets.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E70D51D72F3C957B00E38737 /* Top Scores */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			explicitFolders = (
-				"tv-logos",
-			);
 			path = "Top Scores";
 			sourceTree = "<group>";
 		};
@@ -189,6 +190,7 @@
 			isa = PBXGroup;
 			children = (
 				E70D51D72F3C957B00E38737 /* Top Scores */,
+				E77994E42F4F8AF90063BB9C /* Media.xcassets */,
 				E70D51E52F3C957D00E38737 /* Top ScoresTests */,
 				E70D51EF2F3C957D00E38737 /* Top ScoresUITests */,
 				E70D65382F3E413C00E38737 /* Top Scores Watch Watch App */,
@@ -445,6 +447,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E77994E52F4F8AF90063BB9C /* Media.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -466,6 +469,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E77994E62F4F8AF90063BB9C /* Media.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -487,6 +491,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E77994E72F4F8AF90063BB9C /* Media.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -702,8 +707,8 @@
 		E70D51F72F3C957D00E38737 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_APPICON_NAME = TopScoresAppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = TopScoresAccent;
 				CODE_SIGN_ENTITLEMENTS = "Top Scores/Top ScoresDebug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -736,8 +741,8 @@
 		E70D51F82F3C957D00E38737 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_APPICON_NAME = TopScoresAppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = TopScoresAccent;
 				CODE_SIGN_ENTITLEMENTS = "Top Scores/Top ScoresDebug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
