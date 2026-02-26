@@ -1852,6 +1852,9 @@ private struct TopScoresLiveActivityLockScreenView: View {
     }
 
     private var delayBannerText: String? {
+        if state.delayMinutes > 0 {
+            return "Delayed \(state.delayMinutes) m | Tap to open"
+        }
         guard let delayLabel = state.delayLabel, !delayLabel.isEmpty else { return nil }
         return "\(delayLabel) | Tap to open"
     }
@@ -2040,9 +2043,18 @@ private struct MultiMatchListView: View {
     let live: Bool
 
     var body: some View {
-        Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 3) {
-            ForEach(visibleMatches, id: \.matchId) { match in
-                MultiMatchGridRow(match: match, live: live)
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(chunkedMatches.enumerated()), id: \.offset) { _, rowMatches in
+                HStack(spacing: 6) {
+                    ForEach(Array(rowMatches.enumerated()), id: \.offset) { _, match in
+                        MultiMatchEntryCell(match: match, live: live)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if rowMatches.count == 1 {
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                    }
+                }
             }
         }
     }
@@ -2070,6 +2082,12 @@ private struct MultiMatchListView: View {
         return Array(sorted.prefix(10))
     }
 
+    private var chunkedMatches: [[TopScoresLiveActivityMatchState]] {
+        stride(from: 0, to: visibleMatches.count, by: 2).map { index in
+            Array(visibleMatches[index..<min(index + 2, visibleMatches.count)])
+        }
+    }
+
     private func competitionWeight(for match: TopScoresLiveActivityMatchState) -> Double {
         if let subcategory = match.leagueSubcategory?.trimmingCharacters(in: .whitespacesAndNewlines),
            !subcategory.isEmpty {
@@ -2083,51 +2101,56 @@ private struct MultiMatchListView: View {
 }
 
 @available(iOSApplicationExtension 16.1, *)
-private struct MultiMatchGridRow: View {
+private struct MultiMatchEntryCell: View {
     let match: TopScoresLiveActivityMatchState
     let live: Bool
 
     var body: some View {
-        GridRow {
-            Text(match.time)
+        HStack(spacing: 4) {
+            LiveActivityTeamLogo(teamName: match.homeTeam, size: 14)
+                .frame(width: 14, alignment: .center)
+
+            Text(scoreText)
+                .font(.caption.monospacedDigit().weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(width: 30, alignment: .center)
+
+            Text(timeText)
                 .font(.caption2.monospacedDigit())
+                .foregroundStyle(live ? .red : .secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(width: 32, alignment: .center)
+
+            LiveActivityTeamLogo(teamName: match.awayTeam, size: 14)
+                .frame(width: 14, alignment: .center)
+
+            Text(aggregateText)
+                .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .frame(width: 34, alignment: .leading)
-
-            LiveActivityTeamLogo(teamName: match.homeTeam, size: 12)
-
-            Text(WidgetNameFormatter.abbreviated(match.homeTeam, length: 9))
-                .font(.caption2)
-                .lineLimit(1)
-                .frame(width: 54, alignment: .trailing)
-
-            if live {
-                Text("\(match.homeScore ?? 0)-\(match.awayScore ?? 0)")
-                    .font(.caption2.monospacedDigit().weight(.semibold))
-                    .lineLimit(1)
-                    .frame(width: 30, alignment: .center)
-            } else {
-                Text("vs")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(width: 30, alignment: .center)
-            }
-
-            Text(WidgetNameFormatter.abbreviated(match.awayTeam, length: 9))
-                .font(.caption2)
-                .lineLimit(1)
-                .frame(width: 54, alignment: .leading)
-
-            LiveActivityTeamLogo(teamName: match.awayTeam, size: 12)
-
-            Text(live ? (match.matchTime ?? "-") : "-")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .frame(width: 20, alignment: .trailing)
+                .minimumScaleFactor(0.75)
+                .frame(width: 40, alignment: .leading)
         }
+    }
+
+    private var scoreText: String {
+        if let home = match.homeScore, let away = match.awayScore {
+            return "\(home)-\(away)"
+        }
+        return "vs"
+    }
+
+    private var timeText: String {
+        live ? (match.matchTime ?? match.time) : match.time
+    }
+
+    private var aggregateText: String {
+        guard let homeAgg = match.aggregateHomeScore, let awayAgg = match.aggregateAwayScore else {
+            return "-"
+        }
+        return "A\(homeAgg)-\(awayAgg)"
     }
 }
 

@@ -6249,6 +6249,137 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
       1,
       now
     ),
+    normalizeLiveActivityTestMatch(
+      {
+        matchId: "test_multi_live_3",
+        date: now.toISOString().split("T")[0],
+        time: "20:00",
+        league: "UEFA Champions League",
+        leagueSubcategory: "Round of 16",
+        homeTeam: "Inter Milan",
+        awayTeam: "Benfica",
+        homeScore: 2,
+        awayScore: 1,
+        aggregateHomeScore: 3,
+        aggregateAwayScore: 3,
+        matchTime: "110'",
+        tvChannels: ["TNT Sports 1"],
+      },
+      2,
+      now
+    ),
+    normalizeLiveActivityTestMatch(
+      {
+        matchId: "test_multi_live_4",
+        date: now.toISOString().split("T")[0],
+        time: "20:00",
+        league: "Premier League",
+        homeTeam: "Arsenal",
+        awayTeam: "Chelsea",
+        homeScore: 3,
+        awayScore: 2,
+        matchTime: "78'",
+        tvChannels: ["Sky Sports Main Event"],
+      },
+      3,
+      now
+    ),
+    normalizeLiveActivityTestMatch(
+      {
+        matchId: "test_multi_live_5",
+        date: now.toISOString().split("T")[0],
+        time: "20:15",
+        league: "UEFA Europa League",
+        homeTeam: "Roma",
+        awayTeam: "Leverkusen",
+        homeScore: 1,
+        awayScore: 1,
+        matchTime: "67'",
+        tvChannels: ["TNT Sports 1"],
+      },
+      4,
+      now
+    ),
+    normalizeLiveActivityTestMatch(
+      {
+        matchId: "test_multi_live_6",
+        date: now.toISOString().split("T")[0],
+        time: "20:15",
+        league: "FA Cup",
+        homeTeam: "Liverpool",
+        awayTeam: "Everton",
+        homeScore: 0,
+        awayScore: 1,
+        matchTime: "52'",
+        tvChannels: ["ITV1"],
+      },
+      5,
+      now
+    ),
+    normalizeLiveActivityTestMatch(
+      {
+        matchId: "test_multi_live_7",
+        date: now.toISOString().split("T")[0],
+        time: "20:30",
+        league: "UEFA Conference League",
+        homeTeam: "Fiorentina",
+        awayTeam: "Lille",
+        homeScore: 1,
+        awayScore: 0,
+        matchTime: "61'",
+        tvChannels: ["TNT Sports 2"],
+      },
+      6,
+      now
+    ),
+    normalizeLiveActivityTestMatch(
+      {
+        matchId: "test_multi_live_8",
+        date: now.toISOString().split("T")[0],
+        time: "20:30",
+        league: "EFL Cup",
+        homeTeam: "Newcastle United",
+        awayTeam: "Man City",
+        homeScore: 2,
+        awayScore: 2,
+        matchTime: "84'",
+        tvChannels: ["Sky Sports Football"],
+      },
+      7,
+      now
+    ),
+    normalizeLiveActivityTestMatch(
+      {
+        matchId: "test_multi_live_9",
+        date: now.toISOString().split("T")[0],
+        time: "20:45",
+        league: "Premier League",
+        homeTeam: "Spurs",
+        awayTeam: "West Ham",
+        homeScore: 1,
+        awayScore: 1,
+        matchTime: "73'",
+        tvChannels: ["Sky Sports Premier League"],
+      },
+      8,
+      now
+    ),
+    normalizeLiveActivityTestMatch(
+      {
+        matchId: "test_multi_live_10",
+        date: now.toISOString().split("T")[0],
+        time: "20:45",
+        league: "UEFA Champions League",
+        homeTeam: "Real Madrid",
+        awayTeam: "Bayern Munich",
+        homeScore: 0,
+        awayScore: 0,
+        matchTime: "33'",
+        tvChannels: ["TNT Sports 1"],
+      },
+      9,
+      now
+    ),
   ];
 }
 
@@ -6263,7 +6394,7 @@ function buildLiveActivityTestContentState(payload = {}) {
     .map((match, index) => normalizeLiveActivityTestMatch(match, index, now))
     .slice(0, 10);
   const delayLabel =
-    delayMinutes > 0 && mode.includes("live") ? `Delayed by ${delayMinutes}m` : null;
+    delayMinutes > 0 && mode.includes("live") ? `Delayed ${delayMinutes} m` : null;
 
   return {
     mode,

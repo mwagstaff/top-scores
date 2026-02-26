@@ -1749,7 +1749,7 @@ function liveActivityModeForMatches(liveMatches, upcomingMatches) {
 
 function buildLiveActivityContentState(mode, matches, delayMinutes, nowMs = Date.now()) {
   const delayLabel = delayMinutes > 0 && (mode === "single_live" || mode === "multi_live")
-    ? `Delayed by ${delayMinutes}m`
+    ? `Delayed ${delayMinutes} m`
     : null;
   const normalizedMatches = matches.map((match) => ({
     matchId: String(match.match_details_id || ""),

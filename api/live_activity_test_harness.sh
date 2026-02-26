@@ -53,6 +53,7 @@ else
 fi
 
 BASE_URL_INPUT_LOWER="$(printf '%s' "$BASE_URL_INPUT" | tr '[:upper:]' '[:lower:]')"
+TODAY="$(date +%Y-%m-%d)"
 
 case "$BASE_URL_INPUT_LOWER" in
   prod|production)
@@ -85,42 +86,200 @@ curl_json() {
   echo
 }
 
+multi_live_matches_json() {
+  cat <<EOF
+[
+  {
+    "matchId": "test_multi_live_1",
+    "date": "$TODAY",
+    "time": "19:45",
+    "league": "UEFA Champions League",
+    "leagueSubcategory": "Round of 16",
+    "homeTeam": "Atalanta",
+    "awayTeam": "Borussia Dortmund",
+    "homeScore": 2,
+    "awayScore": 0,
+    "aggregateHomeScore": 4,
+    "aggregateAwayScore": 2,
+    "matchTime": "45+2'",
+    "tvChannels": ["TNT Sports 1"]
+  },
+  {
+    "matchId": "test_multi_live_2",
+    "date": "$TODAY",
+    "time": "20:00",
+    "league": "Premier League",
+    "homeTeam": "Norwich City",
+    "awayTeam": "Sheffield Wednesday",
+    "homeScore": 1,
+    "awayScore": 1,
+    "matchTime": "55'",
+    "tvChannels": ["Sky Sports Main Event"]
+  },
+  {
+    "matchId": "test_multi_live_3",
+    "date": "$TODAY",
+    "time": "20:00",
+    "league": "UEFA Champions League",
+    "leagueSubcategory": "Round of 16",
+    "homeTeam": "Inter Milan",
+    "awayTeam": "Benfica",
+    "homeScore": 2,
+    "awayScore": 1,
+    "aggregateHomeScore": 3,
+    "aggregateAwayScore": 3,
+    "matchTime": "110'",
+    "tvChannels": ["TNT Sports 1"]
+  },
+  {
+    "matchId": "test_multi_live_4",
+    "date": "$TODAY",
+    "time": "20:00",
+    "league": "Premier League",
+    "homeTeam": "Arsenal",
+    "awayTeam": "Chelsea",
+    "homeScore": 3,
+    "awayScore": 2,
+    "matchTime": "78'",
+    "tvChannels": ["Sky Sports Main Event"]
+  },
+  {
+    "matchId": "test_multi_live_5",
+    "date": "$TODAY",
+    "time": "20:15",
+    "league": "UEFA Europa League",
+    "homeTeam": "Roma",
+    "awayTeam": "Leverkusen",
+    "homeScore": 1,
+    "awayScore": 1,
+    "matchTime": "67'",
+    "tvChannels": ["TNT Sports 1"]
+  },
+  {
+    "matchId": "test_multi_live_6",
+    "date": "$TODAY",
+    "time": "20:15",
+    "league": "FA Cup",
+    "homeTeam": "Liverpool",
+    "awayTeam": "Everton",
+    "homeScore": 0,
+    "awayScore": 1,
+    "matchTime": "52'",
+    "tvChannels": ["ITV1"]
+  },
+  {
+    "matchId": "test_multi_live_7",
+    "date": "$TODAY",
+    "time": "20:30",
+    "league": "UEFA Conference League",
+    "homeTeam": "Fiorentina",
+    "awayTeam": "Lille",
+    "homeScore": 1,
+    "awayScore": 0,
+    "matchTime": "61'",
+    "tvChannels": ["TNT Sports 2"]
+  },
+  {
+    "matchId": "test_multi_live_8",
+    "date": "$TODAY",
+    "time": "20:30",
+    "league": "EFL Cup",
+    "homeTeam": "Newcastle United",
+    "awayTeam": "Man City",
+    "homeScore": 2,
+    "awayScore": 2,
+    "matchTime": "84'",
+    "tvChannels": ["Sky Sports Football"]
+  },
+  {
+    "matchId": "test_multi_live_9",
+    "date": "$TODAY",
+    "time": "20:45",
+    "league": "Premier League",
+    "homeTeam": "Spurs",
+    "awayTeam": "West Ham",
+    "homeScore": 1,
+    "awayScore": 1,
+    "matchTime": "73'",
+    "tvChannels": ["Sky Sports Premier League"]
+  },
+  {
+    "matchId": "test_multi_live_10",
+    "date": "$TODAY",
+    "time": "20:45",
+    "league": "UEFA Champions League",
+    "homeTeam": "Real Madrid",
+    "awayTeam": "Bayern Munich",
+    "homeScore": 0,
+    "awayScore": 0,
+    "matchTime": "33'",
+    "tvChannels": ["TNT Sports 1"]
+  }
+]
+EOF
+}
+
 case "$ACTION" in
   state)
     curl_json GET "$BASE_URL/live-activity/test/state"
     ;;
   start)
-    curl_json POST "$BASE_URL/live-activity/test/start" "{
-      \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
-      \"mode\": \"$MODE\",
-      \"delayMinutes\": 5,
-      \"forceStart\": $FORCE_START_JSON,
-      \"fallbackStartOnUpdateFailure\": $FALLBACK_START_ON_UPDATE_FAILURE_JSON,
-      \"testHoldSeconds\": $TEST_HOLD_SECONDS_JSON,
-      \"title\": \"Top Scores Test\",
-      \"body\": \"Live Activity start test from CLI\"
-    }"
+    if [[ "$MODE" == "multi_live" ]]; then
+      MATCHES_JSON="$(multi_live_matches_json)"
+      curl_json POST "$BASE_URL/live-activity/test/start" "{
+        \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
+        \"mode\": \"$MODE\",
+        \"delayMinutes\": 5,
+        \"matches\": $MATCHES_JSON,
+        \"forceStart\": $FORCE_START_JSON,
+        \"fallbackStartOnUpdateFailure\": $FALLBACK_START_ON_UPDATE_FAILURE_JSON,
+        \"testHoldSeconds\": $TEST_HOLD_SECONDS_JSON,
+        \"title\": \"Top Scores Test\",
+        \"body\": \"Live Activity start test from CLI\"
+      }"
+    else
+      curl_json POST "$BASE_URL/live-activity/test/start" "{
+        \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
+        \"mode\": \"$MODE\",
+        \"delayMinutes\": 5,
+        \"forceStart\": $FORCE_START_JSON,
+        \"fallbackStartOnUpdateFailure\": $FALLBACK_START_ON_UPDATE_FAILURE_JSON,
+        \"testHoldSeconds\": $TEST_HOLD_SECONDS_JSON,
+        \"title\": \"Top Scores Test\",
+        \"body\": \"Live Activity start test from CLI\"
+      }"
+    fi
     ;;
   update)
-    curl_json POST "$BASE_URL/live-activity/test/update" "{
-      \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
-      \"mode\": \"$MODE\",
-      \"delayMinutes\": 5,
-      \"matches\": [
-        {
-          \"matchId\": \"test_live_1\",
-          \"date\": \"$(date +%Y-%m-%d)\",
-          \"time\": \"$(date +%H:%M)\",
-          \"league\": \"UEFA Champions League\",
-          \"homeTeam\": \"Atalanta\",
-          \"awayTeam\": \"Borussia Dortmund\",
-          \"homeScore\": 2,
-          \"awayScore\": 0,
-          \"matchTime\": \"45+2'\",
-          \"tvChannels\": [\"TNT Sports 1\"]
-        }
-      ]
-    }"
+    if [[ "$MODE" == "multi_live" ]]; then
+      MATCHES_JSON="$(multi_live_matches_json)"
+      curl_json POST "$BASE_URL/live-activity/test/update" "{
+        \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
+        \"mode\": \"$MODE\",
+        \"delayMinutes\": 5,
+        \"matches\": $MATCHES_JSON
+      }"
+    else
+      curl_json POST "$BASE_URL/live-activity/test/update" "{
+        \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
+        \"mode\": \"$MODE\",
+        \"delayMinutes\": 5,
+        \"matches\": [
+          {
+            \"matchId\": \"test_live_1\",
+            \"date\": \"$(date +%Y-%m-%d)\",
+            \"time\": \"$(date +%H:%M)\",
+            \"league\": \"UEFA Champions League\",
+            \"homeTeam\": \"Atalanta\",
+            \"awayTeam\": \"Borussia Dortmund\",
+            \"homeScore\": 2,
+            \"awayScore\": 0,
+            \"matchTime\": \"45+2'\",
+            \"tvChannels\": [\"TNT Sports 1\"]
+          }
+        ]
+      }"
+    fi
     ;;
   end)
     curl_json POST "$BASE_URL/live-activity/test/end" "{

@@ -273,6 +273,8 @@ Supported modes:
 - `multi_upcoming`
 - `multi_live`
 
+`multi_live` defaults to 10 fixtures for visual testing, including an ET/aggregate example (`110'`).
+
 Supported API target aliases:
 - `local` (default) -> `http://localhost:3011/api/v1`
 - `prod` -> `https://api.skynolimit.dev/top-scores/api/v1`
