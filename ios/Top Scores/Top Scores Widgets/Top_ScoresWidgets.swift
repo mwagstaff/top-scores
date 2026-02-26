@@ -2080,7 +2080,7 @@ private struct MultiMatchListView: View {
 
             return lhs.matchId.localizedCaseInsensitiveCompare(rhs.matchId) == .orderedAscending
         }
-        return Array(sorted.prefix(10))
+        return Array(sorted.prefix(8))
     }
 
     private var chunkedMatches: [[TopScoresLiveActivityMatchState]] {
@@ -2108,14 +2108,14 @@ private struct MultiMatchEntryCell: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            LiveActivityTeamLogo(teamName: match.homeTeam, size: 18)
-                .frame(width: 18, alignment: .center)
+            LiveActivityTeamLogo(teamName: match.homeTeam, size: 20)
+                .frame(width: 20, alignment: .center)
 
             Text(scoreText)
-                .font(.footnote.monospacedDigit().weight(.bold))
+                .font(.callout.monospacedDigit().weight(.bold))
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
-                .frame(width: 36, alignment: .center)
+                .minimumScaleFactor(0.7)
+                .frame(width: 88, alignment: .center)
 
             Text(timeText)
                 .font(.caption2.monospacedDigit())
@@ -2124,36 +2124,29 @@ private struct MultiMatchEntryCell: View {
                 .minimumScaleFactor(0.75)
                 .frame(width: 32, alignment: .center)
 
-            LiveActivityTeamLogo(teamName: match.awayTeam, size: 18)
-                .frame(width: 18, alignment: .center)
-
-            Text(aggregateText)
-                .font(.footnote.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .frame(width: 50, alignment: .leading)
+            LiveActivityTeamLogo(teamName: match.awayTeam, size: 20)
+                .frame(width: 20, alignment: .center)
         }
         .frame(minHeight: 22, alignment: .leading)
     }
 
     private var scoreText: String {
+        let liveScoreText: String
         if let home = match.homeScore, let away = match.awayScore {
-            return "\(home)-\(away)"
+            liveScoreText = "\(home) - \(away)"
+        } else {
+            liveScoreText = "vs"
         }
-        return "vs"
+        guard let homeAgg = match.aggregateHomeScore, let awayAgg = match.aggregateAwayScore else {
+            return liveScoreText
+        }
+        return "(\(homeAgg)) \(liveScoreText) (\(awayAgg))"
     }
 
     private var timeText: String {
         live ? (match.matchTime ?? match.time) : match.time
     }
 
-    private var aggregateText: String {
-        guard let homeAgg = match.aggregateHomeScore, let awayAgg = match.aggregateAwayScore else {
-            return "-"
-        }
-        return "A\(homeAgg)-\(awayAgg)"
-    }
 }
 
 @available(iOSApplicationExtension 16.1, *)
