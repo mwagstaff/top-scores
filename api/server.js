@@ -1476,6 +1476,7 @@ function isPenaltyShootoutStatusToken(status) {
 
 function pickPreferredMatchStatus(existingStatus, incomingStatus, options = {}) {
   const preferIncomingOnTie = options.preferIncomingOnTie !== false;
+  const allowTerminalRegression = options.allowTerminalRegression === true;
   const existing = normalizeMatchStatusValue(existingStatus);
   const incoming = normalizeMatchStatusValue(incomingStatus);
 
@@ -1486,13 +1487,17 @@ function pickPreferredMatchStatus(existingStatus, incomingStatus, options = {}) 
   const incomingToken = incoming.toUpperCase();
   const existingFinished = MATCH_STATUS_COMPLETE_TOKENS.has(existingToken);
   const incomingFinished = MATCH_STATUS_COMPLETE_TOKENS.has(incomingToken);
-
-  // Never regress a terminal status back to an in-progress token.
-  if (existingFinished && !incomingFinished) return existing;
-  if (incomingFinished && !existingFinished) return incoming;
-
   const existingMinute = parseMatchStatusMinute(existing);
   const incomingMinute = parseMatchStatusMinute(incoming);
+  const incomingLive =
+    incomingMinute !== null || MATCH_STATUS_IN_PROGRESS_TOKENS.has(incomingToken);
+
+  // Never regress a terminal status back to an in-progress token.
+  if (existingFinished && !incomingFinished) {
+    if (allowTerminalRegression && incomingLive) return incoming;
+    return existing;
+  }
+  if (incomingFinished && !existingFinished) return incoming;
 
   if (existingMinute !== null && incomingMinute !== null) {
     if (incomingMinute > existingMinute) return incoming;
@@ -1660,7 +1665,10 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
   merged.score_status = pickPreferredMatchStatus(
     existing && existing.score_status !== undefined ? existing.score_status : null,
     incoming && incoming.score_status !== undefined ? incoming.score_status : null,
-    { preferIncomingOnTie: true }
+    {
+      preferIncomingOnTie: true,
+      allowTerminalRegression: true,
+    }
   );
 
   MATCH_DETAILS_EVENT_FIELDS.forEach((field) => {
@@ -1756,7 +1764,10 @@ function buildMergedMatchDetailsCandidate(seedMatch, fetchedMatch, detailsUrl) {
   const preferredStatus = pickPreferredMatchStatus(
     seed.score_status || seed.match_time,
     fetched.score_status || fetched.match_time,
-    { preferIncomingOnTie: true }
+    {
+      preferIncomingOnTie: true,
+      allowTerminalRegression: true,
+    }
   );
   if (preferredStatus) {
     combined.score_status = preferredStatus;
@@ -3350,8 +3361,15 @@ function filterStaleBbcMatches(newMatches, cachedMatches) {
     // Check if the new match data is stale (match time has regressed)
     const newTime = parseMatchTimeMinutes(newMatch.match_time);
     const cachedTime = parseMatchTimeMinutes(cached.match_time);
+    const cachedStatus = normalizeMatchStatusValue(cached.match_time || cached.score_status);
+    const newStatus = normalizeMatchStatusValue(newMatch.match_time || newMatch.score_status);
+    const cachedIsTerminal = MATCH_STATUS_COMPLETE_TOKENS.has(
+      String(cachedStatus || "").toUpperCase()
+    );
+    const newIsInProgress = isInProgressMatchStatus(newStatus);
+    const allowTerminalRecovery = cachedIsTerminal && newIsInProgress;
 
-    if (newTime !== null && cachedTime !== null && newTime < cachedTime) {
+    if (!allowTerminalRecovery && newTime !== null && cachedTime !== null && newTime < cachedTime) {
       console.log(
         `[STALE DATA] Rejecting stale BBC data for ${newMatch.home_team} vs ${newMatch.away_team} - ` +
         `new time=${newTime}' cached time=${cachedTime}' (time regressed)`
@@ -3361,12 +3379,22 @@ function filterStaleBbcMatches(newMatches, cachedMatches) {
       return;
     }
 
+    if (allowTerminalRecovery) {
+      console.log(
+        `[STALE DATA] Allowing terminal recovery for ${newMatch.home_team} vs ${newMatch.away_team} - ` +
+        `cached status=${cached.match_time || cached.score_status || "unknown"}, ` +
+        `incoming status=${newMatch.match_time || newMatch.score_status || "unknown"}`
+      );
+    }
+
     // Check if scores have regressed
     if (cached.home_score !== null && cached.away_score !== null) {
       const cachedTotal = cached.home_score + cached.away_score;
       const newTotal = (newMatch.home_score || 0) + (newMatch.away_score || 0);
+      const timeNotAhead =
+        newTime !== null && cachedTime !== null ? newTime <= cachedTime : true;
 
-      if (newTotal < cachedTotal && newTime <= cachedTime) {
+      if (!allowTerminalRecovery && newTotal < cachedTotal && timeNotAhead) {
         console.log(
           `[STALE DATA] Rejecting stale BBC data for ${newMatch.home_team} vs ${newMatch.away_team} - ` +
           `scores regressed from ${cached.home_score}-${cached.away_score} to ${newMatch.home_score}-${newMatch.away_score}`

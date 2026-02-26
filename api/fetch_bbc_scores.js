@@ -520,6 +520,14 @@ function extractStatusFromText(text) {
   }
   const minuteApostropheMatch = minuteNormalized.match(/\b(\d{1,3}(?:\+\d{1,2})?)'/);
   if (minuteApostropheMatch) return minuteApostropheMatch[1];
+  const minuteWordsMatch = minuteNormalized.match(
+    /\b(\d{1,3})(?:\s*minutes?)(?:\s*plus\s*(\d{1,2}))?\b/i
+  );
+  if (minuteWordsMatch) {
+    const base = String(minuteWordsMatch[1] || "").trim();
+    const added = String(minuteWordsMatch[2] || "").trim();
+    return added ? `${base}+${added}` : base;
+  }
 
   return null;
 }
@@ -1137,42 +1145,43 @@ function pickEventScore(team) {
 
 function pickEventStatus(event) {
   const candidates = [
-    event.statusComment && event.statusComment.value,
     event.periodLabel && event.periodLabel.value,
-    event.statusComment && event.statusComment.accessible,
     event.periodLabel && event.periodLabel.accessible,
+    event.statusComment && event.statusComment.value,
+    event.statusComment && event.statusComment.accessible,
     event.status,
   ];
 
-  // Extract all possible statuses
-  const statuses = [];
-
+  let bestStatus = null;
+  let bestRank = Number.NEGATIVE_INFINITY;
   for (const candidate of candidates) {
     if (!candidate) continue;
     const status = extractStatusFromText(candidate);
-    if (status) {
-      statuses.push(status);
-      // Debug ALL matches that have "Pens" status
-      if (status === "Pens" || status === "AET") {
-      }
+    if (!status) continue;
+
+    const minuteMatch = String(status).match(/^(\d{1,3})(?:\+(\d{1,2}))?$/);
+    let rank = 0;
+    if (minuteMatch) {
+      const base = Number(minuteMatch[1]);
+      const added = Number(minuteMatch[2] || 0);
+      rank = 1000 + base + added;
+    } else {
+      const token = String(status).toUpperCase();
+      if (token === "LIVE") rank = 900;
+      else if (token === "ET") rank = 800;
+      else if (token === "HT") rank = 700;
+      else if (token === "PENS" || token === "PEN" || token === "PEN.") rank = 650;
+      else if (token === "AET") rank = 600;
+      else if (token === "FT") rank = 500;
+    }
+
+    if (rank > bestRank) {
+      bestRank = rank;
+      bestStatus = status;
     }
   }
 
-  if (statuses.length === 0) return null;
-
-  // Prefer "AET" over "Pens" - if we found both, return AET
-  // This handles the case where the match is complete after penalties
-  if (statuses.includes("AET")) {
-    if (statuses.includes("Pens")) {
-    }
-    return "AET";
-  }
-
-  if (statuses.includes("Pens")) {
-  }
-
-  // Otherwise return the first status found
-  return statuses[0];
+  return bestStatus;
 }
 
 function extractMatchFromEvent(event) {
@@ -2287,5 +2296,6 @@ module.exports = {
     parseMatchesFromDom,
     pickCompetitionName,
     selectMatchCandidateByDetailsUrl,
+    pickEventStatus,
   },
 };

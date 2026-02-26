@@ -153,6 +153,20 @@ test("extractStatusFromText does not treat aggregate text as live minute", () =>
   assert.equal(__private.extractStatusFromText("3'"), "3");
 });
 
+test("extractStatusFromText parses minute-word formats", () => {
+  assert.equal(__private.extractStatusFromText("24 minutes"), "24");
+  assert.equal(__private.extractStatusFromText("45 minutes plus 2"), "45+2");
+});
+
+test("pickEventStatus prefers live minute over conflicting FT token", () => {
+  const event = {
+    periodLabel: { accessible: "24 minutes" },
+    statusComment: { value: "FT" },
+    status: "FT",
+  };
+  assert.equal(__private.pickEventStatus(event), "24");
+});
+
 test("parseMatchesFromDom ignores aggregate-only fixture cards", () => {
   const html = `
     <article data-event-id="cdxzkljkjxkt">
