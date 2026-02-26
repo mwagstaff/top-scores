@@ -8,7 +8,7 @@ usage() {
   cat <<'EOF'
 Usage:
   live_activity_test_harness.sh state  <USER_DEVICE_TOKEN> [BASE_URL|prod|local]
-  live_activity_test_harness.sh start  <USER_DEVICE_TOKEN> [BASE_URL|prod|local] [MODE] [FORCE_START] [FALLBACK_START_ON_UPDATE_FAILURE]
+  live_activity_test_harness.sh start  <USER_DEVICE_TOKEN> [BASE_URL|prod|local] [MODE] [FORCE_START] [FALLBACK_START_ON_UPDATE_FAILURE] [TEST_HOLD_SECONDS]
   live_activity_test_harness.sh update <USER_DEVICE_TOKEN> [BASE_URL|prod|local] [MODE]
   live_activity_test_harness.sh end    <USER_DEVICE_TOKEN> [BASE_URL|prod|local]
 
@@ -18,6 +18,7 @@ Examples:
   ./live_activity_test_harness.sh start  2F4A... prod single_live
   ./live_activity_test_harness.sh start  2F4A... prod single_live true
   ./live_activity_test_harness.sh start  2F4A... prod single_live false true
+  ./live_activity_test_harness.sh start  2F4A... prod single_live false false 600
   ./live_activity_test_harness.sh update 2F4A... http://localhost:3011/api/v1 single_live
   ./live_activity_test_harness.sh end    2F4A...
 EOF
@@ -34,6 +35,7 @@ BASE_URL_INPUT="${3:-local}"
 MODE="${4:-single_live}"
 FORCE_START_RAW="${5:-false}"
 FALLBACK_START_ON_UPDATE_FAILURE_RAW="${6:-false}"
+TEST_HOLD_SECONDS_RAW="${7:-300}"
 FORCE_START_LOWER="$(printf '%s' "$FORCE_START_RAW" | tr '[:upper:]' '[:lower:]')"
 FALLBACK_START_ON_UPDATE_FAILURE_LOWER="$(printf '%s' "$FALLBACK_START_ON_UPDATE_FAILURE_RAW" | tr '[:upper:]' '[:lower:]')"
 FORCE_START_JSON=false
@@ -43,6 +45,11 @@ if [[ "$FORCE_START_LOWER" == "true" || "$FORCE_START_LOWER" == "1" || "$FORCE_S
 fi
 if [[ "$FALLBACK_START_ON_UPDATE_FAILURE_LOWER" == "true" || "$FALLBACK_START_ON_UPDATE_FAILURE_LOWER" == "1" || "$FALLBACK_START_ON_UPDATE_FAILURE_LOWER" == "yes" ]]; then
   FALLBACK_START_ON_UPDATE_FAILURE_JSON=true
+fi
+if [[ "$TEST_HOLD_SECONDS_RAW" =~ ^[0-9]+$ ]]; then
+  TEST_HOLD_SECONDS_JSON="$TEST_HOLD_SECONDS_RAW"
+else
+  TEST_HOLD_SECONDS_JSON=300
 fi
 
 BASE_URL_INPUT_LOWER="$(printf '%s' "$BASE_URL_INPUT" | tr '[:upper:]' '[:lower:]')"
@@ -89,6 +96,7 @@ case "$ACTION" in
       \"delayMinutes\": 5,
       \"forceStart\": $FORCE_START_JSON,
       \"fallbackStartOnUpdateFailure\": $FALLBACK_START_ON_UPDATE_FAILURE_JSON,
+      \"testHoldSeconds\": $TEST_HOLD_SECONDS_JSON,
       \"title\": \"Top Scores Test\",
       \"body\": \"Live Activity start test from CLI\"
     }"

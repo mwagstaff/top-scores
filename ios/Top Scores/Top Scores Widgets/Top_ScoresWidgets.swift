@@ -1181,6 +1181,10 @@ private final class WidgetTeamLogoResolver {
     private var normalizedLookup: [String: URL] = [:]
     private var coreLookup: [String: [URL]] = [:]
     private var originalLookup: [String: URL] = [:]
+    private var assetNormalizedLookup: [String: String] = [:]
+    private var assetCoreLookup: [String: [String]] = [:]
+    private var assetOriginalLookup: [String: String] = [:]
+    private var fallbackAssetName: String?
     private var cache: [String: UIImage] = [:]
 
     private init() {
@@ -1218,7 +1222,11 @@ private final class WidgetTeamLogoResolver {
 
     private func loadLogos() {
         let urls = bundles.flatMap { bundle in
-            bundle.urls(forResourcesWithExtension: "png", subdirectory: "team-logos") ?? []
+            var resolved = bundle.urls(forResourcesWithExtension: "png", subdirectory: "team-logos") ?? []
+            if resolved.isEmpty {
+                resolved = bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []
+            }
+            return resolved
         }
         for url in urls {
             let fileName = url.deletingPathExtension().lastPathComponent
@@ -1231,76 +1239,161 @@ private final class WidgetTeamLogoResolver {
             originalLookup[fileName.lowercased()] = originalLookup[fileName.lowercased()] ?? url
         }
 
+        loadAssetCatalogLogos()
+
         NSLog("[Widget] team logos file fallback loaded count=\(urls.count)")
     }
 
     private static func logoBundles() -> [Bundle] {
-        var bundles: [Bundle] = [Bundle.main]
-        let bundleURL = Bundle.main.bundleURL
-        if bundleURL.pathExtension == "appex" {
-            let containingAppURL = bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        var output: [Bundle] = []
+        var seenURLs = Set<URL>()
+
+        for bundle in [Bundle.main] + Bundle.allBundles + Bundle.allFrameworks {
+            let url = bundle.bundleURL
+            guard !seenURLs.contains(url) else { continue }
+            seenURLs.insert(url)
+            output.append(bundle)
+        }
+
+        let mainBundleURL = Bundle.main.bundleURL
+        if mainBundleURL.pathExtension == "appex" {
+            let containingAppURL = mainBundleURL.deletingLastPathComponent().deletingLastPathComponent()
             if let containingAppBundle = Bundle(url: containingAppURL) {
-                bundles.append(containingAppBundle)
+                let url = containingAppBundle.bundleURL
+                if !seenURLs.contains(url) {
+                    seenURLs.insert(url)
+                    output.append(containingAppBundle)
+                }
             }
         }
-        return bundles
+
+        return output
+    }
+
+    private func loadAssetCatalogLogos() {
+        var loadedNames = Set<String>()
+        for bundle in bundles {
+            guard let manifestURL = bundle.url(forResource: "team_logo_assets", withExtension: "json"),
+                  let data = try? Data(contentsOf: manifestURL),
+                  let assetNames = try? JSONDecoder().decode([String].self, from: data) else {
+                continue
+            }
+
+            for name in assetNames {
+                let key = name.lowercased()
+                guard loadedNames.insert(key).inserted else { continue }
+                registerAssetName(name)
+            }
+        }
+    }
+
+    private func registerAssetName(_ name: String) {
+        let normalized = Self.normalizedKey(name)
+        assetNormalizedLookup[normalized] = assetNormalizedLookup[normalized] ?? name
+
+        let core = Self.normalizedCoreKey(name)
+        if !core.isEmpty {
+            assetCoreLookup[core, default: []].append(name)
+        }
+
+        assetOriginalLookup[name.lowercased()] = assetOriginalLookup[name.lowercased()] ?? name
+        if Self.isFallbackName(name) {
+            fallbackAssetName = name
+        }
     }
 
     private func resolveAssetImage(for teamName: String) -> UIImage? {
-        let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        for candidate in assetNameCandidates(for: trimmed) {
-            for bundle in bundles {
-                if let image = UIImage(named: candidate, in: bundle, compatibleWith: nil) {
-                    return image
-                }
-            }
-        }
-
-        return nil
+        guard let assetName = resolveAssetName(for: teamName) else { return nil }
+        return imageFromAssets(named: assetName)
     }
 
     private func resolveAssetFallbackImage() -> UIImage? {
+        if let fallbackAssetName {
+            if let image = imageFromAssets(named: fallbackAssetName) {
+                return image
+            }
+        }
+
         for candidate in [fallbackName, "\(fallbackName) 1"] {
-            for bundle in bundles {
-                if let image = UIImage(named: candidate, in: bundle, compatibleWith: nil) {
-                    return image
-                }
+            if let image = imageFromAssets(named: candidate) {
+                return image
+            }
+        }
+
+        return nil
+    }
+
+    private func imageFromAssets(named name: String) -> UIImage? {
+        for bundle in bundles {
+            if let image = UIImage(named: name, in: bundle, compatibleWith: nil) {
+                return image
             }
         }
         return nil
     }
 
-    private func assetNameCandidates(for teamName: String) -> [String] {
-        var candidates: [String] = []
-        var seen = Set<String>()
+    private func resolveAssetName(for teamName: String) -> String? {
+        let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
 
-        func add(_ value: String?) {
-            guard let value else { return }
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-            let key = trimmed.lowercased()
-            guard seen.insert(key).inserted else { return }
-            candidates.append(trimmed)
+        let lower = trimmed.lowercased()
+        if let direct = assetOriginalLookup[lower] {
+            return direct
         }
 
-        add(teamName)
-        add(teamName.replacingOccurrences(of: "’", with: "'"))
-        add(teamName.replacingOccurrences(of: "'", with: ""))
+        for alias in Self.aliases(for: trimmed) {
+            if let directAlias = assetOriginalLookup[alias] {
+                return directAlias
+            }
 
-        let lowered = teamName.lowercased()
-        if let alias = Self.aliasMap[lowered] {
-            add(alias)
-            add(Self.displayName(forAlias: alias))
+            let aliasKey = Self.normalizedKey(alias)
+            if let match = assetNormalizedLookup[aliasKey] {
+                return match
+            }
         }
 
-        for (fullName, alias) in Self.aliasMap where alias == lowered {
-            add(fullName)
-            add(Self.displayName(forAlias: fullName))
+        let normalized = Self.normalizedKey(trimmed)
+        if let match = assetNormalizedLookup[normalized] {
+            return match
         }
 
-        return candidates
+        let core = Self.normalizedCoreKey(trimmed)
+        if let uniqueCoreMatch = uniqueAssetCoreMatch(for: core) {
+            return uniqueCoreMatch
+        }
+
+        return fuzzyAssetMatch(normalizedTeam: normalized)
+    }
+
+    private func uniqueAssetCoreMatch(for coreKey: String) -> String? {
+        guard !coreKey.isEmpty else { return nil }
+        guard let candidates = assetCoreLookup[coreKey], !candidates.isEmpty else { return nil }
+
+        var seenNames = Set<String>()
+        let unique = candidates.filter { seenNames.insert($0.lowercased()).inserted }
+        guard unique.count == 1 else { return nil }
+        return unique[0]
+    }
+
+    private func fuzzyAssetMatch(normalizedTeam: String) -> String? {
+        guard !normalizedTeam.isEmpty else { return nil }
+
+        var bestKey: String?
+        var bestScore = 0.0
+
+        for key in assetNormalizedLookup.keys {
+            let score = Self.similarity(normalizedTeam, key)
+            if score > bestScore {
+                bestScore = score
+                bestKey = key
+            }
+        }
+
+        if let bestKey, bestScore >= 0.78 {
+            return assetNormalizedLookup[bestKey]
+        }
+
+        return nil
     }
 
     private static func displayName(forAlias alias: String) -> String {
@@ -1488,6 +1581,12 @@ private final class WidgetTeamLogoResolver {
         "inter milan": "inter",
         "ac milan": "ac milan"
     ]
+
+    private static func isFallbackName(_ name: String) -> Bool {
+        let fallback = normalizedKey("_noTeamLogo")
+        let normalized = normalizedKey(name)
+        return normalized == fallback || normalized.hasPrefix(fallback)
+    }
 }
 
 private final class WidgetTvLogoResolver {
@@ -1525,7 +1624,11 @@ private final class WidgetTvLogoResolver {
 
     private func loadLogos() {
         let urls = logoBundles().flatMap { bundle in
-            bundle.urls(forResourcesWithExtension: "png", subdirectory: "tv-logos") ?? []
+            var resolved = bundle.urls(forResourcesWithExtension: "png", subdirectory: "tv-logos") ?? []
+            if resolved.isEmpty {
+                resolved = bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []
+            }
+            return resolved
         }
         for url in urls {
             let fileName = url.deletingPathExtension().lastPathComponent
@@ -1536,15 +1639,29 @@ private final class WidgetTvLogoResolver {
     }
 
     private func logoBundles() -> [Bundle] {
-        var bundles: [Bundle] = [Bundle.main]
-        let bundleURL = Bundle.main.bundleURL
-        if bundleURL.pathExtension == "appex" {
-            let containingAppURL = bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        var output: [Bundle] = []
+        var seenURLs = Set<URL>()
+
+        for bundle in [Bundle.main] + Bundle.allBundles + Bundle.allFrameworks {
+            let url = bundle.bundleURL
+            guard !seenURLs.contains(url) else { continue }
+            seenURLs.insert(url)
+            output.append(bundle)
+        }
+
+        let mainBundleURL = Bundle.main.bundleURL
+        if mainBundleURL.pathExtension == "appex" {
+            let containingAppURL = mainBundleURL.deletingLastPathComponent().deletingLastPathComponent()
             if let containingAppBundle = Bundle(url: containingAppURL) {
-                bundles.append(containingAppBundle)
+                let url = containingAppBundle.bundleURL
+                if !seenURLs.contains(url) {
+                    seenURLs.insert(url)
+                    output.append(containingAppBundle)
+                }
             }
         }
-        return bundles
+
+        return output
     }
 
     private func resolveURL(for channelName: String) -> URL? {
@@ -1923,53 +2040,93 @@ private struct MultiMatchListView: View {
     let live: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(Array(chunkedMatches.enumerated()), id: \.offset) { _, rowMatches in
-                HStack(spacing: 10) {
-                    ForEach(rowMatches, id: \.matchId) { match in
-                        MultiMatchCell(match: match, live: live)
-                    }
-                    Spacer(minLength: 0)
-                }
+        Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 3) {
+            ForEach(visibleMatches, id: \.matchId) { match in
+                MultiMatchGridRow(match: match, live: live)
             }
         }
     }
 
-    private var chunkedMatches: [[TopScoresLiveActivityMatchState]] {
-        let limit = Array(matches.prefix(10))
-        return stride(from: 0, to: limit.count, by: 2).map { index in
-            Array(limit[index..<min(index + 2, limit.count)])
+    private var visibleMatches: [TopScoresLiveActivityMatchState] {
+        let sorted = matches.sorted { lhs, rhs in
+            let leftWeight = competitionWeight(for: lhs)
+            let rightWeight = competitionWeight(for: rhs)
+            if leftWeight != rightWeight {
+                return leftWeight > rightWeight
+            }
+
+            let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
+            if homeCompare != .orderedSame {
+                return homeCompare == .orderedAscending
+            }
+
+            let awayCompare = lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam)
+            if awayCompare != .orderedSame {
+                return awayCompare == .orderedAscending
+            }
+
+            return lhs.matchId.localizedCaseInsensitiveCompare(rhs.matchId) == .orderedAscending
         }
+        return Array(sorted.prefix(10))
+    }
+
+    private func competitionWeight(for match: TopScoresLiveActivityMatchState) -> Double {
+        if let subcategory = match.leagueSubcategory?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !subcategory.isEmpty {
+            let displayLeague = "\(match.league): \(subcategory)"
+            if let displayWeight = WidgetCompetitionWeightConfig.weight(for: displayLeague) {
+                return displayWeight
+            }
+        }
+        return WidgetCompetitionWeightConfig.weight(for: match.league) ?? 0
     }
 }
 
 @available(iOSApplicationExtension 16.1, *)
-private struct MultiMatchCell: View {
+private struct MultiMatchGridRow: View {
     let match: TopScoresLiveActivityMatchState
     let live: Bool
 
     var body: some View {
-        HStack(spacing: 3) {
+        GridRow {
             Text(match.time)
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 34, alignment: .leading)
+
             LiveActivityTeamLogo(teamName: match.homeTeam, size: 12)
+
+            Text(WidgetNameFormatter.abbreviated(match.homeTeam, length: 9))
+                .font(.caption2)
+                .lineLimit(1)
+                .frame(width: 54, alignment: .trailing)
+
             if live {
-                Text("\(match.homeScore ?? 0)")
+                Text("\(match.homeScore ?? 0)-\(match.awayScore ?? 0)")
                     .font(.caption2.monospacedDigit().weight(.semibold))
-                if let matchTime = match.matchTime {
-                    Text(matchTime)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Text("\(match.awayScore ?? 0)")
-                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .lineLimit(1)
+                    .frame(width: 30, alignment: .center)
             } else {
                 Text("vs")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(width: 30, alignment: .center)
             }
+
+            Text(WidgetNameFormatter.abbreviated(match.awayTeam, length: 9))
+                .font(.caption2)
+                .lineLimit(1)
+                .frame(width: 54, alignment: .leading)
+
             LiveActivityTeamLogo(teamName: match.awayTeam, size: 12)
+
+            Text(live ? (match.matchTime ?? "-") : "-")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 20, alignment: .trailing)
         }
     }
 }

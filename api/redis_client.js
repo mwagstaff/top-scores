@@ -317,6 +317,9 @@ function normalizeLiveActivityStatePatch(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "lastEndedAt")) {
     normalized.lastEndedAt = normalizeOptionalToken(patch.lastEndedAt);
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "testHoldUntil")) {
+    normalized.testHoldUntil = normalizeOptionalToken(patch.testHoldUntil);
+  }
   return normalized;
 }
 

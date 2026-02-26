@@ -257,6 +257,9 @@ cd api
 # Force a brand new START push even if an activity already exists (debug only)
 ./live_activity_test_harness.sh start <USER_DEVICE_TOKEN> prod single_live true
 
+# Keep test activity pinned for 10 minutes before auto-reconciler can end it
+./live_activity_test_harness.sh start <USER_DEVICE_TOKEN> prod single_live false false 600
+
 # Send a test UPDATE push
 ./live_activity_test_harness.sh update <USER_DEVICE_TOKEN> http://localhost:3011/api/v1 single_live
 
@@ -277,6 +280,7 @@ Supported API target aliases:
 `start` behavior:
 - Default: upsert (updates existing Live Activity if activity token exists; starts new only when none exists)
 - Optional `FORCE_START=true` to explicitly create a new activity for debugging
+- Optional `TEST_HOLD_SECONDS` (default `300`, range `30-1800`) to suppress auto-end briefly while testing UI
 
 ### Raw API endpoints (if you prefer curl directly)
 

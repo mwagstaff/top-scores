@@ -5315,6 +5315,7 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
       lastPayloadHash: null,
       lastMode: null,
       lastEndedAt: nowIso,
+      testHoldUntil: null,
     };
     if (normalizedActivityId) {
       patch.currentActivityId = normalizedActivityId;
@@ -6076,6 +6077,12 @@ function normalizeLiveActivityTestDelay(value, fallback = 0) {
   return Math.max(0, Math.min(10, Math.floor(parsed)));
 }
 
+function normalizeLiveActivityTestHoldSeconds(value, fallback = 300) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(30, Math.min(1800, Math.floor(parsed)));
+}
+
 function liveActivityNowTimeLabel(now = new Date()) {
   return now.toLocaleTimeString("en-GB", {
     hour: "2-digit",
@@ -6362,6 +6369,8 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
     const body = String(payload.body || "Live Activity test start").trim();
     const timestamp = Math.floor(Date.now() / 1000);
     const fallbackStartOnUpdateFailure = payload.fallbackStartOnUpdateFailure === true;
+    const testHoldSeconds = normalizeLiveActivityTestHoldSeconds(payload.testHoldSeconds, 300);
+    const testHoldUntil = new Date((timestamp + testHoldSeconds) * 1000).toISOString();
 
     if (activityPushToken && !forceStart) {
       const updateResult = await sendLiveActivityPush({
@@ -6379,6 +6388,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
             pendingStartAt: null,
             lastMode: contentState.mode,
             lastDispatchAt: new Date().toISOString(),
+            testHoldUntil,
           },
           {
             isDevelopmentBuild,
@@ -6389,6 +6399,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
           userDeviceToken,
           dispatch: "update_existing",
           forceStart,
+          testHoldSeconds,
           result: updateResult,
           contentState,
         });
@@ -6406,6 +6417,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
             pendingStartAt: null,
             lastMode: null,
             lastDispatchAt: new Date().toISOString(),
+            testHoldUntil: null,
           },
           {
             isDevelopmentBuild,
@@ -6436,6 +6448,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
               lastStartAt: new Date().toISOString(),
               lastMode: contentState.mode,
               lastDispatchAt: new Date().toISOString(),
+              testHoldUntil,
             },
             {
               isDevelopmentBuild,
@@ -6448,6 +6461,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
           userDeviceToken,
           dispatch: "fallback_start_after_update_failure",
           forceStart,
+          testHoldSeconds,
           updateResult,
           result: fallbackStartResult,
           contentState,
@@ -6488,6 +6502,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
           lastStartAt: new Date().toISOString(),
           lastMode: contentState.mode,
           lastDispatchAt: new Date().toISOString(),
+          testHoldUntil,
         },
         {
           isDevelopmentBuild,
@@ -6500,6 +6515,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
       userDeviceToken,
       dispatch: "start_new",
       forceStart,
+      testHoldSeconds,
       result,
       contentState,
     });
@@ -6614,6 +6630,7 @@ app.post(`${API_PREFIX}/live-activity/test/end`, async (req, res) => {
           lastMode: null,
           lastPayloadHash: null,
           lastEndedAt: new Date().toISOString(),
+          testHoldUntil: null,
         },
         {
           isDevelopmentBuild,
@@ -6652,6 +6669,7 @@ app.post(`${API_PREFIX}/live-activity/test/end`, async (req, res) => {
           lastMode: null,
           lastPayloadHash: null,
           lastEndedAt: new Date().toISOString(),
+          testHoldUntil: null,
         },
         {
           isDevelopmentBuild,

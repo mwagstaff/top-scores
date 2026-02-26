@@ -1816,9 +1816,14 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const pendingStartAtMs = Date.parse(String(state.pendingStartAt || ""));
   const hasPendingStart = Number.isFinite(pendingStartAtMs);
   const pendingAgeMs = hasPendingStart ? nowMs - pendingStartAtMs : 0;
+  const testHoldUntilMs = Date.parse(String(state.testHoldUntil || ""));
+  const isTestHoldActive = Number.isFinite(testHoldUntilMs) && nowMs < testHoldUntilMs;
   const shouldDisplay = Boolean(presentation && presentation.mode && presentation.matches.length > 0);
 
   if (!shouldDisplay) {
+    if (isTestHoldActive) {
+      return;
+    }
     if (hasPendingStart) {
       await persistLiveActivityPatch(user, {
         pendingStartAt: null,
@@ -1848,6 +1853,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       lastMode: null,
       lastDispatchAt: new Date(nowMs).toISOString(),
       lastEndedAt: new Date(nowMs).toISOString(),
+      testHoldUntil: null,
     };
     if (!result.success && !isTerminalLiveActivityError(result)) {
       return;

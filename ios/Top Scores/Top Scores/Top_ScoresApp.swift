@@ -56,6 +56,7 @@ struct Top_ScoresApp: App {
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        LiveActivitySyncService.shared.start()
 
         // Request notification authorization
         Task {
