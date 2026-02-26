@@ -6061,6 +6061,7 @@ const LIVE_ACTIVITY_TEST_MODES = new Set([
   "multi_upcoming",
   "multi_live",
 ]);
+const LIVE_ACTIVITY_TEST_PENDING_START_MAX_SECONDS = 8 * 60 * 60;
 
 function normalizeLiveActivityTestMode(value, fallback = "single_live") {
   const normalized = String(value || "")
@@ -6472,14 +6473,18 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
 
   try {
     const record = await getUserPreferences(userDeviceToken);
+    const liveActivityState =
+      record && record.liveActivity && typeof record.liveActivity === "object"
+        ? record.liveActivity
+        : {};
     const explicitActivityPushToken = normalizeLiveActivityToken(payload.activityPushToken);
     const storedActivityPushToken = normalizeLiveActivityToken(
-      record && record.liveActivity ? record.liveActivity.currentActivityPushToken : ""
+      liveActivityState.currentActivityPushToken
     );
     const activityPushToken = explicitActivityPushToken || storedActivityPushToken;
     const explicitPushToStartToken = normalizeLiveActivityToken(payload.pushToStartToken);
     const storedPushToStartToken = normalizeLiveActivityToken(
-      record && record.liveActivity ? record.liveActivity.pushToStartToken : ""
+      liveActivityState.pushToStartToken
     );
     const pushToStartToken = explicitPushToStartToken || storedPushToStartToken;
     const forceStart = payload.forceStart === true;
@@ -6502,6 +6507,45 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
     const fallbackStartOnUpdateFailure = payload.fallbackStartOnUpdateFailure === true;
     const testHoldSeconds = normalizeLiveActivityTestHoldSeconds(payload.testHoldSeconds, 300);
     const testHoldUntil = new Date((timestamp + testHoldSeconds) * 1000).toISOString();
+    const pendingStartAtMs = Date.parse(String(liveActivityState.pendingStartAt || ""));
+    const hasPendingStart = Number.isFinite(pendingStartAtMs);
+    const pendingStartAgeSeconds = hasPendingStart
+      ? Math.max(0, Math.floor(Date.now() / 1000 - pendingStartAtMs / 1000))
+      : null;
+    const pendingStartIsFresh =
+      hasPendingStart &&
+      pendingStartAgeSeconds !== null &&
+      pendingStartAgeSeconds < LIVE_ACTIVITY_TEST_PENDING_START_MAX_SECONDS;
+
+    if (hasPendingStart && !pendingStartIsFresh) {
+      await updateUserLiveActivityState(
+        userDeviceToken,
+        {
+          pendingStartAt: null,
+          lastPayloadHash: null,
+          lastMode: null,
+          testHoldUntil: null,
+        },
+        {
+          isDevelopmentBuild,
+        }
+      );
+    }
+
+    if (!activityPushToken && pendingStartIsFresh) {
+      res.status(200).json({
+        success: true,
+        userDeviceToken,
+        dispatch: "pending_start_in_progress",
+        forceStart,
+        testHoldSeconds,
+        message:
+          "A previous start is still pending activity token callback; skipping duplicate start to enforce a single active Live Activity.",
+        pendingStartAgeSeconds,
+        contentState,
+      });
+      return;
+    }
 
     if (activityPushToken && !forceStart) {
       const updateResult = await sendLiveActivityPush({
@@ -6609,6 +6653,55 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
         contentState,
       });
       return;
+    }
+
+    if (activityPushToken && forceStart) {
+      const endExistingResult = await sendLiveActivityPush({
+        token: activityPushToken,
+        event: "end",
+        contentState: {
+          mode: "ended",
+          generatedAtEpochSeconds: timestamp,
+          delayMinutes: 0,
+          delayLabel: null,
+          matches: [],
+        },
+        dismissalDate: timestamp + 30,
+        isDevelopmentBuild,
+      });
+
+      const terminalEndFailure =
+        Boolean(endExistingResult && endExistingResult.isTerminal) ||
+        isLiveActivityTerminalResult(endExistingResult);
+      if (!endExistingResult.success && !terminalEndFailure) {
+        res.status(502).json({
+          success: false,
+          userDeviceToken,
+          dispatch: "force_start_failed_to_end_existing",
+          forceStart,
+          testHoldSeconds,
+          result: endExistingResult,
+          contentState,
+        });
+        return;
+      }
+
+      await updateUserLiveActivityState(
+        userDeviceToken,
+        {
+          currentActivityPushToken: null,
+          currentActivityId: null,
+          pendingStartAt: null,
+          lastPayloadHash: null,
+          lastMode: null,
+          lastDispatchAt: new Date().toISOString(),
+          lastEndedAt: new Date().toISOString(),
+          testHoldUntil: null,
+        },
+        {
+          isDevelopmentBuild,
+        }
+      );
     }
 
     const result = await sendLiveActivityPush({

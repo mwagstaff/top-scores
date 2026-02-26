@@ -1808,6 +1808,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
 
     var body: some View {
+        let isMultiMode = state.mode == "multi_live" || state.mode == "multi_upcoming"
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 switch state.mode {
@@ -1832,7 +1833,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, isMultiMode ? 6 : 8)
 
             if let bannerText = delayBannerText {
                 HStack {
@@ -2043,9 +2044,9 @@ private struct MultiMatchListView: View {
     let live: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(chunkedMatches.enumerated()), id: \.offset) { _, rowMatches in
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     ForEach(Array(rowMatches.enumerated()), id: \.offset) { _, match in
                         MultiMatchEntryCell(match: match, live: live)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2106,15 +2107,15 @@ private struct MultiMatchEntryCell: View {
     let live: Bool
 
     var body: some View {
-        HStack(spacing: 4) {
-            LiveActivityTeamLogo(teamName: match.homeTeam, size: 14)
-                .frame(width: 14, alignment: .center)
+        HStack(spacing: 6) {
+            LiveActivityTeamLogo(teamName: match.homeTeam, size: 18)
+                .frame(width: 18, alignment: .center)
 
             Text(scoreText)
-                .font(.caption.monospacedDigit().weight(.bold))
+                .font(.footnote.monospacedDigit().weight(.bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
-                .frame(width: 30, alignment: .center)
+                .frame(width: 36, alignment: .center)
 
             Text(timeText)
                 .font(.caption2.monospacedDigit())
@@ -2123,16 +2124,17 @@ private struct MultiMatchEntryCell: View {
                 .minimumScaleFactor(0.75)
                 .frame(width: 32, alignment: .center)
 
-            LiveActivityTeamLogo(teamName: match.awayTeam, size: 14)
-                .frame(width: 14, alignment: .center)
+            LiveActivityTeamLogo(teamName: match.awayTeam, size: 18)
+                .frame(width: 18, alignment: .center)
 
             Text(aggregateText)
-                .font(.caption.monospacedDigit().weight(.semibold))
+                .font(.footnote.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-                .frame(width: 40, alignment: .leading)
+                .frame(width: 50, alignment: .leading)
         }
+        .frame(minHeight: 22, alignment: .leading)
     }
 
     private var scoreText: String {
