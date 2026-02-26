@@ -1842,7 +1842,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
         delayLabel: null,
         matches: [],
       },
-      dismissalDate: Math.floor(nowMs / 1000) + 60,
+      dismissalDate: Math.floor(nowMs / 1000),
       isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
     });
     const patch = {

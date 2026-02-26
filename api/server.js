@@ -6666,7 +6666,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
           delayLabel: null,
           matches: [],
         },
-        dismissalDate: timestamp + 30,
+        dismissalDate: timestamp,
         isDevelopmentBuild,
       });
 
@@ -6879,7 +6879,7 @@ app.post(`${API_PREFIX}/live-activity/test/end`, async (req, res) => {
         delayLabel: null,
         matches: [],
       },
-      dismissalDate: timestamp + 30,
+      dismissalDate: timestamp,
       isDevelopmentBuild,
     });
 

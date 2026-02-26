@@ -1828,6 +1828,8 @@ private struct TopScoresLiveActivityLockScreenView: View {
                     MultiMatchListView(matches: state.matches, live: false)
                 case "multi_live":
                     MultiMatchListView(matches: state.matches, live: true)
+                case "ended":
+                    EndedLiveActivityView()
                 default:
                     EmptyLiveActivityView()
                 }
@@ -2215,6 +2217,14 @@ private struct LiveActivityChannelLogo: View {
             }
         }
         .frame(width: size * 1.8, height: size)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct EndedLiveActivityView: View {
+    var body: some View {
+        Color.clear
+            .frame(height: 1)
     }
 }
 
