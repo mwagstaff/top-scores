@@ -27,6 +27,8 @@ enum MatchScoreResolver {
     private static let swappedPenalty = 0.08
     private static let prefixBoost = 0.35
     private static let singleTokenPenalty = 0.12
+    private static let finishedStatuses: Set<String> = ["FT", "AET"]
+    private static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
 
     static func applyScores(to matches: [Match], using bbcMatches: [BbcMatch]) -> [Match] {
         guard !bbcMatches.isEmpty else { return matches }
@@ -67,22 +69,14 @@ enum MatchScoreResolver {
                 }
             }
 
-            // Prefer AET over Pens when applying scores - if match already has AET and BBC has Pens, keep AET
-            let matchStatus = match.scoreStatus?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-            let bbcStatus = candidate.match.matchTime.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-
-            let finalStatus: String?
-            if matchStatus == "AET" && (bbcStatus == "PENS" || bbcStatus == "PEN" || bbcStatus == "PEN.") {
-                NSLog("[DEBUG applyScores] Keeping AET from match (matchStatus=%@ bbcStatus=%@) for %@ vs %@", match.scoreStatus ?? "nil", candidate.match.matchTime, match.homeTeam, match.awayTeam)
-                finalStatus = match.scoreStatus
-            } else {
-                finalStatus = candidate.match.matchTime
-            }
+            let finalStatus = preferredStatus(current: match.scoreStatus, incoming: candidate.match.matchTime)
 
             return match.withScore(
                 home: candidate.match.homeScore,
                 away: candidate.match.awayScore,
-                status: finalStatus
+                status: finalStatus,
+                aggregateHome: candidate.match.aggregateHomeScore,
+                aggregateAway: candidate.match.aggregateAwayScore
             )
         }
     }
@@ -106,6 +100,70 @@ enum MatchScoreResolver {
         if upper == "PENS" || upper == "PEN" || upper == "PEN." { return 120 }
 
         return nil
+    }
+
+    static func preferredStatus(current: String?, incoming: String?) -> String? {
+        let currentStatus = normalizedStatus(current)
+        let incomingStatus = normalizedStatus(incoming)
+
+        guard let currentStatus else { return incomingStatus }
+        guard let incomingStatus else { return currentStatus }
+
+        let currentState = statusState(for: currentStatus)
+        let incomingState = statusState(for: incomingStatus)
+
+        if currentState == .finished && incomingState != .finished {
+            return currentStatus
+        }
+        if incomingState == .finished && currentState != .finished {
+            return incomingStatus
+        }
+        if currentState == .finished && incomingState == .finished {
+            if currentStatus == "AET" && incomingStatus == "FT" {
+                return currentStatus
+            }
+            if incomingStatus == "AET" && currentStatus == "FT" {
+                return incomingStatus
+            }
+            return incomingStatus
+        }
+
+        let currentMinute = parseMatchTimeMinutes(currentStatus)
+        let incomingMinute = parseMatchTimeMinutes(incomingStatus)
+        if let currentMinute, let incomingMinute {
+            return incomingMinute >= currentMinute ? incomingStatus : currentStatus
+        }
+        if currentMinute != nil && incomingMinute == nil {
+            return currentStatus
+        }
+        if incomingMinute != nil && currentMinute == nil {
+            return incomingStatus
+        }
+
+        return incomingStatus
+    }
+
+    private static func normalizedStatus(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value.uppercased()
+    }
+
+    private static func statusState(for status: String) -> StatusState {
+        if finishedStatuses.contains(status) {
+            return .finished
+        }
+        if parseMatchTimeMinutes(status) != nil || inProgressTokens.contains(status) {
+            return .inProgress
+        }
+        return .unknown
+    }
+
+    private enum StatusState {
+        case finished
+        case inProgress
+        case unknown
     }
 
     private static func bestCandidate(for match: Match, in bbcMatches: [BbcMatch]) -> ScoreCandidate? {
@@ -360,6 +418,7 @@ final class MatchesStore: ObservableObject {
     }
 
     func configure(with snapshot: PreferencesSnapshot, mode: MatchesViewMode) {
+        let modeChanged = activeMode != mode
         let snapshotChanged = currentSnapshot != snapshot
         currentSnapshot = snapshot
         activeMode = mode
@@ -367,7 +426,7 @@ final class MatchesStore: ObservableObject {
         if snapshotChanged {
             loadCache(snapshot: snapshot)
             Task { await refresh(preferences: snapshot, mode: mode) }
-        } else if state(for: mode).matches.isEmpty {
+        } else if state(for: mode).matches.isEmpty || modeChanged {
             Task { await refresh(preferences: snapshot, mode: mode) }
         }
 
@@ -499,12 +558,15 @@ final class MatchesStore: ObservableObject {
             )
 
             var nextState = state(for: mode)
-            nextState.matches = reset
+            let mergedVisibleMatches = reset
                 ? mergedModeFiltered
                 : Self.mergePages(existing: nextState.matches, incoming: mergedModeFiltered)
-            nextState.unfilteredMatches = reset
+            let mergedUnfilteredMatches = reset
                 ? mergedIncoming
                 : Self.mergePages(existing: nextState.unfilteredMatches, incoming: mergedIncoming)
+
+            nextState.matches = Self.sortedMatches(mergedVisibleMatches, descendingDates: mode == .results)
+            nextState.unfilteredMatches = Self.sortedMatches(mergedUnfilteredMatches, descendingDates: mode == .results)
             nextState.page = max(0, requestedPage - 1)
             nextState.hasMore = nextHasMore
             if let updated = newestLastUpdated {
@@ -609,8 +671,8 @@ final class MatchesStore: ObservableObject {
         fixtureState.isUsingCache = true
 
         var resultState = ModeState()
-        resultState.matches = Array(Self.sortedMatches(results).reversed())
-        resultState.unfilteredMatches = Array(Self.sortedMatches(unfilteredResults).reversed())
+        resultState.matches = Self.sortedMatches(results, descendingDates: true)
+        resultState.unfilteredMatches = Self.sortedMatches(unfilteredResults, descendingDates: true)
         resultState.lastUpdated = payload.lastUpdated
         resultState.isUsingCache = true
 
@@ -712,12 +774,54 @@ final class MatchesStore: ObservableObject {
 
     private static func mergePages(existing: [Match], incoming: [Match]) -> [Match] {
         var merged = existing
-        var seen = Set(existing.map(\.id))
-        for match in incoming where !seen.contains(match.id) {
-            seen.insert(match.id)
-            merged.append(match)
+        var indicesByID: [String: Int] = [:]
+        for (index, match) in merged.enumerated() {
+            indicesByID[match.id] = index
+        }
+
+        for match in incoming {
+            if let existingIndex = indicesByID[match.id] {
+                let preferred = preferredMatch(existing: merged[existingIndex], incoming: match)
+                merged[existingIndex] = preferred
+            } else {
+                indicesByID[match.id] = merged.count
+                merged.append(match)
+            }
         }
         return merged
+    }
+
+    private static func preferredMatch(existing: Match, incoming: Match) -> Match {
+        let preferredStatus = MatchScoreResolver.preferredStatus(
+            current: existing.scoreStatus,
+            incoming: incoming.scoreStatus
+        )
+        let existingStatus = normalizedStatus(existing.scoreStatus)
+        let incomingStatus = normalizedStatus(incoming.scoreStatus)
+
+        if preferredStatus == existingStatus && preferredStatus != incomingStatus {
+            return existing
+        }
+        if preferredStatus == incomingStatus && preferredStatus != existingStatus {
+            return incoming
+        }
+        if incoming.hasScore && !existing.hasScore {
+            return incoming
+        }
+        if existing.hasScore && !incoming.hasScore {
+            return existing
+        }
+        if incoming.tvChannels.count != existing.tvChannels.count {
+            return incoming.tvChannels.count > existing.tvChannels.count ? incoming : existing
+        }
+        return incoming
+    }
+
+    private static func normalizedStatus(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value.uppercased()
     }
 
     private static func filterMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
@@ -739,26 +843,47 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static func sortedMatches(_ matches: [Match]) -> [Match] {
-        matches.sorted {
-            let leftDate = $0.dateTime ?? MatchDateParser.shared.parse(date: $0.date, time: "00:00") ?? .distantFuture
-            let rightDate = $1.dateTime ?? MatchDateParser.shared.parse(date: $1.date, time: "00:00") ?? .distantFuture
+    private static func sortedMatches(_ matches: [Match], descendingDates: Bool = false) -> [Match] {
+        matches.sorted { lhs, rhs in
+            let leftDate = matchSortDate(for: lhs)
+            let rightDate = matchSortDate(for: rhs)
             if leftDate != rightDate {
-                return leftDate < rightDate
+                return descendingDates ? leftDate > rightDate : leftDate < rightDate
             }
 
-            let leagueCompare = $0.league.localizedCaseInsensitiveCompare($1.league)
+            let leftWeight = competitionWeight(for: lhs)
+            let rightWeight = competitionWeight(for: rhs)
+            if leftWeight != rightWeight {
+                return leftWeight > rightWeight
+            }
+
+            let leagueCompare = lhs.displayLeague.localizedCaseInsensitiveCompare(rhs.displayLeague)
             if leagueCompare != .orderedSame {
                 return leagueCompare == .orderedAscending
             }
 
-            let homeCompare = $0.homeTeam.localizedCaseInsensitiveCompare($1.homeTeam)
+            let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
             if homeCompare != .orderedSame {
                 return homeCompare == .orderedAscending
             }
 
-            return $0.awayTeam.localizedCaseInsensitiveCompare($1.awayTeam) == .orderedAscending
+            return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
         }
+    }
+
+    private static func matchSortDate(for match: Match) -> Date {
+        match.dateTime ?? MatchDateParser.shared.parse(date: match.date, time: "00:00") ?? .distantFuture
+    }
+
+    private static func competitionWeight(for match: Match) -> Double {
+        if let displayWeight = CompetitionWeightConfig.weight(for: match.displayLeague) {
+            return displayWeight
+        }
+        return CompetitionWeightConfig.weight(for: match.league) ?? 0
+    }
+
+    private static func competitionWeight(forCompetitionName competitionName: String) -> Double {
+        CompetitionWeightConfig.weight(for: competitionName) ?? 0
     }
 
     private static func applyChannelFilters(to matches: [Match], selectedChannels: [String]) -> [Match] {
@@ -805,6 +930,7 @@ final class MatchesStore: ObservableObject {
 
         let dateDays: [MatchDay] = dateKeys.compactMap { dateKey -> MatchDay? in
             guard let matchesForDate = groupedByDate[dateKey] else { return nil }
+            let sortedDateMatches = Self.sortedMatches(matchesForDate)
             let displayDate: String
             let parsedDate = MatchDateParser.shared.parse(date: dateKey, time: "00:00")
             let isToday = parsedDate.map { calendar.isDateInToday($0) } ?? false
@@ -815,14 +941,29 @@ final class MatchesStore: ObservableObject {
                 displayDate = dateKey
             }
 
-            let groupedByLeague = Dictionary(grouping: matchesForDate) { $0.league }
-            let leagues = groupedByLeague.keys.sorted {
-                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            let groupedByLeague = Dictionary(grouping: sortedDateMatches) { $0.displayLeague }
+            let leagueSections = groupedByLeague.compactMap { entry -> (league: String, matches: [Match], firstKickoff: Date, weight: Double)? in
+                let (league, leagueMatches) = entry
+                let sortedLeagueMatches = Self.sortedMatches(leagueMatches)
+                guard let firstMatch = sortedLeagueMatches.first else { return nil }
+                return (
+                    league: league,
+                    matches: sortedLeagueMatches,
+                    firstKickoff: Self.matchSortDate(for: firstMatch),
+                    weight: Self.competitionWeight(forCompetitionName: league)
+                )
             }
-
-            let leagueSections = leagues.compactMap { league -> MatchLeague? in
-                guard let leagueMatches = groupedByLeague[league] else { return nil }
-                return MatchLeague(id: "\(dateKey)|\(league)", league: league, matches: leagueMatches)
+            .sorted { lhs, rhs in
+                if lhs.firstKickoff != rhs.firstKickoff {
+                    return lhs.firstKickoff < rhs.firstKickoff
+                }
+                if lhs.weight != rhs.weight {
+                    return lhs.weight > rhs.weight
+                }
+                return lhs.league.localizedCaseInsensitiveCompare(rhs.league) == .orderedAscending
+            }
+            .map { section in
+                MatchLeague(id: "\(dateKey)|\(section.league)", league: section.league, matches: section.matches)
             }
 
             return MatchDay(

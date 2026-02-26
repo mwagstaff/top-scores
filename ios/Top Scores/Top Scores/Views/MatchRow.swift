@@ -21,10 +21,10 @@ struct MatchRow: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(alignment: .top, spacing: 10) {
-                TeamLogo(name: match.homeTeam)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .center, spacing: 10) {
+                    TeamLogo(name: match.homeTeam)
 
-                VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .center, spacing: 8) {
                         Text(match.homeTeam)
                             .font(.subheadline)
@@ -44,25 +44,32 @@ struct MatchRow: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .layoutPriority(1)
                     }
+                    .frame(maxWidth: .infinity)
 
-                    if let penaltyResult = match.penaltyResult {
-                        Text(penaltyResult)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.top, 2)
-                    }
-
-                    if showTeamEvents && hasTeamMatchEvents {
-                        MatchTeamEventListView(entries: teamEventEntries)
-                            .padding(.top, 4)
-                    }
+                    TeamLogo(name: match.awayTeam)
                 }
                 .frame(maxWidth: .infinity)
 
-                TeamLogo(name: match.awayTeam)
+                if let aggregateSummaryText = match.aggregateSummaryText {
+                    Text("(\(aggregateSummaryText))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                if let penaltyResult = match.penaltyResult {
+                    Text(penaltyResult)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 2)
+                }
+
+                if showTeamEvents && hasTeamMatchEvents {
+                    MatchTeamEventListView(entries: teamEventEntries)
+                        .padding(.top, 4)
+                }
             }
-            .frame(maxWidth: .infinity)
 
             if !isMatchFinished {
                 HStack(alignment: .center, spacing: 8) {
@@ -107,12 +114,11 @@ struct MatchRow: View {
         if match.hasScore {
             return "-"
         }
-        return showTeamEvents ? "vs" : match.time
+        return match.time
     }
 
     private var isMatchFinished: Bool {
-        guard let status = match.scoreStatus?.uppercased() else { return false }
-        return status == "FT" || status == "AET"
+        match.isFinished
     }
 
     private var scoreAndStatusRow: some View {

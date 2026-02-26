@@ -99,6 +99,8 @@ struct MatchDetailsPayload: Codable, Hashable {
     let awayTeam: String?
     let homeScore: Int?
     let awayScore: Int?
+    let aggregateHomeScore: Int?
+    let aggregateAwayScore: Int?
     let scoreStatus: String?
     let homeGoalScorers: [MatchGoalScorer]
     let awayGoalScorers: [MatchGoalScorer]
@@ -120,6 +122,8 @@ struct MatchDetailsPayload: Codable, Hashable {
         case awayTeam = "away_team"
         case homeScore = "home_score"
         case awayScore = "away_score"
+        case aggregateHomeScore = "aggregate_home_score"
+        case aggregateAwayScore = "aggregate_away_score"
         case scoreStatus = "score_status"
         case homeGoalScorers = "home_goal_scorers"
         case awayGoalScorers = "away_goal_scorers"
@@ -143,6 +147,8 @@ struct MatchDetailsPayload: Codable, Hashable {
         awayTeam = try container.decodeIfPresent(String.self, forKey: .awayTeam)
         homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
         awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
+        aggregateHomeScore = try container.decodeIfPresent(Int.self, forKey: .aggregateHomeScore)
+        aggregateAwayScore = try container.decodeIfPresent(Int.self, forKey: .aggregateAwayScore)
         scoreStatus = try container.decodeIfPresent(String.self, forKey: .scoreStatus)
         homeGoalScorers = try container.decodeIfPresent([MatchGoalScorer].self, forKey: .homeGoalScorers) ?? []
         awayGoalScorers = try container.decodeIfPresent([MatchGoalScorer].self, forKey: .awayGoalScorers) ?? []
@@ -168,6 +174,8 @@ struct Match: Identifiable, Codable, Hashable {
     let tvChannels: [String]
     let homeScore: Int?
     let awayScore: Int?
+    let aggregateHomeScore: Int?
+    let aggregateAwayScore: Int?
     let scoreStatus: String?
     let homeGoalScorers: [MatchGoalScorer]
     let awayGoalScorers: [MatchGoalScorer]
@@ -190,6 +198,8 @@ struct Match: Identifiable, Codable, Hashable {
         tvChannels: [String],
         homeScore: Int? = nil,
         awayScore: Int? = nil,
+        aggregateHomeScore: Int? = nil,
+        aggregateAwayScore: Int? = nil,
         scoreStatus: String? = nil,
         homeGoalScorers: [MatchGoalScorer] = [],
         awayGoalScorers: [MatchGoalScorer] = [],
@@ -211,6 +221,8 @@ struct Match: Identifiable, Codable, Hashable {
         self.tvChannels = tvChannels
         self.homeScore = homeScore
         self.awayScore = awayScore
+        self.aggregateHomeScore = aggregateHomeScore
+        self.aggregateAwayScore = aggregateAwayScore
         self.scoreStatus = scoreStatus
         self.homeGoalScorers = homeGoalScorers
         self.awayGoalScorers = awayGoalScorers
@@ -250,6 +262,15 @@ struct Match: Identifiable, Codable, Hashable {
         return "\(homeScore) - \(awayScore)"
     }
 
+    var hasAggregateScore: Bool {
+        aggregateHomeScore != nil && aggregateAwayScore != nil
+    }
+
+    var aggregateSummaryText: String? {
+        guard let aggregateHomeScore, let aggregateAwayScore else { return nil }
+        return "Agg: \(aggregateHomeScore)-\(aggregateAwayScore)"
+    }
+
     var displayScoreStatus: String? {
         guard let scoreStatus else { return nil }
         return MatchStatusFormatter.displayValue(for: scoreStatus)
@@ -272,8 +293,17 @@ struct Match: Identifiable, Codable, Hashable {
         return league
     }
 
-    func withScore(home: Int, away: Int, status: String?) -> Match {
-        Match(
+    func withScore(
+        home: Int,
+        away: Int,
+        status: String?,
+        aggregateHome: Int? = nil,
+        aggregateAway: Int? = nil
+    ) -> Match {
+        let nextAggregateHome = aggregateHome ?? adjustedAggregate(base: aggregateHomeScore, previousScore: homeScore, nextScore: home)
+        let nextAggregateAway = aggregateAway ?? adjustedAggregate(base: aggregateAwayScore, previousScore: awayScore, nextScore: away)
+
+        return Match(
             date: date,
             time: time,
             homeTeam: homeTeam,
@@ -285,6 +315,8 @@ struct Match: Identifiable, Codable, Hashable {
             tvChannels: tvChannels,
             homeScore: home,
             awayScore: away,
+            aggregateHomeScore: nextAggregateHome,
+            aggregateAwayScore: nextAggregateAway,
             scoreStatus: status,
             homeGoalScorers: homeGoalScorers,
             awayGoalScorers: awayGoalScorers,
@@ -310,6 +342,8 @@ struct Match: Identifiable, Codable, Hashable {
             tvChannels: channels,
             homeScore: homeScore,
             awayScore: awayScore,
+            aggregateHomeScore: aggregateHomeScore,
+            aggregateAwayScore: aggregateAwayScore,
             scoreStatus: scoreStatus,
             homeGoalScorers: homeGoalScorers,
             awayGoalScorers: awayGoalScorers,
@@ -337,6 +371,8 @@ struct Match: Identifiable, Codable, Hashable {
         tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
         homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
         awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
+        aggregateHomeScore = try container.decodeIfPresent(Int.self, forKey: .aggregateHomeScore)
+        aggregateAwayScore = try container.decodeIfPresent(Int.self, forKey: .aggregateAwayScore)
         scoreStatus = try container.decodeIfPresent(String.self, forKey: .scoreStatus)
         homeGoalScorers = try container.decodeIfPresent([MatchGoalScorer].self, forKey: .homeGoalScorers) ?? []
         awayGoalScorers = try container.decodeIfPresent([MatchGoalScorer].self, forKey: .awayGoalScorers) ?? []
@@ -365,6 +401,8 @@ struct Match: Identifiable, Codable, Hashable {
         case tvChannels = "tv_channels"
         case homeScore = "home_score"
         case awayScore = "away_score"
+        case aggregateHomeScore = "aggregate_home_score"
+        case aggregateAwayScore = "aggregate_away_score"
         case scoreStatus = "score_status"
         case homeGoalScorers = "home_goal_scorers"
         case awayGoalScorers = "away_goal_scorers"
@@ -404,6 +442,8 @@ struct Match: Identifiable, Codable, Hashable {
             tvChannels: tvChannels,
             homeScore: details.homeScore ?? homeScore,
             awayScore: details.awayScore ?? awayScore,
+            aggregateHomeScore: details.aggregateHomeScore ?? aggregateHomeScore,
+            aggregateAwayScore: details.aggregateAwayScore ?? aggregateAwayScore,
             scoreStatus: mergedScoreStatus,
             homeGoalScorers: details.homeGoalScorers,
             awayGoalScorers: details.awayGoalScorers,
@@ -436,6 +476,12 @@ struct Match: Identifiable, Codable, Hashable {
         let allowed = CharacterSet.alphanumerics
         guard normalized.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
         return normalized
+    }
+
+    private func adjustedAggregate(base: Int?, previousScore: Int?, nextScore: Int) -> Int? {
+        guard let base else { return nil }
+        guard let previousScore else { return base }
+        return base + (nextScore - previousScore)
     }
 }
 

@@ -8,21 +8,20 @@ struct APIClient {
     private static let maxLoggedBodyLength = 240
     private static let retryDelayNanos: UInt64 = 350_000_000
     private static let retryableStatusCodes: Set<Int> = [408, 429, 500, 502, 503, 504]
+    private static let sharedNoCacheSession: URLSession = {
+        URLCache.shared.removeAllCachedResponses()
+        let config = URLSessionConfiguration.default
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        return URLSession(configuration: config)
+    }()
 
     init(baseURL: URL, session: URLSession? = nil) {
         self.baseURL = baseURL
         if let session = session {
             self.session = session
         } else {
-            // Clear any existing URL cache from previous app runs
-            URLCache.shared.removeAllCachedResponses()
-
-            // Create a custom URLSession with caching disabled
-            let config = URLSessionConfiguration.default
-            config.urlCache = nil
-            config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            self.session = URLSession(configuration: config)
-            NSLog("[APIClient] Initialized with custom URLSession (caching disabled, cleared existing cache)")
+            self.session = Self.sharedNoCacheSession
         }
     }
 
@@ -549,6 +548,8 @@ struct BbcMatch: Codable, Hashable {
     let awayTeam: String
     let homeScore: Int
     let awayScore: Int
+    let aggregateHomeScore: Int?
+    let aggregateAwayScore: Int?
     let matchTime: String
     let detailsURL: String?
     let homeGoalScorers: [MatchGoalScorer]
@@ -563,6 +564,8 @@ struct BbcMatch: Codable, Hashable {
         case awayTeam = "away_team"
         case homeScore = "home_score"
         case awayScore = "away_score"
+        case aggregateHomeScore = "aggregate_home_score"
+        case aggregateAwayScore = "aggregate_away_score"
         case matchTime = "match_time"
         case detailsURL = "details_url"
         case homeGoalScorers = "home_goal_scorers"
@@ -579,6 +582,8 @@ struct BbcMatch: Codable, Hashable {
         awayTeam = try container.decode(String.self, forKey: .awayTeam)
         homeScore = try container.decode(Int.self, forKey: .homeScore)
         awayScore = try container.decode(Int.self, forKey: .awayScore)
+        aggregateHomeScore = try container.decodeIfPresent(Int.self, forKey: .aggregateHomeScore)
+        aggregateAwayScore = try container.decodeIfPresent(Int.self, forKey: .aggregateAwayScore)
         matchTime = try container.decode(String.self, forKey: .matchTime)
         detailsURL = try container.decodeIfPresent(String.self, forKey: .detailsURL)
         homeGoalScorers = try container.decodeIfPresent([MatchGoalScorer].self, forKey: .homeGoalScorers) ?? []

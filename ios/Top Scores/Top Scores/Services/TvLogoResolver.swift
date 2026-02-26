@@ -6,7 +6,11 @@ final class TvLogoResolver {
 
     private let fallbackName = "_noLogo"
     private var normalizedLookup: [String: URL] = [:]
-    private var cache: [String: UIImage] = [:]
+    private let imageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 64
+        return cache
+    }()
 
     private init() {
         loadLogos()
@@ -18,12 +22,18 @@ final class TvLogoResolver {
 
         for channel in channels {
             guard let url = resolveURL(for: channel) ?? resolveURL(for: fallbackName) else { continue }
-            let fileKey = url.deletingPathExtension().lastPathComponent.lowercased()
+            let fileKey = url.path
             if seenFiles.contains(fileKey) { continue }
             seenFiles.insert(fileKey)
 
+            let cacheKey = fileKey as NSString
+            if let cached = imageCache.object(forKey: cacheKey) {
+                results.append(cached)
+                continue
+            }
+
             if let image = UIImage(contentsOfFile: url.path) {
-                cache[channel] = image
+                imageCache.setObject(image, forKey: cacheKey)
                 results.append(image)
             }
         }
@@ -32,15 +42,17 @@ final class TvLogoResolver {
     }
 
     func image(for channelName: String) -> UIImage? {
-        if let cached = cache[channelName] {
+        let url = resolveURL(for: channelName) ?? resolveURL(for: fallbackName)
+        guard let url else { return nil }
+
+        let cacheKey = url.path as NSString
+        if let cached = imageCache.object(forKey: cacheKey) {
             return cached
         }
 
-        let url = resolveURL(for: channelName) ?? resolveURL(for: fallbackName)
-        guard let url else { return nil }
         let image = UIImage(contentsOfFile: url.path)
         if let image {
-            cache[channelName] = image
+            imageCache.setObject(image, forKey: cacheKey)
         }
         return image
     }

@@ -1,10 +1,22 @@
 import Foundation
 
+struct PreferencesSyncDiagnostics: Sendable {
+    let lastSyncAttempt: Date?
+    let lastSyncSuccess: Date?
+    let lastSyncFailure: Date?
+    let lastSyncHTTPStatus: Int?
+    let lastSyncFailureReason: String?
+}
+
 actor PreferencesSyncService {
     static let shared = PreferencesSyncService()
 
     private var syncTask: Task<Void, Never>?
     private var lastSyncAttempt: Date?
+    private var lastSyncSuccess: Date?
+    private var lastSyncFailure: Date?
+    private var lastSyncHTTPStatus: Int?
+    private var lastSyncFailureReason: String?
     private let minSyncInterval: TimeInterval = 2.0 // Debounce syncs to max once per 2 seconds
 
     private init() {}
@@ -32,13 +44,27 @@ actor PreferencesSyncService {
         await performSync(snapshot)
     }
 
+    func diagnostics() -> PreferencesSyncDiagnostics {
+        PreferencesSyncDiagnostics(
+            lastSyncAttempt: lastSyncAttempt,
+            lastSyncSuccess: lastSyncSuccess,
+            lastSyncFailure: lastSyncFailure,
+            lastSyncHTTPStatus: lastSyncHTTPStatus,
+            lastSyncFailureReason: lastSyncFailureReason
+        )
+    }
+
     private func performSync(_ snapshot: PreferencesSnapshot) async {
-        lastSyncAttempt = Date()
+        let now = Date()
+        lastSyncAttempt = now
 
         let deviceToken = getDeviceToken()
 
         guard let baseURL = URL(string: snapshot.apiBaseURL) else {
             NSLog("[PreferencesSync] Invalid API base URL: %@", snapshot.apiBaseURL)
+            lastSyncFailure = now
+            lastSyncHTTPStatus = nil
+            lastSyncFailureReason = "Invalid API base URL"
             return
         }
 
@@ -83,17 +109,30 @@ actor PreferencesSyncService {
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 NSLog("[PreferencesSync] Invalid response type")
+                lastSyncFailure = Date()
+                lastSyncHTTPStatus = nil
+                lastSyncFailureReason = "Invalid response type"
                 return
             }
 
             if (200...299).contains(httpResponse.statusCode) {
                 NSLog("[PreferencesSync] Successfully synced preferences to Redis")
+                lastSyncSuccess = Date()
+                lastSyncFailure = nil
+                lastSyncHTTPStatus = httpResponse.statusCode
+                lastSyncFailureReason = nil
             } else {
                 let errorBody = String(data: data, encoding: .utf8) ?? "No response body"
                 NSLog("[PreferencesSync] Failed to sync: HTTP %d - %@", httpResponse.statusCode, errorBody)
+                lastSyncFailure = Date()
+                lastSyncHTTPStatus = httpResponse.statusCode
+                lastSyncFailureReason = errorBody
             }
         } catch {
             NSLog("[PreferencesSync] Error syncing preferences: %@", error.localizedDescription)
+            lastSyncFailure = Date()
+            lastSyncHTTPStatus = nil
+            lastSyncFailureReason = error.localizedDescription
         }
     }
 

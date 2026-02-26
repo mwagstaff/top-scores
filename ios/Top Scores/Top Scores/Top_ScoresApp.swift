@@ -40,10 +40,11 @@ struct Top_ScoresApp: App {
                 let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
                 Task {
                     async let refreshTask: Void = matchesStore.refresh(preferences: snapshot)
+                    async let syncTask: Void = PreferencesSyncService.shared.syncPreferences(snapshot)
                     async let metricTask: Void = AppMetricsService.shared.sendAppOpenMetric(
                         apiBaseURL: snapshot.apiBaseURL
                     )
-                    _ = await (refreshTask, metricTask)
+                    _ = await (refreshTask, syncTask, metricTask)
                 }
             default:
                 break

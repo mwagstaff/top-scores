@@ -549,12 +549,10 @@ private struct TopScoresWidgetProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (TopScoresWidgetEntry) -> Void) {
-        NSLog("[Widget] getSnapshot family=\(context.family.rawValue) isPreview=\(context.isPreview)")
         completion(makeEntry(fallbackToSample: context.isPreview))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<TopScoresWidgetEntry>) -> Void) {
-        NSLog("[Widget] getTimeline family=\(context.family.rawValue)")
         let entry = makeEntry(fallbackToSample: false)
 
         // Determine refresh interval based on whether there are live matches
@@ -684,9 +682,6 @@ private struct CompactMatchesWidgetView: View {
             }
         }
         .containerBackground(.fill.tertiary, for: .widget)
-        .overlay(alignment: .bottomTrailing) {
-            WidgetDebugBadge(label: "W-C")
-        }
     }
 
 }
@@ -771,9 +766,6 @@ private struct LargeMatchesWidgetView: View {
             }
         }
         .containerBackground(.fill.tertiary, for: .widget)
-        .overlay(alignment: .bottomTrailing) {
-            WidgetDebugBadge(label: "W-L")
-        }
     }
 }
 
@@ -820,28 +812,6 @@ private struct SmallMatchesWidgetView: View {
             }
         }
         .containerBackground(.fill.tertiary, for: .widget)
-        .overlay(alignment: .bottomTrailing) {
-            WidgetDebugBadge(label: "W-S")
-        }
-    }
-}
-
-private struct WidgetDebugBadge: View {
-    let label: String
-
-    var body: some View {
-#if DEBUG
-        Text(label)
-            .font(.system(size: 7, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.secondary.opacity(0.75))
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .background(.ultraThinMaterial, in: Capsule())
-            .padding(6)
-            .unredacted()
-#else
-        EmptyView()
-#endif
     }
 }
 
@@ -1563,7 +1533,6 @@ private final class WidgetTvLogoResolver {
             normalizedLookup[normalized] = normalizedLookup[normalized] ?? url
         }
 
-        NSLog("[Widget] tv logos loaded count=\(urls.count)")
     }
 
     private func logoBundles() -> [Bundle] {

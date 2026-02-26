@@ -146,26 +146,37 @@ struct MatchesView: View {
         List {
             ForEach(matchesStore.groupedMatches) { day in
                 Section {
-                    ForEach(sortedMatches(for: day)) { match in
-                        NavigationLink {
-                            MatchDetailView(match: match, highlightToday: day.isToday)
-                        } label: {
-                            MatchRow(match: match, highlightToday: day.isToday, showLeague: true)
-                        }
-                        .onAppear {
-                            Task {
-                                let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-                                await matchesStore.prefetchIfNeeded(
-                                    currentMatch: match,
-                                    preferences: snapshot,
-                                    mode: mode
-                                )
+                    ForEach(day.leagues) { league in
+                        Text(league.league)
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                            .textCase(nil)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 2, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+
+                        ForEach(league.matches) { match in
+                            NavigationLink {
+                                MatchDetailView(match: match, highlightToday: day.isToday)
+                            } label: {
+                                MatchRow(match: match, highlightToday: day.isToday, showLeague: false)
                             }
+                            .onAppear {
+                                Task {
+                                    let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+                                    await matchesStore.prefetchIfNeeded(
+                                        currentMatch: match,
+                                        preferences: snapshot,
+                                        mode: mode
+                                    )
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                         }
-                        .buttonStyle(.plain)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
                     }
                 } header: {
                     Text(day.displayDate)
@@ -181,39 +192,6 @@ struct MatchesView: View {
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             await matchesStore.refresh(preferences: snapshot, mode: mode)
         }
-    }
-
-    private func sortedMatches(for day: MatchDay) -> [Match] {
-        day.leagues
-            .flatMap(\.matches)
-            .sorted { lhs, rhs in
-                let lhsDate = lhs.dateTime ?? parseDateTime(date: lhs.date, time: lhs.time) ?? .distantFuture
-                let rhsDate = rhs.dateTime ?? parseDateTime(date: rhs.date, time: rhs.time) ?? .distantFuture
-
-                if lhsDate != rhsDate {
-                    return lhsDate < rhsDate
-                }
-
-                let leagueCompare = lhs.league.localizedCaseInsensitiveCompare(rhs.league)
-                if leagueCompare != .orderedSame {
-                    return leagueCompare == .orderedAscending
-                }
-
-                let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
-                if homeCompare != .orderedSame {
-                    return homeCompare == .orderedAscending
-                }
-
-                return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
-            }
-    }
-
-    private func parseDateTime(date: String, time: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone.current
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        return formatter.date(from: "\(date) \(time)")
     }
 
     private var emptyState: some View {

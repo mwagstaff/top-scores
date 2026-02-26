@@ -31,7 +31,11 @@ final class LogoResolver {
     private var normalizedLookup: [String: ImageSource] = [:]
     private var coreLookup: [String: [ImageSource]] = [:]
     private var originalLookup: [String: ImageSource] = [:]
-    private var cache: [String: UIImage] = [:]
+    private let imageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 300
+        return cache
+    }()
     private var fallbackSource: ImageSource?
 
     private init() {
@@ -39,15 +43,17 @@ final class LogoResolver {
     }
 
     func image(for teamName: String) -> UIImage? {
-        if let cached = cache[teamName] {
+        let source = resolveSource(for: teamName) ?? fallbackSource
+        guard let source else { return nil }
+
+        let cacheKey = source.identifier as NSString
+        if let cached = imageCache.object(forKey: cacheKey) {
             return cached
         }
 
-        let source = resolveSource(for: teamName) ?? fallbackSource
-        guard let source else { return nil }
         let image = image(from: source)
         if let image {
-            cache[teamName] = image
+            imageCache.setObject(image, forKey: cacheKey)
         }
         return image
     }
