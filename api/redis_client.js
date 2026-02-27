@@ -857,7 +857,14 @@ async function saveOperationalDataset(name, payload, options = {}) {
       source: options.source || null,
       payload,
     };
-    await redisClient.set(key, JSON.stringify(record));
+    const ttlSeconds = Number(options.ttl_seconds);
+    if (Number.isFinite(ttlSeconds) && ttlSeconds > 0) {
+      await redisClient.set(key, JSON.stringify(record), {
+        EX: Math.floor(ttlSeconds),
+      });
+    } else {
+      await redisClient.set(key, JSON.stringify(record));
+    }
     return record;
   } catch (error) {
     console.error(`[Redis] Error saving operational dataset ${name}:`, error);

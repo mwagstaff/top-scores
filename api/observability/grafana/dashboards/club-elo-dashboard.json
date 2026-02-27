@@ -1,0 +1,169 @@
+{
+  "title": "Club Elo Data Health",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Last Successful Club Elo Pull",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "1000 * club_elo_last_success_timestamp_seconds{job=\"top-scores\"}",
+          "legendFormat": "last success"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Last Failed Club Elo Pull",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "custom": {
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#E02F44"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "1000 * club_elo_last_failure_timestamp_seconds{job=\"top-scores\"}",
+          "legendFormat": "last failure"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Age of Oldest Club Elo Data",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "time() - club_elo_oldest_from_timestamp_seconds{job=\"top-scores\"}",
+          "legendFormat": "oldest age"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Age of Newest Club Elo Data",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "time() - club_elo_latest_from_timestamp_seconds{job=\"top-scores\"}",
+          "legendFormat": "newest age"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Teams in Latest Club Elo Pull",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#299C46"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "club_elo_latest_pull_team_count{job=\"top-scores\"}",
+          "legendFormat": "team count"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Teams Without Club Elo Match",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#E02F44"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "club_elo_unmatched_team_count{job=\"top-scores\"}",
+          "legendFormat": "unmatched teams"
+        }
+      ]
+    }
+  ]
+}
