@@ -1,13 +1,13 @@
 {
-  "title": "Club Elo Data Health",
+  "title": "Club Elo Rankings & Health",
   "timezone": "browser",
   "schemaVersion": 38,
-  "version": 2,
+  "version": 4,
   "refresh": "10s",
   "panels": [
     {
       "type": "timeseries",
-      "title": "Last Successful Club Elo Pull",
+      "title": "Last Successful Club Elo Pull Duration",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -16,7 +16,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "dateTimeAsIso",
+          "unit": "s",
           "custom": {
             "spanNulls": true
           }
@@ -25,14 +25,14 @@
       },
       "targets": [
         {
-          "expr": "1000 * (max_over_time(club_elo_last_success_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
-          "legendFormat": "last success"
+          "expr": "club_elo_last_success_duration_seconds{job=\"top-scores\"}",
+          "legendFormat": "success duration"
         }
       ]
     },
     {
       "type": "timeseries",
-      "title": "Last Failed Club Elo Pull",
+      "title": "Last Failed Club Elo Pull Duration",
       "gridPos": {
         "x": 12,
         "y": 0,
@@ -41,7 +41,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "dateTimeAsIso",
+          "unit": "s",
           "custom": {
             "spanNulls": true
           },
@@ -54,8 +54,8 @@
       },
       "targets": [
         {
-          "expr": "1000 * (max_over_time(club_elo_last_failure_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
-          "legendFormat": "last failure"
+          "expr": "club_elo_last_failure_duration_seconds{job=\"top-scores\"}",
+          "legendFormat": "failure duration"
         }
       ]
     },
@@ -162,6 +162,160 @@
         {
           "expr": "max_over_time(club_elo_unmatched_team_count{job=\"top-scores\"}[30m])",
           "legendFormat": "unmatched teams"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Club Rankings (Highest Elo First)",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 12
+      },
+      "targets": [
+        {
+          "expr": "sort_desc(club_elo_team_ranking_score{job=\"top-scores\"})",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "index",
+            "alias": "__rank0",
+            "index": {
+              "asPercentile": false
+            },
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": {
+                "matcher": {
+                  "id": "byName",
+                  "options": "__rank0"
+                }
+              },
+              "operator": "+",
+              "right": {
+                "fixed": "1"
+              }
+            },
+            "alias": "#",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "Metric": true,
+              "metric": true,
+              "__rank0": true
+            },
+            "indexByName": {
+              "#": 0,
+              "club": 1,
+              "country": 2,
+              "Value": 3,
+              "Value #A": 3
+            },
+            "renameByName": {
+              "#": "#",
+              "club": "Club",
+              "country": "Country",
+              "Value": "Ranking score",
+              "Value #A": "Ranking score"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Country Average Ranking Score (Highest First)",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 12
+      },
+      "targets": [
+        {
+          "expr": "sort_desc(club_elo_country_average_ranking_score{job=\"top-scores\"})",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "index",
+            "alias": "__rank0",
+            "index": {
+              "asPercentile": false
+            },
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": {
+                "matcher": {
+                  "id": "byName",
+                  "options": "__rank0"
+                }
+              },
+              "operator": "+",
+              "right": {
+                "fixed": "1"
+              }
+            },
+            "alias": "#",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "Metric": true,
+              "metric": true,
+              "__rank0": true
+            },
+            "indexByName": {
+              "#": 0,
+              "country": 1,
+              "Value": 2,
+              "Value #A": 2
+            },
+            "renameByName": {
+              "#": "#",
+              "country": "Country",
+              "Value": "Average score",
+              "Value #A": "Average score"
+            }
+          }
         }
       ]
     }
