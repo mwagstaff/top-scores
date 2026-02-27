@@ -155,6 +155,29 @@ test("includes aggregate score in goal notification body when available", () => 
   assert.equal(goals[0].body, "Atletico Madrid 1 - 0 Club Brugge (agg: 4-3) (A. Griezmann)");
 });
 
+test("suppresses aggregate 0-0 in notifications when live score is non-zero", () => {
+  const oldMatch = {
+    home_team: "Wolves",
+    away_team: "Aston Villa",
+    home_score: 1,
+    away_score: 0,
+    score_status: "70'",
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    home_score: 2,
+    away_score: 0,
+    score_status: "87'",
+    aggregate_home_score: 0,
+    aggregate_away_score: 0,
+  };
+
+  const event = __testHooks.buildScoreChangeEvent(oldMatch, newMatch);
+  assert.ok(event);
+  assert.equal(event.body, "Wolves 2 - 0 Aston Villa (87')");
+});
+
 test("counts own goals for event detection", () => {
   const total = __testHooks.countGoals([
     { player: "Eric Garcia", own_goal_times: ["6'"] },

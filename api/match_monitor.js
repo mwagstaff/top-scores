@@ -679,10 +679,19 @@ function scoreSnapshot(match) {
   };
 }
 
-function aggregateScoreSuffix(match) {
+function aggregateScoreSuffix(match, homeScore, awayScore) {
   const aggregateHomeScore = toNumericScore(match && match.aggregate_home_score);
   const aggregateAwayScore = toNumericScore(match && match.aggregate_away_score);
   if (!Number.isFinite(aggregateHomeScore) || !Number.isFinite(aggregateAwayScore)) {
+    return "";
+  }
+  const liveHomeScore = toNumericScore(homeScore);
+  const liveAwayScore = toNumericScore(awayScore);
+  const hasLiveScoreline =
+    Number.isFinite(liveHomeScore) &&
+    Number.isFinite(liveAwayScore) &&
+    (liveHomeScore > 0 || liveAwayScore > 0);
+  if (aggregateHomeScore === 0 && aggregateAwayScore === 0 && hasLiveScoreline) {
     return "";
   }
   return ` (agg: ${aggregateHomeScore}-${aggregateAwayScore})`;
@@ -691,7 +700,7 @@ function aggregateScoreSuffix(match) {
 function formatScoreline(match, homeScore, awayScore) {
   return (
     `${match && match.home_team ? match.home_team : "Home"} ${homeScore} - ${awayScore} ` +
-    `${match && match.away_team ? match.away_team : "Away"}${aggregateScoreSuffix(match)}`
+    `${match && match.away_team ? match.away_team : "Away"}${aggregateScoreSuffix(match, homeScore, awayScore)}`
   );
 }
 

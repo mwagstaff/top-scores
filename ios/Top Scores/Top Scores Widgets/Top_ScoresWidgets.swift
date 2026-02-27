@@ -1873,21 +1873,34 @@ private struct TopScoresLiveActivityExpandedView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            titleView
             TopScoresLiveActivityLockScreenView(state: state)
         }
     }
 
-    private var title: String {
+    @ViewBuilder
+    private var titleView: some View {
         switch state.mode {
         case "single_live", "multi_live":
-            return "Live Matches"
-        case "single_upcoming", "multi_upcoming":
-            return "Kick-off in 15m"
+            Text("Live Matches")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        case "single_upcoming":
+            if let match = state.matches.first {
+                KickoffCountdownTitle(kickoffDate: WidgetMatchDateParser.shared.parse(date: match.date, time: match.time))
+            } else {
+                Text("Kick off soon")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        case "multi_upcoming":
+            Text("Kick off soon")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
         default:
-            return "Top Scores"
+            Text("Top Scores")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -1899,9 +1912,10 @@ private struct SingleUpcomingMatchView: View {
     var body: some View {
         SingleMatchCardChrome {
             VStack(alignment: .leading, spacing: 8) {
-                CompetitionHeaderRow(
+                UpcomingCompetitionHeaderRow(
                     league: match.league,
-                    subheading: match.leagueSubcategory ?? "Kick-off in 15m"
+                    subheading: match.leagueSubcategory,
+                    kickoffDate: kickoffDate
                 )
 
                 HStack(spacing: 10) {
@@ -1923,6 +1937,10 @@ private struct SingleUpcomingMatchView: View {
                 ChannelInfoRow(channels: match.tvChannels)
             }
         }
+    }
+
+    private var kickoffDate: Date? {
+        WidgetMatchDateParser.shared.parse(date: match.date, time: match.time)
     }
 }
 
@@ -2007,6 +2025,96 @@ private struct CompetitionHeaderRow: View {
                 .foregroundStyle(.white.opacity(0.55))
                 .lineLimit(1)
         }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct UpcomingCompetitionHeaderRow: View {
+    let league: String
+    let subheading: String?
+    let kickoffDate: Date?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(league)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            trailingStatusView
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var trailingStatusView: some View {
+        if kickoffDate != nil {
+            KickoffCountdownLabel(kickoffDate: kickoffDate)
+        } else if let subheading, !subheading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text(subheading)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.55))
+        } else {
+            KickoffCountdownLabel(kickoffDate: kickoffDate)
+        }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct KickoffCountdownTitle: View {
+    let kickoffDate: Date?
+
+    var body: some View {
+        Group {
+            if let kickoffDate, kickoffDate > Date() {
+                (Text("Kick off in ")
+                    + Text(
+                        timerInterval: Date()...kickoffDate,
+                        pauseTime: nil,
+                        countsDown: true,
+                        showsHours: false
+                    )
+                    .monospacedDigit())
+            } else if kickoffDate != nil {
+                Text("Kick off now")
+            } else {
+                Text("Kick off soon")
+            }
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct KickoffCountdownLabel: View {
+    let kickoffDate: Date?
+
+    var body: some View {
+        Group {
+            if let kickoffDate {
+                if kickoffDate > Date() {
+                    (Text("Kick off in ")
+                        + Text(
+                            timerInterval: Date()...kickoffDate,
+                            pauseTime: nil,
+                            countsDown: true,
+                            showsHours: false
+                        )
+                        .monospacedDigit())
+                } else {
+                    Text("Kick off now")
+                }
+            } else {
+                Text("Kick off soon")
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.white.opacity(0.55))
+        .lineLimit(1)
     }
 }
 

@@ -486,6 +486,9 @@ final class MatchesStore: ObservableObject {
 
         do {
             let client = APIClient(baseURL: baseURL)
+            if mode == .fixtures && cachedBbcLiveMatches.isEmpty {
+                await hydrateBbcLiveCacheIfNeeded(client: client)
+            }
             var requestedPage = reset ? 1 : max(1, current.page + 1)
             var pagesFetched = 0
             var nextHasMore = false
@@ -605,6 +608,23 @@ final class MatchesStore: ObservableObject {
         if let urlError = error as? URLError, urlError.code == .cancelled { return true }
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    private func hydrateBbcLiveCacheIfNeeded(client: APIClient) async {
+        guard cachedBbcLiveMatches.isEmpty else { return }
+        if let last = bbcLiveLastFetchedAt,
+           Date().timeIntervalSince(last) < bbcLiveRefreshInterval {
+            return
+        }
+        do {
+            let fresh = try await client.fetchBbcLiveMatches()
+            if !fresh.isEmpty {
+                cachedBbcLiveMatches = fresh
+            }
+            bbcLiveLastFetchedAt = Date()
+        } catch {
+            NSLog("BBC live prefetch failed error=%@", String(describing: error))
+        }
     }
 
     private func scheduleBbcLiveRefreshIfNeeded(client: APIClient, force: Bool = false) {

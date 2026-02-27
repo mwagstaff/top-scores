@@ -1337,15 +1337,116 @@ const SCORE_ALIAS_MAP = new Map([
 ]);
 
 const CLUB_ELO_NATIONAL_TEAM_NAME_EXTRAS = [
+  "afghanistan",
+  "albania",
+  "algeria",
+  "andorra",
+  "angola",
+  "argentina",
+  "armenia",
+  "aruba",
+  "australia",
+  "austria",
+  "azerbaijan",
+  "bahrain",
+  "bangladesh",
+  "belarus",
+  "belgium",
+  "bolivia",
+  "bosnia-herzegovina",
+  "bosnia and herzegovina",
+  "brazil",
+  "bulgaria",
+  "cameroon",
+  "canada",
+  "chile",
+  "china",
+  "chinese taipei",
+  "colombia",
+  "costa rica",
+  "croatia",
+  "cyprus",
+  "czechia",
   "england",
+  "denmark",
+  "ecuador",
+  "egypt",
+  "estonia",
+  "finland",
+  "france",
+  "georgia",
+  "germany",
+  "ghana",
+  "greece",
+  "haiti",
+  "hungary",
+  "iceland",
+  "india",
+  "indonesia",
+  "iran",
+  "iraq",
+  "israel",
+  "italy",
+  "jamaica",
+  "japan",
+  "jordan",
+  "kazakhstan",
+  "kenya",
+  "kosovo",
+  "kuwait",
+  "latvia",
+  "lebanon",
+  "libya",
+  "lithuania",
+  "luxembourg",
+  "malaysia",
+  "mexico",
+  "moldova",
+  "montenegro",
+  "morocco",
+  "netherlands",
+  "new zealand",
+  "nigeria",
+  "norway",
+  "oman",
+  "palestine",
+  "panama",
+  "paraguay",
+  "peru",
+  "philippines",
+  "poland",
+  "portugal",
+  "qatar",
+  "romania",
+  "russia",
+  "saudi arabia",
+  "senegal",
+  "serbia",
+  "slovakia",
+  "slovenia",
+  "south africa",
   "scotland",
+  "south korea",
+  "spain",
+  "sweden",
+  "switzerland",
+  "syria",
+  "thailand",
+  "tunisia",
+  "turkey",
+  "ukraine",
+  "united arab emirates",
+  "united states",
+  "uruguay",
+  "uzbekistan",
+  "venezuela",
+  "vietnam",
   "wales",
   "northern ireland",
   "republic of ireland",
   "usa",
   "us",
   "u s a",
-  "south korea",
   "north korea",
   "korea republic",
   "korea dpr",
@@ -2335,6 +2436,12 @@ function toMatchListPayload(match, options = {}) {
   const normalized = normalizeMatchRecord(match);
   if (!normalized) return null;
 
+  let resolvedHomeScore = normalized.home_score;
+  let resolvedAwayScore = normalized.away_score;
+  let resolvedScoreStatus = normalized.score_status
+    ? String(normalized.score_status).trim()
+    : null;
+
   const payload = {
     date: normalized.date,
     time: normalized.time,
@@ -2349,20 +2456,11 @@ function toMatchListPayload(match, options = {}) {
   } else {
   }
 
-  if (normalized.home_score !== undefined && normalized.home_score !== null) {
-    payload.home_score = normalized.home_score;
-  }
-  if (normalized.away_score !== undefined && normalized.away_score !== null) {
-    payload.away_score = normalized.away_score;
-  }
   if (normalized.aggregate_home_score !== undefined && normalized.aggregate_home_score !== null) {
     payload.aggregate_home_score = normalized.aggregate_home_score;
   }
   if (normalized.aggregate_away_score !== undefined && normalized.aggregate_away_score !== null) {
     payload.aggregate_away_score = normalized.aggregate_away_score;
-  }
-  if (normalized.score_status) {
-    payload.score_status = normalized.score_status;
   }
 
   // Try to get match details ID from details_url or explicit match_details_id field
@@ -2400,6 +2498,51 @@ function toMatchListPayload(match, options = {}) {
       if (
         teamsMatch
       ) {
+        const detailsHomeScore = parseNumericScore(matchDetails.home_score);
+        const detailsAwayScore = parseNumericScore(matchDetails.away_score);
+        const baseHasScore =
+          resolvedHomeScore !== undefined &&
+          resolvedHomeScore !== null &&
+          resolvedAwayScore !== undefined &&
+          resolvedAwayScore !== null;
+        const detailsHasScore = detailsHomeScore !== null && detailsAwayScore !== null;
+        const baseTotal = baseHasScore ? resolvedHomeScore + resolvedAwayScore : null;
+        const detailsTotal = detailsHasScore ? detailsHomeScore + detailsAwayScore : null;
+        const baseStatus = normalizeMatchStatusValue(resolvedScoreStatus);
+        const detailsStatus = normalizeMatchStatusValue(matchDetails.score_status);
+        const baseMinute = parseMatchStatusMinute(baseStatus);
+        const detailsMinute = parseMatchStatusMinute(detailsStatus);
+        const preferredStatus = pickPreferredMatchStatus(baseStatus, detailsStatus, {
+          preferIncomingOnTie: true,
+          allowTerminalRegression: false,
+        });
+
+        if (preferredStatus) {
+          resolvedScoreStatus = preferredStatus;
+        }
+
+        let useDetailsScores = false;
+        if (detailsHasScore) {
+          if (!baseHasScore) {
+            useDetailsScores = true;
+          } else if (detailsTotal > baseTotal) {
+            useDetailsScores = true;
+          } else if (detailsTotal === baseTotal) {
+            if (detailsMinute !== null && baseMinute !== null) {
+              useDetailsScores = detailsMinute >= baseMinute;
+            } else if (detailsMinute !== null && baseMinute === null) {
+              useDetailsScores = true;
+            } else if (preferredStatus && preferredStatus === detailsStatus) {
+              useDetailsScores = true;
+            }
+          }
+        }
+
+        if (useDetailsScores) {
+          resolvedHomeScore = detailsHomeScore;
+          resolvedAwayScore = detailsAwayScore;
+        }
+
         if (!penaltyResult && matchDetails.penalty_result) {
           penaltyResult = matchDetails.penalty_result;
         }
@@ -2411,6 +2554,16 @@ function toMatchListPayload(match, options = {}) {
         }
       }
     }
+  }
+
+  if (resolvedHomeScore !== undefined && resolvedHomeScore !== null) {
+    payload.home_score = resolvedHomeScore;
+  }
+  if (resolvedAwayScore !== undefined && resolvedAwayScore !== null) {
+    payload.away_score = resolvedAwayScore;
+  }
+  if (resolvedScoreStatus) {
+    payload.score_status = resolvedScoreStatus;
   }
 
   if (aggregateHomeScore !== undefined && aggregateHomeScore !== null) {

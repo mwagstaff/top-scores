@@ -1,382 +1,5 @@
 [
   {
-    "date": "2026-02-24",
-    "time": "17:45",
-    "home_team": "Atlético Madrid",
-    "away_team": "Club Brugge",
-    "league": "UEFA Champions League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 3"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "19:45",
-    "home_team": "Blackburn Rovers",
-    "away_team": "Bristol City",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "19:45",
-    "home_team": "Hull City",
-    "away_team": "Derby County",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "19:45",
-    "home_team": "Middlesbrough",
-    "away_team": "Leicester City",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "19:45",
-    "home_team": "Swansea City",
-    "away_team": "Preston North End",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "19:45",
-    "home_team": "Watford",
-    "away_team": "Ipswich Town",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "19:45",
-    "home_team": "West Brom",
-    "away_team": "Charlton Athletic",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "19:45",
-    "home_team": "Wrexham",
-    "away_team": "Portsmouth",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "19:45",
-    "home_team": "Dundee United",
-    "away_team": "Aberdeen",
-    "league": "Scottish Premiership",
-    "tv_channels": [
-      "DUTV"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "20:00",
-    "home_team": "Southampton",
-    "away_team": "QPR",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports Main Event",
-      "Sky Sports Football",
-      "Sky Sports Ultra HDR"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "20:00",
-    "home_team": "Bayer Leverkusen",
-    "away_team": "Olympiakos",
-    "league": "UEFA Champions League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 2"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "20:00",
-    "home_team": "Inter Milan",
-    "away_team": "Bodo/Glimt",
-    "league": "UEFA Champions League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 1"
-    ]
-  },
-  {
-    "date": "2026-02-24",
-    "time": "20:00",
-    "home_team": "Newcastle United",
-    "away_team": "FK Qarabag",
-    "league": "UEFA Champions League Play-Off 2nd Leg",
-    "tv_channels": [
-      "Amazon Prime Video"
-    ]
-  },
-  {
-    "date": "2026-02-25",
-    "time": "17:45",
-    "home_team": "Atalanta",
-    "away_team": "Borussia Dortmund",
-    "league": "UEFA Champions League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 3"
-    ]
-  },
-  {
-    "date": "2026-02-25",
-    "time": "19:45",
-    "home_team": "Millwall",
-    "away_team": "Birmingham City",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-25",
-    "time": "19:45",
-    "home_team": "Norwich City",
-    "away_team": "Sheffield Wednesday",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-25",
-    "time": "19:45",
-    "home_team": "Sheffield United",
-    "away_team": "Coventry City",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-25",
-    "time": "20:00",
-    "home_team": "Stoke City",
-    "away_team": "Oxford United",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports Main Event",
-      "Sky Sports Football",
-      "Sky Sports Ultra HDR"
-    ]
-  },
-  {
-    "date": "2026-02-25",
-    "time": "20:00",
-    "home_team": "Juventus",
-    "away_team": "Galatasaray",
-    "league": "UEFA Champions League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 3",
-      "TNT Sports 5"
-    ]
-  },
-  {
-    "date": "2026-02-25",
-    "time": "20:00",
-    "home_team": "PSG",
-    "away_team": "Monaco",
-    "league": "UEFA Champions League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 2"
-    ]
-  },
-  {
-    "date": "2026-02-25",
-    "time": "20:00",
-    "home_team": "Real Madrid",
-    "away_team": "Benfica",
-    "league": "UEFA Champions League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 1"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "17:45",
-    "home_team": "Celje",
-    "away_team": "FC Drita",
-    "league": "UEFA Conference League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 10"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "17:45",
-    "home_team": "Fiorentina",
-    "away_team": "Jagiellonia Bialystok",
-    "league": "UEFA Conference League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 8"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "17:45",
-    "home_team": "Rijeka",
-    "away_team": "Omonia Nicosia",
-    "league": "UEFA Conference League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 9"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "17:45",
-    "home_team": "Samsunspor",
-    "away_team": "Shkendija",
-    "league": "UEFA Conference League Play-Off 2nd Leg",
-    "tv_channels": [
-      "discovery+"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "17:45",
-    "home_team": "Crvena zvezda",
-    "away_team": "Lille",
-    "league": "UEFA Europa League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 6"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "17:45",
-    "home_team": "Ferencvaros",
-    "away_team": "Ludogorets",
-    "league": "UEFA Europa League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 7"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "17:45",
-    "home_team": "VfB Stuttgart",
-    "away_team": "Celtic",
-    "league": "UEFA Europa League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 2"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "17:45",
-    "home_team": "Viktoria Plzen",
-    "away_team": "Panathinaikos",
-    "league": "UEFA Europa League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 5"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "20:00",
-    "home_team": "AZ Alkmaar",
-    "away_team": "FC Noah",
-    "league": "UEFA Conference League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 9"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "20:00",
-    "home_team": "Crystal Palace",
-    "away_team": "Zrinjski Mostar",
-    "league": "UEFA Conference League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 3"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "20:00",
-    "home_team": "Lausanne Sport",
-    "away_team": "Sigma Olomouc",
-    "league": "UEFA Conference League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 10"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "20:00",
-    "home_team": "Lech Poznan",
-    "away_team": "KuPS",
-    "league": "UEFA Conference League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 8"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "20:00",
-    "home_team": "Bologna",
-    "away_team": "SK Brann",
-    "league": "UEFA Europa League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 2",
-      "TNT Sports 5"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "20:00",
-    "home_team": "Celta Vigo",
-    "away_team": "PAOK",
-    "league": "UEFA Europa League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 7"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "20:00",
-    "home_team": "Genk",
-    "away_team": "Dinamo Zagreb",
-    "league": "UEFA Europa League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 6"
-    ]
-  },
-  {
-    "date": "2026-02-26",
-    "time": "20:00",
-    "home_team": "Nottingham Forest",
-    "away_team": "Fenerbahce",
-    "league": "UEFA Europa League Play-Off 2nd Leg",
-    "tv_channels": [
-      "TNT Sports 1",
-      "TNT Sports Ultimate"
-    ]
-  },
-  {
     "date": "2026-02-27",
     "time": "19:30",
     "home_team": "Augsburg",
@@ -384,7 +7,8 @@
     "league": "Bundesliga",
     "tv_channels": [
       "BBC iPlayer",
-      "Bundesliga YouTube",
+      "Bundesliga App",
+      "The Overlap YouTube",
       "BBC Sport Website"
     ]
   },
@@ -597,7 +221,7 @@
     "away_team": "Nottingham Forest",
     "league": "Premier League",
     "tv_channels": [
-      "Sky Sports+"
+      "Sky Sports Tennis"
     ]
   },
   {
@@ -607,7 +231,7 @@
     "away_team": "Tottenham Hotspur",
     "league": "Premier League",
     "tv_channels": [
-      "Sky Sports Premier League"
+      "Sky Sports+"
     ]
   },
   {
@@ -618,6 +242,7 @@
     "league": "Premier League",
     "tv_channels": [
       "Sky Sports Main Event",
+      "Sky Sports Premier League",
       "Sky Sports Ultra HDR"
     ]
   },
@@ -840,6 +465,18 @@
   {
     "date": "2026-03-04",
     "time": "19:30",
+    "home_team": "Hamburg",
+    "away_team": "Bayer Leverkusen",
+    "league": "Bundesliga",
+    "tv_channels": [
+      "BBC iPlayer",
+      "Bundesliga App",
+      "BBC Sport Website"
+    ]
+  },
+  {
+    "date": "2026-03-04",
+    "time": "19:30",
     "home_team": "Aston Villa",
     "away_team": "Chelsea",
     "league": "Premier League",
@@ -930,7 +567,7 @@
     "league": "Bundesliga",
     "tv_channels": [
       "BBC iPlayer",
-      "Bundesliga YouTube",
+      "Bundesliga App",
       "BBC Sport Website"
     ]
   },
@@ -941,7 +578,9 @@
     "away_team": "Oxford United",
     "league": "Championship",
     "tv_channels": [
-      "Sky Sports TBC"
+      "Sky Sports Main Event",
+      "Sky Sports Football",
+      "Sky Sports Ultra HDR"
     ]
   },
   {
@@ -953,6 +592,7 @@
     "tv_channels": [
       "BBC One",
       "TNT Sports 1",
+      "TNT Sports Ultimate",
       "BBC iPlayer",
       "BBC Sport Website",
       "discovery+"
@@ -987,7 +627,9 @@
     "away_team": "Portsmouth",
     "league": "Championship",
     "tv_channels": [
-      "Sky Sports TBC"
+      "Sky Sports Main Event",
+      "Sky Sports Football",
+      "Sky Sports Ultra HDR"
     ]
   },
   {
@@ -995,16 +637,6 @@
     "time": "12:30",
     "home_team": "Hull City",
     "away_team": "Millwall",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-03-07",
-    "time": "12:30",
-    "home_team": "Watford",
-    "away_team": "Wrexham",
     "league": "Championship",
     "tv_channels": [
       "Sky Sports+"
@@ -1037,7 +669,7 @@
     "away_team": "Borussia Dortmund",
     "league": "Bundesliga",
     "tv_channels": [
-      "Sky Sports TBC"
+      "Sky Sports Football"
     ]
   },
   {
@@ -1047,7 +679,7 @@
     "away_team": "Real Sociedad",
     "league": "La Liga",
     "tv_channels": [
-      "Premier Sports TBC"
+      "LALIGATV"
     ]
   },
   {
@@ -1156,7 +788,7 @@
     "away_team": "Middlesbrough",
     "league": "Championship",
     "tv_channels": [
-      "Sky Sports TBC"
+      "Sky Sports Football"
     ]
   },
   {
@@ -1211,6 +843,16 @@
     "league": "La Liga",
     "tv_channels": [
       "Premier Sports 1"
+    ]
+  },
+  {
+    "date": "2026-03-10",
+    "time": "17:45",
+    "home_team": "Galatasaray",
+    "away_team": "Liverpool",
+    "league": "UEFA Champions League Round of 16 1st Leg",
+    "tv_channels": [
+      "TBC"
     ]
   },
   {
@@ -1270,7 +912,49 @@
     "away_team": "Ipswich Town",
     "league": "Championship",
     "tv_channels": [
-      "Sky Sports TBC"
+      "Sky Sports Main Event",
+      "Sky Sports Football",
+      "Sky Sports Ultra HDR"
+    ]
+  },
+  {
+    "date": "2026-03-10",
+    "time": "20:00",
+    "home_team": "Atalanta",
+    "away_team": "Bayern Munich",
+    "league": "UEFA Champions League Round of 16 1st Leg",
+    "tv_channels": [
+      "TBC"
+    ]
+  },
+  {
+    "date": "2026-03-10",
+    "time": "20:00",
+    "home_team": "Atlético Madrid",
+    "away_team": "Tottenham Hotspur",
+    "league": "UEFA Champions League Round of 16 1st Leg",
+    "tv_channels": [
+      "TBC"
+    ]
+  },
+  {
+    "date": "2026-03-10",
+    "time": "20:00",
+    "home_team": "Newcastle United",
+    "away_team": "Barcelona",
+    "league": "UEFA Champions League Round of 16 1st Leg",
+    "tv_channels": [
+      "TBC"
+    ]
+  },
+  {
+    "date": "2026-03-11",
+    "time": "17:45",
+    "home_team": "Bayer Leverkusen",
+    "away_team": "Arsenal",
+    "league": "UEFA Champions League Round of 16 1st Leg",
+    "tv_channels": [
+      "TNT Sports TBC"
     ]
   },
   {
@@ -1340,7 +1024,39 @@
     "away_team": "Preston North End",
     "league": "Championship",
     "tv_channels": [
-      "Sky Sports TBC"
+      "Sky Sports Main Event",
+      "Sky Sports Football",
+      "Sky Sports Ultra HDR"
+    ]
+  },
+  {
+    "date": "2026-03-11",
+    "time": "20:00",
+    "home_team": "Bodo/Glimt",
+    "away_team": "Sporting CP",
+    "league": "UEFA Champions League Round of 16 1st Leg",
+    "tv_channels": [
+      "TNT Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-11",
+    "time": "20:00",
+    "home_team": "PSG",
+    "away_team": "Chelsea",
+    "league": "UEFA Champions League Round of 16 1st Leg",
+    "tv_channels": [
+      "TNT Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-11",
+    "time": "20:00",
+    "home_team": "Real Madrid",
+    "away_team": "Manchester City",
+    "league": "UEFA Champions League Round of 16 1st Leg",
+    "tv_channels": [
+      "TNT Sports TBC"
     ]
   },
   {
@@ -1351,7 +1067,7 @@
     "league": "Bundesliga",
     "tv_channels": [
       "BBC iPlayer",
-      "Bundesliga YouTube",
+      "Bundesliga App",
       "BBC Sport Website"
     ]
   },
@@ -1548,7 +1264,7 @@
     "away_team": "Dundee United",
     "league": "Scottish Premiership",
     "tv_channels": [
-      "Premier Sports TBC"
+      "Premier Sports 1"
     ]
   },
   {
@@ -1656,6 +1372,86 @@
     ]
   },
   {
+    "date": "2026-03-17",
+    "time": "17:45",
+    "home_team": "Sporting CP",
+    "away_team": "Bodo/Glimt",
+    "league": "UEFA Champions League Round of 16 2nd Leg",
+    "tv_channels": [
+      "TBC"
+    ]
+  },
+  {
+    "date": "2026-03-17",
+    "time": "20:00",
+    "home_team": "Arsenal",
+    "away_team": "Bayer Leverkusen",
+    "league": "UEFA Champions League Round of 16 2nd Leg",
+    "tv_channels": [
+      "TBC"
+    ]
+  },
+  {
+    "date": "2026-03-17",
+    "time": "20:00",
+    "home_team": "Chelsea",
+    "away_team": "PSG",
+    "league": "UEFA Champions League Round of 16 2nd Leg",
+    "tv_channels": [
+      "TBC"
+    ]
+  },
+  {
+    "date": "2026-03-17",
+    "time": "20:00",
+    "home_team": "Manchester City",
+    "away_team": "Real Madrid",
+    "league": "UEFA Champions League Round of 16 2nd Leg",
+    "tv_channels": [
+      "TBC"
+    ]
+  },
+  {
+    "date": "2026-03-18",
+    "time": "17:45",
+    "home_team": "Barcelona",
+    "away_team": "Newcastle United",
+    "league": "UEFA Champions League Round of 16 2nd Leg",
+    "tv_channels": [
+      "TNT Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-18",
+    "time": "20:00",
+    "home_team": "Bayern Munich",
+    "away_team": "Atalanta",
+    "league": "UEFA Champions League Round of 16 2nd Leg",
+    "tv_channels": [
+      "TNT Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-18",
+    "time": "20:00",
+    "home_team": "Liverpool",
+    "away_team": "Galatasaray",
+    "league": "UEFA Champions League Round of 16 2nd Leg",
+    "tv_channels": [
+      "TNT Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-18",
+    "time": "20:00",
+    "home_team": "Tottenham Hotspur",
+    "away_team": "Atlético Madrid",
+    "league": "UEFA Champions League Round of 16 2nd Leg",
+    "tv_channels": [
+      "TNT Sports TBC"
+    ]
+  },
+  {
     "date": "2026-03-20",
     "time": "19:30",
     "home_team": "RB Leipzig",
@@ -1663,7 +1459,7 @@
     "league": "Bundesliga",
     "tv_channels": [
       "BBC iPlayer",
-      "Bundesliga YouTube",
+      "Bundesliga App",
       "BBC Sport Website"
     ]
   },
@@ -1675,6 +1471,16 @@
     "league": "Championship",
     "tv_channels": [
       "Sky Sports Football"
+    ]
+  },
+  {
+    "date": "2026-03-20",
+    "time": "20:00",
+    "home_team": "Villarreal",
+    "away_team": "Real Sociedad",
+    "league": "La Liga",
+    "tv_channels": [
+      "Premier Sports TBC"
     ]
   },
   {
@@ -1734,6 +1540,26 @@
   },
   {
     "date": "2026-03-21",
+    "time": "13:00",
+    "home_team": "Elche",
+    "away_team": "Real Mallorca",
+    "league": "La Liga",
+    "tv_channels": [
+      "Premier Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-21",
+    "time": "15:15",
+    "home_team": "Espanyol",
+    "away_team": "Getafe",
+    "league": "La Liga",
+    "tv_channels": [
+      "LALIGATV"
+    ]
+  },
+  {
+    "date": "2026-03-21",
     "time": "17:15",
     "home_team": "Swansea City",
     "away_team": "Coventry City",
@@ -1755,6 +1581,26 @@
   {
     "date": "2026-03-21",
     "time": "17:30",
+    "home_team": "Levante",
+    "away_team": "Real Oviedo",
+    "league": "La Liga",
+    "tv_channels": [
+      "Premier Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-21",
+    "time": "17:30",
+    "home_team": "Osasuna",
+    "away_team": "Girona",
+    "league": "La Liga",
+    "tv_channels": [
+      "Premier Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-21",
+    "time": "17:30",
     "home_team": "Everton",
     "away_team": "Chelsea",
     "league": "Premier League",
@@ -1771,7 +1617,17 @@
     "away_team": "Aberdeen",
     "league": "Scottish Premiership",
     "tv_channels": [
-      "Premier Sports TBC"
+      "Premier Sports 2"
+    ]
+  },
+  {
+    "date": "2026-03-21",
+    "time": "20:00",
+    "home_team": "Sevilla",
+    "away_team": "Valencia",
+    "league": "La Liga",
+    "tv_channels": [
+      "Disney+"
     ]
   },
   {
@@ -1810,6 +1666,16 @@
   },
   {
     "date": "2026-03-22",
+    "time": "13:00",
+    "home_team": "Barcelona",
+    "away_team": "Rayo Vallecano",
+    "league": "La Liga",
+    "tv_channels": [
+      "Premier Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-22",
     "time": "14:15",
     "home_team": "Tottenham Hotspur",
     "away_team": "Nottingham Forest",
@@ -1828,6 +1694,16 @@
     "league": "Bundesliga",
     "tv_channels": [
       "Amazon Prime PPV"
+    ]
+  },
+  {
+    "date": "2026-03-22",
+    "time": "15:15",
+    "home_team": "Celta Vigo",
+    "away_team": "Alavés",
+    "league": "La Liga",
+    "tv_channels": [
+      "Premier Sports TBC"
     ]
   },
   {
@@ -1858,12 +1734,32 @@
   },
   {
     "date": "2026-03-22",
+    "time": "17:30",
+    "home_team": "Athletic Bilbao",
+    "away_team": "Real Betis",
+    "league": "La Liga",
+    "tv_channels": [
+      "Premier Sports TBC"
+    ]
+  },
+  {
+    "date": "2026-03-22",
     "time": "18:30",
     "home_team": "FC Augsburg",
     "away_team": "VfB Stuttgart",
     "league": "Bundesliga",
     "tv_channels": [
       "Amazon Prime PPV"
+    ]
+  },
+  {
+    "date": "2026-03-22",
+    "time": "20:00",
+    "home_team": "Real Madrid",
+    "away_team": "Atlético Madrid",
+    "league": "La Liga",
+    "tv_channels": [
+      "Premier Sports TBC"
     ]
   },
   {
