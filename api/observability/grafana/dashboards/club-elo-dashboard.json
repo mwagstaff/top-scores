@@ -2,7 +2,7 @@
   "title": "Club Elo Data Health",
   "timezone": "browser",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 2,
   "refresh": "10s",
   "panels": [
     {
@@ -25,7 +25,7 @@
       },
       "targets": [
         {
-          "expr": "1000 * club_elo_last_success_timestamp_seconds{job=\"top-scores\"}",
+          "expr": "1000 * (max_over_time(club_elo_last_success_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
           "legendFormat": "last success"
         }
       ]
@@ -54,7 +54,7 @@
       },
       "targets": [
         {
-          "expr": "1000 * club_elo_last_failure_timestamp_seconds{job=\"top-scores\"}",
+          "expr": "1000 * (max_over_time(club_elo_last_failure_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
           "legendFormat": "last failure"
         }
       ]
@@ -79,7 +79,7 @@
       },
       "targets": [
         {
-          "expr": "time() - club_elo_oldest_from_timestamp_seconds{job=\"top-scores\"}",
+          "expr": "time() - (max_over_time(club_elo_oldest_from_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
           "legendFormat": "oldest age"
         }
       ]
@@ -104,7 +104,7 @@
       },
       "targets": [
         {
-          "expr": "time() - club_elo_latest_from_timestamp_seconds{job=\"top-scores\"}",
+          "expr": "time() - (max_over_time(club_elo_latest_from_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
           "legendFormat": "newest age"
         }
       ]
@@ -132,7 +132,7 @@
       },
       "targets": [
         {
-          "expr": "club_elo_latest_pull_team_count{job=\"top-scores\"}",
+          "expr": "max_over_time(club_elo_latest_pull_team_count{job=\"top-scores\"}[30m])",
           "legendFormat": "team count"
         }
       ]
@@ -160,7 +160,7 @@
       },
       "targets": [
         {
-          "expr": "club_elo_unmatched_team_count{job=\"top-scores\"}",
+          "expr": "max_over_time(club_elo_unmatched_team_count{job=\"top-scores\"}[30m])",
           "legendFormat": "unmatched teams"
         }
       ]

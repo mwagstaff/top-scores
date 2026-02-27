@@ -290,6 +290,8 @@ let clubEloOldestFromDate = null;
 let clubEloNewestFromDate = null;
 let clubEloLatestPullTeamCount = 0;
 let clubEloUnmatchedTeamCount = 0;
+let clubEloLastSuccessDurationSeconds = 0;
+let clubEloLastFailureDurationSeconds = 0;
 let matchDetailsById = new Map();
 let matchDetailsLastUpdated = null;
 let matchDetailsUpdating = false;
@@ -2798,19 +2800,25 @@ function refreshClubEloDataMetrics(teams) {
   clubEloNewestFromDate = newest;
 }
 
-function markClubEloSuccess(updatedAtIso, teams) {
+function markClubEloSuccess(updatedAtIso, teams, durationSeconds = null) {
   const parsedMs = Date.parse(String(updatedAtIso || ""));
   if (Number.isFinite(parsedMs) && parsedMs > 0) {
     clubEloLastSuccessAt = new Date(parsedMs).toISOString();
+  }
+  if (Number.isFinite(durationSeconds) && durationSeconds >= 0) {
+    clubEloLastSuccessDurationSeconds = durationSeconds;
   }
   refreshClubEloDataMetrics(teams);
   refreshClubEloUnmatchedTeamMetric();
 }
 
-function markClubEloFailure(failedAtIso = new Date().toISOString()) {
+function markClubEloFailure(failedAtIso = new Date().toISOString(), durationSeconds = null) {
   const parsedMs = Date.parse(String(failedAtIso || ""));
   if (Number.isFinite(parsedMs) && parsedMs > 0) {
     clubEloLastFailureAt = new Date(parsedMs).toISOString();
+  }
+  if (Number.isFinite(durationSeconds) && durationSeconds >= 0) {
+    clubEloLastFailureDurationSeconds = durationSeconds;
   }
 }
 
