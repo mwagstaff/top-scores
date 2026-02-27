@@ -20,8 +20,10 @@ const GOAL_TIMELINE_BACKLOG_LIMIT = 64; // Keep bounded unreconciled timeline ev
 const MONITOR_DIAGNOSTICS_RECENT_LIMIT = 300; // Keep a rolling in-memory diagnostics window
 const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG !== "0";
 const LIVE_ACTIVITY_EVAL_INTERVAL_MS = 15 * 1000;
+const LIVE_ACTIVITY_STARTUP_KICK_DELAYS_MS = [0, 3000, 9000];
 const LIVE_ACTIVITY_MAX_MATCHES = 10;
-const LIVE_ACTIVITY_PENDING_MAX_MS = 8 * 60 * 60 * 1000;
+// If APNS accepts a start but the app never reports an activity token, retry quickly.
+const LIVE_ACTIVITY_PENDING_MAX_MS = 2 * 60 * 1000;
 const LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS = 30 * 60;
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
@@ -824,7 +826,28 @@ let dailyMatchesCheckTimer = null;
 let cleanupTimer = null;
 let liveActivityEvalTimer = null;
 let liveActivityEvalInFlight = false;
+let liveActivityStartupKickTimers = [];
 let apiBaseURL = "http://localhost:3000/api/v1";
+
+async function runStartupLiveActivityKick(reason = "startup") {
+  if (!isMonitoring) return;
+  try {
+    await checkTodaysMatches();
+  } catch (error) {
+    console.warn(
+      `[MatchMonitor] Startup kick checkTodaysMatches failed (${reason}):`,
+      error && error.message ? error.message : error
+    );
+  }
+  await evaluateAndDispatchLiveActivities();
+}
+
+function clearStartupLiveActivityKickTimers() {
+  for (const timer of liveActivityStartupKickTimers) {
+    clearTimeout(timer);
+  }
+  liveActivityStartupKickTimers = [];
+}
 
 /**
  * Initialize the match monitoring service
@@ -846,8 +869,20 @@ function startMonitoring() {
   isMonitoring = true;
   console.log("[MatchMonitor] Starting match monitoring");
 
+  // Run an eager startup refresh sequence so Live Activities resume promptly after restarts.
+  for (const delayMs of LIVE_ACTIVITY_STARTUP_KICK_DELAYS_MS) {
+    if (delayMs <= 0) {
+      void runStartupLiveActivityKick("startup_immediate");
+      continue;
+    }
+    const timer = setTimeout(() => {
+      liveActivityStartupKickTimers = liveActivityStartupKickTimers.filter((item) => item !== timer);
+      void runStartupLiveActivityKick(`startup_retry_${delayMs}ms`);
+    }, delayMs);
+    liveActivityStartupKickTimers.push(timer);
+  }
+
   // Start daily matches check
-  checkTodaysMatches();
   dailyMatchesCheckTimer = setInterval(checkTodaysMatches, DAILY_MATCHES_CHECK_INTERVAL_MS);
 
   // Start cleanup timer
@@ -867,6 +902,7 @@ function startMonitoring() {
 function stopMonitoring() {
   isMonitoring = false;
   console.log("[MatchMonitor] Stopping match monitoring");
+  clearStartupLiveActivityKickTimers();
 
   if (dailyMatchesCheckTimer) {
     clearInterval(dailyMatchesCheckTimer);
@@ -1681,6 +1717,8 @@ function buildActivityMatchSnapshot(match) {
     away_team: match.away_team || null,
     home_score: toNumericScore(match.home_score),
     away_score: toNumericScore(match.away_score),
+    aggregate_home_score: toNumericScore(match.aggregate_home_score),
+    aggregate_away_score: toNumericScore(match.aggregate_away_score),
     score_status: match.score_status || null,
     tv_channels: Array.isArray(match.tv_channels) ? match.tv_channels : [],
   };
@@ -1940,6 +1978,19 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       lastMode: presentation.mode,
       lastDispatchAt: new Date(nowMs).toISOString(),
     });
+    return;
+  }
+
+  if (isTerminalLiveActivityError(startResult)) {
+    await persistLiveActivityPatch(user, {
+      pushToStartToken: null,
+      pushToStartTokenUpdatedAt: null,
+      pendingStartAt: null,
+      lastPayloadHash: null,
+      lastMode: null,
+      lastDispatchAt: new Date(nowMs).toISOString(),
+      testHoldUntil: null,
+    });
   }
 }
 
@@ -1975,11 +2026,22 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
     const status = currentMatch ? currentMatch.score_status : null;
 
     if (isLiveMatchStatus(status)) {
+      const delayedHasAggregateHome =
+        delayed && Object.prototype.hasOwnProperty.call(delayed, "aggregate_home_score");
+      const delayedHasAggregateAway =
+        delayed && Object.prototype.hasOwnProperty.call(delayed, "aggregate_away_score");
       liveMatches.push({
         ...currentMatch,
         home_score: delayed.home_score,
         away_score: delayed.away_score,
         score_status: delayed.score_status || currentMatch.score_status,
+        // Keep aggregate values on the same delayed timeline as primary scores/status.
+        aggregate_home_score: delayedHasAggregateHome
+          ? delayed.aggregate_home_score
+          : null,
+        aggregate_away_score: delayedHasAggregateAway
+          ? delayed.aggregate_away_score
+          : null,
       });
       continue;
     }

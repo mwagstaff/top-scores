@@ -2049,11 +2049,18 @@ private struct MultiMatchListView: View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(chunkedMatches.enumerated()), id: \.offset) { _, rowMatches in
                 HStack(spacing: 8) {
-                    ForEach(Array(rowMatches.enumerated()), id: \.offset) { _, match in
-                        MultiMatchEntryCell(match: match, live: live)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    if rowMatches.count == 1 {
+                    MultiMatchEntryCell(match: rowMatches[0], live: live)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Rectangle()
+                        .fill(.white.opacity(0.16))
+                        .frame(width: 1)
+                        .padding(.vertical, 2)
+
+                    if rowMatches.count > 1 {
+                        MultiMatchEntryCell(match: rowMatches[1], live: live)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    } else {
                         Color.clear
                             .frame(maxWidth: .infinity)
                     }
@@ -2113,15 +2120,12 @@ private struct MultiMatchEntryCell: View {
             LiveActivityTeamLogo(teamName: match.homeTeam, size: 20)
                 .frame(width: 20, alignment: .center)
 
-            Text(scoreText)
-                .font(.callout.monospacedDigit().weight(.bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+            scoreView
                 .frame(width: 88, alignment: .center)
 
             Text(timeText)
                 .font(.caption2.monospacedDigit())
-                .foregroundStyle(live ? .red : .secondary)
+                .foregroundStyle(.white.opacity(0.65))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .frame(width: 32, alignment: .center)
@@ -2132,17 +2136,33 @@ private struct MultiMatchEntryCell: View {
         .frame(minHeight: 22, alignment: .leading)
     }
 
-    private var scoreText: String {
-        let liveScoreText: String
+    @ViewBuilder
+    private var scoreView: some View {
+        HStack(spacing: 2) {
+            if let homeAgg = match.aggregateHomeScore {
+                Text("(\(homeAgg))")
+                    .font(.callout.monospacedDigit())
+                    .fontWeight(.regular)
+            }
+
+            Text(scoreCoreText)
+                .font(.callout.monospacedDigit().weight(.bold))
+
+            if let awayAgg = match.aggregateAwayScore {
+                Text("(\(awayAgg))")
+                    .font(.callout.monospacedDigit())
+                    .fontWeight(.regular)
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+    }
+
+    private var scoreCoreText: String {
         if let home = match.homeScore, let away = match.awayScore {
-            liveScoreText = "\(home) - \(away)"
-        } else {
-            liveScoreText = "vs"
+            return "\(home) - \(away)"
         }
-        guard let homeAgg = match.aggregateHomeScore, let awayAgg = match.aggregateAwayScore else {
-            return liveScoreText
-        }
-        return "(\(homeAgg)) \(liveScoreText) (\(awayAgg))"
+        return "vs"
     }
 
     private var timeText: String {

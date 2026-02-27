@@ -6089,7 +6089,7 @@ const LIVE_ACTIVITY_TEST_MODES = new Set([
   "multi_upcoming",
   "multi_live",
 ]);
-const LIVE_ACTIVITY_TEST_PENDING_START_MAX_SECONDS = 8 * 60 * 60;
+const LIVE_ACTIVITY_TEST_PENDING_START_MAX_SECONDS = 2 * 60;
 
 function normalizeLiveActivityTestMode(value, fallback = "single_live") {
   const normalized = String(value || "")
@@ -6560,7 +6560,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
       );
     }
 
-    if (!activityPushToken && pendingStartIsFresh) {
+    if (!activityPushToken && pendingStartIsFresh && !forceStart) {
       res.status(200).json({
         success: true,
         userDeviceToken,
@@ -6657,6 +6657,27 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
               isDevelopmentBuild,
             }
           );
+        } else {
+          const terminalFallbackStartFailure =
+            Boolean(fallbackStartResult && fallbackStartResult.isTerminal) ||
+            isLiveActivityTerminalResult(fallbackStartResult);
+          if (terminalFallbackStartFailure) {
+            await updateUserLiveActivityState(
+              userDeviceToken,
+              {
+                pushToStartToken: null,
+                pushToStartTokenUpdatedAt: null,
+                pendingStartAt: null,
+                lastPayloadHash: null,
+                lastMode: null,
+                lastDispatchAt: new Date().toISOString(),
+                testHoldUntil: null,
+              },
+              {
+                isDevelopmentBuild,
+              }
+            );
+          }
         }
 
         res.status(fallbackStartResult.success ? 200 : 502).json({
@@ -6760,6 +6781,26 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
           isDevelopmentBuild,
         }
       );
+    } else {
+      const terminalStartFailure =
+        Boolean(result && result.isTerminal) || isLiveActivityTerminalResult(result);
+      if (terminalStartFailure) {
+        await updateUserLiveActivityState(
+          userDeviceToken,
+          {
+            pushToStartToken: null,
+            pushToStartTokenUpdatedAt: null,
+            pendingStartAt: null,
+            lastPayloadHash: null,
+            lastMode: null,
+            lastDispatchAt: new Date().toISOString(),
+            testHoldUntil: null,
+          },
+          {
+            isDevelopmentBuild,
+          }
+        );
+      }
     }
 
     res.status(result.success ? 200 : 502).json({
