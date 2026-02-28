@@ -219,6 +219,55 @@ multi_live_matches_json() {
 EOF
 }
 
+single_mode_match_json() {
+  local mode="$1"
+  local today now_time
+  today="$(date +%Y-%m-%d)"
+  now_time="$(date +%H:%M)"
+
+  if [[ "$mode" == "single_upcoming" ]]; then
+    cat <<EOF
+[
+  {
+    "matchId": "test_upcoming_1",
+    "date": "$today",
+    "time": "$now_time",
+    "league": "UEFA Champions League",
+    "leagueSubcategory": "Round of 16",
+    "homeTeam": "Atalanta",
+    "awayTeam": "Borussia Dortmund",
+    "homeScore": null,
+    "awayScore": null,
+    "aggregateHomeScore": 2,
+    "aggregateAwayScore": 2,
+    "matchTime": null,
+    "tvChannels": ["TNT Sports 1"]
+  }
+]
+EOF
+  else
+    cat <<EOF
+[
+  {
+    "matchId": "test_live_1",
+    "date": "$today",
+    "time": "$now_time",
+    "league": "UEFA Champions League",
+    "leagueSubcategory": "Round of 16",
+    "homeTeam": "Atalanta",
+    "awayTeam": "Borussia Dortmund",
+    "homeScore": 2,
+    "awayScore": 0,
+    "aggregateHomeScore": 4,
+    "aggregateAwayScore": 2,
+    "matchTime": "45+2'",
+    "tvChannels": ["TNT Sports 1"]
+  }
+]
+EOF
+  fi
+}
+
 case "$ACTION" in
   state)
     curl_json GET "$BASE_URL/live-activity/test/state"
@@ -226,6 +275,19 @@ case "$ACTION" in
   start)
     if [[ "$MODE" == "multi_live" ]]; then
       MATCHES_JSON="$(multi_live_matches_json)"
+      curl_json POST "$BASE_URL/live-activity/test/start" "{
+        \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
+        \"mode\": \"$MODE\",
+        \"delayMinutes\": 5,
+        \"matches\": $MATCHES_JSON,
+        \"forceStart\": $FORCE_START_JSON,
+        \"fallbackStartOnUpdateFailure\": $FALLBACK_START_ON_UPDATE_FAILURE_JSON,
+        \"testHoldSeconds\": $TEST_HOLD_SECONDS_JSON,
+        \"title\": \"Top Scores Test\",
+        \"body\": \"Live Activity start test from CLI\"
+      }"
+    elif [[ "$MODE" == "single_live" || "$MODE" == "single_upcoming" ]]; then
+      MATCHES_JSON="$(single_mode_match_json "$MODE")"
       curl_json POST "$BASE_URL/live-activity/test/start" "{
         \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
         \"mode\": \"$MODE\",
@@ -253,6 +315,14 @@ case "$ACTION" in
   update)
     if [[ "$MODE" == "multi_live" ]]; then
       MATCHES_JSON="$(multi_live_matches_json)"
+      curl_json POST "$BASE_URL/live-activity/test/update" "{
+        \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
+        \"mode\": \"$MODE\",
+        \"delayMinutes\": 5,
+        \"matches\": $MATCHES_JSON
+      }"
+    elif [[ "$MODE" == "single_live" || "$MODE" == "single_upcoming" ]]; then
+      MATCHES_JSON="$(single_mode_match_json "$MODE")"
       curl_json POST "$BASE_URL/live-activity/test/update" "{
         \"userDeviceToken\": \"$USER_DEVICE_TOKEN\",
         \"mode\": \"$MODE\",

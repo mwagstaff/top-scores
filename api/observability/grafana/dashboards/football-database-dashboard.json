@@ -1,0 +1,298 @@
+{
+  "title": "FootballDatabase Rankings & Health",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Last Successful FootballDatabase Pull Duration",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "football_database_last_success_duration_seconds{job=\"top-scores\"}",
+          "legendFormat": "success duration"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Last Failed FootballDatabase Pull Duration",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#E02F44"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "football_database_last_failure_duration_seconds{job=\"top-scores\"}",
+          "legendFormat": "failure duration"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Age of FootballDatabase Data",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "time() - (max_over_time(football_database_latest_data_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
+          "legendFormat": "data age"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Teams in Latest FootballDatabase Pull",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#299C46"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max_over_time(football_database_latest_pull_team_count{job=\"top-scores\"}[30m])",
+          "legendFormat": "team count"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Teams Without FootballDatabase Match",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#E02F44"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max_over_time(football_database_unmatched_team_count{job=\"top-scores\"}[30m])",
+          "legendFormat": "unmatched teams"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Club Rankings (Highest Points First)",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 12
+      },
+      "targets": [
+        {
+          "expr": "sort_desc(football_database_team_ranking_points{job=\"top-scores\"})",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "index",
+            "alias": "__rank0",
+            "index": {
+              "asPercentile": false
+            },
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": {
+                "matcher": {
+                  "id": "byName",
+                  "options": "__rank0"
+                }
+              },
+              "operator": "+",
+              "right": {
+                "fixed": "1"
+              }
+            },
+            "alias": "#",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "Metric": true,
+              "metric": true,
+              "__rank0": true
+            },
+            "indexByName": {
+              "#": 0,
+              "club": 1,
+              "country": 2,
+              "Value": 3,
+              "Value #A": 3
+            },
+            "renameByName": {
+              "#": "#",
+              "club": "Club",
+              "country": "Country",
+              "Value": "Points",
+              "Value #A": "Points"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Country Average Ranking Points (Highest First)",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 12
+      },
+      "targets": [
+        {
+          "expr": "sort_desc(football_database_country_average_ranking_points{job=\"top-scores\"})",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "index",
+            "alias": "__rank0",
+            "index": {
+              "asPercentile": false
+            },
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": {
+                "matcher": {
+                  "id": "byName",
+                  "options": "__rank0"
+                }
+              },
+              "operator": "+",
+              "right": {
+                "fixed": "1"
+              }
+            },
+            "alias": "#",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "Metric": true,
+              "metric": true,
+              "__rank0": true
+            },
+            "indexByName": {
+              "#": 0,
+              "country": 1,
+              "Value": 2,
+              "Value #A": 2
+            },
+            "renameByName": {
+              "#": "#",
+              "country": "Country",
+              "Value": "Average points",
+              "Value #A": "Average points"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

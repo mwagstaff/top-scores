@@ -6,6 +6,7 @@
     "fetch": "node fetch_live_footballontv.js",
     "fetch:epl": "node fetch_bbc_premier_league_table.js",
     "fetch:tables": "node fetch_bbc_league_tables.js",
+    "fetch:footballdatabase": "node fetch_football_database_rankings.js",
     "test:bbc-details": "node test_bbc_match_details.js",
     "start": "node server.js",
     "test-harness": "node test_harness_server.js",

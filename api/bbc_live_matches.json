@@ -1,59 +1,31 @@
 [
   {
-    "home_team": "Atletico Madrid",
-    "home_score": 2,
-    "away_team": "Club Brugge",
+    "home_team": "Costa Rica",
+    "home_score": 0,
+    "away_team": "Brazil",
     "away_score": 1,
-    "match_time": "50",
-    "details_url": "https://www.bbc.co.uk/sport/football/live/cdxzkljkjxkt",
-    "aggregate_home_score": "5",
-    "aggregate_away_score": "4",
-    "home_goal_scorers": [
-      {
-        "player": "A. Sørloth",
-        "goal_times": [
-          "23'"
-        ]
-      },
-      {
-        "player": "J. Cardoso",
-        "goal_times": [
-          "48'"
-        ]
-      }
-    ],
+    "match_time": "13",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c8jxp1egxznt",
+    "home_goal_scorers": [],
     "away_goal_scorers": [
       {
-        "player": "J. Ordoñez",
+        "player": "Kerolin",
         "goal_times": [
-          "36'"
+          "11'"
         ]
       }
     ],
-    "home_red_cards": [],
-    "away_red_cards": [],
-    "home_assists": [
-      {
-        "player": "J. Oblak",
-        "assist_times": [
-          "23'"
-        ]
-      }
-    ],
-    "away_assists": []
-  },
-  {
-    "home_team": "Odisha",
-    "home_score": 0,
-    "away_team": "Inter Kashi",
-    "away_score": 0,
-    "match_time": "FT",
-    "details_url": "https://www.bbc.co.uk/sport/football/live/cx2re80ern5t",
-    "home_goal_scorers": [],
-    "away_goal_scorers": [],
     "home_red_cards": [],
     "away_red_cards": [],
     "home_assists": [],
-    "away_assists": []
+    "away_assists": [
+      {
+        "player": "Duda Sampaio",
+        "assist_times": [
+          "11'"
+        ]
+      }
+    ],
+    "score_status": "13"
   }
 ]

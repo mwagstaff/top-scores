@@ -4,7 +4,7 @@
     "league_name": "Premier League",
     "stage_name": "Regular Season",
     "source_url": "https://www.bbc.co.uk/sport/football/premier-league/table",
-    "updated_at": "24th February 2026 at 01:20",
+    "updated_at": "27th February 2026 at 21:57",
     "rows": [
       {
         "position": 1,
@@ -49,20 +49,20 @@
       {
         "position": 3,
         "team": "Aston Villa",
-        "played": 27,
+        "played": 28,
         "won": 15,
         "drawn": 6,
-        "lost": 6,
+        "lost": 7,
         "goals_for": 38,
-        "goals_against": 28,
-        "goal_difference": 10,
+        "goals_against": 30,
+        "goal_difference": 8,
         "points": 51,
         "form": [
-          "W",
           "L",
           "D",
           "W",
-          "D"
+          "D",
+          "L"
         ],
         "rank_status": "UEFA Champions League"
       },
@@ -389,20 +389,20 @@
       {
         "position": 20,
         "team": "Wolverhampton Wanderers",
-        "played": 28,
-        "won": 1,
+        "played": 29,
+        "won": 2,
         "drawn": 7,
         "lost": 20,
-        "goals_for": 18,
+        "goals_for": 20,
         "goals_against": 51,
-        "goal_difference": -33,
-        "points": 10,
+        "goal_difference": -31,
+        "points": 13,
         "form": [
           "L",
+          "D",
+          "D",
           "L",
-          "D",
-          "D",
-          "L"
+          "W"
         ],
         "rank_status": "Relegation"
       }
@@ -413,7 +413,7 @@
     "league_name": "Championship",
     "stage_name": "Regular Season",
     "source_url": "https://www.bbc.co.uk/sport/football/championship/table",
-    "updated_at": "27th February 2026 at 09:57",
+    "updated_at": "27th February 2026 at 21:53",
     "rows": [
       {
         "position": 1,
@@ -537,6 +537,26 @@
       },
       {
         "position": 7,
+        "team": "Watford",
+        "played": 35,
+        "won": 13,
+        "drawn": 12,
+        "lost": 10,
+        "goals_for": 45,
+        "goals_against": 41,
+        "goal_difference": 4,
+        "points": 51,
+        "form": [
+          "L",
+          "D",
+          "W",
+          "L",
+          "W"
+        ],
+        "rank_status": null
+      },
+      {
+        "position": 8,
         "team": "Southampton",
         "played": 34,
         "won": 13,
@@ -556,27 +576,27 @@
         "rank_status": null
       },
       {
-        "position": 8,
+        "position": 9,
         "team": "Bristol City",
-        "played": 34,
+        "played": 35,
         "won": 14,
         "drawn": 8,
-        "lost": 12,
-        "goals_for": 47,
-        "goals_against": 42,
-        "goal_difference": 5,
+        "lost": 13,
+        "goals_for": 48,
+        "goals_against": 44,
+        "goal_difference": 4,
         "points": 50,
         "form": [
-          "L",
           "W",
           "D",
           "L",
-          "W"
+          "W",
+          "L"
         ],
         "rank_status": null
       },
       {
-        "position": 9,
+        "position": 10,
         "team": "Preston North End",
         "played": 34,
         "won": 12,
@@ -596,7 +616,7 @@
         "rank_status": null
       },
       {
-        "position": 10,
+        "position": 11,
         "team": "Birmingham City",
         "played": 34,
         "won": 13,
@@ -616,7 +636,7 @@
         "rank_status": null
       },
       {
-        "position": 11,
+        "position": 12,
         "team": "Derby County",
         "played": 34,
         "won": 13,
@@ -631,26 +651,6 @@
           "L",
           "W",
           "L",
-          "L"
-        ],
-        "rank_status": null
-      },
-      {
-        "position": 12,
-        "team": "Watford",
-        "played": 34,
-        "won": 12,
-        "drawn": 12,
-        "lost": 10,
-        "goals_for": 43,
-        "goals_against": 40,
-        "goal_difference": 3,
-        "points": 48,
-        "form": [
-          "D",
-          "L",
-          "D",
-          "W",
           "L"
         ],
         "rank_status": null
@@ -1880,7 +1880,7 @@
     "league_name": "La Liga",
     "stage_name": "Regular Season",
     "source_url": "https://www.bbc.co.uk/sport/football/spanish-la-liga/table",
-    "updated_at": "24th February 2026 at 01:20",
+    "updated_at": "27th February 2026 at 21:59",
     "rows": [
       {
         "position": 1,
@@ -2145,20 +2145,20 @@
       {
         "position": 14,
         "team": "Alavés",
-        "played": 25,
+        "played": 26,
         "won": 7,
         "drawn": 6,
-        "lost": 12,
+        "lost": 13,
         "goals_for": 23,
-        "goals_against": 32,
-        "goal_difference": -9,
+        "goals_against": 34,
+        "goal_difference": -11,
         "points": 27,
         "form": [
           "W",
-          "W",
           "L",
           "D",
-          "D"
+          "D",
+          "L"
         ],
         "rank_status": null
       },
@@ -2245,20 +2245,20 @@
       {
         "position": 19,
         "team": "Levante",
-        "played": 25,
-        "won": 4,
+        "played": 26,
+        "won": 5,
         "drawn": 6,
         "lost": 15,
-        "goals_for": 26,
+        "goals_for": 28,
         "goals_against": 44,
-        "goal_difference": -18,
-        "points": 18,
+        "goal_difference": -16,
+        "points": 21,
         "form": [
-          "D",
           "L",
           "L",
           "L",
-          "L"
+          "L",
+          "W"
         ],
         "rank_status": "Relegation"
       },
@@ -3018,7 +3018,7 @@
     "league_name": "UEFA Conference League",
     "stage_name": "League Stage",
     "source_url": "https://www.bbc.co.uk/sport/football/europa-conference-league/table",
-    "updated_at": "27th February 2026 at 15:30",
+    "updated_at": "27th February 2026 at 18:32",
     "rows": [
       {
         "position": 1,

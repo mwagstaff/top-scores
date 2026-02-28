@@ -1915,7 +1915,8 @@ private struct SingleUpcomingMatchView: View {
                 UpcomingCompetitionHeaderRow(
                     league: match.league,
                     subheading: match.leagueSubcategory,
-                    kickoffDate: kickoffDate
+                    kickoffDate: kickoffDate,
+                    primaryChannel: primaryChannel
                 )
 
                 HStack(spacing: 10) {
@@ -1933,14 +1934,17 @@ private struct SingleUpcomingMatchView: View {
                     awayTeam: match.awayTeam,
                     aggregateInfo: "Kick-off"
                 )
-
-                ChannelInfoRow(channels: match.tvChannels)
             }
         }
     }
 
     private var kickoffDate: Date? {
         WidgetMatchDateParser.shared.parse(date: match.date, time: match.time)
+    }
+
+    private var primaryChannel: String? {
+        let primary = match.tvChannels.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return primary?.isEmpty == false ? primary : nil
     }
 }
 
@@ -1953,7 +1957,8 @@ private struct SingleLiveMatchView: View {
             VStack(alignment: .leading, spacing: 8) {
                 CompetitionHeaderRow(
                     league: match.league,
-                    subheading: match.leagueSubcategory ?? "Live now"
+                    subheading: match.leagueSubcategory ?? "Live now",
+                    primaryChannel: primaryChannel
                 )
 
                 HStack(spacing: 10) {
@@ -1979,8 +1984,6 @@ private struct SingleLiveMatchView: View {
                     awayTeam: match.awayTeam,
                     aggregateInfo: aggregateInfoText
                 )
-
-                ChannelInfoRow(channels: match.tvChannels)
             }
         }
     }
@@ -1990,6 +1993,11 @@ private struct SingleLiveMatchView: View {
             return "Agg \(aggregateHome)-\(aggregateAway)"
         }
         return " "
+    }
+
+    private var primaryChannel: String? {
+        let primary = match.tvChannels.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return primary?.isEmpty == false ? primary : nil
     }
 }
 
@@ -2012,19 +2020,36 @@ private struct SingleMatchCardChrome<Content: View>: View {
 private struct CompetitionHeaderRow: View {
     let league: String
     let subheading: String
+    let primaryChannel: String?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(league)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.8))
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            Text(subheading)
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.55))
-                .lineLimit(1)
+        ZStack {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(league)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(topTrailingText)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+
+            if let primaryChannel {
+                LiveActivityChannelLogo(channelName: primaryChannel, size: 16)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var topTrailingText: String {
+        if let primaryChannel, !primaryChannel.isEmpty {
+            return primaryChannel
+        }
+        return subheading
     }
 }
 
@@ -2033,25 +2058,36 @@ private struct UpcomingCompetitionHeaderRow: View {
     let league: String
     let subheading: String?
     let kickoffDate: Date?
+    let primaryChannel: String?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(league)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.8))
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            trailingStatusView
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .multilineTextAlignment(.trailing)
-                .lineLimit(1)
+        ZStack {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(league)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                trailingStatusView
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(1)
+            }
+
+            if let primaryChannel {
+                LiveActivityChannelLogo(channelName: primaryChannel, size: 16)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var trailingStatusView: some View {
-        if kickoffDate != nil {
+        if let primaryChannel, !primaryChannel.isEmpty {
+            Text(primaryChannel)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.55))
+        } else if kickoffDate != nil {
             KickoffCountdownLabel(kickoffDate: kickoffDate)
         } else if let subheading, !subheading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Text(subheading)
@@ -2345,6 +2381,7 @@ private struct LiveActivityChannelLogo: View {
             }
         }
         .frame(width: size * 1.8, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: max(2, size * 0.18), style: .continuous))
     }
 }
 
