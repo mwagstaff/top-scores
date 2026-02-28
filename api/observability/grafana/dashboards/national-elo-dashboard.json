@@ -1,0 +1,222 @@
+{
+  "title": "National Elo Rankings & Health",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Last Successful National Elo Pull Duration",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "national_elo_last_success_duration_seconds{job=\"top-scores\"}",
+          "legendFormat": "success duration"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Last Failed National Elo Pull Duration",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#E02F44"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "national_elo_last_failure_duration_seconds{job=\"top-scores\"}",
+          "legendFormat": "failure duration"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Age of National Elo Data",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "time() - (max_over_time(national_elo_latest_data_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
+          "legendFormat": "data age"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Teams in Latest National Elo Pull",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#299C46"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max_over_time(national_elo_latest_pull_team_count{job=\"top-scores\"}[30m])",
+          "legendFormat": "team count"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Likely National Teams Without National Elo Match",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#E02F44"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max_over_time(national_elo_unmatched_team_count{job=\"top-scores\"}[30m])",
+          "legendFormat": "unmatched teams"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "National Team Rankings (Highest Elo First)",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "expr": "sort_desc(national_elo_team_ranking_score{job=\"top-scores\"})",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "index",
+            "alias": "__rank0",
+            "index": {
+              "asPercentile": false
+            },
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": {
+                "matcher": {
+                  "id": "byName",
+                  "options": "__rank0"
+                }
+              },
+              "operator": "+",
+              "right": {
+                "fixed": "1"
+              }
+            },
+            "alias": "#",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "Metric": true,
+              "metric": true,
+              "__rank0": true
+            },
+            "indexByName": {
+              "#": 0,
+              "team": 1,
+              "country": 2,
+              "Value": 3,
+              "Value #A": 3
+            },
+            "renameByName": {
+              "#": "#",
+              "team": "Team",
+              "country": "Country",
+              "Value": "Elo",
+              "Value #A": "Elo"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

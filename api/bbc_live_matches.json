@@ -1,31 +1,76 @@
 [
   {
     "home_team": "Costa Rica",
-    "home_score": 0,
+    "home_score": 2,
     "away_team": "Brazil",
-    "away_score": 1,
-    "match_time": "13",
+    "away_score": 4,
+    "match_time": "90+3",
     "details_url": "https://www.bbc.co.uk/sport/football/live/c8jxp1egxznt",
-    "home_goal_scorers": [],
+    "home_goal_scorers": [
+      {
+        "player": "P. Chinchilla",
+        "goal_times": [
+          "52'",
+          "67'"
+        ]
+      }
+    ],
     "away_goal_scorers": [
       {
         "player": "Kerolin",
         "goal_times": [
           "11'"
         ]
+      },
+      {
+        "player": "Jheniffer",
+        "goal_times": [
+          "14'"
+        ]
+      },
+      {
+        "player": "Tainá Maranhão",
+        "goal_times": [
+          "28'"
+        ]
+      },
+      {
+        "player": "Adriana",
+        "goal_times": [
+          "81' pen"
+        ]
       }
     ],
     "home_red_cards": [],
     "away_red_cards": [],
-    "home_assists": [],
+    "home_assists": [
+      {
+        "player": "M. Herrera",
+        "assist_times": [
+          "52'"
+        ]
+      }
+    ],
     "away_assists": [
       {
         "player": "Duda Sampaio",
         "assist_times": [
           "11'"
         ]
+      },
+      {
+        "player": "Tainá Maranhão",
+        "assist_times": [
+          "14'"
+        ]
+      },
+      {
+        "player": "Bia Zaneratto",
+        "assist_times": [
+          "28'"
+        ]
       }
     ],
-    "score_status": "13"
+    "score_status": "90+3"
   }
 ]

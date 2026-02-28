@@ -10,6 +10,7 @@ const {
   TEAM_RANKING_SOURCE_MERGED,
   TEAM_RANKING_SOURCE_CLUBELO,
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
+  TEAM_RANKING_SOURCE_NATIONAL_ELO,
   normalizeTeamRankingSource,
 } = require("./config");
 const {
@@ -63,6 +64,20 @@ const {
   fetchFootballDatabaseRankings,
   writeFootballDatabaseRankings,
 } = require("./fetch_football_database_rankings");
+const {
+  DEFAULT_NATIONAL_ELO_BASE_URL,
+  DEFAULT_NATIONAL_ELO_PAGE,
+  DEFAULT_NATIONAL_ELO_OUTPUT,
+  DEFAULT_NATIONAL_ELO_MIN_ROWS,
+  DEFAULT_NATIONAL_ELO_MIN_BYTES,
+  DEFAULT_NATIONAL_ELO_RETRY_ATTEMPTS,
+  DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_BASE_MS,
+  DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
+  DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
+  DEFAULT_NATIONAL_ELO_RETRY_JITTER_MS,
+  fetchNationalEloRankings,
+  writeNationalEloRankings,
+} = require("./fetch_national_elo_rankings");
 const testMatchState = require("./test_match_state");
 
 function parseEnvBoolean(value, fallback = false) {
@@ -253,6 +268,67 @@ const FOOTBALL_DATABASE_ADAPTIVE_MIN_CONCURRENCY = Number.isFinite(
     Math.min(FOOTBALL_DATABASE_CONCURRENCY, Math.floor(parsedFootballDatabaseAdaptiveMinConcurrency))
   )
   : Math.min(4, FOOTBALL_DATABASE_CONCURRENCY);
+const NATIONAL_ELO_BASE_URL = process.env.NATIONAL_ELO_BASE_URL || DEFAULT_NATIONAL_ELO_BASE_URL;
+const NATIONAL_ELO_PAGE = process.env.NATIONAL_ELO_PAGE || DEFAULT_NATIONAL_ELO_PAGE;
+const NATIONAL_ELO_OUTPUT_PATH = process.env.NATIONAL_ELO_OUTPUT_PATH || DEFAULT_NATIONAL_ELO_OUTPUT;
+const parsedNationalEloMinRows = Number(
+  process.env.NATIONAL_ELO_MIN_ROWS || DEFAULT_NATIONAL_ELO_MIN_ROWS
+);
+const NATIONAL_ELO_MIN_ROWS = Number.isFinite(parsedNationalEloMinRows)
+  ? Math.max(1, Math.floor(parsedNationalEloMinRows))
+  : DEFAULT_NATIONAL_ELO_MIN_ROWS;
+const parsedNationalEloMinBytes = Number(
+  process.env.NATIONAL_ELO_MIN_BYTES || DEFAULT_NATIONAL_ELO_MIN_BYTES
+);
+const NATIONAL_ELO_MIN_BYTES = Number.isFinite(parsedNationalEloMinBytes)
+  ? Math.max(1, Math.floor(parsedNationalEloMinBytes))
+  : DEFAULT_NATIONAL_ELO_MIN_BYTES;
+const NATIONAL_ELO_INTERVAL_HOURS = Number(process.env.NATIONAL_ELO_UPDATE_INTERVAL_HOURS || 12);
+const NATIONAL_ELO_INTERVAL_MS = Number(
+  process.env.NATIONAL_ELO_UPDATE_INTERVAL_MS || NATIONAL_ELO_INTERVAL_HOURS * 60 * 60 * 1000
+);
+const parsedNationalEloRedisTtlSeconds = Number(
+  process.env.NATIONAL_ELO_REDIS_TTL_SECONDS || 7 * 24 * 60 * 60
+);
+const NATIONAL_ELO_REDIS_TTL_SECONDS = Number.isFinite(parsedNationalEloRedisTtlSeconds)
+  ? Math.max(1, Math.floor(parsedNationalEloRedisTtlSeconds))
+  : 7 * 24 * 60 * 60;
+const parsedNationalEloRetryAttempts = Number(
+  process.env.NATIONAL_ELO_RETRY_ATTEMPTS || DEFAULT_NATIONAL_ELO_RETRY_ATTEMPTS
+);
+const NATIONAL_ELO_RETRY_ATTEMPTS = Number.isFinite(parsedNationalEloRetryAttempts)
+  ? Math.max(1, Math.floor(parsedNationalEloRetryAttempts))
+  : DEFAULT_NATIONAL_ELO_RETRY_ATTEMPTS;
+const parsedNationalEloRetryBackoffBaseMs = Number(
+  process.env.NATIONAL_ELO_RETRY_BACKOFF_BASE_MS ||
+    DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_BASE_MS
+);
+const NATIONAL_ELO_RETRY_BACKOFF_BASE_MS = Number.isFinite(parsedNationalEloRetryBackoffBaseMs)
+  ? Math.max(1, Math.floor(parsedNationalEloRetryBackoffBaseMs))
+  : DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_BASE_MS;
+const parsedNationalEloRetryBackoffMaxMs = Number(
+  process.env.NATIONAL_ELO_RETRY_BACKOFF_MAX_MS ||
+    DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_MAX_MS
+);
+const NATIONAL_ELO_RETRY_BACKOFF_MAX_MS = Number.isFinite(parsedNationalEloRetryBackoffMaxMs)
+  ? Math.max(NATIONAL_ELO_RETRY_BACKOFF_BASE_MS, Math.floor(parsedNationalEloRetryBackoffMaxMs))
+  : Math.max(
+    NATIONAL_ELO_RETRY_BACKOFF_BASE_MS,
+    DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_MAX_MS
+  );
+const parsedNationalEloRetryBackoffFactor = Number(
+  process.env.NATIONAL_ELO_RETRY_BACKOFF_FACTOR ||
+    DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_FACTOR
+);
+const NATIONAL_ELO_RETRY_BACKOFF_FACTOR = Number.isFinite(parsedNationalEloRetryBackoffFactor)
+  ? Math.max(1, parsedNationalEloRetryBackoffFactor)
+  : DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_FACTOR;
+const parsedNationalEloRetryJitterMs = Number(
+  process.env.NATIONAL_ELO_RETRY_JITTER_MS || DEFAULT_NATIONAL_ELO_RETRY_JITTER_MS
+);
+const NATIONAL_ELO_RETRY_JITTER_MS = Number.isFinite(parsedNationalEloRetryJitterMs)
+  ? Math.max(0, Math.floor(parsedNationalEloRetryJitterMs))
+  : DEFAULT_NATIONAL_ELO_RETRY_JITTER_MS;
 const RECENT_OUTPUT_PATH =
   process.env.RECENT_OUTPUT_PATH || path.join(__dirname, "recent_matches.json");
 const MISSING_TEAM_LOGOS_OUTPUT_PATH =
@@ -342,6 +418,7 @@ const SOURCE_BBC_PREMIER_LEAGUE = "bbc_premier_league_table";
 const SOURCE_BBC_LEAGUE_TABLES = "bbc_league_tables";
 const SOURCE_CLUB_ELO = "club_elo_rankings";
 const SOURCE_FOOTBALL_DATABASE = "football_database_rankings";
+const SOURCE_NATIONAL_ELO = "national_elo_rankings";
 const SOURCE_BBC_MATCH_DETAILS = "bbc_match_details";
 const SOURCE_RECENT_CACHE = "recent_matches_cache";
 const OP_DATASET_LIVE_MATCHES = "live_matches";
@@ -353,6 +430,7 @@ const OP_DATASET_PREMIER_LEAGUE_TEAMS = "premier_league_teams";
 const OP_DATASET_LEAGUE_TABLES = "league_tables";
 const OP_DATASET_CLUB_ELO_TEAMS = "club_elo_teams";
 const OP_DATASET_FOOTBALL_DATABASE_TEAMS = "football_database_teams";
+const OP_DATASET_NATIONAL_ELO_TEAMS = "national_elo_teams";
 const OP_DATASET_MISSING_TEAM_LOGOS = "missing_team_logos";
 const eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
 eventLoopDelayMonitor.enable();
@@ -440,6 +518,16 @@ let footballDatabaseLatestPullTeamCount = 0;
 let footballDatabaseUnmatchedTeamCount = 0;
 let footballDatabaseLastSuccessDurationSeconds = 0;
 let footballDatabaseLastFailureDurationSeconds = 0;
+let cachedNationalEloTeams = [];
+let nationalEloLastUpdated = null;
+let nationalEloUpdating = false;
+let nationalEloLastSuccessAt = null;
+let nationalEloLastFailureAt = null;
+let nationalEloDataDate = null;
+let nationalEloLatestPullTeamCount = 0;
+let nationalEloUnmatchedTeamCount = 0;
+let nationalEloLastSuccessDurationSeconds = 0;
+let nationalEloLastFailureDurationSeconds = 0;
 let clubEloManualMappings = new Map();
 let clubEloManualMappingsMtimeMs = null;
 let matchDetailsById = new Map();
@@ -1031,6 +1119,22 @@ function buildPrometheusMetricsText() {
     if (!Number.isFinite(parsed) || parsed <= 0) return 0;
     return Math.floor(parsed / 1000);
   })();
+  const nationalEloSuccessTimestampSeconds = (() => {
+    const parsed = Date.parse(String(nationalEloLastSuccessAt || ""));
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return Math.floor(parsed / 1000);
+  })();
+  const nationalEloFailureTimestampSeconds = (() => {
+    const parsed = Date.parse(String(nationalEloLastFailureAt || ""));
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return Math.floor(parsed / 1000);
+  })();
+  const nationalEloDataTimestampSeconds = (() => {
+    if (!isDateOnly(nationalEloDataDate)) return 0;
+    const parsed = Date.parse(`${nationalEloDataDate}T00:00:00Z`);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return Math.floor(parsed / 1000);
+  })();
 
   lines.push("# HELP club_elo_last_success_timestamp_seconds Last successful Club Elo download+import timestamp.");
   lines.push("# TYPE club_elo_last_success_timestamp_seconds gauge");
@@ -1205,6 +1309,74 @@ function buildPrometheusMetricsText() {
     lines,
     "football_database_last_failure_duration_seconds",
     footballDatabaseLastFailureDurationSeconds
+  );
+
+  lines.push("# HELP national_elo_last_success_timestamp_seconds Last successful National Elo download+import timestamp.");
+  lines.push("# TYPE national_elo_last_success_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "national_elo_last_success_timestamp_seconds",
+    nationalEloSuccessTimestampSeconds
+  );
+
+  lines.push("# HELP national_elo_last_failure_timestamp_seconds Last failed National Elo download+import timestamp.");
+  lines.push("# TYPE national_elo_last_failure_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "national_elo_last_failure_timestamp_seconds",
+    nationalEloFailureTimestampSeconds
+  );
+
+  lines.push("# HELP national_elo_latest_data_timestamp_seconds National Elo dataset timestamp from rankings source.");
+  lines.push("# TYPE national_elo_latest_data_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "national_elo_latest_data_timestamp_seconds",
+    nationalEloDataTimestampSeconds
+  );
+
+  lines.push("# HELP national_elo_latest_pull_team_count Number of teams in the latest National Elo pull.");
+  lines.push("# TYPE national_elo_latest_pull_team_count gauge");
+  pushPrometheusSample(
+    lines,
+    "national_elo_latest_pull_team_count",
+    nationalEloLatestPullTeamCount
+  );
+
+  const nationalEloMetricSeries = buildNationalEloMetricSeries(cachedNationalEloTeams);
+
+  lines.push("# HELP national_elo_team_ranking_score National Elo rating by national team.");
+  lines.push("# TYPE national_elo_team_ranking_score gauge");
+  nationalEloMetricSeries.teamScores.forEach((teamScore) => {
+    const labels = { team: teamScore.team };
+    if (teamScore.country) {
+      labels.country = teamScore.country;
+    }
+    pushPrometheusSample(lines, "national_elo_team_ranking_score", teamScore.score, labels);
+  });
+
+  lines.push("# HELP national_elo_unmatched_team_count Number of likely national teams without National Elo ranking data after matching.");
+  lines.push("# TYPE national_elo_unmatched_team_count gauge");
+  pushPrometheusSample(
+    lines,
+    "national_elo_unmatched_team_count",
+    nationalEloUnmatchedTeamCount
+  );
+
+  lines.push("# HELP national_elo_last_success_duration_seconds Duration of the most recent successful National Elo download+import.");
+  lines.push("# TYPE national_elo_last_success_duration_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "national_elo_last_success_duration_seconds",
+    nationalEloLastSuccessDurationSeconds
+  );
+
+  lines.push("# HELP national_elo_last_failure_duration_seconds Duration of the most recent failed National Elo download+import.");
+  lines.push("# TYPE national_elo_last_failure_duration_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "national_elo_last_failure_duration_seconds",
+    nationalEloLastFailureDurationSeconds
   );
 
   lines.push("# HELP top_scores_api_requests_total Total API requests.");
@@ -1560,6 +1732,12 @@ const FOOTBALL_DATABASE_MANUAL_TARGET_MIN_CONFIDENCE = Number.isFinite(
 )
   ? Math.min(1, Math.max(0, parsedFootballDatabaseManualTargetMinConfidence))
   : 0.62;
+const parsedNationalEloMatchMinConfidence = Number(
+  process.env.NATIONAL_ELO_MATCH_MIN_CONFIDENCE || 0.82
+);
+const NATIONAL_ELO_MATCH_MIN_CONFIDENCE = Number.isFinite(parsedNationalEloMatchMinConfidence)
+  ? Math.min(1, Math.max(0, parsedNationalEloMatchMinConfidence))
+  : 0.82;
 
 const SCORE_ALIAS_MAP = new Map([
   ["manchester united", "man united"],
@@ -3262,6 +3440,7 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
     cachedMergedMatches,
     cachedFootballDatabaseTeams
   );
+  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
 
   const updatedAt =
     newestIsoTimestamp([bbcRangeLastUpdated, lastUpdated, bbcLastUpdated, recentLastUpdated]) ||
@@ -3516,6 +3695,59 @@ function normalizeFootballDatabaseTeamsPayload(records) {
     });
 }
 
+function normalizeNationalEloTeamRecord(record) {
+  if (!record || typeof record !== "object") return null;
+  const parseNumericField = (value) => {
+    if (value === undefined || value === null || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const teamName = String(record.Team || record.Name || record.Country || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!teamName) return null;
+  const rankValue = parseNumericField(record.Rank || record.rank);
+  const eloValue = parseNumericField(record.Elo || record.elo || record.Points || record.points);
+  const codeValue = String(record.TeamCode || record.Code || record.code || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const aliases = Array.isArray(record.Aliases)
+    ? record.Aliases.map((alias) => String(alias || "").replace(/\s+/g, " ").trim()).filter(Boolean)
+    : [];
+  const dedupedAliases = Array.from(new Set(aliases)).filter(
+    (alias) => compareInsensitive(alias, teamName) !== 0
+  );
+  return {
+    Name: teamName,
+    Team: teamName,
+    Country: String(record.Country || teamName).replace(/\s+/g, " ").trim() || teamName,
+    Rank: Number.isFinite(rankValue) && rankValue > 0 ? Math.floor(rankValue) : null,
+    Elo: Number.isFinite(eloValue) ? eloValue : null,
+    Points: Number.isFinite(eloValue) ? eloValue : null,
+    TeamCode: codeValue || null,
+    Aliases: dedupedAliases,
+    OneYearRankChange: parseNumericField(
+      record.OneYearRankChange || record.one_year_rank_change
+    ),
+    OneYearRatingChange: parseNumericField(
+      record.OneYearRatingChange || record.one_year_rating_change
+    ),
+  };
+}
+
+function normalizeNationalEloTeamsPayload(records) {
+  if (!Array.isArray(records)) return [];
+  return records
+    .map((record) => normalizeNationalEloTeamRecord(record))
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftRank = Number.isFinite(left.Rank) ? left.Rank : Number.MAX_SAFE_INTEGER;
+      const rightRank = Number.isFinite(right.Rank) ? right.Rank : Number.MAX_SAFE_INTEGER;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return String(left.Team || "").localeCompare(String(right.Team || ""));
+    });
+}
+
 function refreshClubEloDataMetrics(teams) {
   const normalizedTeams = Array.isArray(teams) ? teams : [];
   clubEloLatestPullTeamCount = normalizedTeams.length;
@@ -3616,6 +3848,53 @@ function refreshFootballDatabaseUnmatchedTeamMetric(
     ).length;
   } catch (_error) {
     footballDatabaseUnmatchedTeamCount = 0;
+  }
+}
+
+function refreshNationalEloDataMetrics(teams) {
+  const normalizedTeams = Array.isArray(teams) ? teams : [];
+  nationalEloLatestPullTeamCount = normalizedTeams.length;
+}
+
+function markNationalEloSuccess(updatedAtIso, teams, durationSeconds = null, dataDate = null) {
+  const parsedMs = Date.parse(String(updatedAtIso || ""));
+  if (Number.isFinite(parsedMs) && parsedMs > 0) {
+    nationalEloLastSuccessAt = new Date(parsedMs).toISOString();
+  }
+  if (Number.isFinite(durationSeconds) && durationSeconds >= 0) {
+    nationalEloLastSuccessDurationSeconds = durationSeconds;
+  }
+  const normalizedDataDate = isDateOnly(String(dataDate || "").trim())
+    ? String(dataDate).trim()
+    : null;
+  if (normalizedDataDate) {
+    nationalEloDataDate = normalizedDataDate;
+  }
+  refreshNationalEloDataMetrics(teams);
+  refreshNationalEloUnmatchedTeamMetric();
+}
+
+function markNationalEloFailure(failedAtIso = new Date().toISOString(), durationSeconds = null) {
+  const parsedMs = Date.parse(String(failedAtIso || ""));
+  if (Number.isFinite(parsedMs) && parsedMs > 0) {
+    nationalEloLastFailureAt = new Date(parsedMs).toISOString();
+  }
+  if (Number.isFinite(durationSeconds) && durationSeconds >= 0) {
+    nationalEloLastFailureDurationSeconds = durationSeconds;
+  }
+}
+
+function refreshNationalEloUnmatchedTeamMetric(
+  matches = cachedMergedMatches,
+  nationalEloTeams = cachedNationalEloTeams
+) {
+  try {
+    const mapped = mapTeamsToNationalElo(matches, nationalEloTeams);
+    nationalEloUnmatchedTeamCount = mapped.filter(
+      (team) => !team.Team && !team._excluded_from_matching
+    ).length;
+  } catch (_error) {
+    nationalEloUnmatchedTeamCount = 0;
   }
 }
 
@@ -3724,6 +4003,39 @@ function buildFootballDatabaseMetricSeries(teams = cachedFootballDatabaseTeams) 
   return {
     teamScores,
     countryAverageScores,
+  };
+}
+
+function buildNationalEloMetricSeries(teams = cachedNationalEloTeams) {
+  const teamScores = [];
+
+  (Array.isArray(teams) ? teams : []).forEach((team) => {
+    const nationalTeam = String(team && (team.Team || team.Name) ? team.Team || team.Name : "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!nationalTeam) return;
+
+    const score = Number(team && (team.Elo !== undefined ? team.Elo : team.Points));
+    if (!Number.isFinite(score)) return;
+
+    const country = String(team && team.Country ? team.Country : nationalTeam)
+      .replace(/\s+/g, " ")
+      .trim();
+
+    teamScores.push({
+      team: nationalTeam,
+      country: country || null,
+      score,
+    });
+  });
+
+  teamScores.sort((left, right) => {
+    if (right.score !== left.score) return right.score - left.score;
+    return left.team.localeCompare(right.team);
+  });
+
+  return {
+    teamScores,
   };
 }
 
@@ -4103,6 +4415,174 @@ function mapTeamsToFootballDatabase(
   });
 }
 
+function buildNationalEloCandidateIndex(nationalEloTeams) {
+  const byNormalizedName = new Map();
+  const byIdentityKey = new Map();
+  const entries = Array.isArray(nationalEloTeams) ? nationalEloTeams : [];
+
+  entries.forEach((team) => {
+    if (!team || typeof team !== "object") return;
+    const canonicalName = String(team.Team || team.Name || "").trim();
+    if (!canonicalName) return;
+    const names = [canonicalName, ...(Array.isArray(team.Aliases) ? team.Aliases : [])]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    names.forEach((name) => {
+      const normalizedName = normalizeTeamName(name).replace(/\s+/g, " ").trim();
+      if (normalizedName && !byNormalizedName.has(normalizedName)) {
+        byNormalizedName.set(normalizedName, team);
+      }
+      identityTeamKeys(name).forEach((key) => {
+        if (!key) return;
+        if (!byIdentityKey.has(key)) {
+          byIdentityKey.set(key, []);
+        }
+        byIdentityKey.get(key).push(team);
+      });
+    });
+  });
+
+  return { byNormalizedName, byIdentityKey };
+}
+
+function findBestNationalEloMatch(teamName, nationalEloTeams, index = null, options = {}) {
+  const minConfidence = normalizeMatchConfidenceThreshold(
+    options.minConfidence,
+    NATIONAL_ELO_MATCH_MIN_CONFIDENCE
+  );
+  if (!isLikelyNationalTeamName(teamName)) {
+    return {
+      team: null,
+      confidence: 0,
+      method: "excluded_non_national_team",
+      accepted: false,
+    };
+  }
+
+  const safeIndex = index || buildNationalEloCandidateIndex(nationalEloTeams);
+  const normalizedName = normalizeTeamName(teamName).replace(/\s+/g, " ").trim();
+  const baseName = normalizeNationalTeamBaseName(teamName);
+  const normalizedBaseName = normalizeTeamName(baseName).replace(/\s+/g, " ").trim();
+
+  const exact = safeIndex.byNormalizedName.get(normalizedName) ||
+    safeIndex.byNormalizedName.get(normalizedBaseName);
+  if (exact) {
+    return {
+      team: exact,
+      confidence: 1,
+      method: "exact",
+      accepted: true,
+    };
+  }
+
+  const candidates = new Map();
+  const addCandidatesFromName = (value) => {
+    identityTeamKeys(value).forEach((key) => {
+      const matches = safeIndex.byIdentityKey.get(key);
+      (Array.isArray(matches) ? matches : []).forEach((team) => {
+        const canonical = String(team && (team.Team || team.Name) ? team.Team || team.Name : "").trim();
+        if (!canonical) return;
+        if (!candidates.has(canonical)) {
+          candidates.set(canonical, team);
+        }
+      });
+    });
+  };
+  addCandidatesFromName(teamName);
+  addCandidatesFromName(baseName);
+
+  const candidateList = candidates.size > 0
+    ? Array.from(candidates.values())
+    : (Array.isArray(nationalEloTeams) ? nationalEloTeams : []);
+
+  let best = null;
+  candidateList.forEach((candidate) => {
+    const candidateNames = [
+      String(candidate && (candidate.Team || candidate.Name) ? candidate.Team || candidate.Name : ""),
+      ...(Array.isArray(candidate && candidate.Aliases) ? candidate.Aliases : []),
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    if (candidateNames.length === 0) return;
+
+    let confidence = 0;
+    candidateNames.forEach((candidateName) => {
+      confidence = Math.max(
+        confidence,
+        similarityScore(baseName || teamName, candidateName),
+        similarityScore(teamName, candidateName),
+        canonicalIdentityConfidenceBoost(baseName || teamName, candidateName)
+      );
+    });
+    if (!best || confidence > best.confidence) {
+      best = {
+        team: candidate,
+        confidence,
+      };
+    }
+  });
+
+  if (!best) return null;
+  return {
+    ...best,
+    method: candidates.size > 0 ? "identity_fuzzy" : "global_fuzzy",
+    accepted: best.confidence >= minConfidence,
+  };
+}
+
+function mapTeamsToNationalElo(matches, nationalEloTeams, leagueFilter = null, options = {}) {
+  const names = uniqueMatchTeamNames(matches, leagueFilter);
+  const normalizedNationalTeams = normalizeNationalEloTeamsPayload(nationalEloTeams);
+  const index = buildNationalEloCandidateIndex(normalizedNationalTeams);
+  const minConfidence = normalizeMatchConfidenceThreshold(
+    options.minConfidence,
+    NATIONAL_ELO_MATCH_MIN_CONFIDENCE
+  );
+
+  return names.map((name) => {
+    const match = findBestNationalEloMatch(name, normalizedNationalTeams, index, {
+      minConfidence,
+    });
+    const excludedFromMatching = match && match.method === "excluded_non_national_team";
+    if (!match || !match.team || !match.accepted) {
+      return {
+        Name: name,
+        Rank: null,
+        Team: null,
+        Country: null,
+        Elo: null,
+        Points: null,
+        TeamCode: null,
+        Aliases: [],
+        _match_confidence: match && Number.isFinite(match.confidence) ? match.confidence : 0,
+        _closest_club: match && match.team ? match.team.Team : null,
+        _match_method: match && match.method ? match.method : null,
+        _excluded_from_matching: Boolean(excludedFromMatching),
+      };
+    }
+    const team = match.team;
+    const points = Number.isFinite(team.Points)
+      ? team.Points
+      : Number.isFinite(team.Elo)
+        ? team.Elo
+        : null;
+    return {
+      Name: name,
+      Rank: Number.isFinite(team.Rank) ? team.Rank : null,
+      Team: team.Team || team.Name || null,
+      Country: team.Country || team.Team || team.Name || null,
+      Elo: Number.isFinite(points) ? points : null,
+      Points: Number.isFinite(points) ? points : null,
+      TeamCode: team.TeamCode || null,
+      Aliases: Array.isArray(team.Aliases) ? team.Aliases : [],
+      _match_confidence: match.confidence,
+      _match_method: match.method || null,
+      _excluded_from_matching: false,
+    };
+  });
+}
+
 const CLUB_ELO_COUNTRY_CODE_TO_NAME = Object.freeze({
   ALB: "Albania",
   AND: "Andorra",
@@ -4161,7 +4641,11 @@ const CLUB_ELO_COUNTRY_CODE_TO_NAME = Object.freeze({
   WAL: "Wales",
 });
 
+const TEAM_TYPE_CLUB = "club";
+const TEAM_TYPE_NATIONAL = "national";
+
 function rankingDatasourceLabel(source) {
+  if (source === TEAM_RANKING_SOURCE_NATIONAL_ELO) return "National Elo";
   if (source === TEAM_RANKING_SOURCE_FOOTBALLDATABASE) return "FootballDatabase";
   return "Club Elo";
 }
@@ -4169,6 +4653,7 @@ function rankingDatasourceLabel(source) {
 const TEAM_DATASOURCE_SORT_ORDER = Object.freeze({
   "Club Elo": 1,
   FootballDatabase: 2,
+  "National Elo": 3,
 });
 
 function sortDatasourceLabels(values) {
@@ -4223,13 +4708,27 @@ function mapTeamsForRankingSource(
   });
 }
 
-function toUnifiedTeamRows(mappedTeams, source) {
+function mapNationalTeamsForRankingSource(matches, nationalEloTeams, leagueFilter) {
+  return mapTeamsToNationalElo(matches, nationalEloTeams, leagueFilter, {
+    minConfidence: NATIONAL_ELO_MATCH_MIN_CONFIDENCE,
+  });
+}
+
+function toUnifiedTeamRows(mappedTeams, source, teamType = TEAM_TYPE_CLUB) {
   const sourceLabel = rankingDatasourceLabel(source);
   return (Array.isArray(mappedTeams) ? mappedTeams : []).map((team) => {
-    const points = source === TEAM_RANKING_SOURCE_FOOTBALLDATABASE
-      ? Number(team && (team.Points !== undefined ? team.Points : team.Elo))
-      : Number(team && team.Elo);
-    const ranked = team && team.Club && Number.isFinite(points);
+    let points = null;
+    let ranked = false;
+    if (source === TEAM_RANKING_SOURCE_FOOTBALLDATABASE) {
+      points = Number(team && (team.Points !== undefined ? team.Points : team.Elo));
+      ranked = team && team.Club && Number.isFinite(points);
+    } else if (source === TEAM_RANKING_SOURCE_NATIONAL_ELO) {
+      points = Number(team && (team.Points !== undefined ? team.Points : team.Elo));
+      ranked = team && team.Team && Number.isFinite(points);
+    } else {
+      points = Number(team && team.Elo);
+      ranked = team && team.Club && Number.isFinite(points);
+    }
     return {
       Name: String(team && team.Name ? team.Name : "").trim(),
       Rank: null,
@@ -4237,6 +4736,7 @@ function toUnifiedTeamRows(mappedTeams, source) {
       Points: ranked ? points : null,
       Datasource: ranked ? [sourceLabel] : [],
       aliases: [],
+      Type: teamType,
       _source: source,
       _match_confidence:
         team && Number.isFinite(team._match_confidence) ? team._match_confidence : 0,
@@ -4274,6 +4774,7 @@ function chooseMergedTeamRow(clubRow, footballDatabaseRow) {
       Points: (clubPoints + footballDatabasePoints) / 2,
       Datasource: sortDatasourceLabels(datasources),
       aliases: [],
+      Type: TEAM_TYPE_CLUB,
       _match_confidence: Math.max(
         Number(clubRow._match_confidence || 0),
         Number(footballDatabaseRow._match_confidence || 0)
@@ -4303,6 +4804,7 @@ function chooseMergedTeamRow(clubRow, footballDatabaseRow) {
     Points: null,
     Datasource: [],
     aliases: [],
+    Type: TEAM_TYPE_CLUB,
     _excluded_from_matching: Boolean(
       (clubRow && clubRow._excluded_from_matching) ||
       (footballDatabaseRow && footballDatabaseRow._excluded_from_matching)
@@ -4332,6 +4834,7 @@ function mergeUnifiedTeamRows(clubRows, footballDatabaseRows) {
         Points: null,
         Datasource: [],
         aliases: [],
+        Type: TEAM_TYPE_CLUB,
         _source: null,
         _match_confidence: 0,
         _closest_club: null,
@@ -4349,8 +4852,12 @@ function dedupeUnifiedTeamRowsByManualMappings(rows, manualMappings = null) {
   (Array.isArray(rows) ? rows : []).forEach((row) => {
     const name = String(row && row.Name ? row.Name : "").trim();
     if (!name) return;
-    const canonicalKey = resolveManualCanonicalTeamKey(name, safeMappings) || normalizedTeamKey(name);
-    const key = canonicalKey || normalizedTeamKey(name) || name.toLowerCase();
+    const teamType = String(row && row.Type ? row.Type : TEAM_TYPE_CLUB).toLowerCase();
+    const canonicalKey = teamType === TEAM_TYPE_NATIONAL
+      ? normalizedTeamKey(name)
+      : (resolveManualCanonicalTeamKey(name, safeMappings) || normalizedTeamKey(name));
+    const nameKey = canonicalKey || normalizedTeamKey(name) || name.toLowerCase();
+    const key = `${teamType}:${nameKey}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   });
@@ -4451,20 +4958,23 @@ function applyRankingToUnifiedTeamRows(rows) {
       if (right.Points !== left.Points) return right.Points - left.Points;
       return compareInsensitive(left.Name || "", right.Name || "");
     });
-  const rankByName = new Map();
-  rankedRows.forEach((row, index) => {
-    rankByName.set(row.Name, index + 1);
-  });
-
-  return (Array.isArray(rows) ? rows : [])
+  const rankedRowsWithRank = rankedRows.map((row, index) => ({
+    ...row,
+    Rank: index + 1,
+  }));
+  const unrankedRows = (Array.isArray(rows) ? rows : [])
+    .filter((row) => !isRankedTeamRow(row))
     .map((row) => ({
       ...row,
-      Rank: rankByName.has(row.Name) ? rankByName.get(row.Name) : null,
-    }))
+      Rank: null,
+    }));
+
+  return [...rankedRowsWithRank, ...unrankedRows]
     .sort((left, right) => {
       const leftRank = Number.isFinite(left.Rank) ? left.Rank : Number.MAX_SAFE_INTEGER;
       const rightRank = Number.isFinite(right.Rank) ? right.Rank : Number.MAX_SAFE_INTEGER;
       if (leftRank !== rightRank) return leftRank - rightRank;
+      if (left.Type !== right.Type) return compareInsensitive(left.Type || "", right.Type || "");
       return compareInsensitive(left.Name || "", right.Name || "");
     });
 }
@@ -4473,9 +4983,21 @@ function buildRankedTeamsForSource(
   matches,
   clubEloTeams,
   footballDatabaseTeams,
+  nationalEloTeams,
   source,
   leagueFilter = null
 ) {
+  const nationalRows = toUnifiedTeamRows(
+    mapNationalTeamsForRankingSource(matches, nationalEloTeams, leagueFilter),
+    TEAM_RANKING_SOURCE_NATIONAL_ELO,
+    TEAM_TYPE_NATIONAL
+  ).filter((row) => isLikelyNationalTeamName(row.Name));
+  const dedupedNationalRows = dedupeUnifiedTeamRowsByManualMappings(nationalRows);
+
+  if (source === TEAM_RANKING_SOURCE_NATIONAL_ELO) {
+    return applyRankingToUnifiedTeamRows(dedupedNationalRows);
+  }
+
   if (source === TEAM_RANKING_SOURCE_CLUBELO) {
     const clubRows = toUnifiedTeamRows(
       mapTeamsForRankingSource(
@@ -4485,10 +5007,13 @@ function buildRankedTeamsForSource(
         leagueFilter,
         TEAM_RANKING_SOURCE_CLUBELO
       ),
-      TEAM_RANKING_SOURCE_CLUBELO
+      TEAM_RANKING_SOURCE_CLUBELO,
+      TEAM_TYPE_CLUB
     );
-    const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(clubRows);
-    return applyRankingToUnifiedTeamRows(dedupedRows);
+    const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(
+      clubRows.filter((row) => !isLikelyNationalTeamName(row.Name))
+    );
+    return applyRankingToUnifiedTeamRows([...dedupedRows, ...dedupedNationalRows]);
   }
   if (source === TEAM_RANKING_SOURCE_FOOTBALLDATABASE) {
     const footballDatabaseRows = toUnifiedTeamRows(
@@ -4499,10 +5024,13 @@ function buildRankedTeamsForSource(
         leagueFilter,
         TEAM_RANKING_SOURCE_FOOTBALLDATABASE
       ),
-      TEAM_RANKING_SOURCE_FOOTBALLDATABASE
+      TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
+      TEAM_TYPE_CLUB
     );
-    const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(footballDatabaseRows);
-    return applyRankingToUnifiedTeamRows(dedupedRows);
+    const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(
+      footballDatabaseRows.filter((row) => !isLikelyNationalTeamName(row.Name))
+    );
+    return applyRankingToUnifiedTeamRows([...dedupedRows, ...dedupedNationalRows]);
   }
   const clubRows = toUnifiedTeamRows(
     mapTeamsForRankingSource(
@@ -4512,7 +5040,8 @@ function buildRankedTeamsForSource(
       leagueFilter,
       TEAM_RANKING_SOURCE_CLUBELO
     ),
-    TEAM_RANKING_SOURCE_CLUBELO
+    TEAM_RANKING_SOURCE_CLUBELO,
+    TEAM_TYPE_CLUB
   );
   const footballDatabaseRows = toUnifiedTeamRows(
     mapTeamsForRankingSource(
@@ -4522,11 +5051,15 @@ function buildRankedTeamsForSource(
       leagueFilter,
       TEAM_RANKING_SOURCE_FOOTBALLDATABASE
     ),
-    TEAM_RANKING_SOURCE_FOOTBALLDATABASE
+    TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
+    TEAM_TYPE_CLUB
   );
-  const mergedRows = mergeUnifiedTeamRows(clubRows, footballDatabaseRows);
+  const mergedRows = mergeUnifiedTeamRows(
+    clubRows.filter((row) => !isLikelyNationalTeamName(row.Name)),
+    footballDatabaseRows.filter((row) => !isLikelyNationalTeamName(row.Name))
+  );
   const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(mergedRows);
-  return applyRankingToUnifiedTeamRows(dedupedRows);
+  return applyRankingToUnifiedTeamRows([...dedupedRows, ...dedupedNationalRows]);
 }
 
 function toTeamsApiTeamPayload(rows) {
@@ -4536,6 +5069,7 @@ function toTeamsApiTeamPayload(rows) {
     Country: row.Country || null,
     Points: Number.isFinite(row.Points) ? row.Points : null,
     Datasource: sortDatasourceLabels(Array.isArray(row.Datasource) ? row.Datasource : []),
+    Type: row.Type || (isLikelyNationalTeamName(row.Name) ? TEAM_TYPE_NATIONAL : TEAM_TYPE_CLUB),
     aliases: Array.isArray(row.aliases) ? row.aliases : [],
   }));
 }
@@ -4545,6 +5079,7 @@ function buildUnmatchedTeamPayloadFromUnifiedRows(rows) {
     .filter((row) => !isRankedTeamRow(row) && !row._excluded_from_matching)
     .map((row) => ({
       Name: row.Name,
+      Type: row.Type || (isLikelyNationalTeamName(row.Name) ? TEAM_TYPE_NATIONAL : TEAM_TYPE_CLUB),
       confidence: Number.isFinite(row._match_confidence)
         ? Number(row._match_confidence.toFixed(4))
         : 0,
@@ -4555,15 +5090,27 @@ function buildUnmatchedTeamPayloadFromUnifiedRows(rows) {
 }
 
 function teamSourceConfidenceThreshold(source) {
+  if (source === TEAM_RANKING_SOURCE_NATIONAL_ELO) {
+    return {
+      nationalelo: NATIONAL_ELO_MATCH_MIN_CONFIDENCE,
+    };
+  }
   if (source === TEAM_RANKING_SOURCE_CLUBELO) {
-    return CLUB_ELO_MATCH_MIN_CONFIDENCE;
+    return {
+      clubelo: CLUB_ELO_MATCH_MIN_CONFIDENCE,
+      nationalelo: NATIONAL_ELO_MATCH_MIN_CONFIDENCE,
+    };
   }
   if (source === TEAM_RANKING_SOURCE_FOOTBALLDATABASE) {
-    return FOOTBALL_DATABASE_MATCH_MIN_CONFIDENCE;
+    return {
+      footballdatabase: FOOTBALL_DATABASE_MATCH_MIN_CONFIDENCE,
+      nationalelo: NATIONAL_ELO_MATCH_MIN_CONFIDENCE,
+    };
   }
   return {
     clubelo: CLUB_ELO_MATCH_MIN_CONFIDENCE,
     footballdatabase: FOOTBALL_DATABASE_MATCH_MIN_CONFIDENCE,
+    nationalelo: NATIONAL_ELO_MATCH_MIN_CONFIDENCE,
   };
 }
 
@@ -4571,10 +5118,21 @@ const SUPPORTED_TEAM_RANKING_SOURCES = [
   TEAM_RANKING_SOURCE_MERGED,
   TEAM_RANKING_SOURCE_CLUBELO,
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
+  TEAM_RANKING_SOURCE_NATIONAL_ELO,
 ];
 
-function resolveTeamRankingSource(rawSource) {
+function normalizeExtendedTeamRankingSource(rawSource) {
   const normalized = normalizeTeamRankingSource(rawSource);
+  if (normalized) return normalized;
+  const fallback = String(rawSource || "").trim().toLowerCase();
+  if (["nationalelo", "national_elo", "national-elo", "national"].includes(fallback)) {
+    return TEAM_RANKING_SOURCE_NATIONAL_ELO;
+  }
+  return null;
+}
+
+function resolveTeamRankingSource(rawSource) {
+  const normalized = normalizeExtendedTeamRankingSource(rawSource);
   if (normalized) {
     return { source: normalized, fromQuery: true, valid: true };
   }
@@ -4841,6 +5399,28 @@ function loadFootballDatabaseFromDisk() {
   }
 }
 
+function loadNationalEloFromDisk() {
+  try {
+    if (!fs.existsSync(NATIONAL_ELO_OUTPUT_PATH)) return;
+    const raw = fs.readFileSync(NATIONAL_ELO_OUTPUT_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      cachedNationalEloTeams = normalizeNationalEloTeamsPayload(parsed);
+      setSourceCacheSize(SOURCE_NATIONAL_ELO, cachedNationalEloTeams.length);
+      const stat = fs.statSync(NATIONAL_ELO_OUTPUT_PATH);
+      nationalEloLastUpdated = stat.mtime.toISOString();
+      markNationalEloSuccess(
+        nationalEloLastUpdated,
+        cachedNationalEloTeams,
+        null,
+        nationalEloLastUpdated.slice(0, 10)
+      );
+    }
+  } catch (err) {
+    console.warn("Failed to load National Elo teams from disk:", err.message || err);
+  }
+}
+
 function loadMissingTeamLogosFromDisk() {
   try {
     if (!fs.existsSync(MISSING_TEAM_LOGOS_OUTPUT_PATH)) return;
@@ -4890,6 +5470,14 @@ function writeFootballDatabaseTeams(outputPath, teams) {
     writeFootballDatabaseRankings(outputPath, teams);
   } catch (err) {
     console.warn("Failed to write FootballDatabase teams to disk:", err.message || err);
+  }
+}
+
+function writeNationalEloTeams(outputPath, teams) {
+  try {
+    writeNationalEloRankings(outputPath, teams);
+  } catch (err) {
+    console.warn("Failed to write National Elo teams to disk:", err.message || err);
   }
 }
 
@@ -4951,6 +5539,7 @@ async function hydrateOperationalStateFromRedis() {
       OP_DATASET_LEAGUE_TABLES,
       OP_DATASET_CLUB_ELO_TEAMS,
       OP_DATASET_FOOTBALL_DATABASE_TEAMS,
+      OP_DATASET_NATIONAL_ELO_TEAMS,
       OP_DATASET_MISSING_TEAM_LOGOS,
     ]);
     const matchDetailsSnapshot = await getAllOperationalMatchDetails();
@@ -5026,6 +5615,19 @@ async function hydrateOperationalStateFromRedis() {
       );
     }
 
+    const nationalEloRecord = datasetRecords[OP_DATASET_NATIONAL_ELO_TEAMS];
+    if (nationalEloRecord && Array.isArray(nationalEloRecord.payload)) {
+      cachedNationalEloTeams = normalizeNationalEloTeamsPayload(nationalEloRecord.payload);
+      nationalEloLastUpdated = nationalEloRecord.updated_at || nationalEloLastUpdated;
+      setSourceCacheSize(SOURCE_NATIONAL_ELO, cachedNationalEloTeams.length);
+      markNationalEloSuccess(
+        nationalEloLastUpdated,
+        cachedNationalEloTeams,
+        null,
+        nationalEloLastUpdated ? String(nationalEloLastUpdated).slice(0, 10) : null
+      );
+    }
+
     const missingLogosRecord = datasetRecords[OP_DATASET_MISSING_TEAM_LOGOS];
     if (missingLogosRecord && Array.isArray(missingLogosRecord.payload)) {
       missingTeamLogosByKey = new Map();
@@ -5051,6 +5653,7 @@ async function hydrateOperationalStateFromRedis() {
       cachedMergedMatches,
       cachedFootballDatabaseTeams
     );
+    refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
 
     console.log(
       "[OperationalState] Hydrated from Redis:",
@@ -5063,6 +5666,7 @@ async function hydrateOperationalStateFromRedis() {
         league_tables: cachedLeagueTables.length,
         club_elo_teams: cachedClubEloTeams.length,
         football_database_teams: cachedFootballDatabaseTeams.length,
+        national_elo_teams: cachedNationalEloTeams.length,
         match_details: matchDetailsById.size,
       })
     );
@@ -5115,6 +5719,11 @@ async function persistStartupOperationalStateFromDisk() {
         ttl_seconds: FOOTBALL_DATABASE_REDIS_TTL_SECONDS,
       }
     ),
+    persistOperationalDatasetSafe(OP_DATASET_NATIONAL_ELO_TEAMS, cachedNationalEloTeams, {
+      updated_at: nationalEloLastUpdated || new Date().toISOString(),
+      source: "startup_disk_seed",
+      ttl_seconds: NATIONAL_ELO_REDIS_TTL_SECONDS,
+    }),
     persistOperationalDatasetSafe(OP_DATASET_MISSING_TEAM_LOGOS, sortedMissingTeamLogoNames(), {
       updated_at: missingTeamLogosLastUpdated || new Date().toISOString(),
       source: "startup_disk_seed",
@@ -5181,6 +5790,7 @@ const ADMIN_OPERATIONAL_DATASET_NAMES = [
   OP_DATASET_PREMIER_LEAGUE_TEAMS,
   OP_DATASET_CLUB_ELO_TEAMS,
   OP_DATASET_FOOTBALL_DATABASE_TEAMS,
+  OP_DATASET_NATIONAL_ELO_TEAMS,
   OP_DATASET_LEAGUE_TABLES,
 ];
 
@@ -5920,6 +6530,102 @@ async function updateFootballDatabaseTeams(options = {}) {
       recordsFetched,
     });
     footballDatabaseUpdating = false;
+  }
+}
+
+async function updateNationalEloTeams(options = {}) {
+  if (nationalEloUpdating) {
+    return {
+      success: false,
+      skipped: true,
+      reason: "update_in_progress",
+    };
+  }
+
+  nationalEloUpdating = true;
+  const startedAtMs = Date.now();
+  let success = false;
+  let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+
+  try {
+    const result = await fetchNationalEloRankings({
+      baseUrl: NATIONAL_ELO_BASE_URL,
+      page: NATIONAL_ELO_PAGE,
+      minRows: NATIONAL_ELO_MIN_ROWS,
+      minBytes: NATIONAL_ELO_MIN_BYTES,
+      retryAttempts: NATIONAL_ELO_RETRY_ATTEMPTS,
+      retryBackoffBaseMs: NATIONAL_ELO_RETRY_BACKOFF_BASE_MS,
+      retryBackoffMaxMs: NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
+      retryBackoffFactor: NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
+      retryJitterMs: NATIONAL_ELO_RETRY_JITTER_MS,
+    });
+    const teams = normalizeNationalEloTeamsPayload(result.teams);
+    if (!Array.isArray(teams) || teams.length === 0) {
+      throw new Error("National Elo update returned no teams");
+    }
+
+    cachedNationalEloTeams = teams;
+    recordsFetched = teams.length;
+    setSourceCacheSize(SOURCE_NATIONAL_ELO, teams.length);
+    nationalEloLastUpdated = new Date().toISOString();
+    const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
+    markNationalEloSuccess(
+      nationalEloLastUpdated,
+      teams,
+      durationSeconds,
+      result.dateModified || (result.lastModified ? String(result.lastModified).slice(0, 10) : null)
+    );
+    writeNationalEloTeams(NATIONAL_ELO_OUTPUT_PATH, teams);
+    await persistOperationalDatasetSafe(OP_DATASET_NATIONAL_ELO_TEAMS, teams, {
+      updated_at: nationalEloLastUpdated,
+      source: SOURCE_NATIONAL_ELO,
+      ttl_seconds: NATIONAL_ELO_REDIS_TTL_SECONDS,
+    });
+    success = true;
+    console.log(
+      `Updated National Elo teams (${teams.length}) at ${nationalEloLastUpdated} ` +
+      `(page=${result.page}, trigger=${trigger})`
+    );
+    return {
+      success: true,
+      trigger,
+      page: result.page,
+      url: result.url,
+      count: teams.length,
+      min_rows: NATIONAL_ELO_MIN_ROWS,
+      min_bytes: NATIONAL_ELO_MIN_BYTES,
+      retry_attempts: NATIONAL_ELO_RETRY_ATTEMPTS,
+      retry_backoff_base_ms: NATIONAL_ELO_RETRY_BACKOFF_BASE_MS,
+      retry_backoff_max_ms: NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
+      retry_backoff_factor: NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
+      retry_jitter_ms: NATIONAL_ELO_RETRY_JITTER_MS,
+      retry: result && result.retry ? result.retry : null,
+      date_modified: result.dateModified || null,
+      last_modified: result.lastModified || null,
+      content_type: result.contentType,
+      bytes: result.byteLength,
+      updated_at: nationalEloLastUpdated,
+    };
+  } catch (err) {
+    const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
+    markNationalEloFailure(new Date().toISOString(), durationSeconds);
+    console.warn("Failed to update National Elo teams:", err.message || err);
+    return {
+      success: false,
+      trigger,
+      error: err.message || String(err),
+      updated_at: nationalEloLastUpdated,
+      cached_count: Array.isArray(cachedNationalEloTeams) ? cachedNationalEloTeams.length : 0,
+    };
+  } finally {
+    trackSourceUpdateMetrics({
+      source: SOURCE_NATIONAL_ELO,
+      startedAtMs,
+      success,
+      recordsFetched,
+    });
+    nationalEloUpdating = false;
   }
 }
 
@@ -7013,18 +7719,20 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
     });
     return;
   }
-  const [mergedDataset, clubEloDataset, footballDatabaseDataset] = await Promise.all([
+  const [mergedDataset, clubEloDataset, footballDatabaseDataset, nationalEloDataset] = await Promise.all([
     getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
     getOperationalArrayDataset(OP_DATASET_CLUB_ELO_TEAMS, cachedClubEloTeams),
     getOperationalArrayDataset(
       OP_DATASET_FOOTBALL_DATABASE_TEAMS,
       cachedFootballDatabaseTeams
     ),
+    getOperationalArrayDataset(OP_DATASET_NATIONAL_ELO_TEAMS, cachedNationalEloTeams),
   ]);
   const rankedRows = buildRankedTeamsForSource(
     mergedDataset.items,
     clubEloDataset.items,
     footballDatabaseDataset.items,
+    nationalEloDataset.items,
     sourceSelection.source,
     leagueFilter
   );
@@ -7032,8 +7740,10 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
     mergedDataset.updated_at,
     clubEloDataset.updated_at,
     footballDatabaseDataset.updated_at,
+    nationalEloDataset.updated_at,
     clubEloLastUpdated,
     footballDatabaseLastUpdated,
+    nationalEloLastUpdated,
   ]);
   if (updatedAt) {
     res.set("X-Last-Updated", updatedAt);
@@ -7044,7 +7754,8 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
     "X-Operational-Source",
     `merged=${mergedDataset.source || "unknown"};` +
       `club_elo=${clubEloDataset.source || "unknown"};` +
-      `footballdatabase=${footballDatabaseDataset.source || "unknown"}`
+      `footballdatabase=${footballDatabaseDataset.source || "unknown"};` +
+      `national_elo=${nationalEloDataset.source || "unknown"}`
   );
   res.json(toTeamsApiTeamPayload(rankedRows));
 });
@@ -7093,6 +7804,28 @@ app.post(`${API_PREFIX}/teams/footballdatabase/sync`, async (_req, res) => {
   res.status(200).json(result);
 });
 
+app.post(`${API_PREFIX}/teams/national-elo/sync`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  const result = await updateNationalEloTeams({ trigger: "api_on_demand" });
+  if (result && result.skipped && result.reason === "update_in_progress") {
+    res.status(409).json({
+      success: false,
+      error: "National Elo sync already in progress.",
+      ...result,
+    });
+    return;
+  }
+  if (!result || !result.success) {
+    res.status(502).json({
+      success: false,
+      error: "Failed to sync National Elo teams.",
+      ...result,
+    });
+    return;
+  }
+  res.status(200).json(result);
+});
+
 async function serveTeamsUnmatched(req, res, forcedSource = null) {
   setCacheOnlyHeaders(res);
   const leagueFilter = req.query.league ? String(req.query.league) : null;
@@ -7105,18 +7838,20 @@ async function serveTeamsUnmatched(req, res, forcedSource = null) {
     });
     return;
   }
-  const [mergedDataset, clubEloDataset, footballDatabaseDataset] = await Promise.all([
+  const [mergedDataset, clubEloDataset, footballDatabaseDataset, nationalEloDataset] = await Promise.all([
     getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
     getOperationalArrayDataset(OP_DATASET_CLUB_ELO_TEAMS, cachedClubEloTeams),
     getOperationalArrayDataset(
       OP_DATASET_FOOTBALL_DATABASE_TEAMS,
       cachedFootballDatabaseTeams
     ),
+    getOperationalArrayDataset(OP_DATASET_NATIONAL_ELO_TEAMS, cachedNationalEloTeams),
   ]);
   const rankedRows = buildRankedTeamsForSource(
     mergedDataset.items,
     clubEloDataset.items,
     footballDatabaseDataset.items,
+    nationalEloDataset.items,
     sourceSelection.source,
     leagueFilter
   );
@@ -7125,8 +7860,10 @@ async function serveTeamsUnmatched(req, res, forcedSource = null) {
     mergedDataset.updated_at,
     clubEloDataset.updated_at,
     footballDatabaseDataset.updated_at,
+    nationalEloDataset.updated_at,
     clubEloLastUpdated,
     footballDatabaseLastUpdated,
+    nationalEloLastUpdated,
   ]);
   if (updatedAt) {
     res.set("X-Last-Updated", updatedAt);
@@ -7137,7 +7874,8 @@ async function serveTeamsUnmatched(req, res, forcedSource = null) {
     "X-Operational-Source",
     `merged=${mergedDataset.source || "unknown"};` +
       `club_elo=${clubEloDataset.source || "unknown"};` +
-      `footballdatabase=${footballDatabaseDataset.source || "unknown"}`
+      `footballdatabase=${footballDatabaseDataset.source || "unknown"};` +
+      `national_elo=${nationalEloDataset.source || "unknown"}`
   );
   res.status(200).json({
     count: unmatched.length,
@@ -7159,6 +7897,10 @@ app.get(`${API_PREFIX}/teams/club-elo/unmatched`, async (req, res) => {
 
 app.get(`${API_PREFIX}/teams/footballdatabase/unmatched`, async (req, res) => {
   await serveTeamsUnmatched(req, res, TEAM_RANKING_SOURCE_FOOTBALLDATABASE);
+});
+
+app.get(`${API_PREFIX}/teams/national-elo/unmatched`, async (req, res) => {
+  await serveTeamsUnmatched(req, res, TEAM_RANKING_SOURCE_NATIONAL_ELO);
 });
 
 app.get(`${API_PREFIX}/teams/premier-league`, async (_req, res) => {
@@ -7469,6 +8211,7 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     leagueTablesDataset,
     clubEloDataset,
     footballDatabaseDataset,
+    nationalEloDataset,
     matchDetailsSummary,
     matchDetailsSnapshot,
   ] = await Promise.all([
@@ -7484,6 +8227,7 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
       OP_DATASET_FOOTBALL_DATABASE_TEAMS,
       cachedFootballDatabaseTeams
     ),
+    getOperationalArrayDataset(OP_DATASET_NATIONAL_ELO_TEAMS, cachedNationalEloTeams),
     getOperationalMatchDetailsSummary(),
     getOperationalMatchDetailsSnapshotSafe(),
   ]);
@@ -7583,6 +8327,22 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
       FOOTBALL_DATABASE_MANUAL_TARGET_MIN_CONFIDENCE,
     football_database_updating: footballDatabaseUpdating,
     football_database_redis_ttl_seconds: FOOTBALL_DATABASE_REDIS_TTL_SECONDS,
+    national_elo_count: nationalEloDataset.items.length,
+    national_elo_last_updated: nationalEloDataset.updated_at || nationalEloLastUpdated,
+    national_elo_base_url: NATIONAL_ELO_BASE_URL,
+    national_elo_page: NATIONAL_ELO_PAGE,
+    national_elo_output_path: path.resolve(NATIONAL_ELO_OUTPUT_PATH),
+    national_elo_interval_ms: NATIONAL_ELO_INTERVAL_MS,
+    national_elo_min_rows: NATIONAL_ELO_MIN_ROWS,
+    national_elo_min_bytes: NATIONAL_ELO_MIN_BYTES,
+    national_elo_retry_attempts: NATIONAL_ELO_RETRY_ATTEMPTS,
+    national_elo_retry_backoff_base_ms: NATIONAL_ELO_RETRY_BACKOFF_BASE_MS,
+    national_elo_retry_backoff_max_ms: NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
+    national_elo_retry_backoff_factor: NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
+    national_elo_retry_jitter_ms: NATIONAL_ELO_RETRY_JITTER_MS,
+    national_elo_match_min_confidence: NATIONAL_ELO_MATCH_MIN_CONFIDENCE,
+    national_elo_updating: nationalEloUpdating,
+    national_elo_redis_ttl_seconds: NATIONAL_ELO_REDIS_TTL_SECONDS,
     team_ranking_default_source: TEAM_RANKING_DEFAULT_SOURCE,
     recent_count: recentDataset.items.length,
     recent_last_updated: recentDataset.updated_at || recentLastUpdated,
@@ -7628,6 +8388,7 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
       league_tables: leagueTablesDataset.source,
       club_elo_teams: clubEloDataset.source,
       football_database_teams: footballDatabaseDataset.source,
+      national_elo_teams: nationalEloDataset.source,
       match_details: matchDetailsSnapshot.source,
     },
   });
@@ -7641,6 +8402,7 @@ loadPremierLeagueFromDisk();
 loadLeagueTablesFromDisk();
 loadClubEloFromDisk();
 loadFootballDatabaseFromDisk();
+loadNationalEloFromDisk();
 // ===== User Preferences Redis Endpoints =====
 const {
   saveUserPreferences,
@@ -9542,10 +10304,11 @@ app.post(`${API_PREFIX}/notifications/test`, async (req, res) => {
 // ===== End User Preferences Endpoints =====
 
 async function seedOperationalStateFromDiskIfNeeded() {
-  const [mergedDataset, clubEloDataset, footballDatabaseDataset, matchDetailsSummary] = await Promise.all([
+  const [mergedDataset, clubEloDataset, footballDatabaseDataset, nationalEloDataset, matchDetailsSummary] = await Promise.all([
     loadOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES),
     loadOperationalDatasetSafe(OP_DATASET_CLUB_ELO_TEAMS),
     loadOperationalDatasetSafe(OP_DATASET_FOOTBALL_DATABASE_TEAMS),
+    loadOperationalDatasetSafe(OP_DATASET_NATIONAL_ELO_TEAMS),
     getOperationalMatchDetailsSummary(),
   ]);
   const hasMergedState =
@@ -9560,10 +10323,15 @@ async function seedOperationalStateFromDiskIfNeeded() {
     footballDatabaseDataset.payload.length > 0;
   const hasFootballDatabaseSeedData =
     Array.isArray(cachedFootballDatabaseTeams) && cachedFootballDatabaseTeams.length > 0;
+  const hasNationalEloState =
+    nationalEloDataset && Array.isArray(nationalEloDataset.payload) && nationalEloDataset.payload.length > 0;
+  const hasNationalEloSeedData =
+    Array.isArray(cachedNationalEloTeams) && cachedNationalEloTeams.length > 0;
   const clubEloReady = hasClubEloState || !hasClubEloSeedData;
   const footballDatabaseReady =
     hasFootballDatabaseState || !hasFootballDatabaseSeedData;
-  if (hasMergedState && hasMatchDetails && clubEloReady && footballDatabaseReady) {
+  const nationalEloReady = hasNationalEloState || !hasNationalEloSeedData;
+  if (hasMergedState && hasMatchDetails && clubEloReady && footballDatabaseReady && nationalEloReady) {
     return { seeded: false, reason: "redis_has_state" };
   }
 
@@ -9593,6 +10361,7 @@ async function bootstrapOperationalState() {
   void updateLeagueTables();
   void updateClubEloTeams({ trigger: "startup_bootstrap" });
   void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
+  void updateNationalEloTeams({ trigger: "startup_bootstrap" });
 }
 
 const operationalBootstrapPromise = bootstrapOperationalState().catch((error) => {
@@ -9630,6 +10399,13 @@ const footballDatabaseInterval =
 setInterval(() => {
   void updateFootballDatabaseTeams({ trigger: "interval" });
 }, footballDatabaseInterval);
+const nationalEloInterval =
+  Number.isFinite(NATIONAL_ELO_INTERVAL_MS) && NATIONAL_ELO_INTERVAL_MS > 0
+    ? NATIONAL_ELO_INTERVAL_MS
+    : 12 * 60 * 60 * 1000;
+setInterval(() => {
+  void updateNationalEloTeams({ trigger: "interval" });
+}, nationalEloInterval);
 const matchDetailsPollInterval =
   Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
     ? MATCH_DETAILS_POLL_INTERVAL_MS

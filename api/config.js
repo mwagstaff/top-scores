@@ -18,6 +18,7 @@ const DEFAULT_COMPETITION_ALLOWLIST = [
 
 const TEAM_RANKING_SOURCE_CLUBELO = "clubelo";
 const TEAM_RANKING_SOURCE_FOOTBALLDATABASE = "footballdatabase";
+const TEAM_RANKING_SOURCE_NATIONAL_ELO = "nationalelo";
 const TEAM_RANKING_SOURCE_MERGED = "merged";
 
 function parseCsvEnv(value) {
@@ -44,6 +45,9 @@ function normalizeTeamRankingSource(value) {
   ) {
     return TEAM_RANKING_SOURCE_FOOTBALLDATABASE;
   }
+  if (["nationalelo", "national_elo", "national-elo", "national"].includes(normalized)) {
+    return TEAM_RANKING_SOURCE_NATIONAL_ELO;
+  }
   return null;
 }
 
@@ -66,6 +70,7 @@ module.exports = {
   TEAM_RANKING_SOURCE_MERGED,
   TEAM_RANKING_SOURCE_CLUBELO,
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
+  TEAM_RANKING_SOURCE_NATIONAL_ELO,
   normalizeTeamRankingSource,
   SERVER_CONFIG,
 };
