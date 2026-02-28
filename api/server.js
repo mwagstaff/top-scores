@@ -1891,6 +1891,42 @@ function resolveManualMappingCandidates(normalizedName, manualMappings) {
   };
 }
 
+function normalizedTeamKey(value) {
+  return normalizeTeamName(value).replace(/\s+/g, " ").trim();
+}
+
+function resolveManualCanonicalTeamKey(teamName, manualMappings = null) {
+  const safeMappings = manualMappings || loadClubEloManualMappings();
+  let current = normalizedTeamKey(teamName);
+  if (!current) return "";
+
+  const visited = new Set();
+  for (let depth = 0; depth < 12; depth += 1) {
+    if (!current || visited.has(current)) break;
+    visited.add(current);
+    if (!safeMappings.has(current)) break;
+
+    const target = safeMappings.get(current);
+    if (!target) break;
+    const next = normalizedTeamKey(target);
+    if (!next || next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+function areTeamNamesEquivalentByManualMappings(lhs, rhs, manualMappings = null) {
+  const left = normalizedTeamKey(lhs);
+  const right = normalizedTeamKey(rhs);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const safeMappings = manualMappings || loadClubEloManualMappings();
+  return (
+    resolveManualCanonicalTeamKey(left, safeMappings) ===
+    resolveManualCanonicalTeamKey(right, safeMappings)
+  );
+}
+
 function normalizedTokens(value) {
   const lowered = normalizeTeamName(value);
   return lowered
@@ -4130,6 +4166,21 @@ function rankingDatasourceLabel(source) {
   return "Club Elo";
 }
 
+const TEAM_DATASOURCE_SORT_ORDER = Object.freeze({
+  "Club Elo": 1,
+  FootballDatabase: 2,
+});
+
+function sortDatasourceLabels(values) {
+  const labels = Array.isArray(values) ? values.filter(Boolean) : [];
+  return labels.slice().sort((left, right) => {
+    const leftRank = TEAM_DATASOURCE_SORT_ORDER[left] || 999;
+    const rightRank = TEAM_DATASOURCE_SORT_ORDER[right] || 999;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return compareInsensitive(left, right);
+  });
+}
+
 function normalizeClubEloCountryName(value) {
   const raw = String(value || "").replace(/\s+/g, " ").trim();
   if (!raw) return null;
@@ -4184,7 +4235,8 @@ function toUnifiedTeamRows(mappedTeams, source) {
       Rank: null,
       Country: ranked ? normalizeCountryForRankingSource(team.Country, source) : null,
       Points: ranked ? points : null,
-      Datasource: ranked ? sourceLabel : null,
+      Datasource: ranked ? [sourceLabel] : [],
+      aliases: [],
       _source: source,
       _match_confidence:
         team && Number.isFinite(team._match_confidence) ? team._match_confidence : 0,
@@ -4202,12 +4254,36 @@ function chooseMergedTeamRow(clubRow, footballDatabaseRow) {
   if (clubRanked && !footballDatabaseRanked) return clubRow;
   if (footballDatabaseRanked && !clubRanked) return footballDatabaseRow;
   if (clubRanked && footballDatabaseRanked) {
-    const clubConfidence = Number(clubRow._match_confidence || 0);
-    const footballDatabaseConfidence = Number(footballDatabaseRow._match_confidence || 0);
-    if (footballDatabaseConfidence > clubConfidence + 0.02) {
-      return footballDatabaseRow;
-    }
-    return clubRow;
+    const clubPoints = Number(clubRow.Points);
+    const footballDatabasePoints = Number(footballDatabaseRow.Points);
+    const mergedCountry = footballDatabaseRow.Country || clubRow.Country || null;
+    const datasources = [];
+    const addDatasource = (value) => {
+      const label = String(value || "").trim();
+      if (!label) return;
+      if (!datasources.includes(label)) datasources.push(label);
+    };
+    (Array.isArray(clubRow.Datasource) ? clubRow.Datasource : []).forEach(addDatasource);
+    (Array.isArray(footballDatabaseRow.Datasource) ? footballDatabaseRow.Datasource : []).forEach(
+      addDatasource
+    );
+    return {
+      ...clubRow,
+      Rank: null,
+      Country: mergedCountry,
+      Points: (clubPoints + footballDatabasePoints) / 2,
+      Datasource: sortDatasourceLabels(datasources),
+      aliases: [],
+      _match_confidence: Math.max(
+        Number(clubRow._match_confidence || 0),
+        Number(footballDatabaseRow._match_confidence || 0)
+      ),
+      _closest_club: footballDatabaseRow._closest_club || clubRow._closest_club || null,
+      _match_method: "merged_average",
+      _excluded_from_matching: Boolean(
+        clubRow._excluded_from_matching || footballDatabaseRow._excluded_from_matching
+      ),
+    };
   }
 
   const clubConfidence = Number(clubRow && clubRow._match_confidence ? clubRow._match_confidence : 0);
@@ -4225,7 +4301,8 @@ function chooseMergedTeamRow(clubRow, footballDatabaseRow) {
     Rank: null,
     Country: null,
     Points: null,
-    Datasource: null,
+    Datasource: [],
+    aliases: [],
     _excluded_from_matching: Boolean(
       (clubRow && clubRow._excluded_from_matching) ||
       (footballDatabaseRow && footballDatabaseRow._excluded_from_matching)
@@ -4253,7 +4330,8 @@ function mergeUnifiedTeamRows(clubRows, footballDatabaseRows) {
         Rank: null,
         Country: null,
         Points: null,
-        Datasource: null,
+        Datasource: [],
+        aliases: [],
         _source: null,
         _match_confidence: 0,
         _closest_club: null,
@@ -4262,6 +4340,107 @@ function mergeUnifiedTeamRows(clubRows, footballDatabaseRows) {
       };
     })
     .sort((left, right) => compareInsensitive(left.Name || "", right.Name || ""));
+}
+
+function dedupeUnifiedTeamRowsByManualMappings(rows, manualMappings = null) {
+  const safeMappings = manualMappings || loadClubEloManualMappings();
+  const groups = new Map();
+
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const name = String(row && row.Name ? row.Name : "").trim();
+    if (!name) return;
+    const canonicalKey = resolveManualCanonicalTeamKey(name, safeMappings) || normalizedTeamKey(name);
+    const key = canonicalKey || normalizedTeamKey(name) || name.toLowerCase();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+
+  const deduped = [];
+  groups.forEach((groupRows) => {
+    if (!Array.isArray(groupRows) || groupRows.length === 0) return;
+
+    const aliasNames = Array.from(
+      new Set(
+        groupRows
+          .map((row) => String(row && row.Name ? row.Name : "").trim())
+          .filter(Boolean)
+      )
+    ).sort((left, right) => {
+      const lenDiff = left.length - right.length;
+      if (lenDiff !== 0) return lenDiff;
+      return compareInsensitive(left, right);
+    });
+
+    const primaryName = aliasNames[0] || String(groupRows[0].Name || "").trim();
+    const rankedRows = groupRows.filter((row) => isRankedTeamRow(row));
+
+    const bestRanked = rankedRows
+      .slice()
+      .sort((left, right) => {
+        const leftSources = Array.isArray(left.Datasource) ? left.Datasource.length : 0;
+        const rightSources = Array.isArray(right.Datasource) ? right.Datasource.length : 0;
+        if (rightSources !== leftSources) return rightSources - leftSources;
+        const leftConfidence = Number(left._match_confidence || 0);
+        const rightConfidence = Number(right._match_confidence || 0);
+        if (rightConfidence !== leftConfidence) return rightConfidence - leftConfidence;
+        if (Number(right.Points) !== Number(left.Points)) {
+          return Number(right.Points) - Number(left.Points);
+        }
+        return compareInsensitive(String(left.Name || ""), String(right.Name || ""));
+      })[0] || null;
+
+    const datasourceSet = new Set();
+    rankedRows.forEach((row) => {
+      (Array.isArray(row.Datasource) ? row.Datasource : []).forEach((label) => {
+        if (label) datasourceSet.add(label);
+      });
+    });
+
+    const mergedRow = bestRanked
+      ? {
+        ...bestRanked,
+        Name: primaryName,
+        aliases: aliasNames.filter((name) => compareInsensitive(name, primaryName) !== 0),
+        Datasource: sortDatasourceLabels(Array.from(datasourceSet.values())),
+        _match_confidence: Math.max(
+          ...groupRows.map((row) => Number(row && row._match_confidence ? row._match_confidence : 0))
+        ),
+        _closest_club:
+          groupRows.find((row) => row && row._closest_club)
+            ? groupRows.find((row) => row && row._closest_club)._closest_club
+            : null,
+        _match_method:
+          groupRows.find((row) => row && row._match_method)
+            ? groupRows.find((row) => row && row._match_method)._match_method
+            : null,
+        _excluded_from_matching: false,
+      }
+      : {
+        ...groupRows[0],
+        Name: primaryName,
+        Rank: null,
+        Country: null,
+        Points: null,
+        Datasource: [],
+        aliases: aliasNames.filter((name) => compareInsensitive(name, primaryName) !== 0),
+        _match_confidence: Math.max(
+          ...groupRows.map((row) => Number(row && row._match_confidence ? row._match_confidence : 0))
+        ),
+        _closest_club:
+          groupRows.find((row) => row && row._closest_club)
+            ? groupRows.find((row) => row && row._closest_club)._closest_club
+            : null,
+        _match_method:
+          groupRows.find((row) => row && row._match_method)
+            ? groupRows.find((row) => row && row._match_method)._match_method
+            : null,
+        _excluded_from_matching: groupRows.every((row) => Boolean(row && row._excluded_from_matching)),
+      };
+
+    deduped.push(mergedRow);
+  });
+
+  return deduped.sort((left, right) => compareInsensitive(left.Name || "", right.Name || ""));
 }
 
 function applyRankingToUnifiedTeamRows(rows) {
@@ -4308,7 +4487,8 @@ function buildRankedTeamsForSource(
       ),
       TEAM_RANKING_SOURCE_CLUBELO
     );
-    return applyRankingToUnifiedTeamRows(clubRows);
+    const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(clubRows);
+    return applyRankingToUnifiedTeamRows(dedupedRows);
   }
   if (source === TEAM_RANKING_SOURCE_FOOTBALLDATABASE) {
     const footballDatabaseRows = toUnifiedTeamRows(
@@ -4321,7 +4501,8 @@ function buildRankedTeamsForSource(
       ),
       TEAM_RANKING_SOURCE_FOOTBALLDATABASE
     );
-    return applyRankingToUnifiedTeamRows(footballDatabaseRows);
+    const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(footballDatabaseRows);
+    return applyRankingToUnifiedTeamRows(dedupedRows);
   }
   const clubRows = toUnifiedTeamRows(
     mapTeamsForRankingSource(
@@ -4344,7 +4525,8 @@ function buildRankedTeamsForSource(
     TEAM_RANKING_SOURCE_FOOTBALLDATABASE
   );
   const mergedRows = mergeUnifiedTeamRows(clubRows, footballDatabaseRows);
-  return applyRankingToUnifiedTeamRows(mergedRows);
+  const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(mergedRows);
+  return applyRankingToUnifiedTeamRows(dedupedRows);
 }
 
 function toTeamsApiTeamPayload(rows) {
@@ -4353,7 +4535,8 @@ function toTeamsApiTeamPayload(rows) {
     Rank: Number.isFinite(row.Rank) ? row.Rank : null,
     Country: row.Country || null,
     Points: Number.isFinite(row.Points) ? row.Points : null,
-    Datasource: row.Datasource || null,
+    Datasource: sortDatasourceLabels(Array.isArray(row.Datasource) ? row.Datasource : []),
+    aliases: Array.isArray(row.aliases) ? row.aliases : [],
   }));
 }
 
@@ -4471,8 +4654,16 @@ function matchIncludesPremierLeagueTeam(match, premierLeagueTeams) {
   );
 }
 
+function teamMatchesSelectionAliasAware(teamName, selection, manualMappings = null) {
+  const lhs = String(teamName || "").trim();
+  const rhs = String(selection || "").trim();
+  if (!lhs || !rhs) return false;
+  if (compareInsensitive(lhs, rhs) === 0) return true;
+  return areTeamNamesEquivalentByManualMappings(lhs, rhs, manualMappings);
+}
+
 function matchesFilters(match, filters) {
-  const { leagues, teams, channels, dateFrom, dateTo, filterMode } = filters;
+  const { leagues, teams, channels, dateFrom, dateTo, filterMode, manualMappings } = filters;
 
   const matchLeague = normalizeLeagueName(match.league || "");
   const leagueOk =
@@ -4485,8 +4676,8 @@ function matchesFilters(match, filters) {
     teams.length === 0 ||
     teams.some(
       (team) =>
-        compareInsensitive(home, team) === 0 ||
-        compareInsensitive(away, team) === 0
+        teamMatchesSelectionAliasAware(home, team, manualMappings) ||
+        teamMatchesSelectionAliasAware(away, team, manualMappings)
     );
 
   if (leagues.length > 0 || teams.length > 0) {
@@ -6525,6 +6716,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const leagues = normalizeListParam(req.query.league).map(normalizeLeagueName);
     const teams = normalizeListParam(req.query.team);
     const channels = normalizeListParam(req.query.channel);
+    const manualMappings = loadClubEloManualMappings();
     const filterMode = req.query.filter_mode ? String(req.query.filter_mode) : "union";
     const sortOrder = String(req.query.sort || "asc").toLowerCase() === "desc" ? "desc" : "asc";
     const pageSize = parsePositiveInt(req.query.page_size, 100, 1, 500);
@@ -6541,6 +6733,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
         filterMode,
         dateFrom,
         dateTo,
+        manualMappings,
       })
     );
 
@@ -6566,6 +6759,8 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
           teams.length === 0 ||
           teams.some(
             (team) =>
+              teamMatchesSelectionAliasAware(testMatch.home_team, team, manualMappings) ||
+              teamMatchesSelectionAliasAware(testMatch.away_team, team, manualMappings) ||
               testMatch.home_team.toLowerCase().includes(team.toLowerCase()) ||
               testMatch.away_team.toLowerCase().includes(team.toLowerCase())
           );
@@ -6928,7 +7123,6 @@ async function serveTeamsUnmatched(req, res, forcedSource = null) {
   const unmatched = buildUnmatchedTeamPayloadFromUnifiedRows(rankedRows);
   const updatedAt = newestIsoTimestamp([
     mergedDataset.updated_at,
-    clubEloDataset.items,
     clubEloDataset.updated_at,
     footballDatabaseDataset.updated_at,
     clubEloLastUpdated,
