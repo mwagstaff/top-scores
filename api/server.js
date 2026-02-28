@@ -906,6 +906,14 @@ function trackSourceUpdateMetrics({ source, startedAtMs, success, recordsFetched
   }
 }
 
+function logPollSuccess(job, details = {}) {
+  const fields = Object.entries(details)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => `${key}=${String(value).replace(/\s+/g, " ").trim()}`);
+  const suffix = fields.length > 0 ? ` ${fields.join(" ")}` : "";
+  console.info(`[POLL][SUCCESS] job=${job}${suffix}`);
+}
+
 function buildPrometheusMetricsText() {
   const lines = [];
   const cpuUsage = process.cpuUsage(PROCESS_CPU_USAGE_START);
@@ -3015,17 +3023,26 @@ function collectInProgressMatchDetailTargets() {
   return Array.from(targets.values());
 }
 
-async function refreshInProgressMatchDetails() {
+async function refreshInProgressMatchDetails(options = {}) {
   if (matchDetailsUpdating) return;
   matchDetailsUpdating = true;
   const startedAtMs = Date.now();
   let success = false;
   let recordsFetched = 0;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
 
   try {
     const targets = collectInProgressMatchDetailTargets();
     if (targets.length === 0) {
       success = true;
+      logPollSuccess("bbc_match_details", {
+        source: SOURCE_BBC_MATCH_DETAILS,
+        trigger,
+        targets: 0,
+        refreshed: 0,
+        in_progress_cache_size: matchDetailsById.size,
+        note: "no_in_progress_matches",
+      });
       return;
     }
     const nowIso = new Date().toISOString();
@@ -3072,9 +3089,14 @@ async function refreshInProgressMatchDetails() {
         source: SOURCE_BBC_MATCH_DETAILS,
       });
     }
-    console.log(
-      `Refreshed in-progress match details (${targets.length}) at ${nowIso}`
-    );
+    logPollSuccess("bbc_match_details", {
+      source: SOURCE_BBC_MATCH_DETAILS,
+      trigger,
+      targets: targets.length,
+      refreshed: refreshedDetailsIds.size,
+      updated_at: nowIso,
+      duration_ms: Date.now() - startedAtMs,
+    });
   } catch (err) {
     console.warn("Failed to refresh in-progress match details:", err.message || err);
   } finally {
@@ -6269,12 +6291,13 @@ function mergedMatchesForResponse() {
   return Array.isArray(cachedMergedMatches) ? cachedMergedMatches : [];
 }
 
-async function updateMatches() {
+async function updateMatches(options = {}) {
   if (updating) return;
   updating = true;
   const startedAtMs = Date.now();
   let success = false;
   let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
   try {
     const matches = filterMatchesByCompetition(await fetchMatches(SOURCE_URL));
     cachedMatches = matches;
@@ -6289,7 +6312,13 @@ async function updateMatches() {
     await updateRecentCache(SOURCE_LIVE_FOOTBALL);
     await rebuildMergedMatchesCache(SOURCE_LIVE_FOOTBALL);
     success = true;
-    console.log(`Updated ${matches.length} matches at ${lastUpdated}`);
+    logPollSuccess("live_football", {
+      source: SOURCE_LIVE_FOOTBALL,
+      trigger,
+      count: matches.length,
+      updated_at: lastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
   } catch (err) {
     console.warn("Failed to update matches:", err.message || err);
   } finally {
@@ -6408,12 +6437,13 @@ function parseMatchTimeMinutes(matchTime) {
   return null;
 }
 
-async function updateBbcMatches() {
+async function updateBbcMatches(options = {}) {
   if (bbcUpdating) return;
   bbcUpdating = true;
   const startedAtMs = Date.now();
   let success = false;
   let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
   try {
     const matches = await fetchBbcFixtures(BBC_SOURCE_URL);
     const filteredMatches = filterStaleBbcMatches(matches, cachedBbcMatches);
@@ -6435,7 +6465,13 @@ async function updateBbcMatches() {
       source: SOURCE_BBC_LIVE,
     });
     success = true;
-    console.log(`Updated BBC live matches (${filteredMatches.length}) at ${bbcLastUpdated}`);
+    logPollSuccess("bbc_live_matches", {
+      source: SOURCE_BBC_LIVE,
+      trigger,
+      count: filteredMatches.length,
+      updated_at: bbcLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
   } catch (err) {
     console.warn("Failed to update BBC matches:", err.message || err);
   } finally {
@@ -6449,12 +6485,13 @@ async function updateBbcMatches() {
   }
 }
 
-async function updateBbcRangeMatches() {
+async function updateBbcRangeMatches(options = {}) {
   if (bbcRangeUpdating) return;
   bbcRangeUpdating = true;
   const startedAtMs = Date.now();
   let success = false;
   let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
   try {
     const matches = filterMatchesByCompetition(
       await fetchBbcScoresFixturesByDateRange({
@@ -6476,10 +6513,15 @@ async function updateBbcRangeMatches() {
     });
     await rebuildMergedMatchesCache(SOURCE_BBC_RANGE);
     success = true;
-    console.log(
-      `Updated BBC date-range matches (${matches.length}) at ${bbcRangeLastUpdated} ` +
-      `(window ${BBC_RANGE_PAST_DAYS}d past to ${BBC_RANGE_FUTURE_DAYS}d future)`
-    );
+    logPollSuccess("bbc_date_range_matches", {
+      source: SOURCE_BBC_RANGE,
+      trigger,
+      count: matches.length,
+      updated_at: bbcRangeLastUpdated,
+      past_days: BBC_RANGE_PAST_DAYS,
+      future_days: BBC_RANGE_FUTURE_DAYS,
+      duration_ms: Date.now() - startedAtMs,
+    });
   } catch (err) {
     console.warn("Failed to update BBC date-range matches:", err.message || err);
   } finally {
@@ -6493,12 +6535,13 @@ async function updateBbcRangeMatches() {
   }
 }
 
-async function updatePremierLeagueTeams() {
+async function updatePremierLeagueTeams(options = {}) {
   if (eplUpdating) return;
   eplUpdating = true;
   const startedAtMs = Date.now();
   let success = false;
   let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
   try {
     const teams = await fetchPremierLeagueTeams(EPL_SOURCE_URL);
     if (!Array.isArray(teams) || teams.length === 0) {
@@ -6520,7 +6563,13 @@ async function updatePremierLeagueTeams() {
       }
     );
     success = true;
-    console.log(`Updated Premier League teams (${cachedPremierLeagueTeams.length}) at ${eplLastUpdated}`);
+    logPollSuccess("bbc_premier_league_teams", {
+      source: SOURCE_BBC_PREMIER_LEAGUE,
+      trigger,
+      count: cachedPremierLeagueTeams.length,
+      updated_at: eplLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
   } catch (err) {
     console.warn("Failed to update Premier League teams:", err.message || err);
   } finally {
@@ -6534,12 +6583,13 @@ async function updatePremierLeagueTeams() {
   }
 }
 
-async function updateLeagueTables() {
+async function updateLeagueTables(options = {}) {
   if (leagueTablesUpdating) return;
   leagueTablesUpdating = true;
   const startedAtMs = Date.now();
   let success = false;
   let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
 
   try {
     const { tables, errors } = await fetchLeagueTables(LEAGUE_TABLE_SOURCES);
@@ -6604,9 +6654,14 @@ async function updateLeagueTables() {
     }
 
     success = true;
-    console.log(
-      `Updated league tables (${sortedTables.length} leagues, ${recordsFetched} rows) at ${leagueTablesLastUpdated}`
-    );
+    logPollSuccess("bbc_league_tables", {
+      source: SOURCE_BBC_LEAGUE_TABLES,
+      trigger,
+      leagues: sortedTables.length,
+      rows: recordsFetched,
+      updated_at: leagueTablesLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
   } catch (err) {
     console.warn("Failed to update league tables:", err.message || err);
   } finally {
@@ -6695,10 +6750,15 @@ async function updateClubEloFixtures(options = {}) {
     }
 
     success = true;
-    console.log(
-      `Updated Club Elo fixtures (${fixtures.length} rows, matched ${matchedCount}, ` +
-      `unmatched ${unmatchedCount}) at ${nowIso} (trigger=${trigger})`
-    );
+    logPollSuccess("club_elo_fixtures", {
+      source: SOURCE_CLUB_ELO_FIXTURES,
+      trigger,
+      rows: fixtures.length,
+      matched: matchedCount,
+      unmatched: unmatchedCount,
+      updated_at: nowIso,
+      duration_ms: Date.now() - startedAtMs,
+    });
     return {
       success: true,
       trigger,
@@ -6775,10 +6835,14 @@ async function updateClubEloTeams(options = {}) {
       ttl_seconds: CLUB_ELO_REDIS_TTL_SECONDS,
     });
     success = true;
-    console.log(
-      `Updated Club Elo teams (${teams.length}) at ${clubEloLastUpdated} ` +
-      `(date=${result.date}, trigger=${trigger})`
-    );
+    logPollSuccess("club_elo_rankings", {
+      source: SOURCE_CLUB_ELO,
+      trigger,
+      count: teams.length,
+      date: result.date,
+      updated_at: clubEloLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
     return {
       success: true,
       trigger,
@@ -6865,14 +6929,21 @@ async function updateFootballDatabaseTeams(options = {}) {
       ttl_seconds: FOOTBALL_DATABASE_REDIS_TTL_SECONDS,
     });
     success = true;
-    console.log(
-      `Updated FootballDatabase teams (${teams.length}) at ${footballDatabaseLastUpdated} ` +
-      `(pages=${result.fetchedPages}/${result.totalPages}, ` +
-      `retries=${result && result.retry ? result.retry.retries_performed : 0}, ` +
-      `adaptive_reductions=${result && result.adaptive_concurrency ? result.adaptive_concurrency.reductions : 0}, ` +
-      `final_concurrency=${result && result.adaptive_concurrency ? result.adaptive_concurrency.final_concurrency : FOOTBALL_DATABASE_CONCURRENCY}, ` +
-      `trigger=${trigger})`
-    );
+    logPollSuccess("football_database_rankings", {
+      source: SOURCE_FOOTBALL_DATABASE,
+      trigger,
+      count: teams.length,
+      pages: `${result.fetchedPages}/${result.totalPages}`,
+      retries: result && result.retry ? result.retry.retries_performed : 0,
+      adaptive_reductions:
+        result && result.adaptive_concurrency ? result.adaptive_concurrency.reductions : 0,
+      final_concurrency:
+        result && result.adaptive_concurrency
+          ? result.adaptive_concurrency.final_concurrency
+          : FOOTBALL_DATABASE_CONCURRENCY,
+      updated_at: footballDatabaseLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
     return {
       success: true,
       trigger,
@@ -6975,10 +7046,19 @@ async function updateNationalEloTeams(options = {}) {
       ttl_seconds: NATIONAL_ELO_REDIS_TTL_SECONDS,
     });
     success = true;
-    console.log(
-      `Updated National Elo teams (${teams.length}) at ${nationalEloLastUpdated} ` +
-      `(page=${result.page}, trigger=${trigger})`
-    );
+    logPollSuccess("national_elo_rankings", {
+      source: SOURCE_NATIONAL_ELO,
+      trigger,
+      count: teams.length,
+      page: result.page,
+      retries: result && result.retry ? result.retry.retries_performed : 0,
+      partial_success:
+        result && result.partial_fetch
+          ? !result.partial_fetch.successors_loaded || !result.partial_fetch.team_dictionary_loaded
+          : false,
+      updated_at: nationalEloLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
     if (Array.isArray(result.warnings) && result.warnings.length > 0) {
       console.warn(
         `National Elo update completed with warnings (${result.warnings.length}): ${result.warnings.join(" | ")}`
@@ -10788,12 +10868,12 @@ async function bootstrapOperationalState() {
   await rebuildMatchDetailsCache("startup_bootstrap");
 
   // Run network refresh tasks in background after bootstrapping cached state.
-  void refreshInProgressMatchDetails();
-  void updateMatches();
-  void updateBbcMatches();
-  void updateBbcRangeMatches();
-  void updatePremierLeagueTeams();
-  void updateLeagueTables();
+  void refreshInProgressMatchDetails({ trigger: "startup_bootstrap" });
+  void updateMatches({ trigger: "startup_bootstrap" });
+  void updateBbcMatches({ trigger: "startup_bootstrap" });
+  void updateBbcRangeMatches({ trigger: "startup_bootstrap" });
+  void updatePremierLeagueTeams({ trigger: "startup_bootstrap" });
+  void updateLeagueTables({ trigger: "startup_bootstrap" });
   void updateClubEloTeams({ trigger: "startup_bootstrap" });
   void updateClubEloFixtures({ trigger: "startup_bootstrap" });
   void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
@@ -10805,22 +10885,32 @@ const operationalBootstrapPromise = bootstrapOperationalState().catch((error) =>
 });
 
 const interval = Number.isFinite(INTERVAL_MS) && INTERVAL_MS > 0 ? INTERVAL_MS : 30 * 60 * 1000;
-setInterval(updateMatches, interval);
+setInterval(() => {
+  void updateMatches({ trigger: "interval" });
+}, interval);
 const bbcInterval = Number.isFinite(BBC_INTERVAL_MS) && BBC_INTERVAL_MS > 0 ? BBC_INTERVAL_MS : 30 * 1000;
-setInterval(updateBbcMatches, bbcInterval);
+setInterval(() => {
+  void updateBbcMatches({ trigger: "interval" });
+}, bbcInterval);
 const bbcRangeInterval =
   Number.isFinite(BBC_RANGE_INTERVAL_MS) && BBC_RANGE_INTERVAL_MS > 0
     ? BBC_RANGE_INTERVAL_MS
     : 60 * 60 * 1000;
-setInterval(updateBbcRangeMatches, bbcRangeInterval);
+setInterval(() => {
+  void updateBbcRangeMatches({ trigger: "interval" });
+}, bbcRangeInterval);
 const eplInterval =
   Number.isFinite(EPL_INTERVAL_MS) && EPL_INTERVAL_MS > 0 ? EPL_INTERVAL_MS : 24 * 60 * 60 * 1000;
-setInterval(updatePremierLeagueTeams, eplInterval);
+setInterval(() => {
+  void updatePremierLeagueTeams({ trigger: "interval" });
+}, eplInterval);
 const leagueTablesInterval =
   Number.isFinite(LEAGUE_TABLES_INTERVAL_MS) && LEAGUE_TABLES_INTERVAL_MS > 0
     ? LEAGUE_TABLES_INTERVAL_MS
     : 2 * 60 * 1000;
-setInterval(updateLeagueTables, leagueTablesInterval);
+setInterval(() => {
+  void updateLeagueTables({ trigger: "interval" });
+}, leagueTablesInterval);
 const clubEloInterval =
   Number.isFinite(CLUB_ELO_INTERVAL_MS) && CLUB_ELO_INTERVAL_MS > 0
     ? CLUB_ELO_INTERVAL_MS
@@ -10853,7 +10943,9 @@ const matchDetailsPollInterval =
   Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
     ? MATCH_DETAILS_POLL_INTERVAL_MS
     : 10 * 1000;
-setInterval(refreshInProgressMatchDetails, matchDetailsPollInterval);
+setInterval(() => {
+  void refreshInProgressMatchDetails({ trigger: "interval" });
+}, matchDetailsPollInterval);
 
 // Test harness endpoints (for internal use only)
 app.get(`${API_PREFIX}/test-harness/match`, (req, res) => {
