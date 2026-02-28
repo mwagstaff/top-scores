@@ -72,5 +72,89 @@
       }
     ],
     "score_status": "90+3"
+  },
+  {
+    "home_team": "Mazatlán",
+    "home_score": 1,
+    "away_team": "Pachuca",
+    "away_score": 0,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cdjm2xl90x9t",
+    "home_goal_scorers": [
+      {
+        "player": "Dudu Teodora",
+        "goal_times": [
+          "45+2'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "F. Almada",
+        "assist_times": [
+          "45+2'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Querétaro",
+    "home_score": 2,
+    "away_team": "Santos Laguna",
+    "away_score": 2,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cjenylw7jd7t",
+    "home_goal_scorers": [
+      {
+        "player": "M. Coronel",
+        "goal_times": [
+          "13'"
+        ]
+      },
+      {
+        "player": "S. Homenchenko",
+        "goal_times": [
+          "30' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "L. Di Yorio",
+        "goal_times": [
+          "23' pen"
+        ]
+      },
+      {
+        "player": "C. Gruezo",
+        "goal_times": [
+          "45+6'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [
+      {
+        "player": "C. Gruezo",
+        "red_card_times": [
+          "89'"
+        ]
+      }
+    ],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "L. Di Yorio",
+        "assist_times": [
+          "45+6'"
+        ]
+      }
+    ],
+    "score_status": "FT"
   }
 ]

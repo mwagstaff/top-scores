@@ -4958,15 +4958,29 @@ function applyRankingToUnifiedTeamRows(rows) {
       if (right.Points !== left.Points) return right.Points - left.Points;
       return compareInsensitive(left.Name || "", right.Name || "");
     });
-  const rankedRowsWithRank = rankedRows.map((row, index) => ({
-    ...row,
-    Rank: index + 1,
-  }));
+  const typeRankCounters = new Map();
+  const rankedRowsWithRank = rankedRows.map((row, index) => {
+    const teamType = String(
+      row && row.Type ? row.Type : isLikelyNationalTeamName(row && row.Name ? row.Name : "")
+        ? TEAM_TYPE_NATIONAL
+        : TEAM_TYPE_CLUB
+    )
+      .trim()
+      .toLowerCase();
+    const nextTypeRank = (typeRankCounters.get(teamType) || 0) + 1;
+    typeRankCounters.set(teamType, nextTypeRank);
+    return {
+      ...row,
+      Rank: index + 1,
+      TypeRank: nextTypeRank,
+    };
+  });
   const unrankedRows = (Array.isArray(rows) ? rows : [])
     .filter((row) => !isRankedTeamRow(row))
     .map((row) => ({
       ...row,
       Rank: null,
+      TypeRank: null,
     }));
 
   return [...rankedRowsWithRank, ...unrankedRows]
@@ -5065,7 +5079,8 @@ function buildRankedTeamsForSource(
 function toTeamsApiTeamPayload(rows) {
   return (Array.isArray(rows) ? rows : []).map((row) => ({
     Name: row.Name || null,
-    Rank: Number.isFinite(row.Rank) ? row.Rank : null,
+    OverallRank: Number.isFinite(row.Rank) ? row.Rank : null,
+    TypeRank: Number.isFinite(row.TypeRank) ? row.TypeRank : null,
     Country: row.Country || null,
     Points: Number.isFinite(row.Points) ? row.Points : null,
     Datasource: sortDatasourceLabels(Array.isArray(row.Datasource) ? row.Datasource : []),
@@ -5120,6 +5135,7 @@ const SUPPORTED_TEAM_RANKING_SOURCES = [
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
   TEAM_RANKING_SOURCE_NATIONAL_ELO,
 ];
+const SUPPORTED_TEAM_TYPES = [TEAM_TYPE_CLUB, TEAM_TYPE_NATIONAL];
 
 function normalizeExtendedTeamRankingSource(rawSource) {
   const normalized = normalizeTeamRankingSource(rawSource);
@@ -5148,6 +5164,43 @@ function resolveTeamRankingSource(rawSource) {
     fromQuery: false,
     valid: true,
   };
+}
+
+function resolveTeamTypeFilter(rawType) {
+  if (rawType === undefined || rawType === null || String(rawType).trim() === "") {
+    return {
+      type: null,
+      fromQuery: false,
+      valid: true,
+    };
+  }
+  const normalized = String(rawType).trim().toLowerCase();
+  if (normalized === TEAM_TYPE_CLUB || normalized === TEAM_TYPE_NATIONAL) {
+    return {
+      type: normalized,
+      fromQuery: true,
+      valid: true,
+    };
+  }
+  return {
+    type: null,
+    fromQuery: true,
+    valid: false,
+  };
+}
+
+function filterRankedRowsByTeamType(rows, teamType) {
+  if (!teamType) return Array.isArray(rows) ? rows : [];
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const rowType = String(
+      row && row.Type ? row.Type : isLikelyNationalTeamName(row && row.Name ? row.Name : "")
+        ? TEAM_TYPE_NATIONAL
+        : TEAM_TYPE_CLUB
+    )
+      .trim()
+      .toLowerCase();
+    return rowType === teamType;
+  });
 }
 
 function buildChannelList(matches) {
@@ -7711,11 +7764,19 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const leagueFilter = req.query.league ? String(req.query.league) : null;
   const sourceSelection = resolveTeamRankingSource(req.query.source);
+  const typeSelection = resolveTeamTypeFilter(req.query.type);
   if (!sourceSelection.valid) {
     res.status(400).json({
       error: `Invalid source. Expected one of: ${SUPPORTED_TEAM_RANKING_SOURCES.join(", ")}.`,
       supported_sources: SUPPORTED_TEAM_RANKING_SOURCES,
       default_source: TEAM_RANKING_DEFAULT_SOURCE,
+    });
+    return;
+  }
+  if (!typeSelection.valid) {
+    res.status(400).json({
+      error: `Invalid type. Expected one of: ${SUPPORTED_TEAM_TYPES.join(", ")}.`,
+      supported_types: SUPPORTED_TEAM_TYPES,
     });
     return;
   }
@@ -7736,6 +7797,7 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
     sourceSelection.source,
     leagueFilter
   );
+  const filteredRows = filterRankedRowsByTeamType(rankedRows, typeSelection.type);
   const updatedAt = newestIsoTimestamp([
     mergedDataset.updated_at,
     clubEloDataset.updated_at,
@@ -7750,6 +7812,7 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
   }
   res.set("X-Team-Metadata-Source", sourceSelection.source);
   res.set("X-Team-Metadata-Default-Source", TEAM_RANKING_DEFAULT_SOURCE);
+  res.set("X-Team-Type-Filter", typeSelection.type || "all");
   res.set(
     "X-Operational-Source",
     `merged=${mergedDataset.source || "unknown"};` +
@@ -7757,7 +7820,7 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
       `footballdatabase=${footballDatabaseDataset.source || "unknown"};` +
       `national_elo=${nationalEloDataset.source || "unknown"}`
   );
-  res.json(toTeamsApiTeamPayload(rankedRows));
+  res.json(toTeamsApiTeamPayload(filteredRows));
 });
 
 app.post(`${API_PREFIX}/teams/club-elo/sync`, async (_req, res) => {

@@ -198,19 +198,18 @@
               "instance": true,
               "Metric": true,
               "metric": true,
-              "__rank0": true
+              "__rank0": true,
+              "country": true
             },
             "indexByName": {
               "#": 0,
               "team": 1,
-              "country": 2,
-              "Value": 3,
-              "Value #A": 3
+              "Value": 2,
+              "Value #A": 2
             },
             "renameByName": {
               "#": "#",
               "team": "Team",
-              "country": "Country",
               "Value": "Elo",
               "Value #A": "Elo"
             }
