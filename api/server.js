@@ -53,6 +53,14 @@ const {
   writeClubEloRankings,
 } = require("./fetch_club_elo_rankings");
 const {
+  DEFAULT_CLUB_ELO_FIXTURES_URL,
+  DEFAULT_CLUB_ELO_FIXTURES_OUTPUT,
+  DEFAULT_CLUB_ELO_FIXTURES_MIN_ROWS,
+  DEFAULT_CLUB_ELO_FIXTURES_MIN_BYTES,
+  fetchClubEloFixtures,
+  writeClubEloFixtures,
+} = require("./fetch_club_elo_fixtures");
+const {
   DEFAULT_FOOTBALL_DATABASE_BASE_URL,
   DEFAULT_FOOTBALL_DATABASE_OUTPUT,
   DEFAULT_FOOTBALL_DATABASE_MIN_ROWS,
@@ -75,6 +83,8 @@ const {
   DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
   DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
   DEFAULT_NATIONAL_ELO_RETRY_JITTER_MS,
+  DEFAULT_NATIONAL_ELO_PREFER_IPV4,
+  DEFAULT_NATIONAL_ELO_USER_AGENT,
   fetchNationalEloRankings,
   writeNationalEloRankings,
 } = require("./fetch_national_elo_rankings");
@@ -166,6 +176,29 @@ const CLUB_ELO_REDIS_TTL_SECONDS = Number.isFinite(parsedClubEloRedisTtlSeconds)
 const CLUB_ELO_MANUAL_MAPPINGS_PATH =
   process.env.CLUB_ELO_MANUAL_MAPPINGS_PATH ||
   path.join(__dirname, "club_elo_manual_mappings.json");
+const CLUB_ELO_FIXTURES_URL =
+  process.env.CLUB_ELO_FIXTURES_URL || DEFAULT_CLUB_ELO_FIXTURES_URL;
+const CLUB_ELO_FIXTURES_OUTPUT_PATH =
+  process.env.CLUB_ELO_FIXTURES_OUTPUT_PATH || DEFAULT_CLUB_ELO_FIXTURES_OUTPUT;
+const parsedClubEloFixturesMinRows = Number(
+  process.env.CLUB_ELO_FIXTURES_MIN_ROWS || DEFAULT_CLUB_ELO_FIXTURES_MIN_ROWS
+);
+const CLUB_ELO_FIXTURES_MIN_ROWS = Number.isFinite(parsedClubEloFixturesMinRows)
+  ? Math.max(1, Math.floor(parsedClubEloFixturesMinRows))
+  : DEFAULT_CLUB_ELO_FIXTURES_MIN_ROWS;
+const parsedClubEloFixturesMinBytes = Number(
+  process.env.CLUB_ELO_FIXTURES_MIN_BYTES || DEFAULT_CLUB_ELO_FIXTURES_MIN_BYTES
+);
+const CLUB_ELO_FIXTURES_MIN_BYTES = Number.isFinite(parsedClubEloFixturesMinBytes)
+  ? Math.max(1, Math.floor(parsedClubEloFixturesMinBytes))
+  : DEFAULT_CLUB_ELO_FIXTURES_MIN_BYTES;
+const CLUB_ELO_FIXTURES_INTERVAL_HOURS = Number(
+  process.env.CLUB_ELO_FIXTURES_UPDATE_INTERVAL_HOURS || 12
+);
+const CLUB_ELO_FIXTURES_INTERVAL_MS = Number(
+  process.env.CLUB_ELO_FIXTURES_UPDATE_INTERVAL_MS ||
+    CLUB_ELO_FIXTURES_INTERVAL_HOURS * 60 * 60 * 1000
+);
 const FOOTBALL_DATABASE_BASE_URL =
   process.env.FOOTBALL_DATABASE_BASE_URL || DEFAULT_FOOTBALL_DATABASE_BASE_URL;
 const FOOTBALL_DATABASE_OUTPUT_PATH =
@@ -329,6 +362,14 @@ const parsedNationalEloRetryJitterMs = Number(
 const NATIONAL_ELO_RETRY_JITTER_MS = Number.isFinite(parsedNationalEloRetryJitterMs)
   ? Math.max(0, Math.floor(parsedNationalEloRetryJitterMs))
   : DEFAULT_NATIONAL_ELO_RETRY_JITTER_MS;
+const NATIONAL_ELO_PREFER_IPV4 = parseEnvBoolean(
+  process.env.NATIONAL_ELO_PREFER_IPV4,
+  DEFAULT_NATIONAL_ELO_PREFER_IPV4
+);
+const NATIONAL_ELO_USER_AGENT_RAW = String(
+  process.env.NATIONAL_ELO_USER_AGENT || DEFAULT_NATIONAL_ELO_USER_AGENT
+).trim();
+const NATIONAL_ELO_USER_AGENT = NATIONAL_ELO_USER_AGENT_RAW || DEFAULT_NATIONAL_ELO_USER_AGENT;
 const RECENT_OUTPUT_PATH =
   process.env.RECENT_OUTPUT_PATH || path.join(__dirname, "recent_matches.json");
 const MISSING_TEAM_LOGOS_OUTPUT_PATH =
@@ -417,6 +458,7 @@ const SOURCE_BBC_RANGE = "bbc_scores_fixtures_range";
 const SOURCE_BBC_PREMIER_LEAGUE = "bbc_premier_league_table";
 const SOURCE_BBC_LEAGUE_TABLES = "bbc_league_tables";
 const SOURCE_CLUB_ELO = "club_elo_rankings";
+const SOURCE_CLUB_ELO_FIXTURES = "club_elo_fixtures";
 const SOURCE_FOOTBALL_DATABASE = "football_database_rankings";
 const SOURCE_NATIONAL_ELO = "national_elo_rankings";
 const SOURCE_BBC_MATCH_DETAILS = "bbc_match_details";
@@ -508,6 +550,11 @@ let clubEloLatestPullTeamCount = 0;
 let clubEloUnmatchedTeamCount = 0;
 let clubEloLastSuccessDurationSeconds = 0;
 let clubEloLastFailureDurationSeconds = 0;
+let cachedClubEloFixtures = [];
+let clubEloFixturesLastUpdated = null;
+let clubEloFixturesUpdating = false;
+let clubEloFixturesLastMatchedCount = 0;
+let clubEloFixturesLastUnmatchedCount = 0;
 let cachedFootballDatabaseTeams = [];
 let footballDatabaseLastUpdated = null;
 let footballDatabaseUpdating = false;
@@ -1712,6 +1759,31 @@ const TEAM_IDENTITY_STOP_WORDS = new Set([
 ]);
 const DEDUPE_MIN_COMBINED_CONFIDENCE = 0.9;
 const DEDUPE_MIN_TEAM_CONFIDENCE = 0.84;
+const parsedClubEloFixturesMatchMinConfidence = Number(
+  process.env.CLUB_ELO_FIXTURES_MATCH_MIN_CONFIDENCE || 0.84
+);
+const CLUB_ELO_FIXTURES_MATCH_MIN_CONFIDENCE = Number.isFinite(
+  parsedClubEloFixturesMatchMinConfidence
+)
+  ? Math.min(1, Math.max(0, parsedClubEloFixturesMatchMinConfidence))
+  : 0.84;
+const parsedClubEloFixturesMatchMinTeamConfidence = Number(
+  process.env.CLUB_ELO_FIXTURES_MATCH_MIN_TEAM_CONFIDENCE || 0.72
+);
+const CLUB_ELO_FIXTURES_MATCH_MIN_TEAM_CONFIDENCE = Number.isFinite(
+  parsedClubEloFixturesMatchMinTeamConfidence
+)
+  ? Math.min(1, Math.max(0, parsedClubEloFixturesMatchMinTeamConfidence))
+  : 0.72;
+const parsedClubEloFixturesOpponentMargin = Number(
+  process.env.CLUB_ELO_FIXTURES_MATCH_OPPONENT_MARGIN || 0.03
+);
+const CLUB_ELO_FIXTURES_MATCH_OPPONENT_MARGIN = Number.isFinite(
+  parsedClubEloFixturesOpponentMargin
+)
+  ? Math.min(0.5, Math.max(0, parsedClubEloFixturesOpponentMargin))
+  : 0.03;
+const CLUB_ELO_FIXTURES_MATCH_AMBIGUOUS_MARGIN = 0.01;
 const parsedClubEloMatchMinConfidence = Number(process.env.CLUB_ELO_MATCH_MIN_CONFIDENCE || 0.82);
 const CLUB_ELO_MATCH_MIN_CONFIDENCE = Number.isFinite(parsedClubEloMatchMinConfidence)
   ? Math.min(1, Math.max(0, parsedClubEloMatchMinConfidence))
@@ -2265,6 +2337,132 @@ function scoreTeams(home, away, bbcHome, bbcAway, penalty) {
   const awayScore = similarityScore(away, bbcAway);
   const combined = Math.max(0, (homeScore + awayScore) / 2 - penalty);
   return { confidence: combined, minTeamConfidence: Math.min(homeScore, awayScore) };
+}
+
+function buildClubEloFixturesCandidatesByDate(records = matchDetailsById) {
+  const byDate = new Map();
+  const addCandidate = (detailsId, payload) => {
+    const normalizedId = normalizeMatchDetailsId(detailsId || (payload && payload.id));
+    if (!normalizedId) return;
+    const date = String(payload && payload.date ? payload.date : "").trim();
+    if (!isDateOnly(date)) return;
+    const homeTeam = String(payload && payload.home_team ? payload.home_team : "").trim();
+    const awayTeam = String(payload && payload.away_team ? payload.away_team : "").trim();
+    if (!homeTeam || !awayTeam) return;
+
+    if (!byDate.has(date)) {
+      byDate.set(date, []);
+    }
+    byDate.get(date).push({
+      details_id: normalizedId,
+      date,
+      home_team: homeTeam,
+      away_team: awayTeam,
+    });
+  };
+
+  if (records instanceof Map) {
+    records.forEach((payload, detailsId) => addCandidate(detailsId, payload));
+  } else if (records && typeof records === "object") {
+    Object.entries(records).forEach(([detailsId, payload]) => addCandidate(detailsId, payload));
+  }
+
+  return byDate;
+}
+
+function scoreClubEloFixtureCandidate(fixture, candidate) {
+  const homeBase = similarityScore(fixture.home_team, candidate.home_team);
+  const awayBase = similarityScore(fixture.away_team, candidate.away_team);
+  const homeScore = Math.max(
+    homeBase,
+    canonicalIdentityConfidenceBoost(fixture.home_team, candidate.home_team)
+  );
+  const awayScore = Math.max(
+    awayBase,
+    canonicalIdentityConfidenceBoost(fixture.away_team, candidate.away_team)
+  );
+  const confidence = (homeScore + awayScore) / 2;
+  const opponentConfidence =
+    (
+      similarityScore(fixture.home_team, candidate.away_team) +
+      similarityScore(fixture.away_team, candidate.home_team)
+    ) / 2;
+
+  return {
+    confidence,
+    minTeamConfidence: Math.min(homeScore, awayScore),
+    opponentConfidence,
+  };
+}
+
+function findBestMatchDetailsForClubEloFixture(fixture, candidatesByDate) {
+  if (!fixture || typeof fixture !== "object") return null;
+  const fixtureDate = String(fixture.date || "").trim();
+  if (!isDateOnly(fixtureDate)) return null;
+
+  const candidates = candidatesByDate.get(fixtureDate);
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+  let best = null;
+  let secondBestConfidence = Number.NEGATIVE_INFINITY;
+  candidates.forEach((candidate) => {
+    const scored = scoreClubEloFixtureCandidate(fixture, candidate);
+    if (
+      scored.confidence < CLUB_ELO_FIXTURES_MATCH_MIN_CONFIDENCE ||
+      scored.minTeamConfidence < CLUB_ELO_FIXTURES_MATCH_MIN_TEAM_CONFIDENCE
+    ) {
+      return;
+    }
+    // Ensure the home/away orientation is reliable before applying GD probabilities.
+    if (
+      scored.opponentConfidence + CLUB_ELO_FIXTURES_MATCH_OPPONENT_MARGIN >=
+      scored.confidence
+    ) {
+      return;
+    }
+    if (!best || scored.confidence > best.confidence) {
+      if (best) {
+        secondBestConfidence = Math.max(secondBestConfidence, best.confidence);
+      }
+      best = {
+        details_id: candidate.details_id,
+        confidence: scored.confidence,
+        minTeamConfidence: scored.minTeamConfidence,
+      };
+      return;
+    }
+    secondBestConfidence = Math.max(secondBestConfidence, scored.confidence);
+  });
+
+  if (!best) return null;
+  if (secondBestConfidence >= best.confidence - CLUB_ELO_FIXTURES_MATCH_AMBIGUOUS_MARGIN) {
+    return null;
+  }
+  return best;
+}
+
+function mergeClubEloFixtureMetadata(payload, fixture, matchResult, nowIso, sourceUrl) {
+  const metadata = payload && payload.metadata && typeof payload.metadata === "object"
+    ? payload.metadata
+    : {};
+  return {
+    ...payload,
+    updated_at: nowIso,
+    metadata: {
+      ...metadata,
+      club_elo_fixture_probabilities: {
+        source: sourceUrl || CLUB_ELO_FIXTURES_URL,
+        updated_at: nowIso,
+        fixture_date: fixture.date,
+        country: fixture.country || null,
+        home_team: fixture.home_team,
+        away_team: fixture.away_team,
+        match_confidence: Number(matchResult.confidence.toFixed(4)),
+        match_min_team_confidence: Number(matchResult.minTeamConfidence.toFixed(4)),
+        result_chances: Array.isArray(fixture.result_chances) ? fixture.result_chances : [],
+      },
+    },
+  };
 }
 
 function bestScoreCandidate(match, bbcMatches) {
@@ -5432,6 +5630,22 @@ function loadClubEloFromDisk() {
   }
 }
 
+function loadClubEloFixturesFromDisk() {
+  try {
+    if (!fs.existsSync(CLUB_ELO_FIXTURES_OUTPUT_PATH)) return;
+    const raw = fs.readFileSync(CLUB_ELO_FIXTURES_OUTPUT_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      cachedClubEloFixtures = parsed;
+      setSourceCacheSize(SOURCE_CLUB_ELO_FIXTURES, cachedClubEloFixtures.length);
+      const stat = fs.statSync(CLUB_ELO_FIXTURES_OUTPUT_PATH);
+      clubEloFixturesLastUpdated = stat.mtime.toISOString();
+    }
+  } catch (err) {
+    console.warn("Failed to load Club Elo fixtures from disk:", err.message || err);
+  }
+}
+
 function loadFootballDatabaseFromDisk() {
   try {
     if (!fs.existsSync(FOOTBALL_DATABASE_OUTPUT_PATH)) return;
@@ -5515,6 +5729,14 @@ function writeClubEloTeams(outputPath, teams) {
     writeClubEloRankings(outputPath, teams);
   } catch (err) {
     console.warn("Failed to write Club Elo teams to disk:", err.message || err);
+  }
+}
+
+function writeClubEloFixturesData(outputPath, fixtures) {
+  try {
+    writeClubEloFixtures(outputPath, fixtures);
+  } catch (err) {
+    console.warn("Failed to write Club Elo fixtures to disk:", err.message || err);
   }
 }
 
@@ -6398,6 +6620,120 @@ async function updateLeagueTables() {
   }
 }
 
+async function updateClubEloFixtures(options = {}) {
+  if (clubEloFixturesUpdating) {
+    return {
+      success: false,
+      skipped: true,
+      reason: "update_in_progress",
+    };
+  }
+
+  clubEloFixturesUpdating = true;
+  const startedAtMs = Date.now();
+  let success = false;
+  let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+
+  try {
+    const result = await fetchClubEloFixtures({
+      url: CLUB_ELO_FIXTURES_URL,
+      minRows: CLUB_ELO_FIXTURES_MIN_ROWS,
+      minBytes: CLUB_ELO_FIXTURES_MIN_BYTES,
+    });
+    const fixtures = Array.isArray(result.fixtures) ? result.fixtures : [];
+    if (fixtures.length === 0) {
+      throw new Error("Club Elo fixtures update returned no fixtures");
+    }
+
+    const nowIso = new Date().toISOString();
+    const candidatesByDate = buildClubEloFixturesCandidatesByDate(matchDetailsById);
+    const updatedSubset = {};
+    let matchedCount = 0;
+    let unmatchedCount = 0;
+
+    fixtures.forEach((fixture) => {
+      const bestMatch = findBestMatchDetailsForClubEloFixture(fixture, candidatesByDate);
+      if (!bestMatch) {
+        unmatchedCount += 1;
+        return;
+      }
+
+      const existingPayload = matchDetailsById.get(bestMatch.details_id);
+      if (!existingPayload || typeof existingPayload !== "object") {
+        unmatchedCount += 1;
+        return;
+      }
+
+      const mergedPayload = mergeClubEloFixtureMetadata(
+        existingPayload,
+        fixture,
+        bestMatch,
+        nowIso,
+        result.url
+      );
+      matchDetailsById.set(bestMatch.details_id, mergedPayload);
+      updatedSubset[bestMatch.details_id] = mergedPayload;
+      matchedCount += 1;
+    });
+
+    cachedClubEloFixtures = fixtures;
+    recordsFetched = fixtures.length;
+    clubEloFixturesLastUpdated = nowIso;
+    clubEloFixturesLastMatchedCount = matchedCount;
+    clubEloFixturesLastUnmatchedCount = unmatchedCount;
+    setSourceCacheSize(SOURCE_CLUB_ELO_FIXTURES, fixtures.length);
+    writeClubEloFixturesData(CLUB_ELO_FIXTURES_OUTPUT_PATH, fixtures);
+
+    if (Object.keys(updatedSubset).length > 0) {
+      await persistOperationalMatchDetailsSafe(updatedSubset, {
+        replace: false,
+        updated_at: nowIso,
+        source: SOURCE_CLUB_ELO_FIXTURES,
+      });
+      matchDetailsLastUpdated = nowIso;
+    }
+
+    success = true;
+    console.log(
+      `Updated Club Elo fixtures (${fixtures.length} rows, matched ${matchedCount}, ` +
+      `unmatched ${unmatchedCount}) at ${nowIso} (trigger=${trigger})`
+    );
+    return {
+      success: true,
+      trigger,
+      url: result.url,
+      count: fixtures.length,
+      matched_count: matchedCount,
+      unmatched_count: unmatchedCount,
+      content_type: result.contentType,
+      bytes: result.byteLength,
+      min_rows: CLUB_ELO_FIXTURES_MIN_ROWS,
+      min_bytes: CLUB_ELO_FIXTURES_MIN_BYTES,
+      updated_at: nowIso,
+    };
+  } catch (err) {
+    console.warn("Failed to update Club Elo fixtures:", err.message || err);
+    return {
+      success: false,
+      trigger,
+      error: err.message || String(err),
+      updated_at: clubEloFixturesLastUpdated,
+      cached_count: Array.isArray(cachedClubEloFixtures) ? cachedClubEloFixtures.length : 0,
+      cached_matched_count: clubEloFixturesLastMatchedCount,
+      cached_unmatched_count: clubEloFixturesLastUnmatchedCount,
+    };
+  } finally {
+    trackSourceUpdateMetrics({
+      source: SOURCE_CLUB_ELO_FIXTURES,
+      startedAtMs,
+      success,
+      recordsFetched,
+    });
+    clubEloFixturesUpdating = false;
+  }
+}
+
 async function updateClubEloTeams(options = {}) {
   if (clubEloUpdating) {
     return {
@@ -6607,11 +6943,14 @@ async function updateNationalEloTeams(options = {}) {
       page: NATIONAL_ELO_PAGE,
       minRows: NATIONAL_ELO_MIN_ROWS,
       minBytes: NATIONAL_ELO_MIN_BYTES,
+      fallbackTeams: cachedNationalEloTeams,
       retryAttempts: NATIONAL_ELO_RETRY_ATTEMPTS,
       retryBackoffBaseMs: NATIONAL_ELO_RETRY_BACKOFF_BASE_MS,
       retryBackoffMaxMs: NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
       retryBackoffFactor: NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
       retryJitterMs: NATIONAL_ELO_RETRY_JITTER_MS,
+      preferIpv4: NATIONAL_ELO_PREFER_IPV4,
+      userAgent: NATIONAL_ELO_USER_AGENT,
     });
     const teams = normalizeNationalEloTeamsPayload(result.teams);
     if (!Array.isArray(teams) || teams.length === 0) {
@@ -6640,6 +6979,11 @@ async function updateNationalEloTeams(options = {}) {
       `Updated National Elo teams (${teams.length}) at ${nationalEloLastUpdated} ` +
       `(page=${result.page}, trigger=${trigger})`
     );
+    if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+      console.warn(
+        `National Elo update completed with warnings (${result.warnings.length}): ${result.warnings.join(" | ")}`
+      );
+    }
     return {
       success: true,
       trigger,
@@ -6653,7 +6997,11 @@ async function updateNationalEloTeams(options = {}) {
       retry_backoff_max_ms: NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
       retry_backoff_factor: NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
       retry_jitter_ms: NATIONAL_ELO_RETRY_JITTER_MS,
+      prefer_ipv4: NATIONAL_ELO_PREFER_IPV4,
       retry: result && result.retry ? result.retry : null,
+      partial_fetch: result && result.partial_fetch ? result.partial_fetch : null,
+      warnings: Array.isArray(result && result.warnings) ? result.warnings : [],
+      request: result && result.request ? result.request : null,
       date_modified: result.dateModified || null,
       last_modified: result.lastModified || null,
       content_type: result.contentType,
@@ -6664,10 +7012,17 @@ async function updateNationalEloTeams(options = {}) {
     const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
     markNationalEloFailure(new Date().toISOString(), durationSeconds);
     console.warn("Failed to update National Elo teams:", err.message || err);
+    if (Array.isArray(err && err.attemptErrors) && err.attemptErrors.length > 0) {
+      console.warn(
+        `National Elo retry attempts (${err.attemptErrors.length}) for ${err.url || "unknown url"}: ` +
+        `${JSON.stringify(err.attemptErrors)}`
+      );
+    }
     return {
       success: false,
       trigger,
       error: err.message || String(err),
+      attempt_errors: Array.isArray(err && err.attemptErrors) ? err.attemptErrors : [],
       updated_at: nationalEloLastUpdated,
       cached_count: Array.isArray(cachedNationalEloTeams) ? cachedNationalEloTeams.length : 0,
     };
@@ -8368,6 +8723,18 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     club_elo_manual_mappings_count: manualClubEloMappings.size,
     club_elo_updating: clubEloUpdating,
     club_elo_redis_ttl_seconds: CLUB_ELO_REDIS_TTL_SECONDS,
+    club_elo_fixtures_count: cachedClubEloFixtures.length,
+    club_elo_fixtures_last_updated: clubEloFixturesLastUpdated,
+    club_elo_fixtures_base_url: CLUB_ELO_FIXTURES_URL,
+    club_elo_fixtures_output_path: path.resolve(CLUB_ELO_FIXTURES_OUTPUT_PATH),
+    club_elo_fixtures_interval_ms: CLUB_ELO_FIXTURES_INTERVAL_MS,
+    club_elo_fixtures_min_rows: CLUB_ELO_FIXTURES_MIN_ROWS,
+    club_elo_fixtures_min_bytes: CLUB_ELO_FIXTURES_MIN_BYTES,
+    club_elo_fixtures_updating: clubEloFixturesUpdating,
+    club_elo_fixtures_last_matched_count: clubEloFixturesLastMatchedCount,
+    club_elo_fixtures_last_unmatched_count: clubEloFixturesLastUnmatchedCount,
+    club_elo_fixtures_match_min_confidence: CLUB_ELO_FIXTURES_MATCH_MIN_CONFIDENCE,
+    club_elo_fixtures_match_min_team_confidence: CLUB_ELO_FIXTURES_MATCH_MIN_TEAM_CONFIDENCE,
     football_database_count: footballDatabaseDataset.items.length,
     football_database_last_updated:
       footballDatabaseDataset.updated_at || footballDatabaseLastUpdated,
@@ -8403,6 +8770,8 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     national_elo_retry_backoff_max_ms: NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
     national_elo_retry_backoff_factor: NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
     national_elo_retry_jitter_ms: NATIONAL_ELO_RETRY_JITTER_MS,
+    national_elo_prefer_ipv4: NATIONAL_ELO_PREFER_IPV4,
+    national_elo_user_agent: NATIONAL_ELO_USER_AGENT,
     national_elo_match_min_confidence: NATIONAL_ELO_MATCH_MIN_CONFIDENCE,
     national_elo_updating: nationalEloUpdating,
     national_elo_redis_ttl_seconds: NATIONAL_ELO_REDIS_TTL_SECONDS,
@@ -8450,6 +8819,8 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
       premier_league_teams: teamsDataset.source,
       league_tables: leagueTablesDataset.source,
       club_elo_teams: clubEloDataset.source,
+      club_elo_fixtures:
+        clubEloFixturesLastUpdated ? SOURCE_CLUB_ELO_FIXTURES : null,
       football_database_teams: footballDatabaseDataset.source,
       national_elo_teams: nationalEloDataset.source,
       match_details: matchDetailsSnapshot.source,
@@ -8464,6 +8835,7 @@ loadRecentFromDisk();
 loadPremierLeagueFromDisk();
 loadLeagueTablesFromDisk();
 loadClubEloFromDisk();
+loadClubEloFixturesFromDisk();
 loadFootballDatabaseFromDisk();
 loadNationalEloFromDisk();
 // ===== User Preferences Redis Endpoints =====
@@ -10423,6 +10795,7 @@ async function bootstrapOperationalState() {
   void updatePremierLeagueTeams();
   void updateLeagueTables();
   void updateClubEloTeams({ trigger: "startup_bootstrap" });
+  void updateClubEloFixtures({ trigger: "startup_bootstrap" });
   void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
   void updateNationalEloTeams({ trigger: "startup_bootstrap" });
 }
@@ -10455,6 +10828,13 @@ const clubEloInterval =
 setInterval(() => {
   void updateClubEloTeams({ trigger: "interval" });
 }, clubEloInterval);
+const clubEloFixturesInterval =
+  Number.isFinite(CLUB_ELO_FIXTURES_INTERVAL_MS) && CLUB_ELO_FIXTURES_INTERVAL_MS > 0
+    ? CLUB_ELO_FIXTURES_INTERVAL_MS
+    : 12 * 60 * 60 * 1000;
+setInterval(() => {
+  void updateClubEloFixtures({ trigger: "interval" });
+}, clubEloFixturesInterval);
 const footballDatabaseInterval =
   Number.isFinite(FOOTBALL_DATABASE_INTERVAL_MS) && FOOTBALL_DATABASE_INTERVAL_MS > 0
     ? FOOTBALL_DATABASE_INTERVAL_MS

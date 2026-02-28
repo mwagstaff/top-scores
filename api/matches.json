@@ -1,49 +1,6 @@
 [
   {
     "date": "2026-02-28",
-    "time": "12:30",
-    "home_team": "Derby County",
-    "away_team": "Blackburn Rovers",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-28",
-    "time": "12:30",
-    "home_team": "Leicester City",
-    "away_team": "Norwich City",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports Main Event",
-      "Sky Sports Football",
-      "Sky Sports Ultra HDR"
-    ]
-  },
-  {
-    "date": "2026-02-28",
-    "time": "12:30",
-    "home_team": "Portsmouth",
-    "away_team": "Hull City",
-    "league": "Championship",
-    "tv_channels": [
-      "Sky Sports+"
-    ]
-  },
-  {
-    "date": "2026-02-28",
-    "time": "12:30",
-    "home_team": "AFC Bournemouth",
-    "away_team": "Sunderland",
-    "league": "Premier League",
-    "tv_channels": [
-      "TNT Sports 1",
-      "TNT Sports Ultimate"
-    ]
-  },
-  {
-    "date": "2026-02-28",
     "time": "13:00",
     "home_team": "Rayo Vallecano",
     "away_team": "Athletic Bilbao",

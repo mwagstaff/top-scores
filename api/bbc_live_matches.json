@@ -1,5 +1,1839 @@
 [
   {
+    "home_team": "AFC Bournemouth",
+    "home_score": 1,
+    "away_team": "Sunderland",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c75e4rd3596t",
+    "home_goal_scorers": [
+      {
+        "player": "Evanilson",
+        "goal_times": [
+          "63'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "Eliezer Mayenda",
+        "goal_times": [
+          "18'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "M. Tavernier",
+        "assist_times": [
+          "63'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Burnley",
+    "home_score": 3,
+    "away_team": "Brentford",
+    "away_score": 3,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/crl4z0djl7lt",
+    "home_goal_scorers": [
+      {
+        "player": "M. Kayode",
+        "own_goal_times": [
+          "45+3'"
+        ]
+      },
+      {
+        "player": "J. Anthony",
+        "goal_times": [
+          "47'"
+        ]
+      },
+      {
+        "player": "Z. Flemming",
+        "goal_times": [
+          "60'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "M. Damsgaard",
+        "goal_times": [
+          "9'"
+        ]
+      },
+      {
+        "player": "Igor Thiago",
+        "goal_times": [
+          "25'"
+        ]
+      },
+      {
+        "player": "K. Schade",
+        "goal_times": [
+          "34'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "H. Mejbri",
+        "assist_times": [
+          "47'",
+          "60'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "D. Ouattara",
+        "assist_times": [
+          "9'"
+        ]
+      },
+      {
+        "player": "M. Damsgaard",
+        "assist_times": [
+          "25'"
+        ]
+      }
+    ],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Liverpool",
+    "home_score": 3,
+    "away_team": "West Ham United",
+    "away_score": 1,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cy8ljgqd6l5t",
+    "home_goal_scorers": [
+      {
+        "player": "H. Ekitiké",
+        "goal_times": [
+          "5'"
+        ]
+      },
+      {
+        "player": "V. van Dijk",
+        "goal_times": [
+          "24'"
+        ]
+      },
+      {
+        "player": "A. Mac Allister",
+        "goal_times": [
+          "43'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "T. Souček",
+        "goal_times": [
+          "49'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "R. Gravenberch",
+        "assist_times": [
+          "5'"
+        ]
+      },
+      {
+        "player": "D. Szoboszlai",
+        "assist_times": [
+          "24'"
+        ]
+      },
+      {
+        "player": "H. Ekitiké",
+        "assist_times": [
+          "43'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "E. Diouf",
+        "assist_times": [
+          "49'"
+        ]
+      }
+    ],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Newcastle United",
+    "home_score": 1,
+    "away_team": "Everton",
+    "away_score": 2,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cx289ly70e3t",
+    "home_goal_scorers": [
+      {
+        "player": "J. Ramsey",
+        "goal_times": [
+          "32'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "J. Branthwaite",
+        "goal_times": [
+          "19'"
+        ]
+      },
+      {
+        "player": "Beto",
+        "goal_times": [
+          "34'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "S. Tonali",
+        "assist_times": [
+          "32'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "J. Garner",
+        "assist_times": [
+          "19'"
+        ]
+      }
+    ],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Dundee",
+    "home_score": 1,
+    "away_team": "Hibernian",
+    "away_score": 1,
+    "match_time": "67",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cy0dqwywrpxt",
+    "home_goal_scorers": [
+      {
+        "player": "S. Murray",
+        "goal_times": [
+          "15'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "O. Elding",
+        "goal_times": [
+          "11'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "L. Graham",
+        "assist_times": [
+          "15'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "N. Cadden",
+        "assist_times": [
+          "11'"
+        ]
+      }
+    ],
+    "score_status": "67"
+  },
+  {
+    "home_team": "Falkirk",
+    "home_score": 5,
+    "away_team": "Kilmarnock",
+    "away_score": 1,
+    "match_time": "61",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c2d1j0e0plpt",
+    "home_goal_scorers": [
+      {
+        "player": "E. Brown",
+        "own_goal_times": [
+          "1'"
+        ]
+      },
+      {
+        "player": "D. Tait",
+        "goal_times": [
+          "28'",
+          "56'"
+        ]
+      },
+      {
+        "player": "B. Stewart",
+        "goal_times": [
+          "36'",
+          "50'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "G. Kiltie",
+        "goal_times": [
+          "40'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "C. Donaldson",
+        "assist_times": [
+          "36'"
+        ]
+      },
+      {
+        "player": "C. Miller",
+        "assist_times": [
+          "50'"
+        ]
+      },
+      {
+        "player": "B. Broggio",
+        "assist_times": [
+          "56'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "61"
+  },
+  {
+    "home_team": "Hearts",
+    "home_score": 1,
+    "away_team": "Aberdeen",
+    "away_score": 0,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cd03dv2v5vdt",
+    "home_goal_scorers": [
+      {
+        "player": "Cláudio Braga",
+        "goal_times": [
+          "28'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "P. Kaboré",
+        "assist_times": [
+          "28'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Livingston",
+    "home_score": 0,
+    "away_team": "St. Mirren",
+    "away_score": 1,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cz0gy91972yt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "D. Nlundulu",
+        "goal_times": [
+          "44'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "M. Mandron",
+        "assist_times": [
+          "44'"
+        ]
+      }
+    ],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Motherwell",
+    "home_score": 2,
+    "away_team": "Dundee United",
+    "away_score": 0,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c4gjz8r8e77t",
+    "home_goal_scorers": [
+      {
+        "player": "T. Maswanhise",
+        "goal_times": [
+          "37' pen",
+          "46'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "E. Watt",
+        "assist_times": [
+          "46'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Derby County",
+    "home_score": 3,
+    "away_team": "Blackburn Rovers",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cz6e0gd38wzt",
+    "home_goal_scorers": [
+      {
+        "player": "B. Brereton",
+        "goal_times": [
+          "55'"
+        ]
+      },
+      {
+        "player": "M. Clarke",
+        "goal_times": [
+          "74'"
+        ]
+      },
+      {
+        "player": "R. Brewster",
+        "goal_times": [
+          "82'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "H. Carter",
+        "goal_times": [
+          "45+1'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "D. Murkin",
+        "assist_times": [
+          "55'",
+          "82'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "Yuri Ribeiro",
+        "assist_times": [
+          "45+1'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Leicester City",
+    "home_score": 0,
+    "away_team": "Norwich City",
+    "away_score": 2,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cgl5nzxez4et",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "A. Ben Slimane",
+        "goal_times": [
+          "68'"
+        ]
+      },
+      {
+        "player": "A. Ahmed",
+        "goal_times": [
+          "78'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "S. Field",
+        "assist_times": [
+          "68'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Portsmouth",
+    "home_score": 0,
+    "away_team": "Hull City",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c2046rz11ket",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "M. Crooks",
+        "goal_times": [
+          "73'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Charlton Athletic",
+    "home_score": 0,
+    "away_team": "Wrexham",
+    "away_score": 1,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cm21klxyk30t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "O. Rathbone",
+        "goal_times": [
+          "30'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Coventry City",
+    "home_score": 1,
+    "away_team": "Stoke City",
+    "away_score": 1,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c2k8z1vq4d7t",
+    "home_goal_scorers": [
+      {
+        "player": "H. Wright",
+        "goal_times": [
+          "12'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "B. Gibson",
+        "goal_times": [
+          "45+4'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. Dasilva",
+        "assist_times": [
+          "12'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "S. Thomas",
+        "assist_times": [
+          "45+4'"
+        ]
+      }
+    ],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Ipswich Town",
+    "home_score": 2,
+    "away_team": "Swansea City",
+    "away_score": 0,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c309z7q862lt",
+    "home_goal_scorers": [
+      {
+        "player": "A. Mehmeti",
+        "goal_times": [
+          "3'"
+        ]
+      },
+      {
+        "player": "Iván Azón",
+        "goal_times": [
+          "41'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "L. Davis",
+        "assist_times": [
+          "41'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Oxford United",
+    "home_score": 2,
+    "away_team": "West Bromwich Albion",
+    "away_score": 1,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c4g46d3rqdxt",
+    "home_goal_scorers": [
+      {
+        "player": "S. Mills",
+        "goal_times": [
+          "14'"
+        ]
+      },
+      {
+        "player": "W. Lankshear",
+        "goal_times": [
+          "26'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "O. Bostock",
+        "goal_times": [
+          "33'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. Donley",
+        "assist_times": [
+          "14'"
+        ]
+      },
+      {
+        "player": "C. Brannagan",
+        "assist_times": [
+          "26'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "K. Bielik",
+        "assist_times": [
+          "33'"
+        ]
+      }
+    ],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Preston North End",
+    "home_score": 0,
+    "away_team": "Millwall",
+    "away_score": 1,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c8r1ypge1x7t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "R. Leonard",
+        "goal_times": [
+          "29'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "C. De Norre",
+        "assist_times": [
+          "29'"
+        ]
+      }
+    ],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Queens Park Rangers",
+    "home_score": 0,
+    "away_team": "Sheffield United",
+    "away_score": 2,
+    "match_time": "67",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cze0ry1lwz9t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "C. O'Hare",
+        "goal_times": [
+          "13'"
+        ]
+      },
+      {
+        "player": "T. Campbell",
+        "goal_times": [
+          "33'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "S. Peck",
+        "assist_times": [
+          "33'"
+        ]
+      }
+    ],
+    "score_status": "67"
+  },
+  {
+    "home_team": "Sheffield Wednesday",
+    "home_score": 1,
+    "away_team": "Southampton",
+    "away_score": 2,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cjd9y2xz9kyt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Yates",
+        "goal_times": [
+          "57'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "J. Bree",
+        "goal_times": [
+          "17'"
+        ]
+      },
+      {
+        "player": "R. Manning",
+        "goal_times": [
+          "45+1'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. Lowe",
+        "assist_times": [
+          "57'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Leyton Orient",
+    "home_score": 1,
+    "away_team": "Barnsley",
+    "away_score": 3,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c1d6xnrel7yt",
+    "home_goal_scorers": [
+      {
+        "player": "D. Levitt",
+        "goal_times": [
+          "20'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "D. McGoldrick",
+        "goal_times": [
+          "10'",
+          "53'",
+          "62'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "A. Phillips",
+        "assist_times": [
+          "10'"
+        ]
+      },
+      {
+        "player": "R. Cleary",
+        "assist_times": [
+          "62'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Northampton Town",
+    "home_score": 1,
+    "away_team": "Peterborough United",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c4gjz8r2yy4t",
+    "home_goal_scorers": [
+      {
+        "player": "T. Eaves",
+        "goal_times": [
+          "44'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "J. Morgan",
+        "goal_times": [
+          "52'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "T. Fornah",
+        "assist_times": [
+          "44'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "Kyrell Jeremiah Lisbie",
+        "assist_times": [
+          "52'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Doncaster Rovers",
+    "home_score": 0,
+    "away_team": "Cardiff City",
+    "away_score": 3,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cy4w0y8ek13t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "A. Robertson",
+        "goal_times": [
+          "26'"
+        ]
+      },
+      {
+        "player": "D. Lawlor",
+        "goal_times": [
+          "46'"
+        ]
+      },
+      {
+        "player": "C. Ashford",
+        "goal_times": [
+          "56'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "D. Lawlor",
+        "assist_times": [
+          "26'"
+        ]
+      },
+      {
+        "player": "P. Ng",
+        "assist_times": [
+          "46'"
+        ]
+      },
+      {
+        "player": "R. Colwill",
+        "assist_times": [
+          "56'"
+        ]
+      }
+    ],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Exeter City",
+    "home_score": 0,
+    "away_team": "Bolton Wanderers",
+    "away_score": 2,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cpd8j1z40vdt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "S. Dalby",
+        "goal_times": [
+          "21'"
+        ]
+      },
+      {
+        "player": "J. Kenny",
+        "goal_times": [
+          "60'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "J. Kenny",
+        "assist_times": [
+          "21'"
+        ]
+      },
+      {
+        "player": "J. Sheehan",
+        "assist_times": [
+          "60'"
+        ]
+      }
+    ],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Lincoln City",
+    "home_score": 1,
+    "away_team": "Blackpool",
+    "away_score": 0,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cq8g7z05919t",
+    "home_goal_scorers": [
+      {
+        "player": "C. McGrandles",
+        "goal_times": [
+          "38'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Mansfield Town",
+    "home_score": 2,
+    "away_team": "AFC Wimbledon",
+    "away_score": 2,
+    "match_time": "68",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c98g7w5p06dt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Russell",
+        "goal_times": [
+          "7'",
+          "29'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "J. Tilley",
+        "goal_times": [
+          "14'"
+        ]
+      },
+      {
+        "player": "M. Stevens",
+        "goal_times": [
+          "58' pen"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "V. Adeboyejo",
+        "assist_times": [
+          "7'"
+        ]
+      },
+      {
+        "player": "T. Roberts",
+        "assist_times": [
+          "29'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "M. Browne",
+        "assist_times": [
+          "14'"
+        ]
+      }
+    ],
+    "score_status": "68"
+  },
+  {
+    "home_team": "Port Vale",
+    "home_score": 1,
+    "away_team": "Luton Town",
+    "away_score": 1,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cj4zwe52pjnt",
+    "home_goal_scorers": [
+      {
+        "player": "B. Waine",
+        "goal_times": [
+          "29'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "N. Wells",
+        "goal_times": [
+          "5'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "G. Hall",
+        "assist_times": [
+          "29'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "E. Lawrence",
+        "assist_times": [
+          "5'"
+        ]
+      }
+    ],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Reading",
+    "home_score": 0,
+    "away_team": "Bradford City",
+    "away_score": 0,
+    "match_time": "67",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cn4831wgrp2t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "67"
+  },
+  {
+    "home_team": "Rotherham United",
+    "home_score": 1,
+    "away_team": "Plymouth Argyle",
+    "away_score": 0,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cge8rqngv9dt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Rafferty",
+        "goal_times": [
+          "7'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "D. Yearwood",
+        "assist_times": [
+          "7'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Stevenage",
+    "home_score": 2,
+    "away_team": "Stockport County",
+    "away_score": 1,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cq5783w4pq8t",
+    "home_goal_scorers": [
+      {
+        "player": "C. Piergianni",
+        "goal_times": [
+          "35'"
+        ]
+      },
+      {
+        "player": "M. Phillips",
+        "goal_times": [
+          "57'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "A. Sidibeh",
+        "goal_times": [
+          "29'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. Reid",
+        "assist_times": [
+          "57'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "O. Bailey",
+        "assist_times": [
+          "29'"
+        ]
+      }
+    ],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Wigan Athletic",
+    "home_score": 1,
+    "away_team": "Huddersfield Town",
+    "away_score": 0,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c98g7w5pr8gt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Weir",
+        "goal_times": [
+          "61'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "C. Wright",
+        "assist_times": [
+          "61'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Wycombe Wanderers",
+    "home_score": 1,
+    "away_team": "Burton Albion",
+    "away_score": 0,
+    "match_time": "60",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cn0e2zw5p6pt",
+    "home_goal_scorers": [
+      {
+        "player": "C. Boyd-Munce",
+        "goal_times": [
+          "15'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "60"
+  },
+  {
+    "home_team": "Cambridge United",
+    "home_score": 1,
+    "away_team": "Milton Keynes Dons",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/clyg7l5nrldt",
+    "home_goal_scorers": [
+      {
+        "player": "S. Lavery",
+        "goal_times": [
+          "75'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "A. Collins",
+        "goal_times": [
+          "90+6' pen"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Shrewsbury Town",
+    "home_score": 1,
+    "away_team": "Walsall",
+    "away_score": 2,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c0e59plq2vxt",
+    "home_goal_scorers": [
+      {
+        "player": "I. Morgan",
+        "goal_times": [
+          "45+6'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "P. Farquharson",
+        "goal_times": [
+          "28'",
+          "62'"
+        ]
+      }
+    ],
+    "home_red_cards": [
+      {
+        "player": "J. Ruffels",
+        "red_card_times": [
+          "90+2'"
+        ]
+      }
+    ],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "A. Pressley",
+        "assist_times": [
+          "28'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Swindon Town",
+    "home_score": 1,
+    "away_team": "Bristol Rovers",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c70k7x5nvp7t",
+    "home_goal_scorers": [
+      {
+        "player": "O. Palmer",
+        "goal_times": [
+          "58'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "K. Thompson-Sommers",
+        "goal_times": [
+          "43'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. Batty",
+        "assist_times": [
+          "58'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "E. Harrison",
+        "assist_times": [
+          "43'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Barnet",
+    "home_score": 1,
+    "away_team": "Chesterfield",
+    "away_score": 0,
+    "match_time": "67",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c1e9j0g62wwt",
+    "home_goal_scorers": [
+      {
+        "player": "N. Ofoborh",
+        "goal_times": [
+          "65'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "B. Winterburn",
+        "assist_times": [
+          "65'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "67"
+  },
+  {
+    "home_team": "Barrow",
+    "home_score": 0,
+    "away_team": "Gillingham",
+    "away_score": 0,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/ceqvy7rgdxwt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Bromley",
+    "home_score": 2,
+    "away_team": "Accrington Stanley",
+    "away_score": 1,
+    "match_time": "60",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cj4zwe52gnrt",
+    "home_goal_scorers": [
+      {
+        "player": "M. Cheek",
+        "goal_times": [
+          "45+1' pen",
+          "52' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "D. Abimbola",
+        "goal_times": [
+          "45+3'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [
+      {
+        "player": "D. Love",
+        "red_card_times": [
+          "14'"
+        ]
+      }
+    ],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "F. Sass",
+        "assist_times": [
+          "45+3'"
+        ]
+      }
+    ],
+    "score_status": "60"
+  },
+  {
+    "home_team": "Colchester United",
+    "home_score": 0,
+    "away_team": "Salford City",
+    "away_score": 0,
+    "match_time": "62",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cgrz9xg5k9pt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "62"
+  },
+  {
+    "home_team": "Crewe Alexandra",
+    "home_score": 0,
+    "away_team": "Tranmere Rovers",
+    "away_score": 1,
+    "match_time": "66",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c0j594z7lljt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "J. Plant",
+        "goal_times": [
+          "44'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "66"
+  },
+  {
+    "home_team": "Fleetwood Town",
+    "home_score": 0,
+    "away_team": "Newport County",
+    "away_score": 0,
+    "match_time": "66",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cvg1n89d5gdt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "66"
+  },
+  {
+    "home_team": "Notts County",
+    "home_score": 0,
+    "away_team": "Grimsby Town",
+    "away_score": 0,
+    "match_time": "68",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c98g7w5p28rt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "68"
+  },
+  {
+    "home_team": "Oldham Athletic",
+    "home_score": 2,
+    "away_team": "Crawley Town",
+    "away_score": 0,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cqlge062x6vt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Stevens",
+        "goal_times": [
+          "38'",
+          "51'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. Caprice",
+        "assist_times": [
+          "38'"
+        ]
+      },
+      {
+        "player": "M. Fondop-Talom",
+        "assist_times": [
+          "51'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Aldershot Town",
+    "home_score": 0,
+    "away_team": "Rochdale",
+    "away_score": 2,
+    "match_time": "60",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cp81z2j5dw5t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "E. Dieseruvwe",
+        "goal_times": [
+          "17'",
+          "50'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "D. Rodney",
+        "assist_times": [
+          "17'"
+        ]
+      }
+    ],
+    "score_status": "60"
+  },
+  {
+    "home_team": "Brackley Town",
+    "home_score": 0,
+    "away_team": "Altrincham",
+    "away_score": 1,
+    "match_time": "56",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/ce3gjnv90zyt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "J. Cooper",
+        "goal_times": [
+          "44'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "E. Jones",
+        "assist_times": [
+          "44'"
+        ]
+      }
+    ],
+    "score_status": "56"
+  },
+  {
+    "home_team": "Eastleigh",
+    "home_score": 0,
+    "away_team": "Carlisle United",
+    "away_score": 1,
+    "match_time": "58",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c07jpd81lvxt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "G. Kelly",
+        "goal_times": [
+          "54'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "R. Linney",
+        "assist_times": [
+          "54'"
+        ]
+      }
+    ],
+    "score_status": "58"
+  },
+  {
+    "home_team": "Gateshead",
+    "home_score": 0,
+    "away_team": "Forest Green Rovers",
+    "away_score": 2,
+    "match_time": "60",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c93j9kgyexgt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "T. Knowles",
+        "goal_times": [
+          "5'"
+        ]
+      },
+      {
+        "player": "C. Nwoko",
+        "goal_times": [
+          "56'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "H. Isted",
+        "assist_times": [
+          "5'"
+        ]
+      }
+    ],
+    "score_status": "60"
+  },
+  {
+    "home_team": "Halifax Town",
+    "home_score": 1,
+    "away_team": "Sutton United",
+    "away_score": 1,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cx2rqv7ezr9t",
+    "home_goal_scorers": [
+      {
+        "player": "C. Johnson",
+        "goal_times": [
+          "32'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "L. Simper",
+        "goal_times": [
+          "12'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. Hmami",
+        "assist_times": [
+          "32'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "B. Njoku",
+        "assist_times": [
+          "12'"
+        ]
+      }
+    ],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Scunthorpe United",
+    "home_score": 1,
+    "away_team": "Solihull Moors",
+    "away_score": 2,
+    "match_time": "67",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c4ge0243lx5t",
+    "home_goal_scorers": [
+      {
+        "player": "D. Whitehall",
+        "goal_times": [
+          "48'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "C. Wilkinson",
+        "goal_times": [
+          "15'",
+          "42'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [
+      {
+        "player": "T. French",
+        "red_card_times": [
+          "53'"
+        ]
+      }
+    ],
+    "home_assists": [
+      {
+        "player": "A. Boyce",
+        "assist_times": [
+          "48'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "D. Lipsiuc",
+        "assist_times": [
+          "15'"
+        ]
+      }
+    ],
+    "score_status": "67"
+  },
+  {
+    "home_team": "Tamworth",
+    "home_score": 2,
+    "away_team": "Boreham Wood",
+    "away_score": 0,
+    "match_time": "54",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/ceqvy7rg3njt",
+    "home_goal_scorers": [
+      {
+        "player": "O. Lynch",
+        "goal_times": [
+          "24'"
+        ]
+      },
+      {
+        "player": "Stefan Mols",
+        "goal_times": [
+          "52'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "T. Kurtaran",
+        "assist_times": [
+          "24'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "54"
+  },
+  {
+    "home_team": "Truro City",
+    "home_score": 1,
+    "away_team": "Braintree Town",
+    "away_score": 1,
+    "match_time": "62",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cdjm2xl94j3t",
+    "home_goal_scorers": [
+      {
+        "player": "F. Issaka",
+        "goal_times": [
+          "45+4'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "J. Akinde",
+        "goal_times": [
+          "7'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "G. Langston",
+        "assist_times": [
+          "7'"
+        ]
+      }
+    ],
+    "score_status": "62"
+  },
+  {
     "home_team": "Costa Rica",
     "home_score": 2,
     "away_team": "Brazil",
@@ -72,6 +1906,2367 @@
       }
     ],
     "score_status": "90+3"
+  },
+  {
+    "home_team": "Airdrieonians",
+    "home_score": 2,
+    "away_team": "Greenock Morton",
+    "away_score": 1,
+    "match_time": "68",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c70k7x5n7dqt",
+    "home_goal_scorers": [
+      {
+        "player": "D. Thomas",
+        "goal_times": [
+          "16'",
+          "47'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "M. Garrity",
+        "goal_times": [
+          "10'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [
+      {
+        "player": "C. Ballantyne",
+        "red_card_times": [
+          "36'"
+        ]
+      }
+    ],
+    "home_assists": [
+      {
+        "player": "C. McArthur",
+        "assist_times": [
+          "16'"
+        ]
+      },
+      {
+        "player": "O. Stirton",
+        "assist_times": [
+          "47'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "I. Wilson",
+        "assist_times": [
+          "10'"
+        ]
+      }
+    ],
+    "score_status": "68"
+  },
+  {
+    "home_team": "Dunfermline Athletic",
+    "home_score": 1,
+    "away_team": "Queen's Park",
+    "away_score": 0,
+    "match_time": "61",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cgl5nzxez8zt",
+    "home_goal_scorers": [
+      {
+        "player": "C. Morrison",
+        "goal_times": [
+          "25' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "61"
+  },
+  {
+    "home_team": "Partick Thistle",
+    "home_score": 0,
+    "away_team": "Arbroath",
+    "away_score": 0,
+    "match_time": "66",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c4g0z82kl86t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [
+      {
+        "player": "D. O'Reilly",
+        "red_card_times": [
+          "59'"
+        ]
+      }
+    ],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "66"
+  },
+  {
+    "home_team": "Ross County",
+    "home_score": 2,
+    "away_team": "Raith Rovers",
+    "away_score": 0,
+    "match_time": "66",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c1jknwx5ee7t",
+    "home_goal_scorers": [
+      {
+        "player": "J. White",
+        "goal_times": [
+          "33'"
+        ]
+      },
+      {
+        "player": "U. Ikpeazu",
+        "goal_times": [
+          "43'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. Henderson",
+        "assist_times": [
+          "43'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "66"
+  },
+  {
+    "home_team": "St. Johnstone",
+    "home_score": 2,
+    "away_team": "Ayr United",
+    "away_score": 1,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cn9e2y1j7v1t",
+    "home_goal_scorers": [
+      {
+        "player": "R. McAlear",
+        "goal_times": [
+          "16'"
+        ]
+      },
+      {
+        "player": "C. Diabate",
+        "goal_times": [
+          "42'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "L. Dick",
+        "goal_times": [
+          "18'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. Gullan",
+        "assist_times": [
+          "42'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "B. Dempsey",
+        "assist_times": [
+          "18'"
+        ]
+      }
+    ],
+    "score_status": "63"
+  },
+  {
+    "home_team": "East Fife",
+    "home_score": 0,
+    "away_team": "Alloa Athletic",
+    "away_score": 1,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c80jdp7pez4t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "C. Burnside",
+        "goal_times": [
+          "1'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "L. Stewart",
+        "assist_times": [
+          "1'"
+        ]
+      }
+    ],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Hamilton Academical",
+    "home_score": 1,
+    "away_team": "Montrose",
+    "away_score": 1,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c62g08j622et",
+    "home_goal_scorers": [
+      {
+        "player": "L. Kilday",
+        "goal_times": [
+          "63'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "K. Freeman",
+        "goal_times": [
+          "42'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "O. Shaw",
+        "assist_times": [
+          "63'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "T. Sutherland",
+        "assist_times": [
+          "42'"
+        ]
+      }
+    ],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Kelty Hearts",
+    "home_score": 0,
+    "away_team": "Inverness CT",
+    "away_score": 0,
+    "match_time": "67",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cddn3ze2d19t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "67"
+  },
+  {
+    "home_team": "Queen of the South",
+    "home_score": 0,
+    "away_team": "Peterhead",
+    "away_score": 2,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cwyx0en7yd0t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "K. Shanks",
+        "goal_times": [
+          "45+4' pen"
+        ]
+      },
+      {
+        "player": "Jason Brown",
+        "goal_times": [
+          "54'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "S. Ross",
+        "assist_times": [
+          "54'"
+        ]
+      }
+    ],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Stenhousemuir",
+    "home_score": 1,
+    "away_team": "Cove Rangers",
+    "away_score": 0,
+    "match_time": "68",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c9v0drer883t",
+    "home_goal_scorers": [
+      {
+        "player": "O. Whyte",
+        "goal_times": [
+          "35'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "68"
+  },
+  {
+    "home_team": "Clyde",
+    "home_score": 1,
+    "away_team": "East Kilbride",
+    "away_score": 3,
+    "match_time": "69",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c86y0gjgl9qt",
+    "home_goal_scorers": [
+      {
+        "player": "L. Dunachie",
+        "goal_times": [
+          "39'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "João Baldé",
+        "goal_times": [
+          "49'"
+        ]
+      },
+      {
+        "player": "B. McLuckie",
+        "goal_times": [
+          "60'"
+        ]
+      },
+      {
+        "player": "C. Young",
+        "goal_times": [
+          "67'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "T. Robson",
+        "assist_times": [
+          "39'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "L. Spence",
+        "assist_times": [
+          "49'"
+        ]
+      },
+      {
+        "player": "João Baldé",
+        "assist_times": [
+          "60'"
+        ]
+      },
+      {
+        "player": "J. Robertson",
+        "assist_times": [
+          "67'"
+        ]
+      }
+    ],
+    "score_status": "69"
+  },
+  {
+    "home_team": "Edinburgh City",
+    "home_score": 0,
+    "away_team": "Forfar Athletic",
+    "away_score": 0,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/clyzd81894jt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Spartans",
+    "home_score": 2,
+    "away_team": "Annan Athletic",
+    "away_score": 0,
+    "match_time": "66",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c1kgz8483ezt",
+    "home_goal_scorers": [
+      {
+        "player": "M. McNulty",
+        "goal_times": [
+          "45'",
+          "47' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [
+      {
+        "player": "D. Carrick",
+        "red_card_times": [
+          "47'"
+        ]
+      }
+    ],
+    "home_assists": [
+      {
+        "player": "J. Davidson",
+        "assist_times": [
+          "45'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "66"
+  },
+  {
+    "home_team": "Stirling Albion",
+    "home_score": 1,
+    "away_team": "Dumbarton",
+    "away_score": 0,
+    "match_time": "67",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cx2j9g6gnpnt",
+    "home_goal_scorers": [
+      {
+        "player": "R. McLean",
+        "goal_times": [
+          "40' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "67"
+  },
+  {
+    "home_team": "Stranraer",
+    "home_score": 1,
+    "away_team": "Elgin City",
+    "away_score": 1,
+    "match_time": "68",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cly2v818n3rt",
+    "home_goal_scorers": [
+      {
+        "player": "D. Cleland",
+        "goal_times": [
+          "17'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "K. Hester",
+        "goal_times": [
+          "44'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "D. Lang",
+        "assist_times": [
+          "17'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "M. Gallagher",
+        "assist_times": [
+          "44'"
+        ]
+      }
+    ],
+    "score_status": "68"
+  },
+  {
+    "home_team": "Horsham",
+    "home_score": 1,
+    "away_team": "Southend United",
+    "away_score": 2,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c0lj640nxjwt",
+    "home_goal_scorers": [
+      {
+        "player": "I. Philpott",
+        "goal_times": [
+          "41'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "K. Appiah-Forson",
+        "goal_times": [
+          "2'"
+        ]
+      },
+      {
+        "player": "J. Bridge",
+        "goal_times": [
+          "15'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Kidderminster Harriers",
+    "home_score": 1,
+    "away_team": "Wealdstone",
+    "away_score": 1,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c93j9kgyjllt",
+    "home_goal_scorers": [
+      {
+        "player": "R. Reynolds",
+        "goal_times": [
+          "25'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "S. Adarkwa",
+        "goal_times": [
+          "12'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Marine",
+    "home_score": 1,
+    "away_team": "Woking",
+    "away_score": 0,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cz0gy91dg97t",
+    "home_goal_scorers": [
+      {
+        "player": "F. Sinclair-Smith",
+        "goal_times": [
+          "37'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Southport",
+    "home_score": 0,
+    "away_team": "Yeovil Town",
+    "away_score": 1,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/clyzj81qz4yt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "J. Daly",
+        "goal_times": [
+          "42'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "AFC Telford United",
+    "home_score": 1,
+    "away_team": "Radcliffe",
+    "away_score": 0,
+    "match_time": "49",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c78jm470p59t",
+    "home_goal_scorers": [
+      {
+        "player": "J. Meddows",
+        "goal_times": [
+          "46'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "49"
+  },
+  {
+    "home_team": "Chester",
+    "home_score": 2,
+    "away_team": "Spennymoor Town",
+    "away_score": 1,
+    "match_time": "51",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/ce943x2vlv2t",
+    "home_goal_scorers": [
+      {
+        "player": "F. Shrimpton",
+        "goal_times": [
+          "13'",
+          "48'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "G. Taylor",
+        "goal_times": [
+          "3' pen"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "51"
+  },
+  {
+    "home_team": "Darlington",
+    "home_score": 2,
+    "away_team": "Bedford Town",
+    "away_score": 0,
+    "match_time": "50",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c93wd94lzkpt",
+    "home_goal_scorers": [
+      {
+        "player": "C. Main",
+        "goal_times": [
+          "13'"
+        ]
+      },
+      {
+        "player": "J. Maskell",
+        "goal_times": [
+          "48'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "50"
+  },
+  {
+    "home_team": "Fylde",
+    "home_score": 3,
+    "away_team": "Curzon Ashton",
+    "away_score": 1,
+    "match_time": "54",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c795lq3epqet",
+    "home_goal_scorers": [
+      {
+        "player": "L. Thomas",
+        "goal_times": [
+          "16'"
+        ]
+      },
+      {
+        "player": "D. Ormerod",
+        "goal_times": [
+          "40'"
+        ]
+      },
+      {
+        "player": "D. Mayor",
+        "goal_times": [
+          "53'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "T. Weston",
+        "goal_times": [
+          "6'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "54"
+  },
+  {
+    "home_team": "King's Lynn Town",
+    "home_score": 1,
+    "away_team": "Oxford City",
+    "away_score": 1,
+    "match_time": "61",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c62g08j6y6kt",
+    "home_goal_scorers": [
+      {
+        "player": "T. Bondo",
+        "goal_times": [
+          "58'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "T. Scott",
+        "goal_times": [
+          "12'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "61"
+  },
+  {
+    "home_team": "Merthyr Town",
+    "home_score": 1,
+    "away_team": "Buxton",
+    "away_score": 1,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cr45ewnzyent",
+    "home_goal_scorers": [
+      {
+        "player": "L. Lucas",
+        "goal_times": [
+          "6'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "J. Johnston",
+        "goal_times": [
+          "13'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Peterborough Sports",
+    "home_score": 0,
+    "away_team": "South Shields",
+    "away_score": 3,
+    "match_time": "54",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c1d6xnrewkzt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "P. Blackett",
+        "goal_times": [
+          "48'",
+          "51'"
+        ]
+      },
+      {
+        "player": "L. Wheeldon",
+        "goal_times": [
+          "50'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "54"
+  },
+  {
+    "home_team": "Scarborough Athletic",
+    "home_score": 2,
+    "away_team": "Macclesfield",
+    "away_score": 1,
+    "match_time": "50",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c4g7z8r21ext",
+    "home_goal_scorers": [
+      {
+        "player": "S. Walker",
+        "goal_times": [
+          "10'",
+          "47'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "P. Dawson",
+        "goal_times": [
+          "26'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "50"
+  },
+  {
+    "home_team": "Worksop Town",
+    "home_score": 1,
+    "away_team": "Leamington",
+    "away_score": 0,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c1e9j0g6x44t",
+    "home_goal_scorers": [
+      {
+        "player": "S. Sanders",
+        "goal_times": [
+          "23'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Chippenham Town",
+    "home_score": 1,
+    "away_team": "Maidenhead United",
+    "away_score": 0,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c14mgexk6vvt",
+    "home_goal_scorers": [
+      {
+        "player": "H. Parsons",
+        "goal_times": [
+          "26' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Dagenham & Redbridge",
+    "home_score": 0,
+    "away_team": "AFC Totton",
+    "away_score": 2,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cjenylw75nkt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "A. Clarke",
+        "goal_times": [
+          "30'"
+        ]
+      },
+      {
+        "player": "T. Cordner",
+        "goal_times": [
+          "43'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Dorking Wanderers",
+    "home_score": 1,
+    "away_team": "Chesham United",
+    "away_score": 1,
+    "match_time": "62",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c80jdp7k0drt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Prior",
+        "goal_times": [
+          "60' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "J. Bennetts",
+        "goal_times": [
+          "56'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "62"
+  },
+  {
+    "home_team": "Ebbsfleet United",
+    "home_score": 2,
+    "away_team": "Farnborough",
+    "away_score": 2,
+    "match_time": "62",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cpv80jrkgp3t",
+    "home_goal_scorers": [
+      {
+        "player": "K. Appiah",
+        "goal_times": [
+          "1'"
+        ]
+      },
+      {
+        "player": "C. Seaman",
+        "goal_times": [
+          "59'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "R. Bingham",
+        "goal_times": [
+          "26'",
+          "57'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "62"
+  },
+  {
+    "home_team": "Enfield Town",
+    "home_score": 1,
+    "away_team": "Bath City",
+    "away_score": 1,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c5ygp7r2njwt",
+    "home_goal_scorers": [
+      {
+        "player": "N. Adom-Malaki",
+        "goal_times": [
+          "33'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "A. Fisher",
+        "goal_times": [
+          "41'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Hampton & Richmond",
+    "home_score": 0,
+    "away_team": "Eastbourne Borough",
+    "away_score": 1,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cr45ewnzgr1t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "M. Burgess",
+        "goal_times": [
+          "12'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Hemel Hempstead Town",
+    "home_score": 0,
+    "away_team": "Tonbridge Angels",
+    "away_score": 0,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cy4w0y8e4mpt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Hornchurch",
+    "home_score": 2,
+    "away_team": "Worthing",
+    "away_score": 1,
+    "match_time": "53",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c6276dgnyjjt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Rees",
+        "goal_times": [
+          "24'"
+        ]
+      },
+      {
+        "player": "D. Poleon",
+        "goal_times": [
+          "34'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "T. Jenks",
+        "goal_times": [
+          "50'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "53"
+  },
+  {
+    "home_team": "Salisbury",
+    "home_score": 0,
+    "away_team": "Maidstone United",
+    "away_score": 0,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cm2rvz56211t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Slough Town",
+    "home_score": 0,
+    "away_team": "Dover Athletic",
+    "away_score": 0,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/ckgzej5rg15t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Torquay United",
+    "home_score": 0,
+    "away_team": "Chelmsford City",
+    "away_score": 3,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/czx4pw1yxzrt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "C. Adams",
+        "goal_times": [
+          "7'"
+        ]
+      },
+      {
+        "player": "J. Murphy",
+        "goal_times": [
+          "38'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Forres Mechanics",
+    "home_score": 1,
+    "away_team": "Nairn County",
+    "away_score": 0,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cx2kn671823t",
+    "home_goal_scorers": [
+      {
+        "player": "C. Frame",
+        "goal_times": [
+          "32' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "65"
+  },
+  {
+    "home_team": "Huntly",
+    "home_score": 1,
+    "away_team": "Buckie Thistle",
+    "away_score": 1,
+    "match_time": "59",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cjwz6nvq824t",
+    "home_goal_scorers": [
+      {
+        "player": "C. Murray",
+        "goal_times": [
+          "5'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "K. Fraser",
+        "goal_times": [
+          "53'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "C. Youngson",
+        "assist_times": [
+          "5'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "J. Peters",
+        "assist_times": [
+          "53'"
+        ]
+      }
+    ],
+    "score_status": "59"
+  },
+  {
+    "home_team": "Lossiemouth",
+    "home_score": 0,
+    "away_team": "Wick Academy",
+    "away_score": 2,
+    "match_time": "63",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cx2rqv7e2vyt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "M. MacGregor",
+        "goal_times": [
+          "35'"
+        ]
+      },
+      {
+        "player": "E. Kennedy",
+        "goal_times": [
+          "58'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "J. Boyd",
+        "assist_times": [
+          "58'"
+        ]
+      }
+    ],
+    "score_status": "63"
+  },
+  {
+    "home_team": "Berwick Rangers",
+    "home_score": 1,
+    "away_team": "Clydebank",
+    "away_score": 1,
+    "match_time": "66",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cz0pvm9g29jt",
+    "home_goal_scorers": [
+      {
+        "player": "N. Low",
+        "own_goal_times": [
+          "20'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "N. Little",
+        "goal_times": [
+          "29' pen"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "66"
+  },
+  {
+    "home_team": "Bonnyrigg Rose",
+    "home_score": 2,
+    "away_team": "Gala Fairydean Rovers",
+    "away_score": 1,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c4g0xyz5ge2t",
+    "home_goal_scorers": [
+      {
+        "player": "C. Ross",
+        "goal_times": [
+          "30'"
+        ]
+      },
+      {
+        "player": "K. Higginbotham",
+        "goal_times": [
+          "38'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "D. Galbraith",
+        "goal_times": [
+          "62' pen"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "K. Higginbotham",
+        "assist_times": [
+          "30'"
+        ]
+      },
+      {
+        "player": "A. Jones",
+        "assist_times": [
+          "38'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Broxburn Athletic",
+    "home_score": 0,
+    "away_team": "Tranent",
+    "away_score": 0,
+    "match_time": "65",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c2d1j0e58yyt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "65"
+  },
+  {
+    "home_team": "CS Strollers",
+    "home_score": 2,
+    "away_team": "Albion Rovers",
+    "away_score": 0,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cp8zvd65306t",
+    "home_goal_scorers": [
+      {
+        "player": "J. Mill",
+        "goal_times": [
+          "37'"
+        ]
+      },
+      {
+        "player": "M. Laird",
+        "goal_times": [
+          "45' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "T. Findlay",
+        "assist_times": [
+          "37'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Cowdenbeath",
+    "home_score": 1,
+    "away_team": "Linlithgow Rose",
+    "away_score": 1,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cd6xgq18zjet",
+    "home_goal_scorers": [
+      {
+        "player": "M. Ferrie",
+        "goal_times": [
+          "30'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "J. Berry",
+        "goal_times": [
+          "36'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "L. Stenhouse",
+        "assist_times": [
+          "36'"
+        ]
+      }
+    ],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Ballymena United",
+    "home_score": 0,
+    "away_team": "Larne",
+    "away_score": 2,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cy038wxkp39t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "A. Ryan",
+        "goal_times": [
+          "9' pen",
+          "30' pen"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Carrick Rangers",
+    "home_score": 1,
+    "away_team": "Bangor",
+    "away_score": 1,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/clyg7l5nx71t",
+    "home_goal_scorers": [
+      {
+        "player": "P. Heatley",
+        "goal_times": [
+          "12'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "H. Lynch",
+        "goal_times": [
+          "30' pen"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Dungannon Swifts",
+    "home_score": 3,
+    "away_team": "Coleraine",
+    "away_score": 1,
+    "match_time": "52",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/clyxrnqg799t",
+    "home_goal_scorers": [
+      {
+        "player": "S. McAllister",
+        "goal_times": [
+          "11'"
+        ]
+      },
+      {
+        "player": "Leonel Alves",
+        "goal_times": [
+          "20'"
+        ]
+      },
+      {
+        "player": "D. Wallace",
+        "goal_times": [
+          "35'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "J. Akintunde",
+        "goal_times": [
+          "50'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "52"
+  },
+  {
+    "home_team": "Glenavon",
+    "home_score": 2,
+    "away_team": "Portadown",
+    "away_score": 0,
+    "match_time": "60",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c620wgx8jext",
+    "home_goal_scorers": [
+      {
+        "player": "P. Burns",
+        "goal_times": [
+          "24'"
+        ]
+      },
+      {
+        "player": "C. Falls",
+        "goal_times": [
+          "27'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "60"
+  },
+  {
+    "home_team": "Glentoran",
+    "home_score": 3,
+    "away_team": "Crusaders",
+    "away_score": 0,
+    "match_time": "55",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c70k7x5ndr0t",
+    "home_goal_scorers": [
+      {
+        "player": "M. Kamara",
+        "goal_times": [
+          "8'"
+        ]
+      },
+      {
+        "player": "P. Hoban",
+        "goal_times": [
+          "50'",
+          "53'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "55"
+  },
+  {
+    "home_team": "Rayo Vallecano",
+    "home_score": 1,
+    "away_team": "Athletic Club",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c8eg14p4lrrt",
+    "home_goal_scorers": [
+      {
+        "player": "Jorge de Frutos",
+        "goal_times": [
+          "35'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "I. Williams",
+        "goal_times": [
+          "47'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "Alex Berenguer",
+        "assist_times": [
+          "47'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Barcelona",
+    "home_score": 2,
+    "away_team": "Villarreal",
+    "away_score": 0,
+    "match_time": "47",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c3wln4x4p6nt",
+    "home_goal_scorers": [
+      {
+        "player": "Lamine Yamal",
+        "goal_times": [
+          "28'",
+          "37'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "Fermín López",
+        "assist_times": [
+          "28'",
+          "37'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "47"
+  },
+  {
+    "home_team": "Bayer Leverkusen",
+    "home_score": 1,
+    "away_team": "Mainz 05",
+    "away_score": 1,
+    "match_time": "90+2",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cm2rvz56j25t",
+    "home_goal_scorers": [
+      {
+        "player": "J. Quansah",
+        "goal_times": [
+          "88'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "S. Becker",
+        "goal_times": [
+          "67'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "C. Kofane",
+        "assist_times": [
+          "88'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "P. Nebel",
+        "assist_times": [
+          "67'"
+        ]
+      }
+    ],
+    "score_status": "90+2"
+  },
+  {
+    "home_team": "Borussia M'gladbach",
+    "home_score": 0,
+    "away_team": "Union Berlin",
+    "away_score": 0,
+    "match_time": "90+3",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c5yklp6xl9rt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "90+3"
+  },
+  {
+    "home_team": "Hoffenheim",
+    "home_score": 0,
+    "away_team": "St. Pauli",
+    "away_score": 1,
+    "match_time": "90+3",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c5y62lgklv3t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "Mathias Pereira Lage",
+        "goal_times": [
+          "45+4'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "M. Saliakas",
+        "assist_times": [
+          "45+4'"
+        ]
+      }
+    ],
+    "score_status": "90+3"
+  },
+  {
+    "home_team": "Werder Bremen",
+    "home_score": 1,
+    "away_team": "Heidenheim",
+    "away_score": 0,
+    "match_time": "90+4",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c70nxrz6j5rt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Milošević",
+        "goal_times": [
+          "57'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "R. Schmid",
+        "assist_times": [
+          "57'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "90+4"
+  },
+  {
+    "home_team": "Como",
+    "home_score": 3,
+    "away_team": "Lecce",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cn0zrq5qedlt",
+    "home_goal_scorers": [
+      {
+        "player": "T. Douvikas",
+        "goal_times": [
+          "18'"
+        ]
+      },
+      {
+        "player": "Jesús Rodríguez",
+        "goal_times": [
+          "36'"
+        ]
+      },
+      {
+        "player": "M. Kempf",
+        "goal_times": [
+          "44'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "L. Coulibaly",
+        "goal_times": [
+          "13'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "Jesús Rodríguez",
+        "assist_times": [
+          "18'"
+        ]
+      },
+      {
+        "player": "M. Perrone",
+        "assist_times": [
+          "36'"
+        ]
+      },
+      {
+        "player": "L. da Cunha",
+        "assist_times": [
+          "44'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "L. Banda",
+        "assist_times": [
+          "13'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Auckland",
+    "home_score": 3,
+    "away_team": "Melbourne City",
+    "away_score": 0,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c4g7z8r2590t",
+    "home_goal_scorers": [
+      {
+        "player": "L. Rogerson",
+        "goal_times": [
+          "43'"
+        ]
+      },
+      {
+        "player": "J. Randall",
+        "goal_times": [
+          "59'"
+        ]
+      },
+      {
+        "player": "G. May",
+        "goal_times": [
+          "66'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "G. May",
+        "assist_times": [
+          "43'"
+        ]
+      },
+      {
+        "player": "J. Randall",
+        "assist_times": [
+          "66'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Central Coast Mariners",
+    "home_score": 0,
+    "away_team": "Newcastle Jets",
+    "away_score": 0,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c6276dgngk1t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Brisbane Roar",
+    "home_score": 1,
+    "away_team": "Perth Glory",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/clygj1wvvdzt",
+    "home_goal_scorers": [
+      {
+        "player": "C. Long",
+        "goal_times": [
+          "16'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "Y. Salas",
+        "own_goal_times": [
+          "19'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "J. O'Shea",
+        "assist_times": [
+          "16'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Macarthur",
+    "home_score": 0,
+    "away_team": "Western Sydney Wanderers",
+    "away_score": 4,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/ckg3ydr483lt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "S. Ugarković",
+        "goal_times": [
+          "6'"
+        ]
+      },
+      {
+        "player": "B. Kraev",
+        "goal_times": [
+          "24'"
+        ]
+      },
+      {
+        "player": "R. Fraser",
+        "goal_times": [
+          "43'"
+        ]
+      },
+      {
+        "player": "B. Borrello",
+        "goal_times": [
+          "70'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "A. Gersbach",
+        "assist_times": [
+          "6'"
+        ]
+      },
+      {
+        "player": "B. Borrello",
+        "assist_times": [
+          "24'"
+        ]
+      },
+      {
+        "player": "D. Scicluna",
+        "assist_times": [
+          "70'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Mechelen",
+    "home_score": 1,
+    "away_team": "Zulte Waregem",
+    "away_score": 0,
+    "match_time": "58",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c98qljg9qdpt",
+    "home_goal_scorers": [
+      {
+        "player": "R. Halhal",
+        "goal_times": [
+          "7'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "T. St. Jago",
+        "assist_times": [
+          "7'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "58"
+  },
+  {
+    "home_team": "Osijek",
+    "home_score": 2,
+    "away_team": "Vukovar",
+    "away_score": 0,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c4g0z82k0ylt",
+    "home_goal_scorers": [
+      {
+        "player": "A. Jakupovic",
+        "goal_times": [
+          "57' pen"
+        ]
+      },
+      {
+        "player": "S. Akere",
+        "goal_times": [
+          "90+5'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "Š. Mikolčić",
+        "assist_times": [
+          "90+5'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Mladá Boleslav",
+    "home_score": 3,
+    "away_team": "Jablonec",
+    "away_score": 0,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c1d6xnrez2rt",
+    "home_goal_scorers": [
+      {
+        "player": "M. Ševčík",
+        "goal_times": [
+          "47'"
+        ]
+      },
+      {
+        "player": "D. Kostka",
+        "goal_times": [
+          "52'"
+        ]
+      },
+      {
+        "player": "E. Sobol",
+        "own_goal_times": [
+          "55'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [
+      {
+        "player": "A. Alégué",
+        "red_card_times": [
+          "90+5'"
+        ]
+      }
+    ],
+    "home_assists": [
+      {
+        "player": "S. John",
+        "assist_times": [
+          "47'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Pardubice",
+    "home_score": 1,
+    "away_team": "Teplice",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c20z7p9xeyvt",
+    "home_goal_scorers": [
+      {
+        "player": "V. Patrák",
+        "goal_times": [
+          "40'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "M. Bílek",
+        "goal_times": [
+          "11' pen"
+        ]
+      }
+    ],
+    "home_red_cards": [
+      {
+        "player": "E. Godwin",
+        "red_card_times": [
+          "89'"
+        ]
+      }
+    ],
+    "away_red_cards": [
+      {
+        "player": "J. Fortelný",
+        "red_card_times": [
+          "79'"
+        ]
+      }
+    ],
+    "home_assists": [
+      {
+        "player": "L. Krobot",
+        "assist_times": [
+          "40'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Slovan Liberec",
+    "home_score": 0,
+    "away_team": "Hradec Králové",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cvgk36p7myrt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "V. Pilař",
+        "goal_times": [
+          "38'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Heerenveen",
+    "home_score": 1,
+    "away_team": "Sparta Rotterdam",
+    "away_score": 0,
+    "match_time": "45+2",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c1l7ejmdzvlt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Trenskow",
+        "goal_times": [
+          "40'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "45+2"
+  },
+  {
+    "home_team": "Rennes",
+    "home_score": 0,
+    "away_team": "Toulouse",
+    "away_score": 0,
+    "match_time": "25",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c77e6vn10jjt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "25"
+  },
+  {
+    "home_team": "OFI",
+    "home_score": 3,
+    "away_team": "Larissa",
+    "away_score": 0,
+    "match_time": "64",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cwy83k0kljgt",
+    "home_goal_scorers": [
+      {
+        "player": "T. Fountas",
+        "goal_times": [
+          "3'",
+          "7'"
+        ]
+      },
+      {
+        "player": "E. Salcedo",
+        "goal_times": [
+          "56'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "K. Kostoulas",
+        "assist_times": [
+          "3'"
+        ]
+      },
+      {
+        "player": "L. Shengelia",
+        "assist_times": [
+          "7'"
+        ]
+      },
+      {
+        "player": "G. Kanellopoulos",
+        "assist_times": [
+          "56'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "64"
+  },
+  {
+    "home_team": "Kerala Blasters",
+    "home_score": 1,
+    "away_team": "Inter Kashi",
+    "away_score": 2,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cjrq1l7n84pt",
+    "home_goal_scorers": [
+      {
+        "player": "Víctor Bertomeu",
+        "goal_times": [
+          "84'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "N. Petkevičius",
+        "goal_times": [
+          "34'"
+        ]
+      },
+      {
+        "player": "Alfred Planas",
+        "goal_times": [
+          "78'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "E. Yesudasan",
+        "assist_times": [
+          "84'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "Alfred Planas",
+        "assist_times": [
+          "34'"
+        ]
+      },
+      {
+        "player": "N. Petkevičius",
+        "assist_times": [
+          "78'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Mohun Bagan",
+    "home_score": 5,
+    "away_team": "Mohammedan",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cvg53187w26t",
+    "home_goal_scorers": [
+      {
+        "player": "Robinho",
+        "goal_times": [
+          "22'",
+          "27'"
+        ]
+      },
+      {
+        "player": "J. Maclaren",
+        "goal_times": [
+          "35'"
+        ]
+      },
+      {
+        "player": "Manvir Singh",
+        "goal_times": [
+          "62'"
+        ]
+      },
+      {
+        "player": "D. Petratos",
+        "goal_times": [
+          "70'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "L. Rotluanga",
+        "goal_times": [
+          "12'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "A. Singh",
+        "assist_times": [
+          "62'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "L. Lalnuntluanga",
+        "assist_times": [
+          "12'"
+        ]
+      }
+    ],
+    "score_status": "FT"
   },
   {
     "home_team": "Mazatlán",
@@ -155,6 +4350,437 @@
         ]
       }
     ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Juárez",
+    "home_score": 3,
+    "away_team": "Atlas",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c1w58pd313pt",
+    "home_goal_scorers": [
+      {
+        "player": "J. Rodríguez",
+        "goal_times": [
+          "1'"
+        ]
+      },
+      {
+        "player": "D. García",
+        "goal_times": [
+          "45+5'"
+        ]
+      },
+      {
+        "player": "Gustavo Ferrareis",
+        "own_goal_times": [
+          "89'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "A. González",
+        "goal_times": [
+          "26' pen"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "Ó. Estupiñán",
+        "assist_times": [
+          "1'"
+        ]
+      },
+      {
+        "player": "J. Torres",
+        "assist_times": [
+          "45+5'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Tijuana",
+    "home_score": 1,
+    "away_team": "Pumas UNAM",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c2046rz1j64t",
+    "home_goal_scorers": [
+      {
+        "player": "R. Árciga",
+        "goal_times": [
+          "40'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "Juninho",
+        "goal_times": [
+          "45+4'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "K. Castañeda",
+        "assist_times": [
+          "40'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Pogoń Szczecin",
+    "home_score": 1,
+    "away_team": "Widzew Łódź",
+    "away_score": 0,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c043rd5evk6t",
+    "home_goal_scorers": [
+      {
+        "player": "K. Angielski",
+        "goal_times": [
+          "58'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [
+      {
+        "player": "K. Acosta",
+        "red_card_times": [
+          "90+2'"
+        ]
+      }
+    ],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "AVS",
+    "home_score": 0,
+    "away_team": "Estrela",
+    "away_score": 0,
+    "match_time": "45+4",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/ckg2d5x4m75t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
+    "score_status": "45+4"
+  },
+  {
+    "home_team": "Novi Pazar",
+    "home_score": 2,
+    "away_team": "TSC",
+    "away_score": 0,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cj32lrxre1nt",
+    "home_goal_scorers": [
+      {
+        "player": "D. Sadi",
+        "goal_times": [
+          "13'"
+        ]
+      },
+      {
+        "player": "J. Marinković",
+        "goal_times": [
+          "75'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "N. Miletić",
+        "assist_times": [
+          "13'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Čukarički",
+    "home_score": 3,
+    "away_team": "Mladost Lučani",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c33j65z5d3nt",
+    "home_goal_scorers": [
+      {
+        "player": "U. Miladinović",
+        "goal_times": [
+          "16'"
+        ]
+      },
+      {
+        "player": "L. Mijović",
+        "goal_times": [
+          "48'",
+          "59'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "P. Bojić",
+        "goal_times": [
+          "12'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "S. Tedić",
+        "assist_times": [
+          "16'",
+          "59'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Kaizer Chiefs",
+    "home_score": 0,
+    "away_team": "Orlando Pirates",
+    "away_score": 3,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cj0dymz9098t",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "T. Moremi",
+        "goal_times": [
+          "5'"
+        ]
+      },
+      {
+        "player": "O. Appollis",
+        "goal_times": [
+          "39'"
+        ]
+      },
+      {
+        "player": "E. Makgopa",
+        "goal_times": [
+          "78'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "D. Hotto",
+        "assist_times": [
+          "5'"
+        ]
+      },
+      {
+        "player": "R. Mofokeng",
+        "assist_times": [
+          "39'"
+        ]
+      },
+      {
+        "player": "T. Moremi",
+        "assist_times": [
+          "78'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Kasımpaşa",
+    "home_score": 0,
+    "away_team": "Rizespor",
+    "away_score": 3,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c70k7x5xzkdt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "H. Dervişoğlu",
+        "goal_times": [
+          "25'"
+        ]
+      },
+      {
+        "player": "V. Mihăilă",
+        "goal_times": [
+          "56'"
+        ]
+      },
+      {
+        "player": "A. Mebude",
+        "goal_times": [
+          "80'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "Q. Laçi",
+        "assist_times": [
+          "56'"
+        ]
+      },
+      {
+        "player": "I. Olawoyin",
+        "assist_times": [
+          "80'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Kocaelispor",
+    "home_score": 0,
+    "away_team": "Beşiktaş",
+    "away_score": 1,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cqlge060d3vt",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "E. Agbadou",
+        "goal_times": [
+          "52'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "V. Černý",
+        "assist_times": [
+          "52'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "LNZ Cherkasy",
+    "home_score": 1,
+    "away_team": "Polissya",
+    "away_score": 3,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/cg5n0zqv5m7t",
+    "home_goal_scorers": [
+      {
+        "player": "M. Assinor",
+        "goal_times": [
+          "73'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "O. Andriievskyi",
+        "goal_times": [
+          "4'"
+        ]
+      },
+      {
+        "player": "L. Emërllahu",
+        "goal_times": [
+          "33'"
+        ]
+      },
+      {
+        "player": "M. Haiduchyk",
+        "goal_times": [
+          "83'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [
+      {
+        "player": "Y. Tverdokhlib",
+        "assist_times": [
+          "73'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "O. Nazarenko",
+        "assist_times": [
+          "4'"
+        ]
+      },
+      {
+        "player": "I. Krasnopir",
+        "assist_times": [
+          "33'"
+        ]
+      },
+      {
+        "player": "O. Hutsuliak",
+        "assist_times": [
+          "83'"
+        ]
+      }
+    ],
+    "score_status": "FT"
+  },
+  {
+    "home_team": "Metalist 1925 Kharkiv",
+    "home_score": 1,
+    "away_team": "Oleksandria",
+    "away_score": 0,
+    "match_time": "FT",
+    "details_url": "https://www.bbc.co.uk/sport/football/live/c9wny18g9y1t",
+    "home_goal_scorers": [
+      {
+        "player": "B. Zabërgja",
+        "goal_times": [
+          "83' pen"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_red_cards": [],
+    "away_red_cards": [],
+    "home_assists": [],
+    "away_assists": [],
     "score_status": "FT"
   }
 ]

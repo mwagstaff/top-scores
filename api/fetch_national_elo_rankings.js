@@ -12,11 +12,15 @@ const DEFAULT_NATIONAL_ELO_OUTPUT = path.join(__dirname, "national_elo_teams.jso
 const DEFAULT_NATIONAL_ELO_MIN_ROWS = 180;
 const DEFAULT_NATIONAL_ELO_MIN_BYTES = 4 * 1024;
 const DEFAULT_NATIONAL_ELO_TIMEOUT_MS = 30000;
-const DEFAULT_NATIONAL_ELO_RETRY_ATTEMPTS = 4;
+const DEFAULT_NATIONAL_ELO_RETRY_ATTEMPTS = 5;
 const DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_BASE_MS = 400;
 const DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_MAX_MS = 5000;
 const DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_FACTOR = 2;
 const DEFAULT_NATIONAL_ELO_RETRY_JITTER_MS = 200;
+const DEFAULT_NATIONAL_ELO_PREFER_IPV4 = true;
+const DEFAULT_NATIONAL_ELO_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
 
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   "ETIMEDOUT",
@@ -94,6 +98,13 @@ function isRetryableError(error) {
   const code = String(error.code || "").toUpperCase();
   if (RETRYABLE_NETWORK_ERROR_CODES.has(code)) return true;
 
+  if (Array.isArray(error.errors) && error.errors.some((item) => isRetryableError(item))) {
+    return true;
+  }
+  if (error.cause && isRetryableError(error.cause)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -138,29 +149,91 @@ function normalizeRetryOptions(options = {}) {
   };
 }
 
-function fetchText(url, timeoutMs = DEFAULT_NATIONAL_ELO_TIMEOUT_MS, redirectDepth = 0) {
+function normalizeRequestOptions(options = {}) {
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs))
+    ? Math.max(1000, Math.floor(Number(options.timeoutMs)))
+    : DEFAULT_NATIONAL_ELO_TIMEOUT_MS;
+  const preferIpv4 =
+    options.preferIpv4 === undefined || options.preferIpv4 === null
+      ? DEFAULT_NATIONAL_ELO_PREFER_IPV4
+      : Boolean(options.preferIpv4);
+  const userAgent = cleanText(options.userAgent) || DEFAULT_NATIONAL_ELO_USER_AGENT;
+  return {
+    timeoutMs,
+    preferIpv4,
+    userAgent,
+  };
+}
+
+function formatErrorForMessage(error, depth = 0) {
+  if (error === undefined || error === null) return "unknown error";
+  if (typeof error === "string") return error;
+  if (typeof error !== "object") return String(error);
+
+  const name = cleanText(error.name) || "Error";
+  const message = cleanText(error.message) || name;
+  const details = [];
+  const code = cleanText(error.code);
+  const statusCode = Number(error.statusCode || error.status || 0);
+  if (code) details.push(`code=${code}`);
+  if (Number.isFinite(statusCode) && statusCode > 0) details.push(`status=${statusCode}`);
+  if (error.address) details.push(`address=${error.address}`);
+  if (Number.isFinite(Number(error.port))) details.push(`port=${Number(error.port)}`);
+
+  let result = message;
+  if (details.length > 0) {
+    result = `${result} (${details.join(",")})`;
+  }
+
+  if (depth < 1 && Array.isArray(error.errors) && error.errors.length > 0) {
+    const children = error.errors
+      .map((item) => formatErrorForMessage(item, depth + 1))
+      .filter(Boolean);
+    if (children.length > 0) {
+      result = `${result}; suberrors=[${children.join(" | ")}]`;
+    }
+  }
+
+  if (depth < 1 && error.cause) {
+    const causeText = formatErrorForMessage(error.cause, depth + 1);
+    if (causeText) {
+      result = `${result}; cause=${causeText}`;
+    }
+  }
+
+  if (name && !result.toLowerCase().startsWith(name.toLowerCase())) {
+    result = `${name}: ${result}`;
+  }
+  return result;
+}
+
+function fetchText(url, options = {}, redirectDepth = 0) {
   return new Promise((resolve, reject) => {
     if (redirectDepth > 5) {
       reject(new Error("Too many redirects while fetching National Elo TSV"));
       return;
     }
 
+    const requestOptions = normalizeRequestOptions(options);
     const target = new URL(url);
     const lib = target.protocol === "https:" ? https : http;
     const req = lib.get(
       target,
       {
         headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; NationalEloParser/1.0)",
+          "User-Agent": requestOptions.userAgent,
           Accept: "text/plain,text/tab-separated-values,*/*;q=0.8",
+          "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+          Referer: "https://www.eloratings.net/",
         },
+        family: requestOptions.preferIpv4 ? 4 : undefined,
       },
       (res) => {
         const statusCode = Number(res.statusCode || 0);
         if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
           const redirectUrl = new URL(res.headers.location, target).toString();
           res.resume();
-          fetchText(redirectUrl, timeoutMs, redirectDepth + 1).then(resolve).catch(reject);
+          fetchText(redirectUrl, requestOptions, redirectDepth + 1).then(resolve).catch(reject);
           return;
         }
         if (statusCode !== 200) {
@@ -186,7 +259,7 @@ function fetchText(url, timeoutMs = DEFAULT_NATIONAL_ELO_TIMEOUT_MS, redirectDep
       }
     );
 
-    req.setTimeout(timeoutMs, () => {
+    req.setTimeout(requestOptions.timeoutMs, () => {
       const timeoutError = new Error("National Elo request timed out");
       timeoutError.code = "ETIMEDOUT";
       req.destroy(timeoutError);
@@ -195,25 +268,37 @@ function fetchText(url, timeoutMs = DEFAULT_NATIONAL_ELO_TIMEOUT_MS, redirectDep
   });
 }
 
-async function fetchTextWithRetry(url, timeoutMs, retryOptions, retryState = null) {
+async function fetchTextWithRetry(url, requestOptions, retryOptions, retryState = null) {
   for (let attempt = 1; attempt <= retryOptions.attempts; attempt += 1) {
     try {
-      return await fetchText(url, timeoutMs);
+      return await fetchText(url, requestOptions);
     } catch (error) {
       const hasMore = attempt < retryOptions.attempts;
       const retryable = isRetryableError(error);
+      const errorSummary = formatErrorForMessage(error);
+      if (retryState && typeof retryState === "object") {
+        if (!Array.isArray(retryState.attemptErrors)) retryState.attemptErrors = [];
+        retryState.attemptErrors.push({
+          url,
+          attempt,
+          retryable,
+          error: errorSummary,
+        });
+      }
       if (!hasMore || !retryable) {
-        if (attempt > 1) {
-          const wrapped = new Error(
-            `National Elo request failed after ${attempt} attempts (${url}): ` +
-            `${error && error.message ? error.message : error}`
-          );
-          wrapped.code = error && error.code ? error.code : undefined;
-          wrapped.statusCode = error && error.statusCode ? error.statusCode : undefined;
-          wrapped.cause = error;
-          throw wrapped;
-        }
-        throw error;
+        const wrapped = new Error(
+          `National Elo request failed after ${attempt} attempts (${url}): ${errorSummary}`
+        );
+        wrapped.code = error && error.code ? error.code : undefined;
+        wrapped.statusCode = error && error.statusCode ? error.statusCode : undefined;
+        wrapped.cause = error;
+        wrapped.url = url;
+        wrapped.attempts = attempt;
+        wrapped.retryable = retryable;
+        wrapped.attemptErrors = Array.isArray(retryState && retryState.attemptErrors)
+          ? retryState.attemptErrors.filter((entry) => entry && entry.url === url)
+          : [];
+        throw wrapped;
       }
 
       if (retryState && typeof retryState === "object") {
@@ -356,6 +441,40 @@ function deduplicateByTeamCode(rows) {
   });
 }
 
+function buildFallbackTeamDictionaryFromTeams(teams) {
+  const map = new Map();
+  (Array.isArray(teams) ? teams : []).forEach((team) => {
+    const code = cleanText(team && team.TeamCode ? team.TeamCode : "");
+    const primary = cleanText(team && (team.Team || team.Name || team.Country));
+    if (!code || !primary) return;
+    const aliases = Array.isArray(team && team.Aliases)
+      ? team.Aliases.map((alias) => cleanText(alias)).filter(Boolean)
+      : [];
+    const labels = Array.from(new Set([primary, ...aliases]));
+    if (labels.length === 0) return;
+    map.set(code, labels);
+  });
+  return map;
+}
+
+async function fetchOptionalTextWithRetry(name, url, timeoutMs, retryOptions, retryState, warnings) {
+  const requestOptions = {
+    timeoutMs,
+    preferIpv4: retryState && retryState.preferIpv4,
+    userAgent: retryState && retryState.userAgent,
+  };
+  try {
+    return await fetchTextWithRetry(url, requestOptions, retryOptions, retryState);
+  } catch (error) {
+    if (Array.isArray(warnings)) {
+      warnings.push(
+        `${name} unavailable (${url}): ${formatErrorForMessage(error)}`
+      );
+    }
+    return null;
+  }
+}
+
 async function fetchNationalEloRankings(options = {}) {
   const baseUrl = options.baseUrl || DEFAULT_NATIONAL_ELO_BASE_URL;
   const page = normalizePageName(options.page || DEFAULT_NATIONAL_ELO_PAGE);
@@ -372,24 +491,66 @@ async function fetchNationalEloRankings(options = {}) {
   const retryState = {
     retriesPerformed: 0,
     urlsRetried: [],
+    attemptErrors: [],
   };
+  const warnings = [];
+  const requestOptions = normalizeRequestOptions({
+    timeoutMs,
+    preferIpv4: options.preferIpv4,
+    userAgent: options.userAgent,
+  });
+  retryState.preferIpv4 = requestOptions.preferIpv4;
+  retryState.userAgent = requestOptions.userAgent;
 
   const rankingUrl = buildTsvUrl(baseUrl, page);
   const successorUrl = buildTsvUrl(baseUrl, "teams");
   const teamDictionaryUrl = buildTsvUrl(baseUrl, "en.teams");
+  const fallbackTeamDictionary = buildFallbackTeamDictionaryFromTeams(options.fallbackTeams);
 
-  const [rankingResponse, successorResponse, teamDictionaryResponse] = await Promise.all([
-    fetchTextWithRetry(rankingUrl, timeoutMs, retryOptions, retryState),
-    fetchTextWithRetry(successorUrl, timeoutMs, retryOptions, retryState),
-    fetchTextWithRetry(teamDictionaryUrl, timeoutMs, retryOptions, retryState),
+  const rankingResponse = await fetchTextWithRetry(
+    rankingUrl,
+    requestOptions,
+    retryOptions,
+    retryState
+  );
+  const [successorResponse, teamDictionaryResponse] = await Promise.all([
+    fetchOptionalTextWithRetry(
+      "National Elo successor map",
+      successorUrl,
+      requestOptions.timeoutMs,
+      retryOptions,
+      retryState,
+      warnings
+    ),
+    fetchOptionalTextWithRetry(
+      "National Elo team dictionary",
+      teamDictionaryUrl,
+      requestOptions.timeoutMs,
+      retryOptions,
+      retryState,
+      warnings
+    ),
   ]);
 
   const rankingValidated = validateTsvResponse("National Elo rankings", rankingResponse, minBytes);
-  const successorValidated = validateTsvResponse("National Elo successor map", successorResponse);
-  const dictionaryValidated = validateTsvResponse("National Elo team dictionary", teamDictionaryResponse);
+  const successorValidated = successorResponse
+    ? validateTsvResponse("National Elo successor map", successorResponse)
+    : null;
+  const dictionaryValidated = teamDictionaryResponse
+    ? validateTsvResponse("National Elo team dictionary", teamDictionaryResponse)
+    : null;
 
-  const successorMap = parseSuccessorMap(successorValidated.body);
-  const teamDictionary = parseTeamDictionary(dictionaryValidated.body);
+  const successorMap = successorValidated ? parseSuccessorMap(successorValidated.body) : new Map();
+  const teamDictionary = dictionaryValidated
+    ? parseTeamDictionary(dictionaryValidated.body)
+    : new Map(fallbackTeamDictionary.entries());
+
+  if (!dictionaryValidated && teamDictionary.size === 0) {
+    throw new Error(
+      "National Elo team dictionary unavailable and no fallback dictionary is available."
+    );
+  }
+
   const parsedRows = parseRankingRows(rankingValidated.body, teamDictionary, successorMap);
   const teams = deduplicateByTeamCode(parsedRows);
 
@@ -406,13 +567,12 @@ async function fetchNationalEloRankings(options = {}) {
   );
   const rankingDate = parseDateOnlyFromIso(rankingLastModifiedIso);
 
-  const contentTypes = new Set([
-    rankingValidated.contentType,
-    successorValidated.contentType,
-    dictionaryValidated.contentType,
-  ]);
-  const totalBytes =
-    rankingValidated.byteLength + successorValidated.byteLength + dictionaryValidated.byteLength;
+  const contentTypes = new Set([rankingValidated.contentType]);
+  if (successorValidated && successorValidated.contentType) contentTypes.add(successorValidated.contentType);
+  if (dictionaryValidated && dictionaryValidated.contentType) contentTypes.add(dictionaryValidated.contentType);
+  const totalBytes = rankingValidated.byteLength +
+    (successorValidated ? successorValidated.byteLength : 0) +
+    (dictionaryValidated ? dictionaryValidated.byteLength : 0);
 
   return {
     url: rankingUrl,
@@ -428,6 +588,12 @@ async function fetchNationalEloRankings(options = {}) {
       successors: successorUrl,
       team_dictionary: teamDictionaryUrl,
     },
+    partial_fetch: {
+      successors_loaded: Boolean(successorValidated),
+      team_dictionary_loaded: Boolean(dictionaryValidated),
+      fallback_team_dictionary_used: !dictionaryValidated && fallbackTeamDictionary.size > 0,
+    },
+    warnings,
     retry: {
       attempts: retryOptions.attempts,
       backoff_base_ms: retryOptions.backoffBaseMs,
@@ -436,6 +602,14 @@ async function fetchNationalEloRankings(options = {}) {
       jitter_ms: retryOptions.jitterMs,
       retries_performed: retryState.retriesPerformed,
       urls_retried: retryState.urlsRetried.slice(),
+      attempt_errors: Array.isArray(retryState.attemptErrors)
+        ? retryState.attemptErrors.slice()
+        : [],
+    },
+    request: {
+      prefer_ipv4: requestOptions.preferIpv4,
+      user_agent: requestOptions.userAgent,
+      timeout_ms: requestOptions.timeoutMs,
     },
     min_rows: minRows,
     min_bytes: minBytes,
@@ -474,6 +648,11 @@ async function runCli() {
   const retryJitterMs = Number(
     getArgValue(args, "--retry-jitter-ms", DEFAULT_NATIONAL_ELO_RETRY_JITTER_MS)
   );
+  const preferIpv4Arg = getArgValue(args, "--prefer-ipv4", String(DEFAULT_NATIONAL_ELO_PREFER_IPV4));
+  const preferIpv4 = ["1", "true", "yes", "y", "on"].includes(
+    String(preferIpv4Arg || "").trim().toLowerCase()
+  );
+  const userAgent = getArgValue(args, "--user-agent", DEFAULT_NATIONAL_ELO_USER_AGENT);
 
   const result = await fetchNationalEloRankings({
     baseUrl,
@@ -485,6 +664,8 @@ async function runCli() {
     retryBackoffMaxMs,
     retryBackoffFactor,
     retryJitterMs,
+    preferIpv4,
+    userAgent,
   });
   writeNationalEloRankings(outputPath, result.teams);
   console.log(
@@ -512,6 +693,8 @@ module.exports = {
   DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
   DEFAULT_NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
   DEFAULT_NATIONAL_ELO_RETRY_JITTER_MS,
+  DEFAULT_NATIONAL_ELO_PREFER_IPV4,
+  DEFAULT_NATIONAL_ELO_USER_AGENT,
   fetchNationalEloRankings,
   writeNationalEloRankings,
   __private: {
@@ -523,7 +706,11 @@ module.exports = {
     resolveSuccessorCode,
     parseRankingRows,
     deduplicateByTeamCode,
+    buildFallbackTeamDictionaryFromTeams,
+    fetchOptionalTextWithRetry,
     normalizeRetryOptions,
+    normalizeRequestOptions,
+    formatErrorForMessage,
     isRetryableError,
     computeRetryDelayMs,
   },

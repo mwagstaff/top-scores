@@ -44,7 +44,57 @@
     "league": "Championship",
     "tv_channels": [
       "Sky Sports+"
-    ]
+    ],
+    "home_score": 3,
+    "away_score": 1,
+    "score_status": "FT",
+    "home_goal_scorers": [
+      {
+        "player": "B. Brereton",
+        "goal_times": [
+          "55'"
+        ]
+      },
+      {
+        "player": "M. Clarke",
+        "goal_times": [
+          "74'"
+        ]
+      },
+      {
+        "player": "R. Brewster",
+        "goal_times": [
+          "82'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "H. Carter",
+        "goal_times": [
+          "45+1'"
+        ]
+      }
+    ],
+    "home_assists": [
+      {
+        "player": "D. Murkin",
+        "assist_times": [
+          "55'",
+          "82'"
+        ]
+      }
+    ],
+    "away_assists": [
+      {
+        "player": "Yuri Ribeiro",
+        "assist_times": [
+          "45+1'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": []
   },
   {
     "date": "2026-02-28",
@@ -56,7 +106,36 @@
       "Sky Sports Main Event",
       "Sky Sports Football",
       "Sky Sports Ultra HDR"
-    ]
+    ],
+    "home_score": 0,
+    "away_score": 2,
+    "score_status": "FT",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "A. Ben Slimane",
+        "goal_times": [
+          "68'"
+        ]
+      },
+      {
+        "player": "A. Ahmed",
+        "goal_times": [
+          "78'"
+        ]
+      }
+    ],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "S. Field",
+        "assist_times": [
+          "68'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": []
   },
   {
     "date": "2026-02-28",
@@ -66,7 +145,23 @@
     "league": "Championship",
     "tv_channels": [
       "Sky Sports+"
-    ]
+    ],
+    "home_score": 0,
+    "away_score": 1,
+    "score_status": "FT",
+    "home_goal_scorers": [],
+    "away_goal_scorers": [
+      {
+        "player": "M. Crooks",
+        "goal_times": [
+          "73'"
+        ]
+      }
+    ],
+    "home_assists": [],
+    "away_assists": [],
+    "home_red_cards": [],
+    "away_red_cards": []
   },
   {
     "date": "2026-02-28",
@@ -77,7 +172,37 @@
     "tv_channels": [
       "TNT Sports 1",
       "TNT Sports Ultimate"
-    ]
+    ],
+    "home_score": 1,
+    "away_score": 1,
+    "score_status": "FT",
+    "home_goal_scorers": [
+      {
+        "player": "Evanilson",
+        "goal_times": [
+          "63'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "Eliezer Mayenda",
+        "goal_times": [
+          "18'"
+        ]
+      }
+    ],
+    "home_assists": [
+      {
+        "player": "M. Tavernier",
+        "assist_times": [
+          "63'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "home_red_cards": [],
+    "away_red_cards": []
   },
   {
     "date": "2026-02-28",
@@ -1561,7 +1686,37 @@
     "league": "La Liga",
     "tv_channels": [
       "LALIGATV"
-    ]
+    ],
+    "home_score": 1,
+    "away_score": 1,
+    "score_status": "FT",
+    "home_goal_scorers": [
+      {
+        "player": "Jorge de Frutos",
+        "goal_times": [
+          "35'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [
+      {
+        "player": "I. Williams",
+        "goal_times": [
+          "47'"
+        ]
+      }
+    ],
+    "home_assists": [],
+    "away_assists": [
+      {
+        "player": "Alex Berenguer",
+        "assist_times": [
+          "47'"
+        ]
+      }
+    ],
+    "home_red_cards": [],
+    "away_red_cards": []
   },
   {
     "date": "2026-02-28",
@@ -1571,7 +1726,32 @@
     "league": "La Liga",
     "tv_channels": [
       "LALIGATV"
-    ]
+    ],
+    "home_score": 2,
+    "away_score": 0,
+    "score_status": "47",
+    "home_goal_scorers": [
+      {
+        "player": "Lamine Yamal",
+        "goal_times": [
+          "28'",
+          "37'"
+        ]
+      }
+    ],
+    "away_goal_scorers": [],
+    "home_assists": [
+      {
+        "player": "Fermín López",
+        "assist_times": [
+          "28'",
+          "37'"
+        ]
+      }
+    ],
+    "away_assists": [],
+    "home_red_cards": [],
+    "away_red_cards": []
   },
   {
     "date": "2026-02-28",
