@@ -1,0 +1,164 @@
+{
+  "title": "FPL Bootstrap Source Health",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Successful Updates - req/sec",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(source_fetches_total{source=\"fpl_bootstrap_static\",status=\"success\"}[$__rate_interval]))",
+          "legendFormat": "success req/sec"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Failed Updates - req/sec",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#E02F44"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(source_fetches_total{source=\"fpl_bootstrap_static\",status=\"failure\"}[$__rate_interval]))",
+          "legendFormat": "failure req/sec"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Failure Rate (% of Updates)",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(source_fetches_total{source=\"fpl_bootstrap_static\",status=\"failure\"}[$__rate_interval])) / clamp_min(sum(rate(source_fetches_total{source=\"fpl_bootstrap_static\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "failure %"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Payload Size",
+      "gridPos": { "x": 0, "y": 8, "w": 8, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "fpl_bootstrap_payload_bytes",
+          "legendFormat": "payload bytes"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Events Cached",
+      "gridPos": { "x": 8, "y": 8, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "fpl_bootstrap_events_count",
+          "legendFormat": "events"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Freshness Age",
+      "gridPos": { "x": 16, "y": 8, "w": 8, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "time() - source_last_success_timestamp_seconds{source=\"fpl_bootstrap_static\"}",
+          "legendFormat": "seconds since last success"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "P95 Successful Fetch Duration",
+      "gridPos": { "x": 0, "y": 16, "w": 8, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "1000 * histogram_quantile(0.95, sum(rate(source_fetch_duration_seconds_bucket{source=\"fpl_bootstrap_static\",status=\"success\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Latest Current/Next Event IDs",
+      "gridPos": { "x": 8, "y": 16, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "fpl_bootstrap_current_event_id",
+          "legendFormat": "current"
+        },
+        {
+          "expr": "fpl_bootstrap_next_event_id",
+          "legendFormat": "next"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Update Counts by Status",
+      "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sort_desc(sum(increase(source_fetches_total{source=\"fpl_bootstrap_static\"}[$__range])) by (status))",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "Metric": true,
+              "metric": true
+            },
+            "indexByName": {
+              "status": 0,
+              "Value": 1,
+              "Value #A": 1
+            },
+            "renameByName": {
+              "status": "Status",
+              "Value": "Count",
+              "Value #A": "Count"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

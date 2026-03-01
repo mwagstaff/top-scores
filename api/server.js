@@ -2,7 +2,10 @@
 /* eslint-disable no-console */
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
+const https = require("https");
 const v8 = require("v8");
+const zlib = require("zlib");
 const { monitorEventLoopDelay } = require("perf_hooks");
 const express = require("express");
 const {
@@ -370,6 +373,28 @@ const NATIONAL_ELO_USER_AGENT_RAW = String(
   process.env.NATIONAL_ELO_USER_AGENT || DEFAULT_NATIONAL_ELO_USER_AGENT
 ).trim();
 const NATIONAL_ELO_USER_AGENT = NATIONAL_ELO_USER_AGENT_RAW || DEFAULT_NATIONAL_ELO_USER_AGENT;
+const DEFAULT_FPL_BOOTSTRAP_SOURCE_URL = "https://fantasy.premierleague.com/api/bootstrap-static/";
+const FPL_BOOTSTRAP_SOURCE_URL =
+  process.env.FPL_BOOTSTRAP_SOURCE_URL || DEFAULT_FPL_BOOTSTRAP_SOURCE_URL;
+const FPL_BOOTSTRAP_INTERVAL_HOURS = Number(
+  process.env.FPL_BOOTSTRAP_UPDATE_INTERVAL_HOURS || 12
+);
+const FPL_BOOTSTRAP_INTERVAL_MS = Number(
+  process.env.FPL_BOOTSTRAP_UPDATE_INTERVAL_MS ||
+    FPL_BOOTSTRAP_INTERVAL_HOURS * 60 * 60 * 1000
+);
+const parsedFplBootstrapTimeoutMs = Number(
+  process.env.FPL_BOOTSTRAP_TIMEOUT_MS || 10 * 60 * 1000
+);
+const FPL_BOOTSTRAP_TIMEOUT_MS = Number.isFinite(parsedFplBootstrapTimeoutMs)
+  ? Math.max(10 * 1000, Math.floor(parsedFplBootstrapTimeoutMs))
+  : 10 * 60 * 1000;
+const parsedFplBootstrapMaxBytes = Number(
+  process.env.FPL_BOOTSTRAP_MAX_BYTES || 1900 * 1024 * 1024
+);
+const FPL_BOOTSTRAP_MAX_BYTES = Number.isFinite(parsedFplBootstrapMaxBytes)
+  ? Math.max(10 * 1024 * 1024, Math.floor(parsedFplBootstrapMaxBytes))
+  : 1900 * 1024 * 1024;
 const RECENT_OUTPUT_PATH =
   process.env.RECENT_OUTPUT_PATH || path.join(__dirname, "recent_matches.json");
 const MISSING_TEAM_LOGOS_OUTPUT_PATH =
@@ -463,6 +488,7 @@ const SOURCE_FOOTBALL_DATABASE = "football_database_rankings";
 const SOURCE_NATIONAL_ELO = "national_elo_rankings";
 const SOURCE_BBC_MATCH_DETAILS = "bbc_match_details";
 const SOURCE_RECENT_CACHE = "recent_matches_cache";
+const SOURCE_FPL_BOOTSTRAP = "fpl_bootstrap_static";
 const OP_DATASET_LIVE_MATCHES = "live_matches";
 const OP_DATASET_BBC_LIVE_MATCHES = "bbc_live_matches";
 const OP_DATASET_BBC_RANGE_MATCHES = "bbc_range_matches";
@@ -582,6 +608,17 @@ let matchDetailsLastUpdated = null;
 let matchDetailsUpdating = false;
 let missingTeamLogosByKey = new Map();
 let missingTeamLogosLastUpdated = null;
+let cachedFantasyBootstrap = null;
+let fantasyBootstrapLastUpdated = null;
+let fantasyBootstrapUpdating = false;
+let fantasyBootstrapPayloadBytes = 0;
+let fantasyBootstrapEventsCount = 0;
+let fantasyBootstrapCurrentEvent = null;
+let fantasyBootstrapNextEvent = null;
+let fantasyBootstrapLastSuccessAt = null;
+let fantasyBootstrapLastFailureAt = null;
+let fantasyBootstrapLastSuccessDurationSeconds = 0;
+let fantasyBootstrapLastFailureDurationSeconds = 0;
 
 const STAGE_PATTERNS = [
   /\s*[-:–]\s*Round\s+\w+$/i,
@@ -914,6 +951,123 @@ function logPollSuccess(job, details = {}) {
   console.info(`[POLL][SUCCESS] job=${job}${suffix}`);
 }
 
+function isoTimestampToSeconds(value) {
+  const parsed = Date.parse(String(value || ""));
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.floor(parsed / 1000);
+}
+
+function decodeHttpResponseStream(res) {
+  const contentEncoding = String(res.headers["content-encoding"] || "")
+    .trim()
+    .toLowerCase();
+  if (!contentEncoding) return res;
+  if (contentEncoding.includes("gzip")) return res.pipe(zlib.createGunzip());
+  if (contentEncoding.includes("deflate")) return res.pipe(zlib.createInflate());
+  if (contentEncoding.includes("br")) return res.pipe(zlib.createBrotliDecompress());
+  return res;
+}
+
+function fetchFantasyBootstrapStaticPayload(url, options = {}, redirectDepth = 0) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : FPL_BOOTSTRAP_TIMEOUT_MS;
+  const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : FPL_BOOTSTRAP_MAX_BYTES;
+  const maxRedirects = Number.isFinite(options.maxRedirects) ? options.maxRedirects : 3;
+
+  return new Promise((resolve, reject) => {
+    let target;
+    try {
+      target = new URL(url);
+    } catch (_error) {
+      reject(new Error(`Invalid FPL bootstrap URL: ${url}`));
+      return;
+    }
+
+    const lib = target.protocol === "https:" ? https : http;
+    const req = lib.get(
+      target,
+      {
+        headers: {
+          "User-Agent": "TopScoresAPI/1.0 (+https://fantasy.premierleague.com/)",
+          Accept: "application/json",
+          "Accept-Encoding": "gzip, deflate, br",
+        },
+      },
+      (res) => {
+        const statusCode = Number(res.statusCode || 0);
+        if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
+          if (redirectDepth >= maxRedirects) {
+            res.resume();
+            reject(new Error("FPL bootstrap fetch failed: too many redirects"));
+            return;
+          }
+          const redirectUrl = new URL(res.headers.location, target).toString();
+          res.resume();
+          fetchFantasyBootstrapStaticPayload(redirectUrl, options, redirectDepth + 1)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+
+        if (statusCode !== 200) {
+          res.resume();
+          reject(new Error(`FPL bootstrap fetch failed with status ${statusCode}`));
+          return;
+        }
+
+        const decodedStream = decodeHttpResponseStream(res);
+        const chunks = [];
+        let totalBytes = 0;
+
+        decodedStream.on("data", (chunk) => {
+          const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += bufferChunk.length;
+          if (totalBytes > maxBytes) {
+            decodedStream.destroy(
+              new Error(`FPL bootstrap payload exceeded max size limit (${maxBytes} bytes)`)
+            );
+            return;
+          }
+          chunks.push(bufferChunk);
+        });
+
+        decodedStream.on("error", (error) => {
+          reject(error);
+        });
+
+        decodedStream.on("end", () => {
+          try {
+            const rawPayload = Buffer.concat(chunks, totalBytes).toString("utf8");
+            const payload = JSON.parse(rawPayload);
+            resolve({
+              payload,
+              payloadBytes: totalBytes,
+            });
+          } catch (error) {
+            reject(new Error(`FPL bootstrap parse failed: ${error.message || error}`));
+          }
+        });
+      }
+    );
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`FPL bootstrap request timed out after ${timeoutMs}ms`));
+    });
+    req.on("error", (error) => {
+      reject(error);
+    });
+  });
+}
+
+function refreshFantasyBootstrapDerivedState(payload) {
+  const events = Array.isArray(payload && payload.events) ? payload.events : [];
+  fantasyBootstrapEventsCount = events.length;
+  fantasyBootstrapCurrentEvent =
+    events.find((event) => event && event.is_current === true) || null;
+  fantasyBootstrapNextEvent =
+    events.find((event) => event && event.is_next === true) || null;
+  setSourceCacheSize(SOURCE_FPL_BOOTSTRAP, fantasyBootstrapEventsCount);
+}
+
 function buildPrometheusMetricsText() {
   const lines = [];
   const cpuUsage = process.cpuUsage(PROCESS_CPU_USAGE_START);
@@ -1135,17 +1289,102 @@ function buildPrometheusMetricsText() {
         source,
       });
     });
+  const fantasyBootstrapSuccessTimestampSeconds = isoTimestampToSeconds(
+    fantasyBootstrapLastSuccessAt
+  );
+  const fantasyBootstrapFailureTimestampSeconds = isoTimestampToSeconds(
+    fantasyBootstrapLastFailureAt
+  );
+  const fantasyBootstrapUpdatedTimestampSeconds = isoTimestampToSeconds(
+    fantasyBootstrapLastUpdated
+  );
+  const fantasyBootstrapCurrentEventId = (() => {
+    const parsed = Number(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  })();
+  const fantasyBootstrapNextEventId = (() => {
+    const parsed = Number(fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  })();
 
-  const clubEloSuccessTimestampSeconds = (() => {
-    const parsed = Date.parse(String(clubEloLastSuccessAt || ""));
-    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
-    return Math.floor(parsed / 1000);
-  })();
-  const clubEloFailureTimestampSeconds = (() => {
-    const parsed = Date.parse(String(clubEloLastFailureAt || ""));
-    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
-    return Math.floor(parsed / 1000);
-  })();
+  lines.push(
+    "# HELP fpl_bootstrap_payload_bytes Last downloaded FPL bootstrap-static payload size in bytes."
+  );
+  lines.push("# TYPE fpl_bootstrap_payload_bytes gauge");
+  pushPrometheusSample(lines, "fpl_bootstrap_payload_bytes", fantasyBootstrapPayloadBytes);
+
+  lines.push(
+    "# HELP fpl_bootstrap_events_count Number of FPL events in the latest bootstrap-static payload."
+  );
+  lines.push("# TYPE fpl_bootstrap_events_count gauge");
+  pushPrometheusSample(lines, "fpl_bootstrap_events_count", fantasyBootstrapEventsCount);
+
+  lines.push(
+    "# HELP fpl_bootstrap_last_updated_timestamp_seconds Last successful FPL bootstrap-static refresh timestamp."
+  );
+  lines.push("# TYPE fpl_bootstrap_last_updated_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "fpl_bootstrap_last_updated_timestamp_seconds",
+    fantasyBootstrapUpdatedTimestampSeconds
+  );
+
+  lines.push("# HELP fpl_bootstrap_current_event_id Current FPL event ID from bootstrap-static.");
+  lines.push("# TYPE fpl_bootstrap_current_event_id gauge");
+  pushPrometheusSample(lines, "fpl_bootstrap_current_event_id", fantasyBootstrapCurrentEventId);
+
+  lines.push("# HELP fpl_bootstrap_next_event_id Next FPL event ID from bootstrap-static.");
+  lines.push("# TYPE fpl_bootstrap_next_event_id gauge");
+  pushPrometheusSample(lines, "fpl_bootstrap_next_event_id", fantasyBootstrapNextEventId);
+
+  lines.push(
+    "# HELP fpl_bootstrap_updating Whether an FPL bootstrap-static refresh is currently running (1=true, 0=false)."
+  );
+  lines.push("# TYPE fpl_bootstrap_updating gauge");
+  pushPrometheusSample(lines, "fpl_bootstrap_updating", fantasyBootstrapUpdating ? 1 : 0);
+
+  lines.push(
+    "# HELP fpl_bootstrap_last_success_timestamp_seconds Last successful FPL bootstrap-static refresh timestamp."
+  );
+  lines.push("# TYPE fpl_bootstrap_last_success_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "fpl_bootstrap_last_success_timestamp_seconds",
+    fantasyBootstrapSuccessTimestampSeconds
+  );
+
+  lines.push(
+    "# HELP fpl_bootstrap_last_failure_timestamp_seconds Last failed FPL bootstrap-static refresh timestamp."
+  );
+  lines.push("# TYPE fpl_bootstrap_last_failure_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "fpl_bootstrap_last_failure_timestamp_seconds",
+    fantasyBootstrapFailureTimestampSeconds
+  );
+
+  lines.push(
+    "# HELP fpl_bootstrap_last_success_duration_seconds Duration of the most recent successful FPL bootstrap-static refresh."
+  );
+  lines.push("# TYPE fpl_bootstrap_last_success_duration_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "fpl_bootstrap_last_success_duration_seconds",
+    fantasyBootstrapLastSuccessDurationSeconds
+  );
+
+  lines.push(
+    "# HELP fpl_bootstrap_last_failure_duration_seconds Duration of the most recent failed FPL bootstrap-static refresh."
+  );
+  lines.push("# TYPE fpl_bootstrap_last_failure_duration_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "fpl_bootstrap_last_failure_duration_seconds",
+    fantasyBootstrapLastFailureDurationSeconds
+  );
+
+  const clubEloSuccessTimestampSeconds = isoTimestampToSeconds(clubEloLastSuccessAt);
+  const clubEloFailureTimestampSeconds = isoTimestampToSeconds(clubEloLastFailureAt);
   const clubEloOldestFromTimestampSeconds = (() => {
     if (!isDateOnly(clubEloOldestFromDate)) return 0;
     const parsed = Date.parse(`${clubEloOldestFromDate}T00:00:00Z`);
@@ -1158,32 +1397,20 @@ function buildPrometheusMetricsText() {
     if (!Number.isFinite(parsed) || parsed <= 0) return 0;
     return Math.floor(parsed / 1000);
   })();
-  const footballDatabaseSuccessTimestampSeconds = (() => {
-    const parsed = Date.parse(String(footballDatabaseLastSuccessAt || ""));
-    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
-    return Math.floor(parsed / 1000);
-  })();
-  const footballDatabaseFailureTimestampSeconds = (() => {
-    const parsed = Date.parse(String(footballDatabaseLastFailureAt || ""));
-    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
-    return Math.floor(parsed / 1000);
-  })();
+  const footballDatabaseSuccessTimestampSeconds = isoTimestampToSeconds(
+    footballDatabaseLastSuccessAt
+  );
+  const footballDatabaseFailureTimestampSeconds = isoTimestampToSeconds(
+    footballDatabaseLastFailureAt
+  );
   const footballDatabaseDataTimestampSeconds = (() => {
     if (!isDateOnly(footballDatabaseDataDate)) return 0;
     const parsed = Date.parse(`${footballDatabaseDataDate}T00:00:00Z`);
     if (!Number.isFinite(parsed) || parsed <= 0) return 0;
     return Math.floor(parsed / 1000);
   })();
-  const nationalEloSuccessTimestampSeconds = (() => {
-    const parsed = Date.parse(String(nationalEloLastSuccessAt || ""));
-    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
-    return Math.floor(parsed / 1000);
-  })();
-  const nationalEloFailureTimestampSeconds = (() => {
-    const parsed = Date.parse(String(nationalEloLastFailureAt || ""));
-    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
-    return Math.floor(parsed / 1000);
-  })();
+  const nationalEloSuccessTimestampSeconds = isoTimestampToSeconds(nationalEloLastSuccessAt);
+  const nationalEloFailureTimestampSeconds = isoTimestampToSeconds(nationalEloLastFailureAt);
   const nationalEloDataTimestampSeconds = (() => {
     if (!isDateOnly(nationalEloDataDate)) return 0;
     const parsed = Date.parse(`${nationalEloDataDate}T00:00:00Z`);
@@ -6772,6 +6999,77 @@ async function updateLeagueTables(options = {}) {
   }
 }
 
+async function updateFantasyBootstrapStatic(options = {}) {
+  if (fantasyBootstrapUpdating) return;
+  fantasyBootstrapUpdating = true;
+  const startedAtMs = Date.now();
+  let success = false;
+  let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+
+  console.info(
+    `[FPLBootstrap] Download start source=${FPL_BOOTSTRAP_SOURCE_URL} trigger=${trigger}`
+  );
+
+  try {
+    const { payload, payloadBytes } = await fetchFantasyBootstrapStaticPayload(
+      FPL_BOOTSTRAP_SOURCE_URL,
+      {
+        timeoutMs: FPL_BOOTSTRAP_TIMEOUT_MS,
+        maxBytes: FPL_BOOTSTRAP_MAX_BYTES,
+      }
+    );
+
+    cachedFantasyBootstrap = payload;
+    fantasyBootstrapPayloadBytes = payloadBytes;
+    fantasyBootstrapLastUpdated = new Date().toISOString();
+    refreshFantasyBootstrapDerivedState(payload);
+    recordsFetched = fantasyBootstrapEventsCount;
+    fantasyBootstrapLastSuccessAt = fantasyBootstrapLastUpdated;
+    fantasyBootstrapLastSuccessDurationSeconds = Math.max(
+      0,
+      (Date.now() - startedAtMs) / 1000
+    );
+
+    success = true;
+    console.info(
+      `[FPLBootstrap] Download complete source=${FPL_BOOTSTRAP_SOURCE_URL} trigger=${trigger} bytes=${fantasyBootstrapPayloadBytes} events=${fantasyBootstrapEventsCount} duration_ms=${Date.now() - startedAtMs} updated_at=${fantasyBootstrapLastUpdated}`
+    );
+    logPollSuccess("fpl_bootstrap_static", {
+      source: SOURCE_FPL_BOOTSTRAP,
+      trigger,
+      bytes: fantasyBootstrapPayloadBytes,
+      events: fantasyBootstrapEventsCount,
+      current_event_id: fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id,
+      next_event_id: fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id,
+      updated_at: fantasyBootstrapLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
+  } catch (err) {
+    fantasyBootstrapLastFailureAt = new Date().toISOString();
+    fantasyBootstrapLastFailureDurationSeconds = Math.max(
+      0,
+      (Date.now() - startedAtMs) / 1000
+    );
+    console.warn(
+      "Failed to update FPL bootstrap-static dataset:",
+      err.message || err
+    );
+  } finally {
+    const durationMs = Date.now() - startedAtMs;
+    console.info(
+      `[FPLBootstrap] Download end source=${FPL_BOOTSTRAP_SOURCE_URL} trigger=${trigger} status=${success ? "success" : "failure"} duration_ms=${durationMs}`
+    );
+    trackSourceUpdateMetrics({
+      source: SOURCE_FPL_BOOTSTRAP,
+      startedAtMs,
+      success,
+      recordsFetched,
+    });
+    fantasyBootstrapUpdating = false;
+  }
+}
+
 async function updateClubEloFixtures(options = {}) {
   if (clubEloFixturesUpdating) {
     return {
@@ -8670,6 +8968,171 @@ app.get(`${API_PREFIX}/channels`, async (_req, res) => {
   res.json(buildChannelList(dataset.items));
 });
 
+app.get(`${API_PREFIX}/fantasy/gameweek/current`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+  if (fantasyBootstrapLastUpdated) {
+    res.set("X-Last-Updated", fantasyBootstrapLastUpdated);
+  }
+  res.set("X-Operational-Source", "memory_cache");
+
+  if (!cachedFantasyBootstrap) {
+    res.status(503).json({
+      error: "Fantasy bootstrap-static dataset not loaded yet.",
+    });
+    return;
+  }
+
+  if (!fantasyBootstrapCurrentEvent) {
+    res.status(404).json({
+      error: "No current gameweek found in fantasy bootstrap-static dataset.",
+    });
+    return;
+  }
+
+  res.json(fantasyBootstrapCurrentEvent);
+});
+
+app.get(`${API_PREFIX}/fantasy/gameweek/next`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+  if (fantasyBootstrapLastUpdated) {
+    res.set("X-Last-Updated", fantasyBootstrapLastUpdated);
+  }
+  res.set("X-Operational-Source", "memory_cache");
+
+  if (!cachedFantasyBootstrap) {
+    res.status(503).json({
+      error: "Fantasy bootstrap-static dataset not loaded yet.",
+    });
+    return;
+  }
+
+  if (!fantasyBootstrapNextEvent) {
+    res.status(404).json({
+      error: "No next gameweek found in fantasy bootstrap-static dataset.",
+    });
+    return;
+  }
+
+  res.json(fantasyBootstrapNextEvent);
+});
+
+function fantasyBootstrapLookupPayload() {
+  const payload = cachedFantasyBootstrap && typeof cachedFantasyBootstrap === "object"
+    ? cachedFantasyBootstrap
+    : {};
+
+  const elements = Array.isArray(payload.elements)
+    ? payload.elements
+      .map((item) => ({
+        id: Number(item && item.id) || 0,
+        web_name: String((item && item.web_name) || "").trim(),
+        first_name: String((item && item.first_name) || "").trim(),
+        second_name: String((item && item.second_name) || "").trim(),
+        team: Number(item && item.team) || 0,
+        element_type: Number(item && item.element_type) || 0,
+        photo: String((item && item.photo) || "").trim(),
+        status: String((item && item.status) || "").trim(),
+        news: String((item && item.news) || "").trim(),
+      }))
+      .filter((item) => Number.isFinite(item.id) && item.id > 0)
+    : [];
+
+  const teams = Array.isArray(payload.teams)
+    ? payload.teams
+      .map((item) => ({
+        id: Number(item && item.id) || 0,
+        name: String((item && item.name) || "").trim(),
+        short_name: String((item && item.short_name) || "").trim(),
+        code: Number(item && item.code) || 0,
+      }))
+      .filter((item) => Number.isFinite(item.id) && item.id > 0)
+    : [];
+
+  const elementTypes = Array.isArray(payload.element_types)
+    ? payload.element_types
+      .map((item) => ({
+        id: Number(item && item.id) || 0,
+        singular_name: String((item && item.singular_name) || "").trim(),
+        singular_name_short: String((item && item.singular_name_short) || "").trim(),
+        plural_name: String((item && item.plural_name) || "").trim(),
+        plural_name_short: String((item && item.plural_name_short) || "").trim(),
+      }))
+      .filter((item) => Number.isFinite(item.id) && item.id > 0)
+    : [];
+
+  const events = Array.isArray(payload.events)
+    ? payload.events
+      .map((item) => ({
+        id: Number(item && item.id) || 0,
+        name: String((item && item.name) || "").trim(),
+        is_current: Boolean(item && item.is_current === true),
+        is_next: Boolean(item && item.is_next === true),
+        deadline_time: String((item && item.deadline_time) || "").trim() || null,
+      }))
+      .filter((item) => Number.isFinite(item.id) && item.id > 0)
+    : [];
+
+  return {
+    updated_at: fantasyBootstrapLastUpdated,
+    elements,
+    teams,
+    element_types: elementTypes,
+    events,
+  };
+}
+
+function setFantasyBootstrapHeaders(res) {
+  setCacheOnlyHeaders(res);
+  if (fantasyBootstrapLastUpdated) {
+    res.set("X-Last-Updated", fantasyBootstrapLastUpdated);
+  }
+  res.set("X-Operational-Source", "memory_cache");
+}
+
+app.get(`${API_PREFIX}/fantasy/bootstrap/lookup`, (_req, res) => {
+  setFantasyBootstrapHeaders(res);
+  if (!cachedFantasyBootstrap) {
+    res.status(503).json({
+      error: "Fantasy bootstrap-static dataset not loaded yet.",
+    });
+    return;
+  }
+  res.json(fantasyBootstrapLookupPayload());
+});
+
+app.get(`${API_PREFIX}/fantasy/bootstrap/elements`, (_req, res) => {
+  setFantasyBootstrapHeaders(res);
+  if (!cachedFantasyBootstrap) {
+    res.status(503).json({
+      error: "Fantasy bootstrap-static dataset not loaded yet.",
+    });
+    return;
+  }
+  res.json(fantasyBootstrapLookupPayload().elements);
+});
+
+app.get(`${API_PREFIX}/fantasy/bootstrap/teams`, (_req, res) => {
+  setFantasyBootstrapHeaders(res);
+  if (!cachedFantasyBootstrap) {
+    res.status(503).json({
+      error: "Fantasy bootstrap-static dataset not loaded yet.",
+    });
+    return;
+  }
+  res.json(fantasyBootstrapLookupPayload().teams);
+});
+
+app.get(`${API_PREFIX}/fantasy/bootstrap/element-types`, (_req, res) => {
+  setFantasyBootstrapHeaders(res);
+  if (!cachedFantasyBootstrap) {
+    res.status(503).json({
+      error: "Fantasy bootstrap-static dataset not loaded yet.",
+    });
+    return;
+  }
+  res.json(fantasyBootstrapLookupPayload().element_types);
+});
+
 app.post(`${API_PREFIX}/audit/missing-team-logos`, (req, res) => {
   setCacheOnlyHeaders(res);
 
@@ -8985,6 +9448,22 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     epl_output_path: path.resolve(EPL_OUTPUT_PATH),
     epl_interval_ms: EPL_INTERVAL_MS,
     epl_team_min_confidence: EPL_TEAM_MIN_CONFIDENCE,
+    fpl_bootstrap_source_url: FPL_BOOTSTRAP_SOURCE_URL,
+    fpl_bootstrap_interval_ms: FPL_BOOTSTRAP_INTERVAL_MS,
+    fpl_bootstrap_timeout_ms: FPL_BOOTSTRAP_TIMEOUT_MS,
+    fpl_bootstrap_max_bytes: FPL_BOOTSTRAP_MAX_BYTES,
+    fpl_bootstrap_last_updated: fantasyBootstrapLastUpdated,
+    fpl_bootstrap_payload_bytes: fantasyBootstrapPayloadBytes,
+    fpl_bootstrap_events_count: fantasyBootstrapEventsCount,
+    fpl_bootstrap_current_event_id:
+      fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id
+        ? fantasyBootstrapCurrentEvent.id
+        : null,
+    fpl_bootstrap_next_event_id:
+      fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id
+        ? fantasyBootstrapNextEvent.id
+        : null,
+    fpl_bootstrap_updating: fantasyBootstrapUpdating,
     league_tables_count: leagueTablesDataset.items.length,
     league_tables_rows_count: leagueTableRowsCount(leagueTablesDataset.items),
     league_tables_last_updated: leagueTablesDataset.updated_at || leagueTablesLastUpdated,
@@ -9104,6 +9583,7 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
       football_database_teams: footballDatabaseDataset.source,
       national_elo_teams: nationalEloDataset.source,
       match_details: matchDetailsSnapshot.source,
+      fpl_bootstrap: "memory_cache",
     },
   });
 });
@@ -11078,6 +11558,7 @@ async function bootstrapOperationalState() {
   void updateClubEloFixtures({ trigger: "startup_bootstrap" });
   void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
   void updateNationalEloTeams({ trigger: "startup_bootstrap" });
+  void updateFantasyBootstrapStatic({ trigger: "startup_bootstrap" });
 }
 
 const operationalBootstrapPromise = bootstrapOperationalState().catch((error) => {
@@ -11139,6 +11620,13 @@ const nationalEloInterval =
 setInterval(() => {
   void updateNationalEloTeams({ trigger: "interval" });
 }, nationalEloInterval);
+const fantasyBootstrapInterval =
+  Number.isFinite(FPL_BOOTSTRAP_INTERVAL_MS) && FPL_BOOTSTRAP_INTERVAL_MS > 0
+    ? FPL_BOOTSTRAP_INTERVAL_MS
+    : 12 * 60 * 60 * 1000;
+setInterval(() => {
+  void updateFantasyBootstrapStatic({ trigger: "interval" });
+}, fantasyBootstrapInterval);
 const matchDetailsPollInterval =
   Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
     ? MATCH_DETAILS_POLL_INTERVAL_MS

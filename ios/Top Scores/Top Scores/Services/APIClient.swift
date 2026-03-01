@@ -152,6 +152,20 @@ struct APIClient {
         )
     }
 
+    func fetchFantasyCurrentGameweek() async throws -> FantasyGameweek {
+        let request = try buildRequest(path: "fantasy/gameweek/current", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "fantasy_gameweek_current")
+        try validateSuccess(http, data: data, operation: "fantasy_gameweek_current")
+        return try JSONDecoder().decode(FantasyGameweek.self, from: data)
+    }
+
+    func fetchFantasyBootstrapLookup() async throws -> FantasyBootstrapLookup {
+        let request = try buildRequest(path: "fantasy/bootstrap/lookup", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "fantasy_bootstrap_lookup")
+        try validateSuccess(http, data: data, operation: "fantasy_bootstrap_lookup")
+        return try JSONDecoder().decode(FantasyBootstrapLookup.self, from: data)
+    }
+
     func fetchMatchDetails(matchId: String) async throws -> MatchDetailsPayload {
         guard let normalizedID = Self.normalizedMatchDetailsID(matchId) else {
             throw APIClientError.invalidMatchDetailsID(matchId)

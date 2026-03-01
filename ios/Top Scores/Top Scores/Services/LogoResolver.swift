@@ -314,6 +314,9 @@ final class LogoResolver {
 
     private static let aliasMap: [String: String] = [
         "manchester united": "man united",
+        "man utd": "man united",
+        "manchester utd": "man united",
+        "man u": "man united",
         "manchester city": "man city",
         "tottenham hotspur": "tottenham",
         "wolverhampton wanderers": "wolves",
