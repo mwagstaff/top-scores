@@ -11,6 +11,11 @@ final class FantasyViewModel: ObservableObject {
     @Published var errorMessage: String?
 
     private let fantasyPublicClient = FantasyPublicAPIClient()
+    private var cachedBootstrapLookup: FantasyBootstrapLookup?
+    private var cachedBootstrapFetchedAt: Date?
+    private var cachedBootstrapBaseURL: String?
+    private let bootstrapCacheTTL: TimeInterval = 12 * 60 * 60
+    private var rivalRefreshToken = UUID()
 
     func reset() {
         isLoading = false
@@ -19,9 +24,13 @@ final class FantasyViewModel: ObservableObject {
         rivalSquads = []
         lastUpdated = nil
         errorMessage = nil
+        cachedBootstrapLookup = nil
+        cachedBootstrapFetchedAt = nil
+        cachedBootstrapBaseURL = nil
     }
 
     func refresh(managerEntryID: String, apiBaseURL: String, rivalManagers: [FantasyRivalManager]) async {
+        let refreshStartedAt = Date()
         let trimmedManagerID = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let entryID = Int(trimmedManagerID), entryID > 0 else {
             errorMessage = "Stored manager ID is invalid. Please relink your Fantasy account."
@@ -47,15 +56,29 @@ final class FantasyViewModel: ObservableObject {
 
         do {
             let serverClient = APIClient(baseURL: baseURL)
-            let currentGameweek = try await serverClient.fetchFantasyCurrentGameweek()
+            logPerf("refresh_start entry_id=\(entryID) rivals=\(rivalManagers.count)")
 
-            async let bootstrapLookupTask = serverClient.fetchFantasyBootstrapLookup()
-            async let picksTask = fantasyPublicClient.fetchPicks(
-                entryID: entryID,
-                eventID: currentGameweek.id
+            let currentGameweek = try await timed("current_gameweek") {
+                try await serverClient.fetchFantasyCurrentGameweek()
+            }
+
+            let bootstrapBaseURLKey = baseURL.absoluteString
+            async let bootstrapLookupTask = fetchBootstrapLookup(
+                serverClient: serverClient,
+                baseURLKey: bootstrapBaseURLKey
             )
-            async let liveTask = fantasyPublicClient.fetchEventLive(eventID: currentGameweek.id)
-            async let fixturesTask = fantasyPublicClient.fetchEventFixtures(eventID: currentGameweek.id)
+            async let picksTask = timed("my_picks") {
+                try await fantasyPublicClient.fetchPicks(
+                    entryID: entryID,
+                    eventID: currentGameweek.id
+                )
+            }
+            async let liveTask = timed("event_live") {
+                try await fantasyPublicClient.fetchEventLive(eventID: currentGameweek.id)
+            }
+            async let fixturesTask = timed("event_fixtures") {
+                try await fantasyPublicClient.fetchEventFixtures(eventID: currentGameweek.id)
+            }
 
             let (bootstrapLookup, picksResponse, liveResponse, fixtures) = try await (
                 bootstrapLookupTask,
@@ -76,45 +99,31 @@ final class FantasyViewModel: ObservableObject {
                 rivalManagers: rivalManagers,
                 excludingEntryID: entryID
             )
-
-            var refreshedRivals: [FantasyRivalSquad] = []
-            for rival in normalizedRivals {
-                do {
-                    let rivalPicks = try await fantasyPublicClient.fetchPicks(
-                        entryID: rival.entryID,
-                        eventID: currentGameweek.id
-                    )
-                    let rivalSquad = FantasySquadBuilder.build(
+            if normalizedRivals.isEmpty {
+                rivalSquads = []
+            } else {
+                let refreshToken = UUID()
+                rivalRefreshToken = refreshToken
+                Task {
+                    let refreshedRivals = await self.fetchRivalSquads(
+                        rivals: normalizedRivals,
                         gameweek: currentGameweek,
-                        picksResponse: rivalPicks,
                         liveResponse: liveResponse,
                         fixtures: fixtures,
-                        bootstrap: bootstrapLookup
+                        bootstrapLookup: bootstrapLookup
                     )
-                    refreshedRivals.append(
-                        FantasyRivalSquad(
-                            entryID: rival.entryID,
-                            teamName: rival.teamName,
-                            managerName: rival.managerDisplayName,
-                            squad: rivalSquad
-                        )
-                    )
-                } catch {
-                    continue
+                    guard self.rivalRefreshToken == refreshToken else { return }
+                    self.rivalSquads = refreshedRivals
+                    self.logPerf("rivals_complete count=\(refreshedRivals.count)")
                 }
-            }
-
-            rivalSquads = refreshedRivals.sorted { lhs, rhs in
-                let left = lhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-                let right = rhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-                if left.caseInsensitiveCompare(right) != .orderedSame {
-                    return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
-                }
-                return lhs.entryID < rhs.entryID
             }
             lastUpdated = Date()
             errorMessage = nil
+            let totalDurationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
+            logPerf("refresh_complete entry_id=\(entryID) rivals_loaded=\(rivalSquads.count) duration_ms=\(Int(totalDurationMs))")
         } catch {
+            let totalDurationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
+            logPerf("refresh_failed entry_id=\(entryID) duration_ms=\(Int(totalDurationMs)) error=\"\(error.localizedDescription)\"")
             errorMessage = error.localizedDescription
         }
     }
@@ -149,6 +158,96 @@ final class FantasyViewModel: ObservableObject {
         }
 
         return result
+    }
+
+    private func fetchRivalSquads(
+        rivals: [FantasyRivalManager],
+        gameweek: FantasyGameweek,
+        liveResponse: FantasyEventLiveResponse,
+        fixtures: [FantasyFixture],
+        bootstrapLookup: FantasyBootstrapLookup
+    ) async -> [FantasyRivalSquad] {
+        var refreshedRivals: [FantasyRivalSquad] = []
+
+        for rival in rivals {
+            do {
+                let rivalPicks = try await timed("rival_picks entry_id=\(rival.entryID)") {
+                    try await fantasyPublicClient.fetchPicks(
+                        entryID: rival.entryID,
+                        eventID: gameweek.id
+                    )
+                }
+                let rivalSquad = FantasySquadBuilder.build(
+                    gameweek: gameweek,
+                    picksResponse: rivalPicks,
+                    liveResponse: liveResponse,
+                    fixtures: fixtures,
+                    bootstrap: bootstrapLookup
+                )
+                refreshedRivals.append(
+                    FantasyRivalSquad(
+                        entryID: rival.entryID,
+                        teamName: rival.teamName,
+                        managerName: rival.managerDisplayName,
+                        squad: rivalSquad
+                    )
+                )
+            } catch {
+                continue
+            }
+        }
+
+        return refreshedRivals.sorted { lhs, rhs in
+            let left = lhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let right = rhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if left.caseInsensitiveCompare(right) != .orderedSame {
+                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+            }
+            return lhs.entryID < rhs.entryID
+        }
+    }
+
+    private func fetchBootstrapLookup(
+        serverClient: APIClient,
+        baseURLKey: String
+    ) async throws -> FantasyBootstrapLookup {
+        let now = Date()
+        if cachedBootstrapBaseURL == baseURLKey,
+           let cachedBootstrapLookup,
+           let cachedBootstrapFetchedAt,
+           now.timeIntervalSince(cachedBootstrapFetchedAt) < bootstrapCacheTTL {
+            let age = Int(now.timeIntervalSince(cachedBootstrapFetchedAt))
+            logPerf("bootstrap_lookup_cache_hit age_s=\(age)")
+            return cachedBootstrapLookup
+        }
+
+        let lookup = try await timed("bootstrap_lookup_fetch") {
+            try await serverClient.fetchFantasyBootstrapLookup()
+        }
+        cachedBootstrapLookup = lookup
+        cachedBootstrapFetchedAt = now
+        cachedBootstrapBaseURL = baseURLKey
+        return lookup
+    }
+
+    private func timed<T>(_ label: String, operation: () async throws -> T) async throws -> T {
+        let started = Date()
+        do {
+            let value = try await operation()
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            logPerf("\(label) ok duration_ms=\(ms)")
+            return value
+        } catch {
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            logPerf("\(label) failed duration_ms=\(ms) error=\"\(error.localizedDescription)\"")
+            throw error
+        }
+    }
+
+    private func logPerf(_ message: String) {
+        #if DEBUG
+        print("[FantasyPerf] \(message)")
+        #endif
     }
 }
 

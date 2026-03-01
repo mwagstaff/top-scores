@@ -113,6 +113,10 @@ struct FantasyView: View {
             guard isSelected,
                   scenePhase == .active,
                   !managerEntryID.isEmpty else { return }
+            if let currentData = fantasyViewModel.data, !currentData.hasActiveFixtures {
+                guard let lastUpdated = fantasyViewModel.lastUpdated else { return }
+                guard Date().timeIntervalSince(lastUpdated) >= 15 * 60 else { return }
+            }
             triggerFantasyRefresh(force: false)
         }
     }
@@ -664,7 +668,7 @@ struct FantasyView: View {
         guard !managerEntryID.isEmpty else { return }
         guard isSelected else { return }
         guard scenePhase == .active else { return }
-        if !force, (fantasyViewModel.isLoading || fantasyViewModel.isRefreshing) {
+        if fantasyViewModel.isLoading || fantasyViewModel.isRefreshing {
             return
         }
 
