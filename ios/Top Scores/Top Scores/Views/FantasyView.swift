@@ -150,6 +150,7 @@ struct FantasyView: View {
                     scoreSummaryCard(data)
                     pitchSection(data)
                     benchSection(data)
+                    eventLegendSection(data)
                     rivalsSection
                 } else if fantasyViewModel.isLoading {
                     VStack(spacing: 10) {
@@ -524,6 +525,7 @@ struct FantasyView: View {
                     scoreSummaryCard(rival.squad)
                     pitchSection(rival.squad)
                     benchSection(rival.squad)
+                    eventLegendSection(rival.squad)
                     summaryStatsSection(rival.squad)
                 }
                 .padding(.horizontal, 14)
@@ -599,6 +601,68 @@ struct FantasyView: View {
                     .fill(Color(.secondarySystemGroupedBackground))
             )
         }
+    }
+
+    private func eventLegendSection(_ data: FantasySquadDisplayData) -> some View {
+        let goalLine = legendLine(
+            emoji: "⚽️",
+            title: "Goals scored",
+            players: legendPlayers(data.allPlayers, value: \.goalsScored)
+        )
+        let assistLine = legendLine(
+            emoji: "🅰️",
+            title: "Assists",
+            players: legendPlayers(data.allPlayers, value: \.assists)
+        )
+        let yellowLine = legendLine(
+            emoji: "🟨",
+            title: "Yellow cards",
+            players: legendPlayers(data.allPlayers, value: \.yellowCards)
+        )
+        let redLine = legendLine(
+            emoji: "🟥",
+            title: "Red cards",
+            players: legendPlayers(data.allPlayers, value: \.redCards)
+        )
+
+        let lines = [goalLine, assistLine, yellowLine, redLine].compactMap { $0 }
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Icon legend")
+                .font(.headline)
+
+            if lines.isEmpty {
+                Text("No goals, assists, or cards recorded yet this gameweek.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(lines, id: \.self) { line in
+                    Text(line)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private func legendLine(emoji: String, title: String, players: [String]) -> String? {
+        guard !players.isEmpty else { return nil }
+        return "\(emoji) \(title) (\(players.joined(separator: ", ")))"
+    }
+
+    private func legendPlayers(
+        _ players: [FantasyDisplayPlayer],
+        value: KeyPath<FantasyDisplayPlayer, Int>
+    ) -> [String] {
+        players
+            .filter { $0[keyPath: value] > 0 }
+            .map { "\($0.displayName) x\($0[keyPath: value])" }
     }
 
     private func summaryPill(title: String, value: String) -> some View {
@@ -1074,7 +1138,7 @@ private struct FantasyPlayerCard: View {
                             eventStatBadge(symbol: "soccerball", color: .white, count: player.goalsScored)
                         }
                         if player.assists > 0 {
-                            eventStatBadge(symbol: "arrow.triangle.branch", color: .mint, count: player.assists)
+                            eventEmojiBadge(emoji: "🅰️", color: .mint, count: player.assists)
                         }
                         if player.yellowCards > 0 {
                             cardStatBadge(fill: Color.yellow, count: player.yellowCards, textColor: .black)
@@ -1146,11 +1210,26 @@ private struct FantasyPlayerCard: View {
 
     private func eventStatBadge(symbol: String, color: Color, count: Int) -> some View {
         HStack(spacing: 1) {
-            Image(systemName: symbol)
-                .font(.system(size: 10, weight: .semibold))
-            Text("\(count)")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .monospacedDigit()
+            ForEach(0..<max(1, count), id: \.self) { _ in
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .semibold))
+            }
+        }
+        .padding(.horizontal, 3)
+        .padding(.vertical, 1)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.38))
+        )
+        .foregroundStyle(color)
+    }
+
+    private func eventEmojiBadge(emoji: String, color: Color, count: Int) -> some View {
+        HStack(spacing: 1) {
+            ForEach(0..<max(1, count), id: \.self) { _ in
+                Text(emoji)
+                    .font(.system(size: 10))
+            }
         }
         .padding(.horizontal, 3)
         .padding(.vertical, 1)
@@ -1163,13 +1242,11 @@ private struct FantasyPlayerCard: View {
 
     private func cardStatBadge(fill: Color, count: Int, textColor: Color) -> some View {
         HStack(spacing: 1) {
-            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                .fill(fill)
-                .frame(width: 7, height: 9)
-            Text("\(count)")
-                .font(.system(size: 7, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(textColor)
+            ForEach(0..<max(1, count), id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    .fill(fill)
+                    .frame(width: 7, height: 9)
+            }
         }
         .padding(.horizontal, 3)
         .padding(.vertical, 1)
@@ -1177,7 +1254,7 @@ private struct FantasyPlayerCard: View {
             Capsule(style: .continuous)
                 .fill(Color.black.opacity(0.34))
         )
-        .foregroundStyle(.white)
+        .foregroundStyle(textColor)
     }
 }
 

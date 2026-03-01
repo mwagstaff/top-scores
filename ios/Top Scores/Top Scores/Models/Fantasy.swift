@@ -293,6 +293,10 @@ struct FantasySquadDisplayData: Hashable {
         starters.reduce(0) { $0 + $1.appliedPoints }
     }
 
+    var allPlayers: [FantasyDisplayPlayer] {
+        (starters + bench).sorted { $0.pickPosition < $1.pickPosition }
+    }
+
     var resolvedCurrentScore: Int {
         hasActiveFixtures || hasFixturesPlayedToday
             ? computedAppliedPointsTotal
