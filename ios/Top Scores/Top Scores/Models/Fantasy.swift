@@ -135,9 +135,17 @@ struct FantasyLiveElement: Codable, Hashable {
 
 struct FantasyLiveStats: Codable, Hashable {
     let totalPoints: Int
+    let goalsScored: Int?
+    let assists: Int?
+    let yellowCards: Int?
+    let redCards: Int?
 
     enum CodingKeys: String, CodingKey {
         case totalPoints = "total_points"
+        case goalsScored = "goals_scored"
+        case assists
+        case yellowCards = "yellow_cards"
+        case redCards = "red_cards"
     }
 }
 
@@ -246,6 +254,10 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
     let isPlayingNow: Bool
     let isUnavailable: Bool
     let upcomingOpponentDisplay: String?
+    let goalsScored: Int
+    let assists: Int
+    let yellowCards: Int
+    let redCards: Int
 
     var id: Int {
         elementID
@@ -299,6 +311,9 @@ enum FantasySquadBuilder {
     ) -> FantasySquadDisplayData {
         let livePointsByElementID = Dictionary(
             uniqueKeysWithValues: liveResponse.elements.map { ($0.id, $0.stats.totalPoints) }
+        )
+        let liveStatsByElementID = Dictionary(
+            uniqueKeysWithValues: liveResponse.elements.map { ($0.id, $0.stats) }
         )
 
         let elementByID = Dictionary(
@@ -419,6 +434,11 @@ enum FantasySquadBuilder {
             let rawPoints = livePointsByElementID[pick.element] ?? 0
             let appliedPoints = rawPoints * pick.multiplier
             let displayPoints = pick.position <= 11 ? appliedPoints : rawPoints
+            let liveStats = liveStatsByElementID[pick.element]
+            let goalsScored = liveStats?.goalsScored ?? 0
+            let assists = liveStats?.assists ?? 0
+            let yellowCards = liveStats?.yellowCards ?? 0
+            let redCards = liveStats?.redCards ?? 0
             let isPlayingNow = {
                 guard let teamID = element?.team else { return false }
                 return activeTeamIDs.contains(teamID)
@@ -449,7 +469,11 @@ enum FantasySquadBuilder {
                 isViceCaptain: pick.isViceCaptain,
                 isPlayingNow: isPlayingNow,
                 isUnavailable: isUnavailable,
-                upcomingOpponentDisplay: upcomingOpponentDisplay
+                upcomingOpponentDisplay: upcomingOpponentDisplay,
+                goalsScored: goalsScored,
+                assists: assists,
+                yellowCards: yellowCards,
+                redCards: redCards
             )
         }
         .sorted { $0.pickPosition < $1.pickPosition }

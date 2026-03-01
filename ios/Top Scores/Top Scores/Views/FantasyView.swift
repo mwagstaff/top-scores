@@ -1023,6 +1023,10 @@ private struct FantasyPlayerCard: View {
         return .white
     }
 
+    private var hasEventStats: Bool {
+        player.goalsScored > 0 || player.assists > 0 || player.yellowCards > 0 || player.redCards > 0
+    }
+
     var body: some View {
         let crestContainerSize = max(22, min(width * 0.48, 32))
         let crestImageSize = crestContainerSize * 0.78
@@ -1062,6 +1066,25 @@ private struct FantasyPlayerCard: View {
                     }
                     .padding(3)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+
+                if hasEventStats {
+                    HStack(spacing: 3) {
+                        if player.goalsScored > 0 {
+                            eventStatBadge(symbol: "soccerball", color: .white, count: player.goalsScored)
+                        }
+                        if player.assists > 0 {
+                            eventStatBadge(symbol: "arrow.triangle.branch", color: .mint, count: player.assists)
+                        }
+                        if player.yellowCards > 0 {
+                            cardStatBadge(fill: Color.yellow, count: player.yellowCards, textColor: .black)
+                        }
+                        if player.redCards > 0 {
+                            cardStatBadge(fill: Color.red, count: player.redCards, textColor: .white)
+                        }
+                    }
+                    .padding(3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 }
 
                 HStack(spacing: 4) {
@@ -1119,6 +1142,42 @@ private struct FantasyPlayerCard: View {
                     .fill(color.opacity(0.95))
             )
             .foregroundStyle(.black.opacity(0.8))
+    }
+
+    private func eventStatBadge(symbol: String, color: Color, count: Int) -> some View {
+        HStack(spacing: 1) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+            Text("\(count)")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 3)
+        .padding(.vertical, 1)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.38))
+        )
+        .foregroundStyle(color)
+    }
+
+    private func cardStatBadge(fill: Color, count: Int, textColor: Color) -> some View {
+        HStack(spacing: 1) {
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(fill)
+                .frame(width: 7, height: 9)
+            Text("\(count)")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(textColor)
+        }
+        .padding(.horizontal, 3)
+        .padding(.vertical, 1)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.34))
+        )
+        .foregroundStyle(.white)
     }
 }
 
