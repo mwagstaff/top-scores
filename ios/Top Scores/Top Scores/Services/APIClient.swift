@@ -176,6 +176,38 @@ struct APIClient {
         return ChannelSelection.selectableChannels(from: channels)
     }
 
+    func fetchTeamRanking(teamName: String, type: String? = "club") async throws -> TeamRankingEntry? {
+        let trimmedTeamName = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTeamName.isEmpty else { return nil }
+
+        var queryItems: [URLQueryItem] = []
+        if let type, !type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            queryItems.append(URLQueryItem(name: "type", value: type))
+        }
+
+        // Defensive normalization for path components that may contain separators.
+        let sanitizedPathTeamName = trimmedTeamName.replacingOccurrences(of: "/", with: " ")
+        let request = try buildRequest(path: "teams/\(sanitizedPathTeamName)", queryItems: queryItems)
+        let (data, http) = try await performRequest(request, operation: "team_ranking_lookup")
+        if http.statusCode == 404 {
+            return nil
+        }
+        try validateSuccess(http, data: data, operation: "team_ranking_lookup")
+        return try JSONDecoder().decode(TeamRankingEntry.self, from: data)
+    }
+
+    func fetchTeamRankings(type: String? = "club") async throws -> [TeamRankingEntry] {
+        var queryItems: [URLQueryItem] = []
+        if let type, !type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            queryItems.append(URLQueryItem(name: "type", value: type))
+        }
+
+        let request = try buildRequest(path: "teams", queryItems: queryItems)
+        let (data, http) = try await performRequest(request, operation: "team_rankings")
+        try validateSuccess(http, data: data, operation: "team_rankings")
+        return try JSONDecoder().decode([TeamRankingEntry].self, from: data)
+    }
+
     func reportMissingTeamLogos(_ teamNames: [String]) async throws {
         let normalizedTeamNames = Self.normalizedTeamNames(teamNames)
         guard !normalizedTeamNames.isEmpty else { return }
@@ -530,6 +562,80 @@ struct MatchPageResponse {
 struct LeagueTablesResponse {
     let leagues: [LeagueTable]
     let lastUpdated: Date?
+}
+
+struct TeamRankingEntry: Codable, Hashable {
+    let name: String
+    let points: Double?
+    let aliases: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case name = "Name"
+        case nameLower = "name"
+        case points = "Points"
+        case pointsLower = "points"
+        case elo = "elo"
+        case rating = "rating"
+        case aliases = "aliases"
+        case aliasesUpper = "Aliases"
+    }
+
+    init(name: String, points: Double?, aliases: [String]) {
+        self.name = name
+        self.points = points
+        self.aliases = aliases
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        if let primaryName = try container.decodeIfPresent(String.self, forKey: .name) {
+            name = primaryName
+        } else if let fallbackName = try container.decodeIfPresent(String.self, forKey: .nameLower) {
+            name = fallbackName
+        } else {
+            name = ""
+        }
+
+        if let numericPoints = try container.decodeIfPresent(Double.self, forKey: .points) {
+            points = numericPoints
+        } else if let numericPoints = try container.decodeIfPresent(Double.self, forKey: .pointsLower) {
+            points = numericPoints
+        } else if let numericPoints = try container.decodeIfPresent(Double.self, forKey: .elo) {
+            points = numericPoints
+        } else if let numericPoints = try container.decodeIfPresent(Double.self, forKey: .rating) {
+            points = numericPoints
+        } else if let stringPoints = try container.decodeIfPresent(String.self, forKey: .points),
+                  let parsed = Double(stringPoints) {
+            points = parsed
+        } else if let stringPoints = try container.decodeIfPresent(String.self, forKey: .pointsLower),
+                  let parsed = Double(stringPoints) {
+            points = parsed
+        } else if let stringPoints = try container.decodeIfPresent(String.self, forKey: .elo),
+                  let parsed = Double(stringPoints) {
+            points = parsed
+        } else if let stringPoints = try container.decodeIfPresent(String.self, forKey: .rating),
+                  let parsed = Double(stringPoints) {
+            points = parsed
+        } else {
+            points = nil
+        }
+
+        if let primaryAliases = try container.decodeIfPresent([String].self, forKey: .aliases) {
+            aliases = primaryAliases
+        } else if let fallbackAliases = try container.decodeIfPresent([String].self, forKey: .aliasesUpper) {
+            aliases = fallbackAliases
+        } else {
+            aliases = []
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(points, forKey: .points)
+        try container.encode(aliases, forKey: .aliases)
+    }
 }
 
 private extension MatchesViewMode {

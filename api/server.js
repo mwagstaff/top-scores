@@ -5423,6 +5423,103 @@ function filterRankedRowsByTeamType(rows, teamType) {
   });
 }
 
+const TEAM_LOOKUP_DEFAULT_MIN_CONFIDENCE = 0.82;
+
+function teamRowQualityScore(row) {
+  if (!row || typeof row !== "object") return 0;
+  let score = 0;
+  if (isRankedTeamRow(row)) score += 100;
+  if (Array.isArray(row.Datasource)) score += row.Datasource.length * 4;
+  if (Number.isFinite(row.Points)) score += Number(row.Points) / 1000;
+  if (Number.isFinite(row._match_confidence)) score += Number(row._match_confidence);
+  return score;
+}
+
+function findBestRankedTeamRowMatch(teamName, rows, options = {}) {
+  const query = String(teamName || "").replace(/\s+/g, " ").trim();
+  if (!query) return null;
+  const manualMappings = options.manualMappings || loadClubEloManualMappings();
+  const minConfidence = normalizeMatchConfidenceThreshold(
+    options.minConfidence,
+    TEAM_LOOKUP_DEFAULT_MIN_CONFIDENCE
+  );
+
+  let best = null;
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    if (!row || typeof row !== "object") return;
+    const primaryName = String(row.Name || "").replace(/\s+/g, " ").trim();
+    if (!primaryName) return;
+    const aliases = Array.isArray(row.aliases)
+      ? row.aliases.map((alias) => String(alias || "").replace(/\s+/g, " ").trim()).filter(Boolean)
+      : [];
+    const candidates = [
+      { value: primaryName, isAlias: false },
+      ...aliases.map((alias) => ({ value: alias, isAlias: true })),
+    ];
+
+    candidates.forEach((candidate) => {
+      const candidateName = String(candidate.value || "").trim();
+      if (!candidateName) return;
+
+      let method = null;
+      let confidence = 0;
+      if (compareInsensitive(query, candidateName) === 0) {
+        method = candidate.isAlias ? "alias_exact" : "exact";
+        confidence = 1;
+      } else if (areTeamNamesEquivalentByManualMappings(query, candidateName, manualMappings)) {
+        method = "manual_alias";
+        confidence = 1;
+      } else {
+        confidence = Math.max(
+          similarityScore(query, candidateName),
+          canonicalIdentityConfidenceBoost(query, candidateName)
+        );
+        if (confidence < minConfidence) {
+          return;
+        }
+        method = candidate.isAlias ? "alias_fuzzy" : "fuzzy";
+      }
+
+      const next = {
+        row,
+        query,
+        matched_name: candidateName,
+        matched_alias: Boolean(candidate.isAlias),
+        method,
+        confidence,
+      };
+      if (!best) {
+        best = next;
+        return;
+      }
+
+      if (next.confidence > best.confidence) {
+        best = next;
+        return;
+      }
+      if (next.confidence < best.confidence) {
+        return;
+      }
+
+      const nextQuality = teamRowQualityScore(next.row);
+      const bestQuality = teamRowQualityScore(best.row);
+      if (nextQuality > bestQuality) {
+        best = next;
+        return;
+      }
+      if (nextQuality < bestQuality) {
+        return;
+      }
+
+      if (compareInsensitive(next.row.Name || "", best.row.Name || "") < 0) {
+        best = next;
+      }
+    });
+  });
+
+  return best;
+}
+
 function buildChannelList(matches) {
   const set = new Set(CHANNEL_SPECIAL_OPTIONS);
   matches.forEach((match) => {
@@ -8413,6 +8510,109 @@ app.get(`${API_PREFIX}/teams/premier-league`, async (_req, res) => {
   }
   res.set("X-Operational-Source", dataset.source || "unknown");
   res.json(dataset.items);
+});
+
+app.get(`${API_PREFIX}/teams/:teamName`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const teamName = String(req.params.teamName || "").replace(/\s+/g, " ").trim();
+  if (!teamName) {
+    res.status(400).json({ error: "Team name is required." });
+    return;
+  }
+
+  const leagueFilter = req.query.league ? String(req.query.league) : null;
+  const sourceSelection = resolveTeamRankingSource(req.query.source);
+  const typeSelection = resolveTeamTypeFilter(req.query.type);
+  if (!sourceSelection.valid) {
+    res.status(400).json({
+      error: `Invalid source. Expected one of: ${SUPPORTED_TEAM_RANKING_SOURCES.join(", ")}.`,
+      supported_sources: SUPPORTED_TEAM_RANKING_SOURCES,
+      default_source: TEAM_RANKING_DEFAULT_SOURCE,
+    });
+    return;
+  }
+  if (!typeSelection.valid) {
+    res.status(400).json({
+      error: `Invalid type. Expected one of: ${SUPPORTED_TEAM_TYPES.join(", ")}.`,
+      supported_types: SUPPORTED_TEAM_TYPES,
+    });
+    return;
+  }
+
+  const [mergedDataset, clubEloDataset, footballDatabaseDataset, nationalEloDataset] = await Promise.all([
+    getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
+    getOperationalArrayDataset(OP_DATASET_CLUB_ELO_TEAMS, cachedClubEloTeams),
+    getOperationalArrayDataset(
+      OP_DATASET_FOOTBALL_DATABASE_TEAMS,
+      cachedFootballDatabaseTeams
+    ),
+    getOperationalArrayDataset(OP_DATASET_NATIONAL_ELO_TEAMS, cachedNationalEloTeams),
+  ]);
+  const rankedRows = buildRankedTeamsForSource(
+    mergedDataset.items,
+    clubEloDataset.items,
+    footballDatabaseDataset.items,
+    nationalEloDataset.items,
+    sourceSelection.source,
+    leagueFilter
+  );
+  const filteredRows = filterRankedRowsByTeamType(rankedRows, typeSelection.type);
+  const match = findBestRankedTeamRowMatch(teamName, filteredRows, {
+    minConfidence: req.query.min_confidence,
+  });
+  if (!match) {
+    res.status(404).json({
+      error: "Team not found for provided name.",
+      query: teamName,
+      source: sourceSelection.source,
+      type: typeSelection.type || "all",
+    });
+    return;
+  }
+
+  const updatedAt = newestIsoTimestamp([
+    mergedDataset.updated_at,
+    clubEloDataset.updated_at,
+    footballDatabaseDataset.updated_at,
+    nationalEloDataset.updated_at,
+    clubEloLastUpdated,
+    footballDatabaseLastUpdated,
+    nationalEloLastUpdated,
+  ]);
+  if (updatedAt) {
+    res.set("X-Last-Updated", updatedAt);
+  }
+  res.set("X-Team-Metadata-Source", sourceSelection.source);
+  res.set("X-Team-Metadata-Default-Source", TEAM_RANKING_DEFAULT_SOURCE);
+  res.set("X-Team-Type-Filter", typeSelection.type || "all");
+  res.set("X-Team-Match-Method", match.method);
+  res.set("X-Team-Match-Confidence", String(Number(match.confidence).toFixed(4)));
+  res.set(
+    "X-Operational-Source",
+    `merged=${mergedDataset.source || "unknown"};` +
+      `club_elo=${clubEloDataset.source || "unknown"};` +
+      `footballdatabase=${footballDatabaseDataset.source || "unknown"};` +
+      `national_elo=${nationalEloDataset.source || "unknown"}`
+  );
+
+  const payload = toTeamsApiTeamPayload([match.row])[0] || null;
+  if (!payload) {
+    res.status(404).json({
+      error: "Team found but payload could not be generated.",
+      query: teamName,
+      source: sourceSelection.source,
+      type: typeSelection.type || "all",
+    });
+    return;
+  }
+  res.status(200).json({
+    ...payload,
+    query: teamName,
+    match_name: match.matched_name,
+    match_alias: match.matched_alias,
+    match_method: match.method,
+    match_confidence: Number(match.confidence.toFixed(4)),
+  });
 });
 
 app.get(`${API_PREFIX}/tables`, async (_req, res) => {

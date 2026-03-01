@@ -7,6 +7,10 @@ struct MatchRow: View {
     var highlightToday: Bool = false
     var showTeamEvents: Bool = false
     var showLeague: Bool = false
+    var showBroadcastDetails: Bool = true
+    var centerFooterText: String? = nil
+    var centerFooterColor: Color = .secondary
+    var isLargePresentation: Bool = false
 
     var body: some View {
         matchCard
@@ -23,11 +27,11 @@ struct MatchRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .center, spacing: 10) {
-                    TeamLogo(name: match.homeTeam)
+                    TeamLogo(name: match.homeTeam, size: logoSize)
 
                     HStack(alignment: .center, spacing: 8) {
                         Text(match.homeTeam)
-                            .font(.subheadline)
+                            .font(teamNameFont)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -37,7 +41,7 @@ struct MatchRow: View {
                         scoreAndStatusRow
 
                         Text(match.awayTeam)
-                            .font(.subheadline)
+                            .font(teamNameFont)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -46,7 +50,7 @@ struct MatchRow: View {
                     }
                     .frame(maxWidth: .infinity)
 
-                    TeamLogo(name: match.awayTeam)
+                    TeamLogo(name: match.awayTeam, size: logoSize)
                 }
                 .frame(maxWidth: .infinity)
 
@@ -69,9 +73,18 @@ struct MatchRow: View {
                     MatchTeamEventListView(entries: teamEventEntries)
                         .padding(.top, 4)
                 }
+
+                if let centerFooterText, !centerFooterText.isEmpty {
+                    Text(centerFooterText)
+                        .font(centerFooterFont)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(centerFooterColor)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 4)
+                }
             }
 
-            if !isMatchFinished {
+            if showBroadcastDetails && !isMatchFinished {
                 HStack(alignment: .center, spacing: 8) {
                     Text(match.tvChannels.isEmpty ? "TV TBA" : match.tvChannels.joined(separator: " • "))
                         .font(.caption)
@@ -88,13 +101,13 @@ struct MatchRow: View {
                 }
             }
         }
-        .padding(12)
+        .padding(cardPadding)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
                 .stroke(highlightToday ? Color(.systemYellow).opacity(0.35) : .clear, lineWidth: 1)
         )
     }
@@ -125,7 +138,7 @@ struct MatchRow: View {
         HStack(spacing: 8) {
             if let homeScoreText {
                 Text(homeScoreText)
-                    .font(.headline)
+                    .font(scoreFont)
                     .fontWeight(.semibold)
                     .monospacedDigit()
                     .frame(minWidth: 14, alignment: .trailing)
@@ -133,18 +146,43 @@ struct MatchRow: View {
 
             MatchTimeStatusView(
                 text: centerStatusText,
-                isLive: match.isInProgress
+                isLive: match.isInProgress,
+                isLargePresentation: isLargePresentation
             )
             .fixedSize(horizontal: true, vertical: false)
 
             if let awayScoreText {
                 Text(awayScoreText)
-                    .font(.headline)
+                    .font(scoreFont)
                     .fontWeight(.semibold)
                     .monospacedDigit()
                     .frame(minWidth: 14, alignment: .leading)
             }
         }
+    }
+
+    private var teamNameFont: Font {
+        isLargePresentation ? .caption : .subheadline
+    }
+
+    private var centerFooterFont: Font {
+        isLargePresentation ? .caption : .caption2
+    }
+
+    private var scoreFont: Font {
+        isLargePresentation ? .caption : .headline
+    }
+
+    private var logoSize: CGFloat {
+        isLargePresentation ? 34 : 22
+    }
+
+    private var cardPadding: CGFloat {
+        isLargePresentation ? 16 : 12
+    }
+
+    private var cardCornerRadius: CGFloat {
+        isLargePresentation ? 18 : 14
     }
 
     private var homeTeamEvents: [MatchTeamTimelineEvent] {
@@ -894,12 +932,13 @@ private struct MatchActionAlert: Identifiable {
 private struct MatchTimeStatusView: View {
     let text: String
     let isLive: Bool
+    var isLargePresentation: Bool = false
 
     @State private var isPulsing = false
 
     var body: some View {
         Text(text)
-            .font(.caption)
+            .font(statusFont)
             .fontWeight(isLive ? .semibold : .regular)
             .foregroundStyle(isLive ? Color.red : Color.secondary)
             .monospacedDigit()
@@ -930,6 +969,10 @@ private struct MatchTimeStatusView: View {
                 isPulsing = newValue
             }
     }
+
+    private var statusFont: Font {
+        isLargePresentation ? .subheadline : .caption
+    }
 }
 
 private struct CalendarChoice: Identifiable {
@@ -959,6 +1002,7 @@ private struct TvLogoRow: View {
 
 private struct TeamLogo: View {
     let name: String
+    var size: CGFloat = 22
 
     var body: some View {
         Group {
@@ -971,7 +1015,7 @@ private struct TeamLogo: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 22, height: 22)
+        .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .accessibilityHidden(true)
     }

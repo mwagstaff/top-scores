@@ -28,6 +28,11 @@ struct Top_ScoresApp: App {
             ContentView()
                 .environmentObject(preferences)
                 .environmentObject(matchesStore)
+                .task {
+                    await TeamRankingsCatalog.shared.ensureFresh(
+                        apiBaseURL: preferences.snapshot.apiBaseURL
+                    )
+                }
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -44,7 +49,10 @@ struct Top_ScoresApp: App {
                     async let metricTask: Void = AppMetricsService.shared.sendAppOpenMetric(
                         apiBaseURL: snapshot.apiBaseURL
                     )
-                    _ = await (refreshTask, syncTask, metricTask)
+                    async let teamRankingWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
+                        apiBaseURL: snapshot.apiBaseURL
+                    )
+                    _ = await (refreshTask, syncTask, metricTask, teamRankingWarmTask)
                 }
             default:
                 break
