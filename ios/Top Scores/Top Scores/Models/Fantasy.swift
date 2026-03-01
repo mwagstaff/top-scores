@@ -146,6 +146,7 @@ struct FantasyFixture: Codable, Hashable {
     let event: Int?
     let teamH: Int
     let teamA: Int
+    let kickoffTime: String?
     let started: Bool?
     let finished: Bool?
     let finishedProvisional: Bool?
@@ -155,9 +156,58 @@ struct FantasyFixture: Codable, Hashable {
         case event
         case teamH = "team_h"
         case teamA = "team_a"
+        case kickoffTime = "kickoff_time"
         case started
         case finished
         case finishedProvisional = "finished_provisional"
+    }
+}
+
+struct FantasyEntryProfile: Codable, Hashable {
+    let id: Int
+    let name: String
+    let playerFirstName: String
+    let playerLastName: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case playerFirstName = "player_first_name"
+        case playerLastName = "player_last_name"
+    }
+}
+
+struct FantasyRivalManager: Codable, Hashable, Identifiable {
+    let entryID: Int
+    let teamName: String
+    let managerFirstName: String
+    let managerLastName: String
+
+    var id: Int {
+        entryID
+    }
+
+    var managerDisplayName: String {
+        let combined = [managerFirstName, managerLastName]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return combined.isEmpty ? "Manager \(entryID)" : combined
+    }
+}
+
+struct FantasyRivalSquad: Identifiable, Hashable {
+    let entryID: Int
+    let teamName: String
+    let managerName: String
+    let squad: FantasySquadDisplayData
+
+    var id: Int {
+        entryID
+    }
+
+    var currentScore: Int {
+        squad.resolvedCurrentScore
     }
 }
 
@@ -211,6 +261,7 @@ struct FantasySquadDisplayData: Hashable {
     let gameweekTitle: String
     let totalPoints: Int
     let hasActiveFixtures: Bool
+    let hasFixturesPlayedToday: Bool
     let rank: Int?
     let overallRank: Int?
     let transfersCost: Int?
@@ -229,6 +280,12 @@ struct FantasySquadDisplayData: Hashable {
     var computedAppliedPointsTotal: Int {
         starters.reduce(0) { $0 + $1.appliedPoints }
     }
+
+    var resolvedCurrentScore: Int {
+        hasActiveFixtures || hasFixturesPlayedToday
+            ? computedAppliedPointsTotal
+            : totalPoints
+    }
 }
 
 enum FantasySquadBuilder {
@@ -237,7 +294,8 @@ enum FantasySquadBuilder {
         picksResponse: FantasyPicksResponse,
         liveResponse: FantasyEventLiveResponse,
         fixtures: [FantasyFixture],
-        bootstrap: FantasyBootstrapLookup
+        bootstrap: FantasyBootstrapLookup,
+        now: Date = Date()
     ) -> FantasySquadDisplayData {
         let livePointsByElementID = Dictionary(
             uniqueKeysWithValues: liveResponse.elements.map { ($0.id, $0.stats.totalPoints) }
@@ -263,6 +321,32 @@ enum FantasySquadBuilder {
             }
         )
         let hasActiveFixtures = !activeTeamIDs.isEmpty
+        let hasFixturesPlayedToday = {
+            let calendar = Calendar.current
+            let startOfToday = calendar.startOfDay(for: now)
+            guard let startOfTomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday) else {
+                return false
+            }
+
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let fallbackFormatter = ISO8601DateFormatter()
+            fallbackFormatter.formatOptions = [.withInternetDateTime]
+
+            for fixture in fixtures {
+                guard fixture.started == true else { continue }
+                guard let kickoffRaw = fixture.kickoffTime?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !kickoffRaw.isEmpty else {
+                    continue
+                }
+                let kickoffDate = formatter.date(from: kickoffRaw) ?? fallbackFormatter.date(from: kickoffRaw)
+                guard let kickoffDate else { continue }
+                if kickoffDate >= startOfToday && kickoffDate < startOfTomorrow {
+                    return true
+                }
+            }
+            return false
+        }()
 
         func teamDisplayCode(teamID: Int) -> String {
             let shortName = (teamShortNameByID[teamID] ?? "")
@@ -403,6 +487,7 @@ enum FantasySquadBuilder {
             gameweekTitle: resolvedGameweekTitle,
             totalPoints: picksResponse.entryHistory.points,
             hasActiveFixtures: hasActiveFixtures,
+            hasFixturesPlayedToday: hasFixturesPlayedToday,
             rank: picksResponse.entryHistory.rank,
             overallRank: picksResponse.entryHistory.overallRank,
             transfersCost: picksResponse.entryHistory.eventTransfersCost,

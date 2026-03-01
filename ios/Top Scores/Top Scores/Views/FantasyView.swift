@@ -7,6 +7,7 @@ struct FantasyView: View {
 
     @EnvironmentObject private var preferences: PreferencesStore
     @AppStorage(StorageKeys.managerEntryID) private var managerEntryID = ""
+    @AppStorage(StorageKeys.rivalManagersJSON) private var rivalManagersJSON = "[]"
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
@@ -18,6 +19,13 @@ struct FantasyView: View {
     @State private var clipboardStatusMessage = ""
     @State private var lastClipboardChangeCount = UIPasteboard.general.changeCount
     @State private var showSuccessInterstitial = false
+    @State private var rivalManagers: [FantasyRivalManager] = []
+    @State private var showAddRivalSheet = false
+    @State private var rivalEntryInput = ""
+    @State private var pendingRivalProfile: FantasyEntryProfile?
+    @State private var rivalValidationErrorMessage: String?
+    @State private var isValidatingRival = false
+    @State private var selectedRivalSquad: FantasyRivalSquad?
 
     private let clipboardPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
@@ -39,7 +47,14 @@ struct FantasyView: View {
                 successOverlay
             }
         }
+        .sheet(isPresented: $showAddRivalSheet) {
+            addRivalSheet
+        }
+        .sheet(item: $selectedRivalSquad) { rival in
+            rivalDetailSheet(rival)
+        }
         .onAppear {
+            loadRivalManagersFromStorage()
             if managerEntryID.isEmpty {
                 updateClipboardStatusMessage()
                 if isSelected, hasInitiatedClipboardCapture {
@@ -79,6 +94,11 @@ struct FantasyView: View {
             }
         }
         .onChange(of: preferences.apiBaseURL) { _, _ in
+            guard !managerEntryID.isEmpty else { return }
+            triggerFantasyRefresh(force: true)
+        }
+        .onChange(of: rivalManagersJSON) { _, _ in
+            loadRivalManagersFromStorage()
             guard !managerEntryID.isEmpty else { return }
             triggerFantasyRefresh(force: true)
         }
@@ -126,6 +146,7 @@ struct FantasyView: View {
                     scoreSummaryCard(data)
                     pitchSection(data)
                     benchSection(data)
+                    rivalsSection
                 } else if fantasyViewModel.isLoading {
                     VStack(spacing: 10) {
                         ProgressView()
@@ -155,7 +176,8 @@ struct FantasyView: View {
         .refreshable {
             await fantasyViewModel.refresh(
                 managerEntryID: managerEntryID,
-                apiBaseURL: preferences.apiBaseURL
+                apiBaseURL: preferences.apiBaseURL,
+                rivalManagers: rivalManagers
             )
         }
     }
@@ -286,7 +308,8 @@ struct FantasyView: View {
     }
 
     private func scoreSummaryCard(_ data: FantasySquadDisplayData) -> some View {
-        let currentScore = data.hasActiveFixtures ? data.computedAppliedPointsTotal : data.totalPoints
+        let shouldUseComputedScore = data.hasActiveFixtures || data.hasFixturesPlayedToday
+        let currentScore = shouldUseComputedScore ? data.computedAppliedPointsTotal : data.totalPoints
 
         return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -340,6 +363,171 @@ struct FantasyView: View {
                 summaryPill(title: "Bench", value: formatNumber(data.pointsOnBench))
                 summaryPill(title: "TCost", value: formatNumber(data.transfersCost))
             }
+        }
+    }
+
+    private var rivalsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Rivals")
+                    .font(.headline)
+                Spacer(minLength: 0)
+                Button {
+                    prepareRivalEntrySheet()
+                } label: {
+                    Label("Add", systemImage: "plus.circle.fill")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if fantasyViewModel.rivalSquads.isEmpty {
+                Text("Add rival manager IDs to compare live scores.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(fantasyViewModel.rivalSquads) { rival in
+                            Button {
+                                selectedRivalSquad = rival
+                            } label: {
+                                rivalLozenge(rival)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    removeRival(entryID: rival.entryID)
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private func rivalLozenge(_ rival: FantasyRivalSquad) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(rival.teamName)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(Color.primary)
+            Text(rival.managerName)
+                .font(.caption)
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text("\(rival.currentScore)")
+                    .font(.title3.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.primary)
+                Text("PTS")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 164, alignment: .leading)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.tertiarySystemGroupedBackground))
+        )
+    }
+
+    private var addRivalSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Manager ID") {
+                    TextField("Enter manager ID", text: $rivalEntryInput)
+                        .keyboardType(.numberPad)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+
+                    Button {
+                        Task {
+                            await validateRivalEntryInput()
+                        }
+                    } label: {
+                        if isValidatingRival {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Validating...")
+                            }
+                        } else {
+                            Text("Validate manager ID")
+                        }
+                    }
+                    .disabled(isValidatingRival)
+                }
+
+                if let rivalValidationErrorMessage {
+                    Section {
+                        Text(rivalValidationErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                if let pendingRivalProfile {
+                    Section("Confirm manager") {
+                        Text("Team: \(pendingRivalProfile.name)")
+                        Text("Manager: \(pendingRivalProfile.playerFirstName) \(pendingRivalProfile.playerLastName)")
+                        Button("Add rival manager") {
+                            addPendingRivalProfile()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+            .navigationTitle("Add Rival")
+            .toolbarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") {
+                        showAddRivalSheet = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func rivalDetailSheet(_ rival: FantasyRivalSquad) -> some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(rival.managerName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text("Entry ID: \(rival.entryID)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    scoreSummaryCard(rival.squad)
+                    pitchSection(rival.squad)
+                    benchSection(rival.squad)
+                    summaryStatsSection(rival.squad)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle(rival.teamName)
+            .toolbarTitleDisplayMode(.inline)
         }
     }
 
@@ -483,9 +671,89 @@ struct FantasyView: View {
         Task {
             await fantasyViewModel.refresh(
                 managerEntryID: managerEntryID,
-                apiBaseURL: preferences.apiBaseURL
+                apiBaseURL: preferences.apiBaseURL,
+                rivalManagers: rivalManagers
             )
         }
+    }
+
+    private func prepareRivalEntrySheet() {
+        rivalEntryInput = ""
+        rivalValidationErrorMessage = nil
+        pendingRivalProfile = nil
+        isValidatingRival = false
+        showAddRivalSheet = true
+    }
+
+    private func validateRivalEntryInput() async {
+        rivalValidationErrorMessage = nil
+        pendingRivalProfile = nil
+
+        let trimmed = rivalEntryInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            rivalValidationErrorMessage = "Enter a manager ID to continue."
+            return
+        }
+        guard trimmed.allSatisfy(\.isNumber) else {
+            rivalValidationErrorMessage = "Manager ID must contain numbers only."
+            return
+        }
+        guard let entryID = Int(trimmed), entryID > 0 else {
+            rivalValidationErrorMessage = "Manager ID is invalid."
+            return
+        }
+        if entryID == Int(managerEntryID) {
+            rivalValidationErrorMessage = "That is your own manager ID. Add a different manager."
+            return
+        }
+
+        if rivalManagers.contains(where: { $0.entryID == entryID }) {
+            rivalValidationErrorMessage = "That manager is already in your rivals list."
+            return
+        }
+
+        isValidatingRival = true
+        defer { isValidatingRival = false }
+
+        do {
+            let profile = try await fantasyViewModel.validateRivalEntryID(trimmed)
+            pendingRivalProfile = profile
+            rivalEntryInput = String(profile.id)
+        } catch {
+            rivalValidationErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func addPendingRivalProfile() {
+        guard let pendingRivalProfile else { return }
+        let rival = FantasyRivalManager(
+            entryID: pendingRivalProfile.id,
+            teamName: pendingRivalProfile.name,
+            managerFirstName: pendingRivalProfile.playerFirstName,
+            managerLastName: pendingRivalProfile.playerLastName
+        )
+        guard !rivalManagers.contains(where: { $0.entryID == rival.entryID }) else {
+            return
+        }
+
+        rivalManagers.append(rival)
+        rivalManagers.sort { lhs, rhs in
+            let left = lhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let right = rhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if left.localizedCaseInsensitiveCompare(right) != .orderedSame {
+                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+            }
+            return lhs.entryID < rhs.entryID
+        }
+        persistRivalManagersToStorage()
+        showAddRivalSheet = false
+        triggerFantasyRefresh(force: true)
+    }
+
+    private func removeRival(entryID: Int) {
+        rivalManagers.removeAll { $0.entryID == entryID }
+        persistRivalManagersToStorage()
+        triggerFantasyRefresh(force: true)
     }
 
     private func instructionStep(number: Int, text: String) -> some View {
@@ -584,6 +852,24 @@ struct FantasyView: View {
         }
     }
 
+    private func loadRivalManagersFromStorage() {
+        guard let data = rivalManagersJSON.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([FantasyRivalManager].self, from: data) else {
+            rivalManagers = []
+            return
+        }
+        rivalManagers = decoded
+    }
+
+    private func persistRivalManagersToStorage() {
+        guard let data = try? JSONEncoder().encode(rivalManagers),
+              let encoded = String(data: data, encoding: .utf8) else {
+            rivalManagersJSON = "[]"
+            return
+        }
+        rivalManagersJSON = encoded
+    }
+
     private func formatNumber(_ value: Int?) -> String {
         guard let value else { return "-" }
         return Self.integerFormatter.string(from: NSNumber(value: value)) ?? String(value)
@@ -591,6 +877,7 @@ struct FantasyView: View {
 
     private enum StorageKeys {
         static let managerEntryID = "fantasy.managerEntryID"
+        static let rivalManagersJSON = "fantasy.rivalManagersJSON"
     }
 
     private static let integerFormatter: NumberFormatter = {
