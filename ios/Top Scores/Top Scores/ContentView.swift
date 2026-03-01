@@ -28,16 +28,21 @@ struct ContentView: View {
                         Label("Tables", systemImage: "tablecells")
                     }
                     .tag(2)
+                FantasyView(isSelected: selectedTab == 3)
+                    .tabItem {
+                        Label("Fantasy", systemImage: "trophy")
+                    }
+                    .tag(3)
                 PreferencesView()
                     .tabItem {
                         Label("Preferences", systemImage: "slider.horizontal.3")
                     }
-                    .tag(3)
+                    .tag(4)
                 AboutView()
                     .tabItem {
                         Label("About", systemImage: "info.circle")
                     }
-                    .tag(4)
+                    .tag(5)
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .background(Color(.systemBackground))
