@@ -72,11 +72,38 @@ struct MatchesView: View {
     @State private var activePredictions: DailyFixturePredictions?
     @State private var predictionTask: Task<Void, Never>?
     @State private var predictorAvailabilityTask: Task<Void, Never>?
+    @State private var searchDebounceTask: Task<Void, Never>?
+    @State private var searchFilterWorkItem: DispatchWorkItem?
     @State private var predictionErrorMessage: String?
     @State private var predictableDateKeys: Set<String> = []
+    @State private var isSearchVisible = false
+    @State private var searchText = ""
+    @State private var debouncedSearchText = ""
+    @State private var filteredMatchDays: [MatchDay] = []
+    @State private var indexedMatchDays: [IndexedMatchDay] = []
+
+    private static let minimumSearchCharacters = 3
+    private static let searchDebounceNanoseconds: UInt64 = 250_000_000
+    private static let searchFilterQueue = DispatchQueue(label: "TopScores.match-search", qos: .userInitiated)
 
     private var showAllMatches: Bool {
         preferences.showAllMatches
+    }
+
+    private var normalizedDebouncedQuery: String {
+        Self.normalizedSearchText(debouncedSearchText)
+    }
+
+    private var normalizedLiveQuery: String {
+        Self.normalizedSearchText(searchText)
+    }
+
+    private var isSearchFilteringActive: Bool {
+        normalizedDebouncedQuery.count >= Self.minimumSearchCharacters
+    }
+
+    private var displayedMatchDays: [MatchDay] {
+        isSearchFilteringActive ? filteredMatchDays : matchesStore.groupedMatches
     }
 
     private var predictionErrorPresented: Binding<Bool> {
@@ -111,7 +138,7 @@ struct MatchesView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if matchesStore.groupedMatches.isEmpty {
+                        } else if displayedMatchDays.isEmpty {
                             emptyState
                         } else {
                             matchesList
@@ -133,9 +160,11 @@ struct MatchesView: View {
         .onAppear {
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             matchesStore.configure(with: snapshot, mode: mode)
-            reportMissingTeamLogosIfNeeded(days: matchesStore.groupedMatches)
+            let days = matchesStore.groupedMatches
+            rebuildSearchIndex(from: days)
+            reportMissingTeamLogosIfNeeded(days: days)
             predictionDateKeys = FixturePredictionStore.storedDateKeys()
-            refreshPredictorAvailability(days: matchesStore.groupedMatches)
+            refreshPredictorAvailability(days: days)
         }
         .onChange(of: preferences.snapshot) { _, _ in
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
@@ -157,13 +186,19 @@ struct MatchesView: View {
             }
         }
         .onChange(of: matchesStore.groupedMatches) { _, days in
+            rebuildSearchIndex(from: days)
             reportMissingTeamLogosIfNeeded(days: days)
             refreshPredictorAvailability(days: days)
+        }
+        .onChange(of: searchText) { _, newValue in
+            scheduleDebouncedSearch(for: newValue)
         }
         .onDisappear {
             matchesStore.stopAutoRefresh()
             predictionTask?.cancel()
             predictorAvailabilityTask?.cancel()
+            searchDebounceTask?.cancel()
+            searchFilterWorkItem?.cancel()
         }
         .fullScreenCover(item: $activePredictionJob) { job in
             PredictionInterstitialView(displayDate: job.displayDate)
@@ -183,7 +218,7 @@ struct MatchesView: View {
 
     private var matchesList: some View {
         List {
-            ForEach(matchesStore.groupedMatches) { day in
+            ForEach(displayedMatchDays) { day in
                 Section {
                     ForEach(day.leagues) { league in
                         Text(league.league)
@@ -325,9 +360,9 @@ struct MatchesView: View {
             Image(systemName: "tv")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text(mode.emptyStateTitle)
+            Text(isSearchFilteringActive ? "No matches found" : mode.emptyStateTitle)
                 .font(.title3)
-            Text(mode.emptyStateSubtitle)
+            Text(isSearchFilteringActive ? "Try a different search term." : mode.emptyStateSubtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -344,14 +379,32 @@ struct MatchesView: View {
                     .fontWeight(.bold)
                 Spacer()
                 Button {
-                    preferences.showAllMatches.toggle()
+                    if isSearchVisible {
+                        hideSearchAndClear()
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isSearchVisible = true
+                        }
+                    }
                 } label: {
-                    Image(systemName: showAllMatches ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    Image(systemName: isSearchVisible ? "magnifyingglass.circle.fill" : "magnifyingglass")
                         .font(.title3)
                         .padding(10)
                         .background(Circle().fill(.ultraThinMaterial))
                 }
-                .accessibilityLabel(showAllMatches ? "Show preferred matches only" : "Show all matches")
+                .accessibilityLabel(isSearchVisible ? "Hide search and clear text" : "Show match search")
+            }
+
+            if isSearchVisible {
+                MatchSearchBar(text: $searchText, placeholder: "Search teams, leagues or channels")
+                    .frame(height: 44)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+
+                if !normalizedLiveQuery.isEmpty, normalizedLiveQuery.count < Self.minimumSearchCharacters {
+                    Text("Type at least \(Self.minimumSearchCharacters) characters to search.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if matchesStore.errorMessage != nil || matchesStore.isLoading || matchesStore.lastUpdated != nil {
@@ -383,6 +436,138 @@ struct MatchesView: View {
         .padding(.top, 8)
         .padding(.bottom, 12)
         .background(.ultraThinMaterial)
+    }
+
+    private func hideSearchAndClear() {
+        searchDebounceTask?.cancel()
+        searchDebounceTask = nil
+        searchFilterWorkItem?.cancel()
+        searchFilterWorkItem = nil
+        searchText = ""
+        debouncedSearchText = ""
+        filteredMatchDays = []
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isSearchVisible = false
+        }
+    }
+
+    private func scheduleDebouncedSearch(for rawText: String) {
+        searchDebounceTask?.cancel()
+        searchFilterWorkItem?.cancel()
+        let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            debouncedSearchText = ""
+            filteredMatchDays = []
+            return
+        }
+
+        searchDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: Self.searchDebounceNanoseconds)
+            guard !Task.isCancelled else { return }
+            debouncedSearchText = trimmed
+            applySearchFilter()
+        }
+    }
+
+    private func rebuildSearchIndex(from days: [MatchDay]) {
+        indexedMatchDays = days.map { day in
+            let indexedLeagues = day.leagues.map { league in
+                let indexedMatches = league.matches.map { match in
+                    IndexedMatch(
+                        match: match,
+                        searchText: Self.normalizedSearchText(
+                            [
+                                match.homeTeam,
+                                match.awayTeam,
+                                match.displayLeague,
+                                match.time,
+                                match.tvChannels.joined(separator: " ")
+                            ].joined(separator: " ")
+                        )
+                    )
+                }
+                return IndexedMatchLeague(id: league.id, league: league.league, matches: indexedMatches)
+            }
+            return IndexedMatchDay(
+                id: day.id,
+                dateKey: day.dateKey,
+                displayDate: day.displayDate,
+                isToday: day.isToday,
+                isTomorrow: day.isTomorrow,
+                leagues: indexedLeagues
+            )
+        }
+
+        applySearchFilter()
+    }
+
+    private func applySearchFilter() {
+        let query = normalizedDebouncedQuery
+        guard query.count >= Self.minimumSearchCharacters else {
+            searchFilterWorkItem?.cancel()
+            searchFilterWorkItem = nil
+            filteredMatchDays = []
+            return
+        }
+
+        searchFilterWorkItem?.cancel()
+        let scheduledQuery = query
+        let indexedDays = indexedMatchDays
+        let workItem = DispatchWorkItem {
+            let result = Self.filterDays(indexedDays, query: scheduledQuery)
+            DispatchQueue.main.async {
+                guard scheduledQuery == self.normalizedDebouncedQuery else { return }
+                self.filteredMatchDays = result
+            }
+        }
+        searchFilterWorkItem = workItem
+        Self.searchFilterQueue.async(execute: workItem)
+    }
+
+    private static func normalizedSearchText(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    private static func filterDays(_ indexedDays: [IndexedMatchDay], query: String) -> [MatchDay] {
+        var result: [MatchDay] = []
+        result.reserveCapacity(indexedDays.count)
+
+        for day in indexedDays {
+            var dayLeagues: [MatchLeague] = []
+            dayLeagues.reserveCapacity(day.leagues.count)
+
+            for league in day.leagues {
+                var leagueMatches: [Match] = []
+                leagueMatches.reserveCapacity(league.matches.count)
+
+                for indexedMatch in league.matches where indexedMatch.searchText.contains(query) {
+                    leagueMatches.append(indexedMatch.match)
+                }
+
+                if !leagueMatches.isEmpty {
+                    dayLeagues.append(MatchLeague(id: league.id, league: league.league, matches: leagueMatches))
+                }
+            }
+
+            if !dayLeagues.isEmpty {
+                result.append(
+                    MatchDay(
+                        id: day.id,
+                        dateKey: day.dateKey,
+                        displayDate: day.displayDate,
+                        isToday: day.isToday,
+                        isTomorrow: day.isTomorrow,
+                        leagues: dayLeagues
+                    )
+                )
+            }
+        }
+
+        return result
     }
 
     private func handlePredictorTap(for day: MatchDay, forceRegenerate: Bool = false) {
@@ -527,6 +712,68 @@ struct MatchesView: View {
             } catch {
                 NSLog("Missing logo audit post failed error=%@", String(describing: error))
             }
+        }
+    }
+}
+
+private struct IndexedMatchDay {
+    let id: String
+    let dateKey: String
+    let displayDate: String
+    let isToday: Bool
+    let isTomorrow: Bool
+    let leagues: [IndexedMatchLeague]
+}
+
+private struct IndexedMatchLeague {
+    let id: String
+    let league: String
+    let matches: [IndexedMatch]
+}
+
+private struct IndexedMatch {
+    let match: Match
+    let searchText: String
+}
+
+private struct MatchSearchBar: UIViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeUIView(context: Context) -> UISearchBar {
+        let searchBar = UISearchBar(frame: .zero)
+        searchBar.searchBarStyle = .minimal
+        searchBar.placeholder = placeholder
+        searchBar.autocapitalizationType = .none
+        searchBar.autocorrectionType = .no
+        searchBar.returnKeyType = .search
+        searchBar.delegate = context.coordinator
+        return searchBar
+    }
+
+    func updateUIView(_ searchBar: UISearchBar, context: Context) {
+        if searchBar.text != text {
+            searchBar.text = text
+        }
+    }
+
+    final class Coordinator: NSObject, UISearchBarDelegate {
+        private var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+            text.wrappedValue = searchText
+        }
+
+        func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+            searchBar.resignFirstResponder()
         }
     }
 }
@@ -1126,6 +1373,7 @@ private enum EloScorePredictor {
 private struct PredictionInterstitialView: View {
     let displayDate: String
     @State private var animate = false
+    @State private var statusMessage = PredictionInterstitialMessages.random()
 
     var body: some View {
         ZStack {
@@ -1187,17 +1435,12 @@ private struct PredictionInterstitialView: View {
                 }
 
                 VStack(spacing: 8) {
-                    Text("Supercomputer Simulation")
+                    Text(statusMessage)
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text(displayDate)
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.88))
-                    Text("Running Elo vectors, Poisson score models, and chaos factors...")
-                        .font(.footnote)
                         .multilineTextAlignment(.center)
-                        .foregroundStyle(.white.opacity(0.82))
                         .padding(.horizontal, 28)
+                        .padding(.top, 10)
                 }
 
                 ProgressView()
@@ -1207,6 +1450,7 @@ private struct PredictionInterstitialView: View {
         }
         .onAppear {
             animate = true
+            statusMessage = PredictionInterstitialMessages.random()
         }
     }
 }
@@ -1268,12 +1512,9 @@ private struct DayPredictionsView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "sparkles")
                             .font(.subheadline.weight(.semibold))
-                        Text("Predicted scorelines for \(prediction.displayDate)")
+                        Text("Predictions for \(prediction.displayDate)")
                             .font(.subheadline.weight(.semibold))
                     }
-                    Text(summaryText)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                     Text("Generated \(Self.exportDateFormatter.string(from: prediction.generatedAt))")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -1401,12 +1642,6 @@ private struct DayPredictionsView: View {
                 pendingShareAfterRender = false
             }
         }
-    }
-
-    private var summaryText: String {
-        let predictedCount = prediction.predictions.filter(\.isPredicted).count
-        let unknownSuffix = prediction.skippedUnknownCount > 0 ? ", \(prediction.skippedUnknownCount) unknown" : ""
-        return "\(predictedCount) predicted, \(prediction.skippedMissingEloCount) missing Elo, \(prediction.skippedKickedOffCount) already kicked off\(unknownSuffix)."
     }
 
     private var shareText: String {
