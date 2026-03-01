@@ -275,3 +275,9 @@ chatgpt_config.yaml
 .vscode/ai/
 .vscode/extensions/*ai*
 .vscode/settings/*ai*
+
+############################################
+# Temporary files
+############################################
+
+_temp
