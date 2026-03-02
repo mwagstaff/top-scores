@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import Combine
+import UniformTypeIdentifiers
 
 struct FantasyView: View {
     let isSelected: Bool
@@ -9,6 +10,7 @@ struct FantasyView: View {
     @AppStorage(StorageKeys.managerEntryID) private var managerEntryID = ""
     @AppStorage(StorageKeys.rivalManagersJSON) private var rivalManagersJSON = "[]"
     @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
     @StateObject private var fantasyViewModel = FantasyViewModel()
@@ -26,6 +28,12 @@ struct FantasyView: View {
     @State private var rivalValidationErrorMessage: String?
     @State private var isValidatingRival = false
     @State private var selectedRivalSquad: FantasyRivalSquad?
+    @State private var showReviewShareSheet = false
+    @State private var shareRemovedEntryIDs: Set<Int> = []
+    @State private var queuedShareItems: [Any] = []
+    @State private var activeSharePayload: FantasySharePayload?
+    @State private var isPreparingShareImage = false
+    @State private var isLaunchingShareFlow = false
 
     private let clipboardPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
@@ -43,8 +51,13 @@ struct FantasyView: View {
             .toolbarTitleDisplayMode(.inline)
         }
         .overlay {
-            if showSuccessInterstitial {
-                successOverlay
+            ZStack {
+                if showSuccessInterstitial {
+                    successOverlay
+                }
+                if isLaunchingShareFlow {
+                    shareLoadingOverlay
+                }
             }
         }
         .sheet(isPresented: $showAddRivalSheet) {
@@ -52,6 +65,28 @@ struct FantasyView: View {
         }
         .sheet(item: $selectedRivalSquad) { rival in
             rivalDetailSheet(rival)
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showReviewShareSheet, onDismiss: {
+            shareRemovedEntryIDs = []
+            isPreparingShareImage = false
+            if !queuedShareItems.isEmpty {
+                let items = queuedShareItems
+                queuedShareItems = []
+                DispatchQueue.main.async {
+                    presentShareSheet(with: items)
+                }
+            } else {
+                isLaunchingShareFlow = false
+            }
+        }) {
+            reviewAndShareSheet
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $activeSharePayload, onDismiss: {
+            activeSharePayload = nil
+        }) {
+            FantasyShareSheet(activityItems: $0.items)
         }
         .onAppear {
             loadRivalManagersFromStorage()
@@ -151,6 +186,9 @@ struct FantasyView: View {
                     pitchSection(data)
                     benchSection(data)
                     eventLegendSection(data)
+                    if data.isEstimatedScore {
+                        scoreCalculationSection(data)
+                    }
                     rivalsSection
                 } else if fantasyViewModel.isLoading {
                     VStack(spacing: 10) {
@@ -313,8 +351,8 @@ struct FantasyView: View {
     }
 
     private func scoreSummaryCard(_ data: FantasySquadDisplayData) -> some View {
-        let shouldUseComputedScore = data.hasActiveFixtures || data.hasFixturesPlayedToday
-        let currentScore = shouldUseComputedScore ? data.computedAppliedPointsTotal : data.totalPoints
+        let currentScore = data.resolvedCurrentScore
+        let displayedScore = data.isEstimatedScore ? "\(currentScore)*" : "\(currentScore)"
 
         return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -338,7 +376,7 @@ struct FantasyView: View {
                     )
 
                 VStack(spacing: 0) {
-                    Text("\(currentScore)")
+                    Text(displayedScore)
                         .font(.system(size: 30, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(Color(.label))
@@ -371,12 +409,82 @@ struct FantasyView: View {
         }
     }
 
+    private var leagueTableEntries: [FantasyLeagueTableEntry] {
+        guard let mySquad = fantasyViewModel.data else { return [] }
+
+        let entryID = Int(managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
+        let profile = fantasyViewModel.myProfile
+
+        let myTeamName = {
+            let trimmed = profile?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? "My Team" : trimmed
+        }()
+
+        let myManagerName = {
+            let first = profile?.playerFirstName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let last = profile?.playerLastName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let combined = [first, last]
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            return combined.isEmpty ? "You" : combined
+        }()
+
+        var rows: [FantasyLeagueTableEntry] = [
+            FantasyLeagueTableEntry(
+                entryID: entryID,
+                teamName: myTeamName,
+                managerName: myManagerName,
+                score: mySquad.resolvedCurrentScore,
+                squad: mySquad,
+                isUser: true
+            )
+        ]
+
+        rows.append(contentsOf: fantasyViewModel.rivalSquads.map { rival in
+            FantasyLeagueTableEntry(
+                entryID: rival.entryID,
+                teamName: rival.teamName,
+                managerName: rival.managerName,
+                score: rival.currentScore,
+                squad: rival.squad,
+                isUser: false
+            )
+        })
+
+        return rows.sorted { lhs, rhs in
+            if lhs.score != rhs.score {
+                return lhs.score > rhs.score
+            }
+            let lhsName = lhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rhsName = rhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if lhsName.localizedCaseInsensitiveCompare(rhsName) != .orderedSame {
+                return lhsName.localizedCaseInsensitiveCompare(rhsName) == .orderedAscending
+            }
+            return lhs.entryID < rhs.entryID
+        }
+    }
+
+    private var reviewShareEntries: [FantasyLeagueTableEntry] {
+        leagueTableEntries.filter { !shareRemovedEntryIDs.contains($0.entryID) }
+    }
+
     private var rivalsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let rankedEntries = leagueTableEntries
+
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Rivals")
                     .font(.headline)
                 Spacer(minLength: 0)
+                Button {
+                    prepareReviewShareSheet()
+                } label: {
+                    Text("Review and share")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                .disabled(rankedEntries.count < 2)
+
                 Button {
                     prepareRivalEntrySheet()
                 } label: {
@@ -385,34 +493,62 @@ struct FantasyView: View {
                 .buttonStyle(.borderless)
             }
 
-            if fantasyViewModel.rivalSquads.isEmpty {
+            if rankedEntries.count <= 1 {
                 Text("Add rival manager IDs to compare live scores.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(fantasyViewModel.rivalSquads) { rival in
-                            Button {
-                                selectedRivalSquad = rival
+            }
+
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Text("#")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 26, alignment: .trailing)
+                    Text("Team")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Pts")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 44, alignment: .trailing)
+                    Color.clear
+                        .frame(width: 16)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .foregroundStyle(.secondary)
+
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.22))
+                    .frame(height: 1)
+
+                ForEach(Array(rankedEntries.enumerated()), id: \.element.id) { index, entry in
+                    Button {
+                        openLeagueTableEntry(entry)
+                    } label: {
+                        rivalTableRow(rank: index + 1, entry: entry)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        if !entry.isUser {
+                            Button(role: .destructive) {
+                                removeRival(entryID: entry.entryID)
                             } label: {
-                                rivalLozenge(rival)
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    removeRival(entryID: rival.entryID)
-                                } label: {
-                                    Label("Remove", systemImage: "trash")
-                                }
+                                Label("Remove", systemImage: "trash")
                             }
                         }
                     }
-                    .padding(.vertical, 2)
+
+                    if index < rankedEntries.count - 1 {
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.22))
+                            .frame(height: 1)
+                    }
                 }
             }
+            .background(.thinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .padding(12)
         .background(
@@ -421,32 +557,156 @@ struct FantasyView: View {
         )
     }
 
-    private func rivalLozenge(_ rival: FantasyRivalSquad) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(rival.teamName)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .foregroundStyle(Color.primary)
-            Text(rival.managerName)
-                .font(.caption)
-                .lineLimit(1)
+    private func rivalTableRow(rank: Int, entry: FantasyLeagueTableEntry) -> some View {
+        HStack(spacing: 8) {
+            Text("\(rank)")
+                .font(.body.monospacedDigit())
+                .frame(width: 26, alignment: .trailing)
                 .foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                Text("\(rival.currentScore)")
-                    .font(.title3.weight(.bold))
-                    .monospacedDigit()
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(entry.teamName)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
                     .foregroundStyle(Color.primary)
-                Text("PTS")
-                    .font(.caption.weight(.semibold))
+                Text(entry.isUser ? "\(entry.managerName) (You)" : entry.managerName)
+                    .font(.caption)
+                    .lineLimit(1)
                     .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("\(entry.score)")
+                .font(.body.monospacedDigit().weight(.semibold))
+                .frame(width: 44, alignment: .trailing)
+                .foregroundStyle(Color.primary)
+
+            Text(">")
+                .font(.body.weight(.semibold))
+                .frame(width: 16, alignment: .center)
+                .foregroundStyle(.secondary)
         }
-        .frame(width: 164, alignment: .leading)
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.tertiarySystemGroupedBackground))
-        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+    }
+
+    private var reviewAndShareSheet: some View {
+        let rankedEntries = leagueTableEntries
+        let includedEntries = reviewShareEntries
+
+        return NavigationStack {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Choose the teams to include in your shared league table.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if includedEntries.count < 2 {
+                    Text("Keep at least 2 entries selected to share.")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                VStack(spacing: 0) {
+                    ForEach(Array(rankedEntries.enumerated()), id: \.element.id) { index, entry in
+                        reviewShareEntryRow(rank: index + 1, entry: entry)
+
+                        if index < rankedEntries.count - 1 {
+                            Rectangle()
+                                .fill(Color.secondary.opacity(0.2))
+                                .frame(height: 1)
+                        }
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                )
+
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .navigationTitle("Review and Share")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") {
+                        showReviewShareSheet = false
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        shareLeagueTable()
+                    } label: {
+                        if isPreparingShareImage {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                    }
+                    .disabled(isPreparingShareImage || includedEntries.count < 2)
+                    .accessibilityLabel("Share table")
+                }
+            }
+            .background(Color(.systemGroupedBackground))
+        }
+    }
+
+    private func reviewShareEntryRow(rank: Int, entry: FantasyLeagueTableEntry) -> some View {
+        let isIncluded = !shareRemovedEntryIDs.contains(entry.entryID)
+        let canRemove = !entry.isUser && isIncluded && reviewShareEntries.count > 2
+
+        return HStack(spacing: 8) {
+            Text("\(rank)")
+                .font(.body.monospacedDigit())
+                .frame(width: 26, alignment: .trailing)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(entry.teamName)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(Color.primary)
+                Text(entry.isUser ? "\(entry.managerName) (You)" : entry.managerName)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(isIncluded ? 1.0 : 0.5)
+
+            Text("\(entry.score)")
+                .font(.body.monospacedDigit().weight(.semibold))
+                .frame(width: 44, alignment: .trailing)
+                .foregroundStyle(isIncluded ? Color.primary : Color.secondary)
+
+            if entry.isUser {
+                Text("You")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, alignment: .center)
+            } else {
+                Button {
+                    toggleShareInclusion(for: entry)
+                } label: {
+                    Image(systemName: isIncluded ? "minus.circle.fill" : "plus.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(
+                            isIncluded
+                            ? (canRemove ? Color.red : Color.gray)
+                            : Color.blue
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(isIncluded && !canRemove)
+                .frame(width: 32, alignment: .center)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
     }
 
     private var addRivalSheet: some View {
@@ -511,6 +771,13 @@ struct FantasyView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.95))
+                        .frame(width: 38, height: 5)
+                        .shadow(color: .black.opacity(0.12), radius: 1, x: 0, y: 1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 2)
+
                     VStack(alignment: .leading, spacing: 2) {
                         Text(rival.managerName)
                             .font(.subheadline.weight(.semibold))
@@ -526,6 +793,9 @@ struct FantasyView: View {
                     pitchSection(rival.squad)
                     benchSection(rival.squad)
                     eventLegendSection(rival.squad)
+                    if rival.squad.isEstimatedScore {
+                        scoreCalculationSection(rival.squad)
+                    }
                     summaryStatsSection(rival.squad)
                 }
                 .padding(.horizontal, 14)
@@ -534,6 +804,17 @@ struct FantasyView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle(rival.teamName)
             .toolbarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.body.weight(.semibold))
+                    }
+                    .accessibilityLabel("Close")
+                }
+            }
         }
     }
 
@@ -651,6 +932,31 @@ struct FantasyView: View {
         )
     }
 
+    private func scoreCalculationSection(_ data: FantasySquadDisplayData) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("* Score calculation")
+                .font(.headline)
+
+            if data.scoreCalculationRulesApplied.isEmpty {
+                Text("Score is estimated based on player stats, and is subject to change")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(data.scoreCalculationRulesApplied, id: \.self) { rule in
+                    Text("• \(rule)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
     private func legendLine(emoji: String, title: String, players: [String]) -> String? {
         guard !players.isEmpty else { return nil }
         return "\(emoji) \(title) (\(players.joined(separator: ", ")))"
@@ -726,6 +1032,29 @@ struct FantasyView: View {
         }
         .transition(.opacity)
         .animation(.easeInOut(duration: 0.2), value: showSuccessInterstitial)
+    }
+
+    private var shareLoadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.2)
+                .ignoresSafeArea()
+
+            VStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.regular)
+                Text("Preparing share sheet...")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+        }
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.15), value: isLaunchingShareFlow)
     }
 
     private func triggerFantasyRefresh(force: Bool) {
@@ -822,6 +1151,78 @@ struct FantasyView: View {
         rivalManagers.removeAll { $0.entryID == entryID }
         persistRivalManagersToStorage()
         triggerFantasyRefresh(force: true)
+    }
+
+    private func openLeagueTableEntry(_ entry: FantasyLeagueTableEntry) {
+        guard let squad = entry.squad else { return }
+        selectedRivalSquad = FantasyRivalSquad(
+            entryID: entry.entryID,
+            teamName: entry.teamName,
+            managerName: entry.managerName,
+            squad: squad
+        )
+    }
+
+    private func prepareReviewShareSheet() {
+        shareRemovedEntryIDs = []
+        isPreparingShareImage = false
+        showReviewShareSheet = true
+    }
+
+    private func toggleShareInclusion(for entry: FantasyLeagueTableEntry) {
+        guard !entry.isUser else { return }
+
+        if shareRemovedEntryIDs.contains(entry.entryID) {
+            shareRemovedEntryIDs.remove(entry.entryID)
+            return
+        }
+
+        guard reviewShareEntries.count > 2 else { return }
+        shareRemovedEntryIDs.insert(entry.entryID)
+    }
+
+    private func shareLeagueTable() {
+        let includedEntries = reviewShareEntries
+        guard includedEntries.count >= 2 else { return }
+        guard let squad = fantasyViewModel.data else { return }
+        let hasEstimatedScores = includedEntries.contains { entry in
+            entry.squad?.isEstimatedScore == true
+        }
+
+        isPreparingShareImage = true
+        isLaunchingShareFlow = true
+
+        Task { @MainActor in
+            let image = FantasyLeagueShareImageRenderer.render(
+                gameweekTitle: squad.gameweekTitle,
+                rows: includedEntries,
+                showEstimatedFooter: hasEstimatedScores
+            )
+            isPreparingShareImage = false
+
+            if let image {
+                #if DEBUG
+                print("[FantasyShare] rendered image size=\(Int(image.size.width))x\(Int(image.size.height)) scale=\(image.scale)")
+                #endif
+                queuedShareItems = [FantasyImageShareItemSource(image: image)]
+                showReviewShareSheet = false
+            } else {
+                #if DEBUG
+                print("[FantasyShare] render returned nil")
+                #endif
+                isLaunchingShareFlow = false
+            }
+        }
+    }
+
+    private func presentShareSheet(with items: [Any]) {
+        guard activeSharePayload == nil else { return }
+        #if DEBUG
+        let typeDescriptions = items.map { String(describing: type(of: $0)) }.joined(separator: ",")
+        print("[FantasyShare] presenting share sheet items=\(items.count) types=[\(typeDescriptions)]")
+        #endif
+        activeSharePayload = FantasySharePayload(items: items)
+        isLaunchingShareFlow = false
     }
 
     private func instructionStep(number: Int, text: String) -> some View {
@@ -1255,6 +1656,255 @@ private struct FantasyPlayerCard: View {
                 .fill(Color.black.opacity(0.34))
         )
         .foregroundStyle(textColor)
+    }
+}
+
+private struct FantasyLeagueTableEntry: Identifiable, Hashable {
+    let entryID: Int
+    let teamName: String
+    let managerName: String
+    let score: Int
+    let squad: FantasySquadDisplayData?
+    let isUser: Bool
+
+    var id: Int {
+        entryID
+    }
+}
+
+private struct FantasySharePayload: Identifiable {
+    let id = UUID()
+    let items: [Any]
+}
+
+private struct FantasyShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        controller.excludedActivityTypes = [.assignToContact, .addToReadingList]
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+private final class FantasyImageShareItemSource: NSObject, UIActivityItemSource {
+    private let image: UIImage
+
+    init(image: UIImage) {
+        self.image = image
+        super.init()
+    }
+
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        image
+    }
+
+    func activityViewController(
+        _ activityViewController: UIActivityViewController,
+        itemForActivityType activityType: UIActivity.ActivityType?
+    ) -> Any? {
+        image
+    }
+
+    func activityViewController(
+        _ activityViewController: UIActivityViewController,
+        dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?
+    ) -> String {
+        UTType.png.identifier
+    }
+}
+
+private enum FantasyLeagueShareImageRenderer {
+    private static let viewportWidth: CGFloat = 390
+
+    @MainActor
+    static func render(
+        gameweekTitle: String,
+        rows: [FantasyLeagueTableEntry],
+        showEstimatedFooter: Bool
+    ) -> UIImage? {
+        guard !rows.isEmpty else { return nil }
+
+        let snapshot = FantasyLeagueShareSnapshotView(
+            gameweekTitle: gameweekTitle,
+            generatedAtText: generatedAtLabel(),
+            rows: rows,
+            showEstimatedFooter: showEstimatedFooter
+        )
+        .environment(\.colorScheme, .dark)
+        .frame(width: viewportWidth, alignment: .topLeading)
+        .background(Color.black)
+        .fixedSize(horizontal: false, vertical: true)
+
+        let renderer = ImageRenderer(content: snapshot)
+        renderer.proposedSize = ProposedViewSize(width: viewportWidth, height: nil)
+        renderer.scale = exportScale(forRowCount: rows.count)
+        if #available(iOS 17.0, *) {
+            renderer.isOpaque = true
+        }
+        return renderer.uiImage
+    }
+
+    private static func generatedAtLabel() -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return "Generated \(formatter.string(from: Date()))"
+    }
+
+    private static func exportScale(forRowCount rowCount: Int) -> CGFloat {
+        switch rowCount {
+        case ...12:
+            return 2.0
+        case ...24:
+            return 1.6
+        default:
+            return 1.3
+        }
+    }
+}
+
+private struct FantasyLeagueShareSnapshotView: View {
+    let gameweekTitle: String
+    let generatedAtText: String
+    let rows: [FantasyLeagueTableEntry]
+    let showEstimatedFooter: Bool
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.04, green: 0.05, blue: 0.08),
+                    Color(red: 0.11, green: 0.12, blue: 0.17)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Top Scores: Fantasy Football")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.white)
+                        Text("League Table • \(gameweekTitle)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                        Text(generatedAtText)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.66))
+                    }
+
+                    Spacer(minLength: 8)
+                    FantasyShareAppIconView(size: 30)
+                }
+
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        Text("#")
+                            .frame(width: 26, alignment: .trailing)
+                        Text("Team")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Pts")
+                            .frame(width: 44, alignment: .trailing)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(height: 1)
+
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        HStack(spacing: 8) {
+                            Text("\(index + 1)")
+                                .font(.body.monospacedDigit())
+                                .frame(width: 26, alignment: .trailing)
+                                .foregroundStyle(.white.opacity(0.72))
+
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(row.teamName)
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                Text(row.isUser ? "\(row.managerName) (You)" : row.managerName)
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.72))
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Text("\(row.score)")
+                                .font(.body.monospacedDigit().weight(.bold))
+                                .foregroundStyle(row.isUser ? .cyan : .white)
+                                .frame(width: 44, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                        .background(
+                            row.isUser
+                                ? Color.cyan.opacity(0.12)
+                                : Color.clear
+                        )
+
+                        if index < rows.count - 1 {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.1))
+                                .frame(height: 1)
+                        }
+                    }
+                }
+                .background(Color.white.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                if showEstimatedFooter {
+                    Text("Scores are not final and subject to change")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.62))
+                }
+            }
+            .padding(16)
+        }
+    }
+}
+
+private struct FantasyShareAppIconView: View {
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let uiImage = appIconImage {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Image(systemName: "app.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(Color.accentColor)
+                    .padding(3)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
+    }
+
+    private var appIconImage: UIImage? {
+        guard
+            let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+            let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+            let iconFiles = primary["CFBundleIconFiles"] as? [String],
+            let iconName = iconFiles.last,
+            let image = UIImage(named: iconName)
+        else {
+            return nil
+        }
+        return image
     }
 }
 

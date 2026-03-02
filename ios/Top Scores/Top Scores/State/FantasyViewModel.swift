@@ -7,6 +7,7 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var data: FantasySquadDisplayData?
     @Published private(set) var rivalSquads: [FantasyRivalSquad] = []
+    @Published private(set) var myProfile: FantasyEntryProfile?
     @Published private(set) var lastUpdated: Date?
     @Published var errorMessage: String?
 
@@ -22,6 +23,7 @@ final class FantasyViewModel: ObservableObject {
         isRefreshing = false
         data = nil
         rivalSquads = []
+        myProfile = nil
         lastUpdated = nil
         errorMessage = nil
         cachedBootstrapLookup = nil
@@ -67,6 +69,7 @@ final class FantasyViewModel: ObservableObject {
                 serverClient: serverClient,
                 baseURLKey: bootstrapBaseURLKey
             )
+            async let myProfileTask = fetchMyProfile(entryID: entryID)
             async let picksTask = timed("my_picks") {
                 try await fantasyPublicClient.fetchPicks(
                     entryID: entryID,
@@ -80,12 +83,14 @@ final class FantasyViewModel: ObservableObject {
                 try await fantasyPublicClient.fetchEventFixtures(eventID: currentGameweek.id)
             }
 
-            let (bootstrapLookup, picksResponse, liveResponse, fixtures) = try await (
+            let (bootstrapLookup, myProfile, picksResponse, liveResponse, fixtures) = try await (
                 bootstrapLookupTask,
+                myProfileTask,
                 picksTask,
                 liveTask,
                 fixturesTask
             )
+            self.myProfile = myProfile
 
             data = FantasySquadBuilder.build(
                 gameweek: currentGameweek,
@@ -228,6 +233,16 @@ final class FantasyViewModel: ObservableObject {
         cachedBootstrapFetchedAt = now
         cachedBootstrapBaseURL = baseURLKey
         return lookup
+    }
+
+    private func fetchMyProfile(entryID: Int) async -> FantasyEntryProfile? {
+        do {
+            return try await timed("my_profile") {
+                try await fantasyPublicClient.fetchEntryProfile(entryID: entryID)
+            }
+        } catch {
+            return nil
+        }
     }
 
     private func timed<T>(_ label: String, operation: () async throws -> T) async throws -> T {
