@@ -66,6 +66,32 @@ struct FantasyPublicAPIClient {
         return try await fetch(request, operation: "fpl_entry_profile")
     }
 
+    func fetchElementSummary(elementID: Int) async throws -> FantasyElementSummaryResponse {
+        guard let url = URL(
+            string: "https://fantasy.premierleague.com/api/element-summary/\(elementID)/"
+        ) else {
+            throw FantasyPublicAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return try await fetch(request, operation: "fpl_element_summary")
+    }
+
+    func fetchBootstrapStatic() async throws -> FantasyBootstrapLookup {
+        guard let url = URL(
+            string: "https://fantasy.premierleague.com/api/bootstrap-static/"
+        ) else {
+            throw FantasyPublicAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return try await fetch(request, operation: "fpl_bootstrap_static")
+    }
+
     private func fetch<T: Decodable>(_ request: URLRequest, operation: String) async throws -> T {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {

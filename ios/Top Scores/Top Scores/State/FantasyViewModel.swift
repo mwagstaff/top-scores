@@ -16,6 +16,9 @@ final class FantasyViewModel: ObservableObject {
     private var cachedBootstrapFetchedAt: Date?
     private var cachedBootstrapBaseURL: String?
     private let bootstrapCacheTTL: TimeInterval = 12 * 60 * 60
+    private var cachedPlayerDetailsBootstrap: FantasyBootstrapLookup?
+    private var cachedPlayerDetailsBootstrapFetchedAt: Date?
+    private let playerDetailsBootstrapCacheTTL: TimeInterval = 6 * 60 * 60
     private var rivalRefreshToken = UUID()
 
     func reset() {
@@ -29,6 +32,8 @@ final class FantasyViewModel: ObservableObject {
         cachedBootstrapLookup = nil
         cachedBootstrapFetchedAt = nil
         cachedBootstrapBaseURL = nil
+        cachedPlayerDetailsBootstrap = nil
+        cachedPlayerDetailsBootstrapFetchedAt = nil
     }
 
     func refresh(managerEntryID: String, apiBaseURL: String, rivalManagers: [FantasyRivalManager]) async {
@@ -145,6 +150,56 @@ final class FantasyViewModel: ObservableObject {
             throw RivalValidationError.invalidNumber
         }
         return try await fantasyPublicClient.fetchEntryProfile(entryID: entryID)
+    }
+
+    func loadPlayerDetails(
+        elementID: Int,
+        gameweekID: Int,
+        apiBaseURL: String
+    ) async throws -> FantasyPlayerDetailsData {
+        async let bootstrapLookupTask = fetchPlayerDetailsBootstrapLookup(apiBaseURL: apiBaseURL)
+        async let elementSummaryTask = timed("element_summary element_id=\(elementID)") {
+            try await fantasyPublicClient.fetchElementSummary(elementID: elementID)
+        }
+
+        let (bootstrapLookup, elementSummary) = try await (bootstrapLookupTask, elementSummaryTask)
+        return try FantasyPlayerDetailsBuilder.build(
+            elementID: elementID,
+            gameweekID: gameweekID,
+            bootstrap: bootstrapLookup,
+            summary: elementSummary
+        )
+    }
+
+    private func fetchPlayerDetailsBootstrapLookup(apiBaseURL: String) async throws -> FantasyBootstrapLookup {
+        let now = Date()
+        if let cachedPlayerDetailsBootstrap,
+           let cachedPlayerDetailsBootstrapFetchedAt,
+           now.timeIntervalSince(cachedPlayerDetailsBootstrapFetchedAt) < playerDetailsBootstrapCacheTTL {
+            let age = Int(now.timeIntervalSince(cachedPlayerDetailsBootstrapFetchedAt))
+            logPerf("bootstrap_static_details_cache_hit age_s=\(age)")
+            return cachedPlayerDetailsBootstrap
+        }
+
+        do {
+            let fullBootstrap = try await timed("bootstrap_static_details_fetch") {
+                try await fantasyPublicClient.fetchBootstrapStatic()
+            }
+            cachedPlayerDetailsBootstrap = fullBootstrap
+            cachedPlayerDetailsBootstrapFetchedAt = now
+            return fullBootstrap
+        } catch {
+            logPerf("bootstrap_static_details_fetch_failed fallback=server_lookup error=\"\(error.localizedDescription)\"")
+            guard let baseURL = URL(string: apiBaseURL) else {
+                throw FantasyPublicAPIError.invalidURL
+            }
+            let serverClient = APIClient(baseURL: baseURL)
+            let bootstrapBaseURLKey = baseURL.absoluteString
+            return try await fetchBootstrapLookup(
+                serverClient: serverClient,
+                baseURLKey: bootstrapBaseURLKey
+            )
+        }
     }
 
     private func deduplicatedRivals(

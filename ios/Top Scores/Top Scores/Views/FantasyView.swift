@@ -28,6 +28,7 @@ struct FantasyView: View {
     @State private var rivalValidationErrorMessage: String?
     @State private var isValidatingRival = false
     @State private var selectedRivalSquad: FantasyRivalSquad?
+    @State private var selectedPlayerSelection: FantasySelectedPlayerSelection?
     @State private var showReviewShareSheet = false
     @State private var shareRemovedEntryIDs: Set<Int> = []
     @State private var queuedShareItems: [Any] = []
@@ -66,6 +67,14 @@ struct FantasyView: View {
         .sheet(item: $selectedRivalSquad) { rival in
             rivalDetailSheet(rival)
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $selectedPlayerSelection) { selection in
+            FantasyPlayerDetailsSheet(
+                selection: selection,
+                apiBaseURL: preferences.apiBaseURL,
+                fantasyViewModel: fantasyViewModel
+            )
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showReviewShareSheet, onDismiss: {
             shareRemovedEntryIDs = []
@@ -183,8 +192,8 @@ struct FantasyView: View {
 
                 if let data = fantasyViewModel.data {
                     scoreSummaryCard(data)
-                    pitchSection(data)
-                    benchSection(data)
+                    pitchSection(data, playerSelectionEnabled: true)
+                    benchSection(data, playerSelectionEnabled: true)
                     eventLegendSection(data)
                     if data.isEstimatedScore {
                         scoreCalculationSection(data)
@@ -790,8 +799,8 @@ struct FantasyView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     scoreSummaryCard(rival.squad)
-                    pitchSection(rival.squad)
-                    benchSection(rival.squad)
+                    pitchSection(rival.squad, playerSelectionEnabled: false)
+                    benchSection(rival.squad, playerSelectionEnabled: false)
                     eventLegendSection(rival.squad)
                     if rival.squad.isEstimatedScore {
                         scoreCalculationSection(rival.squad)
@@ -818,7 +827,7 @@ struct FantasyView: View {
         }
     }
 
-    private func pitchSection(_ data: FantasySquadDisplayData) -> some View {
+    private func pitchSection(_ data: FantasySquadDisplayData, playerSelectionEnabled: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Pitch")
                 .font(.headline)
@@ -827,10 +836,10 @@ struct FantasyView: View {
                 FantasyPitchBackground()
 
                 VStack(spacing: 8) {
-                    positionRow(data.goalkeepers)
-                    positionRow(data.defenders)
-                    positionRow(data.midfielders)
-                    positionRow(data.forwards)
+                    positionRow(data.goalkeepers, gameweekID: data.gameweekID, playerSelectionEnabled: playerSelectionEnabled)
+                    positionRow(data.defenders, gameweekID: data.gameweekID, playerSelectionEnabled: playerSelectionEnabled)
+                    positionRow(data.midfielders, gameweekID: data.gameweekID, playerSelectionEnabled: playerSelectionEnabled)
+                    positionRow(data.forwards, gameweekID: data.gameweekID, playerSelectionEnabled: playerSelectionEnabled)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 10)
@@ -840,7 +849,11 @@ struct FantasyView: View {
         }
     }
 
-    private func positionRow(_ players: [FantasyDisplayPlayer]) -> some View {
+    private func positionRow(
+        _ players: [FantasyDisplayPlayer],
+        gameweekID: Int,
+        playerSelectionEnabled: Bool
+    ) -> some View {
         GeometryReader { proxy in
             let count = max(players.count, 1)
             let spacing: CGFloat = 4
@@ -849,7 +862,12 @@ struct FantasyView: View {
 
             HStack(spacing: spacing) {
                 ForEach(players) { player in
-                    FantasyPlayerCard(player: player, width: cardWidth)
+                    selectablePlayerCard(
+                        player: player,
+                        width: cardWidth,
+                        gameweekID: gameweekID,
+                        playerSelectionEnabled: playerSelectionEnabled
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -857,7 +875,7 @@ struct FantasyView: View {
         .frame(height: 90)
     }
 
-    private func benchSection(_ data: FantasySquadDisplayData) -> some View {
+    private func benchSection(_ data: FantasySquadDisplayData, playerSelectionEnabled: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Bench")
                 .font(.headline)
@@ -870,7 +888,12 @@ struct FantasyView: View {
 
                 HStack(spacing: spacing) {
                     ForEach(data.bench) { player in
-                        FantasyPlayerCard(player: player, width: cardWidth)
+                        selectablePlayerCard(
+                            player: player,
+                            width: cardWidth,
+                            gameweekID: data.gameweekID,
+                            playerSelectionEnabled: playerSelectionEnabled
+                        )
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -881,6 +904,25 @@ struct FantasyView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color(.secondarySystemGroupedBackground))
             )
+        }
+    }
+
+    @ViewBuilder
+    private func selectablePlayerCard(
+        player: FantasyDisplayPlayer,
+        width: CGFloat,
+        gameweekID: Int,
+        playerSelectionEnabled: Bool
+    ) -> some View {
+        if playerSelectionEnabled {
+            Button {
+                openPlayerDetails(player: player, gameweekID: gameweekID)
+            } label: {
+                FantasyPlayerCard(player: player, width: width)
+            }
+            .buttonStyle(.plain)
+        } else {
+            FantasyPlayerCard(player: player, width: width)
         }
     }
 
@@ -1160,6 +1202,13 @@ struct FantasyView: View {
             teamName: entry.teamName,
             managerName: entry.managerName,
             squad: squad
+        )
+    }
+
+    private func openPlayerDetails(player: FantasyDisplayPlayer, gameweekID: Int) {
+        selectedPlayerSelection = FantasySelectedPlayerSelection(
+            player: player,
+            gameweekID: gameweekID
         )
     }
 
@@ -1669,6 +1718,15 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
 
     var id: Int {
         entryID
+    }
+}
+
+struct FantasySelectedPlayerSelection: Identifiable {
+    let player: FantasyDisplayPlayer
+    let gameweekID: Int
+
+    var id: String {
+        "\(player.elementID)-\(gameweekID)-\(player.pickPosition)"
     }
 }
 

@@ -40,6 +40,16 @@ struct FantasyBootstrapElement: Codable, Hashable {
     let photo: String?
     let status: String?
     let news: String?
+    let nowCost: Int?
+    let form: String?
+    let pointsPerGame: String?
+    let eventPoints: Int?
+    let totalPoints: Int?
+    let bonus: Int?
+    let ictIndex: String?
+    let selectedByPercent: String?
+    let chanceOfPlayingThisRound: Int?
+    let chanceOfPlayingNextRound: Int?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -51,6 +61,16 @@ struct FantasyBootstrapElement: Codable, Hashable {
         case photo
         case status
         case news
+        case nowCost = "now_cost"
+        case form
+        case pointsPerGame = "points_per_game"
+        case eventPoints = "event_points"
+        case totalPoints = "total_points"
+        case bonus
+        case ictIndex = "ict_index"
+        case selectedByPercent = "selected_by_percent"
+        case chanceOfPlayingThisRound = "chance_of_playing_this_round"
+        case chanceOfPlayingNextRound = "chance_of_playing_next_round"
     }
 }
 
@@ -126,6 +146,165 @@ struct FantasyEntryHistory: Codable, Hashable {
 
 struct FantasyEventLiveResponse: Codable, Hashable {
     let elements: [FantasyLiveElement]
+}
+
+struct FantasyElementSummaryResponse: Codable, Hashable {
+    let fixtures: [FantasyElementSummaryFixture]
+    let history: [FantasyElementSummaryHistory]
+
+    enum CodingKeys: String, CodingKey {
+        case fixtures
+        case history
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fixtures = (try? container.decode([FantasyElementSummaryFixture].self, forKey: .fixtures)) ?? []
+        history = (try? container.decode([FantasyElementSummaryHistory].self, forKey: .history)) ?? []
+    }
+}
+
+struct FantasyElementSummaryFixture: Codable, Hashable {
+    let event: Int?
+    let opponentTeam: Int?
+    let teamH: Int?
+    let teamA: Int?
+    let isHome: Bool?
+    let difficulty: Int?
+    let kickoffTime: String?
+    let finished: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case event
+        case opponentTeam = "opponent_team"
+        case teamH = "team_h"
+        case teamA = "team_a"
+        case isHome = "is_home"
+        case difficulty
+        case kickoffTime = "kickoff_time"
+        case finished
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        event = Self.decodeFlexibleInt(container: container, key: .event)
+        opponentTeam = Self.decodeFlexibleInt(container: container, key: .opponentTeam)
+        teamH = Self.decodeFlexibleInt(container: container, key: .teamH)
+        teamA = Self.decodeFlexibleInt(container: container, key: .teamA)
+        difficulty = Self.decodeFlexibleInt(container: container, key: .difficulty)
+        kickoffTime = try? container.decode(String.self, forKey: .kickoffTime)
+        finished = try? container.decode(Bool.self, forKey: .finished)
+
+        if let value = try? container.decode(Bool.self, forKey: .isHome) {
+            isHome = value
+        } else if let value = Self.decodeFlexibleInt(container: container, key: .isHome) {
+            isHome = value != 0
+        } else {
+            isHome = nil
+        }
+    }
+
+    private static func decodeFlexibleInt(
+        container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Int? {
+        if let value = try? container.decode(Int.self, forKey: key) {
+            return value
+        }
+        if let value = try? container.decode(String.self, forKey: key) {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let intValue = Int(trimmed) {
+                return intValue
+            }
+            if let doubleValue = Double(trimmed) {
+                return Int(doubleValue)
+            }
+            return nil
+        }
+        if let value = try? container.decode(Double.self, forKey: key) {
+            return Int(value)
+        }
+        return nil
+    }
+}
+
+struct FantasyElementSummaryHistory: Codable, Hashable {
+    let round: Int
+    let opponentTeam: Int
+    let wasHome: Bool
+    let totalPoints: Int
+    let starts: Int
+    let minutes: Int
+    let goalsScored: Int
+    let assists: Int
+    let expectedGoals: String?
+    let kickoffTime: String?
+
+    enum CodingKeys: String, CodingKey {
+        case round
+        case opponentTeam = "opponent_team"
+        case wasHome = "was_home"
+        case totalPoints = "total_points"
+        case starts
+        case minutes
+        case goalsScored = "goals_scored"
+        case assists
+        case expectedGoals = "expected_goals"
+        case kickoffTime = "kickoff_time"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        round = Self.decodeFlexibleInt(container: container, key: .round) ?? 0
+        opponentTeam = Self.decodeFlexibleInt(container: container, key: .opponentTeam) ?? 0
+        totalPoints = Self.decodeFlexibleInt(container: container, key: .totalPoints) ?? 0
+        starts = Self.decodeFlexibleInt(container: container, key: .starts) ?? 0
+        minutes = Self.decodeFlexibleInt(container: container, key: .minutes) ?? 0
+        goalsScored = Self.decodeFlexibleInt(container: container, key: .goalsScored) ?? 0
+        assists = Self.decodeFlexibleInt(container: container, key: .assists) ?? 0
+        kickoffTime = try? container.decode(String.self, forKey: .kickoffTime)
+
+        if let value = try? container.decode(Bool.self, forKey: .wasHome) {
+            wasHome = value
+        } else if let value = Self.decodeFlexibleInt(container: container, key: .wasHome) {
+            wasHome = value != 0
+        } else {
+            wasHome = false
+        }
+
+        if let value = try? container.decode(String.self, forKey: .expectedGoals) {
+            expectedGoals = value
+        } else if let value = try? container.decode(Double.self, forKey: .expectedGoals) {
+            expectedGoals = String(format: "%.2f", value)
+        } else if let value = try? container.decode(Int.self, forKey: .expectedGoals) {
+            expectedGoals = String(format: "%.2f", Double(value))
+        } else {
+            expectedGoals = nil
+        }
+    }
+
+    private static func decodeFlexibleInt(
+        container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Int? {
+        if let value = try? container.decode(Int.self, forKey: key) {
+            return value
+        }
+        if let value = try? container.decode(String.self, forKey: key) {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let intValue = Int(trimmed) {
+                return intValue
+            }
+            if let doubleValue = Double(trimmed) {
+                return Int(doubleValue)
+            }
+            return nil
+        }
+        if let value = try? container.decode(Double.self, forKey: key) {
+            return Int(value)
+        }
+        return nil
+    }
 }
 
 struct FantasyLiveElement: Codable, Hashable {
@@ -311,6 +490,319 @@ struct FantasySquadDisplayData: Hashable {
         isEstimatedScore
             ? estimatedCurrentScore
             : totalPoints
+    }
+}
+
+struct FantasyPlayerDetailsData: Hashable {
+    enum StatusSeverity: String, Hashable {
+        case warning
+        case info
+    }
+
+    struct StatusUpdate: Hashable, Identifiable {
+        let message: String
+        let severity: StatusSeverity
+
+        var id: String {
+            "\(severity.rawValue)-\(message)"
+        }
+    }
+
+    struct Metric: Hashable {
+        let title: String
+        let value: String
+    }
+
+    struct FormItem: Hashable, Identifiable {
+        let gameweek: Int
+        let opponentTeamID: Int?
+        let opponentTeamName: String
+        let wasHome: Bool?
+        let points: Int?
+        let isBlank: Bool
+
+        var id: String {
+            "\(gameweek)-\(opponentTeamID ?? -1)-\(wasHome ?? false)-\(points ?? -1)-\(isBlank)"
+        }
+    }
+
+    struct UpcomingFixture: Hashable, Identifiable {
+        let gameweek: Int
+        let opponentTeamID: Int?
+        let opponentTeamName: String
+        let isHome: Bool?
+        let difficulty: Int?
+        let isBlank: Bool
+
+        var id: String {
+            "\(gameweek)-\(opponentTeamID ?? -1)-\(isHome ?? false)-\(difficulty ?? -1)-\(isBlank)"
+        }
+    }
+
+    struct HistoryRow: Hashable, Identifiable {
+        let gameweek: Int
+        let opponentTeamID: Int
+        let opponentTeamName: String
+        let wasHome: Bool
+        let points: Int
+        let starts: Int
+        let minutes: Int
+        let goalsScored: Int
+        let assists: Int
+        let expectedGoals: String
+
+        var id: String {
+            "\(gameweek)-\(opponentTeamID)-\(wasHome)-\(points)-\(minutes)"
+        }
+    }
+
+    let elementID: Int
+    let playerName: String
+    let teamName: String
+    let teamID: Int
+    let position: String
+    let statusUpdates: [StatusUpdate]
+    let metrics: [Metric]
+    let formItems: [FormItem]
+    let upcomingFixtures: [UpcomingFixture]
+    let historyRows: [HistoryRow]
+}
+
+enum FantasyPlayerDetailsBuilder {
+    static func build(
+        elementID: Int,
+        gameweekID: Int,
+        bootstrap: FantasyBootstrapLookup,
+        summary: FantasyElementSummaryResponse
+    ) throws -> FantasyPlayerDetailsData {
+        guard let element = bootstrap.elements.first(where: { $0.id == elementID }) else {
+            throw FantasyPublicAPIError.decodeFailed(
+                operation: "fpl_element_summary",
+                underlying: NSError(domain: "Fantasy", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing bootstrap element for player \(elementID)."])
+            )
+        }
+
+        let teamsByID = Dictionary(uniqueKeysWithValues: bootstrap.teams.map { ($0.id, $0) })
+        let positionByID = Dictionary(uniqueKeysWithValues: bootstrap.elementTypes.map { ($0.id, $0.singularName) })
+        let team = teamsByID[element.team]
+        let teamName = team?.name ?? "Unknown Team"
+        let position = positionByID[element.elementType] ?? "Player"
+
+        let sortedHistory = summary.history.sorted { lhs, rhs in
+            if lhs.round != rhs.round {
+                return lhs.round > rhs.round
+            }
+            return (lhs.kickoffTime ?? "") > (rhs.kickoffTime ?? "")
+        }
+
+        let latestGameweekPoints = sortedHistory
+            .filter { $0.round == gameweekID }
+            .reduce(0) { $0 + $1.totalPoints }
+        let resolvedLatestPoints = latestGameweekPoints > 0 ? latestGameweekPoints : (element.eventPoints ?? 0)
+
+        var statusUpdates: [FantasyPlayerDetailsData.StatusUpdate] = []
+        var seenStatusMessages = Set<String>()
+
+        func appendStatus(
+            _ message: String,
+            severity: FantasyPlayerDetailsData.StatusSeverity
+        ) {
+            let normalized = message
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            guard !normalized.isEmpty else { return }
+            guard !seenStatusMessages.contains(normalized) else { return }
+            seenStatusMessages.insert(normalized)
+            statusUpdates.append(
+                FantasyPlayerDetailsData.StatusUpdate(
+                    message: message.trimmingCharacters(in: .whitespacesAndNewlines),
+                    severity: severity
+                )
+            )
+        }
+
+        if let chance = element.chanceOfPlayingNextRound, chance < 100 {
+            if chance == 0 {
+                appendStatus("Unavailable - 0% chance of playing", severity: .warning)
+            } else {
+                appendStatus("Knock - \(chance)% chance of playing", severity: .warning)
+            }
+        }
+        let news = (element.news ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !news.isEmpty {
+            appendStatus(news, severity: .warning)
+        }
+
+        let fixtureEventIDs = Set(summary.fixtures.compactMap(\.event))
+        let upcomingGameweekRange = (gameweekID + 1)...(gameweekID + 5)
+        if let firstBlankGameweek = upcomingGameweekRange.first(where: { !fixtureEventIDs.contains($0) }) {
+            appendStatus(
+                "This player currently has no Premier League fixture in Gameweek \(firstBlankGameweek).",
+                severity: .info
+            )
+        }
+
+        let upcomingCandidates: [FantasyElementSummaryFixture] = summary.fixtures
+            .filter { fixture in
+                guard let event = fixture.event else { return false }
+                if event <= gameweekID { return false }
+                if fixture.finished == true { return false }
+                return true
+            }
+            .sorted { lhs, rhs in
+                let leftEvent = lhs.event ?? Int.max
+                let rightEvent = rhs.event ?? Int.max
+                if leftEvent != rightEvent {
+                    return leftEvent < rightEvent
+                }
+                return (lhs.kickoffTime ?? "") < (rhs.kickoffTime ?? "")
+            }
+
+        let upcomingByGameweek: [Int: FantasyElementSummaryFixture] = Dictionary(
+            upcomingCandidates.compactMap { fixture in
+                guard let event = fixture.event else { return nil }
+                return (event, fixture)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let upcoming: [FantasyPlayerDetailsData.UpcomingFixture] = upcomingGameweekRange.map { gw in
+            guard
+                let fixture = upcomingByGameweek[gw],
+                let resolvedOpponentTeam = resolveOpponentTeamID(
+                    fixture: fixture,
+                    playerTeamID: element.team
+                )
+            else {
+                return FantasyPlayerDetailsData.UpcomingFixture(
+                    gameweek: gw,
+                    opponentTeamID: nil,
+                    opponentTeamName: "No game",
+                    isHome: nil,
+                    difficulty: nil,
+                    isBlank: true
+                )
+            }
+
+            return FantasyPlayerDetailsData.UpcomingFixture(
+                gameweek: gw,
+                opponentTeamID: resolvedOpponentTeam,
+                opponentTeamName: teamsByID[resolvedOpponentTeam]?.name ?? "Unknown",
+                isHome: fixture.isHome ?? true,
+                difficulty: fixture.difficulty ?? 3,
+                isBlank: false
+            )
+        }
+
+        let metrics: [FantasyPlayerDetailsData.Metric] = [
+            .init(title: "Price", value: formatPrice(element.nowCost)),
+            .init(title: "Form", value: formatDecimalString(element.form)),
+            .init(title: "Pts / Match", value: formatDecimalString(element.pointsPerGame)),
+            .init(title: "Latest GW Pts", value: "\(resolvedLatestPoints)"),
+            .init(title: "Total Pts", value: formatInt(element.totalPoints)),
+            .init(title: "Total Bonus", value: formatInt(element.bonus)),
+            .init(title: "ICT Index", value: formatDecimalString(element.ictIndex)),
+            .init(title: "TSB %", value: formatPercent(element.selectedByPercent))
+        ]
+
+        let sortedHistoryForLookup = sortedHistory.sorted { lhs, rhs in
+            if lhs.round != rhs.round {
+                return lhs.round > rhs.round
+            }
+            return (lhs.kickoffTime ?? "") > (rhs.kickoffTime ?? "")
+        }
+        let recentGameweeks = stride(from: gameweekID, through: max(1, gameweekID - 2), by: -1)
+        let formItems = recentGameweeks.map { gw in
+            guard let row = sortedHistoryForLookup.first(where: { $0.round == gw }) else {
+                return FantasyPlayerDetailsData.FormItem(
+                    gameweek: gw,
+                    opponentTeamID: nil,
+                    opponentTeamName: "No game",
+                    wasHome: nil,
+                    points: nil,
+                    isBlank: true
+                )
+            }
+
+            return FantasyPlayerDetailsData.FormItem(
+                gameweek: row.round,
+                opponentTeamID: row.opponentTeam,
+                opponentTeamName: teamsByID[row.opponentTeam]?.name ?? "Unknown",
+                wasHome: row.wasHome,
+                points: row.totalPoints,
+                isBlank: false
+            )
+        }
+
+        let historyRows = Array(sortedHistory.prefix(10)).map { row in
+            FantasyPlayerDetailsData.HistoryRow(
+                gameweek: row.round,
+                opponentTeamID: row.opponentTeam,
+                opponentTeamName: teamsByID[row.opponentTeam]?.name ?? "Unknown",
+                wasHome: row.wasHome,
+                points: row.totalPoints,
+                starts: row.starts,
+                minutes: row.minutes,
+                goalsScored: row.goalsScored,
+                assists: row.assists,
+                expectedGoals: formatDecimalString(row.expectedGoals)
+            )
+        }
+
+        let fullName = "\(element.firstName) \(element.secondName)".trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedPlayerName = fullName.isEmpty ? element.webName : fullName
+
+        return FantasyPlayerDetailsData(
+            elementID: elementID,
+            playerName: resolvedPlayerName,
+            teamName: teamName,
+            teamID: element.team,
+            position: position,
+            statusUpdates: statusUpdates,
+            metrics: metrics,
+            formItems: formItems,
+            upcomingFixtures: Array(upcoming),
+            historyRows: historyRows
+        )
+    }
+
+    private static func formatPrice(_ raw: Int?) -> String {
+        guard let raw else { return "-" }
+        return String(format: "£%.1fm", Double(raw) / 10.0)
+    }
+
+    private static func formatInt(_ value: Int?) -> String {
+        guard let value else { return "-" }
+        return "\(value)"
+    }
+
+    private static func formatDecimalString(_ value: String?) -> String {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "-" : trimmed
+    }
+
+    private static func formatPercent(_ value: String?) -> String {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "-" }
+        return "\(trimmed)%"
+    }
+
+    private static func resolveOpponentTeamID(
+        fixture: FantasyElementSummaryFixture,
+        playerTeamID: Int
+    ) -> Int? {
+        if let opponentTeam = fixture.opponentTeam {
+            return opponentTeam
+        }
+        if let isHome = fixture.isHome {
+            if isHome {
+                return fixture.teamA
+            }
+            return fixture.teamH
+        }
+        if let teamH = fixture.teamH, let teamA = fixture.teamA {
+            return teamH == playerTeamID ? teamA : (teamA == playerTeamID ? teamH : nil)
+        }
+        return nil
     }
 }
 
