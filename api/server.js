@@ -395,6 +395,9 @@ const parsedFplBootstrapMaxBytes = Number(
 const FPL_BOOTSTRAP_MAX_BYTES = Number.isFinite(parsedFplBootstrapMaxBytes)
   ? Math.max(10 * 1024 * 1024, Math.floor(parsedFplBootstrapMaxBytes))
   : 1900 * 1024 * 1024;
+const FPL_GAME_UPDATING_NEEDLE = "the game is being updated";
+const FPL_GAME_UPDATING_USER_MESSAGE =
+  "Fantasy Football data is temporarily unavailable while the official game is being updated. Please try again in a few minutes.";
 const RECENT_OUTPUT_PATH =
   process.env.RECENT_OUTPUT_PATH || path.join(__dirname, "recent_matches.json");
 const MISSING_TEAM_LOGOS_OUTPUT_PATH =
@@ -619,6 +622,9 @@ let fantasyBootstrapLastSuccessAt = null;
 let fantasyBootstrapLastFailureAt = null;
 let fantasyBootstrapLastSuccessDurationSeconds = 0;
 let fantasyBootstrapLastFailureDurationSeconds = 0;
+let fantasyBootstrapGameUpdating = false;
+let fantasyBootstrapGameUpdatingMessage = null;
+let fantasyBootstrapGameUpdatingDetectedAt = null;
 
 const STAGE_PATTERNS = [
   /\s*[-:–]\s*Round\s+\w+$/i,
@@ -968,6 +974,58 @@ function decodeHttpResponseStream(res) {
   return res;
 }
 
+function normalizeFplMessage(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function isFplGameUpdatingMessage(value) {
+  const normalized = normalizeFplMessage(value).toLowerCase();
+  if (!normalized) return false;
+  return normalized.includes(FPL_GAME_UPDATING_NEEDLE);
+}
+
+function extractFplGameUpdatingMessage(payload) {
+  if (typeof payload === "string") {
+    const normalized = normalizeFplMessage(payload);
+    return isFplGameUpdatingMessage(normalized) ? normalized : null;
+  }
+
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  const keys = ["error", "message", "detail"];
+  for (const key of keys) {
+    if (typeof payload[key] !== "string") continue;
+    const normalized = normalizeFplMessage(payload[key]);
+    if (isFplGameUpdatingMessage(normalized)) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function extractFplGameUpdatingMessageFromError(error) {
+  if (!error) return null;
+  if (typeof error === "string") {
+    const normalized = normalizeFplMessage(error);
+    return isFplGameUpdatingMessage(normalized) ? normalized : null;
+  }
+
+  if (typeof error === "object") {
+    if (typeof error.upstreamMessage === "string") {
+      const upstreamMessage = normalizeFplMessage(error.upstreamMessage);
+      if (isFplGameUpdatingMessage(upstreamMessage)) return upstreamMessage;
+    }
+    if (typeof error.message === "string") {
+      const message = normalizeFplMessage(error.message);
+      if (isFplGameUpdatingMessage(message)) return message;
+    }
+  }
+
+  return null;
+}
+
 function fetchFantasyBootstrapStaticPayload(url, options = {}, redirectDepth = 0) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : FPL_BOOTSTRAP_TIMEOUT_MS;
   const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : FPL_BOOTSTRAP_MAX_BYTES;
@@ -1038,6 +1096,20 @@ function fetchFantasyBootstrapStaticPayload(url, options = {}, redirectDepth = 0
           try {
             const rawPayload = Buffer.concat(chunks, totalBytes).toString("utf8");
             const payload = JSON.parse(rawPayload);
+            const gameUpdatingMessage = extractFplGameUpdatingMessage(payload);
+            if (gameUpdatingMessage) {
+              const updatingError = new Error(
+                `FPL upstream update in progress: ${gameUpdatingMessage}`
+              );
+              updatingError.code = "FPL_GAME_UPDATING";
+              updatingError.upstreamMessage = gameUpdatingMessage;
+              reject(updatingError);
+              return;
+            }
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+              reject(new Error("FPL bootstrap parse failed: expected JSON object payload"));
+              return;
+            }
             resolve({
               payload,
               payloadBytes: totalBytes,
@@ -1298,6 +1370,9 @@ function buildPrometheusMetricsText() {
   const fantasyBootstrapUpdatedTimestampSeconds = isoTimestampToSeconds(
     fantasyBootstrapLastUpdated
   );
+  const fantasyBootstrapGameUpdatingTimestampSeconds = isoTimestampToSeconds(
+    fantasyBootstrapGameUpdatingDetectedAt
+  );
   const fantasyBootstrapCurrentEventId = (() => {
     const parsed = Number(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -1342,6 +1417,26 @@ function buildPrometheusMetricsText() {
   );
   lines.push("# TYPE fpl_bootstrap_updating gauge");
   pushPrometheusSample(lines, "fpl_bootstrap_updating", fantasyBootstrapUpdating ? 1 : 0);
+
+  lines.push(
+    "# HELP fpl_bootstrap_game_updating Whether FPL currently reports 'The game is being updated' for bootstrap-static (1=true, 0=false)."
+  );
+  lines.push("# TYPE fpl_bootstrap_game_updating gauge");
+  pushPrometheusSample(
+    lines,
+    "fpl_bootstrap_game_updating",
+    fantasyBootstrapGameUpdating ? 1 : 0
+  );
+
+  lines.push(
+    "# HELP fpl_bootstrap_game_updating_detected_timestamp_seconds Timestamp when the most recent FPL 'game updating' response was detected."
+  );
+  lines.push("# TYPE fpl_bootstrap_game_updating_detected_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "fpl_bootstrap_game_updating_detected_timestamp_seconds",
+    fantasyBootstrapGameUpdatingTimestampSeconds
+  );
 
   lines.push(
     "# HELP fpl_bootstrap_last_success_timestamp_seconds Last successful FPL bootstrap-static refresh timestamp."
@@ -7023,6 +7118,9 @@ async function updateFantasyBootstrapStatic(options = {}) {
     cachedFantasyBootstrap = payload;
     fantasyBootstrapPayloadBytes = payloadBytes;
     fantasyBootstrapLastUpdated = new Date().toISOString();
+    fantasyBootstrapGameUpdating = false;
+    fantasyBootstrapGameUpdatingMessage = null;
+    fantasyBootstrapGameUpdatingDetectedAt = null;
     refreshFantasyBootstrapDerivedState(payload);
     recordsFetched = fantasyBootstrapEventsCount;
     fantasyBootstrapLastSuccessAt = fantasyBootstrapLastUpdated;
@@ -7046,6 +7144,15 @@ async function updateFantasyBootstrapStatic(options = {}) {
       duration_ms: Date.now() - startedAtMs,
     });
   } catch (err) {
+    const gameUpdatingMessage = extractFplGameUpdatingMessageFromError(err);
+    if (gameUpdatingMessage) {
+      fantasyBootstrapGameUpdating = true;
+      fantasyBootstrapGameUpdatingMessage = gameUpdatingMessage;
+      fantasyBootstrapGameUpdatingDetectedAt = new Date().toISOString();
+      console.warn(
+        `[FPLBootstrap] Upstream reported game update in progress message="${gameUpdatingMessage}" trigger=${trigger}`
+      );
+    }
     fantasyBootstrapLastFailureAt = new Date().toISOString();
     fantasyBootstrapLastFailureDurationSeconds = Math.max(
       0,
@@ -8974,11 +9081,20 @@ app.get(`${API_PREFIX}/fantasy/gameweek/current`, (_req, res) => {
     res.set("X-Last-Updated", fantasyBootstrapLastUpdated);
   }
   res.set("X-Operational-Source", "memory_cache");
+  res.set("X-Fantasy-Upstream-Status", fantasyBootstrapGameUpdating ? "game-updating" : "ok");
 
   if (!cachedFantasyBootstrap) {
-    res.status(503).json({
-      error: "Fantasy bootstrap-static dataset not loaded yet.",
-    });
+    if (fantasyBootstrapGameUpdating) {
+      res.set("Retry-After", "120");
+      res.status(503).json({
+        error: FPL_GAME_UPDATING_USER_MESSAGE,
+        code: "fantasy_game_updating",
+        upstream_message: fantasyBootstrapGameUpdatingMessage,
+        detected_at: fantasyBootstrapGameUpdatingDetectedAt,
+      });
+      return;
+    }
+    res.status(503).json({ error: "Fantasy bootstrap-static dataset not loaded yet." });
     return;
   }
 
@@ -8998,11 +9114,20 @@ app.get(`${API_PREFIX}/fantasy/gameweek/next`, (_req, res) => {
     res.set("X-Last-Updated", fantasyBootstrapLastUpdated);
   }
   res.set("X-Operational-Source", "memory_cache");
+  res.set("X-Fantasy-Upstream-Status", fantasyBootstrapGameUpdating ? "game-updating" : "ok");
 
   if (!cachedFantasyBootstrap) {
-    res.status(503).json({
-      error: "Fantasy bootstrap-static dataset not loaded yet.",
-    });
+    if (fantasyBootstrapGameUpdating) {
+      res.set("Retry-After", "120");
+      res.status(503).json({
+        error: FPL_GAME_UPDATING_USER_MESSAGE,
+        code: "fantasy_game_updating",
+        upstream_message: fantasyBootstrapGameUpdatingMessage,
+        detected_at: fantasyBootstrapGameUpdatingDetectedAt,
+      });
+      return;
+    }
+    res.status(503).json({ error: "Fantasy bootstrap-static dataset not loaded yet." });
     return;
   }
 
@@ -9086,15 +9211,24 @@ function setFantasyBootstrapHeaders(res) {
   if (fantasyBootstrapLastUpdated) {
     res.set("X-Last-Updated", fantasyBootstrapLastUpdated);
   }
+  res.set("X-Fantasy-Upstream-Status", fantasyBootstrapGameUpdating ? "game-updating" : "ok");
   res.set("X-Operational-Source", "memory_cache");
 }
 
 app.get(`${API_PREFIX}/fantasy/bootstrap/lookup`, (_req, res) => {
   setFantasyBootstrapHeaders(res);
   if (!cachedFantasyBootstrap) {
-    res.status(503).json({
-      error: "Fantasy bootstrap-static dataset not loaded yet.",
-    });
+    if (fantasyBootstrapGameUpdating) {
+      res.set("Retry-After", "120");
+      res.status(503).json({
+        error: FPL_GAME_UPDATING_USER_MESSAGE,
+        code: "fantasy_game_updating",
+        upstream_message: fantasyBootstrapGameUpdatingMessage,
+        detected_at: fantasyBootstrapGameUpdatingDetectedAt,
+      });
+      return;
+    }
+    res.status(503).json({ error: "Fantasy bootstrap-static dataset not loaded yet." });
     return;
   }
   res.json(fantasyBootstrapLookupPayload());
@@ -9103,9 +9237,17 @@ app.get(`${API_PREFIX}/fantasy/bootstrap/lookup`, (_req, res) => {
 app.get(`${API_PREFIX}/fantasy/bootstrap/elements`, (_req, res) => {
   setFantasyBootstrapHeaders(res);
   if (!cachedFantasyBootstrap) {
-    res.status(503).json({
-      error: "Fantasy bootstrap-static dataset not loaded yet.",
-    });
+    if (fantasyBootstrapGameUpdating) {
+      res.set("Retry-After", "120");
+      res.status(503).json({
+        error: FPL_GAME_UPDATING_USER_MESSAGE,
+        code: "fantasy_game_updating",
+        upstream_message: fantasyBootstrapGameUpdatingMessage,
+        detected_at: fantasyBootstrapGameUpdatingDetectedAt,
+      });
+      return;
+    }
+    res.status(503).json({ error: "Fantasy bootstrap-static dataset not loaded yet." });
     return;
   }
   res.json(fantasyBootstrapLookupPayload().elements);
@@ -9114,9 +9256,17 @@ app.get(`${API_PREFIX}/fantasy/bootstrap/elements`, (_req, res) => {
 app.get(`${API_PREFIX}/fantasy/bootstrap/teams`, (_req, res) => {
   setFantasyBootstrapHeaders(res);
   if (!cachedFantasyBootstrap) {
-    res.status(503).json({
-      error: "Fantasy bootstrap-static dataset not loaded yet.",
-    });
+    if (fantasyBootstrapGameUpdating) {
+      res.set("Retry-After", "120");
+      res.status(503).json({
+        error: FPL_GAME_UPDATING_USER_MESSAGE,
+        code: "fantasy_game_updating",
+        upstream_message: fantasyBootstrapGameUpdatingMessage,
+        detected_at: fantasyBootstrapGameUpdatingDetectedAt,
+      });
+      return;
+    }
+    res.status(503).json({ error: "Fantasy bootstrap-static dataset not loaded yet." });
     return;
   }
   res.json(fantasyBootstrapLookupPayload().teams);
@@ -9125,9 +9275,17 @@ app.get(`${API_PREFIX}/fantasy/bootstrap/teams`, (_req, res) => {
 app.get(`${API_PREFIX}/fantasy/bootstrap/element-types`, (_req, res) => {
   setFantasyBootstrapHeaders(res);
   if (!cachedFantasyBootstrap) {
-    res.status(503).json({
-      error: "Fantasy bootstrap-static dataset not loaded yet.",
-    });
+    if (fantasyBootstrapGameUpdating) {
+      res.set("Retry-After", "120");
+      res.status(503).json({
+        error: FPL_GAME_UPDATING_USER_MESSAGE,
+        code: "fantasy_game_updating",
+        upstream_message: fantasyBootstrapGameUpdatingMessage,
+        detected_at: fantasyBootstrapGameUpdatingDetectedAt,
+      });
+      return;
+    }
+    res.status(503).json({ error: "Fantasy bootstrap-static dataset not loaded yet." });
     return;
   }
   res.json(fantasyBootstrapLookupPayload().element_types);
@@ -9464,6 +9622,9 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
         ? fantasyBootstrapNextEvent.id
         : null,
     fpl_bootstrap_updating: fantasyBootstrapUpdating,
+    fpl_bootstrap_game_updating: fantasyBootstrapGameUpdating,
+    fpl_bootstrap_game_updating_message: fantasyBootstrapGameUpdatingMessage,
+    fpl_bootstrap_game_updating_detected_at: fantasyBootstrapGameUpdatingDetectedAt,
     league_tables_count: leagueTablesDataset.items.length,
     league_tables_rows_count: leagueTableRowsCount(leagueTablesDataset.items),
     league_tables_last_updated: leagueTablesDataset.updated_at || leagueTablesLastUpdated,
@@ -11799,6 +11960,24 @@ app.get(`${API_PREFIX}/monitor/status`, (req, res) => {
     },
     ...status,
   });
+});
+
+// Trigger an immediate Live Activity evaluation cycle.
+app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    const result = await matchMonitor.runLiveActivityEvaluationNow();
+    res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error("[API] Error reconciling live activities:", error);
+    res.status(500).json({
+      error: "Failed to reconcile live activities",
+      message: error.message,
+    });
+  }
 });
 
 app.listen(PORT, () => {

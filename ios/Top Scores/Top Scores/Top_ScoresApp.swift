@@ -42,6 +42,7 @@ struct Top_ScoresApp: App {
                     hasInProgressMatches: matchesStore.hasInProgressMatches
                 )
             case .active:
+                LiveActivitySyncService.shared.reconcileOnForeground()
                 let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
                 Task {
                     async let refreshTask: Void = matchesStore.refresh(preferences: snapshot)

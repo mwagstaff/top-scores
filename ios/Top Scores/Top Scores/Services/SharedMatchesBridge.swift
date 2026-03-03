@@ -6,6 +6,9 @@ enum AppGroupConfig {
     static let sharedMatchesFileName = "shared-matches.json"
     static let matchesPayloadContextKey = "matches_payload"
     static let requestMatchesSyncMessageKey = "request_matches_sync"
+    static let fantasySharedEntryURLKey = "fantasy.sharedEntryURL"
+    static let fantasySharedEntryUpdatedAtKey = "fantasy.sharedEntryUpdatedAt"
+    static let fantasyManagerEntryIDKey = "fantasy.managerEntryID"
 
     static let selectedLeaguesKey = "preferences.selectedLeagues"
     static let selectedChannelsKey = "preferences.selectedChannels"

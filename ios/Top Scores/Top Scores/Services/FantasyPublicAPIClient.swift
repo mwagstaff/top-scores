@@ -1,6 +1,8 @@
 import Foundation
 
 struct FantasyPublicAPIClient {
+    private static let gameUpdatingNeedle = "the game is being updated"
+
     private static let noCacheSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.urlCache = nil
@@ -94,6 +96,13 @@ struct FantasyPublicAPIClient {
 
     private func fetch<T: Decodable>(_ request: URLRequest, operation: String) async throws -> T {
         let (data, response) = try await session.data(for: request)
+        if let gameUpdatingMessage = Self.extractGameUpdatingMessage(from: data) {
+            throw FantasyPublicAPIError.gameUpdating(
+                operation: operation,
+                message: gameUpdatingMessage
+            )
+        }
+
         guard let http = response as? HTTPURLResponse else {
             throw FantasyPublicAPIError.invalidHTTPResponse
         }
@@ -109,6 +118,53 @@ struct FantasyPublicAPIClient {
             throw FantasyPublicAPIError.decodeFailed(operation: operation, underlying: error)
         }
     }
+
+    private static func extractGameUpdatingMessage(from data: Data) -> String? {
+        guard !data.isEmpty else { return nil }
+
+        if let payload = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+            if let message = messageIfGameUpdating(from: payload) {
+                return message
+            }
+        }
+
+        guard let raw = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+
+        let unquoted = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        guard containsGameUpdatingText(unquoted) else { return nil }
+        return unquoted
+    }
+
+    private static func messageIfGameUpdating(from payload: Any) -> String? {
+        if let stringPayload = payload as? String {
+            let trimmed = stringPayload.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard containsGameUpdatingText(trimmed) else { return nil }
+            return trimmed
+        }
+
+        guard let objectPayload = payload as? [String: Any] else { return nil }
+        let candidateKeys = ["error", "message", "detail"]
+        for key in candidateKeys {
+            guard let value = objectPayload[key] as? String else { continue }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard containsGameUpdatingText(trimmed) else { continue }
+            return trimmed
+        }
+
+        return nil
+    }
+
+    private static func containsGameUpdatingText(_ value: String) -> Bool {
+        let normalized = value
+            .lowercased()
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.contains(gameUpdatingNeedle)
+    }
 }
 
 enum FantasyPublicAPIError: LocalizedError {
@@ -116,6 +172,7 @@ enum FantasyPublicAPIError: LocalizedError {
     case invalidHTTPResponse
     case badStatus(Int, operation: String, snippet: String)
     case decodeFailed(operation: String, underlying: Error)
+    case gameUpdating(operation: String, message: String)
 
     var errorDescription: String? {
         switch self {
@@ -130,6 +187,8 @@ enum FantasyPublicAPIError: LocalizedError {
             return "Fantasy Football API request failed (\(operation), HTTP \(statusCode)): \(snippet)"
         case let .decodeFailed(operation, underlying):
             return "Failed to decode Fantasy Football API payload (\(operation)): \(underlying.localizedDescription)"
+        case .gameUpdating:
+            return "Fantasy Football data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
         }
     }
 }

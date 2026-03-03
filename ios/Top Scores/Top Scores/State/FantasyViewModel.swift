@@ -3,6 +3,8 @@ import Combine
 
 @MainActor
 final class FantasyViewModel: ObservableObject {
+    private static let gameUpdatingUserMessage = "Fantasy Football data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
+
     @Published private(set) var isLoading = false
     @Published private(set) var isRefreshing = false
     @Published private(set) var data: FantasySquadDisplayData?
@@ -134,7 +136,7 @@ final class FantasyViewModel: ObservableObject {
         } catch {
             let totalDurationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
             logPerf("refresh_failed entry_id=\(entryID) duration_ms=\(Int(totalDurationMs)) error=\"\(error.localizedDescription)\"")
-            errorMessage = error.localizedDescription
+            errorMessage = userFriendlyErrorMessage(for: error)
         }
     }
 
@@ -231,12 +233,14 @@ final class FantasyViewModel: ObservableObject {
 
         for rival in rivals {
             do {
+                async let rivalProfileTask = fetchMyProfile(entryID: rival.entryID)
                 let rivalPicks = try await timed("rival_picks entry_id=\(rival.entryID)") {
                     try await fantasyPublicClient.fetchPicks(
                         entryID: rival.entryID,
                         eventID: gameweek.id
                     )
                 }
+                let rivalProfile = await rivalProfileTask
                 let rivalSquad = FantasySquadBuilder.build(
                     gameweek: gameweek,
                     picksResponse: rivalPicks,
@@ -249,7 +253,8 @@ final class FantasyViewModel: ObservableObject {
                         entryID: rival.entryID,
                         teamName: rival.teamName,
                         managerName: rival.managerDisplayName,
-                        squad: rivalSquad
+                        squad: rivalSquad,
+                        allGameweeksPoints: rivalProfile?.summaryOverallPoints ?? rival.overallPoints
                     )
                 )
             } catch {
@@ -298,6 +303,45 @@ final class FantasyViewModel: ObservableObject {
         } catch {
             return nil
         }
+    }
+
+    private func userFriendlyErrorMessage(for error: Error) -> String {
+        if let fantasyError = error as? FantasyPublicAPIError,
+           case .gameUpdating = fantasyError {
+            return Self.gameUpdatingUserMessage
+        }
+
+        if let apiError = error as? APIClientError,
+           case let .badStatus(_, _, bodySnippet) = apiError,
+           Self.containsGameUpdatingText(bodySnippet) {
+            return Self.gameUpdatingUserMessage
+        }
+
+        let message = error.localizedDescription
+        if Self.containsGameUpdatingText(message) {
+            return Self.gameUpdatingUserMessage
+        }
+        return message
+    }
+
+    private static func containsGameUpdatingText(_ value: String) -> Bool {
+        let normalized = value
+            .lowercased()
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if normalized.contains("the game is being updated") {
+            return true
+        }
+        if normalized.contains("game is being updated") {
+            return true
+        }
+        if normalized.contains("temporarily unavailable"),
+           normalized.contains("game"),
+           normalized.contains("updated") {
+            return true
+        }
+        return false
     }
 
     private func timed<T>(_ label: String, operation: () async throws -> T) async throws -> T {

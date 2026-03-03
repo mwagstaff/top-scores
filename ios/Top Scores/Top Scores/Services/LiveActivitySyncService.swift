@@ -37,6 +37,8 @@ final class LiveActivitySyncService {
 
     private let lock = NSLock()
     private var started = false
+    private var lastForegroundReconcileAt: Date?
+    private let foregroundReconcileMinInterval: TimeInterval = 15
     private var pushToStartTask: Task<Void, Never>?
     private var activityUpdatesTask: Task<Void, Never>?
     private var observedActivityIDs = Set<String>()
@@ -76,6 +78,25 @@ final class LiveActivitySyncService {
                 }
             }
             NSLog("[LiveActivitySync] Monitoring activity push token updates")
+        }
+
+        reconcileOnForeground()
+    }
+
+    func reconcileOnForeground() {
+        guard #available(iOS 16.1, *) else { return }
+        let now = Date()
+        lock.lock()
+        if let last = lastForegroundReconcileAt,
+           now.timeIntervalSince(last) < foregroundReconcileMinInterval {
+            lock.unlock()
+            return
+        }
+        lastForegroundReconcileAt = now
+        lock.unlock()
+
+        Task(priority: .background) {
+            await self.reconcileLiveActivityStateOnForeground()
         }
     }
 
@@ -131,6 +152,26 @@ final class LiveActivitySyncService {
         }
     }
 
+    @available(iOS 16.1, *)
+    private func reconcileLiveActivityStateOnForeground() async {
+        if #available(iOS 17.2, *),
+           let pushToStartToken = Activity<TopScoresLiveActivityAttributes>.pushToStartToken {
+            await uploadPushToStartToken(pushToStartToken)
+        }
+
+        let activeActivities = Activity<TopScoresLiveActivityAttributes>.activities
+        if activeActivities.isEmpty {
+            await uploadActivityEnded(activityID: "")
+        } else {
+            for activity in activeActivities {
+                if let tokenData = activity.pushToken {
+                    await uploadActivityPushToken(activityID: activity.id, tokenData: tokenData)
+                }
+            }
+        }
+        await requestLiveActivityReconcile()
+    }
+
     private func uploadPushToStartToken(_ tokenData: Data) async {
         guard let endpoint = endpointURL(path: "live-activity/push-to-start-token") else { return }
         let payload: [String: Any] = [
@@ -160,6 +201,15 @@ final class LiveActivitySyncService {
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
         ]
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "activity-ended")
+    }
+
+    private func requestLiveActivityReconcile() async {
+        guard let endpoint = endpointURL(path: "live-activity/reconcile") else { return }
+        let payload: [String: Any] = [
+            "deviceToken": DeviceIdentity.currentToken,
+            "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
+        ]
+        await sendJSONRequest(url: endpoint, payload: payload, logContext: "live-activity-reconcile")
     }
 
     private func endpointURL(path: String) -> URL? {
@@ -205,5 +255,6 @@ final class LiveActivitySyncService {
     static let shared = LiveActivitySyncService()
     private init() {}
     func start() {}
+    func reconcileOnForeground() {}
 }
 #endif

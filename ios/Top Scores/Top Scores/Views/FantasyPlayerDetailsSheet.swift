@@ -28,7 +28,6 @@ struct FantasyPlayerDetailsSheet: View {
                         VStack(alignment: .leading, spacing: 12) {
                             playerHeader(details)
                             availabilitySection(details)
-                                .padding(.horizontal, -14)
                             metricsSection(details)
                             fixturesSection(details)
                             historySection(details)

@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C3D4A0D1234567890ABCDEF1 /* top-scores-logo.png in Resources */ = {isa = PBXBuildFile; fileRef = C3D4A0D1234567890ABCDEF2 /* top-scores-logo.png */; };
+		55613BCE4BFFFD69F0CFBC64 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C50E718921438BE91AE856D /* ShareViewController.swift */; };
+		B9707E5236C03403E67799BC /* Top Scores Share Extension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 8C13B8A3E56DC06B5DF70FDB /* Top Scores Share Extension.appex */; };
 		E70D65572F3E413E00E38737 /* Top Scores Watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = E70D65372F3E413C00E38737 /* Top Scores Watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E77994E52F4F8AF90063BB9C /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E77994E42F4F8AF90063BB9C /* Media.xcassets */; };
 		E77994E62F4F8AF90063BB9C /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E77994E42F4F8AF90063BB9C /* Media.xcassets */; };
@@ -15,6 +18,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		D2870B4340756FA21655C5CE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E70D51CD2F3C957B00E38737 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 677C4AFCC93490BD6C6894D4;
+			remoteInfo = "Top Scores Share Extension";
+		};
 		E70D51E32F3C957D00E38737 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = E70D51CD2F3C957B00E38737 /* Project object */;
@@ -78,6 +88,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				E7F0A0012F40400100E38737 /* Top Scores Widgets.appex in Embed App Extensions */,
+				B9707E5236C03403E67799BC /* Top Scores Share Extension.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -85,6 +96,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		11932B20256D9587C52EA4E1 /* Top Scores Share Extension-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = "Top Scores Share Extension-Info.plist"; sourceTree = "<group>"; };
+		C3D4A0D1234567890ABCDEF2 /* top-scores-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "top-scores-logo.png"; sourceTree = "<group>"; };
+		8C13B8A3E56DC06B5DF70FDB /* Top Scores Share Extension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Top Scores Share Extension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		9C50E718921438BE91AE856D /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		A00C896AE1EA717292BD7AFD /* Top Scores Share Extension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = "Top Scores Share Extension.entitlements"; sourceTree = "<group>"; };
 		E70D51D52F3C957B00E38737 /* Top Scores.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Top Scores.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E70D51E22F3C957D00E38737 /* Top ScoresTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Top ScoresTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E70D51EC2F3C957D00E38737 /* Top ScoresUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Top ScoresUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -134,6 +150,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		6F4D5C48C2A1EEF84156BFE1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E70D51D22F3C957B00E38737 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -186,6 +209,17 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		1B4D08A42A0B89A61928D00F /* Top Scores Share Extension */ = {
+			isa = PBXGroup;
+			children = (
+				9C50E718921438BE91AE856D /* ShareViewController.swift */,
+				A00C896AE1EA717292BD7AFD /* Top Scores Share Extension.entitlements */,
+				C3D4A0D1234567890ABCDEF2 /* top-scores-logo.png */,
+			);
+			name = "Top Scores Share Extension";
+			path = "Top Scores Share Extension";
+			sourceTree = "<group>";
+		};
 		E70D51CC2F3C957B00E38737 = {
 			isa = PBXGroup;
 			children = (
@@ -198,6 +232,8 @@
 				E70D65502F3E413E00E38737 /* Top Scores Watch Watch AppUITests */,
 				E7F0A0052F40400100E38737 /* Top Scores Widgets */,
 				E70D51D62F3C957B00E38737 /* Products */,
+				1B4D08A42A0B89A61928D00F /* Top Scores Share Extension */,
+				11932B20256D9587C52EA4E1 /* Top Scores Share Extension-Info.plist */,
 			);
 			sourceTree = "<group>";
 		};
@@ -211,6 +247,7 @@
 				E70D65432F3E413E00E38737 /* Top Scores Watch Watch AppTests.xctest */,
 				E70D654D2F3E413E00E38737 /* Top Scores Watch Watch AppUITests.xctest */,
 				E7F0A0042F40400100E38737 /* Top Scores Widgets.appex */,
+				8C13B8A3E56DC06B5DF70FDB /* Top Scores Share Extension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -218,6 +255,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		677C4AFCC93490BD6C6894D4 /* Top Scores Share Extension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FD4F4DBCAAC9ECE7971E8843 /* Build configuration list for PBXNativeTarget "Top Scores Share Extension" */;
+			buildPhases = (
+				9702F4A706D2A37A6C67AAF8 /* Sources */,
+				6F4D5C48C2A1EEF84156BFE1 /* Frameworks */,
+				25A54CA7853BAA3AD6BE4171 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Top Scores Share Extension";
+			productName = "Top Scores Share Extension";
+			productReference = 8C13B8A3E56DC06B5DF70FDB /* Top Scores Share Extension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		E70D51D42F3C957B00E38737 /* Top Scores */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = E70D51F62F3C957D00E38737 /* Build configuration list for PBXNativeTarget "Top Scores" */;
@@ -233,13 +287,12 @@
 			dependencies = (
 				E7F0A00A2F40400100E38737 /* PBXTargetDependency */,
 				E70D65562F3E413E00E38737 /* PBXTargetDependency */,
+				40BBFDE66E52A1AA657FE620 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				E70D51D72F3C957B00E38737 /* Top Scores */,
 			);
 			name = "Top Scores";
-			packageProductDependencies = (
-			);
 			productName = "Top Scores";
 			productReference = E70D51D52F3C957B00E38737 /* Top Scores.app */;
 			productType = "com.apple.product-type.application";
@@ -261,8 +314,6 @@
 				E70D51E52F3C957D00E38737 /* Top ScoresTests */,
 			);
 			name = "Top ScoresTests";
-			packageProductDependencies = (
-			);
 			productName = "Top ScoresTests";
 			productReference = E70D51E22F3C957D00E38737 /* Top ScoresTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -284,8 +335,6 @@
 				E70D51EF2F3C957D00E38737 /* Top ScoresUITests */,
 			);
 			name = "Top ScoresUITests";
-			packageProductDependencies = (
-			);
 			productName = "Top ScoresUITests";
 			productReference = E70D51EC2F3C957D00E38737 /* Top ScoresUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -306,8 +355,6 @@
 				E70D65382F3E413C00E38737 /* Top Scores Watch Watch App */,
 			);
 			name = "Top Scores Watch Watch App";
-			packageProductDependencies = (
-			);
 			productName = "Top Scores Watch Watch App";
 			productReference = E70D65372F3E413C00E38737 /* Top Scores Watch Watch App.app */;
 			productType = "com.apple.product-type.application";
@@ -329,8 +376,6 @@
 				E70D65462F3E413E00E38737 /* Top Scores Watch Watch AppTests */,
 			);
 			name = "Top Scores Watch Watch AppTests";
-			packageProductDependencies = (
-			);
 			productName = "Top Scores Watch Watch AppTests";
 			productReference = E70D65432F3E413E00E38737 /* Top Scores Watch Watch AppTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -352,8 +397,6 @@
 				E70D65502F3E413E00E38737 /* Top Scores Watch Watch AppUITests */,
 			);
 			name = "Top Scores Watch Watch AppUITests";
-			packageProductDependencies = (
-			);
 			productName = "Top Scores Watch Watch AppUITests";
 			productReference = E70D654D2F3E413E00E38737 /* Top Scores Watch Watch AppUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -374,8 +417,6 @@
 				E7F0A0052F40400100E38737 /* Top Scores Widgets */,
 			);
 			name = "Top Scores Widgets";
-			packageProductDependencies = (
-			);
 			productName = "Top Scores Widgets";
 			productReference = E7F0A0042F40400100E38737 /* Top Scores Widgets.appex */;
 			productType = "com.apple.product-type.app-extension";
@@ -438,11 +479,20 @@
 				E70D65422F3E413E00E38737 /* Top Scores Watch Watch AppTests */,
 				E70D654C2F3E413E00E38737 /* Top Scores Watch Watch AppUITests */,
 				E7F0A0072F40400100E38737 /* Top Scores Widgets */,
+				677C4AFCC93490BD6C6894D4 /* Top Scores Share Extension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		25A54CA7853BAA3AD6BE4171 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C3D4A0D1234567890ABCDEF1 /* top-scores-logo.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E70D51D32F3C957B00E38737 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -498,6 +548,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		9702F4A706D2A37A6C67AAF8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				55613BCE4BFFFD69F0CFBC64 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E70D51D12F3C957B00E38737 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -550,6 +608,12 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		40BBFDE66E52A1AA657FE620 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "Top Scores Share Extension";
+			target = 677C4AFCC93490BD6C6894D4 /* Top Scores Share Extension */;
+			targetProxy = D2870B4340756FA21655C5CE /* PBXContainerItemProxy */;
+		};
 		E70D51E42F3C957D00E38737 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = E70D51D42F3C957B00E38737 /* Top Scores */;
@@ -583,6 +647,57 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		0FF9693A1070D2E725A2220D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "Top Scores Share Extension/Top Scores Share Extension.entitlements";
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Top Scores Share Extension-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = topscores.dev.skynolimit.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A3C1494CB7ABD8887BE819B5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "Top Scores Share Extension/Top Scores Share Extension.entitlements";
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SJ8X4DLAN9;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Top Scores Share Extension-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = topscores.dev.skynolimit.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		E70D51F42F3C957D00E38737 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1157,6 +1272,15 @@
 			buildConfigurations = (
 				E7F0A00B2F40400100E38737 /* Debug */,
 				E7F0A00C2F40400100E38737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FD4F4DBCAAC9ECE7971E8843 /* Build configuration list for PBXNativeTarget "Top Scores Share Extension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0FF9693A1070D2E725A2220D /* Release */,
+				A3C1494CB7ABD8887BE819B5 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

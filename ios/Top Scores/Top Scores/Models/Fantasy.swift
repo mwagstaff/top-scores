@@ -357,12 +357,14 @@ struct FantasyEntryProfile: Codable, Hashable {
     let name: String
     let playerFirstName: String
     let playerLastName: String
+    let summaryOverallPoints: Int?
 
     enum CodingKeys: String, CodingKey {
         case id
         case name
         case playerFirstName = "player_first_name"
         case playerLastName = "player_last_name"
+        case summaryOverallPoints = "summary_overall_points"
     }
 }
 
@@ -371,6 +373,7 @@ struct FantasyRivalManager: Codable, Hashable, Identifiable {
     let teamName: String
     let managerFirstName: String
     let managerLastName: String
+    let overallPoints: Int?
 
     var id: Int {
         entryID
@@ -390,6 +393,7 @@ struct FantasyRivalSquad: Identifiable, Hashable {
     let teamName: String
     let managerName: String
     let squad: FantasySquadDisplayData
+    let allGameweeksPoints: Int?
 
     var id: Int {
         entryID

@@ -10,16 +10,18 @@ struct FantasyView: View {
     @AppStorage(StorageKeys.managerEntryID) private var managerEntryID = ""
     @AppStorage(StorageKeys.rivalManagersJSON) private var rivalManagersJSON = "[]"
     @Environment(\.openURL) private var openURL
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
     @StateObject private var fantasyViewModel = FantasyViewModel()
 
-    @State private var showSafariHelp = false
-    @State private var showChromeHelp = false
-    @State private var hasInitiatedClipboardCapture = false
-    @State private var clipboardStatusMessage = ""
-    @State private var lastClipboardChangeCount = UIPasteboard.general.changeCount
+    @State private var managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
+    @State private var shareImportStatusMessage: String?
+    @State private var shareImportStatusIsError = false
+    @State private var sharedEntryPollingDeadline: Date?
+    @State private var lastProcessedSharedEntryUpdatedAt: TimeInterval = 0
+    @State private var lastProcessedSharedEntryURL = ""
+    @State private var nextSharedEntryRetryAt: Date = .distantPast
+    @State private var isProcessingSharedEntryImport = false
     @State private var showSuccessInterstitial = false
     @State private var rivalManagers: [FantasyRivalManager] = []
     @State private var showAddRivalSheet = false
@@ -35,9 +37,14 @@ struct FantasyView: View {
     @State private var activeSharePayload: FantasySharePayload?
     @State private var isPreparingShareImage = false
     @State private var isLaunchingShareFlow = false
+    @State private var showDeleteRivalConfirmation = false
+    @State private var rivalEntryIDPendingDeletion: Int?
+    @State private var rivalTeamNamePendingDeletion = ""
+    @State private var rivalsScoreMode: RivalsScoreMode = .currentGameweek
+    @State private var showUnlinkAccountConfirmation = false
 
-    private let clipboardPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
+    private let sharedEntryPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationStack {
@@ -67,6 +74,34 @@ struct FantasyView: View {
         .sheet(item: $selectedRivalSquad) { rival in
             rivalDetailSheet(rival)
                 .presentationDragIndicator(.visible)
+        }
+        .alert("Delete rival?", isPresented: $showDeleteRivalConfirmation) {
+            Button("Cancel", role: .cancel) {
+                rivalEntryIDPendingDeletion = nil
+                rivalTeamNamePendingDeletion = ""
+            }
+            Button("Delete", role: .destructive) {
+                guard let entryID = rivalEntryIDPendingDeletion else { return }
+                removeRival(entryID: entryID)
+                selectedRivalSquad = nil
+                rivalEntryIDPendingDeletion = nil
+                rivalTeamNamePendingDeletion = ""
+                setShareImportStatus("Rival removed from table.", isError: false)
+            }
+        } message: {
+            if rivalTeamNamePendingDeletion.isEmpty {
+                Text("This rival will be removed from your table.")
+            } else {
+                Text("Remove \(rivalTeamNamePendingDeletion) from your rivals table?")
+            }
+        }
+        .alert("Unlink Fantasy account?", isPresented: $showUnlinkAccountConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Unlink", role: .destructive) {
+                unlinkFantasyAccountData()
+            }
+        } message: {
+            Text("This will remove your linked manager account, rivals, and Fantasy Football data from this device.")
         }
         .sheet(item: $selectedPlayerSelection) { selection in
             FantasyPlayerDetailsSheet(
@@ -99,40 +134,36 @@ struct FantasyView: View {
         }
         .onAppear {
             loadRivalManagersFromStorage()
+            syncManagerEntryIDToSharedDefaults()
             if managerEntryID.isEmpty {
-                updateClipboardStatusMessage()
-                if isSelected, hasInitiatedClipboardCapture {
-                    checkClipboardForManagerID(forceRead: true)
-                }
+                managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
             } else {
                 triggerFantasyRefresh(force: fantasyViewModel.data == nil)
             }
+            armSharedEntryPolling()
+            consumeSharedFantasyEntryURLIfNeeded()
         }
         .onChange(of: isSelected) { _, selected in
             guard selected else { return }
-            if managerEntryID.isEmpty {
-                if hasInitiatedClipboardCapture {
-                    checkClipboardForManagerID(forceRead: true)
-                }
-            } else {
+            if !managerEntryID.isEmpty {
                 triggerFantasyRefresh(force: fantasyViewModel.data == nil)
             }
+            armSharedEntryPolling()
+            consumeSharedFantasyEntryURLIfNeeded()
         }
         .onChange(of: scenePhase) { _, newValue in
-            guard isSelected, newValue == .active else { return }
-            if managerEntryID.isEmpty {
-                guard hasInitiatedClipboardCapture else { return }
-                checkClipboardForManagerID(forceRead: true)
-            } else {
+            guard newValue == .active else { return }
+            if isSelected, !managerEntryID.isEmpty {
                 triggerFantasyRefresh(force: false)
             }
+            armSharedEntryPolling()
+            consumeSharedFantasyEntryURLIfNeeded()
         }
         .onChange(of: managerEntryID) { _, newValue in
+            syncManagerEntryIDToSharedDefaults()
             if newValue.isEmpty {
-                hasInitiatedClipboardCapture = false
-                lastClipboardChangeCount = UIPasteboard.general.changeCount
                 fantasyViewModel.reset()
-                updateClipboardStatusMessage()
+                managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
             } else {
                 triggerFantasyRefresh(force: true)
             }
@@ -146,13 +177,6 @@ struct FantasyView: View {
             guard !managerEntryID.isEmpty else { return }
             triggerFantasyRefresh(force: true)
         }
-        .onReceive(clipboardPollTimer) { _ in
-            guard isSelected,
-                  hasInitiatedClipboardCapture,
-                  scenePhase == .active,
-                  managerEntryID.isEmpty else { return }
-            checkClipboardForManagerID(forceRead: false)
-        }
         .onReceive(fantasyRefreshTimer) { _ in
             guard isSelected,
                   scenePhase == .active,
@@ -163,14 +187,22 @@ struct FantasyView: View {
             }
             triggerFantasyRefresh(force: false)
         }
+        .onReceive(sharedEntryPollTimer) { _ in
+            guard isSelected, scenePhase == .active else { return }
+            guard let deadline = sharedEntryPollingDeadline else { return }
+            if Date() > deadline {
+                sharedEntryPollingDeadline = nil
+                return
+            }
+            consumeSharedFantasyEntryURLIfNeeded()
+        }
     }
 
     private var setupFlowView: some View {
         Form {
             setupSection
-            safariHelpSection
-            chromeHelpSection
-            clipboardStatusSection
+            shareFromBrowserHelpSection
+            managerCaptureStatusSection
         }
     }
 
@@ -191,6 +223,12 @@ struct FantasyView: View {
                 }
 
                 if let data = fantasyViewModel.data {
+                    if let shareImportStatusMessage {
+                        shareImportStatusCard(
+                            message: shareImportStatusMessage,
+                            isError: shareImportStatusIsError
+                        )
+                    }
                     scoreSummaryCard(data)
                     pitchSection(data, playerSelectionEnabled: true)
                     benchSection(data, playerSelectionEnabled: true)
@@ -214,12 +252,11 @@ struct FantasyView: View {
                     errorCard(errorMessage)
                 }
 
-                managerMetadataCard
-                debugCard
-
                 if let data = fantasyViewModel.data {
                     summaryStatsSection(data)
                 }
+
+                unlinkAccountCard
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -236,125 +273,84 @@ struct FantasyView: View {
 
     private var setupSection: some View {
         Section("Connect your Fantasy account") {
-            instructionStep(number: 1, text: "Open the Fantasy Premier League website using the link below")
-            instructionStep(number: 2, text: "Sign in to your account, and tap the Points tab.")
-            instructionStep(number: 3, text: "Copy the website address, return to this app and tap \"Allow Paste\".")
+            instructionStep(number: 1, text: "Open Fantasy Premier League in Safari or Chrome.")
+            instructionStep(number: 2, text: "Sign in and open your Points page URL.")
+            instructionStep(number: 3, text: "Tap Share and choose Top Scores.")
+            instructionStep(number: 4, text: "If Top Scores is missing, open More/Edit Actions and enable Top Scores.")
+            instructionStep(number: 5, text: "Return to Top Scores to complete setup or view your updated Rivals table.")
 
             Button {
-                openFantasyLogin()
+                openFantasyWebsiteInBrowser()
             } label: {
                 Label("Open fantasy.premierleague.com", systemImage: "safari")
             }
         }
     }
 
-    private var safariHelpSection: some View {
-        Section {
-            DisclosureGroup("How to do this in Safari", isExpanded: $showSafariHelp) {
-                VStack(alignment: .leading, spacing: 12) {
-                    browserStepCard(
-                        step: 1,
-                        title: "Tap the 3 dots button",
-                        detail: "Use the bottom-right menu button in Safari.",
-                        symbol: "ellipsis.circle.fill"
-                    )
-
-                    browserStepCard(
-                        step: 2,
-                        title: "Tap Share",
-                        detail: "Select Share from the menu that opens.",
-                        symbol: "square.and.arrow.up.fill"
-                    )
-
-                    browserStepCard(
-                        step: 3,
-                        title: "Tap Copy",
-                        detail: "Copy the URL, then return to Top Scores.",
-                        symbol: "doc.on.doc.fill"
-                    )
-                }
-                .padding(.vertical, 6)
-            }
-        }
-    }
-
-    private var chromeHelpSection: some View {
-        Section {
-            DisclosureGroup("How to do this in Chrome", isExpanded: $showChromeHelp) {
-                VStack(alignment: .leading, spacing: 12) {
-                    browserStepCard(
-                        step: 1,
-                        title: "Tap the Share button",
-                        detail: "Tap the Share button in the top right-hand corner, at the end of the address bar.",
-                        symbol: "square.and.arrow.up.fill"
-                    )
-
-                    browserStepCard(
-                        step: 2,
-                        title: "Tap Copy",
-                        detail: "Copy the website address, then return to Top Scores.",
-                        symbol: "doc.on.doc.fill"
-                    )
-                }
-                .padding(.vertical, 6)
-            }
-        }
-    }
-
-    private var clipboardStatusSection: some View {
-        Section("Clipboard status") {
-            if !hasInitiatedClipboardCapture && managerEntryID.isEmpty {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(clipboardStatusMessage)
-                }
+    private var shareFromBrowserHelpSection: some View {
+        Section("Share Extension Flow") {
+            Text("First setup: share your own Points page to Top Scores.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            } else {
-                Text(clipboardStatusMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var managerMetadataCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Manager ID")
+            Text("After setup: any shared Fantasy entry URL is treated as a rival and validated automatically.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            Text(managerEntryID)
-                .font(.headline.monospacedDigit())
+            Text("Because all shared entry URLs have the same format, the first successful share is always used as your manager ID.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Text("If Google sign-in blocks in-app browsers, use Safari or Chrome, then Share -> Top Scores.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Text("Example: https://fantasy.premierleague.com/entry/6653695/event/28")
+                .font(.caption.monospaced())
                 .textSelection(.enabled)
-
-            if let lastUpdated = fantasyViewModel.lastUpdated {
-                Text("Updated \(Self.timeFormatter.string(from: lastUpdated))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+    }
+
+    private var managerCaptureStatusSection: some View {
+        Section("Connection status") {
+            Text(managerCaptureStatusMessage)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func shareImportStatusCard(message: String, isError: Bool) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(isError ? Color.orange : Color.green)
+                .padding(.top, 2)
+
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
     }
 
-    private var debugCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Debug")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Button("Delete stored manager ID", role: .destructive) {
-                managerEntryID = ""
+    private var unlinkAccountCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(role: .destructive) {
+                showUnlinkAccountConfirmation = true
+            } label: {
+                Label("Unlink account", systemImage: "person.crop.circle.badge.xmark")
+                    .font(.subheadline.weight(.semibold))
             }
+
+            Text("Removes your linked manager account and locally saved Fantasy data.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
     }
@@ -363,7 +359,7 @@ struct FantasyView: View {
         let currentScore = data.resolvedCurrentScore
         let displayedScore = data.isEstimatedScore ? "\(currentScore)*" : "\(currentScore)"
 
-        return HStack(spacing: 12) {
+        return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(data.gameweekTitle)
                     .font(.headline)
@@ -384,20 +380,15 @@ struct FantasyView: View {
                         )
                     )
 
-                VStack(spacing: 0) {
-                    Text(displayedScore)
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(Color(.label))
-                    Text("PTS")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Color(.label).opacity(0.86))
-                }
+                Text(displayedScore)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(Color(.label))
                 .padding(.horizontal, 12)
             }
-            .frame(width: 110, height: 72)
+            .frame(width: 94, height: 62)
         }
-        .padding(14)
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
@@ -443,26 +434,34 @@ struct FantasyView: View {
                 entryID: entryID,
                 teamName: myTeamName,
                 managerName: myManagerName,
-                score: mySquad.resolvedCurrentScore,
+                currentGameweekScore: mySquad.resolvedCurrentScore,
+                allGameweeksScore: profile?.summaryOverallPoints,
                 squad: mySquad,
                 isUser: true
             )
         ]
 
-        rows.append(contentsOf: fantasyViewModel.rivalSquads.map { rival in
-            FantasyLeagueTableEntry(
+        let rivalSquadsByEntryID = Dictionary(
+            uniqueKeysWithValues: fantasyViewModel.rivalSquads.map { ($0.entryID, $0) }
+        )
+        rows.append(contentsOf: rivalManagers.map { rival in
+            let rivalSquad = rivalSquadsByEntryID[rival.entryID]
+            return FantasyLeagueTableEntry(
                 entryID: rival.entryID,
                 teamName: rival.teamName,
-                managerName: rival.managerName,
-                score: rival.currentScore,
-                squad: rival.squad,
+                managerName: rival.managerDisplayName,
+                currentGameweekScore: rivalSquad?.currentScore,
+                allGameweeksScore: rivalSquad?.allGameweeksPoints ?? rival.overallPoints,
+                squad: rivalSquad?.squad,
                 isUser: false
             )
         })
 
         return rows.sorted { lhs, rhs in
-            if lhs.score != rhs.score {
-                return lhs.score > rhs.score
+            let lhsScore = lhs.scoreValue(for: rivalsScoreMode) ?? Int.min
+            let rhsScore = rhs.scoreValue(for: rivalsScoreMode) ?? Int.min
+            if lhsScore != rhsScore {
+                return lhsScore > rhsScore
             }
             let lhsName = lhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
             let rhsName = rhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -502,6 +501,18 @@ struct FantasyView: View {
                 .buttonStyle(.borderless)
             }
 
+            Text("Share a rival's Fantasy Points page to Top Scores from Safari/Chrome to add them automatically.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Picker("Score scope", selection: $rivalsScoreMode) {
+                ForEach(RivalsScoreMode.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
             if rankedEntries.count <= 1 {
                 Text("Add rival manager IDs to compare live scores.")
                     .font(.footnote)
@@ -518,7 +529,7 @@ struct FantasyView: View {
                     Text("Team")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Pts")
+                    Text(rivalsScoreMode == .currentGameweek ? "GW" : "Total")
                         .font(.subheadline.weight(.semibold))
                         .frame(width: 44, alignment: .trailing)
                     Color.clear
@@ -536,7 +547,7 @@ struct FantasyView: View {
                     Button {
                         openLeagueTableEntry(entry)
                     } label: {
-                        rivalTableRow(rank: index + 1, entry: entry)
+                        rivalTableRow(rank: index + 1, entry: entry, scoreMode: rivalsScoreMode)
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
@@ -566,7 +577,11 @@ struct FantasyView: View {
         )
     }
 
-    private func rivalTableRow(rank: Int, entry: FantasyLeagueTableEntry) -> some View {
+    private func rivalTableRow(
+        rank: Int,
+        entry: FantasyLeagueTableEntry,
+        scoreMode: RivalsScoreMode
+    ) -> some View {
         HStack(spacing: 8) {
             Text("\(rank)")
                 .font(.body.monospacedDigit())
@@ -585,7 +600,7 @@ struct FantasyView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("\(entry.score)")
+            Text(entry.scoreDisplay(for: scoreMode))
                 .font(.body.monospacedDigit().weight(.semibold))
                 .frame(width: 44, alignment: .trailing)
                 .foregroundStyle(Color.primary)
@@ -687,7 +702,7 @@ struct FantasyView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(isIncluded ? 1.0 : 0.5)
 
-            Text("\(entry.score)")
+            Text(entry.scoreDisplay(for: rivalsScoreMode))
                 .font(.body.monospacedDigit().weight(.semibold))
                 .frame(width: 44, alignment: .trailing)
                 .foregroundStyle(isIncluded ? Color.primary : Color.secondary)
@@ -721,6 +736,12 @@ struct FantasyView: View {
     private var addRivalSheet: some View {
         NavigationStack {
             Form {
+                Section("Tip") {
+                    Text("For the fastest flow, open a rival's Points page in Safari/Chrome and share it to Top Scores. It will auto-validate when you return to the app.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Manager ID") {
                     TextField("Enter manager ID", text: $rivalEntryInput)
                         .keyboardType(.numberPad)
@@ -780,13 +801,6 @@ struct FantasyView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.95))
-                        .frame(width: 38, height: 5)
-                        .shadow(color: .black.opacity(0.12), radius: 1, x: 0, y: 1)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 2)
-
                     VStack(alignment: .leading, spacing: 2) {
                         Text(rival.managerName)
                             .font(.subheadline.weight(.semibold))
@@ -814,9 +828,20 @@ struct FantasyView: View {
             .navigationTitle(rival.teamName)
             .toolbarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(role: .destructive) {
+                        rivalEntryIDPendingDeletion = rival.entryID
+                        rivalTeamNamePendingDeletion = rival.teamName
+                        showDeleteRivalConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.body.weight(.semibold))
+                    }
+                    .accessibilityLabel("Delete rival")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        dismiss()
+                        selectedRivalSquad = nil
                     } label: {
                         Image(systemName: "xmark")
                             .font(.body.weight(.semibold))
@@ -1169,7 +1194,8 @@ struct FantasyView: View {
             entryID: pendingRivalProfile.id,
             teamName: pendingRivalProfile.name,
             managerFirstName: pendingRivalProfile.playerFirstName,
-            managerLastName: pendingRivalProfile.playerLastName
+            managerLastName: pendingRivalProfile.playerLastName,
+            overallPoints: pendingRivalProfile.summaryOverallPoints
         )
         guard !rivalManagers.contains(where: { $0.entryID == rival.entryID }) else {
             return
@@ -1195,13 +1221,37 @@ struct FantasyView: View {
         triggerFantasyRefresh(force: true)
     }
 
+    private func unlinkFantasyAccountData() {
+        managerEntryID = ""
+        rivalManagers = []
+        rivalManagersJSON = "[]"
+        selectedRivalSquad = nil
+        selectedPlayerSelection = nil
+        pendingRivalProfile = nil
+        rivalEntryInput = ""
+        rivalValidationErrorMessage = nil
+        showAddRivalSheet = false
+        showReviewShareSheet = false
+        shareRemovedEntryIDs = []
+        shareImportStatusMessage = nil
+        shareImportStatusIsError = false
+        managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
+
+        guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
+        defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryURLKey)
+        defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
+        defaults.removeObject(forKey: AppGroupConfig.fantasyManagerEntryIDKey)
+        defaults.synchronize()
+    }
+
     private func openLeagueTableEntry(_ entry: FantasyLeagueTableEntry) {
         guard let squad = entry.squad else { return }
         selectedRivalSquad = FantasyRivalSquad(
             entryID: entry.entryID,
             teamName: entry.teamName,
             managerName: entry.managerName,
-            squad: squad
+            squad: squad,
+            allGameweeksPoints: entry.allGameweeksScore
         )
     }
 
@@ -1245,6 +1295,7 @@ struct FantasyView: View {
             let image = FantasyLeagueShareImageRenderer.render(
                 gameweekTitle: squad.gameweekTitle,
                 rows: includedEntries,
+                scoreMode: rivalsScoreMode,
                 showEstimatedFooter: hasEstimatedScores
             )
             isPreparingShareImage = false
@@ -1284,59 +1335,20 @@ struct FantasyView: View {
         .font(.subheadline)
     }
 
-    private func browserStepCard(step: Int, title: String, detail: String, symbol: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: symbol)
-                .font(.headline)
-                .foregroundStyle(.blue)
-                .frame(width: 22, height: 22)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Step \(step): \(title)")
-                    .font(.subheadline.weight(.semibold))
-                Text(detail)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-    }
-
-    private func openFantasyLogin() {
+    private func openFantasyWebsiteInBrowser() {
         guard let url = URL(string: "https://fantasy.premierleague.com/") else { return }
-        hasInitiatedClipboardCapture = true
+        armSharedEntryPolling()
         openURL(url)
-        clipboardStatusMessage = "After copying your Points URL, return here and tap \"Allow Paste\"."
     }
 
-    private func checkClipboardForManagerID(forceRead: Bool) {
-        guard managerEntryID.isEmpty else { return }
-
-        let pasteboard = UIPasteboard.general
-        let currentChangeCount = pasteboard.changeCount
-
-        if !forceRead, currentChangeCount == lastClipboardChangeCount {
+    private func applyCapturedManagerID(_ capturedID: String) {
+        guard capturedID.allSatisfy(\.isNumber), !capturedID.isEmpty else {
+            managerCaptureStatusMessage = "Shared URL did not include a valid manager ID. Share the Points page URL."
             return
         }
 
-        lastClipboardChangeCount = currentChangeCount
-
-        guard let clipboardText = clipboardText(from: pasteboard) else {
-            clipboardStatusMessage = "Clipboard is empty. Copy your Fantasy Points URL first."
-            return
-        }
-
-        guard let parsedID = FantasyManagerIDParser.parse(from: clipboardText) else {
-            clipboardStatusMessage = "No manager ID found yet. Make sure you copied the URL from the Points page."
-            return
-        }
-
-        managerEntryID = parsedID
-        clipboardStatusMessage = "Manager ID captured from clipboard."
+        managerEntryID = capturedID
+        managerCaptureStatusMessage = "Manager ID \(capturedID) linked from shared URL."
         showSuccessInterstitial = true
 
         Task {
@@ -1347,27 +1359,164 @@ struct FantasyView: View {
         }
     }
 
-    private func clipboardText(from pasteboard: UIPasteboard) -> String? {
-        if let text = pasteboard.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-            return text
+    private func consumeSharedFantasyEntryURLIfNeeded() {
+        guard !isProcessingSharedEntryImport else { return }
+        guard Date() >= nextSharedEntryRetryAt else { return }
+        guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
+        guard let sharedURL = defaults.string(forKey: AppGroupConfig.fantasySharedEntryURLKey) else { return }
+        let sharedUpdatedAt = defaults.double(forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
+
+        let trimmed = sharedURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            clearSharedEntryImportPayload()
+            return
         }
 
-        if let url = pasteboard.url?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty {
-            return url
+        if sharedUpdatedAt > 0, sharedUpdatedAt <= lastProcessedSharedEntryUpdatedAt {
+            return
+        }
+        if sharedUpdatedAt <= 0, trimmed == lastProcessedSharedEntryURL {
+            return
         }
 
-        return nil
-    }
-
-    private func updateClipboardStatusMessage() {
-        if managerEntryID.isEmpty, !hasInitiatedClipboardCapture {
-            clipboardStatusMessage = "Waiting for Fantasy Football address..."
+        guard let parsedID = FantasyManagerIDParser.parse(from: trimmed) else {
+            managerCaptureStatusMessage = "Received a shared link, but it did not contain a valid Fantasy entry URL."
+            setShareImportStatus(
+                "Received a shared link, but it did not contain a valid Fantasy entry URL.",
+                isError: true
+            )
+            markSharedEntryAsProcessed(updatedAt: sharedUpdatedAt, rawURL: trimmed)
+            clearSharedEntryImportPayload()
             return
         }
 
         if managerEntryID.isEmpty {
-            clipboardStatusMessage = "Copy your Points URL, return to this screen, and tap \"Allow Paste\"."
+            applyCapturedManagerID(parsedID)
+            setShareImportStatus("Manager ID \(parsedID) linked from shared URL.", isError: false)
+            markSharedEntryAsProcessed(updatedAt: sharedUpdatedAt, rawURL: trimmed)
+            clearSharedEntryImportPayload()
+            return
         }
+
+        isProcessingSharedEntryImport = true
+        Task {
+            let handled = await addRivalFromSharedEntryID(parsedID)
+            await MainActor.run {
+                if handled {
+                    markSharedEntryAsProcessed(updatedAt: sharedUpdatedAt, rawURL: trimmed)
+                    clearSharedEntryImportPayload()
+                } else {
+                    nextSharedEntryRetryAt = Date().addingTimeInterval(3)
+                }
+                isProcessingSharedEntryImport = false
+            }
+        }
+    }
+
+    @MainActor
+    private func addRivalFromSharedEntryID(_ capturedID: String) async -> Bool {
+        guard let entryID = Int(capturedID), entryID > 0 else {
+            managerCaptureStatusMessage = "Shared URL did not contain a valid manager ID."
+            setShareImportStatus("Shared URL did not contain a valid manager ID.", isError: true)
+            return true
+        }
+
+        guard entryID != Int(managerEntryID) else {
+            managerCaptureStatusMessage = "Shared entry ID \(capturedID) is already your linked manager ID."
+            setShareImportStatus(
+                "Shared entry ID \(capturedID) is already your linked manager ID.",
+                isError: true
+            )
+            return true
+        }
+
+        guard !rivalManagers.contains(where: { $0.entryID == entryID }) else {
+            managerCaptureStatusMessage = "Shared rival \(capturedID) is already in your rivals list."
+            setShareImportStatus("Rival \(capturedID) is already in your rivals list.", isError: false)
+            return true
+        }
+
+        do {
+            let profile = try await fantasyViewModel.validateRivalEntryID(capturedID)
+            let rival = FantasyRivalManager(
+                entryID: profile.id,
+                teamName: profile.name,
+                managerFirstName: profile.playerFirstName,
+                managerLastName: profile.playerLastName,
+                overallPoints: profile.summaryOverallPoints
+            )
+            guard !rivalManagers.contains(where: { $0.entryID == rival.entryID }) else {
+                setShareImportStatus("Rival \(capturedID) is already in your rivals list.", isError: false)
+                return true
+            }
+            rivalManagers.append(rival)
+            rivalManagers.sort { lhs, rhs in
+                let left = lhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let right = rhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if left.localizedCaseInsensitiveCompare(right) != .orderedSame {
+                    return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+                }
+                return lhs.entryID < rhs.entryID
+            }
+            persistRivalManagersToStorage()
+            managerCaptureStatusMessage = "Rival added from shared URL: \(profile.name) (\(profile.id))."
+            setShareImportStatus("Rival added: \(profile.name) (\(profile.id)).", isError: false)
+            triggerFantasyRefresh(force: true)
+            return true
+        } catch {
+            if let fantasyError = error as? FantasyPublicAPIError,
+               case .gameUpdating = fantasyError {
+                managerCaptureStatusMessage = "Fantasy Football is temporarily updating. We'll retry adding this rival shortly."
+                setShareImportStatus(
+                    "Fantasy Football is temporarily updating. We'll retry adding this rival shortly.",
+                    isError: true
+                )
+                return false
+            }
+            managerCaptureStatusMessage = "Could not add shared rival ID \(capturedID): \(error.localizedDescription)"
+            setShareImportStatus(
+                "Could not add rival \(capturedID) yet. Retrying shortly.",
+                isError: true
+            )
+            if case FantasyPublicAPIError.badStatus(let code, _, _) = error,
+               code == 400 || code == 404 {
+                return true
+            }
+            return false
+        }
+    }
+
+    private func clearSharedEntryImportPayload() {
+        guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
+        defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryURLKey)
+        defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
+    }
+
+    private func markSharedEntryAsProcessed(updatedAt: TimeInterval, rawURL: String) {
+        if updatedAt > 0 {
+            lastProcessedSharedEntryUpdatedAt = updatedAt
+        }
+        lastProcessedSharedEntryURL = rawURL
+    }
+
+    private func armSharedEntryPolling() {
+        sharedEntryPollingDeadline = Date().addingTimeInterval(12)
+    }
+
+    private func setShareImportStatus(_ message: String, isError: Bool) {
+        shareImportStatusMessage = message
+        shareImportStatusIsError = isError
+    }
+
+    private func syncManagerEntryIDToSharedDefaults() {
+        guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
+        let trimmed = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: AppGroupConfig.fantasyManagerEntryIDKey)
+        } else {
+            defaults.set(trimmed, forKey: AppGroupConfig.fantasyManagerEntryIDKey)
+        }
+        defaults.synchronize()
     }
 
     private func loadRivalManagersFromStorage() {
@@ -1401,12 +1550,6 @@ struct FantasyView: View {
     private static let integerFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
-        return formatter
-    }()
-
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
         return formatter
     }()
 }
@@ -1708,16 +1851,45 @@ private struct FantasyPlayerCard: View {
     }
 }
 
+private enum RivalsScoreMode: String, CaseIterable {
+    case currentGameweek
+    case allGameweeks
+
+    var title: String {
+        switch self {
+        case .currentGameweek:
+            return "Current gameweek"
+        case .allGameweeks:
+            return "All gameweeks"
+        }
+    }
+}
+
 private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     let entryID: Int
     let teamName: String
     let managerName: String
-    let score: Int
+    let currentGameweekScore: Int?
+    let allGameweeksScore: Int?
     let squad: FantasySquadDisplayData?
     let isUser: Bool
 
     var id: Int {
         entryID
+    }
+
+    func scoreValue(for mode: RivalsScoreMode) -> Int? {
+        switch mode {
+        case .currentGameweek:
+            return currentGameweekScore
+        case .allGameweeks:
+            return allGameweeksScore
+        }
+    }
+
+    func scoreDisplay(for mode: RivalsScoreMode) -> String {
+        guard let score = scoreValue(for: mode) else { return "-" }
+        return "\(score)"
     }
 }
 
@@ -1781,6 +1953,7 @@ private enum FantasyLeagueShareImageRenderer {
     static func render(
         gameweekTitle: String,
         rows: [FantasyLeagueTableEntry],
+        scoreMode: RivalsScoreMode,
         showEstimatedFooter: Bool
     ) -> UIImage? {
         guard !rows.isEmpty else { return nil }
@@ -1789,6 +1962,7 @@ private enum FantasyLeagueShareImageRenderer {
             gameweekTitle: gameweekTitle,
             generatedAtText: generatedAtLabel(),
             rows: rows,
+            scoreMode: scoreMode,
             showEstimatedFooter: showEstimatedFooter
         )
         .environment(\.colorScheme, .dark)
@@ -1828,6 +2002,7 @@ private struct FantasyLeagueShareSnapshotView: View {
     let gameweekTitle: String
     let generatedAtText: String
     let rows: [FantasyLeagueTableEntry]
+    let scoreMode: RivalsScoreMode
     let showEstimatedFooter: Bool
 
     var body: some View {
@@ -1848,7 +2023,11 @@ private struct FantasyLeagueShareSnapshotView: View {
                         Text("Top Scores: Fantasy Football")
                             .font(.title3.weight(.bold))
                             .foregroundStyle(.white)
-                        Text("League Table • \(gameweekTitle)")
+                        Text(
+                            scoreMode == .currentGameweek
+                                ? "League Table • \(gameweekTitle)"
+                                : "League Table • All gameweeks"
+                        )
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white.opacity(0.85))
                         Text(generatedAtText)
@@ -1866,7 +2045,7 @@ private struct FantasyLeagueShareSnapshotView: View {
                             .frame(width: 26, alignment: .trailing)
                         Text("Team")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("Pts")
+                        Text(scoreMode == .currentGameweek ? "GW" : "Total")
                             .frame(width: 44, alignment: .trailing)
                     }
                     .font(.caption.weight(.semibold))
@@ -1897,7 +2076,7 @@ private struct FantasyLeagueShareSnapshotView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                            Text("\(row.score)")
+                            Text(row.scoreDisplay(for: scoreMode))
                                 .font(.body.monospacedDigit().weight(.bold))
                                 .foregroundStyle(row.isUser ? .cyan : .white)
                                 .frame(width: 44, alignment: .trailing)

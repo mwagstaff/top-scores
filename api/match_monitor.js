@@ -1767,6 +1767,18 @@ function delayedSnapshotForMatch(monitorState, delayMinutes, nowMs = Date.now())
   return first && first.match ? first.match : monitorState.lastState || null;
 }
 
+function hasFullDelayBufferForMatch(monitorState, delayMinutes, nowMs = Date.now()) {
+  if (delayMinutes <= 0) return true;
+  if (!monitorState || !Array.isArray(monitorState.history) || monitorState.history.length === 0) {
+    return false;
+  }
+  const targetMs = nowMs - delayMinutes * 60 * 1000;
+  const first = monitorState.history[0];
+  const firstTimestampMs = Number(first && first.timestampMs);
+  if (!Number.isFinite(firstTimestampMs)) return false;
+  return firstTimestampMs <= targetMs;
+}
+
 function monitoredMatchStatesSnapshot() {
   return Array.from(monitoredMatches.entries())
     .map(([matchId, state]) => ({
@@ -2030,11 +2042,24 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
   for (const entry of eligible) {
     const state = entry.state || null;
     const currentMatch = entry.match;
-    const delayed = delayedSnapshotForMatch(state, delayMinutes, nowMs) || currentMatch;
     const kickoffMs = parseMatchDateTimeMs(currentMatch);
     const status = currentMatch ? currentMatch.score_status : null;
 
     if (isLiveMatchStatus(status)) {
+      if (!hasFullDelayBufferForMatch(state, delayMinutes, nowMs)) {
+        // Avoid spoilers: keep the activity active but suppress live scores/minute until full
+        // delay buffer is available.
+        upcomingMatches.push({
+          ...currentMatch,
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          aggregate_home_score: null,
+          aggregate_away_score: null,
+        });
+        continue;
+      }
+      const delayed = delayedSnapshotForMatch(state, delayMinutes, nowMs) || currentMatch;
       const delayedHasAggregateHome =
         delayed && Object.prototype.hasOwnProperty.call(delayed, "aggregate_home_score");
       const delayedHasAggregateAway =
@@ -2123,6 +2148,15 @@ async function evaluateAndDispatchLiveActivities() {
   } finally {
     liveActivityEvalInFlight = false;
   }
+}
+
+async function runLiveActivityEvaluationNow() {
+  await evaluateAndDispatchLiveActivities();
+  return {
+    success: true,
+    isMonitoring,
+    monitoredMatchCount: monitoredMatches.size,
+  };
 }
 
 /**
@@ -2495,6 +2529,7 @@ module.exports = {
   startMonitoring,
   stopMonitoring,
   getStatus,
+  runLiveActivityEvaluationNow,
   __testHooks: {
     buildMatchEvents,
     buildScoreChangeEvent,
