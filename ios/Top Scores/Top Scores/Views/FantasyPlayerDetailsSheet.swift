@@ -27,8 +27,13 @@ struct FantasyPlayerDetailsSheet: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
                             playerHeader(details)
-                            availabilitySection(details)
+                            if !details.statusUpdates.isEmpty {
+                                availabilitySection(details)
+                            }
                             metricsSection(details)
+                            if !details.latestPointsBreakdown.isEmpty {
+                                latestPointsBreakdownSection(details)
+                            }
                             fixturesSection(details)
                             historySection(details)
                         }
@@ -113,21 +118,15 @@ struct FantasyPlayerDetailsSheet: View {
             Text("Status Update")
                 .font(.headline)
 
-            if details.statusUpdates.isEmpty {
-                Text("No availability issues reported.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(details.statusUpdates) { update in
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: update.severity == .warning ? "exclamationmark.triangle.fill" : "info.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(update.severity == .warning ? Color.yellow : Color.secondary)
-                            .padding(.top, 2)
-                        Text(update.message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+            ForEach(details.statusUpdates) { update in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: update.severity == .warning ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(update.severity == .warning ? Color.yellow : Color.secondary)
+                        .padding(.top, 2)
+                    Text(update.message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -173,6 +172,77 @@ struct FantasyPlayerDetailsSheet: View {
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private func latestPointsBreakdownSection(_ details: FantasyPlayerDetailsData) -> some View {
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 2)
+        let maxAbsPoints = max(
+            details.latestPointsBreakdown.map { abs($0.points) }.max() ?? 1,
+            1
+        )
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Latest GW points breakdown")
+                .font(.headline)
+
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(details.latestPointsBreakdown) { item in
+                    pointsBreakdownCard(item: item, maxAbsPoints: maxAbsPoints)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private func pointsBreakdownCard(
+        item: FantasyPlayerDetailsData.PointsBreakdownItem,
+        maxAbsPoints: Int
+    ) -> some View {
+        let isNegative = item.points < 0
+        let magnitude = CGFloat(abs(item.points))
+        let denominator = CGFloat(max(maxAbsPoints, 1))
+        let progress = max(0.0, min(1.0, magnitude / denominator))
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(item.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+            HStack(spacing: 8) {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.10))
+
+                        Capsule(style: .continuous)
+                            .fill(
+                                isNegative
+                                    ? Color.red.opacity(0.88)
+                                    : Color.green.opacity(0.88)
+                            )
+                            .frame(width: max(4, proxy.size.width * progress))
+                    }
+                }
+                .frame(height: 8)
+
+                Text("\(item.points)")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(isNegative ? Color.red : Color.primary)
+                    .frame(width: 28, alignment: .trailing)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(.tertiarySystemGroupedBackground))
         )
     }
 

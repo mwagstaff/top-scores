@@ -3553,6 +3553,16 @@ function toMatchListPayload(match, options = {}) {
         ? matchDetailsLookup.get(detailsId)
         : matchDetailsLookup[detailsId];
     if (matchDetails) {
+      const baseStatus = normalizeMatchStatusValue(resolvedScoreStatus);
+      const detailsStatus = normalizeMatchStatusValue(matchDetails.score_status);
+      const preferredStatus = pickPreferredMatchStatus(baseStatus, detailsStatus, {
+        preferIncomingOnTie: true,
+        allowTerminalRegression: false,
+      });
+      if (preferredStatus) {
+        resolvedScoreStatus = preferredStatus;
+      }
+
       // CRITICAL FIX: Only use penalty_result if the cached details match this actual match
       const teamsMatch = (() => {
         const normalizedHome = normalizeTeamName(normalized.home_team || "");
@@ -3575,18 +3585,8 @@ function toMatchListPayload(match, options = {}) {
         const detailsHasScore = detailsHomeScore !== null && detailsAwayScore !== null;
         const baseTotal = baseHasScore ? resolvedHomeScore + resolvedAwayScore : null;
         const detailsTotal = detailsHasScore ? detailsHomeScore + detailsAwayScore : null;
-        const baseStatus = normalizeMatchStatusValue(resolvedScoreStatus);
-        const detailsStatus = normalizeMatchStatusValue(matchDetails.score_status);
         const baseMinute = parseMatchStatusMinute(baseStatus);
         const detailsMinute = parseMatchStatusMinute(detailsStatus);
-        const preferredStatus = pickPreferredMatchStatus(baseStatus, detailsStatus, {
-          preferIncomingOnTie: true,
-          allowTerminalRegression: false,
-        });
-
-        if (preferredStatus) {
-          resolvedScoreStatus = preferredStatus;
-        }
 
         let useDetailsScores = false;
         if (detailsHasScore) {
@@ -11722,79 +11722,84 @@ async function bootstrapOperationalState() {
   void updateFantasyBootstrapStatic({ trigger: "startup_bootstrap" });
 }
 
-const operationalBootstrapPromise = bootstrapOperationalState().catch((error) => {
-  console.warn("[Startup] Operational bootstrap failed:", error.message || error);
-});
+const shouldRunRuntime = require.main === module;
+const operationalBootstrapPromise = shouldRunRuntime
+  ? bootstrapOperationalState().catch((error) => {
+    console.warn("[Startup] Operational bootstrap failed:", error.message || error);
+  })
+  : Promise.resolve();
 
-const interval = Number.isFinite(INTERVAL_MS) && INTERVAL_MS > 0 ? INTERVAL_MS : 30 * 60 * 1000;
-setInterval(() => {
-  void updateMatches({ trigger: "interval" });
-}, interval);
-const bbcInterval = Number.isFinite(BBC_INTERVAL_MS) && BBC_INTERVAL_MS > 0 ? BBC_INTERVAL_MS : 30 * 1000;
-setInterval(() => {
-  void updateBbcMatches({ trigger: "interval" });
-}, bbcInterval);
-const bbcRangeInterval =
-  Number.isFinite(BBC_RANGE_INTERVAL_MS) && BBC_RANGE_INTERVAL_MS > 0
-    ? BBC_RANGE_INTERVAL_MS
-    : 60 * 60 * 1000;
-setInterval(() => {
-  void updateBbcRangeMatches({ trigger: "interval" });
-}, bbcRangeInterval);
-const eplInterval =
-  Number.isFinite(EPL_INTERVAL_MS) && EPL_INTERVAL_MS > 0 ? EPL_INTERVAL_MS : 24 * 60 * 60 * 1000;
-setInterval(() => {
-  void updatePremierLeagueTeams({ trigger: "interval" });
-}, eplInterval);
-const leagueTablesInterval =
-  Number.isFinite(LEAGUE_TABLES_INTERVAL_MS) && LEAGUE_TABLES_INTERVAL_MS > 0
-    ? LEAGUE_TABLES_INTERVAL_MS
-    : 2 * 60 * 1000;
-setInterval(() => {
-  void updateLeagueTables({ trigger: "interval" });
-}, leagueTablesInterval);
-const clubEloInterval =
-  Number.isFinite(CLUB_ELO_INTERVAL_MS) && CLUB_ELO_INTERVAL_MS > 0
-    ? CLUB_ELO_INTERVAL_MS
-    : 12 * 60 * 60 * 1000;
-setInterval(() => {
-  void updateClubEloTeams({ trigger: "interval" });
-}, clubEloInterval);
-const clubEloFixturesInterval =
-  Number.isFinite(CLUB_ELO_FIXTURES_INTERVAL_MS) && CLUB_ELO_FIXTURES_INTERVAL_MS > 0
-    ? CLUB_ELO_FIXTURES_INTERVAL_MS
-    : 12 * 60 * 60 * 1000;
-setInterval(() => {
-  void updateClubEloFixtures({ trigger: "interval" });
-}, clubEloFixturesInterval);
-const footballDatabaseInterval =
-  Number.isFinite(FOOTBALL_DATABASE_INTERVAL_MS) && FOOTBALL_DATABASE_INTERVAL_MS > 0
-    ? FOOTBALL_DATABASE_INTERVAL_MS
-    : 12 * 60 * 60 * 1000;
-setInterval(() => {
-  void updateFootballDatabaseTeams({ trigger: "interval" });
-}, footballDatabaseInterval);
-const nationalEloInterval =
-  Number.isFinite(NATIONAL_ELO_INTERVAL_MS) && NATIONAL_ELO_INTERVAL_MS > 0
-    ? NATIONAL_ELO_INTERVAL_MS
-    : 12 * 60 * 60 * 1000;
-setInterval(() => {
-  void updateNationalEloTeams({ trigger: "interval" });
-}, nationalEloInterval);
-const fantasyBootstrapInterval =
-  Number.isFinite(FPL_BOOTSTRAP_INTERVAL_MS) && FPL_BOOTSTRAP_INTERVAL_MS > 0
-    ? FPL_BOOTSTRAP_INTERVAL_MS
-    : 12 * 60 * 60 * 1000;
-setInterval(() => {
-  void updateFantasyBootstrapStatic({ trigger: "interval" });
-}, fantasyBootstrapInterval);
-const matchDetailsPollInterval =
-  Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
-    ? MATCH_DETAILS_POLL_INTERVAL_MS
-    : 10 * 1000;
-setInterval(() => {
-  void refreshInProgressMatchDetails({ trigger: "interval" });
-}, matchDetailsPollInterval);
+if (shouldRunRuntime) {
+  const interval = Number.isFinite(INTERVAL_MS) && INTERVAL_MS > 0 ? INTERVAL_MS : 30 * 60 * 1000;
+  setInterval(() => {
+    void updateMatches({ trigger: "interval" });
+  }, interval);
+  const bbcInterval = Number.isFinite(BBC_INTERVAL_MS) && BBC_INTERVAL_MS > 0 ? BBC_INTERVAL_MS : 30 * 1000;
+  setInterval(() => {
+    void updateBbcMatches({ trigger: "interval" });
+  }, bbcInterval);
+  const bbcRangeInterval =
+    Number.isFinite(BBC_RANGE_INTERVAL_MS) && BBC_RANGE_INTERVAL_MS > 0
+      ? BBC_RANGE_INTERVAL_MS
+      : 60 * 60 * 1000;
+  setInterval(() => {
+    void updateBbcRangeMatches({ trigger: "interval" });
+  }, bbcRangeInterval);
+  const eplInterval =
+    Number.isFinite(EPL_INTERVAL_MS) && EPL_INTERVAL_MS > 0 ? EPL_INTERVAL_MS : 24 * 60 * 60 * 1000;
+  setInterval(() => {
+    void updatePremierLeagueTeams({ trigger: "interval" });
+  }, eplInterval);
+  const leagueTablesInterval =
+    Number.isFinite(LEAGUE_TABLES_INTERVAL_MS) && LEAGUE_TABLES_INTERVAL_MS > 0
+      ? LEAGUE_TABLES_INTERVAL_MS
+      : 2 * 60 * 1000;
+  setInterval(() => {
+    void updateLeagueTables({ trigger: "interval" });
+  }, leagueTablesInterval);
+  const clubEloInterval =
+    Number.isFinite(CLUB_ELO_INTERVAL_MS) && CLUB_ELO_INTERVAL_MS > 0
+      ? CLUB_ELO_INTERVAL_MS
+      : 12 * 60 * 60 * 1000;
+  setInterval(() => {
+    void updateClubEloTeams({ trigger: "interval" });
+  }, clubEloInterval);
+  const clubEloFixturesInterval =
+    Number.isFinite(CLUB_ELO_FIXTURES_INTERVAL_MS) && CLUB_ELO_FIXTURES_INTERVAL_MS > 0
+      ? CLUB_ELO_FIXTURES_INTERVAL_MS
+      : 12 * 60 * 60 * 1000;
+  setInterval(() => {
+    void updateClubEloFixtures({ trigger: "interval" });
+  }, clubEloFixturesInterval);
+  const footballDatabaseInterval =
+    Number.isFinite(FOOTBALL_DATABASE_INTERVAL_MS) && FOOTBALL_DATABASE_INTERVAL_MS > 0
+      ? FOOTBALL_DATABASE_INTERVAL_MS
+      : 12 * 60 * 60 * 1000;
+  setInterval(() => {
+    void updateFootballDatabaseTeams({ trigger: "interval" });
+  }, footballDatabaseInterval);
+  const nationalEloInterval =
+    Number.isFinite(NATIONAL_ELO_INTERVAL_MS) && NATIONAL_ELO_INTERVAL_MS > 0
+      ? NATIONAL_ELO_INTERVAL_MS
+      : 12 * 60 * 60 * 1000;
+  setInterval(() => {
+    void updateNationalEloTeams({ trigger: "interval" });
+  }, nationalEloInterval);
+  const fantasyBootstrapInterval =
+    Number.isFinite(FPL_BOOTSTRAP_INTERVAL_MS) && FPL_BOOTSTRAP_INTERVAL_MS > 0
+      ? FPL_BOOTSTRAP_INTERVAL_MS
+      : 12 * 60 * 60 * 1000;
+  setInterval(() => {
+    void updateFantasyBootstrapStatic({ trigger: "interval" });
+  }, fantasyBootstrapInterval);
+  const matchDetailsPollInterval =
+    Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
+      ? MATCH_DETAILS_POLL_INTERVAL_MS
+      : 10 * 1000;
+  setInterval(() => {
+    void refreshInProgressMatchDetails({ trigger: "interval" });
+  }, matchDetailsPollInterval);
+}
 
 // Test harness endpoints (for internal use only)
 app.get(`${API_PREFIX}/test-harness/match`, (req, res) => {
@@ -11934,7 +11939,9 @@ const matchMonitor = require("./match_monitor");
 
 // Initialize and start match monitoring
 const SERVER_BASE_URL = `http://localhost:${PORT}${API_PREFIX}`;
-matchMonitor.initialize(SERVER_BASE_URL);
+if (shouldRunRuntime) {
+  matchMonitor.initialize(SERVER_BASE_URL);
+}
 
 // Status endpoint for monitoring
 app.get(`${API_PREFIX}/monitor/status`, (req, res) => {
@@ -11980,29 +11987,43 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+if (shouldRunRuntime) {
+  app.listen(PORT, () => {
+    console.log(`Server listening on http://localhost:${PORT}`);
 
-  // Start match monitoring after server is ready
-  setTimeout(async () => {
-    await operationalBootstrapPromise;
-    matchMonitor.startMonitoring();
-  }, 2000); // Wait 2 seconds for server to fully initialize
-});
+    // Start match monitoring after server is ready
+    setTimeout(async () => {
+      await operationalBootstrapPromise;
+      matchMonitor.startMonitoring();
+    }, 2000); // Wait 2 seconds for server to fully initialize
+  });
 
-// Graceful shutdown
-process.on("SIGTERM", async () => {
-  console.log("SIGTERM received, shutting down gracefully");
-  matchMonitor.stopMonitoring();
-  const { shutdown: shutdownAPNS } = require("./apns_client");
-  await shutdownAPNS();
-  process.exit(0);
-});
+  // Graceful shutdown
+  process.on("SIGTERM", async () => {
+    console.log("SIGTERM received, shutting down gracefully");
+    matchMonitor.stopMonitoring();
+    const { shutdown: shutdownAPNS } = require("./apns_client");
+    await shutdownAPNS();
+    process.exit(0);
+  });
 
-process.on("SIGINT", async () => {
-  console.log("SIGINT received, shutting down gracefully");
-  matchMonitor.stopMonitoring();
-  const { shutdown: shutdownAPNS } = require("./apns_client");
-  await shutdownAPNS();
-  process.exit(0);
-});
+  process.on("SIGINT", async () => {
+    console.log("SIGINT received, shutting down gracefully");
+    matchMonitor.stopMonitoring();
+    const { shutdown: shutdownAPNS } = require("./apns_client");
+    await shutdownAPNS();
+    process.exit(0);
+  });
+}
+
+module.exports = {
+  app,
+  __private: {
+    toMatchListPayload,
+    pickPreferredMatchStatus,
+    normalizeMatchStatusValue,
+    parseMatchStatusMinute,
+    normalizeTeamName,
+    matchDetailsIdFromUrl,
+  },
+};

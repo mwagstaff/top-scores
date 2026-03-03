@@ -237,6 +237,16 @@ struct FantasyElementSummaryHistory: Codable, Hashable {
     let minutes: Int
     let goalsScored: Int
     let assists: Int
+    let cleanSheets: Int
+    let goalsConceded: Int
+    let ownGoals: Int
+    let penaltiesSaved: Int
+    let penaltiesMissed: Int
+    let yellowCards: Int
+    let redCards: Int
+    let saves: Int
+    let bonus: Int
+    let defensiveContribution: Int
     let expectedGoals: String?
     let kickoffTime: String?
 
@@ -249,6 +259,16 @@ struct FantasyElementSummaryHistory: Codable, Hashable {
         case minutes
         case goalsScored = "goals_scored"
         case assists
+        case cleanSheets = "clean_sheets"
+        case goalsConceded = "goals_conceded"
+        case ownGoals = "own_goals"
+        case penaltiesSaved = "penalties_saved"
+        case penaltiesMissed = "penalties_missed"
+        case yellowCards = "yellow_cards"
+        case redCards = "red_cards"
+        case saves
+        case bonus
+        case defensiveContribution = "defensive_contribution"
         case expectedGoals = "expected_goals"
         case kickoffTime = "kickoff_time"
     }
@@ -262,6 +282,16 @@ struct FantasyElementSummaryHistory: Codable, Hashable {
         minutes = Self.decodeFlexibleInt(container: container, key: .minutes) ?? 0
         goalsScored = Self.decodeFlexibleInt(container: container, key: .goalsScored) ?? 0
         assists = Self.decodeFlexibleInt(container: container, key: .assists) ?? 0
+        cleanSheets = Self.decodeFlexibleInt(container: container, key: .cleanSheets) ?? 0
+        goalsConceded = Self.decodeFlexibleInt(container: container, key: .goalsConceded) ?? 0
+        ownGoals = Self.decodeFlexibleInt(container: container, key: .ownGoals) ?? 0
+        penaltiesSaved = Self.decodeFlexibleInt(container: container, key: .penaltiesSaved) ?? 0
+        penaltiesMissed = Self.decodeFlexibleInt(container: container, key: .penaltiesMissed) ?? 0
+        yellowCards = Self.decodeFlexibleInt(container: container, key: .yellowCards) ?? 0
+        redCards = Self.decodeFlexibleInt(container: container, key: .redCards) ?? 0
+        saves = Self.decodeFlexibleInt(container: container, key: .saves) ?? 0
+        bonus = Self.decodeFlexibleInt(container: container, key: .bonus) ?? 0
+        defensiveContribution = Self.decodeFlexibleInt(container: container, key: .defensiveContribution) ?? 0
         kickoffTime = try? container.decode(String.self, forKey: .kickoffTime)
 
         if let value = try? container.decode(Bool.self, forKey: .wasHome) {
@@ -438,6 +468,10 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
     let isViceCaptain: Bool
     let isPlayingNow: Bool
     let isUnavailable: Bool
+    let isDefinitelyUnavailable: Bool
+    let hasAnyFixtureThisGameweek: Bool
+    let hasUpcomingFixtureThisGameweek: Bool
+    let hasActiveFixtureThisGameweek: Bool
     let minutesPlayed: Int
     let upcomingOpponentDisplay: String?
     let goalsScored: Int
@@ -455,6 +489,17 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
 
     var didNotPlay: Bool {
         minutesPlayed == 0
+    }
+
+    var shouldAutoSubAsNonParticipant: Bool {
+        guard minutesPlayed == 0 else { return false }
+        if isDefinitelyUnavailable { return true }
+        if !hasAnyFixtureThisGameweek { return true }
+        return !hasUpcomingFixtureThisGameweek && !hasActiveFixtureThisGameweek
+    }
+
+    var isEligibleAutoSubReplacement: Bool {
+        minutesPlayed > 0
     }
 }
 
@@ -517,6 +562,15 @@ struct FantasyPlayerDetailsData: Hashable {
         let value: String
     }
 
+    struct PointsBreakdownItem: Hashable, Identifiable {
+        let title: String
+        let points: Int
+
+        var id: String {
+            title
+        }
+    }
+
     struct FormItem: Hashable, Identifiable {
         let gameweek: Int
         let opponentTeamID: Int?
@@ -567,6 +621,7 @@ struct FantasyPlayerDetailsData: Hashable {
     let position: String
     let statusUpdates: [StatusUpdate]
     let metrics: [Metric]
+    let latestPointsBreakdown: [PointsBreakdownItem]
     let formItems: [FormItem]
     let upcomingFixtures: [UpcomingFixture]
     let historyRows: [HistoryRow]
@@ -598,6 +653,7 @@ enum FantasyPlayerDetailsBuilder {
             }
             return (lhs.kickoffTime ?? "") > (rhs.kickoffTime ?? "")
         }
+        let positionType = FantasyPositionType(rawValue: element.elementType)
 
         let latestGameweekPoints = sortedHistory
             .filter { $0.round == gameweekID }
@@ -708,6 +764,19 @@ enum FantasyPlayerDetailsBuilder {
             .init(title: "TSB %", value: formatPercent(element.selectedByPercent))
         ]
 
+        let latestHistoryRows: [FantasyElementSummaryHistory] = {
+            let rowsForSelectedGW = sortedHistory.filter { $0.round == gameweekID }
+            if !rowsForSelectedGW.isEmpty {
+                return rowsForSelectedGW
+            }
+            guard let latestRound = sortedHistory.first?.round else { return [] }
+            return sortedHistory.filter { $0.round == latestRound }
+        }()
+        let latestPointsBreakdown = latestPointsBreakdown(
+            rows: latestHistoryRows,
+            positionType: positionType
+        )
+
         let sortedHistoryForLookup = sortedHistory.sorted { lhs, rhs in
             if lhs.round != rhs.round {
                 return lhs.round > rhs.round
@@ -763,6 +832,7 @@ enum FantasyPlayerDetailsBuilder {
             position: position,
             statusUpdates: statusUpdates,
             metrics: metrics,
+            latestPointsBreakdown: latestPointsBreakdown,
             formItems: formItems,
             upcomingFixtures: Array(upcoming),
             historyRows: historyRows
@@ -788,6 +858,124 @@ enum FantasyPlayerDetailsBuilder {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "-" }
         return "\(trimmed)%"
+    }
+
+    private static func latestPointsBreakdown(
+        rows: [FantasyElementSummaryHistory],
+        positionType: FantasyPositionType?
+    ) -> [FantasyPlayerDetailsData.PointsBreakdownItem] {
+        guard !rows.isEmpty else { return [] }
+
+        var totals: [String: Int] = [
+            "Appearance": 0,
+            "Goals": 0,
+            "Assists": 0,
+            "Clean sheets": 0,
+            "Bonus": 0,
+            "Saves": 0,
+            "Pen saves": 0,
+            "Conceded": 0,
+            "Pen misses": 0,
+            "Own goals": 0,
+            "Yellow cards": 0,
+            "Red cards": 0
+        ]
+
+        let goalPoints = goalPointsPerGoal(for: positionType)
+        let cleanSheetPoints = cleanSheetPointsValue(for: positionType)
+        let concededApplies = (positionType == .goalkeeper || positionType == .defender)
+        let savePointsApplies = positionType == .goalkeeper
+
+        for row in rows {
+            totals["Appearance", default: 0] += appearancePoints(for: row.minutes)
+            totals["Goals", default: 0] += row.goalsScored * goalPoints
+            totals["Assists", default: 0] += row.assists * 3
+            totals["Clean sheets", default: 0] += row.cleanSheets * cleanSheetPoints
+            totals["Bonus", default: 0] += row.bonus
+
+            if savePointsApplies {
+                totals["Saves", default: 0] += row.saves / 3
+                totals["Pen saves", default: 0] += row.penaltiesSaved * 5
+            }
+            if concededApplies {
+                totals["Conceded", default: 0] -= row.goalsConceded / 2
+            }
+
+            totals["Pen misses", default: 0] -= row.penaltiesMissed * 2
+            totals["Own goals", default: 0] -= row.ownGoals * 2
+            totals["Yellow cards", default: 0] -= row.yellowCards
+            totals["Red cards", default: 0] -= row.redCards * 3
+        }
+
+        let knownTotal = totals.values.reduce(0, +)
+        let targetTotal = rows.reduce(0) { $0 + $1.totalPoints }
+        let residual = targetTotal - knownTotal
+        if residual != 0 {
+            let hasDefensiveContribution = rows.contains { $0.defensiveContribution > 0 }
+            let residualLabel: String
+            if hasDefensiveContribution && residual > 0 {
+                residualLabel = "Def. contribution"
+            } else {
+                residualLabel = "Other adjustments"
+            }
+            totals[residualLabel, default: 0] += residual
+        }
+
+        let orderedLabels = [
+            "Appearance",
+            "Goals",
+            "Assists",
+            "Clean sheets",
+            "Bonus",
+            "Def. contribution",
+            "Saves",
+            "Pen saves",
+            "Conceded",
+            "Pen misses",
+            "Own goals",
+            "Yellow cards",
+            "Red cards",
+            "Other adjustments"
+        ]
+
+        return orderedLabels.compactMap { label in
+            guard let points = totals[label], points != 0 else { return nil }
+            return FantasyPlayerDetailsData.PointsBreakdownItem(
+                title: label,
+                points: points
+            )
+        }
+    }
+
+    private static func appearancePoints(for minutes: Int) -> Int {
+        if minutes <= 0 { return 0 }
+        return minutes > 60 ? 2 : 1
+    }
+
+    private static func goalPointsPerGoal(for positionType: FantasyPositionType?) -> Int {
+        switch positionType {
+        case .goalkeeper:
+            return 10
+        case .defender:
+            return 6
+        case .midfielder:
+            return 5
+        case .forward:
+            return 4
+        case .none:
+            return 4
+        }
+    }
+
+    private static func cleanSheetPointsValue(for positionType: FantasyPositionType?) -> Int {
+        switch positionType {
+        case .goalkeeper, .defender:
+            return 4
+        case .midfielder:
+            return 1
+        case .forward, .none:
+            return 0
+        }
     }
 
     private static func resolveOpponentTeamID(
@@ -843,6 +1031,19 @@ enum FantasySquadBuilder {
                 let isFinished = fixture.finished == true || fixture.finishedProvisional == true
                 guard hasStarted, !isFinished else { return [] }
                 return [fixture.teamH, fixture.teamA]
+            }
+        )
+        let upcomingTeamIDs = Set(
+            fixtures.flatMap { fixture -> [Int] in
+                let hasStarted = fixture.started == true
+                let isFinished = fixture.finished == true || fixture.finishedProvisional == true
+                guard !hasStarted, !isFinished else { return [] }
+                return [fixture.teamH, fixture.teamA]
+            }
+        )
+        let teamsWithAnyFixture = Set(
+            fixtures.flatMap { fixture -> [Int] in
+                [fixture.teamH, fixture.teamA]
             }
         )
         let hasActiveFixtures = !activeTeamIDs.isEmpty
@@ -954,11 +1155,33 @@ enum FantasySquadBuilder {
                 guard let teamID = element?.team else { return false }
                 return activeTeamIDs.contains(teamID)
             }()
+            let availabilityStatus = (element?.status ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
             let isUnavailable = {
-                let status = (element?.status ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .lowercased()
-                return status == "i" || status == "d" || status == "s" || status == "u"
+                availabilityStatus == "i" || availabilityStatus == "d" || availabilityStatus == "s" || availabilityStatus == "u"
+            }()
+            let chanceOfPlaying = element?.chanceOfPlayingNextRound ?? element?.chanceOfPlayingThisRound
+            let isDefinitelyUnavailable = {
+                if availabilityStatus == "i" || availabilityStatus == "s" || availabilityStatus == "u" {
+                    return true
+                }
+                if availabilityStatus == "d", chanceOfPlaying == 0 {
+                    return true
+                }
+                return false
+            }()
+            let hasAnyFixtureThisGameweek = {
+                guard let teamID = element?.team else { return false }
+                return teamsWithAnyFixture.contains(teamID)
+            }()
+            let hasUpcomingFixtureThisGameweek = {
+                guard let teamID = element?.team else { return false }
+                return upcomingTeamIDs.contains(teamID)
+            }()
+            let hasActiveFixtureThisGameweek = {
+                guard let teamID = element?.team else { return false }
+                return activeTeamIDs.contains(teamID)
             }()
             let upcomingOpponentDisplay: String? = {
                 guard rawPoints == 0 else { return nil }
@@ -980,6 +1203,10 @@ enum FantasySquadBuilder {
                 isViceCaptain: pick.isViceCaptain,
                 isPlayingNow: isPlayingNow,
                 isUnavailable: isUnavailable,
+                isDefinitelyUnavailable: isDefinitelyUnavailable,
+                hasAnyFixtureThisGameweek: hasAnyFixtureThisGameweek,
+                hasUpcomingFixtureThisGameweek: hasUpcomingFixtureThisGameweek,
+                hasActiveFixtureThisGameweek: hasActiveFixtureThisGameweek,
                 minutesPlayed: minutesPlayed,
                 upcomingOpponentDisplay: upcomingOpponentDisplay,
                 goalsScored: goalsScored,
@@ -1004,9 +1231,9 @@ enum FantasySquadBuilder {
             var runningEstimatedTotal = computedAppliedPointsTotal
 
             if let unavailableStartingGoalkeeper = starters.first(where: { player in
-                player.positionType == .goalkeeper && player.didNotPlay
+                player.positionType == .goalkeeper && player.shouldAutoSubAsNonParticipant
             }),
-               let benchGoalkeeper = bench.first(where: { $0.positionType == .goalkeeper && !$0.didNotPlay }) {
+               let benchGoalkeeper = bench.first(where: { $0.positionType == .goalkeeper && $0.isEligibleAutoSubReplacement }) {
                 runningEstimatedTotal -= unavailableStartingGoalkeeper.appliedPoints
                 runningEstimatedTotal += benchGoalkeeper.rawPoints
                 scoreCalculationRulesApplied.append(
@@ -1025,10 +1252,10 @@ enum FantasySquadBuilder {
             }
 
             var nonPlayingOutfieldStarters = starters
-                .filter { $0.positionType != .goalkeeper && $0.didNotPlay }
+                .filter { $0.positionType != .goalkeeper && $0.shouldAutoSubAsNonParticipant }
                 .sorted { $0.pickPosition < $1.pickPosition }
             let playedOutfieldBench = bench
-                .filter { $0.positionType != .goalkeeper && !$0.didNotPlay }
+                .filter { $0.positionType != .goalkeeper && $0.isEligibleAutoSubReplacement }
                 .sorted { $0.pickPosition < $1.pickPosition }
             var outfieldReplacementNotes: [String] = []
 
@@ -1064,12 +1291,19 @@ enum FantasySquadBuilder {
                 )
             }
 
-            if let captain = starters.first(where: { $0.isCaptain && $0.didNotPlay }),
-               let viceCaptain = players.first(where: { $0.isViceCaptain && !$0.didNotPlay }) {
+            if let captain = starters.first(where: { $0.isCaptain && $0.shouldAutoSubAsNonParticipant }),
+               let viceCaptain = players.first(where: { $0.isViceCaptain && $0.isEligibleAutoSubReplacement }) {
                 runningEstimatedTotal += viceCaptain.rawPoints
                 scoreCalculationRulesApplied.append(
                     "Vice-captain boost applied: \(captain.displayName) did not play, so \(viceCaptain.displayName) was doubled (+\(viceCaptain.rawPoints) pts)."
                 )
+            }
+
+            if isEstimatedScore,
+               let transferCost = picksResponse.entryHistory.eventTransfersCost,
+               transferCost > 0 {
+                runningEstimatedTotal -= transferCost
+                scoreCalculationRulesApplied.append("\(transferCost) points deducted for transfers.")
             }
 
             estimatedCurrentScore = runningEstimatedTotal

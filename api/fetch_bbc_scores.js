@@ -1143,6 +1143,29 @@ function pickEventScore(team) {
   return null;
 }
 
+function isPostEventLifecycleStatus(value) {
+  const normalized = normalizeText(value)
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+  if (!normalized) return false;
+  return (
+    normalized === "postevent" ||
+    normalized === "postmatch" ||
+    normalized === "fulltime" ||
+    normalized === "finished" ||
+    normalized === "completed" ||
+    normalized === "final"
+  );
+}
+
+function terminalStatusRank(status) {
+  const token = String(status || "").toUpperCase();
+  if (token === "AET") return 400;
+  if (token === "PENS" || token === "PEN" || token === "PEN.") return 300;
+  if (token === "FT") return 200;
+  return 0;
+}
+
 function pickEventStatus(event) {
   const candidates = [
     event.periodLabel && event.periodLabel.value,
@@ -1152,13 +1175,34 @@ function pickEventStatus(event) {
     event.status,
   ];
 
-  let bestStatus = null;
-  let bestRank = Number.NEGATIVE_INFINITY;
+  const lifecycleHints = [
+    event.status,
+    event.eventStatus,
+    event.state,
+    event.phase,
+  ];
+  const hasPostEventLifecycle = lifecycleHints.some((value) => isPostEventLifecycleStatus(value));
+
+  const parsedCandidates = [];
   for (const candidate of candidates) {
     if (!candidate) continue;
     const status = extractStatusFromText(candidate);
     if (!status) continue;
+    parsedCandidates.push(status);
+  }
 
+  // BBC event payloads can transiently keep a stale live minute in periodLabel
+  // after the lifecycle has switched to post-event. Prefer terminal tokens in that phase.
+  if (hasPostEventLifecycle) {
+    const bestTerminal = parsedCandidates
+      .filter((status) => terminalStatusRank(status) > 0)
+      .sort((lhs, rhs) => terminalStatusRank(rhs) - terminalStatusRank(lhs))[0];
+    if (bestTerminal) return bestTerminal;
+  }
+
+  let bestStatus = null;
+  let bestRank = Number.NEGATIVE_INFINITY;
+  for (const status of parsedCandidates) {
     const minuteMatch = String(status).match(/^(\d{1,3})(?:\+(\d{1,2}))?$/);
     let rank = 0;
     if (minuteMatch) {

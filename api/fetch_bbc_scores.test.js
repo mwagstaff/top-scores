@@ -167,6 +167,15 @@ test("pickEventStatus prefers live minute over conflicting FT token", () => {
   assert.equal(__private.pickEventStatus(event), "24");
 });
 
+test("pickEventStatus prefers terminal status when lifecycle is post-event", () => {
+  const event = {
+    periodLabel: { accessible: "49 minutes" },
+    statusComment: { value: "FT", accessible: "Full time" },
+    status: "PostEvent",
+  };
+  assert.equal(__private.pickEventStatus(event), "FT");
+});
+
 test("parseMatchesFromDom ignores aggregate-only fixture cards", () => {
   const html = `
     <article data-event-id="cdxzkljkjxkt">

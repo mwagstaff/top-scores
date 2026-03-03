@@ -26,8 +26,11 @@ struct FantasyView: View {
     @State private var rivalManagers: [FantasyRivalManager] = []
     @State private var showAddRivalSheet = false
     @State private var rivalEntryInput = ""
+    @State private var managerEntryInput = ""
     @State private var pendingRivalProfile: FantasyEntryProfile?
     @State private var rivalValidationErrorMessage: String?
+    @State private var managerValidationErrorMessage: String?
+    @State private var isValidatingManager = false
     @State private var isValidatingRival = false
     @State private var selectedRivalSquad: FantasyRivalSquad?
     @State private var selectedPlayerSelection: FantasySelectedPlayerSelection?
@@ -42,6 +45,7 @@ struct FantasyView: View {
     @State private var rivalTeamNamePendingDeletion = ""
     @State private var rivalsScoreMode: RivalsScoreMode = .currentGameweek
     @State private var showUnlinkAccountConfirmation = false
+    @FocusState private var isRivalEntryInputFocused: Bool
 
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
     private let sharedEntryPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
@@ -164,8 +168,10 @@ struct FantasyView: View {
             if newValue.isEmpty {
                 fantasyViewModel.reset()
                 managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
+                managerValidationErrorMessage = nil
             } else {
                 triggerFantasyRefresh(force: true)
+                managerValidationErrorMessage = nil
             }
         }
         .onChange(of: preferences.apiBaseURL) { _, _ in
@@ -201,9 +207,28 @@ struct FantasyView: View {
     private var setupFlowView: some View {
         Form {
             setupSection
+            managerEntryInputSection
             shareFromBrowserHelpSection
             managerCaptureStatusSection
         }
+    }
+
+    private var managerDigitsInput: String {
+        managerEntryInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isManagerSubmitEnabled: Bool {
+        let input = managerDigitsInput
+        return input.count >= 3 && input.allSatisfy(\.isNumber) && !isValidatingManager
+    }
+
+    private var rivalDigitsInput: String {
+        rivalEntryInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isRivalSubmitEnabled: Bool {
+        let input = rivalDigitsInput
+        return input.count >= 3 && input.allSatisfy(\.isNumber) && !isValidatingRival
     }
 
     private var linkedFantasyView: some View {
@@ -287,6 +312,39 @@ struct FantasyView: View {
         }
     }
 
+    private var managerEntryInputSection: some View {
+        Section("Or enter manager ID manually") {
+            TextField("Enter manager ID", text: $managerEntryInput)
+                .keyboardType(.numberPad)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+                .onChange(of: managerEntryInput) { _, newValue in
+                    let digitsOnly = newValue.filter(\.isNumber)
+                    if digitsOnly != newValue {
+                        managerEntryInput = digitsOnly
+                    }
+                }
+
+            Button {
+                Task {
+                    await validateManagerEntryInput()
+                }
+            } label: {
+                if isValidatingManager {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Submitting...")
+                    }
+                } else {
+                    Text("Submit")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!isManagerSubmitEnabled)
+        }
+    }
+
     private var shareFromBrowserHelpSection: some View {
         Section("Share Extension Flow") {
             Text("First setup: share your own Points page to Top Scores.")
@@ -313,6 +371,12 @@ struct FantasyView: View {
             Text(managerCaptureStatusMessage)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+
+            if let managerValidationErrorMessage {
+                Text(managerValidationErrorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
         }
     }
 
@@ -326,6 +390,22 @@ struct FantasyView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                shareImportStatusMessage = nil
+                shareImportStatusIsError = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .background(
+                        Circle()
+                            .fill(Color(.tertiarySystemGroupedBackground))
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss message")
         }
         .padding(12)
         .background(
@@ -358,41 +438,86 @@ struct FantasyView: View {
     private func scoreSummaryCard(_ data: FantasySquadDisplayData) -> some View {
         let currentScore = data.resolvedCurrentScore
         let displayedScore = data.isEstimatedScore ? "\(currentScore)*" : "\(currentScore)"
+        let rivalPills = rivalScorePills(for: data)
 
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(data.gameweekTitle)
                     .font(.headline)
-                Text("Current gameweek score")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                if !rivalPills.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(rivalPills) { pill in
+                                HStack(spacing: 6) {
+                                    Text(pill.initials)
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    Text("\(pill.score)")
+                                        .font(.caption.monospacedDigit().weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color(.tertiarySystemGroupedBackground))
+                                )
+                            }
+                        }
+                        .padding(.vertical, 1)
+                    }
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 0)
 
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.cyan, Color.blue],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-
-                Text(displayedScore)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(Color(.label))
-                .padding(.horizontal, 12)
-            }
-            .frame(width: 94, height: 62)
+            FantasyScoreLozenge(
+                displayedScore: displayedScore,
+                isLive: data.hasActiveFixtures
+            )
         }
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
+    }
+
+    private func rivalScorePills(for data: FantasySquadDisplayData) -> [FantasyRivalScorePill] {
+        fantasyViewModel.rivalSquads
+            .map { rival in
+                FantasyRivalScorePill(
+                    entryID: rival.entryID,
+                    initials: initials(for: rival.managerName),
+                    score: data.hasActiveFixtures ? rival.squad.resolvedCurrentScore : rival.squad.totalPoints
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score {
+                    return lhs.score > rhs.score
+                }
+                return lhs.initials.localizedCaseInsensitiveCompare(rhs.initials) == .orderedAscending
+            }
+    }
+
+    private func initials(for managerName: String) -> String {
+        let words = managerName
+            .split(whereSeparator: { $0.isWhitespace || $0 == "-" })
+            .map(String.init)
+            .filter { !$0.isEmpty }
+
+        if words.isEmpty {
+            return "R"
+        }
+
+        if words.count == 1 {
+            return String(words[0].prefix(2)).uppercased()
+        }
+
+        let first = words.first?.prefix(1) ?? ""
+        let last = words.last?.prefix(1) ?? ""
+        return String(first + last).uppercased()
     }
 
     private func summaryStatsSection(_ data: FantasySquadDisplayData) -> some View {
@@ -404,7 +529,7 @@ struct FantasyView: View {
                 summaryPill(title: "GW Rank", value: formatNumber(data.rank))
                 summaryPill(title: "Overall", value: formatNumber(data.overallRank))
                 summaryPill(title: "Bench", value: formatNumber(data.pointsOnBench))
-                summaryPill(title: "TCost", value: formatNumber(data.transfersCost))
+                summaryPill(title: "Transfers", value: formatTransfersValue(data.transfersCost))
             }
         }
     }
@@ -478,27 +603,13 @@ struct FantasyView: View {
 
     private var rivalsSection: some View {
         let rankedEntries = leagueTableEntries
+        let hasRivals = rankedEntries.count > 1
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Rivals")
                     .font(.headline)
                 Spacer(minLength: 0)
-                Button {
-                    prepareReviewShareSheet()
-                } label: {
-                    Text("Review and share")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .buttonStyle(.borderless)
-                .disabled(rankedEntries.count < 2)
-
-                Button {
-                    prepareRivalEntrySheet()
-                } label: {
-                    Label("Add", systemImage: "plus.circle.fill")
-                }
-                .buttonStyle(.borderless)
             }
 
             Text("Share a rival's Fantasy Points page to Top Scores from Safari/Chrome to add them automatically.")
@@ -569,6 +680,35 @@ struct FantasyView: View {
             }
             .background(.thinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            if hasRivals {
+                HStack(spacing: 10) {
+                    Button {
+                        prepareReviewShareSheet()
+                    } label: {
+                        Label("Review and share", systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(rankedEntries.count < 2)
+
+                    Button {
+                        prepareRivalEntrySheet()
+                    } label: {
+                        Label("Add rival", systemImage: "plus.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            } else {
+                Button {
+                    prepareRivalEntrySheet()
+                } label: {
+                    Label("Add rival", systemImage: "plus.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
         }
         .padding(12)
         .background(
@@ -740,13 +880,30 @@ struct FantasyView: View {
                     Text("For the fastest flow, open a rival's Points page in Safari/Chrome and share it to Top Scores. It will auto-validate when you return to the app.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+
+                    Button {
+                        openFantasyWebsiteInBrowser()
+                    } label: {
+                        Label("Open fantasy.premierleague.com", systemImage: "globe")
+                    }
                 }
 
                 Section("Manager ID") {
+                    Text("Alternatively, if you know their ID, please enter it here...")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
                     TextField("Enter manager ID", text: $rivalEntryInput)
                         .keyboardType(.numberPad)
                         .textInputAutocapitalization(.never)
                         .disableAutocorrection(true)
+                        .focused($isRivalEntryInputFocused)
+                        .onChange(of: rivalEntryInput) { _, newValue in
+                            let digitsOnly = newValue.filter(\.isNumber)
+                            if digitsOnly != newValue {
+                                rivalEntryInput = digitsOnly
+                            }
+                        }
 
                     Button {
                         Task {
@@ -760,10 +917,11 @@ struct FantasyView: View {
                                 Text("Validating...")
                             }
                         } else {
-                            Text("Validate manager ID")
+                            Text("Submit")
                         }
                     }
-                    .disabled(isValidatingRival)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!isRivalSubmitEnabled)
                 }
 
                 if let rivalValidationErrorMessage {
@@ -793,6 +951,14 @@ struct FantasyView: View {
                         showAddRivalSheet = false
                     }
                 }
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    isRivalEntryInputFocused = true
+                }
+            }
+            .onDisappear {
+                isRivalEntryInputFocused = false
             }
         }
     }
@@ -951,6 +1117,7 @@ struct FantasyView: View {
         }
     }
 
+    @ViewBuilder
     private func eventLegendSection(_ data: FantasySquadDisplayData) -> some View {
         let goalLine = legendLine(
             emoji: "⚽️",
@@ -975,15 +1142,11 @@ struct FantasyView: View {
 
         let lines = [goalLine, assistLine, yellowLine, redLine].compactMap { $0 }
 
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Icon legend")
-                .font(.headline)
+        if !lines.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Icon legend")
+                    .font(.headline)
 
-            if lines.isEmpty {
-                Text("No goals, assists, or cards recorded yet this gameweek.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
                 ForEach(lines, id: \.self) { line in
                     Text(line)
                         .font(.footnote)
@@ -991,12 +1154,13 @@ struct FantasyView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+            )
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
     }
 
     private func scoreCalculationSection(_ data: FantasySquadDisplayData) -> some View {
@@ -1149,6 +1313,42 @@ struct FantasyView: View {
         showAddRivalSheet = true
     }
 
+    private func validateManagerEntryInput() async {
+        managerValidationErrorMessage = nil
+
+        let trimmed = managerDigitsInput
+        guard !trimmed.isEmpty else {
+            managerValidationErrorMessage = "Enter a manager ID to continue."
+            return
+        }
+        guard trimmed.allSatisfy(\.isNumber) else {
+            managerValidationErrorMessage = "Manager ID must contain numbers only."
+            return
+        }
+        guard trimmed.count >= 3 else {
+            managerValidationErrorMessage = "Enter at least 3 digits."
+            return
+        }
+        guard let entryID = Int(trimmed), entryID > 0 else {
+            managerValidationErrorMessage = "Manager ID is invalid."
+            return
+        }
+
+        isValidatingManager = true
+        defer { isValidatingManager = false }
+
+        do {
+            let profile = try await fantasyViewModel.validateRivalEntryID(String(entryID))
+            managerEntryID = String(profile.id)
+            managerEntryInput = ""
+            managerValidationErrorMessage = nil
+            managerCaptureStatusMessage = "Fantasy account linked successfully."
+            setShareImportStatus("Fantasy account linked: \(profile.name)", isError: false)
+        } catch {
+            managerValidationErrorMessage = error.localizedDescription
+        }
+    }
+
     private func validateRivalEntryInput() async {
         rivalValidationErrorMessage = nil
         pendingRivalProfile = nil
@@ -1229,7 +1429,9 @@ struct FantasyView: View {
         selectedPlayerSelection = nil
         pendingRivalProfile = nil
         rivalEntryInput = ""
+        managerEntryInput = ""
         rivalValidationErrorMessage = nil
+        managerValidationErrorMessage = nil
         showAddRivalSheet = false
         showReviewShareSheet = false
         shareRemovedEntryIDs = []
@@ -1398,6 +1600,10 @@ struct FantasyView: View {
             return
         }
 
+        if showAddRivalSheet {
+            showAddRivalSheet = false
+        }
+
         isProcessingSharedEntryImport = true
         Task {
             let handled = await addRivalFromSharedEntryID(parsedID)
@@ -1458,9 +1664,21 @@ struct FantasyView: View {
                 }
                 return lhs.entryID < rhs.entryID
             }
+
+            let managerNameParts = [
+                profile.playerFirstName.trimmingCharacters(in: .whitespacesAndNewlines),
+                profile.playerLastName.trimmingCharacters(in: .whitespacesAndNewlines)
+            ].filter { !$0.isEmpty }
+            let managerName = managerNameParts.joined(separator: " ")
+            let rivalDisplayName = managerName.isEmpty ? profile.name : "\(profile.name) (\(managerName))"
+
             persistRivalManagersToStorage()
-            managerCaptureStatusMessage = "Rival added from shared URL: \(profile.name) (\(profile.id))."
-            setShareImportStatus("Rival added: \(profile.name) (\(profile.id)).", isError: false)
+            managerCaptureStatusMessage = "Rival added from shared URL: \(rivalDisplayName)."
+            setShareImportStatus("Rival added: \(rivalDisplayName)", isError: false)
+            rivalEntryInput = ""
+            pendingRivalProfile = nil
+            rivalValidationErrorMessage = nil
+            showAddRivalSheet = false
             triggerFantasyRefresh(force: true)
             return true
         } catch {
@@ -1540,6 +1758,14 @@ struct FantasyView: View {
     private func formatNumber(_ value: Int?) -> String {
         guard let value else { return "-" }
         return Self.integerFormatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    private func formatTransfersValue(_ value: Int?) -> String {
+        guard let value else { return "-" }
+        if value > 0 {
+            return "-\(value)"
+        }
+        return "\(value)"
     }
 
     private enum StorageKeys {
@@ -1639,6 +1865,7 @@ private struct FantasyPitchBackground: View {
 private struct FantasyPlayerCard: View {
     let player: FantasyDisplayPlayer
     let width: CGFloat
+    @State private var isPulsing = false
 
     private var logoImage: UIImage? {
         LogoResolver.shared.image(for: player.teamName)
@@ -1786,7 +2013,24 @@ private struct FantasyPlayerCard: View {
                 .background(pointsBackground)
         }
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .overlay {
+            if player.isPlayingNow {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Color.red.opacity(isPulsing ? 0.45 : 0.9), lineWidth: 1)
+                    .scaleEffect(isPulsing ? 1.03 : 1.0)
+            }
+        }
+        .shadow(color: player.isPlayingNow ? Color.red.opacity(isPulsing ? 0.25 : 0.1) : .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .animation(
+            player.isPlayingNow ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
+            value: isPulsing
+        )
+        .onAppear {
+            isPulsing = player.isPlayingNow
+        }
+        .onChange(of: player.isPlayingNow) { _, newValue in
+            isPulsing = newValue
+        }
     }
 
     private func badge(text: String, color: Color) -> some View {
@@ -1890,6 +2134,74 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     func scoreDisplay(for mode: RivalsScoreMode) -> String {
         guard let score = scoreValue(for: mode) else { return "-" }
         return "\(score)"
+    }
+}
+
+private struct FantasyRivalScorePill: Identifiable, Hashable {
+    let entryID: Int
+    let initials: String
+    let score: Int
+
+    var id: Int {
+        entryID
+    }
+}
+
+private struct FantasyScoreLozenge: View {
+    let displayedScore: String
+    let isLive: Bool
+
+    @State private var isPulsing = false
+
+    private var gradient: LinearGradient {
+        if isLive {
+            return LinearGradient(
+                colors: [
+                    Color(red: 0.95, green: 0.20, blue: 0.66),
+                    Color(red: 1.0, green: 0.29, blue: 0.29),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
+
+        return LinearGradient(
+            colors: [Color.cyan, Color.blue],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(gradient)
+
+            Text(displayedScore)
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(Color(.label))
+                .padding(.horizontal, 12)
+        }
+        .frame(width: 94, height: 62)
+        .overlay {
+            if isLive {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.red.opacity(isPulsing ? 0.45 : 0.9), lineWidth: 1)
+                    .scaleEffect(isPulsing ? 1.04 : 1.0)
+            }
+        }
+        .shadow(color: isLive ? Color.red.opacity(isPulsing ? 0.28 : 0.12) : .clear, radius: 8)
+        .animation(
+            isLive ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
+            value: isPulsing
+        )
+        .onAppear {
+            isPulsing = isLive
+        }
+        .onChange(of: isLive) { _, newValue in
+            isPulsing = newValue
+        }
     }
 }
 
