@@ -19,6 +19,8 @@ final class FantasyViewModel: ObservableObject {
     private var cachedBootstrapFetchedAt: Date?
     private var cachedBootstrapBaseURL: String?
     private let bootstrapCacheTTL: TimeInterval = 12 * 60 * 60
+    private var cachedTransferRecommendations: [String: (payload: FantasyTransferRecommendationsResponse, fetchedAt: Date)] = [:]
+    private let transferRecommendationsCacheTTL: TimeInterval = 10 * 60
     private var cachedPlayerDetailsBootstrap: FantasyBootstrapLookup?
     private var cachedPlayerDetailsBootstrapFetchedAt: Date?
     private let playerDetailsBootstrapCacheTTL: TimeInterval = 6 * 60 * 60
@@ -40,6 +42,7 @@ final class FantasyViewModel: ObservableObject {
         cachedBootstrapLookup = nil
         cachedBootstrapFetchedAt = nil
         cachedBootstrapBaseURL = nil
+        cachedTransferRecommendations = [:]
         cachedPlayerDetailsBootstrap = nil
         cachedPlayerDetailsBootstrapFetchedAt = nil
         cachedSeasonFixtures = []
@@ -225,6 +228,31 @@ final class FantasyViewModel: ObservableObject {
             bootstrap: bootstrapLookup,
             summary: elementSummary
         )
+    }
+
+    func fetchTransferRecommendations(
+        elementID: Int,
+        apiBaseURL: String
+    ) async throws -> FantasyTransferRecommendationsResponse {
+        guard let baseURL = URL(string: apiBaseURL) else {
+            throw FantasyPublicAPIError.invalidURL
+        }
+
+        let cacheKey = "\(baseURL.absoluteString)|\(elementID)"
+        let now = Date()
+        if let cached = cachedTransferRecommendations[cacheKey],
+           now.timeIntervalSince(cached.fetchedAt) < transferRecommendationsCacheTTL {
+            let age = Int(now.timeIntervalSince(cached.fetchedAt))
+            logPerf("transfer_recommendations_cache_hit element_id=\(elementID) age_s=\(age)")
+            return cached.payload
+        }
+
+        let serverClient = APIClient(baseURL: baseURL)
+        let response = try await timed("transfer_recommendations element_id=\(elementID)") {
+            try await serverClient.fetchFantasyTransferRecommendations(elementID: elementID)
+        }
+        cachedTransferRecommendations[cacheKey] = (payload: response, fetchedAt: now)
+        return response
     }
 
     private func fetchPlayerDetailsBootstrapLookup(apiBaseURL: String) async throws -> FantasyBootstrapLookup {

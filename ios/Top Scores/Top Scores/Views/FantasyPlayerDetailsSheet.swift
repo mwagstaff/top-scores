@@ -11,6 +11,9 @@ struct FantasyPlayerDetailsSheet: View {
     @State private var isLoading = true
     @State private var details: FantasyPlayerDetailsData?
     @State private var errorMessage: String?
+    @State private var transferRecommendations: FantasyTransferRecommendationsResponse?
+    @State private var isLoadingTransferRecommendations = false
+    @State private var transferRecommendationsErrorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -36,6 +39,7 @@ struct FantasyPlayerDetailsSheet: View {
                             }
                             fixturesSection(details)
                             historySection(details)
+                            transferRecommendationsSection
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
@@ -462,9 +466,171 @@ struct FantasyPlayerDetailsSheet: View {
         }
     }
 
+    private var transferRecommendationsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Transfer recommendations")
+                .font(.headline)
+
+            if isLoadingTransferRecommendations {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Finding recommendations...")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let transferRecommendationsErrorMessage {
+                Text(transferRecommendationsErrorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else if let transferRecommendations {
+                transferRecommendationGroup(
+                    title: "Similar value",
+                    subtitle: "Top options within a similar budget",
+                    items: transferRecommendations.similarValue
+                )
+
+                transferRecommendationGroup(
+                    title: "Budget options",
+                    subtitle: "Top lower-cost alternatives",
+                    items: transferRecommendations.budget
+                )
+            } else {
+                Text("No transfer recommendations available.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private func transferRecommendationGroup(
+        title: String,
+        subtitle: String,
+        items: [FantasyTransferRecommendation]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if items.isEmpty {
+                Text("No players found for this filter.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(items.prefix(10)) { recommendation in
+                    transferRecommendationRow(recommendation)
+                }
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(.tertiarySystemGroupedBackground))
+        )
+    }
+
+    private func transferRecommendationRow(_ item: FantasyTransferRecommendation) -> some View {
+        HStack(spacing: 8) {
+            teamLogoView(teamName: item.teamName, size: 18)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.playerName)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Text(item.teamName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 6) {
+                Text("£\(String(format: "%.1f", item.nowCostMillions))")
+                    .font(.caption2.monospacedDigit())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color(.secondarySystemGroupedBackground))
+                    )
+                Text("Form \(String(format: "%.1f", item.form))")
+                    .font(.caption2.monospacedDigit())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color(.secondarySystemGroupedBackground))
+                    )
+                Text("D\(item.projectedNext5Difficulty)")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(fixtureDifficultyColor(item.projectedNext5Difficulty))
+                    )
+                Text(item.recommendationScore.formatted(.number.precision(.fractionLength(1))))
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.blue.opacity(0.85))
+                    )
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func userFriendlyTransferRecommendationError(_ error: Error) -> String {
+        let message = error.localizedDescription
+        let normalized = message
+            .lowercased()
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if normalized.contains("game is being updated") || normalized.contains("temporarily unavailable") {
+            return "Transfer recommendations are temporarily unavailable while Fantasy Football updates."
+        }
+        return "Could not load transfer recommendations right now."
+    }
+
+    private func loadTransferRecommendations(elementID: Int) async {
+        isLoadingTransferRecommendations = true
+        transferRecommendationsErrorMessage = nil
+
+        do {
+            let recommendations = try await fantasyViewModel.fetchTransferRecommendations(
+                elementID: elementID,
+                apiBaseURL: apiBaseURL
+            )
+            transferRecommendations = recommendations
+        } catch {
+            transferRecommendations = nil
+            transferRecommendationsErrorMessage = userFriendlyTransferRecommendationError(error)
+        }
+
+        isLoadingTransferRecommendations = false
+    }
+
     private func loadDetails() async {
         isLoading = true
         errorMessage = nil
+        transferRecommendations = nil
+        transferRecommendationsErrorMessage = nil
+        isLoadingTransferRecommendations = false
 
         do {
             let loaded = try await fantasyViewModel.loadPlayerDetails(
@@ -473,6 +639,9 @@ struct FantasyPlayerDetailsSheet: View {
                 apiBaseURL: apiBaseURL
             )
             details = loaded
+            isLoading = false
+            await loadTransferRecommendations(elementID: loaded.elementID)
+            return
         } catch {
             details = nil
             errorMessage = error.localizedDescription

@@ -166,6 +166,29 @@ struct APIClient {
         return try JSONDecoder().decode(FantasyBootstrapLookup.self, from: data)
     }
 
+    func fetchFantasyTransferRecommendations(
+        elementID: Int,
+        valueWindowMillions: Double = 1.5,
+        budgetDiscountFraction: Double = 0.30,
+        limit: Int = 10
+    ) async throws -> FantasyTransferRecommendationsResponse {
+        let queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "value_window_millions", value: String(valueWindowMillions)),
+            URLQueryItem(name: "budget_discount_fraction", value: String(budgetDiscountFraction)),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        let request = try buildRequest(
+            path: "fantasy/transfers/recommendations/\(elementID)",
+            queryItems: queryItems
+        )
+        let (data, http) = try await performRequest(
+            request,
+            operation: "fantasy_transfer_recommendations"
+        )
+        try validateSuccess(http, data: data, operation: "fantasy_transfer_recommendations")
+        return try JSONDecoder().decode(FantasyTransferRecommendationsResponse.self, from: data)
+    }
+
     func fetchMatchDetails(matchId: String) async throws -> MatchDetailsPayload {
         guard let normalizedID = Self.normalizedMatchDetailsID(matchId) else {
             throw APIClientError.invalidMatchDetailsID(matchId)

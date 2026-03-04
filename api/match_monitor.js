@@ -1289,6 +1289,19 @@ async function monitorMatch(matchId, initialMatch) {
   pollMatchDetails(matchId);
 }
 
+function mergeSnapshotWithFallback(fallbackMatch, payloadMatch) {
+  const merged = { ...(fallbackMatch && typeof fallbackMatch === "object" ? fallbackMatch : {}) };
+  const payload = payloadMatch && typeof payloadMatch === "object" ? payloadMatch : {};
+
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value === null || value === undefined) return;
+    if (typeof value === "string" && !String(value).trim()) return;
+    merged[key] = value;
+  });
+
+  return merged;
+}
+
 async function fetchInitialMatchSnapshot(matchId, fallbackMatch) {
   const fallback = fallbackMatch && typeof fallbackMatch === "object" ? fallbackMatch : {};
   const url = `${apiBaseURL}/matches/${matchId}`;
@@ -1313,7 +1326,7 @@ async function fetchInitialMatchSnapshot(matchId, fallbackMatch) {
       return { ...fallback };
     }
 
-    const merged = { ...fallback, ...payload };
+    const merged = mergeSnapshotWithFallback(fallback, payload);
     logDecision("monitor_seed_snapshot", {
       match_id: matchId,
       result: "seeded_from_match_details",
@@ -1351,13 +1364,14 @@ async function pollMatchDetails(matchId) {
       return;
     }
 
-    const currentMatch = await response.json();
+    const currentPayload = await response.json();
 
-    if (!currentMatch || typeof currentMatch !== "object") {
+    if (!currentPayload || typeof currentPayload !== "object") {
       console.warn(`[MatchMonitor] No match data for ${matchId}`);
       scheduleNextPoll(matchId);
       return;
     }
+    const currentMatch = mergeSnapshotWithFallback(monitorState.lastState, currentPayload);
 
     // Detect changes and trigger notifications
     await detectAndNotifyChanges(matchId, monitorState, monitorState.lastState, currentMatch);
@@ -2535,6 +2549,7 @@ module.exports = {
     buildScoreChangeEvent,
     buildNotificationId,
     countGoals,
+    mergeSnapshotWithFallback,
     diffGoalEvents,
     isMatchRelevant,
     isLiveMatchStatus,

@@ -17,6 +17,26 @@ function newMonitorState(overrides = {}) {
   };
 }
 
+test("mergeSnapshotWithFallback preserves existing league when new payload omits it", () => {
+  const merged = __testHooks.mergeSnapshotWithFallback(
+    {
+      league: "La Liga",
+      home_team: "Rayo Vallecano",
+      away_team: "Real Oviedo",
+      score_status: "55",
+    },
+    {
+      league: null,
+      home_team: "Rayo Vallecano",
+      away_team: "Real Oviedo",
+      score_status: "56",
+    }
+  );
+
+  assert.equal(merged.league, "La Liga");
+  assert.equal(merged.score_status, "56");
+});
+
 test("does not emit delayed kickoff when first live status seen is HT", () => {
   const monitorState = newMonitorState();
 

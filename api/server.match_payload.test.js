@@ -77,3 +77,61 @@ test("toMatchListPayload still merges scoreline when match details teams exactly
   assert.equal(payload.home_score, 2);
   assert.equal(payload.away_score, 1);
 });
+
+test("toMatchListPayload resolves match_details_id from details lookup when list row lacks details_url", () => {
+  const fallbackId = "ce3k6y7dg63t";
+  const payload = toMatchListPayload(
+    {
+      date: "2026-03-04",
+      time: "18:00",
+      league: "La Liga",
+      home_team: "Rayo Vallecano",
+      away_team: "Real Oviedo",
+      tv_channels: ["Premier Sports 2"],
+    },
+    {
+      matchDetailsLookup: {
+        [fallbackId]: {
+          id: fallbackId,
+          date: null,
+          time: null,
+          league: null,
+          home_team: "Rayo Vallecano",
+          away_team: "Real Oviedo",
+          score_status: "56",
+        },
+      },
+    }
+  );
+
+  assert.equal(payload.match_details_id, fallbackId);
+});
+
+test("toMatchListPayload does not resolve match_details_id from details lookup when date conflicts", () => {
+  const fallbackId = "ce3k6y7dg63t";
+  const payload = toMatchListPayload(
+    {
+      date: "2026-03-04",
+      time: "18:00",
+      league: "La Liga",
+      home_team: "Rayo Vallecano",
+      away_team: "Real Oviedo",
+      tv_channels: ["Premier Sports 2"],
+    },
+    {
+      matchDetailsLookup: {
+        [fallbackId]: {
+          id: fallbackId,
+          date: "2026-03-01",
+          time: "18:00",
+          league: "La Liga",
+          home_team: "Rayo Vallecano",
+          away_team: "Real Oviedo",
+          score_status: "FT",
+        },
+      },
+    }
+  );
+
+  assert.equal(payload.match_details_id, undefined);
+});

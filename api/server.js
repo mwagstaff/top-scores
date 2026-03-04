@@ -383,6 +383,18 @@ const FPL_BOOTSTRAP_INTERVAL_MS = Number(
   process.env.FPL_BOOTSTRAP_UPDATE_INTERVAL_MS ||
     FPL_BOOTSTRAP_INTERVAL_HOURS * 60 * 60 * 1000
 );
+const FPL_BOOTSTRAP_DAILY_REFRESH_HOUR_UK = Number(
+  process.env.FPL_BOOTSTRAP_DAILY_REFRESH_HOUR_UK || 3
+);
+const FPL_BOOTSTRAP_DAILY_REFRESH_MINUTE_UK = Number(
+  process.env.FPL_BOOTSTRAP_DAILY_REFRESH_MINUTE_UK || 0
+);
+const parsedFplBootstrapMaxAgeMs = Number(
+  process.env.FPL_BOOTSTRAP_MAX_AGE_MS || 24 * 60 * 60 * 1000
+);
+const FPL_BOOTSTRAP_MAX_AGE_MS = Number.isFinite(parsedFplBootstrapMaxAgeMs)
+  ? Math.max(60 * 60 * 1000, Math.floor(parsedFplBootstrapMaxAgeMs))
+  : 24 * 60 * 60 * 1000;
 const parsedFplBootstrapTimeoutMs = Number(
   process.env.FPL_BOOTSTRAP_TIMEOUT_MS || 10 * 60 * 1000
 );
@@ -398,6 +410,10 @@ const FPL_BOOTSTRAP_MAX_BYTES = Number.isFinite(parsedFplBootstrapMaxBytes)
 const FPL_GAME_UPDATING_NEEDLE = "the game is being updated";
 const FPL_GAME_UPDATING_USER_MESSAGE =
   "Fantasy Football data is temporarily unavailable while the official game is being updated. Please try again in a few minutes.";
+const FPL_TRANSFER_DEFAULT_VALUE_WINDOW_MILLIONS = 1.5;
+const FPL_TRANSFER_DEFAULT_BUDGET_DISCOUNT_FRACTION = 0.30;
+const FPL_TRANSFER_DEFAULT_LIMIT = 10;
+const FPL_TRANSFER_MAX_LIMIT = 25;
 const RECENT_OUTPUT_PATH =
   process.env.RECENT_OUTPUT_PATH || path.join(__dirname, "recent_matches.json");
 const MISSING_TEAM_LOGOS_OUTPUT_PATH =
@@ -467,6 +483,7 @@ const PROCESS_START_TIME_SECONDS = Math.floor(Date.now() / 1000);
 const PROCESS_CPU_USAGE_START = process.cpuUsage();
 const HTTP_REQUEST_DURATION_BUCKETS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5];
 const SOURCE_FETCH_DURATION_BUCKETS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
+const FPL_TRANSFER_RECOMMENDATION_DURATION_BUCKETS = [0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1];
 const UNIQUE_USER_WINDOWS = [
   { period: "1m", windowMs: 60 * 1000 },
   { period: "5m", windowMs: 5 * 60 * 1000 },
@@ -477,6 +494,7 @@ const UNIQUE_USER_WINDOWS = [
 ];
 const httpRequestMetrics = new Map();
 const sourceFetchMetrics = new Map();
+const fantasyTransferRecommendationMetrics = new Map();
 const sourceRecordsFetchedTotalBySource = new Map();
 const sourceCacheSizeBySource = new Map();
 const sourceLastSuccessAtSeconds = new Map();
@@ -625,6 +643,10 @@ let fantasyBootstrapLastFailureDurationSeconds = 0;
 let fantasyBootstrapGameUpdating = false;
 let fantasyBootstrapGameUpdatingMessage = null;
 let fantasyBootstrapGameUpdatingDetectedAt = null;
+let fantasyBootstrapNextDailyRefreshAt = null;
+let fantasyBootstrapDailyRefreshTimer = null;
+let fantasyTransferRecommendationRequestsTotal = 0;
+let fantasyTransferRecommendationFailuresTotal = 0;
 
 const STAGE_PATTERNS = [
   /\s*[-:–]\s*Round\s+\w+$/i,
@@ -1140,6 +1162,306 @@ function refreshFantasyBootstrapDerivedState(payload) {
   setSourceCacheSize(SOURCE_FPL_BOOTSTRAP, fantasyBootstrapEventsCount);
 }
 
+function fantasyBootstrapAgeSeconds(nowMs = Date.now()) {
+  if (!fantasyBootstrapLastUpdated) return Number.POSITIVE_INFINITY;
+  const parsed = Date.parse(fantasyBootstrapLastUpdated);
+  if (!Number.isFinite(parsed) || parsed <= 0) return Number.POSITIVE_INFINITY;
+  return Math.max(0, (nowMs - parsed) / 1000);
+}
+
+function isFantasyBootstrapStale(nowMs = Date.now()) {
+  const ageSeconds = fantasyBootstrapAgeSeconds(nowMs);
+  if (!Number.isFinite(ageSeconds)) return true;
+  return ageSeconds * 1000 > FPL_BOOTSTRAP_MAX_AGE_MS;
+}
+
+const londonDateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/London",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function londonDateTimeParts(date) {
+  const parts = londonDateTimeFormatter.formatToParts(date);
+  const values = {};
+  for (const part of parts) {
+    if (part.type === "literal") continue;
+    values[part.type] = Number(part.value);
+  }
+  return {
+    year: Number.isFinite(values.year) ? values.year : 0,
+    month: Number.isFinite(values.month) ? values.month : 0,
+    day: Number.isFinite(values.day) ? values.day : 0,
+    hour: Number.isFinite(values.hour) ? values.hour : 0,
+    minute: Number.isFinite(values.minute) ? values.minute : 0,
+    second: Number.isFinite(values.second) ? values.second : 0,
+  };
+}
+
+function millisecondsUntilNextLondonTime(targetHour, targetMinute, now = new Date()) {
+  const safeHour = Number.isFinite(targetHour)
+    ? Math.max(0, Math.min(23, Math.floor(targetHour)))
+    : 3;
+  const safeMinute = Number.isFinite(targetMinute)
+    ? Math.max(0, Math.min(59, Math.floor(targetMinute)))
+    : 0;
+
+  const maxMinutesToSearch = 60 * 48;
+  let candidate = new Date(now.getTime() + 60 * 1000);
+  for (let i = 0; i < maxMinutesToSearch; i += 1) {
+    const parts = londonDateTimeParts(candidate);
+    if (parts.hour === safeHour && parts.minute === safeMinute) {
+      candidate = new Date(candidate.getTime());
+      candidate.setSeconds(0, 0);
+      return Math.max(1000, candidate.getTime() - now.getTime());
+    }
+    candidate = new Date(candidate.getTime() + 60 * 1000);
+  }
+
+  return 24 * 60 * 60 * 1000;
+}
+
+function scheduleFantasyBootstrapDailyRefresh() {
+  if (fantasyBootstrapDailyRefreshTimer) {
+    clearTimeout(fantasyBootstrapDailyRefreshTimer);
+    fantasyBootstrapDailyRefreshTimer = null;
+  }
+
+  const delayMs = millisecondsUntilNextLondonTime(
+    FPL_BOOTSTRAP_DAILY_REFRESH_HOUR_UK,
+    FPL_BOOTSTRAP_DAILY_REFRESH_MINUTE_UK
+  );
+  const nextAt = new Date(Date.now() + delayMs);
+  fantasyBootstrapNextDailyRefreshAt = nextAt.toISOString();
+  const londonTarget = londonDateTimeFormatter.format(nextAt);
+  console.info(
+    `[FPLBootstrap] Daily refresh scheduled hour_uk=${FPL_BOOTSTRAP_DAILY_REFRESH_HOUR_UK} minute_uk=${FPL_BOOTSTRAP_DAILY_REFRESH_MINUTE_UK} next_london="${londonTarget}" next_iso=${fantasyBootstrapNextDailyRefreshAt}`
+  );
+
+  fantasyBootstrapDailyRefreshTimer = setTimeout(async () => {
+    try {
+      await updateFantasyBootstrapStatic({ trigger: "daily_uk_time" });
+    } finally {
+      scheduleFantasyBootstrapDailyRefresh();
+    }
+  }, delayMs);
+
+  if (
+    fantasyBootstrapDailyRefreshTimer &&
+    typeof fantasyBootstrapDailyRefreshTimer.unref === "function"
+  ) {
+    fantasyBootstrapDailyRefreshTimer.unref();
+  }
+}
+
+function parseFiniteNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clamp(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+function normalizeByRange(value, min, max, fallback = 0) {
+  if (!Number.isFinite(value)) return fallback;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return fallback;
+  return clamp((value - min) / (max - min), 0, 1);
+}
+
+function roundTo(value, places = 2) {
+  const factor = 10 ** places;
+  const normalized = Number.isFinite(value) ? value : 0;
+  return Math.round(normalized * factor) / factor;
+}
+
+function normalizedPlayerName(element) {
+  const first = String((element && element.first_name) || "").trim();
+  const second = String((element && element.second_name) || "").trim();
+  const full = [first, second].filter(Boolean).join(" ").trim();
+  if (full) return full;
+  return String((element && element.web_name) || "").trim() || "Unknown";
+}
+
+function elementAvailabilityPenalty(element) {
+  const status = String((element && element.status) || "")
+    .trim()
+    .toLowerCase();
+  const chanceNext = parseFiniteNumber(element && element.chance_of_playing_next_round, 100);
+  const chanceThis = parseFiniteNumber(element && element.chance_of_playing_this_round, chanceNext);
+  const chance = Math.min(chanceNext, chanceThis);
+  const news = String((element && element.news) || "")
+    .trim()
+    .toLowerCase();
+
+  let penalty = 0;
+  if (status === "i" || status === "s" || status === "u") {
+    penalty += 1.0;
+  } else if (status === "d") {
+    if (chance <= 0) penalty += 0.85;
+    else if (chance < 50) penalty += 0.55;
+    else penalty += 0.25;
+  } else if (status && status !== "a") {
+    penalty += 0.15;
+  }
+
+  if (chance <= 0) penalty += 0.3;
+  else if (chance < 50) penalty += 0.2;
+  else if (chance < 75) penalty += 0.08;
+
+  if (
+    /(injur|knock|suspend|ill|virus|hamstring|ankle|knee|muscle|doubt|doubtful|calf)/.test(news)
+  ) {
+    penalty += 0.12;
+  }
+
+  return clamp(penalty, 0, 1.5);
+}
+
+function teamStrengthContext(teams) {
+  const records = Array.isArray(teams)
+    ? teams.map((team) => ({
+      id: parseFiniteNumber(team && team.id, 0),
+      name: String((team && team.name) || "").trim(),
+      shortName: String((team && team.short_name) || "").trim(),
+      attackAverage:
+        (parseFiniteNumber(team && team.strength_attack_home, 0) +
+          parseFiniteNumber(team && team.strength_attack_away, 0)) / 2,
+      defenceAverage:
+        (parseFiniteNumber(team && team.strength_defence_home, 0) +
+          parseFiniteNumber(team && team.strength_defence_away, 0)) / 2,
+    }))
+      .filter((team) => team.id > 0)
+    : [];
+
+  const teamsByID = new Map(records.map((team) => [team.id, team]));
+  const attackValues = records.map((team) => team.attackAverage).filter(Number.isFinite);
+  const defenceValues = records.map((team) => team.defenceAverage).filter(Number.isFinite);
+
+  return {
+    teamsByID,
+    attackMin: attackValues.length > 0 ? Math.min(...attackValues) : 0,
+    attackMax: attackValues.length > 0 ? Math.max(...attackValues) : 1,
+    defenceMin: defenceValues.length > 0 ? Math.min(...defenceValues) : 0,
+    defenceMax: defenceValues.length > 0 ? Math.max(...defenceValues) : 1,
+  };
+}
+
+function projectedFiveGameDifficulty(element, teamContext) {
+  const elementType = parseFiniteNumber(element && element.element_type, 0);
+  const teamID = parseFiniteNumber(element && element.team, 0);
+  const team = teamContext.teamsByID.get(teamID) || null;
+  const epNext = parseFiniteNumber(element && element.ep_next, parseFiniteNumber(element && element.form, 0));
+  const epNextNorm = clamp(epNext / 8.0, 0, 1);
+
+  let teamStrengthNorm = 0.5;
+  if (team) {
+    if (elementType === 1 || elementType === 2) {
+      teamStrengthNorm = normalizeByRange(
+        team.defenceAverage,
+        teamContext.defenceMin,
+        teamContext.defenceMax,
+        0.5
+      );
+    } else {
+      teamStrengthNorm = normalizeByRange(
+        team.attackAverage,
+        teamContext.attackMin,
+        teamContext.attackMax,
+        0.5
+      );
+    }
+  }
+
+  const ease = clamp(epNextNorm * 0.7 + teamStrengthNorm * 0.3, 0, 1);
+  const projectedDifficulty = Math.round((1 - ease) * 4 + 1);
+
+  return {
+    projectedDifficulty: clamp(projectedDifficulty, 1, 5),
+    projectedEase: ease,
+  };
+}
+
+function buildTransferRecommendation(element, targetElement, teamContext, positionNameByID) {
+  const nowCost = parseFiniteNumber(element && element.now_cost, 0);
+  const targetCost = parseFiniteNumber(targetElement && targetElement.now_cost, 0);
+  const costMillions = nowCost / 10;
+  const targetCostMillions = targetCost / 10;
+  const form = parseFiniteNumber(element && element.form, 0);
+  const pointsPerGame = parseFiniteNumber(element && element.points_per_game, form);
+  const totalPoints = parseFiniteNumber(element && element.total_points, 0);
+  const eventPoints = parseFiniteNumber(element && element.event_points, 0);
+  const availabilityPenalty = elementAvailabilityPenalty(element);
+  const next5 = projectedFiveGameDifficulty(element, teamContext);
+
+  const formLast5Proxy = form * 5;
+  const formScoreNorm = clamp(formLast5Proxy / 35, 0, 1);
+  const pointsPerGameNorm = clamp(pointsPerGame / 8, 0, 1);
+  const valueEfficiency = costMillions > 0 ? totalPoints / costMillions : 0;
+  const valueEfficiencyNorm = clamp(valueEfficiency / 32, 0, 1);
+
+  const weightedScore =
+    formScoreNorm * 0.52 +
+    next5.projectedEase * 0.28 +
+    pointsPerGameNorm * 0.12 +
+    valueEfficiencyNorm * 0.08;
+  const recommendationScore = weightedScore * 100 - availabilityPenalty * 24;
+
+  const teamID = parseFiniteNumber(element && element.team, 0);
+  const team = teamContext.teamsByID.get(teamID) || null;
+  const chanceNext = parseFiniteNumber(element && element.chance_of_playing_next_round, 100);
+  const chanceThis = parseFiniteNumber(element && element.chance_of_playing_this_round, chanceNext);
+  const rawStatus = String((element && element.status) || "").trim().toLowerCase();
+  const status = rawStatus || "a";
+  const availability = (() => {
+    if (status === "a" && availabilityPenalty < 0.05) return "available";
+    if (status === "d" || chanceNext < 100 || chanceThis < 100) return "doubtful";
+    return "unavailable";
+  })();
+
+  return {
+    element_id: parseFiniteNumber(element && element.id, 0),
+    web_name: String((element && element.web_name) || "").trim(),
+    player_name: normalizedPlayerName(element),
+    team_id: teamID,
+    team_name: team && team.name ? team.name : "Unknown",
+    team_short_name: team && team.shortName ? team.shortName : "",
+    position_id: parseFiniteNumber(element && element.element_type, 0),
+    position: positionNameByID.get(parseFiniteNumber(element && element.element_type, 0)) || "Player",
+    now_cost_millions: roundTo(costMillions, 1),
+    value_delta_millions: roundTo(costMillions - targetCostMillions, 1),
+    form,
+    form_last5_proxy_points: roundTo(formLast5Proxy, 1),
+    points_per_game: roundTo(pointsPerGame, 2),
+    ep_next: roundTo(parseFiniteNumber(element && element.ep_next, form), 2),
+    total_points: totalPoints,
+    event_points: eventPoints,
+    status,
+    chance_of_playing_next_round: chanceNext,
+    chance_of_playing_this_round: chanceThis,
+    news: String((element && element.news) || "").trim(),
+    availability,
+    projected_next5_difficulty: next5.projectedDifficulty,
+    projected_next5_ease: roundTo(next5.projectedEase, 3),
+    recommendation_score: roundTo(recommendationScore, 2),
+    score_breakdown: {
+      form_score: roundTo(formScoreNorm * 100, 2),
+      fixture_score: roundTo(next5.projectedEase * 100, 2),
+      points_per_game_score: roundTo(pointsPerGameNorm * 100, 2),
+      value_efficiency_score: roundTo(valueEfficiencyNorm * 100, 2),
+      availability_penalty: roundTo(availabilityPenalty, 3),
+    },
+  };
+}
+
 function buildPrometheusMetricsText() {
   const lines = [];
   const cpuUsage = process.cpuUsage(PROCESS_CPU_USAGE_START);
@@ -1381,6 +1703,8 @@ function buildPrometheusMetricsText() {
     const parsed = Number(fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
   })();
+  const fantasyBootstrapAgeGaugeSeconds = fantasyBootstrapAgeSeconds();
+  const fantasyBootstrapStaleGauge = isFantasyBootstrapStale() ? 1 : 0;
 
   lines.push(
     "# HELP fpl_bootstrap_payload_bytes Last downloaded FPL bootstrap-static payload size in bytes."
@@ -1476,6 +1800,52 @@ function buildPrometheusMetricsText() {
     lines,
     "fpl_bootstrap_last_failure_duration_seconds",
     fantasyBootstrapLastFailureDurationSeconds
+  );
+
+  lines.push(
+    "# HELP fpl_bootstrap_age_seconds Age of the in-memory FPL bootstrap-static cache in seconds."
+  );
+  lines.push("# TYPE fpl_bootstrap_age_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "fpl_bootstrap_age_seconds",
+    Number.isFinite(fantasyBootstrapAgeGaugeSeconds) ? fantasyBootstrapAgeGaugeSeconds : 0
+  );
+
+  lines.push(
+    "# HELP fpl_bootstrap_stale Whether the in-memory FPL bootstrap cache is older than the configured freshness threshold (1=true, 0=false)."
+  );
+  lines.push("# TYPE fpl_bootstrap_stale gauge");
+  pushPrometheusSample(lines, "fpl_bootstrap_stale", fantasyBootstrapStaleGauge);
+
+  const transferRecommendationMetricEntries = Array.from(
+    fantasyTransferRecommendationMetrics.values()
+  );
+  appendHistogramMetrics(
+    lines,
+    "fpl_transfer_recommendation_duration_seconds",
+    "Duration of in-memory FPL transfer recommendation requests in seconds.",
+    FPL_TRANSFER_RECOMMENDATION_DURATION_BUCKETS,
+    transferRecommendationMetricEntries
+  );
+  lines.push(
+    "# HELP fpl_transfer_recommendation_requests_total Total transfer recommendation requests served."
+  );
+  lines.push("# TYPE fpl_transfer_recommendation_requests_total counter");
+  pushPrometheusSample(
+    lines,
+    "fpl_transfer_recommendation_requests_total",
+    fantasyTransferRecommendationRequestsTotal
+  );
+
+  lines.push(
+    "# HELP fpl_transfer_recommendation_failures_total Total transfer recommendation requests that failed."
+  );
+  lines.push("# TYPE fpl_transfer_recommendation_failures_total counter");
+  pushPrometheusSample(
+    lines,
+    "fpl_transfer_recommendation_failures_total",
+    fantasyTransferRecommendationFailuresTotal
   );
 
   const clubEloSuccessTimestampSeconds = isoTimestampToSeconds(clubEloLastSuccessAt);
@@ -3499,9 +3869,183 @@ function normalizeMatchRecord(match) {
   return record;
 }
 
+function normalizeTeamIdentity(value) {
+  return normalizeTeamName(value).replace(/\s+/g, " ").trim();
+}
+
+function normalizeLeagueIdentity(value) {
+  return normalizeLeagueName(value || "").toLowerCase().trim();
+}
+
+function normalizeLookupDateValue(value) {
+  const date = String(value || "").trim();
+  return isDateOnly(date) ? date : null;
+}
+
+function normalizeLookupTimeValue(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return null;
+  return TIME_ONLY_PATTERN.test(trimmed) ? normalizeTimeValue(trimmed) : null;
+}
+
+function isComparableLookupTime(lhs, rhs) {
+  if (!lhs || !rhs) return true;
+  return lhs === rhs || lhs === "00:00" || rhs === "00:00";
+}
+
+function buildMatchDetailsIdentityIndex(matchDetailsLookup) {
+  const byExact = new Map();
+  const byTeams = new Map();
+  const entries =
+    matchDetailsLookup instanceof Map
+      ? Array.from(matchDetailsLookup.entries())
+      : Object.entries(matchDetailsLookup || {});
+
+  entries.forEach(([lookupKey, value]) => {
+    if (!value || typeof value !== "object") return;
+    const detailsId = normalizeMatchDetailsId(value.id || lookupKey);
+    if (!detailsId) return;
+
+    const home = normalizeTeamIdentity(value.home_team);
+    const away = normalizeTeamIdentity(value.away_team);
+    if (!home || !away) return;
+
+    const date = normalizeLookupDateValue(value.date);
+    const time = normalizeLookupTimeValue(value.time);
+    const league = normalizeLeagueIdentity(value.league);
+    const teamKey = `${home}|${away}`;
+    const candidate = {
+      id: detailsId,
+      home,
+      away,
+      date,
+      time,
+      league,
+      payload: value,
+    };
+
+    if (!byTeams.has(teamKey)) byTeams.set(teamKey, []);
+    byTeams.get(teamKey).push(candidate);
+
+    if (date) {
+      const exactKey = `${date}|${time || "00:00"}|${league}|${teamKey}`;
+      if (!byExact.has(exactKey)) byExact.set(exactKey, []);
+      byExact.get(exactKey).push(candidate);
+    }
+  });
+
+  return { byExact, byTeams };
+}
+
+function isCompatibleMatchDetailsCandidate(candidate, normalizedMatch) {
+  if (!candidate || !normalizedMatch) return false;
+
+  if (candidate.date && candidate.date !== normalizedMatch.date) {
+    return false;
+  }
+
+  const matchTime = normalizeLookupTimeValue(normalizedMatch.time) || "00:00";
+  if (candidate.time && !isComparableLookupTime(candidate.time, matchTime)) {
+    return false;
+  }
+
+  const matchLeague = normalizeLeagueIdentity(normalizedMatch.league);
+  if (candidate.league && matchLeague && candidate.league !== matchLeague) {
+    return false;
+  }
+
+  return true;
+}
+
+function scoreMatchDetailsCandidate(candidate, normalizedMatch) {
+  const matchTime = normalizeLookupTimeValue(normalizedMatch.time) || "00:00";
+  const matchLeague = normalizeLeagueIdentity(normalizedMatch.league);
+  let score = 0;
+
+  if (candidate.date && candidate.date === normalizedMatch.date) score += 8;
+  else if (!candidate.date) score += 1;
+
+  if (candidate.time && candidate.time === matchTime) score += 4;
+  else if (candidate.time && isComparableLookupTime(candidate.time, matchTime)) score += 2;
+  else if (!candidate.time) score += 1;
+
+  if (candidate.league && matchLeague && candidate.league === matchLeague) score += 4;
+  else if (!candidate.league) score += 1;
+
+  const status = normalizeMatchStatusValue(candidate.payload && candidate.payload.score_status);
+  if (isInProgressMatchStatus(status)) score += 2;
+
+  return score;
+}
+
+function pickBestMatchDetailsCandidate(candidates, normalizedMatch) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+  const compatible = candidates.filter((candidate) =>
+    isCompatibleMatchDetailsCandidate(candidate, normalizedMatch)
+  );
+  if (compatible.length === 0) return null;
+  if (compatible.length === 1) return compatible[0];
+
+  let best = null;
+  let bestScore = -Infinity;
+  let bestUpdatedAt = -Infinity;
+  let hasAmbiguousBest = false;
+
+  compatible.forEach((candidate) => {
+    const score = scoreMatchDetailsCandidate(candidate, normalizedMatch);
+    const updatedAtValue = Date.parse(
+      String(candidate && candidate.payload && candidate.payload.updated_at ? candidate.payload.updated_at : "")
+    );
+    const updatedAt = Number.isFinite(updatedAtValue) ? updatedAtValue : -Infinity;
+
+    if (score > bestScore || (score === bestScore && updatedAt > bestUpdatedAt)) {
+      best = candidate;
+      bestScore = score;
+      bestUpdatedAt = updatedAt;
+      hasAmbiguousBest = false;
+      return;
+    }
+
+    if (score === bestScore && updatedAt === bestUpdatedAt) {
+      hasAmbiguousBest = true;
+    }
+  });
+
+  if (hasAmbiguousBest) return null;
+  return best;
+}
+
+function resolveMatchDetailsIdFromLookup(normalizedMatch, options = {}) {
+  if (!normalizedMatch || typeof normalizedMatch !== "object") return null;
+  const matchDetailsLookup = options.matchDetailsLookup;
+  if (!matchDetailsLookup) return null;
+
+  const home = normalizeTeamIdentity(normalizedMatch.home_team);
+  const away = normalizeTeamIdentity(normalizedMatch.away_team);
+  if (!home || !away) return null;
+
+  const index = options.matchDetailsIdentityIndex || buildMatchDetailsIdentityIndex(matchDetailsLookup);
+  const matchTime = normalizeLookupTimeValue(normalizedMatch.time) || "00:00";
+  const matchLeague = normalizeLeagueIdentity(normalizedMatch.league);
+  const teamKey = `${home}|${away}`;
+  const exactKey = `${normalizedMatch.date}|${matchTime}|${matchLeague}|${teamKey}`;
+
+  const exactMatch = pickBestMatchDetailsCandidate(index.byExact.get(exactKey) || [], normalizedMatch);
+  if (exactMatch) return exactMatch.id;
+
+  const teamMatch = pickBestMatchDetailsCandidate(index.byTeams.get(teamKey) || [], normalizedMatch);
+  return teamMatch ? teamMatch.id : null;
+}
+
 function toMatchListPayload(match, options = {}) {
   const normalized = normalizeMatchRecord(match);
   if (!normalized) return null;
+
+  const matchDetailsLookup =
+    options && options.matchDetailsLookup ? options.matchDetailsLookup : null;
+  const matchDetailsIdentityIndex =
+    options && options.matchDetailsIdentityIndex ? options.matchDetailsIdentityIndex : null;
 
   let resolvedHomeScore = normalized.home_score;
   let resolvedAwayScore = normalized.away_score;
@@ -3536,12 +4080,15 @@ function toMatchListPayload(match, options = {}) {
     // For test matches or matches with explicit match_details_id
     detailsId = normalizeMatchDetailsId(normalized.match_details_id);
   }
+  if (!detailsId && matchDetailsLookup) {
+    detailsId = resolveMatchDetailsIdFromLookup(normalized, {
+      matchDetailsLookup,
+      matchDetailsIdentityIndex,
+    });
+  }
   if (detailsId) {
     payload.match_details_id = detailsId;
   }
-
-  const matchDetailsLookup =
-    options && options.matchDetailsLookup ? options.matchDetailsLookup : null;
 
   // Check if we have enriched match details (including penalty_result) in the cache
   let penaltyResult = normalized.penalty_result;
@@ -8495,10 +9042,13 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     res.set("X-Has-More", hasMore ? "true" : "false");
     res.set("X-Sort-Order", sortOrder);
 
+    const matchDetailsLookup = matchDetailsSnapshot.records || {};
+    const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(matchDetailsLookup);
     const payload = paged
       .map((match) =>
         toMatchListPayload(match, {
-          matchDetailsLookup: matchDetailsSnapshot.records || {},
+          matchDetailsLookup,
+          matchDetailsIdentityIndex,
         })
       )
       .filter(Boolean);
@@ -9076,12 +9626,7 @@ app.get(`${API_PREFIX}/channels`, async (_req, res) => {
 });
 
 app.get(`${API_PREFIX}/fantasy/gameweek/current`, (_req, res) => {
-  setCacheOnlyHeaders(res);
-  if (fantasyBootstrapLastUpdated) {
-    res.set("X-Last-Updated", fantasyBootstrapLastUpdated);
-  }
-  res.set("X-Operational-Source", "memory_cache");
-  res.set("X-Fantasy-Upstream-Status", fantasyBootstrapGameUpdating ? "game-updating" : "ok");
+  setFantasyBootstrapHeaders(res);
 
   if (!cachedFantasyBootstrap) {
     if (fantasyBootstrapGameUpdating) {
@@ -9109,12 +9654,7 @@ app.get(`${API_PREFIX}/fantasy/gameweek/current`, (_req, res) => {
 });
 
 app.get(`${API_PREFIX}/fantasy/gameweek/next`, (_req, res) => {
-  setCacheOnlyHeaders(res);
-  if (fantasyBootstrapLastUpdated) {
-    res.set("X-Last-Updated", fantasyBootstrapLastUpdated);
-  }
-  res.set("X-Operational-Source", "memory_cache");
-  res.set("X-Fantasy-Upstream-Status", fantasyBootstrapGameUpdating ? "game-updating" : "ok");
+  setFantasyBootstrapHeaders(res);
 
   if (!cachedFantasyBootstrap) {
     if (fantasyBootstrapGameUpdating) {
@@ -9212,6 +9752,11 @@ function setFantasyBootstrapHeaders(res) {
     res.set("X-Last-Updated", fantasyBootstrapLastUpdated);
   }
   res.set("X-Fantasy-Upstream-Status", fantasyBootstrapGameUpdating ? "game-updating" : "ok");
+  const ageSeconds = fantasyBootstrapAgeSeconds();
+  if (Number.isFinite(ageSeconds)) {
+    res.set("X-Fantasy-Cache-Age-Seconds", String(Math.floor(ageSeconds)));
+  }
+  res.set("X-Fantasy-Cache-Stale", isFantasyBootstrapStale() ? "true" : "false");
   res.set("X-Operational-Source", "memory_cache");
 }
 
@@ -9289,6 +9834,190 @@ app.get(`${API_PREFIX}/fantasy/bootstrap/element-types`, (_req, res) => {
     return;
   }
   res.json(fantasyBootstrapLookupPayload().element_types);
+});
+
+app.get(`${API_PREFIX}/fantasy/transfers/recommendations/:elementId`, (req, res) => {
+  const startedAtMs = Date.now();
+  fantasyTransferRecommendationRequestsTotal += 1;
+
+  try {
+    setFantasyBootstrapHeaders(res);
+
+    if (!cachedFantasyBootstrap) {
+      if (fantasyBootstrapGameUpdating) {
+        res.set("Retry-After", "120");
+        res.status(503).json({
+          error: FPL_GAME_UPDATING_USER_MESSAGE,
+          code: "fantasy_game_updating",
+          upstream_message: fantasyBootstrapGameUpdatingMessage,
+          detected_at: fantasyBootstrapGameUpdatingDetectedAt,
+        });
+        return;
+      }
+      res.status(503).json({ error: "Fantasy bootstrap-static dataset not loaded yet." });
+      return;
+    }
+
+    const targetElementID = parseFiniteNumber(req.params.elementId, 0);
+    if (!Number.isFinite(targetElementID) || targetElementID <= 0) {
+      res.status(400).json({
+        error: "Invalid element ID. Use a positive integer player ID.",
+      });
+      return;
+    }
+
+    const payload = cachedFantasyBootstrap && typeof cachedFantasyBootstrap === "object"
+      ? cachedFantasyBootstrap
+      : {};
+    const elements = Array.isArray(payload.elements) ? payload.elements : [];
+    const teams = Array.isArray(payload.teams) ? payload.teams : [];
+    const elementTypes = Array.isArray(payload.element_types) ? payload.element_types : [];
+    const targetElement = elements.find(
+      (item) => parseFiniteNumber(item && item.id, 0) === targetElementID
+    );
+
+    if (!targetElement) {
+      res.status(404).json({
+        error: "Player not found in bootstrap-static dataset.",
+        element_id: targetElementID,
+      });
+      return;
+    }
+
+    const targetPositionID = parseFiniteNumber(targetElement && targetElement.element_type, 0);
+    const targetNowCost = parseFiniteNumber(targetElement && targetElement.now_cost, 0);
+    if (targetPositionID <= 0 || targetNowCost <= 0) {
+      res.status(422).json({
+        error: "Target player has incomplete data for recommendation scoring.",
+        element_id: targetElementID,
+      });
+      return;
+    }
+
+    const rawValueWindowMillions = Number(req.query.value_window_millions);
+    const valueWindowMillions = Number.isFinite(rawValueWindowMillions)
+      ? clamp(rawValueWindowMillions, 0.1, 5)
+      : FPL_TRANSFER_DEFAULT_VALUE_WINDOW_MILLIONS;
+    const valueWindowCostUnits = valueWindowMillions * 10;
+
+    const rawBudgetDiscount = Number(req.query.budget_discount_fraction);
+    const budgetDiscountFraction = Number.isFinite(rawBudgetDiscount)
+      ? clamp(rawBudgetDiscount, 0.1, 0.8)
+      : FPL_TRANSFER_DEFAULT_BUDGET_DISCOUNT_FRACTION;
+
+    const rawLimit = Number(req.query.limit);
+    const limit = Number.isFinite(rawLimit)
+      ? Math.max(1, Math.min(FPL_TRANSFER_MAX_LIMIT, Math.floor(rawLimit)))
+      : FPL_TRANSFER_DEFAULT_LIMIT;
+
+    const maxBudgetCost = Math.floor(targetNowCost * (1 - budgetDiscountFraction));
+    const positionNameByID = new Map(
+      elementTypes
+        .map((item) => [
+          parseFiniteNumber(item && item.id, 0),
+          String((item && item.singular_name) || "").trim() || "Player",
+        ])
+        .filter(([id]) => id > 0)
+    );
+    const teamContext = teamStrengthContext(teams);
+
+    const recommendations = elements
+      .filter((item) => {
+        const elementID = parseFiniteNumber(item && item.id, 0);
+        if (elementID <= 0 || elementID === targetElementID) return false;
+        const elementType = parseFiniteNumber(item && item.element_type, 0);
+        if (elementType !== targetPositionID) return false;
+        const nowCost = parseFiniteNumber(item && item.now_cost, 0);
+        return nowCost > 0;
+      })
+      .map((item) =>
+        buildTransferRecommendation(
+          item,
+          targetElement,
+          teamContext,
+          positionNameByID
+        )
+      )
+      .sort((left, right) => {
+        if (right.recommendation_score !== left.recommendation_score) {
+          return right.recommendation_score - left.recommendation_score;
+        }
+        if (right.total_points !== left.total_points) {
+          return right.total_points - left.total_points;
+        }
+        return left.now_cost_millions - right.now_cost_millions;
+      });
+
+    const similarValue = recommendations
+      .filter((item) =>
+        Math.abs(item.value_delta_millions) <= valueWindowMillions + 0.001
+      )
+      .slice(0, limit);
+
+    const budget = recommendations
+      .filter((item) => parseFiniteNumber(item.now_cost_millions, 0) * 10 <= maxBudgetCost)
+      .slice(0, limit);
+
+    res.json({
+      source: "memory_cache",
+      updated_at: fantasyBootstrapLastUpdated,
+      age_seconds: Math.floor(
+        Number.isFinite(fantasyBootstrapAgeSeconds()) ? fantasyBootstrapAgeSeconds() : 0
+      ),
+      stale: isFantasyBootstrapStale(),
+      criteria: {
+        element_id: targetElementID,
+        player_name: normalizedPlayerName(targetElement),
+        position_id: targetPositionID,
+        position: positionNameByID.get(targetPositionID) || "Player",
+        value_millions: roundTo(targetNowCost / 10, 1),
+        value_window_millions: valueWindowMillions,
+        budget_discount_fraction: roundTo(budgetDiscountFraction, 3),
+        budget_max_value_millions: roundTo(maxBudgetCost / 10, 1),
+        limit,
+      },
+      algorithm: {
+        summary:
+          "Score combines last-5 form proxy, projected next-5 fixture ease proxy, points-per-game, value efficiency, and availability penalties.",
+        components: {
+          form_last5_proxy_weight: 0.52,
+          next5_fixture_ease_proxy_weight: 0.28,
+          points_per_game_weight: 0.12,
+          value_efficiency_weight: 0.08,
+          availability_penalty_multiplier: 24,
+        },
+        notes: [
+          "Past form is approximated with bootstrap 'form' scaled to a 5-match equivalent.",
+          "Next-5 fixture difficulty is approximated from bootstrap 'ep_next' and team strength context.",
+          "Recommendations penalize injury/suspension/doubt and chance-of-playing fields.",
+        ],
+      },
+      similar_value: similarValue,
+      budget,
+    });
+  } catch (error) {
+    console.warn(
+      "[FPLTransferRecommendations] failed:",
+      error && error.message ? error.message : error
+    );
+    res.status(500).json({
+      error: "Failed to build transfer recommendations.",
+    });
+  } finally {
+    const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
+    const success = res.statusCode >= 200 && res.statusCode < 300;
+    if (!success) {
+      fantasyTransferRecommendationFailuresTotal += 1;
+    }
+    recordHistogramSample(
+      fantasyTransferRecommendationMetrics,
+      {
+        status: success ? "success" : "failure",
+      },
+      durationSeconds,
+      FPL_TRANSFER_RECOMMENDATION_DURATION_BUCKETS
+    );
+  }
 });
 
 app.post(`${API_PREFIX}/audit/missing-team-logos`, (req, res) => {
@@ -9610,7 +10339,15 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     fpl_bootstrap_interval_ms: FPL_BOOTSTRAP_INTERVAL_MS,
     fpl_bootstrap_timeout_ms: FPL_BOOTSTRAP_TIMEOUT_MS,
     fpl_bootstrap_max_bytes: FPL_BOOTSTRAP_MAX_BYTES,
+    fpl_bootstrap_max_age_ms: FPL_BOOTSTRAP_MAX_AGE_MS,
+    fpl_bootstrap_daily_refresh_hour_uk: FPL_BOOTSTRAP_DAILY_REFRESH_HOUR_UK,
+    fpl_bootstrap_daily_refresh_minute_uk: FPL_BOOTSTRAP_DAILY_REFRESH_MINUTE_UK,
+    fpl_bootstrap_next_daily_refresh_at: fantasyBootstrapNextDailyRefreshAt,
     fpl_bootstrap_last_updated: fantasyBootstrapLastUpdated,
+    fpl_bootstrap_age_seconds: Number.isFinite(fantasyBootstrapAgeSeconds())
+      ? Math.floor(fantasyBootstrapAgeSeconds())
+      : null,
+    fpl_bootstrap_stale: isFantasyBootstrapStale(),
     fpl_bootstrap_payload_bytes: fantasyBootstrapPayloadBytes,
     fpl_bootstrap_events_count: fantasyBootstrapEventsCount,
     fpl_bootstrap_current_event_id:
@@ -9625,6 +10362,8 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     fpl_bootstrap_game_updating: fantasyBootstrapGameUpdating,
     fpl_bootstrap_game_updating_message: fantasyBootstrapGameUpdatingMessage,
     fpl_bootstrap_game_updating_detected_at: fantasyBootstrapGameUpdatingDetectedAt,
+    fpl_transfer_recommendation_requests_total: fantasyTransferRecommendationRequestsTotal,
+    fpl_transfer_recommendation_failures_total: fantasyTransferRecommendationFailuresTotal,
     league_tables_count: leagueTablesDataset.items.length,
     league_tables_rows_count: leagueTableRowsCount(leagueTablesDataset.items),
     league_tables_last_updated: leagueTablesDataset.updated_at || leagueTablesLastUpdated,
@@ -11792,6 +12531,7 @@ if (shouldRunRuntime) {
   setInterval(() => {
     void updateFantasyBootstrapStatic({ trigger: "interval" });
   }, fantasyBootstrapInterval);
+  scheduleFantasyBootstrapDailyRefresh();
   const matchDetailsPollInterval =
     Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
       ? MATCH_DETAILS_POLL_INTERVAL_MS
@@ -12001,6 +12741,10 @@ if (shouldRunRuntime) {
   // Graceful shutdown
   process.on("SIGTERM", async () => {
     console.log("SIGTERM received, shutting down gracefully");
+    if (fantasyBootstrapDailyRefreshTimer) {
+      clearTimeout(fantasyBootstrapDailyRefreshTimer);
+      fantasyBootstrapDailyRefreshTimer = null;
+    }
     matchMonitor.stopMonitoring();
     const { shutdown: shutdownAPNS } = require("./apns_client");
     await shutdownAPNS();
@@ -12009,6 +12753,10 @@ if (shouldRunRuntime) {
 
   process.on("SIGINT", async () => {
     console.log("SIGINT received, shutting down gracefully");
+    if (fantasyBootstrapDailyRefreshTimer) {
+      clearTimeout(fantasyBootstrapDailyRefreshTimer);
+      fantasyBootstrapDailyRefreshTimer = null;
+    }
     matchMonitor.stopMonitoring();
     const { shutdown: shutdownAPNS } = require("./apns_client");
     await shutdownAPNS();

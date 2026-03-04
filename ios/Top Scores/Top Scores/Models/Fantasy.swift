@@ -465,6 +465,124 @@ struct FantasyClassicLeagueStandingEntry: Codable, Hashable, Identifiable {
     }
 }
 
+struct FantasyTransferRecommendationsResponse: Codable, Hashable {
+    struct Criteria: Codable, Hashable {
+        let elementID: Int
+        let playerName: String
+        let positionID: Int
+        let position: String
+        let valueMillions: Double
+        let valueWindowMillions: Double
+        let budgetDiscountFraction: Double
+        let budgetMaxValueMillions: Double
+        let limit: Int
+
+        enum CodingKeys: String, CodingKey {
+            case elementID = "element_id"
+            case playerName = "player_name"
+            case positionID = "position_id"
+            case position
+            case valueMillions = "value_millions"
+            case valueWindowMillions = "value_window_millions"
+            case budgetDiscountFraction = "budget_discount_fraction"
+            case budgetMaxValueMillions = "budget_max_value_millions"
+            case limit
+        }
+    }
+
+    let source: String?
+    let updatedAt: String?
+    let ageSeconds: Int?
+    let stale: Bool?
+    let criteria: Criteria?
+    let similarValue: [FantasyTransferRecommendation]
+    let budget: [FantasyTransferRecommendation]
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case updatedAt = "updated_at"
+        case ageSeconds = "age_seconds"
+        case stale
+        case criteria
+        case similarValue = "similar_value"
+        case budget
+    }
+}
+
+struct FantasyTransferRecommendation: Codable, Hashable, Identifiable {
+    struct ScoreBreakdown: Codable, Hashable {
+        let formScore: Double
+        let fixtureScore: Double
+        let pointsPerGameScore: Double
+        let valueEfficiencyScore: Double
+        let availabilityPenalty: Double
+
+        enum CodingKeys: String, CodingKey {
+            case formScore = "form_score"
+            case fixtureScore = "fixture_score"
+            case pointsPerGameScore = "points_per_game_score"
+            case valueEfficiencyScore = "value_efficiency_score"
+            case availabilityPenalty = "availability_penalty"
+        }
+    }
+
+    let elementID: Int
+    let webName: String
+    let playerName: String
+    let teamID: Int
+    let teamName: String
+    let teamShortName: String?
+    let positionID: Int
+    let position: String
+    let nowCostMillions: Double
+    let valueDeltaMillions: Double
+    let form: Double
+    let formLast5ProxyPoints: Double
+    let pointsPerGame: Double
+    let epNext: Double
+    let totalPoints: Int
+    let eventPoints: Int
+    let status: String
+    let chanceOfPlayingNextRound: Int
+    let chanceOfPlayingThisRound: Int
+    let news: String
+    let availability: String
+    let projectedNext5Difficulty: Int
+    let projectedNext5Ease: Double
+    let recommendationScore: Double
+    let scoreBreakdown: ScoreBreakdown?
+
+    enum CodingKeys: String, CodingKey {
+        case elementID = "element_id"
+        case webName = "web_name"
+        case playerName = "player_name"
+        case teamID = "team_id"
+        case teamName = "team_name"
+        case teamShortName = "team_short_name"
+        case positionID = "position_id"
+        case position
+        case nowCostMillions = "now_cost_millions"
+        case valueDeltaMillions = "value_delta_millions"
+        case form
+        case formLast5ProxyPoints = "form_last5_proxy_points"
+        case pointsPerGame = "points_per_game"
+        case epNext = "ep_next"
+        case totalPoints = "total_points"
+        case eventPoints = "event_points"
+        case status
+        case chanceOfPlayingNextRound = "chance_of_playing_next_round"
+        case chanceOfPlayingThisRound = "chance_of_playing_this_round"
+        case news
+        case availability
+        case projectedNext5Difficulty = "projected_next5_difficulty"
+        case projectedNext5Ease = "projected_next5_ease"
+        case recommendationScore = "recommendation_score"
+        case scoreBreakdown = "score_breakdown"
+    }
+
+    var id: Int { elementID }
+}
+
 struct FantasyRivalManager: Codable, Hashable, Identifiable {
     let entryID: Int
     let teamName: String
