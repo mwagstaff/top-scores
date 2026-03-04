@@ -398,6 +398,73 @@ struct FantasyEntryProfile: Codable, Hashable {
     }
 }
 
+struct FantasyLeagueStandingsResponse: Codable, Hashable {
+    let newEntries: FantasyLeagueNewEntries?
+    let lastUpdatedData: String?
+    let league: FantasyClassicLeague
+    let standings: FantasyClassicLeagueStandings
+
+    enum CodingKeys: String, CodingKey {
+        case newEntries = "new_entries"
+        case lastUpdatedData = "last_updated_data"
+        case league
+        case standings
+    }
+}
+
+struct FantasyLeagueNewEntries: Codable, Hashable {
+    let hasNext: Bool?
+    let page: Int?
+    let results: [FantasyClassicLeagueStandingEntry]?
+
+    enum CodingKeys: String, CodingKey {
+        case hasNext = "has_next"
+        case page
+        case results
+    }
+}
+
+struct FantasyClassicLeague: Codable, Hashable {
+    let id: Int
+    let name: String
+}
+
+struct FantasyClassicLeagueStandings: Codable, Hashable {
+    let hasNext: Bool
+    let page: Int
+    let results: [FantasyClassicLeagueStandingEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case hasNext = "has_next"
+        case page
+        case results
+    }
+}
+
+struct FantasyClassicLeagueStandingEntry: Codable, Hashable, Identifiable {
+    let id: Int
+    let eventTotal: Int
+    let playerName: String
+    let rank: Int
+    let lastRank: Int?
+    let total: Int
+    let entry: Int
+    let entryName: String
+    let clubBadgeSrc: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case eventTotal = "event_total"
+        case playerName = "player_name"
+        case rank
+        case lastRank = "last_rank"
+        case total
+        case entry
+        case entryName = "entry_name"
+        case clubBadgeSrc = "club_badge_src"
+    }
+}
+
 struct FantasyRivalManager: Codable, Hashable, Identifiable {
     let entryID: Int
     let teamName: String
@@ -415,6 +482,30 @@ struct FantasyRivalManager: Codable, Hashable, Identifiable {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
         return combined.isEmpty ? "Manager \(entryID)" : combined
+    }
+}
+
+struct FantasyTrackedLeague: Codable, Hashable, Identifiable {
+    let leagueID: Int
+
+    var id: Int {
+        leagueID
+    }
+}
+
+struct FantasyTrackedLeagueStanding: Hashable, Identifiable {
+    let leagueID: Int
+    let leagueName: String
+    let myEntryID: Int
+    let myRank: Int?
+    let myLastRank: Int?
+    let myEventTotal: Int?
+    let myOverallTotal: Int?
+    let myEntryName: String?
+    let standings: [FantasyClassicLeagueStandingEntry]
+
+    var id: Int {
+        leagueID
     }
 }
 
@@ -472,6 +563,8 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
     let hasAnyFixtureThisGameweek: Bool
     let hasUpcomingFixtureThisGameweek: Bool
     let hasActiveFixtureThisGameweek: Bool
+    let hasFutureAvailabilityIssue: Bool
+    let futureAvailabilityIssueGameweek: Int?
     let minutesPlayed: Int
     let upcomingOpponentDisplay: String?
     let goalsScored: Int
@@ -694,7 +787,10 @@ enum FantasyPlayerDetailsBuilder {
         }
 
         let fixtureEventIDs = Set(summary.fixtures.compactMap(\.event))
-        let upcomingGameweekRange = (gameweekID + 1)...(gameweekID + 5)
+        let currentGameweekFixtures = summary.fixtures.filter { $0.event == gameweekID }
+        let hasUnfinishedCurrentGameweekFixture = currentGameweekFixtures.contains { $0.finished != true }
+        let fixturesStartGameweek = hasUnfinishedCurrentGameweekFixture ? gameweekID : (gameweekID + 1)
+        let upcomingGameweekRange = fixturesStartGameweek...(fixturesStartGameweek + 4)
         if let firstBlankGameweek = upcomingGameweekRange.first(where: { !fixtureEventIDs.contains($0) }) {
             appendStatus(
                 "This player currently has no Premier League fixture in Gameweek \(firstBlankGameweek).",
@@ -705,7 +801,7 @@ enum FantasyPlayerDetailsBuilder {
         let upcomingCandidates: [FantasyElementSummaryFixture] = summary.fixtures
             .filter { fixture in
                 guard let event = fixture.event else { return false }
-                if event <= gameweekID { return false }
+                if event < fixturesStartGameweek { return false }
                 if fixture.finished == true { return false }
                 return true
             }
@@ -772,10 +868,23 @@ enum FantasyPlayerDetailsBuilder {
             guard let latestRound = sortedHistory.first?.round else { return [] }
             return sortedHistory.filter { $0.round == latestRound }
         }()
-        let latestPointsBreakdown = latestPointsBreakdown(
-            rows: latestHistoryRows,
-            positionType: positionType
-        )
+        let currentGameweekRows = sortedHistory.filter { $0.round == gameweekID }
+        let hasPlayedCurrentGameweek = currentGameweekRows.contains { $0.minutes > 0 }
+        let shouldHideLatestBreakdown =
+            resolvedLatestPoints == 0 &&
+            hasUnfinishedCurrentGameweekFixture &&
+            !hasPlayedCurrentGameweek
+
+        let latestPointsBreakdownItems: [FantasyPlayerDetailsData.PointsBreakdownItem]
+        if shouldHideLatestBreakdown {
+            latestPointsBreakdownItems = []
+        } else {
+            latestPointsBreakdownItems = latestPointsBreakdown(
+                rows: latestHistoryRows,
+                positionType: positionType,
+                fallbackTotal: resolvedLatestPoints
+            )
+        }
 
         let sortedHistoryForLookup = sortedHistory.sorted { lhs, rhs in
             if lhs.round != rhs.round {
@@ -832,7 +941,7 @@ enum FantasyPlayerDetailsBuilder {
             position: position,
             statusUpdates: statusUpdates,
             metrics: metrics,
-            latestPointsBreakdown: latestPointsBreakdown,
+            latestPointsBreakdown: latestPointsBreakdownItems,
             formItems: formItems,
             upcomingFixtures: Array(upcoming),
             historyRows: historyRows
@@ -862,9 +971,17 @@ enum FantasyPlayerDetailsBuilder {
 
     private static func latestPointsBreakdown(
         rows: [FantasyElementSummaryHistory],
-        positionType: FantasyPositionType?
+        positionType: FantasyPositionType?,
+        fallbackTotal: Int
     ) -> [FantasyPlayerDetailsData.PointsBreakdownItem] {
-        guard !rows.isEmpty else { return [] }
+        guard !rows.isEmpty else {
+            return [
+                FantasyPlayerDetailsData.PointsBreakdownItem(
+                    title: "Total points",
+                    points: fallbackTotal
+                )
+            ]
+        }
 
         var totals: [String: Int] = [
             "Appearance": 0,
@@ -921,7 +1038,7 @@ enum FantasyPlayerDetailsBuilder {
             totals[residualLabel, default: 0] += residual
         }
 
-        let orderedLabels = [
+        let orderedLabels: [String] = [
             "Appearance",
             "Goals",
             "Assists",
@@ -938,13 +1055,23 @@ enum FantasyPlayerDetailsBuilder {
             "Other adjustments"
         ]
 
-        return orderedLabels.compactMap { label in
+        let detailedItems: [FantasyPlayerDetailsData.PointsBreakdownItem] = orderedLabels.compactMap { label -> FantasyPlayerDetailsData.PointsBreakdownItem? in
             guard let points = totals[label], points != 0 else { return nil }
             return FantasyPlayerDetailsData.PointsBreakdownItem(
                 title: label,
                 points: points
             )
         }
+
+        if detailedItems.isEmpty {
+            return [
+                FantasyPlayerDetailsData.PointsBreakdownItem(
+                    title: "Total points",
+                    points: targetTotal
+                )
+            ]
+        }
+        return detailedItems
     }
 
     private static func appearancePoints(for minutes: Int) -> Int {
@@ -1004,6 +1131,7 @@ enum FantasySquadBuilder {
         picksResponse: FantasyPicksResponse,
         liveResponse: FantasyEventLiveResponse,
         fixtures: [FantasyFixture],
+        seasonFixtures: [FantasyFixture],
         bootstrap: FantasyBootstrapLookup,
         now: Date = Date()
     ) -> FantasySquadDisplayData {
@@ -1072,6 +1200,21 @@ enum FantasySquadBuilder {
                 }
             }
             return false
+        }()
+
+        let futureCandidateEvents = bootstrap.events
+            .map(\.id)
+            .filter { $0 > (gameweek.id + 1) }
+            .sorted()
+            .prefix(4)
+        let teamFixtureEvents: [Int: Set<Int>] = {
+            var map: [Int: Set<Int>] = [:]
+            for fixture in seasonFixtures {
+                guard let event = fixture.event else { continue }
+                map[fixture.teamH, default: []].insert(event)
+                map[fixture.teamA, default: []].insert(event)
+            }
+            return map
         }()
 
         func teamDisplayCode(teamID: Int) -> String {
@@ -1183,6 +1326,11 @@ enum FantasySquadBuilder {
                 guard let teamID = element?.team else { return false }
                 return activeTeamIDs.contains(teamID)
             }()
+            let futureAvailabilityIssueGameweek: Int? = {
+                guard let teamID = element?.team else { return nil }
+                let teamEvents = teamFixtureEvents[teamID] ?? []
+                return futureCandidateEvents.first(where: { !teamEvents.contains($0) })
+            }()
             let upcomingOpponentDisplay: String? = {
                 guard rawPoints == 0 else { return nil }
                 guard let teamID = element?.team else { return nil }
@@ -1207,6 +1355,8 @@ enum FantasySquadBuilder {
                 hasAnyFixtureThisGameweek: hasAnyFixtureThisGameweek,
                 hasUpcomingFixtureThisGameweek: hasUpcomingFixtureThisGameweek,
                 hasActiveFixtureThisGameweek: hasActiveFixtureThisGameweek,
+                hasFutureAvailabilityIssue: futureAvailabilityIssueGameweek != nil,
+                futureAvailabilityIssueGameweek: futureAvailabilityIssueGameweek,
                 minutesPlayed: minutesPlayed,
                 upcomingOpponentDisplay: upcomingOpponentDisplay,
                 goalsScored: goalsScored,

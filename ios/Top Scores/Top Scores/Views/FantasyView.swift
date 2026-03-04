@@ -9,6 +9,7 @@ struct FantasyView: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @AppStorage(StorageKeys.managerEntryID) private var managerEntryID = ""
     @AppStorage(StorageKeys.rivalManagersJSON) private var rivalManagersJSON = "[]"
+    @AppStorage(StorageKeys.trackedLeaguesJSON) private var trackedLeaguesJSON = "[]"
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
@@ -24,16 +25,25 @@ struct FantasyView: View {
     @State private var isProcessingSharedEntryImport = false
     @State private var showSuccessInterstitial = false
     @State private var rivalManagers: [FantasyRivalManager] = []
+    @State private var trackedLeagues: [FantasyTrackedLeague] = []
     @State private var showAddRivalSheet = false
+    @State private var addSheetMode: FantasyIDAddMode = .rival
     @State private var rivalEntryInput = ""
     @State private var managerEntryInput = ""
     @State private var pendingRivalProfile: FantasyEntryProfile?
+    @State private var pendingLeagueStanding: FantasyTrackedLeagueStanding?
     @State private var rivalValidationErrorMessage: String?
+    @State private var leagueValidationErrorMessage: String?
     @State private var managerValidationErrorMessage: String?
     @State private var isValidatingManager = false
     @State private var isValidatingRival = false
+    @State private var isValidatingLeague = false
     @State private var selectedRivalSquad: FantasyRivalSquad?
+    @State private var selectedLeagueStanding: FantasyTrackedLeagueStanding?
     @State private var selectedPlayerSelection: FantasySelectedPlayerSelection?
+    @State private var pendingPlayerSelectionAfterRivalDismiss: FantasySelectedPlayerSelection?
+    @State private var pendingScoreBreakdownAfterRivalDismiss: FantasyScoreBreakdownSelection?
+    @State private var selectedScoreBreakdown: FantasyScoreBreakdownSelection?
     @State private var showReviewShareSheet = false
     @State private var shareRemovedEntryIDs: Set<Int> = []
     @State private var queuedShareItems: [Any] = []
@@ -43,14 +53,23 @@ struct FantasyView: View {
     @State private var showDeleteRivalConfirmation = false
     @State private var rivalEntryIDPendingDeletion: Int?
     @State private var rivalTeamNamePendingDeletion = ""
+    @State private var showDeleteLeagueConfirmation = false
+    @State private var leagueIDPendingDeletion: Int?
+    @State private var leagueNamePendingDeletion = ""
     @State private var rivalsScoreMode: RivalsScoreMode = .currentGameweek
     @State private var showUnlinkAccountConfirmation = false
     @FocusState private var isRivalEntryInputFocused: Bool
+    @State private var lastObservedClipboardChangeCount = UIPasteboard.general.changeCount
 
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
     private let sharedEntryPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
+    private let addSheetClipboardPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
+        lifecycleBoundView
+    }
+
+    private var baseNavigationView: some View {
         NavigationStack {
             Group {
                 if managerEntryID.isEmpty {
@@ -62,146 +81,223 @@ struct FantasyView: View {
             .navigationTitle("Fantasy Football")
             .toolbarTitleDisplayMode(.inline)
         }
-        .overlay {
-            ZStack {
-                if showSuccessInterstitial {
-                    successOverlay
-                }
-                if isLaunchingShareFlow {
-                    shareLoadingOverlay
+    }
+
+    private var modalPresentationView: some View {
+        baseNavigationView
+            .overlay {
+                ZStack {
+                    if showSuccessInterstitial {
+                        successOverlay
+                    }
+                    if isLaunchingShareFlow {
+                        shareLoadingOverlay
+                    }
                 }
             }
-        }
-        .sheet(isPresented: $showAddRivalSheet) {
-            addRivalSheet
-        }
-        .sheet(item: $selectedRivalSquad) { rival in
-            rivalDetailSheet(rival)
+            .sheet(isPresented: $showAddRivalSheet) {
+                addRivalSheet
+            }
+            .sheet(item: $selectedRivalSquad) { rival in
+                rivalDetailSheet(rival)
+                    .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $selectedLeagueStanding) { league in
+                leagueDetailSheet(league)
+                    .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $selectedScoreBreakdown) { breakdown in
+                scoreBreakdownSheet(breakdown)
+                    .presentationDragIndicator(.visible)
+            }
+            .alert("Delete rival?", isPresented: $showDeleteRivalConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    rivalEntryIDPendingDeletion = nil
+                    rivalTeamNamePendingDeletion = ""
+                }
+                Button("Delete", role: .destructive) {
+                    guard let entryID = rivalEntryIDPendingDeletion else { return }
+                    removeRival(entryID: entryID)
+                    selectedRivalSquad = nil
+                    rivalEntryIDPendingDeletion = nil
+                    rivalTeamNamePendingDeletion = ""
+                    setShareImportStatus("Rival removed from table.", isError: false)
+                }
+            } message: {
+                if rivalTeamNamePendingDeletion.isEmpty {
+                    Text("This rival will be removed from your table.")
+                } else {
+                    Text("Remove \(rivalTeamNamePendingDeletion) from your rivals table?")
+                }
+            }
+            .alert("Delete league?", isPresented: $showDeleteLeagueConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    leagueIDPendingDeletion = nil
+                    leagueNamePendingDeletion = ""
+                }
+                Button("Delete", role: .destructive) {
+                    guard let leagueID = leagueIDPendingDeletion else { return }
+                    removeLeague(leagueID: leagueID)
+                    selectedLeagueStanding = nil
+                    leagueIDPendingDeletion = nil
+                    leagueNamePendingDeletion = ""
+                    setShareImportStatus("League removed.", isError: false)
+                }
+            } message: {
+                if leagueNamePendingDeletion.isEmpty {
+                    Text("This league will be removed from your saved leagues.")
+                } else {
+                    Text("Remove \(leagueNamePendingDeletion) from your leagues?")
+                }
+            }
+            .alert("Unlink Fantasy account?", isPresented: $showUnlinkAccountConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                Button("Unlink", role: .destructive) {
+                    unlinkFantasyAccountData()
+                }
+            } message: {
+                Text("This will remove your linked manager account, rivals, and Fantasy Football data from this device.")
+            }
+            .sheet(item: $selectedPlayerSelection) { selection in
+                FantasyPlayerDetailsSheet(
+                    selection: selection,
+                    apiBaseURL: preferences.apiBaseURL,
+                    fantasyViewModel: fantasyViewModel
+                )
                 .presentationDragIndicator(.visible)
-        }
-        .alert("Delete rival?", isPresented: $showDeleteRivalConfirmation) {
-            Button("Cancel", role: .cancel) {
-                rivalEntryIDPendingDeletion = nil
-                rivalTeamNamePendingDeletion = ""
             }
-            Button("Delete", role: .destructive) {
-                guard let entryID = rivalEntryIDPendingDeletion else { return }
-                removeRival(entryID: entryID)
-                selectedRivalSquad = nil
-                rivalEntryIDPendingDeletion = nil
-                rivalTeamNamePendingDeletion = ""
-                setShareImportStatus("Rival removed from table.", isError: false)
-            }
-        } message: {
-            if rivalTeamNamePendingDeletion.isEmpty {
-                Text("This rival will be removed from your table.")
-            } else {
-                Text("Remove \(rivalTeamNamePendingDeletion) from your rivals table?")
-            }
-        }
-        .alert("Unlink Fantasy account?", isPresented: $showUnlinkAccountConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Unlink", role: .destructive) {
-                unlinkFantasyAccountData()
-            }
-        } message: {
-            Text("This will remove your linked manager account, rivals, and Fantasy Football data from this device.")
-        }
-        .sheet(item: $selectedPlayerSelection) { selection in
-            FantasyPlayerDetailsSheet(
-                selection: selection,
-                apiBaseURL: preferences.apiBaseURL,
-                fantasyViewModel: fantasyViewModel
-            )
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showReviewShareSheet, onDismiss: {
-            shareRemovedEntryIDs = []
-            isPreparingShareImage = false
-            if !queuedShareItems.isEmpty {
-                let items = queuedShareItems
-                queuedShareItems = []
-                DispatchQueue.main.async {
-                    presentShareSheet(with: items)
+            .sheet(isPresented: $showReviewShareSheet, onDismiss: {
+                shareRemovedEntryIDs = []
+                isPreparingShareImage = false
+                if !queuedShareItems.isEmpty {
+                    let items = queuedShareItems
+                    queuedShareItems = []
+                    DispatchQueue.main.async {
+                        presentShareSheet(with: items)
+                    }
+                } else {
+                    isLaunchingShareFlow = false
                 }
-            } else {
-                isLaunchingShareFlow = false
+            }) {
+                reviewAndShareSheet
+                    .presentationDragIndicator(.visible)
             }
-        }) {
-            reviewAndShareSheet
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(item: $activeSharePayload, onDismiss: {
-            activeSharePayload = nil
-        }) {
-            FantasyShareSheet(activityItems: $0.items)
-        }
-        .onAppear {
-            loadRivalManagersFromStorage()
-            syncManagerEntryIDToSharedDefaults()
-            if managerEntryID.isEmpty {
-                managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
-            } else {
-                triggerFantasyRefresh(force: fantasyViewModel.data == nil)
+            .sheet(item: $activeSharePayload, onDismiss: {
+                activeSharePayload = nil
+            }) {
+                FantasyShareSheet(activityItems: $0.items)
             }
-            armSharedEntryPolling()
-            consumeSharedFantasyEntryURLIfNeeded()
-        }
-        .onChange(of: isSelected) { _, selected in
-            guard selected else { return }
-            if !managerEntryID.isEmpty {
-                triggerFantasyRefresh(force: fantasyViewModel.data == nil)
+    }
+
+    private var lifecycleBoundView: some View {
+        modalPresentationView
+            .onAppear {
+                loadRivalManagersFromStorage()
+                loadTrackedLeaguesFromStorage()
+                syncManagerEntryIDToSharedDefaults()
+                if managerEntryID.isEmpty {
+                    managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
+                } else {
+                    triggerFantasyRefresh(force: fantasyViewModel.data == nil)
+                }
+                armSharedEntryPolling()
+                consumeSharedFantasyEntryURLIfNeeded()
             }
-            armSharedEntryPolling()
-            consumeSharedFantasyEntryURLIfNeeded()
-        }
-        .onChange(of: scenePhase) { _, newValue in
-            guard newValue == .active else { return }
-            if isSelected, !managerEntryID.isEmpty {
+            .onChange(of: isSelected) { _, selected in
+                guard selected else { return }
+                if !managerEntryID.isEmpty {
+                    triggerFantasyRefresh(force: fantasyViewModel.data == nil)
+                }
+                armSharedEntryPolling()
+                consumeSharedFantasyEntryURLIfNeeded()
+            }
+            .onChange(of: scenePhase) { _, newValue in
+                guard newValue == .active else { return }
+                if isSelected, !managerEntryID.isEmpty {
+                    triggerFantasyRefresh(force: false)
+                }
+                if showAddRivalSheet {
+                    autoPopulateAddSheetIDFromClipboard(forceRead: true)
+                }
+                armSharedEntryPolling()
+                consumeSharedFantasyEntryURLIfNeeded()
+            }
+            .onChange(of: showAddRivalSheet) { _, isPresented in
+                guard isPresented else { return }
+                autoPopulateAddSheetIDFromClipboard(forceRead: true)
+            }
+            .onChange(of: isRivalEntryInputFocused) { _, isFocused in
+                guard showAddRivalSheet, isFocused else { return }
+                autoPopulateAddSheetIDFromClipboard(forceRead: true)
+            }
+            .onChange(of: managerEntryID) { _, newValue in
+                syncManagerEntryIDToSharedDefaults()
+                if newValue.isEmpty {
+                    fantasyViewModel.reset()
+                    managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
+                    managerValidationErrorMessage = nil
+                } else {
+                    triggerFantasyRefresh(force: true)
+                    managerValidationErrorMessage = nil
+                }
+            }
+            .onChange(of: selectedRivalSquad) { _, newValue in
+                guard newValue == nil else { return }
+                if let pendingPlayerSelection = pendingPlayerSelectionAfterRivalDismiss {
+                    pendingPlayerSelectionAfterRivalDismiss = nil
+                    DispatchQueue.main.async {
+                        selectedPlayerSelection = pendingPlayerSelection
+                    }
+                    return
+                }
+                if let pendingScoreBreakdown = pendingScoreBreakdownAfterRivalDismiss {
+                    pendingScoreBreakdownAfterRivalDismiss = nil
+                    DispatchQueue.main.async {
+                        selectedScoreBreakdown = pendingScoreBreakdown
+                    }
+                }
+            }
+            .onChange(of: preferences.apiBaseURL) { _, _ in
+                guard !managerEntryID.isEmpty else { return }
+                triggerFantasyRefresh(force: true)
+            }
+            .onChange(of: rivalManagersJSON) { _, _ in
+                loadRivalManagersFromStorage()
+                guard !managerEntryID.isEmpty else { return }
+                triggerFantasyRefresh(force: true)
+            }
+            .onChange(of: trackedLeaguesJSON) { _, _ in
+                loadTrackedLeaguesFromStorage()
+                guard !managerEntryID.isEmpty else { return }
+                triggerFantasyRefresh(force: true)
+            }
+            .onReceive(fantasyRefreshTimer) { _ in
+                guard isSelected,
+                      scenePhase == .active,
+                      !managerEntryID.isEmpty else { return }
+                if let currentData = fantasyViewModel.data, !currentData.hasActiveFixtures {
+                    guard let lastUpdated = fantasyViewModel.lastUpdated else { return }
+                    guard Date().timeIntervalSince(lastUpdated) >= 15 * 60 else { return }
+                }
                 triggerFantasyRefresh(force: false)
             }
-            armSharedEntryPolling()
-            consumeSharedFantasyEntryURLIfNeeded()
-        }
-        .onChange(of: managerEntryID) { _, newValue in
-            syncManagerEntryIDToSharedDefaults()
-            if newValue.isEmpty {
-                fantasyViewModel.reset()
-                managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
-                managerValidationErrorMessage = nil
-            } else {
-                triggerFantasyRefresh(force: true)
-                managerValidationErrorMessage = nil
+            .onReceive(sharedEntryPollTimer) { _ in
+                guard isSelected, scenePhase == .active else { return }
+                guard let deadline = sharedEntryPollingDeadline else { return }
+                if Date() > deadline {
+                    sharedEntryPollingDeadline = nil
+                    return
+                }
+                consumeSharedFantasyEntryURLIfNeeded()
             }
-        }
-        .onChange(of: preferences.apiBaseURL) { _, _ in
-            guard !managerEntryID.isEmpty else { return }
-            triggerFantasyRefresh(force: true)
-        }
-        .onChange(of: rivalManagersJSON) { _, _ in
-            loadRivalManagersFromStorage()
-            guard !managerEntryID.isEmpty else { return }
-            triggerFantasyRefresh(force: true)
-        }
-        .onReceive(fantasyRefreshTimer) { _ in
-            guard isSelected,
-                  scenePhase == .active,
-                  !managerEntryID.isEmpty else { return }
-            if let currentData = fantasyViewModel.data, !currentData.hasActiveFixtures {
-                guard let lastUpdated = fantasyViewModel.lastUpdated else { return }
-                guard Date().timeIntervalSince(lastUpdated) >= 15 * 60 else { return }
+            .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+                guard showAddRivalSheet else { return }
+                autoPopulateAddSheetIDFromClipboard(forceRead: false)
             }
-            triggerFantasyRefresh(force: false)
-        }
-        .onReceive(sharedEntryPollTimer) { _ in
-            guard isSelected, scenePhase == .active else { return }
-            guard let deadline = sharedEntryPollingDeadline else { return }
-            if Date() > deadline {
-                sharedEntryPollingDeadline = nil
-                return
+            .onReceive(addSheetClipboardPollTimer) { _ in
+                guard showAddRivalSheet, scenePhase == .active else { return }
+                autoPopulateAddSheetIDFromClipboard(forceRead: false)
             }
-            consumeSharedFantasyEntryURLIfNeeded()
-        }
     }
 
     private var setupFlowView: some View {
@@ -229,6 +325,29 @@ struct FantasyView: View {
     private var isRivalSubmitEnabled: Bool {
         let input = rivalDigitsInput
         return input.count >= 3 && input.allSatisfy(\.isNumber) && !isValidatingRival
+    }
+
+    private var isLeagueSubmitEnabled: Bool {
+        let input = rivalDigitsInput
+        return input.count >= 3 && input.allSatisfy(\.isNumber) && !isValidatingLeague
+    }
+
+    private var isAddSheetSubmitEnabled: Bool {
+        switch addSheetMode {
+        case .rival:
+            return isRivalSubmitEnabled
+        case .league:
+            return isLeagueSubmitEnabled
+        }
+    }
+
+    private var activeAddSheetErrorMessage: String? {
+        switch addSheetMode {
+        case .rival:
+            return rivalValidationErrorMessage
+        case .league:
+            return leagueValidationErrorMessage
+        }
     }
 
     private var linkedFantasyView: some View {
@@ -262,6 +381,7 @@ struct FantasyView: View {
                         scoreCalculationSection(data)
                     }
                     rivalsSection
+                    leaguesSection
                 } else if fantasyViewModel.isLoading {
                     VStack(spacing: 10) {
                         ProgressView()
@@ -291,7 +411,8 @@ struct FantasyView: View {
             await fantasyViewModel.refresh(
                 managerEntryID: managerEntryID,
                 apiBaseURL: preferences.apiBaseURL,
-                rivalManagers: rivalManagers
+                rivalManagers: rivalManagers,
+                trackedLeagues: trackedLeagues
             )
         }
     }
@@ -350,16 +471,20 @@ struct FantasyView: View {
             Text("First setup: share your own Points page to Top Scores.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            Text("After setup: any shared Fantasy entry URL is treated as a rival and validated automatically.")
+            Text("After setup: shared Fantasy entry URLs add rivals, and shared league URLs add leagues.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            Text("Because all shared entry URLs have the same format, the first successful share is always used as your manager ID.")
+            Text("The first successful shared entry URL is used as your manager ID.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             Text("If Google sign-in blocks in-app browsers, use Safari or Chrome, then Share -> Top Scores.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             Text("Example: https://fantasy.premierleague.com/entry/6653695/event/28")
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .foregroundStyle(.secondary)
+            Text("League example: https://fantasy.premierleague.com/leagues/844129/standings/c")
                 .font(.caption.monospaced())
                 .textSelection(.enabled)
                 .foregroundStyle(.secondary)
@@ -435,7 +560,12 @@ struct FantasyView: View {
         )
     }
 
-    private func scoreSummaryCard(_ data: FantasySquadDisplayData) -> some View {
+    private func scoreSummaryCard(
+        _ data: FantasySquadDisplayData,
+        showRivalPills: Bool = true,
+        scoreTapEnabled: Bool = true,
+        scoreTapAction: (() -> Void)? = nil
+    ) -> some View {
         let currentScore = data.resolvedCurrentScore
         let displayedScore = data.isEstimatedScore ? "\(currentScore)*" : "\(currentScore)"
         let rivalPills = rivalScorePills(for: data)
@@ -444,24 +574,35 @@ struct FantasyView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(data.gameweekTitle)
                     .font(.headline)
-                if !rivalPills.isEmpty {
+                if showRivalPills && !rivalPills.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(rivalPills) { pill in
-                                HStack(spacing: 6) {
-                                    Text(pill.initials)
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                    Text("\(pill.score)")
-                                        .font(.caption.monospacedDigit().weight(.semibold))
-                                        .foregroundStyle(.primary)
+                                Button {
+                                    openRivalFromScorePill(entryID: pill.entryID)
+                                } label: {
+                                    HStack(spacing: 0) {
+                                        Text(pill.initials)
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 5)
+                                            .background(rivalInitialsColor(for: pill.initials))
+
+                                        Text("\(pill.score)")
+                                            .font(.caption.monospacedDigit().weight(.semibold))
+                                            .foregroundStyle(.primary)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 5)
+                                            .background(Color(.tertiarySystemGroupedBackground))
+                                    }
+                                    .clipShape(Capsule(style: .continuous))
+                                    .overlay(
+                                        Capsule(style: .continuous)
+                                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    )
                                 }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(Color(.tertiarySystemGroupedBackground))
-                                )
+                                .buttonStyle(.plain)
                             }
                         }
                         .padding(.vertical, 1)
@@ -472,10 +613,26 @@ struct FantasyView: View {
 
             Spacer(minLength: 0)
 
-            FantasyScoreLozenge(
-                displayedScore: displayedScore,
-                isLive: data.hasActiveFixtures
-            )
+            if scoreTapEnabled {
+                Button {
+                    if let scoreTapAction {
+                        scoreTapAction()
+                    } else {
+                        openScoreBreakdown(for: data)
+                    }
+                } label: {
+                    FantasyScoreLozenge(
+                        displayedScore: displayedScore,
+                        isLive: data.hasActiveFixtures
+                    )
+                }
+                .buttonStyle(.plain)
+            } else {
+                FantasyScoreLozenge(
+                    displayedScore: displayedScore,
+                    isLive: data.hasActiveFixtures
+                )
+            }
         }
         .padding(12)
         .background(
@@ -503,7 +660,7 @@ struct FantasyView: View {
 
     private func initials(for managerName: String) -> String {
         let words = managerName
-            .split(whereSeparator: { $0.isWhitespace || $0 == "-" })
+            .split(whereSeparator: { $0.isWhitespace })
             .map(String.init)
             .filter { !$0.isEmpty }
 
@@ -512,12 +669,279 @@ struct FantasyView: View {
         }
 
         if words.count == 1 {
+            let hyphenParts = words[0]
+                .split(separator: "-")
+                .map(String.init)
+                .filter { !$0.isEmpty }
+            if hyphenParts.count >= 2 {
+                let combined = hyphenParts
+                    .prefix(3)
+                    .compactMap { $0.first }
+                    .map(String.init)
+                    .joined()
+                    .uppercased()
+                if !combined.isEmpty {
+                    return String(combined.prefix(3))
+                }
+            }
             return String(words[0].prefix(2)).uppercased()
         }
 
-        let first = words.first?.prefix(1) ?? ""
-        let last = words.last?.prefix(1) ?? ""
-        return String(first + last).uppercased()
+        let firstInitial = words.first?.first.map(String.init) ?? "R"
+        let surname = words.last ?? ""
+        let surnameParts = surname
+            .split(separator: "-")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+
+        let suffix: String
+        if surnameParts.count >= 2 {
+            suffix = surnameParts
+                .prefix(2)
+                .compactMap { $0.first }
+                .map(String.init)
+                .joined()
+        } else {
+            suffix = surname.first.map(String.init) ?? ""
+        }
+
+        let raw = (firstInitial + suffix).uppercased()
+        return String(raw.prefix(3))
+    }
+
+    private func rivalInitialsColor(for initials: String) -> Color {
+        let normalized = initials
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+
+        guard !normalized.isEmpty else {
+            return .blue
+        }
+
+        var hash = 0
+        for scalar in normalized.unicodeScalars {
+            hash = (hash * 31 + Int(scalar.value)) % 360
+        }
+        let hue = Double(hash) / 360.0
+        return Color(hue: hue, saturation: 0.72, brightness: 0.78)
+    }
+
+    private func openRivalFromScorePill(entryID: Int) {
+        guard let rival = fantasyViewModel.rivalSquads.first(where: { $0.entryID == entryID }) else {
+            return
+        }
+        selectedRivalSquad = rival
+    }
+
+    private func openScoreBreakdown(
+        for data: FantasySquadDisplayData,
+        teamNameOverride: String? = nil
+    ) {
+        let teamName = {
+            if let teamNameOverride {
+                let trimmed = teamNameOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
+            }
+            let ownTeamName = fantasyViewModel.myProfile?.name
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return ownTeamName.isEmpty ? "My Team" : ownTeamName
+        }()
+        let selection = FantasyScoreBreakdownSelection(teamName: teamName, squad: data)
+
+        if selectedRivalSquad != nil {
+            pendingScoreBreakdownAfterRivalDismiss = selection
+            selectedRivalSquad = nil
+            return
+        }
+
+        selectedScoreBreakdown = selection
+    }
+
+    private func scoreBreakdownSheet(_ breakdown: FantasyScoreBreakdownSelection) -> some View {
+        let rows = scoreBreakdownRows(for: breakdown.squad)
+        let maxAbsTotal = max(rows.map { abs($0.totalPoints) }.max() ?? 1, 1)
+
+        return NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(breakdown.teamName)
+                            .font(.headline)
+                        Text("\(breakdown.squad.gameweekTitle) score breakdown")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text("Total: \(breakdown.squad.resolvedCurrentScore)")
+                            .font(.title3.monospacedDigit().weight(.bold))
+                    }
+
+                    ForEach(rows) { row in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                scoreBreakdownTeamLogo(teamName: row.teamName)
+                                Text(row.playerName)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                Text("\(row.totalPoints)")
+                                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                                    .foregroundStyle(scoreColor(points: row.totalPoints))
+                            }
+
+                            scoreBar(
+                                points: row.totalPoints,
+                                maxAbsValue: maxAbsTotal,
+                                barHeight: 9
+                            )
+
+                            if !row.components.isEmpty {
+                                let componentMax = max(row.components.map { abs($0.points) }.max() ?? 1, 1)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(row.components) { component in
+                                        HStack(spacing: 8) {
+                                            Text(component.title)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .frame(width: 140, alignment: .leading)
+
+                                            scoreBar(
+                                                points: component.points,
+                                                maxAbsValue: componentMax,
+                                                barHeight: 7
+                                            )
+
+                                            Text("\(component.points)")
+                                                .font(.caption.monospacedDigit().weight(.semibold))
+                                                .foregroundStyle(scoreColor(points: component.points))
+                                                .frame(width: 28, alignment: .trailing)
+                                        }
+                                    }
+                                }
+                                .padding(.leading, 10)
+                            }
+                        }
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color(.secondarySystemGroupedBackground))
+                        )
+                    }
+                }
+                .padding(14)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Score Breakdown")
+            .toolbarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        selectedScoreBreakdown = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.body.weight(.semibold))
+                    }
+                    .accessibilityLabel("Close")
+                }
+            }
+        }
+    }
+
+    private func scoreBar(points: Int, maxAbsValue: Int, barHeight: CGFloat) -> some View {
+        let magnitude = CGFloat(abs(points))
+        let denominator = CGFloat(max(maxAbsValue, 1))
+        let progress = max(0.0, min(1.0, magnitude / denominator))
+
+        return GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.10))
+                Capsule(style: .continuous)
+                    .fill(scoreColor(points: points).opacity(0.88))
+                    .frame(width: max(4, proxy.size.width * progress))
+            }
+        }
+        .frame(height: barHeight)
+    }
+
+    private func scoreColor(points: Int) -> Color {
+        if points > 0 { return .green }
+        if points < 0 { return .red }
+        return .secondary
+    }
+
+    private func scoreBreakdownRows(for squad: FantasySquadDisplayData) -> [FantasyScoreBreakdownRow] {
+        squad.starters
+            .sorted { $0.pickPosition < $1.pickPosition }
+            .map { player in
+                FantasyScoreBreakdownRow(
+                    elementID: player.elementID,
+                    playerName: player.displayName,
+                    teamName: player.teamName,
+                    totalPoints: player.appliedPoints,
+                    components: scoreBreakdownComponents(for: player)
+                )
+            }
+    }
+
+    @ViewBuilder
+    private func scoreBreakdownTeamLogo(teamName: String) -> some View {
+        if let logo = LogoResolver.shared.image(for: teamName) {
+            Image(uiImage: logo)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 18, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        } else {
+            Image(systemName: "shield")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 18, height: 18)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color(.tertiarySystemGroupedBackground))
+                )
+        }
+    }
+
+    private func scoreBreakdownComponents(for player: FantasyDisplayPlayer) -> [FantasyScoreBreakdownComponent] {
+        let multiplier = max(player.multiplier, 1)
+        let appearance = (player.minutesPlayed <= 0 ? 0 : (player.minutesPlayed > 60 ? 2 : 1)) * multiplier
+        let goalPointsPerGoal: Int = {
+            switch player.positionType {
+            case .goalkeeper:
+                return 10
+            case .defender:
+                return 6
+            case .midfielder:
+                return 5
+            case .forward:
+                return 4
+            }
+        }()
+        let goals = player.goalsScored * goalPointsPerGoal * multiplier
+        let assists = player.assists * 3 * multiplier
+        let cards = ((player.yellowCards * -1) + (player.redCards * -3)) * multiplier
+
+        let known = appearance + goals + assists + cards
+        let residual = player.appliedPoints - known
+
+        let ordered: [(String, Int)] = [
+            ("Appearance", appearance),
+            ("Goals", goals),
+            ("Assists", assists),
+            ("Cards", cards),
+            ("Defensive/other", residual)
+        ]
+
+        let components = ordered.compactMap { title, points -> FantasyScoreBreakdownComponent? in
+            guard points != 0 else { return nil }
+            return FantasyScoreBreakdownComponent(title: title, points: points)
+        }
+        if components.isEmpty {
+            return [FantasyScoreBreakdownComponent(title: "No points", points: 0)]
+        }
+        return components
     }
 
     private func summaryStatsSection(_ data: FantasySquadDisplayData) -> some View {
@@ -717,6 +1141,124 @@ struct FantasyView: View {
         )
     }
 
+    private var leaguesSection: some View {
+        let leagueSnapshots = fantasyViewModel.trackedLeagueStandings
+        let hasConfiguredLeagues = !trackedLeagues.isEmpty
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Leagues")
+                    .font(.headline)
+                Spacer(minLength: 0)
+            }
+
+            if !hasConfiguredLeagues {
+                Button {
+                    prepareLeagueEntrySheet()
+                } label: {
+                    Label("Add league", systemImage: "plus.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                if leagueSnapshots.isEmpty {
+                    if fantasyViewModel.isLoading || fantasyViewModel.isRefreshing {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Loading league standings...")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 4)
+                    } else {
+                        Text("League standings are unavailable right now. Pull to refresh and try again.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(leagueSnapshots) { league in
+                            Button {
+                                selectedLeagueStanding = league
+                            } label: {
+                                leagueSummaryRow(league)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                Button {
+                    prepareLeagueEntrySheet()
+                } label: {
+                    Label("Add league", systemImage: "plus.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private func leagueSummaryRow(_ league: FantasyTrackedLeagueStanding) -> some View {
+        let trend = leagueRankTrend(currentRank: league.myRank, lastRank: league.myLastRank)
+
+        return HStack(spacing: 10) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(league.leagueName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let rank = league.myRank {
+                        Text("Your rank: \(rank)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Your rank: Unavailable")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let rank = league.myRank {
+                    HStack(spacing: 4) {
+                        leagueTrendIcon(currentRank: rank, lastRank: league.myLastRank)
+                        Text("\(rank)")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("-")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.thinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(leagueTrendOutlineColor(for: trend), lineWidth: 1)
+            )
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary.opacity(0.8))
+        }
+    }
+
     private func rivalTableRow(
         rank: Int,
         entry: FantasyLeagueTableEntry,
@@ -745,14 +1287,215 @@ struct FantasyView: View {
                 .frame(width: 44, alignment: .trailing)
                 .foregroundStyle(Color.primary)
 
-            Text(">")
-                .font(.body.weight(.semibold))
+            Image(systemName: "chevron.right")
+                .font(.system(size: 14, weight: .semibold))
                 .frame(width: 16, alignment: .center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.secondary.opacity(0.8))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+    }
+
+    private func leagueDetailSheet(_ league: FantasyTrackedLeagueStanding) -> some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Text("Your rank")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Text(league.myRank.map(String.init) ?? "-")
+                            .font(.subheadline.monospacedDigit().weight(.semibold))
+                    }
+
+                    VStack(spacing: 0) {
+                        HStack(spacing: 8) {
+                            Text("#")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: 30, alignment: .trailing)
+                            Text("Team")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text("GW")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: 44, alignment: .trailing)
+                            Text("Total")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: 56, alignment: .trailing)
+                            Text("")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: 20, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .foregroundStyle(.secondary)
+
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.22))
+                            .frame(height: 1)
+
+                        ForEach(Array(league.standings.enumerated()), id: \.element.id) { index, row in
+                            leagueStandingRow(row, isCurrentUser: row.entry == league.myEntryID)
+                            if index < league.standings.count - 1 {
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.22))
+                                    .frame(height: 1)
+                            }
+                        }
+                    }
+                    .background(.thinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .padding(14)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle(league.leagueName)
+            .toolbarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(role: .destructive) {
+                        leagueIDPendingDeletion = league.leagueID
+                        leagueNamePendingDeletion = league.leagueName
+                        showDeleteLeagueConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.body.weight(.semibold))
+                    }
+                    .accessibilityLabel("Delete league")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        selectedLeagueStanding = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.body.weight(.semibold))
+                    }
+                    .accessibilityLabel("Close")
+                }
+            }
+        }
+    }
+
+    private func leagueStandingRow(_ row: FantasyClassicLeagueStandingEntry, isCurrentUser: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text("\(row.rank)")
+                .font(.body.monospacedDigit())
+                .frame(width: 30, alignment: .trailing)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                leagueBadgeImage(urlString: row.clubBadgeSrc)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.entryName)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                    Text(row.playerName)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("\(row.eventTotal)")
+                .font(.body.monospacedDigit().weight(.semibold))
+                .frame(width: 44, alignment: .trailing)
+                .foregroundStyle(.primary)
+
+            Text("\(row.total)")
+                .font(.body.monospacedDigit().weight(.semibold))
+                .frame(width: 56, alignment: .trailing)
+                .foregroundStyle(.primary)
+
+            leagueTrendIcon(currentRank: row.rank, lastRank: row.lastRank)
+                .frame(width: 20, alignment: .trailing)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isCurrentUser ? Color.accentColor.opacity(0.15) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isCurrentUser ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func leagueTrendIcon(currentRank: Int, lastRank: Int?) -> some View {
+        switch leagueRankTrend(currentRank: currentRank, lastRank: lastRank) {
+        case .up:
+            Image(systemName: "arrow.up")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.green)
+        case .down:
+            Image(systemName: "arrow.down")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.red)
+        case .equal:
+            Image(systemName: "equal")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.gray)
+        }
+    }
+
+    private func leagueRankTrend(currentRank: Int?, lastRank: Int?) -> LeagueRankTrend {
+        guard let currentRank else { return .equal }
+        guard let lastRank else { return .equal }
+        if currentRank < lastRank {
+            return .up
+        }
+        if currentRank > lastRank {
+            return .down
+        }
+        return .equal
+    }
+
+    private func leagueTrendOutlineColor(for trend: LeagueRankTrend) -> Color {
+        switch trend {
+        case .up:
+            return .green.opacity(0.7)
+        case .down:
+            return .red.opacity(0.7)
+        case .equal:
+            return .gray.opacity(0.6)
+        }
+    }
+
+    @ViewBuilder
+    private func leagueBadgeImage(urlString: String?) -> some View {
+        if let urlString,
+           let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .empty:
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.secondary.opacity(0.2))
+                        .frame(width: 20, height: 20)
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                case .failure:
+                    Image(systemName: "shield")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                @unknown default:
+                    EmptyView()
+                }
+            }
+        } else {
+            Image(systemName: "shield")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+        }
     }
 
     private var reviewAndShareSheet: some View {
@@ -877,7 +1620,7 @@ struct FantasyView: View {
         NavigationStack {
             Form {
                 Section("Tip") {
-                    Text("For the fastest flow, open a rival's Points page in Safari/Chrome and share it to Top Scores. It will auto-validate when you return to the app.")
+                    Text(addSheetMode.tipText)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
@@ -888,12 +1631,12 @@ struct FantasyView: View {
                     }
                 }
 
-                Section("Manager ID") {
-                    Text("Alternatively, if you know their ID, please enter it here...")
+                Section(addSheetMode.idSectionTitle) {
+                    Text(addSheetMode.manualEntryHelpText)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
-                    TextField("Enter manager ID", text: $rivalEntryInput)
+                    TextField(addSheetMode.idPlaceholder, text: $rivalEntryInput)
                         .keyboardType(.numberPad)
                         .textInputAutocapitalization(.never)
                         .disableAutocorrection(true)
@@ -907,10 +1650,16 @@ struct FantasyView: View {
 
                     Button {
                         Task {
-                            await validateRivalEntryInput()
+                            await validateAddSheetInput()
                         }
                     } label: {
-                        if isValidatingRival {
+                        if addSheetMode == .rival && isValidatingRival {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Validating...")
+                            }
+                        } else if addSheetMode == .league && isValidatingLeague {
                             HStack(spacing: 8) {
                                 ProgressView()
                                     .controlSize(.small)
@@ -921,18 +1670,18 @@ struct FantasyView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!isRivalSubmitEnabled)
+                    .disabled(!isAddSheetSubmitEnabled)
                 }
 
-                if let rivalValidationErrorMessage {
+                if let validationErrorMessage = activeAddSheetErrorMessage {
                     Section {
-                        Text(rivalValidationErrorMessage)
+                        Text(validationErrorMessage)
                             .font(.footnote)
                             .foregroundStyle(.red)
                     }
                 }
 
-                if let pendingRivalProfile {
+                if addSheetMode == .rival, let pendingRivalProfile {
                     Section("Confirm manager") {
                         Text("Team: \(pendingRivalProfile.name)")
                         Text("Manager: \(pendingRivalProfile.playerFirstName) \(pendingRivalProfile.playerLastName)")
@@ -942,8 +1691,23 @@ struct FantasyView: View {
                         .buttonStyle(.borderedProminent)
                     }
                 }
+
+                if addSheetMode == .league, let pendingLeagueStanding {
+                    Section("Confirm league") {
+                        Text("League: \(pendingLeagueStanding.leagueName)")
+                        if let rank = pendingLeagueStanding.myRank {
+                            Text("Your rank: \(rank)")
+                        } else {
+                            Text("Your rank: Unavailable")
+                        }
+                        Button("Add league") {
+                            addPendingLeagueStanding()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
             }
-            .navigationTitle("Add Rival")
+            .navigationTitle(addSheetMode.sheetTitle)
             .toolbarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -953,6 +1717,7 @@ struct FantasyView: View {
                 }
             }
             .onAppear {
+                autoPopulateAddSheetIDFromClipboard(forceRead: true)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                     isRivalEntryInputFocused = true
                 }
@@ -978,9 +1743,16 @@ struct FantasyView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    scoreSummaryCard(rival.squad)
-                    pitchSection(rival.squad, playerSelectionEnabled: false)
-                    benchSection(rival.squad, playerSelectionEnabled: false)
+                    scoreSummaryCard(
+                        rival.squad,
+                        showRivalPills: false,
+                        scoreTapEnabled: true,
+                        scoreTapAction: {
+                            openScoreBreakdown(for: rival.squad, teamNameOverride: rival.teamName)
+                        }
+                    )
+                    pitchSection(rival.squad, playerSelectionEnabled: true)
+                    benchSection(rival.squad, playerSelectionEnabled: true)
                     eventLegendSection(rival.squad)
                     if rival.squad.isEstimatedScore {
                         scoreCalculationSection(rival.squad)
@@ -1300,17 +2072,95 @@ struct FantasyView: View {
             await fantasyViewModel.refresh(
                 managerEntryID: managerEntryID,
                 apiBaseURL: preferences.apiBaseURL,
-                rivalManagers: rivalManagers
+                rivalManagers: rivalManagers,
+                trackedLeagues: trackedLeagues
             )
         }
     }
 
     private func prepareRivalEntrySheet() {
+        addSheetMode = .rival
         rivalEntryInput = ""
         rivalValidationErrorMessage = nil
+        leagueValidationErrorMessage = nil
         pendingRivalProfile = nil
+        pendingLeagueStanding = nil
         isValidatingRival = false
+        isValidatingLeague = false
         showAddRivalSheet = true
+    }
+
+    private func prepareLeagueEntrySheet() {
+        addSheetMode = .league
+        rivalEntryInput = ""
+        rivalValidationErrorMessage = nil
+        leagueValidationErrorMessage = nil
+        pendingRivalProfile = nil
+        pendingLeagueStanding = nil
+        isValidatingRival = false
+        isValidatingLeague = false
+        showAddRivalSheet = true
+    }
+
+    private func validateAddSheetInput() async {
+        switch addSheetMode {
+        case .rival:
+            await validateRivalEntryInput()
+        case .league:
+            await validateLeagueIDInput()
+        }
+    }
+
+    private func autoPopulateAddSheetIDFromClipboard(forceRead: Bool) {
+        guard showAddRivalSheet else { return }
+        let pasteboard = UIPasteboard.general
+        let changeCount = pasteboard.changeCount
+        guard forceRead || changeCount != lastObservedClipboardChangeCount else { return }
+        lastObservedClipboardChangeCount = changeCount
+
+        guard let extractedID = extractFantasyIDFromPasteboard(pasteboard),
+              extractedID.count >= 3 else {
+            return
+        }
+        guard rivalEntryInput != extractedID else { return }
+
+        rivalEntryInput = extractedID
+        pendingRivalProfile = nil
+        pendingLeagueStanding = nil
+        rivalValidationErrorMessage = nil
+        leagueValidationErrorMessage = nil
+    }
+
+    private func extractFantasyIDFromPasteboard(_ pasteboard: UIPasteboard) -> String? {
+        if let rawString = pasteboard.string,
+           let extracted = extractFantasyID(from: rawString) {
+            return extracted
+        }
+
+        if let url = pasteboard.url,
+           let extracted = extractFantasyID(from: url.absoluteString) {
+            return extracted
+        }
+
+        return nil
+    }
+
+    private func extractFantasyID(from raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let target = FantasySharedURLParser.parse(from: trimmed) {
+            switch target {
+            case .manager(let id), .league(let id):
+                return id
+            }
+        }
+
+        guard trimmed.range(of: #"^\d{3,}$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+
+        return trimmed
     }
 
     private func validateManagerEntryInput() async {
@@ -1352,6 +2202,7 @@ struct FantasyView: View {
     private func validateRivalEntryInput() async {
         rivalValidationErrorMessage = nil
         pendingRivalProfile = nil
+        pendingLeagueStanding = nil
 
         let trimmed = rivalEntryInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -1388,6 +2239,42 @@ struct FantasyView: View {
         }
     }
 
+    private func validateLeagueIDInput() async {
+        leagueValidationErrorMessage = nil
+        pendingLeagueStanding = nil
+        pendingRivalProfile = nil
+
+        let trimmed = rivalEntryInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            leagueValidationErrorMessage = "Enter a league ID to continue."
+            return
+        }
+        guard trimmed.allSatisfy(\.isNumber) else {
+            leagueValidationErrorMessage = "League ID must contain numbers only."
+            return
+        }
+        guard let leagueID = Int(trimmed), leagueID > 0 else {
+            leagueValidationErrorMessage = "League ID is invalid."
+            return
+        }
+
+        if trackedLeagues.contains(where: { $0.leagueID == leagueID }) {
+            leagueValidationErrorMessage = "That league is already in your leagues list."
+            return
+        }
+
+        isValidatingLeague = true
+        defer { isValidatingLeague = false }
+
+        do {
+            let standing = try await fantasyViewModel.validateLeagueID(trimmed, managerEntryID: managerEntryID)
+            pendingLeagueStanding = standing
+            rivalEntryInput = String(standing.leagueID)
+        } catch {
+            leagueValidationErrorMessage = error.localizedDescription
+        }
+    }
+
     private func addPendingRivalProfile() {
         guard let pendingRivalProfile else { return }
         let rival = FantasyRivalManager(
@@ -1415,9 +2302,27 @@ struct FantasyView: View {
         triggerFantasyRefresh(force: true)
     }
 
+    private func addPendingLeagueStanding() {
+        guard let pendingLeagueStanding else { return }
+        let league = FantasyTrackedLeague(leagueID: pendingLeagueStanding.leagueID)
+        guard !trackedLeagues.contains(where: { $0.leagueID == league.leagueID }) else { return }
+
+        trackedLeagues.append(league)
+        trackedLeagues.sort { $0.leagueID < $1.leagueID }
+        persistTrackedLeaguesToStorage()
+        showAddRivalSheet = false
+        triggerFantasyRefresh(force: true)
+    }
+
     private func removeRival(entryID: Int) {
         rivalManagers.removeAll { $0.entryID == entryID }
         persistRivalManagersToStorage()
+        triggerFantasyRefresh(force: true)
+    }
+
+    private func removeLeague(leagueID: Int) {
+        trackedLeagues.removeAll { $0.leagueID == leagueID }
+        persistTrackedLeaguesToStorage()
         triggerFantasyRefresh(force: true)
     }
 
@@ -1425,12 +2330,17 @@ struct FantasyView: View {
         managerEntryID = ""
         rivalManagers = []
         rivalManagersJSON = "[]"
+        trackedLeagues = []
+        trackedLeaguesJSON = "[]"
         selectedRivalSquad = nil
+        selectedLeagueStanding = nil
         selectedPlayerSelection = nil
         pendingRivalProfile = nil
+        pendingLeagueStanding = nil
         rivalEntryInput = ""
         managerEntryInput = ""
         rivalValidationErrorMessage = nil
+        leagueValidationErrorMessage = nil
         managerValidationErrorMessage = nil
         showAddRivalSheet = false
         showReviewShareSheet = false
@@ -1458,10 +2368,18 @@ struct FantasyView: View {
     }
 
     private func openPlayerDetails(player: FantasyDisplayPlayer, gameweekID: Int) {
-        selectedPlayerSelection = FantasySelectedPlayerSelection(
+        let selection = FantasySelectedPlayerSelection(
             player: player,
             gameweekID: gameweekID
         )
+
+        if selectedRivalSquad != nil {
+            pendingPlayerSelectionAfterRivalDismiss = selection
+            selectedRivalSquad = nil
+            return
+        }
+
+        selectedPlayerSelection = selection
     }
 
     private func prepareReviewShareSheet() {
@@ -1581,10 +2499,10 @@ struct FantasyView: View {
             return
         }
 
-        guard let parsedID = FantasyManagerIDParser.parse(from: trimmed) else {
-            managerCaptureStatusMessage = "Received a shared link, but it did not contain a valid Fantasy entry URL."
+        guard let parsedTarget = FantasySharedURLParser.parse(from: trimmed) else {
+            managerCaptureStatusMessage = "Received a shared link, but it did not contain a valid Fantasy entry or league URL."
             setShareImportStatus(
-                "Received a shared link, but it did not contain a valid Fantasy entry URL.",
+                "Received a shared link, but it did not contain a valid Fantasy entry or league URL.",
                 isError: true
             )
             markSharedEntryAsProcessed(updatedAt: sharedUpdatedAt, rawURL: trimmed)
@@ -1593,8 +2511,17 @@ struct FantasyView: View {
         }
 
         if managerEntryID.isEmpty {
-            applyCapturedManagerID(parsedID)
-            setShareImportStatus("Manager ID \(parsedID) linked from shared URL.", isError: false)
+            switch parsedTarget {
+            case .manager(let parsedID):
+                applyCapturedManagerID(parsedID)
+                setShareImportStatus("Manager ID \(parsedID) linked from shared URL.", isError: false)
+            case .league:
+                managerCaptureStatusMessage = "Link your own Fantasy manager account first by sharing your Points page URL."
+                setShareImportStatus(
+                    "Link your own Fantasy manager account first by sharing your Points page URL.",
+                    isError: true
+                )
+            }
             markSharedEntryAsProcessed(updatedAt: sharedUpdatedAt, rawURL: trimmed)
             clearSharedEntryImportPayload()
             return
@@ -1606,7 +2533,13 @@ struct FantasyView: View {
 
         isProcessingSharedEntryImport = true
         Task {
-            let handled = await addRivalFromSharedEntryID(parsedID)
+            let handled: Bool
+            switch parsedTarget {
+            case .manager(let parsedID):
+                handled = await addRivalFromSharedEntryID(parsedID)
+            case .league(let leagueID):
+                handled = await addLeagueFromSharedLeagueID(leagueID)
+            }
             await MainActor.run {
                 if handled {
                     markSharedEntryAsProcessed(updatedAt: sharedUpdatedAt, rawURL: trimmed)
@@ -1704,6 +2637,53 @@ struct FantasyView: View {
         }
     }
 
+    @MainActor
+    private func addLeagueFromSharedLeagueID(_ capturedID: String) async -> Bool {
+        guard let leagueID = Int(capturedID), leagueID > 0 else {
+            setShareImportStatus("Shared URL did not contain a valid league ID.", isError: true)
+            return true
+        }
+
+        guard !trackedLeagues.contains(where: { $0.leagueID == leagueID }) else {
+            setShareImportStatus("League \(capturedID) is already in your leagues list.", isError: false)
+            return true
+        }
+
+        do {
+            let standing = try await fantasyViewModel.validateLeagueID(capturedID, managerEntryID: managerEntryID)
+            trackedLeagues.append(FantasyTrackedLeague(leagueID: standing.leagueID))
+            trackedLeagues.sort { $0.leagueID < $1.leagueID }
+            persistTrackedLeaguesToStorage()
+            managerCaptureStatusMessage = "League added from shared URL: \(standing.leagueName)."
+            if let rank = standing.myRank {
+                setShareImportStatus("League added: \(standing.leagueName) (Rank \(rank))", isError: false)
+            } else {
+                setShareImportStatus("League added: \(standing.leagueName)", isError: false)
+            }
+            showAddRivalSheet = false
+            triggerFantasyRefresh(force: true)
+            return true
+        } catch {
+            if let fantasyError = error as? FantasyPublicAPIError,
+               case .gameUpdating = fantasyError {
+                setShareImportStatus(
+                    "Fantasy Football is temporarily updating. We'll retry adding this league shortly.",
+                    isError: true
+                )
+                return false
+            }
+            setShareImportStatus(
+                "Could not add league \(capturedID) yet. Retrying shortly.",
+                isError: true
+            )
+            if case FantasyPublicAPIError.badStatus(let code, _, _) = error,
+               code == 400 || code == 404 {
+                return true
+            }
+            return false
+        }
+    }
+
     private func clearSharedEntryImportPayload() {
         guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
         defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryURLKey)
@@ -1746,6 +2726,15 @@ struct FantasyView: View {
         rivalManagers = decoded
     }
 
+    private func loadTrackedLeaguesFromStorage() {
+        guard let data = trackedLeaguesJSON.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([FantasyTrackedLeague].self, from: data) else {
+            trackedLeagues = []
+            return
+        }
+        trackedLeagues = decoded
+    }
+
     private func persistRivalManagersToStorage() {
         guard let data = try? JSONEncoder().encode(rivalManagers),
               let encoded = String(data: data, encoding: .utf8) else {
@@ -1753,6 +2742,15 @@ struct FantasyView: View {
             return
         }
         rivalManagersJSON = encoded
+    }
+
+    private func persistTrackedLeaguesToStorage() {
+        guard let data = try? JSONEncoder().encode(trackedLeagues),
+              let encoded = String(data: data, encoding: .utf8) else {
+            trackedLeaguesJSON = "[]"
+            return
+        }
+        trackedLeaguesJSON = encoded
     }
 
     private func formatNumber(_ value: Int?) -> String {
@@ -1771,6 +2769,7 @@ struct FantasyView: View {
     private enum StorageKeys {
         static let managerEntryID = "fantasy.managerEntryID"
         static let rivalManagersJSON = "fantasy.rivalManagersJSON"
+        static let trackedLeaguesJSON = "fantasy.trackedLeaguesJSON"
     }
 
     private static let integerFormatter: NumberFormatter = {
@@ -1941,11 +2940,18 @@ private struct FantasyPlayerCard: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.vertical, 4)
 
-                if player.isUnavailable {
-                    HStack(spacing: 0) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Color.orange)
+                if player.isUnavailable || player.hasFutureAvailabilityIssue {
+                    HStack(spacing: 3) {
+                        if player.isUnavailable {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(Color.orange)
+                        }
+                        if player.hasFutureAvailabilityIssue {
+                            Image(systemName: "info.circle.fill")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(Color.blue)
+                        }
                         Spacer(minLength: 0)
                     }
                     .padding(3)
@@ -2109,6 +3115,62 @@ private enum RivalsScoreMode: String, CaseIterable {
     }
 }
 
+private enum LeagueRankTrend {
+    case up
+    case down
+    case equal
+}
+
+private enum FantasyIDAddMode {
+    case rival
+    case league
+
+    var sheetTitle: String {
+        switch self {
+        case .rival:
+            return "Add Rival"
+        case .league:
+            return "Add League"
+        }
+    }
+
+    var idSectionTitle: String {
+        switch self {
+        case .rival:
+            return "Manager ID"
+        case .league:
+            return "League ID"
+        }
+    }
+
+    var idPlaceholder: String {
+        switch self {
+        case .rival:
+            return "Enter manager ID"
+        case .league:
+            return "Enter league ID"
+        }
+    }
+
+    var manualEntryHelpText: String {
+        switch self {
+        case .rival:
+            return "Alternatively, if you know their ID, please enter it here..."
+        case .league:
+            return "Alternatively, if you know the league ID, please enter it here..."
+        }
+    }
+
+    var tipText: String {
+        switch self {
+        case .rival:
+            return "For the fastest flow, open a rival's Points page in Safari/Chrome and share it to Top Scores. It will auto-validate when you return to the app."
+        case .league:
+            return "For the fastest flow, open a Fantasy league page in Safari/Chrome and share it to Top Scores. It will auto-validate when you return to the app."
+        }
+    }
+}
+
 private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     let entryID: Int
     let teamName: String
@@ -2211,6 +3273,33 @@ struct FantasySelectedPlayerSelection: Identifiable {
 
     var id: String {
         "\(player.elementID)-\(gameweekID)-\(player.pickPosition)"
+    }
+}
+
+private struct FantasyScoreBreakdownSelection: Identifiable {
+    let id = UUID()
+    let teamName: String
+    let squad: FantasySquadDisplayData
+}
+
+private struct FantasyScoreBreakdownRow: Identifiable {
+    let elementID: Int
+    let playerName: String
+    let teamName: String
+    let totalPoints: Int
+    let components: [FantasyScoreBreakdownComponent]
+
+    var id: Int {
+        elementID
+    }
+}
+
+private struct FantasyScoreBreakdownComponent: Identifiable {
+    let title: String
+    let points: Int
+
+    var id: String {
+        "\(title)-\(points)"
     }
 }
 

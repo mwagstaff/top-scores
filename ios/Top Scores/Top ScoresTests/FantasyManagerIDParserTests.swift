@@ -30,4 +30,20 @@ struct FantasyManagerIDParserTests {
 
         #expect(parsed == nil)
     }
+
+    @Test func sharedParser_detectsManagerURL() async throws {
+        let url = "https://fantasy.premierleague.com/entry/8984737/event/29"
+
+        let parsed = FantasySharedURLParser.parse(from: url)
+
+        #expect(parsed == .manager("8984737"))
+    }
+
+    @Test func sharedParser_detectsLeagueURL() async throws {
+        let url = "https://fantasy.premierleague.com/leagues/844129/standings/c"
+
+        let parsed = FantasySharedURLParser.parse(from: url)
+
+        #expect(parsed == .league("844129"))
+    }
 }

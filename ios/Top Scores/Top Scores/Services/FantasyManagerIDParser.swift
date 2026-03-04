@@ -21,6 +21,33 @@ enum FantasyManagerIDParser {
     }
 }
 
+enum FantasySharedURLParser {
+    enum Target: Hashable {
+        case manager(String)
+        case league(String)
+    }
+
+    private static let managerURLPattern = #"(?i)(?:https?://)?(?:www\.)?fantasy\.premierleague\.com/entry/(\d+)(?:[/?#]|$)"#
+    private static let leagueURLPattern = #"(?i)(?:https?://)?(?:www\.)?fantasy\.premierleague\.com/leagues/(?:classic/)?(\d+)(?:[/?#]|$)"#
+
+    static func parse(from rawText: String) -> Target? {
+        let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let match = trimmed.firstMatch(of: managerURLPattern),
+           let id = match.capturedGroups.first {
+            return .manager(id)
+        }
+
+        if let match = trimmed.firstMatch(of: leagueURLPattern),
+           let id = match.capturedGroups.first {
+            return .league(id)
+        }
+
+        return nil
+    }
+}
+
 private extension String {
     func firstMatch(of pattern: String) -> RegexMatch? {
         guard let regex = try? NSRegularExpression(pattern: pattern) else {

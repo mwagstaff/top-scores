@@ -55,6 +55,19 @@ struct FantasyPublicAPIClient {
         return try await fetch(request, operation: "fpl_event_fixtures")
     }
 
+    func fetchAllFixtures() async throws -> [FantasyFixture] {
+        guard let url = URL(
+            string: "https://fantasy.premierleague.com/api/fixtures/"
+        ) else {
+            throw FantasyPublicAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return try await fetch(request, operation: "fpl_all_fixtures")
+    }
+
     func fetchEntryProfile(entryID: Int) async throws -> FantasyEntryProfile {
         guard let url = URL(
             string: "https://fantasy.premierleague.com/api/entry/\(entryID)/"
@@ -92,6 +105,19 @@ struct FantasyPublicAPIClient {
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         return try await fetch(request, operation: "fpl_bootstrap_static")
+    }
+
+    func fetchLeagueStandings(leagueID: Int, page: Int = 1) async throws -> FantasyLeagueStandingsResponse {
+        guard let url = URL(
+            string: "https://fantasy.premierleague.com/api/leagues-classic/\(leagueID)/standings/?page_standings=\(page)"
+        ) else {
+            throw FantasyPublicAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return try await fetch(request, operation: "fpl_league_standings")
     }
 
     private func fetch<T: Decodable>(_ request: URLRequest, operation: String) async throws -> T {

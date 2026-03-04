@@ -87,8 +87,8 @@ final class ShareViewController: UIViewController {
             return
         }
 
-        guard FantasyShareEntryIDParser.parse(from: sharedText) != nil else {
-            finishWithError("No Fantasy entry ID found in shared content.")
+        guard let parsedTarget = FantasyShareTargetParser.parse(from: sharedText) else {
+            finishWithError("No Fantasy entry or league ID found in shared content.")
             return
         }
 
@@ -102,24 +102,39 @@ final class ShareViewController: UIViewController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let isLinkingPrimaryManager = existingManagerID.isEmpty
 
+        if case .league = parsedTarget, isLinkingPrimaryManager {
+            finishWithError("Link your Fantasy account first by sharing your Points page URL.")
+            return
+        }
+
         defaults.set(sharedText, forKey: Config.sharedURLKey)
         defaults.set(Date().timeIntervalSince1970, forKey: Config.sharedUpdatedAtKey)
         defaults.synchronize()
 
-        showSuccessUI(isLinkingPrimaryManager: isLinkingPrimaryManager)
+        showSuccessUI(target: parsedTarget, isLinkingPrimaryManager: isLinkingPrimaryManager)
         completeExtension(after: 5.0)
     }
 
     @MainActor
-    private func showSuccessUI(isLinkingPrimaryManager: Bool) {
+    private func showSuccessUI(target: FantasyShareTargetParser.Target, isLinkingPrimaryManager: Bool) {
         spinner.stopAnimating()
-        titleLabel.text = isLinkingPrimaryManager
-            ? "Fantasy Football account linked"
-            : "Fantasy Football rival added"
+        switch target {
+        case .manager:
+            titleLabel.text = isLinkingPrimaryManager
+                ? "Fantasy Football account linked"
+                : "Fantasy Football rival added"
+        case .league:
+            titleLabel.text = "Fantasy Football league added"
+        }
         statusLabel.textColor = .secondaryLabel
-        statusLabel.text = isLinkingPrimaryManager
-            ? "Please return to Top Scores to complete setup"
-            : "Please return to Top Scores to view your updated Rivals table"
+        switch target {
+        case .manager:
+            statusLabel.text = isLinkingPrimaryManager
+                ? "Please return to Top Scores to complete setup"
+                : "Please return to Top Scores to view your updated Rivals table"
+        case .league:
+            statusLabel.text = "Please return to Top Scores to view your updated Leagues section"
+        }
     }
 
     @MainActor
@@ -183,13 +198,26 @@ final class ShareViewController: UIViewController {
     }
 }
 
-private enum FantasyShareEntryIDParser {
-    private static let urlPattern = #"(?i)(?:https?://)?(?:www\.)?fantasy\.premierleague\.com/entry/(\d+)(?:[/?#]|$)"#
+private enum FantasyShareTargetParser {
+    enum Target {
+        case manager(String)
+        case league(String)
+    }
 
-    static func parse(from rawText: String) -> String? {
+    private static let managerURLPattern = #"(?i)(?:https?://)?(?:www\.)?fantasy\.premierleague\.com/entry/(\d+)(?:[/?#]|$)"#
+    private static let leagueURLPattern = #"(?i)(?:https?://)?(?:www\.)?fantasy\.premierleague\.com/leagues/(?:classic/)?(\d+)(?:[/?#]|$)"#
+
+    static func parse(from rawText: String) -> Target? {
         let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return trimmed.firstMatch(of: urlPattern)?.capturedGroups.first
+
+        if let managerID = trimmed.firstMatch(of: managerURLPattern)?.capturedGroups.first {
+            return .manager(managerID)
+        }
+        if let leagueID = trimmed.firstMatch(of: leagueURLPattern)?.capturedGroups.first {
+            return .league(leagueID)
+        }
+        return nil
     }
 }
 

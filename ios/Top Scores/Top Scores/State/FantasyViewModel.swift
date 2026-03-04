@@ -9,6 +9,7 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var data: FantasySquadDisplayData?
     @Published private(set) var rivalSquads: [FantasyRivalSquad] = []
+    @Published private(set) var trackedLeagueStandings: [FantasyTrackedLeagueStanding] = []
     @Published private(set) var myProfile: FantasyEntryProfile?
     @Published private(set) var lastUpdated: Date?
     @Published var errorMessage: String?
@@ -21,13 +22,18 @@ final class FantasyViewModel: ObservableObject {
     private var cachedPlayerDetailsBootstrap: FantasyBootstrapLookup?
     private var cachedPlayerDetailsBootstrapFetchedAt: Date?
     private let playerDetailsBootstrapCacheTTL: TimeInterval = 6 * 60 * 60
+    private var cachedSeasonFixtures: [FantasyFixture] = []
+    private var cachedSeasonFixturesFetchedAt: Date?
+    private let seasonFixturesCacheTTL: TimeInterval = 30 * 60
     private var rivalRefreshToken = UUID()
+    private var leagueRefreshToken = UUID()
 
     func reset() {
         isLoading = false
         isRefreshing = false
         data = nil
         rivalSquads = []
+        trackedLeagueStandings = []
         myProfile = nil
         lastUpdated = nil
         errorMessage = nil
@@ -36,9 +42,16 @@ final class FantasyViewModel: ObservableObject {
         cachedBootstrapBaseURL = nil
         cachedPlayerDetailsBootstrap = nil
         cachedPlayerDetailsBootstrapFetchedAt = nil
+        cachedSeasonFixtures = []
+        cachedSeasonFixturesFetchedAt = nil
     }
 
-    func refresh(managerEntryID: String, apiBaseURL: String, rivalManagers: [FantasyRivalManager]) async {
+    func refresh(
+        managerEntryID: String,
+        apiBaseURL: String,
+        rivalManagers: [FantasyRivalManager],
+        trackedLeagues: [FantasyTrackedLeague]
+    ) async {
         let refreshStartedAt = Date()
         let trimmedManagerID = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let entryID = Int(trimmedManagerID), entryID > 0 else {
@@ -65,7 +78,7 @@ final class FantasyViewModel: ObservableObject {
 
         do {
             let serverClient = APIClient(baseURL: baseURL)
-            logPerf("refresh_start entry_id=\(entryID) rivals=\(rivalManagers.count)")
+            logPerf("refresh_start entry_id=\(entryID) rivals=\(rivalManagers.count) leagues=\(trackedLeagues.count)")
 
             let currentGameweek = try await timed("current_gameweek") {
                 try await serverClient.fetchFantasyCurrentGameweek()
@@ -89,13 +102,15 @@ final class FantasyViewModel: ObservableObject {
             async let fixturesTask = timed("event_fixtures") {
                 try await fantasyPublicClient.fetchEventFixtures(eventID: currentGameweek.id)
             }
+            async let seasonFixturesTask = fetchSeasonFixtures()
 
-            let (bootstrapLookup, myProfile, picksResponse, liveResponse, fixtures) = try await (
+            let (bootstrapLookup, myProfile, picksResponse, liveResponse, fixtures, seasonFixtures) = try await (
                 bootstrapLookupTask,
                 myProfileTask,
                 picksTask,
                 liveTask,
-                fixturesTask
+                fixturesTask,
+                seasonFixturesTask
             )
             self.myProfile = myProfile
 
@@ -104,6 +119,7 @@ final class FantasyViewModel: ObservableObject {
                 picksResponse: picksResponse,
                 liveResponse: liveResponse,
                 fixtures: fixtures,
+                seasonFixtures: seasonFixtures,
                 bootstrap: bootstrapLookup
             )
 
@@ -122,11 +138,29 @@ final class FantasyViewModel: ObservableObject {
                         gameweek: currentGameweek,
                         liveResponse: liveResponse,
                         fixtures: fixtures,
+                        seasonFixtures: seasonFixtures,
                         bootstrapLookup: bootstrapLookup
                     )
                     guard self.rivalRefreshToken == refreshToken else { return }
                     self.rivalSquads = refreshedRivals
                     self.logPerf("rivals_complete count=\(refreshedRivals.count)")
+                }
+            }
+
+            let normalizedTrackedLeagues = deduplicatedTrackedLeagues(trackedLeagues: trackedLeagues)
+            if normalizedTrackedLeagues.isEmpty {
+                trackedLeagueStandings = []
+            } else {
+                let refreshToken = UUID()
+                leagueRefreshToken = refreshToken
+                Task {
+                    let refreshedLeagues = await self.fetchTrackedLeagueStandings(
+                        trackedLeagues: normalizedTrackedLeagues,
+                        managerEntryID: entryID
+                    )
+                    guard self.leagueRefreshToken == refreshToken else { return }
+                    self.trackedLeagueStandings = refreshedLeagues
+                    self.logPerf("leagues_complete count=\(refreshedLeagues.count)")
                 }
             }
             lastUpdated = Date()
@@ -152,6 +186,26 @@ final class FantasyViewModel: ObservableObject {
             throw RivalValidationError.invalidNumber
         }
         return try await fantasyPublicClient.fetchEntryProfile(entryID: entryID)
+    }
+
+    func validateLeagueID(_ rawLeagueID: String, managerEntryID: String) async throws -> FantasyTrackedLeagueStanding {
+        let trimmedLeagueID = rawLeagueID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLeagueID.isEmpty else {
+            throw LeagueValidationError.empty
+        }
+        guard trimmedLeagueID.allSatisfy(\.isNumber) else {
+            throw LeagueValidationError.nonNumeric
+        }
+        guard let leagueID = Int(trimmedLeagueID), leagueID > 0 else {
+            throw LeagueValidationError.invalidNumber
+        }
+
+        let trimmedManagerID = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let myEntryID = Int(trimmedManagerID), myEntryID > 0 else {
+            throw LeagueValidationError.missingManager
+        }
+
+        return try await fetchLeagueStandingSnapshot(leagueID: leagueID, managerEntryID: myEntryID)
     }
 
     func loadPlayerDetails(
@@ -222,11 +276,26 @@ final class FantasyViewModel: ObservableObject {
         return result
     }
 
+    private func deduplicatedTrackedLeagues(trackedLeagues: [FantasyTrackedLeague]) -> [FantasyTrackedLeague] {
+        var seen = Set<Int>()
+        var result: [FantasyTrackedLeague] = []
+
+        for trackedLeague in trackedLeagues {
+            guard trackedLeague.leagueID > 0 else { continue }
+            guard !seen.contains(trackedLeague.leagueID) else { continue }
+            seen.insert(trackedLeague.leagueID)
+            result.append(trackedLeague)
+        }
+
+        return result
+    }
+
     private func fetchRivalSquads(
         rivals: [FantasyRivalManager],
         gameweek: FantasyGameweek,
         liveResponse: FantasyEventLiveResponse,
         fixtures: [FantasyFixture],
+        seasonFixtures: [FantasyFixture],
         bootstrapLookup: FantasyBootstrapLookup
     ) async -> [FantasyRivalSquad] {
         var refreshedRivals: [FantasyRivalSquad] = []
@@ -246,6 +315,7 @@ final class FantasyViewModel: ObservableObject {
                     picksResponse: rivalPicks,
                     liveResponse: liveResponse,
                     fixtures: fixtures,
+                    seasonFixtures: seasonFixtures,
                     bootstrap: bootstrapLookup
                 )
                 refreshedRivals.append(
@@ -270,6 +340,106 @@ final class FantasyViewModel: ObservableObject {
             }
             return lhs.entryID < rhs.entryID
         }
+    }
+
+    private func fetchTrackedLeagueStandings(
+        trackedLeagues: [FantasyTrackedLeague],
+        managerEntryID: Int
+    ) async -> [FantasyTrackedLeagueStanding] {
+        var snapshots: [FantasyTrackedLeagueStanding] = []
+
+        for trackedLeague in trackedLeagues {
+            do {
+                let snapshot = try await fetchLeagueStandingSnapshot(
+                    leagueID: trackedLeague.leagueID,
+                    managerEntryID: managerEntryID
+                )
+                snapshots.append(snapshot)
+            } catch {
+                continue
+            }
+        }
+
+        return snapshots.sorted { lhs, rhs in
+            if lhs.leagueName.localizedCaseInsensitiveCompare(rhs.leagueName) != .orderedSame {
+                return lhs.leagueName.localizedCaseInsensitiveCompare(rhs.leagueName) == .orderedAscending
+            }
+            return lhs.leagueID < rhs.leagueID
+        }
+    }
+
+    private func fetchLeagueStandingSnapshot(
+        leagueID: Int,
+        managerEntryID: Int
+    ) async throws -> FantasyTrackedLeagueStanding {
+        let response = try await fetchFullLeagueStandings(leagueID: leagueID)
+        let myEntry = response.standings.results.first(where: { $0.entry == managerEntryID })
+        return FantasyTrackedLeagueStanding(
+            leagueID: response.league.id,
+            leagueName: response.league.name,
+            myEntryID: managerEntryID,
+            myRank: myEntry?.rank,
+            myLastRank: myEntry?.lastRank,
+            myEventTotal: myEntry?.eventTotal,
+            myOverallTotal: myEntry?.total,
+            myEntryName: myEntry?.entryName,
+            standings: response.standings.results
+        )
+    }
+
+    private func fetchFullLeagueStandings(leagueID: Int) async throws -> FantasyLeagueStandingsResponse {
+        var page = 1
+        var combinedResults: [FantasyClassicLeagueStandingEntry] = []
+        var firstResponse: FantasyLeagueStandingsResponse?
+
+        while true {
+            let response = try await timed("league_standings league_id=\(leagueID) page=\(page)") {
+                try await fantasyPublicClient.fetchLeagueStandings(leagueID: leagueID, page: page)
+            }
+            if firstResponse == nil {
+                firstResponse = response
+            }
+            combinedResults.append(contentsOf: response.standings.results)
+
+            guard response.standings.hasNext else { break }
+            page += 1
+            if page > 30 {
+                break
+            }
+        }
+
+        guard let firstResponse else {
+            throw FantasyPublicAPIError.invalidHTTPResponse
+        }
+
+        return FantasyLeagueStandingsResponse(
+            newEntries: firstResponse.newEntries,
+            lastUpdatedData: firstResponse.lastUpdatedData,
+            league: firstResponse.league,
+            standings: FantasyClassicLeagueStandings(
+                hasNext: false,
+                page: 1,
+                results: combinedResults
+            )
+        )
+    }
+
+    private func fetchSeasonFixtures() async throws -> [FantasyFixture] {
+        let now = Date()
+        if let cachedSeasonFixturesFetchedAt,
+           now.timeIntervalSince(cachedSeasonFixturesFetchedAt) < seasonFixturesCacheTTL,
+           !cachedSeasonFixtures.isEmpty {
+            let age = Int(now.timeIntervalSince(cachedSeasonFixturesFetchedAt))
+            logPerf("season_fixtures_cache_hit age_s=\(age)")
+            return cachedSeasonFixtures
+        }
+
+        let fixtures = try await timed("season_fixtures") {
+            try await fantasyPublicClient.fetchAllFixtures()
+        }
+        cachedSeasonFixtures = fixtures
+        cachedSeasonFixturesFetchedAt = now
+        return fixtures
     }
 
     private func fetchBootstrapLookup(
@@ -378,6 +548,26 @@ private enum RivalValidationError: LocalizedError {
             return "Manager ID must contain numbers only."
         case .invalidNumber:
             return "Manager ID is invalid."
+        }
+    }
+}
+
+private enum LeagueValidationError: LocalizedError {
+    case empty
+    case nonNumeric
+    case invalidNumber
+    case missingManager
+
+    var errorDescription: String? {
+        switch self {
+        case .empty:
+            return "Enter a league ID to continue."
+        case .nonNumeric:
+            return "League ID must contain numbers only."
+        case .invalidNumber:
+            return "League ID is invalid."
+        case .missingManager:
+            return "Link your Fantasy manager account before adding leagues."
         }
     }
 }
