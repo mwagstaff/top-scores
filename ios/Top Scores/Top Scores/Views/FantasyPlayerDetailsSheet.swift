@@ -341,22 +341,20 @@ struct FantasyPlayerDetailsSheet: View {
             Text("Previous 10 gameweeks")
                 .font(.headline)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                VStack(spacing: 0) {
-                    historyHeader
-                    ForEach(Array(details.historyRows.enumerated()), id: \.element.id) { index, row in
-                        historyRow(row)
-                        if index < details.historyRows.count - 1 {
-                            Divider()
-                                .overlay(Color.secondary.opacity(0.28))
-                        }
+            VStack(spacing: 0) {
+                historyHeader
+                ForEach(Array(details.historyRows.enumerated()), id: \.element.id) { index, row in
+                    historyRow(row)
+                    if index < details.historyRows.count - 1 {
+                        Divider()
+                            .overlay(Color.secondary.opacity(0.28))
                     }
                 }
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(.tertiarySystemGroupedBackground))
-                )
             }
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(.tertiarySystemGroupedBackground))
+            )
         }
         .padding(12)
         .background(
@@ -367,15 +365,15 @@ struct FantasyPlayerDetailsSheet: View {
 
     private var historyHeader: some View {
         HStack(spacing: 8) {
-            headerCell("GW", width: 40)
+            headerCell("GW", width: 30)
             Text("Opponent")
                 .font(.caption.weight(.semibold))
-                .frame(width: 176, alignment: .leading)
-            headerCell("Pts", width: 44)
-            headerCell("MP", width: 62)
-            headerCell("GS", width: 34)
-            headerCell("A", width: 34)
-            headerCell("xG", width: 46)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            headerCell("Pts", width: 40)
+            headerCell("MP", width: 52)
+            headerCell("GS", width: 28)
+            headerCell("A", width: 28)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -386,27 +384,25 @@ struct FantasyPlayerDetailsSheet: View {
         HStack(spacing: 8) {
             Text("\(row.gameweek)")
                 .font(.caption.monospacedDigit())
-                .frame(width: 40, alignment: .leading)
+                .frame(width: 30, alignment: .leading)
 
             HStack(spacing: 6) {
                 teamLogoView(teamName: row.opponentTeamName, size: 16)
                 Text("\(row.opponentTeamName) (\(row.wasHome ? "H" : "A"))")
                     .font(.caption)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-            .frame(width: 176, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            pointsHeatmapCell(row.points, width: 44)
+            pointsHeatmapCell(row.points, width: 40)
             Text(minutesWithStartsText(minutes: row.minutes, starts: row.starts))
                 .font(.caption.monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .frame(width: 62, alignment: .trailing)
-            valueCell(row.goalsScored, width: 34)
-            valueCell(row.assists, width: 34)
-            Text(row.expectedGoals)
-                .font(.caption.monospacedDigit())
-                .frame(width: 46, alignment: .trailing)
+                .frame(width: 52, alignment: .trailing)
+            valueCell(row.goalsScored, width: 28)
+            valueCell(row.assists, width: 28)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -525,11 +521,10 @@ struct FantasyPlayerDetailsSheet: View {
     }
 
     private var recommendationPriceColumnWidth: CGFloat { 54 }
-    private var recommendationNextDifficultyColumnWidth: CGFloat { 70 }
-    private var recommendationStrengthColumnWidth: CGFloat { 72 }
+    private var recommendationNextDifficultyColumnWidth: CGFloat { 40 }
     private var recommendationChevronColumnWidth: CGFloat { 20 }
     private var recommendationGameweekColumnWidth: CGFloat { 62 }
-    private var recommendationTrailingStatColumnWidth: CGFloat { 70 }
+    private var recommendationTrailingStatColumnWidth: CGFloat { 60 }
     private var recommendationSecondaryTrailingStatColumnWidth: CGFloat { 52 }
 
     private var transferRecommendationsSection: some View {
@@ -638,7 +633,11 @@ struct FantasyPlayerDetailsSheet: View {
                 alignment: .leading
             )
             .frame(maxWidth: .infinity, alignment: .leading)
-            transferRecommendationHeaderCell("Rating", width: recommendationStrengthColumnWidth, alignment: .leading)
+            transferRecommendationHeaderCell(
+                "Difficulty",
+                width: recommendationNextDifficultyColumnWidth,
+                alignment: .leading
+            )
             Color.clear
                 .frame(width: recommendationChevronColumnWidth, height: 1)
         }
@@ -689,7 +688,6 @@ struct FantasyPlayerDetailsSheet: View {
                 transferRecommendationMainRow(
                     item: item,
                     nextFixture: nextFixture,
-                    strength: strength,
                     isExpanded: isExpanded
                 )
             }
@@ -699,6 +697,7 @@ struct FantasyPlayerDetailsSheet: View {
                 recommendationExpandedDetailsSection(
                     item: item,
                     fixtures: fixtures,
+                    strength: strength,
                     rowDetails: rowDetails,
                     isLoadingRowDetails: isLoadingRowDetails,
                     rowErrorMessage: rowErrorMessage
@@ -712,7 +711,6 @@ struct FantasyPlayerDetailsSheet: View {
     private func transferRecommendationMainRow(
         item: FantasyTransferRecommendation,
         nextFixture: FantasyTransferRecommendation.Fixture?,
-        strength: Double,
         isExpanded: Bool
     ) -> some View {
         HStack(spacing: 6) {
@@ -744,14 +742,11 @@ struct FantasyPlayerDetailsSheet: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
-
-                recommendationDifficultyPill(nextFixture?.difficulty)
-                    .frame(width: recommendationNextDifficultyColumnWidth, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            recommendationStrengthBar(strength)
-                .frame(width: recommendationStrengthColumnWidth, alignment: .leading)
+            recommendationDifficultyPill(nextFixture?.difficulty)
+                .frame(width: recommendationNextDifficultyColumnWidth, alignment: .leading)
 
             Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                 .font(.caption2.weight(.bold))
@@ -765,6 +760,7 @@ struct FantasyPlayerDetailsSheet: View {
     private func recommendationExpandedDetailsSection(
         item: FantasyTransferRecommendation,
         fixtures: [FantasyTransferRecommendation.Fixture],
+        strength: Double,
         rowDetails: FantasyPlayerDetailsData?,
         isLoadingRowDetails: Bool,
         rowErrorMessage: String?
@@ -779,6 +775,7 @@ struct FantasyPlayerDetailsSheet: View {
                         .foregroundStyle(.secondary)
                 }
             } else if let rowDetails {
+                recommendationStrengthSection(strength: strength)
                 recommendationKeyStatsSection(metrics: rowDetails.metrics)
                 recommendationNextFixturesTable(item: item, fixtures: fixtures)
                 recommendationPreviousFixturesTable(rows: recommendationPlayedHistoryRows(from: rowDetails))
@@ -788,8 +785,21 @@ struct FantasyPlayerDetailsSheet: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+                recommendationStrengthSection(strength: strength)
                 recommendationNextFixturesTable(item: item, fixtures: fixtures)
             }
+        }
+    }
+
+    private func recommendationStrengthSection(strength: Double) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Recommendation strength")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            recommendationStrengthBar(strength)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: 10)
         }
     }
 
@@ -1008,10 +1018,10 @@ struct FantasyPlayerDetailsSheet: View {
         return Text(text)
             .font(.caption2.monospacedDigit().weight(.semibold))
             .foregroundStyle(difficulty == nil ? Color.secondary : Color.white)
-            .padding(.horizontal, 8)
+            .frame(minWidth: 40, alignment: .center)
             .padding(.vertical, 4)
             .background(
-                Capsule(style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(color.opacity(difficulty == nil ? 0.20 : 0.92))
             )
     }
