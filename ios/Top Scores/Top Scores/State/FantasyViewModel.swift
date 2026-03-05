@@ -232,18 +232,19 @@ final class FantasyViewModel: ObservableObject {
 
     func fetchTransferRecommendations(
         elementID: Int,
+        gameweekID: Int,
         apiBaseURL: String
     ) async throws -> FantasyTransferRecommendationsResponse {
         guard let baseURL = URL(string: apiBaseURL) else {
             throw FantasyPublicAPIError.invalidURL
         }
 
-        let cacheKey = "\(baseURL.absoluteString)|\(elementID)"
+        let cacheKey = "\(baseURL.absoluteString)|\(gameweekID)|\(elementID)"
         let now = Date()
         if let cached = cachedTransferRecommendations[cacheKey],
            now.timeIntervalSince(cached.fetchedAt) < transferRecommendationsCacheTTL {
             let age = Int(now.timeIntervalSince(cached.fetchedAt))
-            logPerf("transfer_recommendations_cache_hit element_id=\(elementID) age_s=\(age)")
+            logPerf("transfer_recommendations_cache_hit element_id=\(elementID) gameweek_id=\(gameweekID) age_s=\(age)")
             return cached.payload
         }
 

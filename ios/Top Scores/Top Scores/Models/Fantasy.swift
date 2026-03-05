@@ -529,6 +529,25 @@ struct FantasyTransferRecommendation: Codable, Hashable, Identifiable {
         let isHome: Bool
         let difficulty: Int?
         let label: String?
+        let isBlank: Bool
+
+        init(
+            gameweek: Int,
+            opponentTeamID: Int,
+            opponentShortName: String,
+            isHome: Bool,
+            difficulty: Int?,
+            label: String?,
+            isBlank: Bool
+        ) {
+            self.gameweek = gameweek
+            self.opponentTeamID = opponentTeamID
+            self.opponentShortName = opponentShortName
+            self.isHome = isHome
+            self.difficulty = difficulty
+            self.label = label
+            self.isBlank = isBlank
+        }
 
         enum CodingKeys: String, CodingKey {
             case gameweek
@@ -537,13 +556,42 @@ struct FantasyTransferRecommendation: Codable, Hashable, Identifiable {
             case isHome = "is_home"
             case difficulty
             case label
+            case isBlank = "is_blank"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                gameweek: try container.decode(Int.self, forKey: .gameweek),
+                opponentTeamID: try container.decode(Int.self, forKey: .opponentTeamID),
+                opponentShortName: try container.decode(String.self, forKey: .opponentShortName),
+                isHome: try container.decode(Bool.self, forKey: .isHome),
+                difficulty: try container.decodeIfPresent(Int.self, forKey: .difficulty),
+                label: try container.decodeIfPresent(String.self, forKey: .label),
+                isBlank: try container.decodeIfPresent(Bool.self, forKey: .isBlank) ?? false
+            )
+        }
+
+        static func blank(gameweek: Int) -> Self {
+            .init(
+                gameweek: gameweek,
+                opponentTeamID: 0,
+                opponentShortName: "No game",
+                isHome: false,
+                difficulty: nil,
+                label: "No game",
+                isBlank: true
+            )
         }
 
         var id: String {
-            "gw\(gameweek)-opp\(opponentTeamID)-\(isHome ? "h" : "a")"
+            "gw\(gameweek)-opp\(opponentTeamID)-\(isHome ? "h" : "a")-\(isBlank ? "blank" : "fixture")"
         }
 
         var displayLabel: String {
+            if isBlank {
+                return "No game"
+            }
             if let label {
                 let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {

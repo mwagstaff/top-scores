@@ -521,7 +521,7 @@ struct FantasyPlayerDetailsSheet: View {
     }
 
     private var recommendationPriceColumnWidth: CGFloat { 54 }
-    private var recommendationNextDifficultyColumnWidth: CGFloat { 40 }
+    private var recommendationNextDifficultyColumnWidth: CGFloat { 86 }
     private var recommendationChevronColumnWidth: CGFloat { 20 }
     private var recommendationGameweekColumnWidth: CGFloat { 62 }
     private var recommendationTrailingStatColumnWidth: CGFloat { 60 }
@@ -669,7 +669,8 @@ struct FantasyPlayerDetailsSheet: View {
     ) -> some View {
         let key = recommendationRowKey(groupID: groupID, elementID: item.elementID)
         let isExpanded = expandedRecommendationRows.contains(key)
-        let fixtures = Array(item.upcomingFixtures.prefix(5))
+        let fixtures = normalizedRecommendationUpcomingFixtures(item.upcomingFixtures)
+        let nextThreeFixtures = Array(fixtures.prefix(3))
         let nextFixture = fixtures.first
         let rowDetails = recommendationDetailsByElementID[item.elementID]
         let isLoadingRowDetails = loadingRecommendationDetailElementIDs.contains(item.elementID)
@@ -688,6 +689,7 @@ struct FantasyPlayerDetailsSheet: View {
                 transferRecommendationMainRow(
                     item: item,
                     nextFixture: nextFixture,
+                    nextThreeFixtures: nextThreeFixtures,
                     isExpanded: isExpanded
                 )
             }
@@ -711,6 +713,7 @@ struct FantasyPlayerDetailsSheet: View {
     private func transferRecommendationMainRow(
         item: FantasyTransferRecommendation,
         nextFixture: FantasyTransferRecommendation.Fixture?,
+        nextThreeFixtures: [FantasyTransferRecommendation.Fixture],
         isExpanded: Bool
     ) -> some View {
         HStack(spacing: 6) {
@@ -730,11 +733,19 @@ struct FantasyPlayerDetailsSheet: View {
 
             HStack(spacing: 6) {
                 if let nextFixture {
-                    teamLogoView(teamName: nextFixture.opponentShortName, size: 14)
-                    Text(nextFixture.displayLabel)
-                        .font(.caption2.monospacedDigit())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                    if nextFixture.isBlank {
+                        noGameIcon(size: 14)
+                        Text("No game")
+                            .font(.caption2.monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    } else {
+                        teamLogoView(teamName: nextFixture.opponentShortName, size: 14)
+                        Text(nextFixture.displayLabel)
+                            .font(.caption2.monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
                 } else {
                     noGameIcon(size: 14)
                     Text("No game")
@@ -745,7 +756,7 @@ struct FantasyPlayerDetailsSheet: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            recommendationDifficultyPill(nextFixture?.difficulty)
+            recommendationDifficultyDots(fixtures: nextThreeFixtures)
                 .frame(width: recommendationNextDifficultyColumnWidth, alignment: .leading)
 
             Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -755,6 +766,52 @@ struct FantasyPlayerDetailsSheet: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    private func recommendationDifficultyDots(
+        fixtures: [FantasyTransferRecommendation.Fixture]
+    ) -> some View {
+        let nextThree = Array(fixtures.prefix(3))
+        return HStack(spacing: 6) {
+            ForEach(0..<3, id: \.self) { index in
+                let fixture = index < nextThree.count ? nextThree[index] : nil
+                let color: Color = {
+                    guard let fixture else { return Color.secondary.opacity(0.28) }
+                    if fixture.isBlank {
+                        return Color.secondary.opacity(0.65)
+                    }
+                    return fixtureDifficultyColor(fixture.difficulty).opacity(0.96)
+                }()
+
+                Circle()
+                    .fill(color)
+                    .frame(width: 10, height: 10)
+            }
+        }
+        .frame(minHeight: 18, alignment: .center)
+    }
+
+    private func normalizedRecommendationUpcomingFixtures(
+        _ fixtures: [FantasyTransferRecommendation.Fixture]
+    ) -> [FantasyTransferRecommendation.Fixture] {
+        guard !fixtures.isEmpty else { return [] }
+
+        var fixturesByGameweek: [Int: FantasyTransferRecommendation.Fixture] = [:]
+        for fixture in fixtures.sorted(by: { $0.gameweek < $1.gameweek }) {
+            if fixturesByGameweek[fixture.gameweek] == nil {
+                fixturesByGameweek[fixture.gameweek] = fixture
+            }
+        }
+
+        let startGameweek = max(1, selection.gameweekID + 1)
+
+        return (0..<5).map { offset in
+            let gameweek = startGameweek + offset
+            if let fixture = fixturesByGameweek[gameweek] {
+                return fixture
+            }
+            return FantasyTransferRecommendation.Fixture.blank(gameweek: gameweek)
+        }
     }
 
     private func recommendationExpandedDetailsSection(
@@ -778,7 +835,7 @@ struct FantasyPlayerDetailsSheet: View {
                 recommendationStrengthSection(strength: strength)
                 recommendationKeyStatsSection(metrics: rowDetails.metrics)
                 recommendationNextFixturesTable(item: item, fixtures: fixtures)
-                recommendationPreviousFixturesTable(rows: recommendationPlayedHistoryRows(from: rowDetails))
+                recommendationPreviousFixturesTable(details: rowDetails)
             } else {
                 if let rowErrorMessage {
                     Text(rowErrorMessage)
@@ -871,28 +928,45 @@ struct FantasyPlayerDetailsSheet: View {
                             .font(.caption.monospacedDigit())
                             .frame(width: gameweekWidth, alignment: .leading)
 
-                        HStack(spacing: 6) {
-                            teamLogoView(teamName: fixture.opponentShortName, size: 14)
-                            Text(fixture.displayLabel)
-                                .font(.caption.monospacedDigit())
-                                .lineLimit(1)
+                        if fixture.isBlank {
+                            HStack(spacing: 6) {
+                                noGameIcon(size: 14)
+                                Text("No game")
+                                    .font(.caption.monospacedDigit())
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            HStack(spacing: 6) {
+                                teamLogoView(teamName: fixture.opponentShortName, size: 14)
+                                Text(fixture.displayLabel)
+                                    .font(.caption.monospacedDigit())
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
 
                         recommendationDifficultyPill(fixture.difficulty)
                             .frame(width: difficultyWidth, alignment: .leading)
 
-                        Text(
-                            expectedPointsForFixture(
-                                recommendation: item,
-                                fixture: fixture,
-                                fixtureIndex: index
+                        if fixture.isBlank {
+                            Text("0.0")
+                                .font(.caption.monospacedDigit().weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: xpWidth, alignment: .trailing)
+                        } else {
+                            Text(
+                                expectedPointsForFixture(
+                                    recommendation: item,
+                                    fixture: fixture,
+                                    fixtureIndex: index
+                                )
+                                .formatted(.number.precision(.fractionLength(1)))
                             )
-                            .formatted(.number.precision(.fractionLength(1)))
-                        )
-                        .font(.caption.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: xpWidth, alignment: .trailing)
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: xpWidth, alignment: .trailing)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -902,8 +976,9 @@ struct FantasyPlayerDetailsSheet: View {
     }
 
     private func recommendationPreviousFixturesTable(
-        rows: [FantasyPlayerDetailsData.HistoryRow]
+        details: FantasyPlayerDetailsData
     ) -> some View {
+        let rows = recommendationPreviousHistoryRowsWithBlanks(from: details)
         let gameweekWidth = recommendationGameweekColumnWidth
         let pointsWidth = recommendationTrailingStatColumnWidth
         let minutesWidth = recommendationSecondaryTrailingStatColumnWidth
@@ -934,13 +1009,23 @@ struct FantasyPlayerDetailsSheet: View {
                             .font(.caption.monospacedDigit())
                             .frame(width: gameweekWidth, alignment: .leading)
 
-                        HStack(spacing: 6) {
-                            teamLogoView(teamName: row.opponentTeamName, size: 14)
-                            Text("\(teamAbbreviation(row.opponentTeamName)) (\(row.wasHome ? "H" : "A"))")
-                                .font(.caption.monospacedDigit())
-                                .lineLimit(1)
+                        if row.opponentTeamID <= 0 {
+                            HStack(spacing: 6) {
+                                noGameIcon(size: 14)
+                                Text("No game")
+                                    .font(.caption.monospacedDigit())
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            HStack(spacing: 6) {
+                                teamLogoView(teamName: row.opponentTeamName, size: 14)
+                                Text("\(teamAbbreviation(row.opponentTeamName)) (\(row.wasHome ? "H" : "A"))")
+                                    .font(.caption.monospacedDigit())
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
 
                         recommendationPreviousPointsPill(
                             points: row.points,
@@ -948,7 +1033,11 @@ struct FantasyPlayerDetailsSheet: View {
                         )
                             .frame(width: pointsWidth, alignment: .trailing)
 
-                        Text(minutesWithStartsText(minutes: row.minutes, starts: row.starts))
+                        Text(
+                            row.opponentTeamID <= 0
+                                ? "-"
+                                : minutesWithStartsText(minutes: row.minutes, starts: row.starts)
+                        )
                             .font(.caption.monospacedDigit().weight(.semibold))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -962,14 +1051,48 @@ struct FantasyPlayerDetailsSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func recommendationPlayedHistoryRows(
+    private func recommendationPreviousHistoryRowsWithBlanks(
         from details: FantasyPlayerDetailsData
     ) -> [FantasyPlayerDetailsData.HistoryRow] {
-        Array(
-            details.historyRows
-                .filter { $0.minutes > 0 }
-                .prefix(5)
+        var playedRowsByGameweek: [Int: FantasyPlayerDetailsData.HistoryRow] = [:]
+        for row in details.historyRows where row.minutes > 0 {
+            if playedRowsByGameweek[row.gameweek] == nil {
+                playedRowsByGameweek[row.gameweek] = row
+            }
+        }
+
+        guard let latestPlayedGameweek = playedRowsByGameweek.keys.max() else {
+            return []
+        }
+
+        let upcomingStartsAtCurrentGameweek = details.upcomingFixtures.first?.gameweek == selection.gameweekID
+        let targetStartGameweek = max(
+            1,
+            upcomingStartsAtCurrentGameweek
+                ? (selection.gameweekID - 1)
+                : selection.gameweekID
         )
+        let effectiveStartGameweek = max(targetStartGameweek, latestPlayedGameweek)
+        let floorGameweek = max(1, effectiveStartGameweek - 4)
+
+        return stride(from: effectiveStartGameweek, through: floorGameweek, by: -1)
+            .map { gameweek in
+                if let row = playedRowsByGameweek[gameweek] {
+                    return row
+                }
+                return FantasyPlayerDetailsData.HistoryRow(
+                    gameweek: gameweek,
+                    opponentTeamID: -1,
+                    opponentTeamName: "No game",
+                    wasHome: true,
+                    points: 0,
+                    starts: 0,
+                    minutes: 0,
+                    goalsScored: 0,
+                    assists: 0,
+                    expectedGoals: "0.0"
+                )
+            }
     }
 
     private func recommendationPointsRange(
@@ -1055,6 +1178,9 @@ struct FantasyPlayerDetailsSheet: View {
         fixture: FantasyTransferRecommendation.Fixture,
         fixtureIndex: Int
     ) -> Double {
+        if fixture.isBlank {
+            return 0
+        }
         // Previous-10 proxy: blend season PPG with recent form, then scale by fixture context.
         let previousTenProxyAverage =
             max(0.0, (recommendation.pointsPerGame * 0.65) + (recommendation.form * 0.35))
@@ -1249,6 +1375,7 @@ struct FantasyPlayerDetailsSheet: View {
         do {
             let recommendations = try await fantasyViewModel.fetchTransferRecommendations(
                 elementID: elementID,
+                gameweekID: selection.gameweekID,
                 apiBaseURL: apiBaseURL
             )
             transferRecommendations = recommendations

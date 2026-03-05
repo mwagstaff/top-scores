@@ -1609,7 +1609,8 @@ function buildTransferRecommendation(
   targetElement,
   teamContext,
   positionNameByID,
-  upcomingFixturesByTeam
+  upcomingFixturesByTeam,
+  baselineEvent
 ) {
   const nowCost = parseFiniteNumber(element && element.now_cost, 0);
   const targetCost = parseFiniteNumber(targetElement && targetElement.now_cost, 0);
@@ -1622,8 +1623,58 @@ function buildTransferRecommendation(
   const teamID = parseFiniteNumber(element && element.team, 0);
   const availabilityPenalty = elementAvailabilityPenalty(element);
   const next5 = projectedFiveGameDifficulty(element, teamContext);
-  const upcomingFixtures = (upcomingFixturesByTeam.get(teamID) || []).slice(0, 5);
+  const fixturesByGameweek = new Map();
+  for (const fixture of upcomingFixturesByTeam.get(teamID) || []) {
+    const fixtureGameweek = parseFiniteNumber(fixture && fixture.gameweek, 0);
+    if (fixtureGameweek <= 0) continue;
+    if (!fixturesByGameweek.has(fixtureGameweek)) {
+      fixturesByGameweek.set(fixtureGameweek, fixture);
+    }
+  }
+
+  const normalizedBaselineEvent = Math.max(1, parseFiniteNumber(baselineEvent, 1));
+  const upcomingFixtures = Array.from({ length: 5 }, (_, index) => {
+    const gameweek = normalizedBaselineEvent + index;
+    const fixture = fixturesByGameweek.get(gameweek);
+    if (fixture) {
+      return {
+        ...fixture,
+        is_blank: false,
+      };
+    }
+    return {
+      gameweek,
+      opponent_team_id: 0,
+      opponent_short_name: "No game",
+      is_home: false,
+      difficulty: null,
+      kickoff_sort: Number.MAX_SAFE_INTEGER,
+      is_blank: true,
+    };
+  });
   const nextFixture = upcomingFixtures.length > 0 ? upcomingFixtures[0] : null;
+  const blankGameweeks = upcomingFixtures.reduce(
+    (count, fixture) => count + (fixture && fixture.is_blank ? 1 : 0),
+    0
+  );
+  const scheduleEaseValues = upcomingFixtures.map((fixture) => {
+    if (fixture && fixture.is_blank) return 0;
+    const difficulty = clamp(
+      Math.round(parseFiniteNumber(fixture && fixture.difficulty, 3)),
+      1,
+      5
+    );
+    return clamp((6 - difficulty) / 5, 0, 1);
+  });
+  const scheduleEase = scheduleEaseValues.length > 0
+    ? scheduleEaseValues.reduce((sum, value) => sum + value, 0) / scheduleEaseValues.length
+    : next5.projectedEase;
+  const blendedFixtureEase = clamp(
+    scheduleEase * 0.8 + next5.projectedEase * 0.2,
+    0,
+    1
+  );
+  const blankPenaltyPoints = blankGameweeks * 5;
 
   const formLast5Proxy = form * 5;
   const formScoreNorm = clamp(formLast5Proxy / 35, 0, 1);
@@ -1633,10 +1684,11 @@ function buildTransferRecommendation(
 
   const weightedScore =
     formScoreNorm * 0.52 +
-    next5.projectedEase * 0.28 +
+    blendedFixtureEase * 0.28 +
     pointsPerGameNorm * 0.12 +
     valueEfficiencyNorm * 0.08;
-  const recommendationScore = weightedScore * 100 - availabilityPenalty * 24;
+  const recommendationScore =
+    weightedScore * 100 - availabilityPenalty * 24 - blankPenaltyPoints;
 
   const team = teamContext.teamsByID.get(teamID) || null;
   const chanceNext = parseFiniteNumber(element && element.chance_of_playing_next_round, 100);
@@ -1672,9 +1724,11 @@ function buildTransferRecommendation(
     news: String((element && element.news) || "").trim(),
     availability,
     projected_next5_difficulty: nextFixture
-      ? nextFixture.difficulty
+      ? (nextFixture.is_blank
+        ? 5
+        : nextFixture.difficulty)
       : next5.projectedDifficulty,
-    projected_next5_ease: roundTo(next5.projectedEase, 3),
+    projected_next5_ease: roundTo(blendedFixtureEase, 3),
     next_fixture: nextFixture
       ? {
         gameweek: nextFixture.gameweek,
@@ -1682,7 +1736,10 @@ function buildTransferRecommendation(
         opponent_short_name: nextFixture.opponent_short_name,
         is_home: nextFixture.is_home,
         difficulty: nextFixture.difficulty,
-        label: `${nextFixture.opponent_short_name} (${nextFixture.is_home ? "H" : "A"})`,
+        is_blank: Boolean(nextFixture.is_blank),
+        label: nextFixture.is_blank
+          ? "No game"
+          : `${nextFixture.opponent_short_name} (${nextFixture.is_home ? "H" : "A"})`,
       }
       : null,
     next_five_fixtures: upcomingFixtures.map((fixture) => ({
@@ -1691,15 +1748,20 @@ function buildTransferRecommendation(
       opponent_short_name: fixture.opponent_short_name,
       is_home: fixture.is_home,
       difficulty: fixture.difficulty,
-      label: `${fixture.opponent_short_name} (${fixture.is_home ? "H" : "A"})`,
+      is_blank: Boolean(fixture.is_blank),
+      label: fixture.is_blank
+        ? "No game"
+        : `${fixture.opponent_short_name} (${fixture.is_home ? "H" : "A"})`,
     })),
     recommendation_score: roundTo(recommendationScore, 2),
     score_breakdown: {
       form_score: roundTo(formScoreNorm * 100, 2),
-      fixture_score: roundTo(next5.projectedEase * 100, 2),
+      fixture_score: roundTo(blendedFixtureEase * 100, 2),
       points_per_game_score: roundTo(pointsPerGameNorm * 100, 2),
       value_efficiency_score: roundTo(valueEfficiencyNorm * 100, 2),
       availability_penalty: roundTo(availabilityPenalty, 3),
+      blank_gameweeks: blankGameweeks,
+      blank_penalty_points: blankPenaltyPoints,
     },
   };
 }
@@ -10295,14 +10357,17 @@ app.get(`${API_PREFIX}/fantasy/transfers/recommendations/:elementId`, (req, res)
         .filter(([id]) => id > 0)
     );
     const teamContext = teamStrengthContext(teams);
-    const baselineEvent = Math.max(
-      1,
-      parseFiniteNumber(
-        (fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id) ||
-          (fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id),
-        1
-      )
+    const currentEventID = parseFiniteNumber(
+      fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id,
+      0
     );
+    const nextEventID = parseFiniteNumber(
+      fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id,
+      0
+    );
+    const baselineEvent = nextEventID > 0
+      ? nextEventID
+      : Math.max(1, currentEventID);
     const upcomingFixturesByTeam = buildUpcomingFixturesByTeam(
       cachedFantasyFixtures,
       teamContext,
@@ -10324,7 +10389,8 @@ app.get(`${API_PREFIX}/fantasy/transfers/recommendations/:elementId`, (req, res)
           targetElement,
           teamContext,
           positionNameByID,
-          upcomingFixturesByTeam
+          upcomingFixturesByTeam,
+          baselineEvent
         )
       )
       .sort((left, right) => {
@@ -10367,13 +10433,14 @@ app.get(`${API_PREFIX}/fantasy/transfers/recommendations/:elementId`, (req, res)
       },
       algorithm: {
         summary:
-          "Score combines last-5 form proxy, projected next-5 fixture ease proxy, points-per-game, value efficiency, and availability penalties.",
+          "Score combines last-5 form proxy, projected next-5 fixture ease proxy, points-per-game, value efficiency, availability penalties, and blank-gameweek penalties (xP=0 for blank weeks).",
         components: {
           form_last5_proxy_weight: 0.52,
           next5_fixture_ease_proxy_weight: 0.28,
           points_per_game_weight: 0.12,
           value_efficiency_weight: 0.08,
           availability_penalty_multiplier: 24,
+          blank_gameweek_penalty_points_each: 5,
         },
         notes: [
           "Past form is approximated with bootstrap 'form' scaled to a 5-match equivalent.",
