@@ -388,6 +388,7 @@ struct FantasyEntryProfile: Codable, Hashable {
     let playerFirstName: String
     let playerLastName: String
     let summaryOverallPoints: Int?
+    let clubBadgeSrc: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -395,6 +396,7 @@ struct FantasyEntryProfile: Codable, Hashable {
         case playerFirstName = "player_first_name"
         case playerLastName = "player_last_name"
         case summaryOverallPoints = "summary_overall_points"
+        case clubBadgeSrc = "club_badge_src"
     }
 }
 
@@ -465,6 +467,16 @@ struct FantasyClassicLeagueStandingEntry: Codable, Hashable, Identifiable {
     }
 }
 
+struct FantasyTeamShortNameMappingsResponse: Codable, Hashable {
+    let updatedAt: String?
+    let mappings: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case updatedAt = "updated_at"
+        case mappings
+    }
+}
+
 struct FantasyTransferRecommendationsResponse: Codable, Hashable {
     struct Criteria: Codable, Hashable {
         let elementID: Int
@@ -510,6 +522,38 @@ struct FantasyTransferRecommendationsResponse: Codable, Hashable {
 }
 
 struct FantasyTransferRecommendation: Codable, Hashable, Identifiable {
+    struct Fixture: Codable, Hashable, Identifiable {
+        let gameweek: Int
+        let opponentTeamID: Int
+        let opponentShortName: String
+        let isHome: Bool
+        let difficulty: Int?
+        let label: String?
+
+        enum CodingKeys: String, CodingKey {
+            case gameweek
+            case opponentTeamID = "opponent_team_id"
+            case opponentShortName = "opponent_short_name"
+            case isHome = "is_home"
+            case difficulty
+            case label
+        }
+
+        var id: String {
+            "gw\(gameweek)-opp\(opponentTeamID)-\(isHome ? "h" : "a")"
+        }
+
+        var displayLabel: String {
+            if let label {
+                let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
+            }
+            return "\(opponentShortName) (\(isHome ? "H" : "A"))"
+        }
+    }
+
     struct ScoreBreakdown: Codable, Hashable {
         let formScore: Double
         let fixtureScore: Double
@@ -549,6 +593,8 @@ struct FantasyTransferRecommendation: Codable, Hashable, Identifiable {
     let availability: String
     let projectedNext5Difficulty: Int
     let projectedNext5Ease: Double
+    let nextFixture: Fixture?
+    let nextFiveFixtures: [Fixture]?
     let recommendationScore: Double
     let scoreBreakdown: ScoreBreakdown?
 
@@ -576,11 +622,23 @@ struct FantasyTransferRecommendation: Codable, Hashable, Identifiable {
         case availability
         case projectedNext5Difficulty = "projected_next5_difficulty"
         case projectedNext5Ease = "projected_next5_ease"
+        case nextFixture = "next_fixture"
+        case nextFiveFixtures = "next_five_fixtures"
         case recommendationScore = "recommendation_score"
         case scoreBreakdown = "score_breakdown"
     }
 
     var id: Int { elementID }
+
+    var upcomingFixtures: [Fixture] {
+        if let nextFiveFixtures, !nextFiveFixtures.isEmpty {
+            return nextFiveFixtures
+        }
+        if let nextFixture {
+            return [nextFixture]
+        }
+        return []
+    }
 }
 
 struct FantasyRivalManager: Codable, Hashable, Identifiable {
@@ -589,6 +647,7 @@ struct FantasyRivalManager: Codable, Hashable, Identifiable {
     let managerFirstName: String
     let managerLastName: String
     let overallPoints: Int?
+    let clubBadgeSrc: String?
 
     var id: Int {
         entryID
@@ -631,6 +690,7 @@ struct FantasyRivalSquad: Identifiable, Hashable {
     let entryID: Int
     let teamName: String
     let managerName: String
+    let clubBadgeSrc: String?
     let squad: FantasySquadDisplayData
     let allGameweeksPoints: Int?
 

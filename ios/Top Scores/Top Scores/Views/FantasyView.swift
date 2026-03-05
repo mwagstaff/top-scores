@@ -568,7 +568,7 @@ struct FantasyView: View {
     ) -> some View {
         let currentScore = data.resolvedCurrentScore
         let displayedScore = data.isEstimatedScore ? "\(currentScore)*" : "\(currentScore)"
-        let rivalPills = rivalScorePills(for: data)
+        let rivalPills = rivalScorePills()
 
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
@@ -641,13 +641,13 @@ struct FantasyView: View {
         )
     }
 
-    private func rivalScorePills(for data: FantasySquadDisplayData) -> [FantasyRivalScorePill] {
+    private func rivalScorePills() -> [FantasyRivalScorePill] {
         fantasyViewModel.rivalSquads
             .map { rival in
                 FantasyRivalScorePill(
                     entryID: rival.entryID,
                     initials: initials(for: rival.managerName),
-                    score: data.hasActiveFixtures ? rival.squad.resolvedCurrentScore : rival.squad.totalPoints
+                    score: rival.currentScore
                 )
             }
             .sorted { lhs, rhs in
@@ -986,6 +986,7 @@ struct FantasyView: View {
                 currentGameweekScore: mySquad.resolvedCurrentScore,
                 allGameweeksScore: profile?.summaryOverallPoints,
                 squad: mySquad,
+                clubBadgeSrc: profile?.clubBadgeSrc,
                 isUser: true
             )
         ]
@@ -1002,6 +1003,7 @@ struct FantasyView: View {
                 currentGameweekScore: rivalSquad?.currentScore,
                 allGameweeksScore: rivalSquad?.allGameweeksPoints ?? rival.overallPoints,
                 squad: rivalSquad?.squad,
+                clubBadgeSrc: rivalSquad?.clubBadgeSrc ?? rival.clubBadgeSrc,
                 isUser: false
             )
         })
@@ -1270,15 +1272,18 @@ struct FantasyView: View {
                 .frame(width: 26, alignment: .trailing)
                 .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(entry.teamName)
-                    .font(.body.weight(.semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(Color.primary)
-                Text(entry.isUser ? "\(entry.managerName) (You)" : entry.managerName)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                managerBadgeImage(urlString: entry.clubBadgeSrc, fallbackTeamName: entry.teamName)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.teamName)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(Color.primary)
+                    Text(entry.isUser ? "\(entry.managerName) (You)" : entry.managerName)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1294,6 +1299,14 @@ struct FantasyView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(entry.isUser ? Color.accentColor.opacity(0.15) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(entry.isUser ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 1)
+        )
         .contentShape(Rectangle())
     }
 
@@ -1425,6 +1438,50 @@ struct FantasyView: View {
     }
 
     @ViewBuilder
+    private func managerBadgeImage(urlString: String?, fallbackTeamName: String?) -> some View {
+        if let urlString,
+           let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .empty:
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.secondary.opacity(0.2))
+                        .frame(width: 20, height: 20)
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                case .failure:
+                    managerFallbackBadge(teamName: fallbackTeamName)
+                @unknown default:
+                    managerFallbackBadge(teamName: fallbackTeamName)
+                }
+            }
+        } else {
+            managerFallbackBadge(teamName: fallbackTeamName)
+        }
+    }
+
+    @ViewBuilder
+    private func managerFallbackBadge(teamName: String?) -> some View {
+        if let teamName,
+           let logo = LogoResolver.shared.image(for: teamName) {
+            Image(uiImage: logo)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        } else {
+            Image(systemName: "shield")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+        }
+    }
+
+    @ViewBuilder
     private func leagueTrendIcon(currentRank: Int, lastRank: Int?) -> some View {
         switch leagueRankTrend(currentRank: currentRank, lastRank: lastRank) {
         case .up:
@@ -1487,7 +1544,10 @@ struct FantasyView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 20, height: 20)
                 @unknown default:
-                    EmptyView()
+                    Image(systemName: "shield")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
                 }
             }
         } else {
@@ -1572,15 +1632,18 @@ struct FantasyView: View {
                 .frame(width: 26, alignment: .trailing)
                 .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(entry.teamName)
-                    .font(.body.weight(.semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(Color.primary)
-                Text(entry.isUser ? "\(entry.managerName) (You)" : entry.managerName)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                managerBadgeImage(urlString: entry.clubBadgeSrc, fallbackTeamName: entry.teamName)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.teamName)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(Color.primary)
+                    Text(entry.isUser ? "\(entry.managerName) (You)" : entry.managerName)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(isIncluded ? 1.0 : 0.5)
@@ -2282,7 +2345,8 @@ struct FantasyView: View {
             teamName: pendingRivalProfile.name,
             managerFirstName: pendingRivalProfile.playerFirstName,
             managerLastName: pendingRivalProfile.playerLastName,
-            overallPoints: pendingRivalProfile.summaryOverallPoints
+            overallPoints: pendingRivalProfile.summaryOverallPoints,
+            clubBadgeSrc: pendingRivalProfile.clubBadgeSrc
         )
         guard !rivalManagers.contains(where: { $0.entryID == rival.entryID }) else {
             return
@@ -2362,6 +2426,7 @@ struct FantasyView: View {
             entryID: entry.entryID,
             teamName: entry.teamName,
             managerName: entry.managerName,
+            clubBadgeSrc: entry.clubBadgeSrc,
             squad: squad,
             allGameweeksPoints: entry.allGameweeksScore
         )
@@ -2582,7 +2647,8 @@ struct FantasyView: View {
                 teamName: profile.name,
                 managerFirstName: profile.playerFirstName,
                 managerLastName: profile.playerLastName,
-                overallPoints: profile.summaryOverallPoints
+                overallPoints: profile.summaryOverallPoints,
+                clubBadgeSrc: profile.clubBadgeSrc
             )
             guard !rivalManagers.contains(where: { $0.entryID == rival.entryID }) else {
                 setShareImportStatus("Rival \(capturedID) is already in your rivals list.", isError: false)
@@ -3178,6 +3244,7 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     let currentGameweekScore: Int?
     let allGameweeksScore: Int?
     let squad: FantasySquadDisplayData?
+    let clubBadgeSrc: String?
     let isUser: Bool
 
     var id: Int {

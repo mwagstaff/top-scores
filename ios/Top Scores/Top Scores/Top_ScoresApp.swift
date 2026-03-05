@@ -29,9 +29,14 @@ struct Top_ScoresApp: App {
                 .environmentObject(preferences)
                 .environmentObject(matchesStore)
                 .task {
-                    await TeamRankingsCatalog.shared.ensureFresh(
+                    async let teamRankingsWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
                         apiBaseURL: preferences.snapshot.apiBaseURL
                     )
+                    async let fantasyMappingsWarmTask: Void =
+                        FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(
+                            apiBaseURL: preferences.snapshot.apiBaseURL
+                        )
+                    _ = await (teamRankingsWarmTask, fantasyMappingsWarmTask)
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -53,7 +58,17 @@ struct Top_ScoresApp: App {
                     async let teamRankingWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
                         apiBaseURL: snapshot.apiBaseURL
                     )
-                    _ = await (refreshTask, syncTask, metricTask, teamRankingWarmTask)
+                    async let fantasyMappingsWarmTask: Void =
+                        FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(
+                            apiBaseURL: snapshot.apiBaseURL
+                        )
+                    _ = await (
+                        refreshTask,
+                        syncTask,
+                        metricTask,
+                        teamRankingWarmTask,
+                        fantasyMappingsWarmTask
+                    )
                 }
             default:
                 break

@@ -166,6 +166,16 @@ struct APIClient {
         return try JSONDecoder().decode(FantasyBootstrapLookup.self, from: data)
     }
 
+    func fetchFantasyTeamShortNameMappings() async throws -> FantasyTeamShortNameMappingsResponse {
+        let request = try buildRequest(path: "fantasy/team-short-name-mappings", queryItems: [])
+        let (data, http) = try await performRequest(
+            request,
+            operation: "fantasy_team_short_name_mappings"
+        )
+        try validateSuccess(http, data: data, operation: "fantasy_team_short_name_mappings")
+        return try JSONDecoder().decode(FantasyTeamShortNameMappingsResponse.self, from: data)
+    }
+
     func fetchFantasyTransferRecommendations(
         elementID: Int,
         valueWindowMillions: Double = 1.5,

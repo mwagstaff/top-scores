@@ -351,6 +351,7 @@ final class FantasyViewModel: ObservableObject {
                         entryID: rival.entryID,
                         teamName: rival.teamName,
                         managerName: rival.managerDisplayName,
+                        clubBadgeSrc: rivalProfile?.clubBadgeSrc ?? rival.clubBadgeSrc,
                         squad: rivalSquad,
                         allGameweeksPoints: rivalProfile?.summaryOverallPoints ?? rival.overallPoints
                     )

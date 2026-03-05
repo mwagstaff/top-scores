@@ -151,3 +151,157 @@ actor TeamRankingsCatalog {
         NSLog("[TeamRankingsCatalog] %@", message)
     }
 }
+
+private struct FantasyTeamShortNameMappingsCachePayload: Codable {
+    let fetchedAt: Date
+    let mappings: [String: String]
+}
+
+final class FantasyTeamShortNameMappingsStore {
+    static let shared = FantasyTeamShortNameMappingsStore()
+
+    private let lock = NSLock()
+    private var mappings: [String: String] = [:]
+
+    private init() {}
+
+    func updateMappings(_ nextMappings: [String: String]) {
+        lock.lock()
+        mappings = nextMappings
+        lock.unlock()
+    }
+
+    func resolveTeamName(for rawValue: String) -> String {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+
+        let key = trimmed.uppercased()
+        lock.lock()
+        let mapped = mappings[key]
+        lock.unlock()
+        return mapped ?? trimmed
+    }
+}
+
+actor FantasyTeamShortNameMappingsCatalog {
+    static let shared = FantasyTeamShortNameMappingsCatalog()
+
+    private static let cacheTTL: TimeInterval = 24 * 60 * 60
+    private static let cacheFileName = "fantasy-team-short-name-mappings-cache.json"
+
+    private var didLoadCache = false
+    private var cachedMappings: [String: String] = [:]
+    private var cachedFetchedAt: Date?
+    private var refreshTask: Task<[String: String], Error>?
+
+    private init() {}
+
+    func ensureFresh(apiBaseURL: String) async {
+        loadCacheIfNeeded()
+        applyCachedMappingsToStore()
+        guard shouldRefresh(now: Date()) else { return }
+
+        if let inFlight = refreshTask {
+            _ = try? await inFlight.value
+            return
+        }
+
+        guard let baseURL = URL(string: apiBaseURL) else {
+            log("Invalid fantasy mappings base URL: \(apiBaseURL)")
+            return
+        }
+
+        let task = Task<[String: String], Error> {
+            let client = APIClient(baseURL: baseURL)
+            let response = try await client.fetchFantasyTeamShortNameMappings()
+            return Self.normalize(mappings: response.mappings)
+        }
+        refreshTask = task
+
+        defer { refreshTask = nil }
+
+        do {
+            let fetchedMappings = try await task.value
+            guard !fetchedMappings.isEmpty else {
+                log("Fantasy mappings refresh returned empty payload; keeping existing cache.")
+                return
+            }
+
+            cachedMappings = fetchedMappings
+            cachedFetchedAt = Date()
+            persistCache()
+            applyCachedMappingsToStore()
+            log("Fantasy mappings cache refreshed with \(fetchedMappings.count) entries.")
+        } catch {
+            log("Fantasy mappings refresh failed: \(String(describing: error))")
+        }
+    }
+
+    private func shouldRefresh(now: Date) -> Bool {
+        guard let fetchedAt = cachedFetchedAt else {
+            return true
+        }
+        return now.timeIntervalSince(fetchedAt) >= Self.cacheTTL || cachedMappings.isEmpty
+    }
+
+    private func loadCacheIfNeeded() {
+        guard !didLoadCache else { return }
+        didLoadCache = true
+
+        guard let data = try? Data(contentsOf: cacheURL) else { return }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let payload = try? decoder.decode(FantasyTeamShortNameMappingsCachePayload.self, from: data) else {
+            log("Failed to decode fantasy mappings cache; ignoring stored data.")
+            return
+        }
+
+        cachedFetchedAt = payload.fetchedAt
+        cachedMappings = Self.normalize(mappings: payload.mappings)
+    }
+
+    private func persistCache() {
+        guard let fetchedAt = cachedFetchedAt else { return }
+        let payload = FantasyTeamShortNameMappingsCachePayload(
+            fetchedAt: fetchedAt,
+            mappings: cachedMappings
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(payload) else { return }
+        try? data.write(to: cacheURL, options: [.atomic])
+    }
+
+    private static func normalize(mappings rawMappings: [String: String]) -> [String: String] {
+        var normalized: [String: String] = [:]
+        normalized.reserveCapacity(rawMappings.count)
+
+        for (rawKey, rawValue) in rawMappings {
+            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, !value.isEmpty else { continue }
+            normalized[key] = value
+        }
+
+        return normalized
+    }
+
+    private func applyCachedMappingsToStore() {
+        FantasyTeamShortNameMappingsStore.shared.updateMappings(cachedMappings)
+    }
+
+    private var cacheURL: URL {
+        let fileManager = FileManager.default
+        let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let directory = root.appendingPathComponent("TopScores", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent(Self.cacheFileName)
+    }
+
+    private func log(_ message: String) {
+        NSLog("[FantasyTeamShortNameMappingsCatalog] %@", message)
+    }
+}

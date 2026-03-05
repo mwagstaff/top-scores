@@ -414,6 +414,31 @@ const FPL_TRANSFER_DEFAULT_VALUE_WINDOW_MILLIONS = 1.5;
 const FPL_TRANSFER_DEFAULT_BUDGET_DISCOUNT_FRACTION = 0.30;
 const FPL_TRANSFER_DEFAULT_LIMIT = 10;
 const FPL_TRANSFER_MAX_LIMIT = 25;
+const FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH =
+  process.env.FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH ||
+  path.join(__dirname, "fantasy_team_short_name_mappings.json");
+const DEFAULT_FPL_FIXTURES_SOURCE_URL = "https://fantasy.premierleague.com/api/fixtures/";
+const FPL_FIXTURES_SOURCE_URL =
+  process.env.FPL_FIXTURES_SOURCE_URL || DEFAULT_FPL_FIXTURES_SOURCE_URL;
+const parsedFplFixturesIntervalHours = Number(
+  process.env.FPL_FIXTURES_UPDATE_INTERVAL_HOURS || 6
+);
+const FPL_FIXTURES_INTERVAL_MS = Number(
+  process.env.FPL_FIXTURES_UPDATE_INTERVAL_MS ||
+    parsedFplFixturesIntervalHours * 60 * 60 * 1000
+);
+const parsedFplFixturesTimeoutMs = Number(
+  process.env.FPL_FIXTURES_TIMEOUT_MS || 5 * 60 * 1000
+);
+const FPL_FIXTURES_TIMEOUT_MS = Number.isFinite(parsedFplFixturesTimeoutMs)
+  ? Math.max(10 * 1000, Math.floor(parsedFplFixturesTimeoutMs))
+  : 5 * 60 * 1000;
+const parsedFplFixturesMaxBytes = Number(
+  process.env.FPL_FIXTURES_MAX_BYTES || 200 * 1024 * 1024
+);
+const FPL_FIXTURES_MAX_BYTES = Number.isFinite(parsedFplFixturesMaxBytes)
+  ? Math.max(10 * 1024 * 1024, Math.floor(parsedFplFixturesMaxBytes))
+  : 200 * 1024 * 1024;
 const RECENT_OUTPUT_PATH =
   process.env.RECENT_OUTPUT_PATH || path.join(__dirname, "recent_matches.json");
 const MISSING_TEAM_LOGOS_OUTPUT_PATH =
@@ -510,6 +535,7 @@ const SOURCE_NATIONAL_ELO = "national_elo_rankings";
 const SOURCE_BBC_MATCH_DETAILS = "bbc_match_details";
 const SOURCE_RECENT_CACHE = "recent_matches_cache";
 const SOURCE_FPL_BOOTSTRAP = "fpl_bootstrap_static";
+const SOURCE_FPL_FIXTURES = "fpl_fixtures";
 const OP_DATASET_LIVE_MATCHES = "live_matches";
 const OP_DATASET_BBC_LIVE_MATCHES = "bbc_live_matches";
 const OP_DATASET_BBC_RANGE_MATCHES = "bbc_range_matches";
@@ -643,10 +669,21 @@ let fantasyBootstrapLastFailureDurationSeconds = 0;
 let fantasyBootstrapGameUpdating = false;
 let fantasyBootstrapGameUpdatingMessage = null;
 let fantasyBootstrapGameUpdatingDetectedAt = null;
+let cachedFantasyFixtures = [];
+let fantasyFixturesLastUpdated = null;
+let fantasyFixturesUpdating = false;
+let fantasyFixturesPayloadBytes = 0;
+let fantasyFixturesLastSuccessAt = null;
+let fantasyFixturesLastFailureAt = null;
+let fantasyFixturesLastSuccessDurationSeconds = 0;
+let fantasyFixturesLastFailureDurationSeconds = 0;
 let fantasyBootstrapNextDailyRefreshAt = null;
 let fantasyBootstrapDailyRefreshTimer = null;
 let fantasyTransferRecommendationRequestsTotal = 0;
 let fantasyTransferRecommendationFailuresTotal = 0;
+let fantasyTeamShortNameMappings = Object.freeze({});
+let fantasyTeamShortNameMappingsLoadedAt = null;
+let fantasyTeamShortNameMappingsMtimeMs = null;
 
 const STAGE_PATTERNS = [
   /\s*[-:–]\s*Round\s+\w+$/i,
@@ -1152,6 +1189,110 @@ function fetchFantasyBootstrapStaticPayload(url, options = {}, redirectDepth = 0
   });
 }
 
+function fetchFantasyFixturesPayload(url, options = {}, redirectDepth = 0) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : FPL_FIXTURES_TIMEOUT_MS;
+  const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : FPL_FIXTURES_MAX_BYTES;
+  const maxRedirects = Number.isFinite(options.maxRedirects) ? options.maxRedirects : 3;
+
+  return new Promise((resolve, reject) => {
+    let target;
+    try {
+      target = new URL(url);
+    } catch (_error) {
+      reject(new Error(`Invalid FPL fixtures URL: ${url}`));
+      return;
+    }
+
+    const lib = target.protocol === "https:" ? https : http;
+    const req = lib.get(
+      target,
+      {
+        headers: {
+          "User-Agent": "TopScoresAPI/1.0 (+https://fantasy.premierleague.com/)",
+          Accept: "application/json",
+          "Accept-Encoding": "gzip, deflate, br",
+        },
+      },
+      (res) => {
+        const statusCode = Number(res.statusCode || 0);
+        if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
+          if (redirectDepth >= maxRedirects) {
+            res.resume();
+            reject(new Error("FPL fixtures fetch failed: too many redirects"));
+            return;
+          }
+          const redirectUrl = new URL(res.headers.location, target).toString();
+          res.resume();
+          fetchFantasyFixturesPayload(redirectUrl, options, redirectDepth + 1)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+
+        if (statusCode !== 200) {
+          res.resume();
+          reject(new Error(`FPL fixtures fetch failed with status ${statusCode}`));
+          return;
+        }
+
+        const decodedStream = decodeHttpResponseStream(res);
+        const chunks = [];
+        let totalBytes = 0;
+
+        decodedStream.on("data", (chunk) => {
+          const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += bufferChunk.length;
+          if (totalBytes > maxBytes) {
+            decodedStream.destroy(
+              new Error(`FPL fixtures payload exceeded max size limit (${maxBytes} bytes)`)
+            );
+            return;
+          }
+          chunks.push(bufferChunk);
+        });
+
+        decodedStream.on("error", (error) => {
+          reject(error);
+        });
+
+        decodedStream.on("end", () => {
+          try {
+            const rawPayload = Buffer.concat(chunks, totalBytes).toString("utf8");
+            const payload = JSON.parse(rawPayload);
+            const gameUpdatingMessage = extractFplGameUpdatingMessage(payload);
+            if (gameUpdatingMessage) {
+              const updatingError = new Error(
+                `FPL upstream update in progress: ${gameUpdatingMessage}`
+              );
+              updatingError.code = "FPL_GAME_UPDATING";
+              updatingError.upstreamMessage = gameUpdatingMessage;
+              reject(updatingError);
+              return;
+            }
+            if (!Array.isArray(payload)) {
+              reject(new Error("FPL fixtures parse failed: expected JSON array payload"));
+              return;
+            }
+            resolve({
+              payload,
+              payloadBytes: totalBytes,
+            });
+          } catch (error) {
+            reject(new Error(`FPL fixtures parse failed: ${error.message || error}`));
+          }
+        });
+      }
+    );
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`FPL fixtures request timed out after ${timeoutMs}ms`));
+    });
+    req.on("error", (error) => {
+      reject(error);
+    });
+  });
+}
+
 function refreshFantasyBootstrapDerivedState(payload) {
   const events = Array.isArray(payload && payload.events) ? payload.events : [];
   fantasyBootstrapEventsCount = events.length;
@@ -1390,7 +1531,86 @@ function projectedFiveGameDifficulty(element, teamContext) {
   };
 }
 
-function buildTransferRecommendation(element, targetElement, teamContext, positionNameByID) {
+function teamShortLabel(team) {
+  const shortName = String((team && team.shortName) || "").trim();
+  if (shortName) return shortName.toUpperCase();
+  const name = String((team && team.name) || "").trim();
+  if (!name) return "TBD";
+  const alnum = name.replace(/[^A-Za-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  if (!alnum) return "TBD";
+  const words = alnum.split(" ").filter(Boolean);
+  if (words.length >= 2) {
+    return (words[0].slice(0, 1) + words[1].slice(0, 2)).toUpperCase();
+  }
+  return words[0].slice(0, 3).toUpperCase();
+}
+
+function fixtureKickoffSortValue(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return Number.MAX_SAFE_INTEGER;
+  const parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed)) return Number.MAX_SAFE_INTEGER;
+  return parsed;
+}
+
+function buildUpcomingFixturesByTeam(fixturesPayload, teamContext, baselineEvent) {
+  const fixtures = Array.isArray(fixturesPayload) ? fixturesPayload : [];
+  const byTeam = new Map();
+
+  for (const fixture of fixtures) {
+    const event = parseFiniteNumber(fixture && fixture.event, 0);
+    const teamH = parseFiniteNumber(fixture && fixture.team_h, 0);
+    const teamA = parseFiniteNumber(fixture && fixture.team_a, 0);
+    if (event <= 0 || teamH <= 0 || teamA <= 0) continue;
+    if (event < baselineEvent) continue;
+    const finished = fixture && (fixture.finished === true || fixture.finished_provisional === true);
+    if (finished) continue;
+
+    const kickoffSort = fixtureKickoffSortValue(fixture && fixture.kickoff_time);
+    const homeDifficulty = parseFiniteNumber(fixture && fixture.team_h_difficulty, 3);
+    const awayDifficulty = parseFiniteNumber(fixture && fixture.team_a_difficulty, 3);
+    const awayTeam = teamContext.teamsByID.get(teamA) || null;
+    const homeTeam = teamContext.teamsByID.get(teamH) || null;
+
+    const homePerspective = {
+      gameweek: event,
+      opponent_team_id: teamA,
+      opponent_short_name: teamShortLabel(awayTeam),
+      is_home: true,
+      difficulty: clamp(Math.round(homeDifficulty), 1, 5),
+      kickoff_sort: kickoffSort,
+    };
+    const awayPerspective = {
+      gameweek: event,
+      opponent_team_id: teamH,
+      opponent_short_name: teamShortLabel(homeTeam),
+      is_home: false,
+      difficulty: clamp(Math.round(awayDifficulty), 1, 5),
+      kickoff_sort: kickoffSort,
+    };
+
+    byTeam.set(teamH, [...(byTeam.get(teamH) || []), homePerspective]);
+    byTeam.set(teamA, [...(byTeam.get(teamA) || []), awayPerspective]);
+  }
+
+  byTeam.forEach((records, teamID) => {
+    const sorted = [...records].sort((left, right) => {
+      if (left.gameweek !== right.gameweek) return left.gameweek - right.gameweek;
+      return left.kickoff_sort - right.kickoff_sort;
+    });
+    byTeam.set(teamID, sorted);
+  });
+
+  return byTeam;
+}
+
+function buildTransferRecommendation(
+  element,
+  targetElement,
+  teamContext,
+  positionNameByID,
+  upcomingFixturesByTeam
+) {
   const nowCost = parseFiniteNumber(element && element.now_cost, 0);
   const targetCost = parseFiniteNumber(targetElement && targetElement.now_cost, 0);
   const costMillions = nowCost / 10;
@@ -1399,8 +1619,11 @@ function buildTransferRecommendation(element, targetElement, teamContext, positi
   const pointsPerGame = parseFiniteNumber(element && element.points_per_game, form);
   const totalPoints = parseFiniteNumber(element && element.total_points, 0);
   const eventPoints = parseFiniteNumber(element && element.event_points, 0);
+  const teamID = parseFiniteNumber(element && element.team, 0);
   const availabilityPenalty = elementAvailabilityPenalty(element);
   const next5 = projectedFiveGameDifficulty(element, teamContext);
+  const upcomingFixtures = (upcomingFixturesByTeam.get(teamID) || []).slice(0, 5);
+  const nextFixture = upcomingFixtures.length > 0 ? upcomingFixtures[0] : null;
 
   const formLast5Proxy = form * 5;
   const formScoreNorm = clamp(formLast5Proxy / 35, 0, 1);
@@ -1415,7 +1638,6 @@ function buildTransferRecommendation(element, targetElement, teamContext, positi
     valueEfficiencyNorm * 0.08;
   const recommendationScore = weightedScore * 100 - availabilityPenalty * 24;
 
-  const teamID = parseFiniteNumber(element && element.team, 0);
   const team = teamContext.teamsByID.get(teamID) || null;
   const chanceNext = parseFiniteNumber(element && element.chance_of_playing_next_round, 100);
   const chanceThis = parseFiniteNumber(element && element.chance_of_playing_this_round, chanceNext);
@@ -1449,8 +1671,28 @@ function buildTransferRecommendation(element, targetElement, teamContext, positi
     chance_of_playing_this_round: chanceThis,
     news: String((element && element.news) || "").trim(),
     availability,
-    projected_next5_difficulty: next5.projectedDifficulty,
+    projected_next5_difficulty: nextFixture
+      ? nextFixture.difficulty
+      : next5.projectedDifficulty,
     projected_next5_ease: roundTo(next5.projectedEase, 3),
+    next_fixture: nextFixture
+      ? {
+        gameweek: nextFixture.gameweek,
+        opponent_team_id: nextFixture.opponent_team_id,
+        opponent_short_name: nextFixture.opponent_short_name,
+        is_home: nextFixture.is_home,
+        difficulty: nextFixture.difficulty,
+        label: `${nextFixture.opponent_short_name} (${nextFixture.is_home ? "H" : "A"})`,
+      }
+      : null,
+    next_five_fixtures: upcomingFixtures.map((fixture) => ({
+      gameweek: fixture.gameweek,
+      opponent_team_id: fixture.opponent_team_id,
+      opponent_short_name: fixture.opponent_short_name,
+      is_home: fixture.is_home,
+      difficulty: fixture.difficulty,
+      label: `${fixture.opponent_short_name} (${fixture.is_home ? "H" : "A"})`,
+    })),
     recommendation_score: roundTo(recommendationScore, 2),
     score_breakdown: {
       form_score: roundTo(formScoreNorm * 100, 2),
@@ -2796,6 +3038,58 @@ function loadClubEloManualMappings() {
   }
 
   return clubEloManualMappings;
+}
+
+function loadFantasyTeamShortNameMappings() {
+  let stat = null;
+  try {
+    stat = fs.statSync(FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      fantasyTeamShortNameMappings = Object.freeze({});
+      fantasyTeamShortNameMappingsLoadedAt = new Date().toISOString();
+      fantasyTeamShortNameMappingsMtimeMs = null;
+      console.warn(
+        `[FantasyMappings] Mapping file not found at ${FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH}; using empty mapping.`
+      );
+      return fantasyTeamShortNameMappings;
+    }
+    console.warn(`[FantasyMappings] Failed to stat mapping file: ${error.message || error}`);
+    return fantasyTeamShortNameMappings;
+  }
+
+  const mtimeMs = Number(stat && stat.mtimeMs);
+  if (Number.isFinite(mtimeMs) && fantasyTeamShortNameMappingsMtimeMs === mtimeMs) {
+    return fantasyTeamShortNameMappings;
+  }
+
+  try {
+    const raw = fs.readFileSync(FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Mapping file must be a JSON object.");
+    }
+
+    const next = {};
+    Object.entries(parsed).forEach(([shortName, fullName]) => {
+      const normalizedKey = String(shortName || "").trim().toUpperCase();
+      const normalizedValue = String(fullName || "").trim();
+      if (!normalizedKey || !normalizedValue) return;
+      next[normalizedKey] = normalizedValue;
+    });
+
+    fantasyTeamShortNameMappings = Object.freeze(next);
+    fantasyTeamShortNameMappingsLoadedAt = new Date().toISOString();
+    fantasyTeamShortNameMappingsMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+    console.log(
+      `[FantasyMappings] Loaded ${Object.keys(next).length} mappings from ${FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH}`
+    );
+  } catch (error) {
+    console.warn(`[FantasyMappings] Failed to load mapping file: ${error.message || error}`);
+    fantasyTeamShortNameMappingsMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+  }
+
+  return fantasyTeamShortNameMappings;
 }
 
 function resolveManualMappingCandidates(normalizedName, manualMappings) {
@@ -7724,6 +8018,74 @@ async function updateFantasyBootstrapStatic(options = {}) {
   }
 }
 
+async function updateFantasyFixtures(options = {}) {
+  if (fantasyFixturesUpdating) return;
+  fantasyFixturesUpdating = true;
+  const startedAtMs = Date.now();
+  let success = false;
+  let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+
+  console.info(
+    `[FPLFixtures] Download start source=${FPL_FIXTURES_SOURCE_URL} trigger=${trigger}`
+  );
+
+  try {
+    const { payload, payloadBytes } = await fetchFantasyFixturesPayload(
+      FPL_FIXTURES_SOURCE_URL,
+      {
+        timeoutMs: FPL_FIXTURES_TIMEOUT_MS,
+        maxBytes: FPL_FIXTURES_MAX_BYTES,
+      }
+    );
+    cachedFantasyFixtures = payload;
+    fantasyFixturesPayloadBytes = payloadBytes;
+    fantasyFixturesLastUpdated = new Date().toISOString();
+    recordsFetched = payload.length;
+    fantasyFixturesLastSuccessAt = fantasyFixturesLastUpdated;
+    fantasyFixturesLastSuccessDurationSeconds = Math.max(
+      0,
+      (Date.now() - startedAtMs) / 1000
+    );
+    setSourceCacheSize(SOURCE_FPL_FIXTURES, recordsFetched);
+
+    success = true;
+    console.info(
+      `[FPLFixtures] Download complete source=${FPL_FIXTURES_SOURCE_URL} trigger=${trigger} bytes=${fantasyFixturesPayloadBytes} fixtures=${recordsFetched} duration_ms=${Date.now() - startedAtMs} updated_at=${fantasyFixturesLastUpdated}`
+    );
+    logPollSuccess("fpl_fixtures", {
+      source: SOURCE_FPL_FIXTURES,
+      trigger,
+      bytes: fantasyFixturesPayloadBytes,
+      fixtures: recordsFetched,
+      updated_at: fantasyFixturesLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
+  } catch (err) {
+    fantasyFixturesLastFailureAt = new Date().toISOString();
+    fantasyFixturesLastFailureDurationSeconds = Math.max(
+      0,
+      (Date.now() - startedAtMs) / 1000
+    );
+    console.warn(
+      "Failed to update FPL fixtures dataset:",
+      err.message || err
+    );
+  } finally {
+    const durationMs = Date.now() - startedAtMs;
+    console.info(
+      `[FPLFixtures] Download end source=${FPL_FIXTURES_SOURCE_URL} trigger=${trigger} status=${success ? "success" : "failure"} duration_ms=${durationMs}`
+    );
+    trackSourceUpdateMetrics({
+      source: SOURCE_FPL_FIXTURES,
+      startedAtMs,
+      success,
+      recordsFetched,
+    });
+    fantasyFixturesUpdating = false;
+  }
+}
+
 async function updateClubEloFixtures(options = {}) {
   if (clubEloFixturesUpdating) {
     return {
@@ -9625,6 +9987,19 @@ app.get(`${API_PREFIX}/channels`, async (_req, res) => {
   res.json(buildChannelList(dataset.items));
 });
 
+app.get(`${API_PREFIX}/fantasy/team-short-name-mappings`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+  const mappings = loadFantasyTeamShortNameMappings();
+  if (fantasyTeamShortNameMappingsLoadedAt) {
+    res.set("X-Last-Updated", fantasyTeamShortNameMappingsLoadedAt);
+  }
+  res.set("X-Operational-Source", "filesystem_config");
+  res.json({
+    updated_at: fantasyTeamShortNameMappingsLoadedAt,
+    mappings,
+  });
+});
+
 app.get(`${API_PREFIX}/fantasy/gameweek/current`, (_req, res) => {
   setFantasyBootstrapHeaders(res);
 
@@ -9920,6 +10295,19 @@ app.get(`${API_PREFIX}/fantasy/transfers/recommendations/:elementId`, (req, res)
         .filter(([id]) => id > 0)
     );
     const teamContext = teamStrengthContext(teams);
+    const baselineEvent = Math.max(
+      1,
+      parseFiniteNumber(
+        (fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id) ||
+          (fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id),
+        1
+      )
+    );
+    const upcomingFixturesByTeam = buildUpcomingFixturesByTeam(
+      cachedFantasyFixtures,
+      teamContext,
+      baselineEvent
+    );
 
     const recommendations = elements
       .filter((item) => {
@@ -9935,7 +10323,8 @@ app.get(`${API_PREFIX}/fantasy/transfers/recommendations/:elementId`, (req, res)
           item,
           targetElement,
           teamContext,
-          positionNameByID
+          positionNameByID,
+          upcomingFixturesByTeam
         )
       )
       .sort((left, right) => {
@@ -9988,7 +10377,7 @@ app.get(`${API_PREFIX}/fantasy/transfers/recommendations/:elementId`, (req, res)
         },
         notes: [
           "Past form is approximated with bootstrap 'form' scaled to a 5-match equivalent.",
-          "Next-5 fixture difficulty is approximated from bootstrap 'ep_next' and team strength context.",
+          "Upcoming fixture labels/difficulty come from the in-memory fixtures cache.",
           "Recommendations penalize injury/suspension/doubt and chance-of-playing fields.",
         ],
       },
@@ -10362,6 +10751,16 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     fpl_bootstrap_game_updating: fantasyBootstrapGameUpdating,
     fpl_bootstrap_game_updating_message: fantasyBootstrapGameUpdatingMessage,
     fpl_bootstrap_game_updating_detected_at: fantasyBootstrapGameUpdatingDetectedAt,
+    fpl_fixtures_source_url: FPL_FIXTURES_SOURCE_URL,
+    fpl_fixtures_interval_ms: FPL_FIXTURES_INTERVAL_MS,
+    fpl_fixtures_timeout_ms: FPL_FIXTURES_TIMEOUT_MS,
+    fpl_fixtures_max_bytes: FPL_FIXTURES_MAX_BYTES,
+    fpl_fixtures_count: cachedFantasyFixtures.length,
+    fpl_fixtures_payload_bytes: fantasyFixturesPayloadBytes,
+    fpl_fixtures_last_updated: fantasyFixturesLastUpdated,
+    fpl_fixtures_updating: fantasyFixturesUpdating,
+    fpl_fixtures_last_success_at: fantasyFixturesLastSuccessAt,
+    fpl_fixtures_last_failure_at: fantasyFixturesLastFailureAt,
     fpl_transfer_recommendation_requests_total: fantasyTransferRecommendationRequestsTotal,
     fpl_transfer_recommendation_failures_total: fantasyTransferRecommendationFailuresTotal,
     league_tables_count: leagueTablesDataset.items.length,
@@ -12459,6 +12858,7 @@ async function bootstrapOperationalState() {
   void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
   void updateNationalEloTeams({ trigger: "startup_bootstrap" });
   void updateFantasyBootstrapStatic({ trigger: "startup_bootstrap" });
+  void updateFantasyFixtures({ trigger: "startup_bootstrap" });
 }
 
 const shouldRunRuntime = require.main === module;
@@ -12532,6 +12932,13 @@ if (shouldRunRuntime) {
     void updateFantasyBootstrapStatic({ trigger: "interval" });
   }, fantasyBootstrapInterval);
   scheduleFantasyBootstrapDailyRefresh();
+  const fantasyFixturesInterval =
+    Number.isFinite(FPL_FIXTURES_INTERVAL_MS) && FPL_FIXTURES_INTERVAL_MS > 0
+      ? FPL_FIXTURES_INTERVAL_MS
+      : 6 * 60 * 60 * 1000;
+  setInterval(() => {
+    void updateFantasyFixtures({ trigger: "interval" });
+  }, fantasyFixturesInterval);
   const matchDetailsPollInterval =
     Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
       ? MATCH_DETAILS_POLL_INTERVAL_MS

@@ -14,6 +14,10 @@ struct FantasyPlayerDetailsSheet: View {
     @State private var transferRecommendations: FantasyTransferRecommendationsResponse?
     @State private var isLoadingTransferRecommendations = false
     @State private var transferRecommendationsErrorMessage: String?
+    @State private var expandedRecommendationRows: Set<String> = []
+    @State private var recommendationDetailsByElementID: [Int: FantasyPlayerDetailsData] = [:]
+    @State private var loadingRecommendationDetailElementIDs: Set<Int> = []
+    @State private var recommendationDetailErrorsByElementID: [Int: String] = [:]
 
     var body: some View {
         NavigationStack {
@@ -250,7 +254,12 @@ struct FantasyPlayerDetailsSheet: View {
         )
     }
 
+    @ViewBuilder
     private func fixturesSection(_ details: FantasyPlayerDetailsData) -> some View {
+        let gameweekWidth: CGFloat = 34
+        let difficultyWidth: CGFloat = 74
+        let xpWidth: CGFloat = 44
+
         VStack(alignment: .leading, spacing: 8) {
             Text("Fixtures")
                 .font(.headline)
@@ -260,23 +269,63 @@ struct FantasyPlayerDetailsSheet: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(details.upcomingFixtures) { fixture in
+                HStack(spacing: 8) {
+                    transferRecommendationHeaderCell("GW", width: gameweekWidth, alignment: .leading)
+                    transferRecommendationHeaderCell("Opponent", alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    transferRecommendationHeaderCell("Difficulty", width: difficultyWidth, alignment: .leading)
+                    transferRecommendationHeaderCell("xP", width: xpWidth, alignment: .trailing)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                ForEach(Array(details.upcomingFixtures.prefix(5).enumerated()), id: \.element.id) { index, fixture in
                     HStack(spacing: 8) {
-                        Text("GW\(fixture.gameweek)")
+                        Text("\(fixture.gameweek)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                            .frame(width: 40, alignment: .leading)
+                            .frame(width: gameweekWidth, alignment: .leading)
+
                         if fixture.isBlank {
-                            noGameIcon(size: 18)
+                            HStack(spacing: 6) {
+                                noGameIcon(size: 14)
+                                Text("No game")
+                                    .font(.caption.monospacedDigit())
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
-                            teamLogoView(teamName: fixture.opponentTeamName, size: 18)
+                            HStack(spacing: 6) {
+                                teamLogoView(teamName: fixture.opponentTeamName, size: 14)
+                                Text(fixtureOpponentText(fixture))
+                                    .font(.caption.monospacedDigit())
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        Text(fixtureOpponentText(fixture))
-                            .font(.caption)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
+
                         fixtureDifficultyBadge(fixture)
+                            .frame(width: difficultyWidth, alignment: .leading)
+
+                        if fixture.isBlank {
+                            Text("-")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: xpWidth, alignment: .trailing)
+                        } else {
+                            Text(
+                                expectedPointsForDetailsFixture(
+                                    details: details,
+                                    fixture: fixture,
+                                    fixtureIndex: index
+                                )
+                                .formatted(.number.precision(.fractionLength(1)))
+                            )
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: xpWidth, alignment: .trailing)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -323,8 +372,7 @@ struct FantasyPlayerDetailsSheet: View {
                 .font(.caption.weight(.semibold))
                 .frame(width: 176, alignment: .leading)
             headerCell("Pts", width: 44)
-            headerCell("St", width: 34)
-            headerCell("MP", width: 40)
+            headerCell("MP", width: 62)
             headerCell("GS", width: 34)
             headerCell("A", width: 34)
             headerCell("xG", width: 46)
@@ -349,8 +397,11 @@ struct FantasyPlayerDetailsSheet: View {
             .frame(width: 176, alignment: .leading)
 
             pointsHeatmapCell(row.points, width: 44)
-            valueCell(row.starts, width: 34)
-            valueCell(row.minutes, width: 40)
+            Text(minutesWithStartsText(minutes: row.minutes, starts: row.starts))
+                .font(.caption.monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: 62, alignment: .trailing)
             valueCell(row.goalsScored, width: 34)
             valueCell(row.assists, width: 34)
             Text(row.expectedGoals)
@@ -373,6 +424,11 @@ struct FantasyPlayerDetailsSheet: View {
             .frame(width: width, alignment: .trailing)
     }
 
+    private func minutesWithStartsText(minutes: Int, starts: Int) -> String {
+        guard starts > 1 else { return "\(minutes)" }
+        return "\(minutes) (\(starts))"
+    }
+
     private func pointsHeatmapCell(_ points: Int, width: CGFloat) -> some View {
         Text("\(points)")
             .font(.caption.monospacedDigit().weight(.semibold))
@@ -385,9 +441,11 @@ struct FantasyPlayerDetailsSheet: View {
             )
     }
 
+    @ViewBuilder
     private func teamLogoView(teamName: String, size: CGFloat) -> some View {
+        let resolvedTeamName = FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: teamName)
         Group {
-            if let logo = LogoResolver.shared.image(for: teamName) {
+            if let logo = LogoResolver.shared.image(for: resolvedTeamName) ?? LogoResolver.shared.image(for: teamName) {
                 Image(uiImage: logo)
                     .resizable()
                     .scaledToFit()
@@ -426,7 +484,7 @@ struct FantasyPlayerDetailsSheet: View {
     }
 
     private func fixtureDifficultyBadge(_ fixture: FantasyPlayerDetailsData.UpcomingFixture) -> some View {
-        let text = fixture.difficulty.map { "D\($0)" } ?? "-"
+        let text = fixture.difficulty.map(String.init) ?? "-"
         let color = fixtureDifficultyColor(fixture.difficulty)
 
         return Text(text)
@@ -466,6 +524,14 @@ struct FantasyPlayerDetailsSheet: View {
         }
     }
 
+    private var recommendationPriceColumnWidth: CGFloat { 54 }
+    private var recommendationNextDifficultyColumnWidth: CGFloat { 70 }
+    private var recommendationStrengthColumnWidth: CGFloat { 72 }
+    private var recommendationChevronColumnWidth: CGFloat { 20 }
+    private var recommendationGameweekColumnWidth: CGFloat { 62 }
+    private var recommendationTrailingStatColumnWidth: CGFloat { 70 }
+    private var recommendationSecondaryTrailingStatColumnWidth: CGFloat { 52 }
+
     private var transferRecommendationsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Transfer recommendations")
@@ -486,12 +552,14 @@ struct FantasyPlayerDetailsSheet: View {
                     .foregroundStyle(.secondary)
             } else if let transferRecommendations {
                 transferRecommendationGroup(
+                    groupID: "similar",
                     title: "Similar value",
                     subtitle: "Top options within a similar budget",
                     items: transferRecommendations.similarValue
                 )
 
                 transferRecommendationGroup(
+                    groupID: "budget",
                     title: "Budget options",
                     subtitle: "Top lower-cost alternatives",
                     items: transferRecommendations.budget
@@ -510,25 +578,47 @@ struct FantasyPlayerDetailsSheet: View {
     }
 
     private func transferRecommendationGroup(
+        groupID: String,
         title: String,
         subtitle: String,
         items: [FantasyTransferRecommendation]
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let topItems = Array(items.prefix(10))
+        let scoreRange = recommendationScoreRange(topItems)
+
+        return VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
             Text(subtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if items.isEmpty {
+            if topItems.isEmpty {
                 Text("No players found for this filter.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(items.prefix(10)) { recommendation in
-                    transferRecommendationRow(recommendation)
+                VStack(alignment: .leading, spacing: 0) {
+                    transferRecommendationHeaderRow
+                        .padding(.bottom, 4)
+
+                    ForEach(Array(topItems.enumerated()), id: \.element.id) { index, recommendation in
+                        transferRecommendationRow(
+                            recommendation,
+                            groupID: groupID,
+                            strength: recommendationStrength(
+                                recommendation.recommendationScore,
+                                in: scoreRange
+                            )
+                        )
+                        if index < topItems.count - 1 {
+                            Divider()
+                                .overlay(Color.secondary.opacity(0.22))
+                                .padding(.vertical, 4)
+                        }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(10)
@@ -538,60 +628,595 @@ struct FantasyPlayerDetailsSheet: View {
         )
     }
 
-    private func transferRecommendationRow(_ item: FantasyTransferRecommendation) -> some View {
+    private var transferRecommendationHeaderRow: some View {
         HStack(spacing: 8) {
-            teamLogoView(teamName: item.teamName, size: 18)
+            transferRecommendationHeaderCell("Player", alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            transferRecommendationHeaderCell("Price", width: recommendationPriceColumnWidth, alignment: .trailing)
+            transferRecommendationHeaderCell(
+                "Next game",
+                alignment: .leading
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            transferRecommendationHeaderCell("Rating", width: recommendationStrengthColumnWidth, alignment: .leading)
+            Color.clear
+                .frame(width: recommendationChevronColumnWidth, height: 1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.playerName)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                Text(item.teamName)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+    @ViewBuilder
+    private func transferRecommendationHeaderCell(
+        _ title: String,
+        width: CGFloat? = nil,
+        alignment: Alignment
+    ) -> some View {
+        let text = Text(title)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+        if let width {
+            text.frame(width: width, alignment: alignment)
+        } else {
+            text.frame(maxWidth: .infinity, alignment: alignment)
+        }
+    }
+
+    private func transferRecommendationRow(
+        _ item: FantasyTransferRecommendation,
+        groupID: String,
+        strength: Double
+    ) -> some View {
+        let key = recommendationRowKey(groupID: groupID, elementID: item.elementID)
+        let isExpanded = expandedRecommendationRows.contains(key)
+        let fixtures = Array(item.upcomingFixtures.prefix(5))
+        let nextFixture = fixtures.first
+        let rowDetails = recommendationDetailsByElementID[item.elementID]
+        let isLoadingRowDetails = loadingRecommendationDetailElementIDs.contains(item.elementID)
+        let rowErrorMessage = recommendationDetailErrorsByElementID[item.elementID]
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                let wasExpanded = expandedRecommendationRows.contains(key)
+                toggleRecommendationRow(key: key)
+                if !wasExpanded {
+                    Task {
+                        await loadRecommendationDetailsIfNeeded(for: item.elementID)
+                    }
+                }
+            } label: {
+                transferRecommendationMainRow(
+                    item: item,
+                    nextFixture: nextFixture,
+                    strength: strength,
+                    isExpanded: isExpanded
+                )
             }
+            .buttonStyle(.plain)
 
-            Spacer(minLength: 0)
-
-            HStack(spacing: 6) {
-                Text("£\(String(format: "%.1f", item.nowCostMillions))")
-                    .font(.caption2.monospacedDigit())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(Color(.secondarySystemGroupedBackground))
-                    )
-                Text("Form \(String(format: "%.1f", item.form))")
-                    .font(.caption2.monospacedDigit())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(Color(.secondarySystemGroupedBackground))
-                    )
-                Text("D\(item.projectedNext5Difficulty)")
-                    .font(.caption2.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(fixtureDifficultyColor(item.projectedNext5Difficulty))
-                    )
-                Text(item.recommendationScore.formatted(.number.precision(.fractionLength(1))))
-                    .font(.caption2.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(Color.blue.opacity(0.85))
-                    )
+            if isExpanded {
+                recommendationExpandedDetailsSection(
+                    item: item,
+                    fixtures: fixtures,
+                    rowDetails: rowDetails,
+                    isLoadingRowDetails: isLoadingRowDetails,
+                    rowErrorMessage: rowErrorMessage
+                )
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func transferRecommendationMainRow(
+        item: FantasyTransferRecommendation,
+        nextFixture: FantasyTransferRecommendation.Fixture?,
+        strength: Double,
+        isExpanded: Bool
+    ) -> some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 4) {
+                teamLogoView(teamName: item.teamName, size: 16)
+                Text(item.webName.isEmpty ? item.playerName : item.webName)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(String(format: "£%.1f", item.nowCostMillions))
+                .font(.caption2.monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: recommendationPriceColumnWidth, alignment: .trailing)
+
+            HStack(spacing: 6) {
+                if let nextFixture {
+                    teamLogoView(teamName: nextFixture.opponentShortName, size: 14)
+                    Text(nextFixture.displayLabel)
+                        .font(.caption2.monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                } else {
+                    noGameIcon(size: 14)
+                    Text("No game")
+                        .font(.caption2.monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+
+                recommendationDifficultyPill(nextFixture?.difficulty)
+                    .frame(width: recommendationNextDifficultyColumnWidth, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            recommendationStrengthBar(strength)
+                .frame(width: recommendationStrengthColumnWidth, alignment: .leading)
+
+            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.primary.opacity(0.85))
+                .frame(width: recommendationChevronColumnWidth, alignment: .center)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    private func recommendationExpandedDetailsSection(
+        item: FantasyTransferRecommendation,
+        fixtures: [FantasyTransferRecommendation.Fixture],
+        rowDetails: FantasyPlayerDetailsData?,
+        isLoadingRowDetails: Bool,
+        rowErrorMessage: String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isLoadingRowDetails {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading player details...")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let rowDetails {
+                recommendationKeyStatsSection(metrics: rowDetails.metrics)
+                recommendationNextFixturesTable(item: item, fixtures: fixtures)
+                recommendationPreviousFixturesTable(rows: recommendationPlayedHistoryRows(from: rowDetails))
+            } else {
+                if let rowErrorMessage {
+                    Text(rowErrorMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                recommendationNextFixturesTable(item: item, fixtures: fixtures)
+            }
+        }
+    }
+
+    private func recommendationKeyStatsSection(
+        metrics: [FantasyPlayerDetailsData.Metric]
+    ) -> some View {
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Key stats")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(metrics.prefix(8), id: \.title) { metric in
+                    VStack(spacing: 2) {
+                        Text(metric.title)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Text(metric.value)
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(.secondarySystemGroupedBackground))
+                    )
+                }
+            }
+        }
+    }
+
+    private func recommendationNextFixturesTable(
+        item: FantasyTransferRecommendation,
+        fixtures: [FantasyTransferRecommendation.Fixture]
+    ) -> some View {
+        let gameweekWidth = recommendationGameweekColumnWidth
+        let difficultyWidth = recommendationTrailingStatColumnWidth
+        let xpWidth = recommendationSecondaryTrailingStatColumnWidth
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Next 5 fixtures")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if fixtures.isEmpty {
+                Text("No upcoming fixtures")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 8) {
+                    transferRecommendationHeaderCell("Gameweek", width: gameweekWidth, alignment: .leading)
+                    transferRecommendationHeaderCell("Opponent", alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    transferRecommendationHeaderCell("Difficulty", width: difficultyWidth, alignment: .leading)
+                    transferRecommendationHeaderCell("xP", width: xpWidth, alignment: .trailing)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                ForEach(Array(fixtures.prefix(5).enumerated()), id: \.element.id) { index, fixture in
+                    HStack(spacing: 8) {
+                        Text("GW\(fixture.gameweek)")
+                            .font(.caption.monospacedDigit())
+                            .frame(width: gameweekWidth, alignment: .leading)
+
+                        HStack(spacing: 6) {
+                            teamLogoView(teamName: fixture.opponentShortName, size: 14)
+                            Text(fixture.displayLabel)
+                                .font(.caption.monospacedDigit())
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        recommendationDifficultyPill(fixture.difficulty)
+                            .frame(width: difficultyWidth, alignment: .leading)
+
+                        Text(
+                            expectedPointsForFixture(
+                                recommendation: item,
+                                fixture: fixture,
+                                fixtureIndex: index
+                            )
+                            .formatted(.number.precision(.fractionLength(1)))
+                        )
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: xpWidth, alignment: .trailing)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func recommendationPreviousFixturesTable(
+        rows: [FantasyPlayerDetailsData.HistoryRow]
+    ) -> some View {
+        let gameweekWidth = recommendationGameweekColumnWidth
+        let pointsWidth = recommendationTrailingStatColumnWidth
+        let minutesWidth = recommendationSecondaryTrailingStatColumnWidth
+        let pointsRange = recommendationPointsRange(rows)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Previous 5 fixtures")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if rows.isEmpty {
+                Text("No recent fixtures")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 8) {
+                    transferRecommendationHeaderCell("Gameweek", width: gameweekWidth, alignment: .leading)
+                    transferRecommendationHeaderCell("Opponent", alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    transferRecommendationHeaderCell("Pts", width: pointsWidth, alignment: .trailing)
+                    transferRecommendationHeaderCell("MP", width: minutesWidth, alignment: .trailing)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                ForEach(rows) { row in
+                    HStack(spacing: 8) {
+                        Text("GW\(row.gameweek)")
+                            .font(.caption.monospacedDigit())
+                            .frame(width: gameweekWidth, alignment: .leading)
+
+                        HStack(spacing: 6) {
+                            teamLogoView(teamName: row.opponentTeamName, size: 14)
+                            Text("\(teamAbbreviation(row.opponentTeamName)) (\(row.wasHome ? "H" : "A"))")
+                                .font(.caption.monospacedDigit())
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        recommendationPreviousPointsPill(
+                            points: row.points,
+                            range: pointsRange
+                        )
+                            .frame(width: pointsWidth, alignment: .trailing)
+
+                        Text(minutesWithStartsText(minutes: row.minutes, starts: row.starts))
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(width: minutesWidth, alignment: .trailing)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func recommendationPlayedHistoryRows(
+        from details: FantasyPlayerDetailsData
+    ) -> [FantasyPlayerDetailsData.HistoryRow] {
+        Array(
+            details.historyRows
+                .filter { $0.minutes > 0 }
+                .prefix(5)
+        )
+    }
+
+    private func recommendationPointsRange(
+        _ rows: [FantasyPlayerDetailsData.HistoryRow]
+    ) -> (min: Int, max: Int) {
+        let points = rows.map(\.points)
+        guard let minValue = points.min(), let maxValue = points.max() else {
+            return (0, 0)
+        }
+        return (minValue, maxValue)
+    }
+
+    private func recommendationPreviousPointsPill(
+        points: Int,
+        range: (min: Int, max: Int)
+    ) -> some View {
+        let color = recommendationPreviousPointsColor(points: points, range: range)
+
+        return Text("\(points)")
+            .font(.caption.monospacedDigit().weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(color.opacity(0.94))
+            )
+    }
+
+    private func recommendationPreviousPointsColor(
+        points: Int,
+        range: (min: Int, max: Int)
+    ) -> Color {
+        if range.min == range.max {
+            return points > 0 ? Color.green : Color.red
+        }
+        let normalized = Double(points - range.min) / Double(max(1, range.max - range.min))
+        let hue = 0.02 + (0.34 * min(max(normalized, 0), 1))
+        return Color(hue: hue, saturation: 0.78, brightness: 0.90)
+    }
+
+    private func recommendationDifficultyPill(_ difficulty: Int?) -> some View {
+        let color = fixtureDifficultyColor(difficulty)
+        let text = difficulty.map(String.init) ?? "-"
+
+        return Text(text)
+            .font(.caption2.monospacedDigit().weight(.semibold))
+            .foregroundStyle(difficulty == nil ? Color.secondary : Color.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(color.opacity(difficulty == nil ? 0.20 : 0.92))
+            )
+    }
+
+    private func teamAbbreviation(_ teamName: String) -> String {
+        let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "TBD" }
+        let tokens = trimmed
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+            .filter { !$0.isEmpty }
+
+        if tokens.count >= 2 {
+            let first = tokens[0].prefix(1)
+            let second = tokens[1].prefix(2)
+            let combined = "\(first)\(second)".uppercased()
+            if combined.count == 3 { return combined }
+        }
+
+        let lettersOnly = trimmed
+            .uppercased()
+            .filter { $0.isLetter || $0.isNumber }
+        if lettersOnly.count >= 3 {
+            return String(lettersOnly.prefix(3))
+        }
+        return lettersOnly.isEmpty ? "TBD" : lettersOnly
+    }
+
+    private func expectedPointsForFixture(
+        recommendation: FantasyTransferRecommendation,
+        fixture: FantasyTransferRecommendation.Fixture,
+        fixtureIndex: Int
+    ) -> Double {
+        // Previous-10 proxy: blend season PPG with recent form, then scale by fixture context.
+        let previousTenProxyAverage =
+            max(0.0, (recommendation.pointsPerGame * 0.65) + (recommendation.form * 0.35))
+
+        let formVsPPG = recommendation.pointsPerGame > 0
+            ? recommendation.form / max(recommendation.pointsPerGame, 0.1)
+            : 1.0
+        let momentumMultiplier = min(max(formVsPPG, 0.78), 1.25)
+
+        let difficultyMultiplier: Double = {
+            switch fixture.difficulty ?? 3 {
+            case ...1: return 1.32
+            case 2: return 1.16
+            case 3: return 1.0
+            case 4: return 0.84
+            default: return 0.68
+            }
+        }()
+
+        let availabilityMultiplier: Double = {
+            if recommendation.availability == "unavailable" { return 0.35 }
+            if recommendation.availability == "doubtful" { return 0.70 }
+            return 1.0
+        }()
+
+        let homeAwayMultiplier: Double = fixture.isHome ? 1.04 : 0.96
+        let horizonDecay = 1.0 - (Double(fixtureIndex) * 0.02)
+
+        let raw = previousTenProxyAverage *
+            momentumMultiplier *
+            difficultyMultiplier *
+            availabilityMultiplier *
+            homeAwayMultiplier *
+            max(0.85, horizonDecay)
+
+        let bounded = min(max(raw, 0.0), 20.0)
+        return (bounded * 10).rounded() / 10
+    }
+
+    private func expectedPointsForDetailsFixture(
+        details: FantasyPlayerDetailsData,
+        fixture: FantasyPlayerDetailsData.UpcomingFixture,
+        fixtureIndex: Int
+    ) -> Double {
+        let pointsPerMatch = metricDouble(details.metrics, title: "Pts / Match") ?? 0
+        let form = metricDouble(details.metrics, title: "Form") ?? pointsPerMatch
+        let previousTen = details.historyRows.prefix(10).map(\.points)
+        let previousTenAverage = previousTen.isEmpty
+            ? ((pointsPerMatch * 0.65) + (form * 0.35))
+            : Double(previousTen.reduce(0, +)) / Double(previousTen.count)
+
+        let formVsPPG = pointsPerMatch > 0
+            ? form / max(pointsPerMatch, 0.1)
+            : 1.0
+        let momentumMultiplier = min(max(formVsPPG, 0.78), 1.25)
+
+        let difficultyMultiplier: Double = {
+            switch fixture.difficulty ?? 3 {
+            case ...1: return 1.32
+            case 2: return 1.16
+            case 3: return 1.0
+            case 4: return 0.84
+            default: return 0.68
+            }
+        }()
+
+        let homeAwayMultiplier: Double = fixture.isHome == true ? 1.04 : 0.96
+        let horizonDecay = 1.0 - (Double(fixtureIndex) * 0.02)
+
+        let raw = previousTenAverage *
+            momentumMultiplier *
+            difficultyMultiplier *
+            homeAwayMultiplier *
+            max(0.85, horizonDecay)
+
+        let bounded = min(max(raw, 0.0), 20.0)
+        return (bounded * 10).rounded() / 10
+    }
+
+    private func metricDouble(
+        _ metrics: [FantasyPlayerDetailsData.Metric],
+        title: String
+    ) -> Double? {
+        guard let value = metrics.first(where: { $0.title == title })?.value else {
+            return nil
+        }
+        let normalized = value
+            .replacingOccurrences(of: "%", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Double(normalized)
+    }
+
+    private func recommendationStrengthBar(_ strength: Double) -> some View {
+        let clamped = min(max(strength, 0), 1)
+        let fillRatio = 0.2 + (0.8 * clamped)
+        let color = recommendationStrengthColor(clamped)
+
+        return GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.12))
+                Capsule(style: .continuous)
+                    .fill(color)
+                    .frame(width: max(4, proxy.size.width * fillRatio))
+            }
+        }
+        .frame(height: 8)
+    }
+
+    private func recommendationStrengthColor(_ strength: Double) -> Color {
+        let clamped = min(max(strength, 0), 1)
+        let hue = 0.02 + (0.34 * clamped) // red -> green
+        return Color(hue: hue, saturation: 0.78, brightness: 0.88)
+    }
+
+    private func recommendationScoreRange(
+        _ items: [FantasyTransferRecommendation]
+    ) -> (min: Double, max: Double) {
+        let scores = items.map(\.recommendationScore)
+        guard let minScore = scores.min(), let maxScore = scores.max() else {
+            return (0, 100)
+        }
+        return (minScore, maxScore)
+    }
+
+    private func recommendationStrength(
+        _ score: Double,
+        in range: (min: Double, max: Double)
+    ) -> Double {
+        let span = max(0.0001, range.max - range.min)
+        return min(max((score - range.min) / span, 0), 1)
+    }
+
+    private func recommendationRowKey(groupID: String, elementID: Int) -> String {
+        "\(groupID)-\(elementID)"
+    }
+
+    private func toggleRecommendationRow(key: String) {
+        if expandedRecommendationRows.contains(key) {
+            expandedRecommendationRows.remove(key)
+        } else {
+            expandedRecommendationRows.insert(key)
+        }
+    }
+
+    private func loadRecommendationDetailsIfNeeded(for elementID: Int) async {
+        if recommendationDetailsByElementID[elementID] != nil { return }
+        if loadingRecommendationDetailElementIDs.contains(elementID) { return }
+
+        if elementID == selection.player.elementID, let details {
+            recommendationDetailsByElementID[elementID] = details
+            recommendationDetailErrorsByElementID[elementID] = nil
+            return
+        }
+
+        loadingRecommendationDetailElementIDs.insert(elementID)
+        recommendationDetailErrorsByElementID[elementID] = nil
+        defer {
+            loadingRecommendationDetailElementIDs.remove(elementID)
+        }
+
+        do {
+            let loaded = try await fantasyViewModel.loadPlayerDetails(
+                elementID: elementID,
+                gameweekID: selection.gameweekID,
+                apiBaseURL: apiBaseURL
+            )
+            recommendationDetailsByElementID[elementID] = loaded
+        } catch {
+            recommendationDetailErrorsByElementID[elementID] = "Could not load expanded details."
+        }
     }
 
     private func userFriendlyTransferRecommendationError(_ error: Error) -> String {
@@ -631,6 +1256,10 @@ struct FantasyPlayerDetailsSheet: View {
         transferRecommendations = nil
         transferRecommendationsErrorMessage = nil
         isLoadingTransferRecommendations = false
+        expandedRecommendationRows = []
+        recommendationDetailsByElementID = [:]
+        loadingRecommendationDetailElementIDs = []
+        recommendationDetailErrorsByElementID = [:]
 
         do {
             let loaded = try await fantasyViewModel.loadPlayerDetails(
