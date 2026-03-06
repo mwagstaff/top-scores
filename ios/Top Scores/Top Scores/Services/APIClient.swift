@@ -255,6 +255,13 @@ struct APIClient {
         return try JSONDecoder().decode([TeamRankingEntry].self, from: data)
     }
 
+    func fetchTeamRankingSettings() async throws -> TeamRankingSettingsResponse {
+        let request = try buildRequest(path: "teams/config", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "team_ranking_settings")
+        try validateSuccess(http, data: data, operation: "team_ranking_settings")
+        return try JSONDecoder().decode(TeamRankingSettingsResponse.self, from: data)
+    }
+
     func reportMissingTeamLogos(_ teamNames: [String]) async throws {
         let normalizedTeamNames = Self.normalizedTeamNames(teamNames)
         guard !normalizedTeamNames.isEmpty else { return }
@@ -682,6 +689,40 @@ struct TeamRankingEntry: Codable, Hashable {
         try container.encode(name, forKey: .name)
         try container.encodeIfPresent(points, forKey: .points)
         try container.encode(aliases, forKey: .aliases)
+    }
+}
+
+struct TeamRankingSettingsResponse: Codable, Hashable {
+    let defaultElo: Double
+    let updatedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case defaultElo = "default_elo"
+        case updatedAt = "updated_at"
+    }
+
+    init(defaultElo: Double, updatedAt: Date?) {
+        self.defaultElo = defaultElo
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        if let numericValue = try container.decodeIfPresent(Double.self, forKey: .defaultElo) {
+            defaultElo = numericValue
+        } else if let stringValue = try container.decodeIfPresent(String.self, forKey: .defaultElo),
+                  let parsed = Double(stringValue) {
+            defaultElo = parsed
+        } else {
+            defaultElo = TeamRankingSettings.defaultDefaultElo
+        }
+
+        if let updatedAtString = try container.decodeIfPresent(String.self, forKey: .updatedAt) {
+            updatedAt = ISO8601DateFormatter().date(from: updatedAtString)
+        } else {
+            updatedAt = nil
+        }
     }
 }
 

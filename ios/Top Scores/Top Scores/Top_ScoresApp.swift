@@ -32,11 +32,19 @@ struct Top_ScoresApp: App {
                     async let teamRankingsWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
                         apiBaseURL: preferences.snapshot.apiBaseURL
                     )
+                    async let teamRankingSettingsWarmTask: Void =
+                        TeamRankingSettingsCatalog.shared.ensureFresh(
+                            apiBaseURL: preferences.snapshot.apiBaseURL
+                        )
                     async let fantasyMappingsWarmTask: Void =
                         FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(
                             apiBaseURL: preferences.snapshot.apiBaseURL
                         )
-                    _ = await (teamRankingsWarmTask, fantasyMappingsWarmTask)
+                    _ = await (
+                        teamRankingsWarmTask,
+                        teamRankingSettingsWarmTask,
+                        fantasyMappingsWarmTask
+                    )
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -58,6 +66,10 @@ struct Top_ScoresApp: App {
                     async let teamRankingWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
                         apiBaseURL: snapshot.apiBaseURL
                     )
+                    async let teamRankingSettingsWarmTask: Void =
+                        TeamRankingSettingsCatalog.shared.ensureFresh(
+                            apiBaseURL: snapshot.apiBaseURL
+                        )
                     async let fantasyMappingsWarmTask: Void =
                         FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(
                             apiBaseURL: snapshot.apiBaseURL
@@ -67,6 +79,7 @@ struct Top_ScoresApp: App {
                         syncTask,
                         metricTask,
                         teamRankingWarmTask,
+                        teamRankingSettingsWarmTask,
                         fantasyMappingsWarmTask
                     )
                 }

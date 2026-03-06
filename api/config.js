@@ -29,6 +29,11 @@ function parseCsvEnv(value) {
     .filter(Boolean);
 }
 
+function parseNumberEnv(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function normalizeTeamRankingSource(value) {
   const normalized = String(value || "")
     .trim()
@@ -55,6 +60,7 @@ const envCompetitionAllowlist = parseCsvEnv(process.env.COMPETITION_ALLOWLIST);
 const envTeamRankingDefaultSource = normalizeTeamRankingSource(
   process.env.TEAM_RANKING_DEFAULT_SOURCE
 );
+const envTeamRankingDefaultElo = parseNumberEnv(process.env.TEAM_RANKING_DEFAULT_ELO, 1000);
 
 const SERVER_CONFIG = {
   competitionAllowlist:
@@ -63,6 +69,7 @@ const SERVER_CONFIG = {
       : DEFAULT_COMPETITION_ALLOWLIST,
   teamRankingDefaultSource:
     envTeamRankingDefaultSource || TEAM_RANKING_SOURCE_MERGED,
+  teamRankingDefaultElo: envTeamRankingDefaultElo,
 };
 
 module.exports = {

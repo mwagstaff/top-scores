@@ -93,6 +93,7 @@ actor PreferencesSyncService {
                 "apiBaseURL": snapshot.apiBaseURL,
                 "refreshIntervalMinutes": snapshot.refreshIntervalMinutes,
                 "showAllMatches": snapshot.showAllMatches,
+                "matchGroupSortOrder": snapshot.matchGroupSortOrder.rawValue,
                 "notificationsEnabled": snapshot.notificationsEnabled,
                 "notificationDelayMinutes": snapshot.notificationDelayMinutes,
                 "notificationEventTypes": Array(snapshot.notificationEventTypes),
@@ -192,6 +193,9 @@ actor PreferencesSyncService {
                 apiBaseURL: preferences["apiBaseURL"] as? String ?? PreferencesStore.defaultApiBaseURL,
                 refreshIntervalMinutes: preferences["refreshIntervalMinutes"] as? Int ?? PreferencesStore.defaultRefreshIntervalMinutes,
                 showAllMatches: preferences["showAllMatches"] as? Bool ?? PreferencesStore.defaultShowAllMatches,
+                matchGroupSortOrder: (preferences["matchGroupSortOrder"] as? String)
+                    .flatMap(MatchGroupSortOrder.init(rawValue:))
+                    ?? PreferencesStore.defaultMatchGroupSortOrder,
                 notificationsEnabled: preferences["notificationsEnabled"] as? Bool ?? PreferencesStore.defaultNotificationsEnabled,
                 notificationDelayMinutes: preferences["notificationDelayMinutes"] as? Int ?? PreferencesStore.defaultNotificationDelayMinutes,
                 notificationEventTypes: notificationEventTypes,

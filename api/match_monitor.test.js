@@ -17,6 +17,19 @@ function newMonitorState(overrides = {}) {
   };
 }
 
+function formatLocalDateTimeParts(timestampMs) {
+  const date = new Date(timestampMs);
+  const yyyy = String(date.getFullYear());
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return {
+    date: `${yyyy}-${mm}-${dd}`,
+    time: `${hh}:${min}`,
+  };
+}
+
 test("mergeSnapshotWithFallback preserves existing league when new payload omits it", () => {
   const merged = __testHooks.mergeSnapshotWithFallback(
     {
@@ -35,6 +48,87 @@ test("mergeSnapshotWithFallback preserves existing league when new payload omits
 
   assert.equal(merged.league, "La Liga");
   assert.equal(merged.score_status, "56");
+});
+
+test("mergeSnapshotWithFallback clears stale aggregate when incoming payload sets aggregate to null", () => {
+  const merged = __testHooks.mergeSnapshotWithFallback(
+    {
+      home_team: "Tottenham Hotspur",
+      away_team: "Crystal Palace",
+      score_status: "21",
+      aggregate_home_score: 0,
+      aggregate_away_score: 0,
+    },
+    {
+      score_status: "22",
+      aggregate_home_score: null,
+      aggregate_away_score: null,
+    }
+  );
+
+  assert.equal(merged.score_status, "22");
+  assert.equal(merged.aggregate_home_score, null);
+  assert.equal(merged.aggregate_away_score, null);
+});
+
+test("buildLiveActivityPresentationForUser suppresses stale high-minute live status and ends activity", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 130 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    { preferences: { notificationDelayMinutes: 5 } },
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "c4gq92l5de2t",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Tottenham Hotspur",
+          away_team: "Crystal Palace",
+          home_score: 1,
+          away_score: 3,
+          score_status: "90+5",
+          updated_at: new Date(nowMs - 8 * 60 * 1000).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, null);
+  assert.equal(Array.isArray(presentation.matches), true);
+  assert.equal(presentation.matches.length, 0);
+});
+
+test("compareLiveActivityMatches sorts higher total team score first", () => {
+  const highScoreMatch = {
+    match_details_id: "high",
+    league: "Championship",
+    home_team: "Wolves",
+    away_team: "Liverpool",
+    home_team_score: 1680,
+    away_team_score: 1961,
+    total_team_score: 3641,
+    date: "2026-03-06",
+    time: "20:00",
+  };
+  const lowScoreMatch = {
+    match_details_id: "low",
+    league: "Premier League",
+    home_team: "Norwich City",
+    away_team: "Sheffield Wednesday",
+    home_team_score: 1442,
+    away_team_score: 1413,
+    total_team_score: 2855,
+    date: "2026-03-06",
+    time: "19:45",
+  };
+
+  const sorted = [lowScoreMatch, highScoreMatch].sort(__testHooks.compareLiveActivityMatches);
+  assert.equal(sorted[0].match_details_id, "high");
 });
 
 test("does not emit delayed kickoff when first live status seen is HT", () => {

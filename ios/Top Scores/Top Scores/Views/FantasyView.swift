@@ -61,6 +61,7 @@ struct FantasyView: View {
     @FocusState private var isRivalEntryInputFocused: Bool
     @State private var lastObservedClipboardChangeCount = UIPasteboard.general.changeCount
 
+    private let rivalsSectionScrollID = "fantasy-rivals-section"
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
     private let sharedEntryPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     private let addSheetClipboardPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
@@ -87,6 +88,9 @@ struct FantasyView: View {
         baseNavigationView
             .overlay {
                 ZStack {
+                    if showFantasyLoadingInterstitial {
+                        fantasyLoadingOverlay
+                    }
                     if showSuccessInterstitial {
                         successOverlay
                     }
@@ -350,70 +354,85 @@ struct FantasyView: View {
         }
     }
 
+    private var showFantasyLoadingInterstitial: Bool {
+        !managerEntryID.isEmpty && fantasyViewModel.data == nil && fantasyViewModel.isLoading
+    }
+
     private var linkedFantasyView: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                if fantasyViewModel.isRefreshing {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Refreshing Fantasy score...")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 0)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 12) {
+                    if fantasyViewModel.isRefreshing {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Refreshing Fantasy score...")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 2)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 2)
-                }
 
-                if let data = fantasyViewModel.data {
-                    if let shareImportStatusMessage {
-                        shareImportStatusCard(
-                            message: shareImportStatusMessage,
-                            isError: shareImportStatusIsError
+                    if let data = fantasyViewModel.data {
+                        if let shareImportStatusMessage {
+                            shareImportStatusCard(
+                                message: shareImportStatusMessage,
+                                isError: shareImportStatusIsError
+                            )
+                        }
+                        scoreSummaryCard(
+                            data,
+                            moreRivalsTapAction: {
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    proxy.scrollTo(rivalsSectionScrollID, anchor: .top)
+                                }
+                            }
                         )
+                        pitchSection(data, playerSelectionEnabled: true)
+                        benchSection(data, playerSelectionEnabled: true)
+                        eventLegendSection(data)
+                        if data.isEstimatedScore {
+                            scoreCalculationSection(data)
+                        }
+                        rivalsSection
+                            .id(rivalsSectionScrollID)
+                        leaguesSection
+                    } else if fantasyViewModel.isLoading {
+                        VStack(spacing: 10) {
+                            ProgressView()
+                            Text("Loading Fantasy score...")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 26)
+                        .hidden()
                     }
-                    scoreSummaryCard(data)
-                    pitchSection(data, playerSelectionEnabled: true)
-                    benchSection(data, playerSelectionEnabled: true)
-                    eventLegendSection(data)
-                    if data.isEstimatedScore {
-                        scoreCalculationSection(data)
+
+                    if let errorMessage = fantasyViewModel.errorMessage {
+                        errorCard(errorMessage)
                     }
-                    rivalsSection
-                    leaguesSection
-                } else if fantasyViewModel.isLoading {
-                    VStack(spacing: 10) {
-                        ProgressView()
-                        Text("Loading Fantasy score...")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+
+                    if let data = fantasyViewModel.data {
+                        summaryStatsSection(data)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 26)
-                }
 
-                if let errorMessage = fantasyViewModel.errorMessage {
-                    errorCard(errorMessage)
+                    unlinkAccountCard
                 }
-
-                if let data = fantasyViewModel.data {
-                    summaryStatsSection(data)
-                }
-
-                unlinkAccountCard
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-        }
-        .background(Color(.systemGroupedBackground))
-        .refreshable {
-            await fantasyViewModel.refresh(
-                managerEntryID: managerEntryID,
-                apiBaseURL: preferences.apiBaseURL,
-                rivalManagers: rivalManagers,
-                trackedLeagues: trackedLeagues
-            )
+            .background(Color(.systemGroupedBackground))
+            .refreshable {
+                await fantasyViewModel.refresh(
+                    managerEntryID: managerEntryID,
+                    apiBaseURL: preferences.apiBaseURL,
+                    rivalManagers: rivalManagers,
+                    trackedLeagues: trackedLeagues
+                )
+            }
         }
     }
 
@@ -564,49 +583,63 @@ struct FantasyView: View {
         _ data: FantasySquadDisplayData,
         showRivalPills: Bool = true,
         scoreTapEnabled: Bool = true,
-        scoreTapAction: (() -> Void)? = nil
+        scoreTapAction: (() -> Void)? = nil,
+        moreRivalsTapAction: (() -> Void)? = nil
     ) -> some View {
         let currentScore = data.resolvedCurrentScore
         let displayedScore = data.isEstimatedScore ? "\(currentScore)*" : "\(currentScore)"
         let rivalPills = rivalScorePills()
+        let visibleRivalPills = Array(rivalPills.prefix(3))
+        let hiddenRivalCount = max(0, rivalPills.count - visibleRivalPills.count)
 
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(data.gameweekTitle)
                     .font(.headline)
-                if showRivalPills && !rivalPills.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(rivalPills) { pill in
-                                Button {
-                                    openRivalFromScorePill(entryID: pill.entryID)
-                                } label: {
-                                    HStack(spacing: 0) {
-                                        Text(pill.initials)
-                                            .font(.caption2.weight(.semibold))
-                                            .foregroundStyle(.white)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 5)
-                                            .background(rivalInitialsColor(for: pill.initials))
+                if showRivalPills && !visibleRivalPills.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(visibleRivalPills) { pill in
+                            Button {
+                                openRivalFromScorePill(entryID: pill.entryID)
+                            } label: {
+                                HStack(spacing: 0) {
+                                    Text(pill.initials)
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 5)
+                                        .background(rivalInitialsColor(for: pill.initials))
 
-                                        Text("\(pill.score)")
-                                            .font(.caption.monospacedDigit().weight(.semibold))
-                                            .foregroundStyle(.primary)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 5)
-                                            .background(Color(.tertiarySystemGroupedBackground))
-                                    }
-                                    .clipShape(Capsule(style: .continuous))
-                                    .overlay(
-                                        Capsule(style: .continuous)
-                                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                                    )
+                                    Text("\(pill.score)")
+                                        .font(.caption.monospacedDigit().weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 5)
+                                        .background(Color(.tertiarySystemGroupedBackground))
                                 }
-                                .buttonStyle(.plain)
+                                .clipShape(Capsule(style: .continuous))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                )
                             }
+                            .buttonStyle(.plain)
                         }
-                        .padding(.vertical, 1)
+
+                        if hiddenRivalCount > 0, let moreRivalsTapAction {
+                            Button {
+                                moreRivalsTapAction()
+                            } label: {
+                                Text("+\(hiddenRivalCount)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .underline()
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Show \(hiddenRivalCount) more rivals")
+                        }
                     }
+                    .padding(.vertical, 1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2123,6 +2156,12 @@ struct FantasyView: View {
         .animation(.easeInOut(duration: 0.15), value: isLaunchingShareFlow)
     }
 
+    private var fantasyLoadingOverlay: some View {
+        FantasyLoadingInterstitialView()
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.2), value: showFantasyLoadingInterstitial)
+    }
+
     private func triggerFantasyRefresh(force: Bool) {
         guard !managerEntryID.isEmpty else { return }
         guard isSelected else { return }
@@ -3578,6 +3617,172 @@ private struct FantasyLeagueShareSnapshotView: View {
     }
 }
 
+private struct FantasyLoadingInterstitialView: View {
+    @State private var animate = false
+    @State private var statusMessage = FantasyInterstitialMessages.random()
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.06, green: 0.22, blue: 0.32),
+                    Color(red: 0.10, green: 0.76, blue: 0.90),
+                    Color(red: 0.05, green: 0.53, blue: 0.77),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 28) {
+                ZStack {
+                    Circle()
+                        .stroke(.white.opacity(0.18), lineWidth: 1)
+                        .frame(width: 214, height: 214)
+
+                    Circle()
+                        .trim(from: 0.12, to: 0.90)
+                        .stroke(
+                            AngularGradient(
+                                colors: [
+                                    Color.white.opacity(0.18),
+                                    Color(red: 0.23, green: 0.0, blue: 0.29),
+                                    Color.white.opacity(0.82),
+                                    Color.white.opacity(0.18),
+                                ],
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 8, lineCap: .round)
+                        )
+                        .frame(width: 176, height: 176)
+                        .rotationEffect(.degrees(animate ? 360 : 0))
+                        .animation(.linear(duration: 2.8).repeatForever(autoreverses: false), value: animate)
+
+                    Circle()
+                        .trim(from: 0.06, to: 0.42)
+                        .stroke(
+                            Color.white.opacity(0.72),
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                        )
+                        .frame(width: 144, height: 144)
+                        .rotationEffect(.degrees(animate ? -360 : 0))
+                        .animation(.linear(duration: 1.9).repeatForever(autoreverses: false), value: animate)
+
+                    ForEach(0..<20, id: \.self) { index in
+                        Circle()
+                            .fill(.white.opacity(animate ? 0.92 : 0.36))
+                            .frame(width: index.isMultiple(of: 4) ? 7 : 4, height: index.isMultiple(of: 4) ? 7 : 4)
+                            .offset(y: -86)
+                            .rotationEffect(.degrees(Double(index) * 18 + (animate ? 360 : 0)))
+                            .animation(
+                                .easeInOut(duration: 1.15)
+                                    .repeatForever(autoreverses: true)
+                                    .delay(Double(index) * 0.03),
+                                value: animate
+                            )
+                    }
+
+                    FantasyLoadingLogoView(size: 104)
+                        .rotationEffect(.degrees(animate ? 3 : -3))
+                        .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: animate)
+                        .shadow(color: Color.black.opacity(0.18), radius: 12, x: 0, y: 8)
+                }
+
+                VStack(spacing: 8) {
+                    Text("Fantasy Football")
+                        .font(.title.weight(.bold))
+                        .foregroundStyle(.white)
+
+                    Text(statusMessage)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                }
+
+                ProgressView()
+                    .tint(.white)
+            }
+            .padding(24)
+        }
+        .onAppear {
+            animate = true
+            statusMessage = FantasyInterstitialMessages.random()
+        }
+    }
+}
+
+private struct FantasyLoadingLogoView: View {
+    let size: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.16, green: 0.84, blue: 0.98),
+                            Color(red: 0.13, green: 0.70, blue: 0.92),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            FantasyLionGlyph()
+                .fill(Color(red: 0.23, green: 0.0, blue: 0.29))
+                .padding(size * 0.17)
+
+            Image(systemName: "crown.fill")
+                .font(.system(size: size * 0.18, weight: .black))
+                .foregroundStyle(Color(red: 0.23, green: 0.0, blue: 0.29))
+                .offset(x: size * 0.10, y: size * 0.10)
+        }
+        .frame(width: size, height: size)
+        .overlay(
+            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+    }
+}
+
+private struct FantasyLionGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let width = rect.width
+        let height = rect.height
+
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + (x * width), y: rect.minY + (y * height))
+        }
+
+        var path = Path()
+        path.move(to: point(0.18, 0.34))
+        path.addCurve(to: point(0.30, 0.16), control1: point(0.18, 0.24), control2: point(0.23, 0.17))
+        path.addLine(to: point(0.41, 0.10))
+        path.addLine(to: point(0.45, 0.03))
+        path.addLine(to: point(0.50, 0.10))
+        path.addLine(to: point(0.58, 0.04))
+        path.addLine(to: point(0.58, 0.14))
+        path.addCurve(to: point(0.73, 0.29), control1: point(0.66, 0.16), control2: point(0.72, 0.21))
+        path.addCurve(to: point(0.67, 0.47), control1: point(0.75, 0.37), control2: point(0.73, 0.44))
+        path.addCurve(to: point(0.57, 0.60), control1: point(0.62, 0.52), control2: point(0.60, 0.58))
+        path.addCurve(to: point(0.64, 0.77), control1: point(0.58, 0.66), control2: point(0.62, 0.71))
+        path.addCurve(to: point(0.49, 0.90), control1: point(0.65, 0.86), control2: point(0.57, 0.90))
+        path.addCurve(to: point(0.38, 0.82), control1: point(0.45, 0.90), control2: point(0.40, 0.87))
+        path.addLine(to: point(0.28, 0.88))
+        path.addLine(to: point(0.26, 0.76))
+        path.addLine(to: point(0.17, 0.79))
+        path.addLine(to: point(0.12, 0.68))
+        path.addLine(to: point(0.04, 0.66))
+        path.addLine(to: point(0.10, 0.55))
+        path.addLine(to: point(0.02, 0.48))
+        path.addLine(to: point(0.10, 0.41))
+        path.addLine(to: point(0.07, 0.33))
+        path.closeSubpath()
+        return path
+    }
+}
+
 private struct FantasyShareAppIconView: View {
     let size: CGFloat
 
@@ -3610,6 +3815,35 @@ private struct FantasyShareAppIconView: View {
             return nil
         }
         return image
+    }
+}
+
+private enum FantasyInterstitialMessages {
+    private static let rawMessages = """
+Loading your squad...
+Checking live bonus points...
+Sizing up the rivals...
+Pulling in your latest picks...
+Refreshing your Gameweek score...
+Scanning the bench...
+Lining up the captains...
+Fetching rival teams...
+Updating live Fantasy data...
+Crunching bonus point swings...
+Building your pitch view...
+Calculating rank movement...
+Checking who blanked...
+Checking who hauled...
+Finalising your Fantasy dashboard...
+"""
+
+    static let all: [String] = rawMessages
+        .split(separator: "\n")
+        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+    static func random() -> String {
+        all.randomElement() ?? "Loading Fantasy Football..."
     }
 }
 

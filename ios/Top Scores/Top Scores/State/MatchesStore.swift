@@ -399,6 +399,11 @@ final class MatchesStore: ObservableObject {
     private var cachedBbcLiveMatches: [BbcMatch] = []
     private var bbcLiveLastFetchedAt: Date?
     private var bbcLiveRefreshTask: Task<Void, Never>?
+    private var teamRankingsRefreshTask: Task<Void, Never>?
+    private var teamRatingLookup = TeamRatingLookup(
+        entries: [],
+        defaultPoints: TeamRankingSettings.defaultDefaultElo
+    )
 
     private let liveRefreshInterval: TimeInterval = 30
     private let bbcLiveRefreshInterval: TimeInterval = 90
@@ -431,6 +436,7 @@ final class MatchesStore: ObservableObject {
         }
 
         publishState(for: mode)
+        refreshTeamRatingLookup(apiBaseURL: snapshot.apiBaseURL)
         updateRefreshTimer(using: snapshot, matches: combinedLoadedMatches())
     }
 
@@ -439,6 +445,8 @@ final class MatchesStore: ObservableObject {
         refreshTimer = nil
         bbcLiveRefreshTask?.cancel()
         bbcLiveRefreshTask = nil
+        teamRankingsRefreshTask?.cancel()
+        teamRankingsRefreshTask = nil
     }
 
     func refresh(preferences: PreferencesSnapshot) async {
@@ -585,6 +593,7 @@ final class MatchesStore: ObservableObject {
             if mode == activeMode {
                 publishState(for: mode)
             }
+            refreshTeamRatingLookup(apiBaseURL: preferences.apiBaseURL)
             updateRefreshTimer(using: preferences, matches: combinedLoadedMatches())
         } catch {
             if Self.isCancellationError(error) {
@@ -724,6 +733,49 @@ final class MatchesStore: ObservableObject {
         )
     }
 
+    private func refreshTeamRatingLookup(apiBaseURL: String) {
+        teamRankingsRefreshTask?.cancel()
+        teamRankingsRefreshTask = Task { [weak self] in
+            let cachedSettings = await TeamRankingSettingsCatalog.shared.settings()
+            let cachedEntries = await TeamRankingsCatalog.shared.cachedEntries()
+            await self?.applyTeamRatingSnapshot(
+                entries: cachedEntries,
+                defaultElo: cachedSettings.defaultElo
+            )
+
+            async let settingsRefresh: Void = TeamRankingSettingsCatalog.shared.ensureFresh(
+                apiBaseURL: apiBaseURL
+            )
+            async let rankingsRefresh: Void = TeamRankingsCatalog.shared.ensureFresh(
+                apiBaseURL: apiBaseURL
+            )
+            _ = await (settingsRefresh, rankingsRefresh)
+            guard !Task.isCancelled else { return }
+
+            let refreshedSettings = await TeamRankingSettingsCatalog.shared.settings()
+            let refreshedEntries = await TeamRankingsCatalog.shared.cachedEntries()
+            await self?.applyTeamRatingSnapshot(
+                entries: refreshedEntries,
+                defaultElo: refreshedSettings.defaultElo
+            )
+        }
+    }
+
+    private func applyTeamRatingSnapshot(entries: [TeamRankingEntry], defaultElo: Double) {
+        let nextLookup = TeamRatingLookup(entries: entries, defaultPoints: defaultElo)
+        teamRatingLookup = nextLookup
+        publishState(for: activeMode)
+    }
+
+    func teamRatingDebugText(for match: Match) -> String {
+        let homeRating = teamRatingLookup.resolveRating(for: match.homeTeam)
+        let awayRating = teamRatingLookup.resolveRating(for: match.awayTeam)
+        let totalRating = homeRating.rating + awayRating.rating
+        let homeText = "\(Int(homeRating.rating.rounded()))\(homeRating.usedDefault ? "*" : "")"
+        let awayText = "\(Int(awayRating.rating.rounded()))\(awayRating.usedDefault ? "*" : "")"
+        return "Elo \(homeText) + \(awayText) = \(Int(totalRating.rounded()))"
+    }
+
     private func latestLastUpdatedAcrossModes() -> Date? {
         let updates = modeStates.values.compactMap(\.lastUpdated)
         return updates.max()
@@ -757,7 +809,12 @@ final class MatchesStore: ObservableObject {
         activeMode = mode
         let current = state(for: mode)
         matches = current.matches
-        groupedMatches = Self.groupMatches(current.matches, descendingDates: mode == .results)
+        groupedMatches = Self.groupMatches(
+            current.matches,
+            descendingDates: mode == .results,
+            sortOrder: currentSnapshot?.matchGroupSortOrder ?? PreferencesStore.defaultMatchGroupSortOrder,
+            ratingLookup: teamRatingLookup
+        )
         isLoading = current.isLoading
         errorMessage = current.errorMessage
         lastUpdated = current.lastUpdated
@@ -940,7 +997,12 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static func groupMatches(_ matches: [Match], descendingDates: Bool = false) -> [MatchDay] {
+    private static func groupMatches(
+        _ matches: [Match],
+        descendingDates: Bool = false,
+        sortOrder: MatchGroupSortOrder,
+        ratingLookup: TeamRatingLookup
+    ) -> [MatchDay] {
         let groupedByDate = Dictionary(grouping: matches) { $0.date }
         var dateKeys = groupedByDate.keys.sorted()
         if descendingDates {
@@ -950,7 +1012,6 @@ final class MatchesStore: ObservableObject {
 
         let dateDays: [MatchDay] = dateKeys.compactMap { dateKey -> MatchDay? in
             guard let matchesForDate = groupedByDate[dateKey] else { return nil }
-            let sortedDateMatches = Self.sortedMatches(matchesForDate)
             let displayDate: String
             let parsedDate = MatchDateParser.shared.parse(date: dateKey, time: "00:00")
             let isToday = parsedDate.map { calendar.isDateInToday($0) } ?? false
@@ -961,21 +1022,65 @@ final class MatchesStore: ObservableObject {
                 displayDate = dateKey
             }
 
-            let groupedByLeague = Dictionary(grouping: sortedDateMatches) { $0.displayLeague }
-            let leagueSections = groupedByLeague.compactMap { entry -> (league: String, matches: [Match], firstKickoff: Date, weight: Double)? in
+            let groupedByLeague = Dictionary(grouping: matchesForDate) { $0.displayLeague }
+            let leagueSections = groupedByLeague.compactMap {
+                entry -> (
+                    league: String,
+                    matches: [Match],
+                    totalTeamRating: Double,
+                    leadingMatchRating: Double,
+                    leadingMatchKickoff: Date,
+                    leadingMatchHomeTeam: String,
+                    leadingMatchAwayTeam: String,
+                    weight: Double
+                )?
+                in
                 let (league, leagueMatches) = entry
-                let sortedLeagueMatches = Self.sortedMatches(leagueMatches)
-                guard let firstMatch = sortedLeagueMatches.first else { return nil }
+                let sortedLeagueMatches = Self.sortMatchesWithinLeague(
+                    leagueMatches,
+                    sortOrder: sortOrder,
+                    ratingLookup: ratingLookup
+                )
+                guard let leadingMatch = sortedLeagueMatches.first else { return nil }
                 return (
                     league: league,
                     matches: sortedLeagueMatches,
-                    firstKickoff: Self.matchSortDate(for: firstMatch),
+                    totalTeamRating: Self.totalTeamRating(for: leagueMatches, ratingLookup: ratingLookup),
+                    leadingMatchRating: Self.totalTeamRating(for: leadingMatch, ratingLookup: ratingLookup),
+                    leadingMatchKickoff: Self.matchSortDate(for: leadingMatch),
+                    leadingMatchHomeTeam: leadingMatch.homeTeam,
+                    leadingMatchAwayTeam: leadingMatch.awayTeam,
                     weight: Self.competitionWeight(forCompetitionName: league)
                 )
             }
             .sorted { lhs, rhs in
-                if lhs.firstKickoff != rhs.firstKickoff {
-                    return lhs.firstKickoff < rhs.firstKickoff
+                switch sortOrder {
+                case .kickoffThenTeamScore:
+                    if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
+                        return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
+                    }
+                    if lhs.leadingMatchRating != rhs.leadingMatchRating {
+                        return lhs.leadingMatchRating > rhs.leadingMatchRating
+                    }
+                case .kickoffThenAlphabetical:
+                    if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
+                        return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
+                    }
+                    let homeCompare = lhs.leadingMatchHomeTeam.localizedCaseInsensitiveCompare(rhs.leadingMatchHomeTeam)
+                    if homeCompare != .orderedSame {
+                        return homeCompare == .orderedAscending
+                    }
+                    let awayCompare = lhs.leadingMatchAwayTeam.localizedCaseInsensitiveCompare(rhs.leadingMatchAwayTeam)
+                    if awayCompare != .orderedSame {
+                        return awayCompare == .orderedAscending
+                    }
+                case .teamScore, .alphabetical:
+                    if lhs.totalTeamRating != rhs.totalTeamRating {
+                        return lhs.totalTeamRating > rhs.totalTeamRating
+                    }
+                    if lhs.leadingMatchRating != rhs.leadingMatchRating {
+                        return lhs.leadingMatchRating > rhs.leadingMatchRating
+                    }
                 }
                 if lhs.weight != rhs.weight {
                     return lhs.weight > rhs.weight
@@ -997,5 +1102,79 @@ final class MatchesStore: ObservableObject {
         }
 
         return dateDays
+    }
+
+    private static func sortMatchesWithinLeague(
+        _ matches: [Match],
+        sortOrder: MatchGroupSortOrder,
+        ratingLookup: TeamRatingLookup
+    ) -> [Match] {
+        matches.sorted { lhs, rhs in
+            switch sortOrder {
+            case .teamScore:
+                let leftScore = totalTeamRating(for: lhs, ratingLookup: ratingLookup)
+                let rightScore = totalTeamRating(for: rhs, ratingLookup: ratingLookup)
+                if leftScore != rightScore {
+                    return leftScore > rightScore
+                }
+            case .alphabetical:
+                let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
+                if homeCompare != .orderedSame {
+                    return homeCompare == .orderedAscending
+                }
+                let awayCompare = lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam)
+                if awayCompare != .orderedSame {
+                    return awayCompare == .orderedAscending
+                }
+            case .kickoffThenTeamScore:
+                let leftDate = matchSortDate(for: lhs)
+                let rightDate = matchSortDate(for: rhs)
+                if leftDate != rightDate {
+                    return leftDate < rightDate
+                }
+                let leftScore = totalTeamRating(for: lhs, ratingLookup: ratingLookup)
+                let rightScore = totalTeamRating(for: rhs, ratingLookup: ratingLookup)
+                if leftScore != rightScore {
+                    return leftScore > rightScore
+                }
+            case .kickoffThenAlphabetical:
+                let leftDate = matchSortDate(for: lhs)
+                let rightDate = matchSortDate(for: rhs)
+                if leftDate != rightDate {
+                    return leftDate < rightDate
+                }
+                let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
+                if homeCompare != .orderedSame {
+                    return homeCompare == .orderedAscending
+                }
+                let awayCompare = lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam)
+                if awayCompare != .orderedSame {
+                    return awayCompare == .orderedAscending
+                }
+            }
+
+            let leftDate = matchSortDate(for: lhs)
+            let rightDate = matchSortDate(for: rhs)
+            if leftDate != rightDate {
+                return leftDate < rightDate
+            }
+
+            let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
+            if homeCompare != .orderedSame {
+                return homeCompare == .orderedAscending
+            }
+
+            return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
+        }
+    }
+
+    private static func totalTeamRating(for matches: [Match], ratingLookup: TeamRatingLookup) -> Double {
+        matches.reduce(0) { partialResult, match in
+            partialResult + totalTeamRating(for: match, ratingLookup: ratingLookup)
+        }
+    }
+
+    private static func totalTeamRating(for match: Match, ratingLookup: TeamRatingLookup) -> Double {
+        ratingLookup.resolvedRating(for: match.homeTeam) + ratingLookup.resolvedRating(for: match.awayTeam)
     }
 }

@@ -38,6 +38,18 @@ struct PreferencesView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Sorting") {
+                    Picker("Match order", selection: matchGroupSortOrderBinding) {
+                        ForEach(MatchGroupSortOrder.allCases) { sortOrder in
+                            Text(sortOrder.title).tag(sortOrder)
+                        }
+                    }
+
+                    Text("Kick-off based modes order competition groups by the first visible match. The other modes rank competition groups by combined team Elo.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Filters") {
                     Toggle("Premier League teams only", isOn: englishPremierLeagueTeamsOnlyBinding)
                     Text("Show only matches where at least one team is in the BBC Premier League table.")
@@ -228,6 +240,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.englishPremierLeagueTeamsOnly },
             set: { preferences.englishPremierLeagueTeamsOnly = $0 }
+        )
+    }
+
+    private var matchGroupSortOrderBinding: Binding<MatchGroupSortOrder> {
+        Binding(
+            get: { preferences.matchGroupSortOrder },
+            set: { preferences.matchGroupSortOrder = $0 }
         )
     }
 

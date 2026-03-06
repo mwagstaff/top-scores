@@ -18,6 +18,7 @@ enum AppGroupConfig {
     static let apiBaseURLKey = "preferences.apiBaseURL"
     static let refreshIntervalMinutesKey = "preferences.refreshIntervalMinutes"
     static let showAllMatchesKey = "preferences.showAllMatches"
+    static let matchGroupSortOrderKey = "preferences.matchGroupSortOrder"
 }
 
 struct SharedMatchesPayload: Codable {
@@ -68,6 +69,7 @@ enum SharedMatchesBridge {
         defaults.set(snapshot.apiBaseURL, forKey: AppGroupConfig.apiBaseURLKey)
         defaults.set(snapshot.refreshIntervalMinutes, forKey: AppGroupConfig.refreshIntervalMinutesKey)
         defaults.set(snapshot.showAllMatches, forKey: AppGroupConfig.showAllMatchesKey)
+        defaults.set(snapshot.matchGroupSortOrder.rawValue, forKey: AppGroupConfig.matchGroupSortOrderKey)
     }
 
     private static var sharedFileURL: URL? {

@@ -171,6 +171,9 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let aggregateHomeScore: Int?
     let aggregateAwayScore: Int?
     let matchTime: String?
+    let homeTeamScore: Double?
+    let awayTeamScore: Double?
+    let totalTeamScore: Double?
     let tvChannels: [String]
 }
 
@@ -2215,10 +2218,22 @@ private struct MultiMatchListView: View {
 
     private var visibleMatches: [TopScoresLiveActivityMatchState] {
         let sorted = matches.sorted { lhs, rhs in
+            let leftTeamScore = totalTeamScore(for: lhs)
+            let rightTeamScore = totalTeamScore(for: rhs)
+            if leftTeamScore != rightTeamScore {
+                return leftTeamScore > rightTeamScore
+            }
+
             let leftWeight = competitionWeight(for: lhs)
             let rightWeight = competitionWeight(for: rhs)
             if leftWeight != rightWeight {
                 return leftWeight > rightWeight
+            }
+
+            let leftKickoff = kickoffSortKey(for: lhs)
+            let rightKickoff = kickoffSortKey(for: rhs)
+            if leftKickoff != rightKickoff {
+                return leftKickoff < rightKickoff
             }
 
             let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
@@ -2251,6 +2266,17 @@ private struct MultiMatchListView: View {
             }
         }
         return WidgetCompetitionWeightConfig.weight(for: match.league) ?? 0
+    }
+
+    private func totalTeamScore(for match: TopScoresLiveActivityMatchState) -> Double {
+        if let explicitTotal = match.totalTeamScore {
+            return explicitTotal
+        }
+        return (match.homeTeamScore ?? 0) + (match.awayTeamScore ?? 0)
+    }
+
+    private func kickoffSortKey(for match: TopScoresLiveActivityMatchState) -> Date {
+        WidgetMatchDateParser.shared.parse(date: match.date, time: match.time) ?? .distantFuture
     }
 }
 

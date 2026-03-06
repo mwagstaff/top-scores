@@ -22,9 +22,14 @@ const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LO
 const LIVE_ACTIVITY_EVAL_INTERVAL_MS = 15 * 1000;
 const LIVE_ACTIVITY_STARTUP_KICK_DELAYS_MS = [0, 3000, 9000];
 const LIVE_ACTIVITY_MAX_MATCHES = 10;
+const LIVE_ACTIVITY_TEAM_RANKING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const LIVE_ACTIVITY_TEAM_RANKING_RETRY_MS = 5 * 60 * 1000;
+const LIVE_ACTIVITY_TEAM_RANKING_FETCH_TIMEOUT_MS = 15 * 1000;
 // If APNS accepts a start but the app never reports an activity token, retry quickly.
 const LIVE_ACTIVITY_PENDING_MAX_MS = 2 * 60 * 1000;
 const LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS = 30 * 60;
+const LIVE_ACTIVITY_STALE_LIVE_UPDATED_GRACE_MS = 5 * 60 * 1000;
+const LIVE_ACTIVITY_STALE_LIVE_KICKOFF_GRACE_MS = 2 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
 const LIVE_ACTIVITY_COMPETITION_WEIGHTS = {
@@ -35,6 +40,41 @@ const LIVE_ACTIVITY_COMPETITION_WEIGHTS = {
   "FA Cup": 65,
   "EFL Cup": 60,
 };
+const LIVE_ACTIVITY_TEAM_RATING_STOP_WORDS = new Set([
+  "fc",
+  "cf",
+  "sc",
+  "afc",
+  "ac",
+  "sv",
+  "fk",
+  "bk",
+  "bc",
+  "ks",
+  "nk",
+  "club",
+  "de",
+  "the",
+  "and",
+]);
+const LIVE_ACTIVITY_TEAM_RATING_ALIAS_MAP = Object.freeze({
+  celtavigo: "celta",
+  manchesterunited: "manunited",
+  manchestercity: "mancity",
+  tottenhamhotspur: "tottenham",
+  wolverhamptonwanderers: "wolves",
+  sheffieldunited: "sheffutd",
+  sheffieldwednesday: "sheffwed",
+  nottinghamforest: "nottmforest",
+  brightonhovealbion: "brighton",
+  brightonandhovealbion: "brighton",
+  bayernmunich: "bayern",
+  borussiadortmund: "dortmund",
+  borussiamonchengladbach: "gladbach",
+  intermilan: "inter",
+  oxfordunited: "oxford",
+  prestonnorthend: "preston",
+});
 
 // State tracking
 const monitoredMatches = new Map(); // matchId -> matchState
@@ -48,12 +88,18 @@ const monitorDiagnostics = {
   recentMonitorStarts: [],
   recentMonitorStops: [],
 };
+let liveActivityTeamRatingLookup = null;
+let liveActivityTeamRatingDefaultElo = 1000;
+let liveActivityTeamRatingFetchedAtMs = 0;
+let liveActivityTeamRatingLastAttemptAtMs = 0;
+let liveActivityTeamRatingRefreshPromise = null;
 
 // Match status helpers - mirrors server.js MATCH_STATUS_* constants
 const MATCH_STATUS_MINUTE_PATTERN = /^(\d{1,3})(?:\+(\d{1,2}))?'?$/;
 const MATCH_STATUS_COMPLETE_TOKENS = new Set(["FT", "AET"]);
 const MATCH_STATUS_IN_PROGRESS_TOKENS = new Set(["LIVE", "HT", "ET", "PENS", "PEN", "PEN."]);
 const MATCH_STATUS_PENALTY_TOKENS = new Set(["PENS", "PEN", "PEN."]);
+const SNAPSHOT_NULL_CLEAR_FIELDS = new Set(["aggregate_home_score", "aggregate_away_score"]);
 
 function shortDeviceToken(deviceToken) {
   return String(deviceToken || "").slice(0, 12);
@@ -152,9 +198,314 @@ function parseMatchDateTimeMs(match) {
   return value;
 }
 
+function isLikelyTerminalStaleLiveMatch(match, kickoffMs, nowMs = Date.now()) {
+  if (!match || typeof match !== "object") return false;
+
+  const statusMinute = parseStatusMinute(match.score_status);
+  if (statusMinute === null || statusMinute < 90) return false;
+
+  const resolvedKickoffMs = Number.isFinite(kickoffMs) ? kickoffMs : parseMatchDateTimeMs(match);
+  if (!Number.isFinite(resolvedKickoffMs)) return false;
+  if (nowMs - resolvedKickoffMs < LIVE_ACTIVITY_STALE_LIVE_KICKOFF_GRACE_MS) return false;
+
+  const updatedAtMs = Date.parse(String(match.updated_at || "").trim());
+  if (Number.isFinite(updatedAtMs)) {
+    if (nowMs <= updatedAtMs) return false;
+    if (nowMs - updatedAtMs < LIVE_ACTIVITY_STALE_LIVE_UPDATED_GRACE_MS) return false;
+  }
+
+  return true;
+}
+
 function toNumericScore(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildTimeoutSignal(timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timer);
+    },
+  };
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = LIVE_ACTIVITY_TEAM_RANKING_FETCH_TIMEOUT_MS) {
+  const timeout = buildTimeoutSignal(timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: timeout.signal,
+      headers: {
+        Accept: "application/json",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return await response.json();
+  } finally {
+    timeout.clear();
+  }
+}
+
+function normalizeLiveActivityTeamTokens(value) {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/'/g, "")
+    .replace(/\./g, " ")
+    .replace(/-/g, " ")
+    .replace(/_/g, " ");
+
+  return normalized
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token && !LIVE_ACTIVITY_TEAM_RATING_STOP_WORDS.has(token));
+}
+
+function normalizeLiveActivityTeamKey(value) {
+  const tokens = normalizeLiveActivityTeamTokens(value);
+  if (tokens.length > 0) {
+    return tokens.join("");
+  }
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function liveActivityTeamDiceCoefficient(lhsTokens, rhsTokens) {
+  if (lhsTokens.length === 0 && rhsTokens.length === 0) return 1;
+  const lhsSet = new Set(lhsTokens);
+  const rhsSet = new Set(rhsTokens);
+  let overlap = 0;
+  lhsSet.forEach((token) => {
+    if (rhsSet.has(token)) overlap += 1;
+  });
+  return (2 * overlap) / (lhsTokens.length + rhsTokens.length);
+}
+
+function liveActivityTeamPrefixSimilarity(lhsKey, rhsKey, lhsTokens, rhsTokens) {
+  if (Math.min(lhsTokens.length, rhsTokens.length) !== 1) return 0;
+  if (lhsKey.startsWith(rhsKey) || rhsKey.startsWith(lhsKey)) {
+    const shorter = Math.min(lhsKey.length, rhsKey.length);
+    const longer = Math.max(lhsKey.length, rhsKey.length);
+    if (longer <= 0) return 1;
+    return Math.min(1, shorter / longer + 0.3);
+  }
+  return 0;
+}
+
+function liveActivityTeamLevenshtein(lhs, rhs) {
+  const lhsChars = Array.from(lhs);
+  const rhsChars = Array.from(rhs);
+  const previous = Array.from({ length: rhsChars.length + 1 }, (_, index) => index);
+  const current = new Array(rhsChars.length + 1).fill(0);
+
+  for (let lhsIndex = 0; lhsIndex < lhsChars.length; lhsIndex += 1) {
+    current[0] = lhsIndex + 1;
+    for (let rhsIndex = 0; rhsIndex < rhsChars.length; rhsIndex += 1) {
+      const cost = lhsChars[lhsIndex] === rhsChars[rhsIndex] ? 0 : 1;
+      current[rhsIndex + 1] = Math.min(
+        previous[rhsIndex + 1] + 1,
+        current[rhsIndex] + 1,
+        previous[rhsIndex] + cost
+      );
+    }
+    for (let index = 0; index < current.length; index += 1) {
+      previous[index] = current[index];
+    }
+  }
+
+  return previous[rhsChars.length];
+}
+
+function liveActivityTeamNormalizedEditSimilarity(lhs, rhs) {
+  const maxLength = Math.max(lhs.length, rhs.length);
+  if (maxLength <= 0) return 1;
+  return 1 - liveActivityTeamLevenshtein(lhs, rhs) / maxLength;
+}
+
+function liveActivityTeamSimilarity(lhsKey, rhsKey, lhsTokens, rhsTokens) {
+  return Math.max(
+    liveActivityTeamNormalizedEditSimilarity(lhsKey, rhsKey),
+    liveActivityTeamDiceCoefficient(lhsTokens, rhsTokens),
+    liveActivityTeamPrefixSimilarity(lhsKey, rhsKey, lhsTokens, rhsTokens)
+  );
+}
+
+function buildLiveActivityTeamRatingLookup(rows, defaultElo = 1000) {
+  const exactByKey = new Map();
+  const candidates = [];
+
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const rating = Number(row && row.Points);
+    if (!Number.isFinite(rating)) return;
+
+    const names = [row && row.Name ? row.Name : ""];
+    if (Array.isArray(row && row.aliases)) {
+      names.push(...row.aliases);
+    }
+
+    Array.from(
+      new Set(
+        names
+          .map((name) => String(name || "").trim())
+          .filter(Boolean)
+      )
+    ).forEach((name) => {
+      const key = normalizeLiveActivityTeamKey(name);
+      if (!key) return;
+      if (!exactByKey.has(key)) {
+        exactByKey.set(key, rating);
+      }
+      candidates.push({
+        key,
+        tokens: normalizeLiveActivityTeamTokens(name),
+        rating,
+      });
+    });
+  });
+
+  return {
+    exactByKey,
+    candidates,
+    defaultElo: Number.isFinite(defaultElo) ? defaultElo : 1000,
+  };
+}
+
+function lookupLiveActivityTeamRating(teamName) {
+  const lookup = liveActivityTeamRatingLookup;
+  const key = normalizeLiveActivityTeamKey(teamName);
+  if (!lookup || !key) {
+    return null;
+  }
+
+  if (lookup.exactByKey.has(key)) {
+    return lookup.exactByKey.get(key);
+  }
+
+  const aliasedKey = LIVE_ACTIVITY_TEAM_RATING_ALIAS_MAP[key];
+  if (aliasedKey && lookup.exactByKey.has(aliasedKey)) {
+    return lookup.exactByKey.get(aliasedKey);
+  }
+
+  const sourceTokens = normalizeLiveActivityTeamTokens(teamName);
+  let bestRating = null;
+  let bestConfidence = 0;
+
+  lookup.candidates.forEach((candidate) => {
+    const confidence = liveActivityTeamSimilarity(
+      key,
+      candidate.key,
+      sourceTokens,
+      candidate.tokens
+    );
+    if (confidence > bestConfidence) {
+      bestConfidence = confidence;
+      bestRating = candidate.rating;
+    }
+  });
+
+  return bestConfidence >= 0.86 ? bestRating : null;
+}
+
+function resolveLiveActivityTeamRating(teamName) {
+  const exactRating = lookupLiveActivityTeamRating(teamName);
+  if (Number.isFinite(exactRating)) {
+    return {
+      rating: exactRating,
+      usedDefault: false,
+    };
+  }
+  return {
+    rating: liveActivityTeamRatingDefaultElo,
+    usedDefault: true,
+  };
+}
+
+function annotateMatchWithLiveActivityTeamRatings(match) {
+  if (!match || typeof match !== "object") return match;
+  const homeResolution = resolveLiveActivityTeamRating(match.home_team);
+  const awayResolution = resolveLiveActivityTeamRating(match.away_team);
+  return {
+    ...match,
+    home_team_score: homeResolution.rating,
+    away_team_score: awayResolution.rating,
+    total_team_score: homeResolution.rating + awayResolution.rating,
+  };
+}
+
+function liveActivityTeamScoreTotal(match) {
+  const explicitTotal = Number(match && match.total_team_score);
+  if (Number.isFinite(explicitTotal)) return explicitTotal;
+  const homeTeamScore = Number(match && match.home_team_score);
+  const awayTeamScore = Number(match && match.away_team_score);
+  const total = (Number.isFinite(homeTeamScore) ? homeTeamScore : 0) +
+    (Number.isFinite(awayTeamScore) ? awayTeamScore : 0);
+  return Number.isFinite(total) ? total : 0;
+}
+
+async function ensureLiveActivityTeamRatingCache(nowMs = Date.now()) {
+  if (
+    liveActivityTeamRatingLookup &&
+    nowMs - liveActivityTeamRatingFetchedAtMs < LIVE_ACTIVITY_TEAM_RANKING_CACHE_TTL_MS
+  ) {
+    return;
+  }
+
+  if (
+    liveActivityTeamRatingRefreshPromise &&
+    typeof liveActivityTeamRatingRefreshPromise.then === "function"
+  ) {
+    await liveActivityTeamRatingRefreshPromise;
+    return;
+  }
+
+  if (
+    !liveActivityTeamRatingLookup &&
+    liveActivityTeamRatingLastAttemptAtMs > 0 &&
+    nowMs - liveActivityTeamRatingLastAttemptAtMs < LIVE_ACTIVITY_TEAM_RANKING_RETRY_MS
+  ) {
+    return;
+  }
+
+  liveActivityTeamRatingLastAttemptAtMs = nowMs;
+  liveActivityTeamRatingRefreshPromise = (async () => {
+    try {
+      const [settings, teams] = await Promise.all([
+        fetchJsonWithTimeout(`${apiBaseURL}/teams/config`),
+        fetchJsonWithTimeout(`${apiBaseURL}/teams?source=merged`),
+      ]);
+      const defaultElo = Number(settings && settings.default_elo);
+      liveActivityTeamRatingDefaultElo = Number.isFinite(defaultElo) ? defaultElo : 1000;
+      liveActivityTeamRatingLookup = buildLiveActivityTeamRatingLookup(
+        Array.isArray(teams) ? teams : [],
+        liveActivityTeamRatingDefaultElo
+      );
+      liveActivityTeamRatingFetchedAtMs = Date.now();
+    } catch (error) {
+      console.warn(
+        "[MatchMonitor] Failed to refresh live activity team ratings:",
+        error && error.message ? error.message : error
+      );
+      if (!liveActivityTeamRatingLookup) {
+        liveActivityTeamRatingLookup = buildLiveActivityTeamRatingLookup(
+          [],
+          liveActivityTeamRatingDefaultElo
+        );
+      }
+    } finally {
+      liveActivityTeamRatingRefreshPromise = null;
+    }
+  })();
+
+  await liveActivityTeamRatingRefreshPromise;
 }
 
 function evaluateMatchRelevance(match, nowMs = Date.now()) {
@@ -1294,7 +1645,13 @@ function mergeSnapshotWithFallback(fallbackMatch, payloadMatch) {
   const payload = payloadMatch && typeof payloadMatch === "object" ? payloadMatch : {};
 
   Object.entries(payload).forEach(([key, value]) => {
-    if (value === null || value === undefined) return;
+    if (value === undefined) return;
+    if (value === null) {
+      if (SNAPSHOT_NULL_CLEAR_FIELDS.has(key)) {
+        merged[key] = null;
+      }
+      return;
+    }
     if (typeof value === "string" && !String(value).trim()) return;
     merged[key] = value;
   });
@@ -1670,9 +2027,15 @@ function competitionWeightForMatch(match) {
 }
 
 function compareLiveActivityMatches(lhs, rhs) {
+  const lhsTeamScore = liveActivityTeamScoreTotal(lhs);
+  const rhsTeamScore = liveActivityTeamScoreTotal(rhs);
+  if (lhsTeamScore !== rhsTeamScore) return rhsTeamScore - lhsTeamScore;
   const lhsWeight = competitionWeightForMatch(lhs);
   const rhsWeight = competitionWeightForMatch(rhs);
   if (lhsWeight !== rhsWeight) return rhsWeight - lhsWeight;
+  const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
+  const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
+  if (leftKickoff !== rightKickoff) return leftKickoff - rightKickoff;
   const homeCompare = String(lhs && lhs.home_team ? lhs.home_team : "").localeCompare(
     String(rhs && rhs.home_team ? rhs.home_team : ""),
     undefined,
@@ -1685,9 +2048,11 @@ function compareLiveActivityMatches(lhs, rhs) {
     { sensitivity: "base" }
   );
   if (awayCompare !== 0) return awayCompare;
-  const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
-  const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
-  return leftKickoff - rightKickoff;
+  return String(lhs && lhs.match_details_id ? lhs.match_details_id : "").localeCompare(
+    String(rhs && rhs.match_details_id ? rhs.match_details_id : ""),
+    undefined,
+    { sensitivity: "base" }
+  );
 }
 
 function isEligibleForLiveActivityByPreferences(user, match) {
@@ -1840,6 +2205,9 @@ function buildLiveActivityContentState(mode, matches, delayMinutes, nowMs = Date
     aggregateHomeScore: toNumericScore(match.aggregate_home_score),
     aggregateAwayScore: toNumericScore(match.aggregate_away_score),
     matchTime: displayStatusToken(match.score_status),
+    homeTeamScore: toNumericScore(match.home_team_score),
+    awayTeamScore: toNumericScore(match.away_team_score),
+    totalTeamScore: toNumericScore(match.total_team_score),
     tvChannels: Array.isArray(match.tv_channels) ? match.tv_channels.slice(0, 3) : [],
   }));
 
@@ -2059,6 +2427,10 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
     const kickoffMs = parseMatchDateTimeMs(currentMatch);
     const status = currentMatch ? currentMatch.score_status : null;
 
+    if (isLikelyTerminalStaleLiveMatch(currentMatch, kickoffMs, nowMs)) {
+      continue;
+    }
+
     if (isLiveMatchStatus(status)) {
       if (!hasFullDelayBufferForMatch(state, delayMinutes, nowMs)) {
         // Avoid spoilers: keep the activity active but suppress live scores/minute until full
@@ -2102,8 +2474,12 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
     }
   }
 
-  const sortedLive = liveMatches.sort(compareLiveActivityMatches).slice(0, LIVE_ACTIVITY_MAX_MATCHES);
+  const sortedLive = liveMatches
+    .map(annotateMatchWithLiveActivityTeamRatings)
+    .sort(compareLiveActivityMatches)
+    .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const sortedUpcoming = upcomingMatches
+    .map(annotateMatchWithLiveActivityTeamRatings)
     .sort(compareLiveActivityMatches)
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const mode = liveActivityModeForMatches(sortedLive, sortedUpcoming);
@@ -2129,6 +2505,7 @@ async function evaluateAndDispatchLiveActivities() {
   const nowMs = Date.now();
 
   try {
+    await ensureLiveActivityTeamRatingCache(nowMs);
     const entries = monitoredMatchStatesSnapshot();
     const users = await getAllUserPreferences();
     if (!Array.isArray(users) || users.length === 0) return;
@@ -2545,6 +2922,7 @@ module.exports = {
   getStatus,
   runLiveActivityEvaluationNow,
   __testHooks: {
+    annotateMatchWithLiveActivityTeamRatings,
     buildMatchEvents,
     buildScoreChangeEvent,
     buildNotificationId,
@@ -2556,5 +2934,8 @@ module.exports = {
     isFinishedMatchStatus,
     isPenaltyShootoutStatus,
     shouldStopMonitoringAsIrrelevant,
+    buildLiveActivityPresentationForUser,
+    compareLiveActivityMatches,
+    isLikelyTerminalStaleLiveMatch,
   },
 };

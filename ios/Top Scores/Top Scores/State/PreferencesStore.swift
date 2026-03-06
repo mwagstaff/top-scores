@@ -1,6 +1,37 @@
 import Foundation
 import Combine
 
+enum MatchGroupSortOrder: String, Codable, CaseIterable, Identifiable {
+    case alphabetical
+    case teamScore
+    case kickoffThenAlphabetical
+    case kickoffThenTeamScore
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .alphabetical:
+            return "Alphabetical"
+        case .teamScore:
+            return "Team score"
+        case .kickoffThenAlphabetical:
+            return "Kick-off then alphabetical"
+        case .kickoffThenTeamScore:
+            return "Kick-off then team score"
+        }
+    }
+
+    var usesTeamScore: Bool {
+        switch self {
+        case .teamScore, .kickoffThenTeamScore:
+            return true
+        case .alphabetical, .kickoffThenAlphabetical:
+            return false
+        }
+    }
+}
+
 struct PreferencesSnapshot: Codable, Equatable {
     let selectedLeagues: [String]
     let selectedChannels: [String]
@@ -10,6 +41,7 @@ struct PreferencesSnapshot: Codable, Equatable {
     let apiBaseURL: String
     let refreshIntervalMinutes: Int
     let showAllMatches: Bool
+    let matchGroupSortOrder: MatchGroupSortOrder
     let notificationsEnabled: Bool
     let notificationDelayMinutes: Int
     let notificationEventTypes: Set<String>
@@ -26,6 +58,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         apiBaseURL: String,
         refreshIntervalMinutes: Int,
         showAllMatches: Bool = false,
+        matchGroupSortOrder: MatchGroupSortOrder = PreferencesStore.defaultMatchGroupSortOrder,
         notificationsEnabled: Bool = false,
         notificationDelayMinutes: Int = 0,
         notificationEventTypes: Set<String> = PreferencesStore.defaultNotificationEventTypes,
@@ -41,6 +74,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         self.apiBaseURL = apiBaseURL
         self.refreshIntervalMinutes = refreshIntervalMinutes
         self.showAllMatches = showAllMatches
+        self.matchGroupSortOrder = matchGroupSortOrder
         self.notificationsEnabled = notificationsEnabled
         self.notificationDelayMinutes = notificationDelayMinutes
         self.notificationEventTypes = notificationEventTypes
@@ -58,6 +92,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         case apiBaseURL
         case refreshIntervalMinutes
         case showAllMatches
+        case matchGroupSortOrder
         case notificationsEnabled
         case notificationDelayMinutes
         case notificationEventTypes
@@ -76,6 +111,9 @@ struct PreferencesSnapshot: Codable, Equatable {
         apiBaseURL = try container.decode(String.self, forKey: .apiBaseURL)
         refreshIntervalMinutes = try container.decode(Int.self, forKey: .refreshIntervalMinutes)
         showAllMatches = try container.decodeIfPresent(Bool.self, forKey: .showAllMatches) ?? false
+        matchGroupSortOrder =
+            try container.decodeIfPresent(MatchGroupSortOrder.self, forKey: .matchGroupSortOrder)
+            ?? PreferencesStore.defaultMatchGroupSortOrder
         notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? false
         notificationDelayMinutes = try container.decodeIfPresent(Int.self, forKey: .notificationDelayMinutes) ?? 0
         let eventTypesArray = try container.decodeIfPresent([String].self, forKey: .notificationEventTypes)
@@ -104,6 +142,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultCompetitionFilterEnabled = true
     nonisolated static let defaultChannelFilterEnabled = true
     nonisolated static let defaultShowAllMatches = false
+    nonisolated static let defaultMatchGroupSortOrder: MatchGroupSortOrder = .alphabetical
     nonisolated static let defaultNotificationsEnabled = false
     nonisolated static let defaultNotificationDelayMinutes = 0
     nonisolated static let defaultNotificationEventTypes: Set<String> = ["goal", "kickoff", "halftime", "fulltime", "redcard"]
@@ -140,6 +179,10 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var showAllMatches: Bool {
+        didSet { persist() }
+    }
+
+    @Published var matchGroupSortOrder: MatchGroupSortOrder {
         didSet { persist() }
     }
 
@@ -181,6 +224,10 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultRefreshIntervalMinutes
         let showAllMatches = userDefaults.object(forKey: Keys.showAllMatches) as? Bool
             ?? Self.defaultShowAllMatches
+        let matchGroupSortOrderRawValue = userDefaults.string(forKey: Keys.matchGroupSortOrder)
+        let matchGroupSortOrder = matchGroupSortOrderRawValue
+            .flatMap(MatchGroupSortOrder.init(rawValue:))
+            ?? Self.defaultMatchGroupSortOrder
         let notificationsEnabled = userDefaults.object(forKey: Keys.notificationsEnabled) as? Bool
             ?? Self.defaultNotificationsEnabled
         let notificationDelayMinutes = userDefaults.object(forKey: Keys.notificationDelayMinutes) as? Int
@@ -202,6 +249,7 @@ final class PreferencesStore: ObservableObject {
         self.apiBaseURL = apiBaseURL
         self.refreshIntervalMinutes = max(1, refreshInterval)
         self.showAllMatches = showAllMatches
+        self.matchGroupSortOrder = matchGroupSortOrder
         self.notificationsEnabled = notificationsEnabled
         self.notificationDelayMinutes = max(0, min(10, notificationDelayMinutes))
         self.notificationEventTypes = notificationEventTypes
@@ -220,6 +268,7 @@ final class PreferencesStore: ObservableObject {
             apiBaseURL: apiBaseURL,
             refreshIntervalMinutes: refreshIntervalMinutes,
             showAllMatches: showAllMatches,
+            matchGroupSortOrder: matchGroupSortOrder,
             notificationsEnabled: notificationsEnabled,
             notificationDelayMinutes: notificationDelayMinutes,
             notificationEventTypes: notificationEventTypes,
@@ -239,6 +288,7 @@ final class PreferencesStore: ObservableObject {
             apiBaseURL: apiBaseURL,
             refreshIntervalMinutes: refreshIntervalMinutes,
             showAllMatches: showAllMatches,
+            matchGroupSortOrder: matchGroupSortOrder,
             notificationsEnabled: notificationsEnabled,
             notificationDelayMinutes: notificationDelayMinutes,
             notificationEventTypes: notificationEventTypes,
@@ -257,6 +307,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(apiBaseURL, forKey: Keys.apiBaseURL)
         userDefaults.set(refreshIntervalMinutes, forKey: Keys.refreshIntervalMinutes)
         userDefaults.set(showAllMatches, forKey: Keys.showAllMatches)
+        userDefaults.set(matchGroupSortOrder.rawValue, forKey: Keys.matchGroupSortOrder)
         userDefaults.set(notificationsEnabled, forKey: Keys.notificationsEnabled)
         userDefaults.set(notificationDelayMinutes, forKey: Keys.notificationDelayMinutes)
         userDefaults.set(Array(notificationEventTypes), forKey: Keys.notificationEventTypes)
@@ -285,6 +336,10 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultRefreshIntervalMinutes
         let showAllMatches = userDefaults.object(forKey: Keys.showAllMatches) as? Bool
             ?? Self.defaultShowAllMatches
+        let matchGroupSortOrderRawValue = userDefaults.string(forKey: Keys.matchGroupSortOrder)
+        let matchGroupSortOrder = matchGroupSortOrderRawValue
+            .flatMap(MatchGroupSortOrder.init(rawValue:))
+            ?? Self.defaultMatchGroupSortOrder
         let notificationsEnabled = userDefaults.object(forKey: Keys.notificationsEnabled) as? Bool
             ?? Self.defaultNotificationsEnabled
         let notificationDelayMinutes = userDefaults.object(forKey: Keys.notificationDelayMinutes) as? Int
@@ -307,6 +362,7 @@ final class PreferencesStore: ObservableObject {
             apiBaseURL: apiBaseURL,
             refreshIntervalMinutes: max(1, refreshInterval),
             showAllMatches: showAllMatches,
+            matchGroupSortOrder: matchGroupSortOrder,
             notificationsEnabled: notificationsEnabled,
             notificationDelayMinutes: max(0, min(10, notificationDelayMinutes)),
             notificationEventTypes: notificationEventTypes,
@@ -325,6 +381,7 @@ final class PreferencesStore: ObservableObject {
         static let apiBaseURL = "preferences.apiBaseURL"
         static let refreshIntervalMinutes = "preferences.refreshIntervalMinutes"
         static let showAllMatches = "preferences.showAllMatches"
+        static let matchGroupSortOrder = "preferences.matchGroupSortOrder"
         static let notificationsEnabled = "preferences.notificationsEnabled"
         static let notificationDelayMinutes = "preferences.notificationDelayMinutes"
         static let notificationEventTypes = "preferences.notificationEventTypes"

@@ -234,7 +234,12 @@ struct MatchesView: View {
                             NavigationLink {
                                 MatchDetailView(match: match, highlightToday: day.isToday)
                             } label: {
-                                MatchRow(match: match, highlightToday: day.isToday, showLeague: false)
+                                MatchRow(
+                                    match: match,
+                                    highlightToday: day.isToday,
+                                    showLeague: false,
+                                    centerFooterText: matchDebugFooterText(for: match)
+                                )
                             }
                             .onAppear {
                                 Task {
@@ -279,6 +284,10 @@ struct MatchesView: View {
             }
         }
         .textCase(nil)
+    }
+
+    private func matchDebugFooterText(for match: Match) -> String? {
+        return matchesStore.teamRatingDebugText(for: match)
     }
 
     private func shouldShowPredictorButton(for day: MatchDay) -> Bool {
@@ -676,21 +685,12 @@ struct MatchesView: View {
         predictorAvailabilityTask?.cancel()
         let apiBaseURL = preferences.apiBaseURL
         predictorAvailabilityTask = Task {
+            await TeamRankingSettingsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
             await TeamRankingsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
-            let cachedRankings = await TeamRankingsCatalog.shared.cachedEntries()
-            let lookup = TeamRatingLookup(entries: cachedRankings)
 
             guard !Task.isCancelled else { return }
-            var allowed = Set<String>()
-            for (dateKey, matches) in candidateDays {
-                if matches.contains(where: { match in
-                    lookup.rating(for: match.homeTeam) != nil && lookup.rating(for: match.awayTeam) != nil
-                }) {
-                    allowed.insert(dateKey)
-                }
-            }
             await MainActor.run {
-                predictableDateKeys = allowed
+                predictableDateKeys = Set(candidateDays.keys)
             }
         }
     }
@@ -963,15 +963,15 @@ private enum FixturePredictionGenerator {
         let sortedMatches = job.matches.sorted { lhs, rhs in
             (lhs.dateTime ?? .distantFuture) < (rhs.dateTime ?? .distantFuture)
         }
+        await TeamRankingSettingsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
+        let settings = await TeamRankingSettingsCatalog.shared.settings()
         let cachedRankings = await TeamRankingsCatalog.shared.cachedEntries()
-        let lookup = TeamRatingLookup(entries: cachedRankings)
+        let lookup = TeamRatingLookup(entries: cachedRankings, defaultPoints: settings.defaultElo)
         let uniqueTeamNames = Set(sortedMatches.flatMap { [$0.homeTeam, $0.awayTeam] })
         var ratingsByTeamName: [String: Double] = [:]
         ratingsByTeamName.reserveCapacity(uniqueTeamNames.count)
         for teamName in uniqueTeamNames {
-            if let rating = lookup.rating(for: teamName) {
-                ratingsByTeamName[teamName] = rating
-            }
+            ratingsByTeamName[teamName] = lookup.resolvedRating(for: teamName)
         }
 
         let computedRows = await withTaskGroup(of: PredictionComputationResult.self) { group in
@@ -986,8 +986,6 @@ private enum FixturePredictionGenerator {
                         unavailableReason = "Kick-off time unavailable"
                     } else if kickoff! <= now {
                         unavailableReason = match.isInProgress ? "Already in progress" : "Already kicked off"
-                    } else if homeElo == nil || awayElo == nil {
-                        unavailableReason = "Elo data unavailable"
                     } else {
                         unavailableReason = nil
                     }
@@ -1016,7 +1014,7 @@ private enum FixturePredictionGenerator {
                                 unavailableReason: unavailableReason
                             ),
                             skippedKickedOff: kickoff != nil && kickoff! <= now,
-                            skippedMissingElo: kickoff != nil && kickoff! > now && (homeElo == nil || awayElo == nil),
+                            skippedMissingElo: false,
                             skippedUnknown: kickoff == nil
                         )
                     }
@@ -1084,176 +1082,6 @@ private struct PredictionComputationResult {
     let skippedKickedOff: Bool
     let skippedMissingElo: Bool
     let skippedUnknown: Bool
-}
-
-private struct TeamRatingLookup {
-    private struct Candidate {
-        let key: String
-        let tokens: [String]
-        let rating: Double
-    }
-
-    private let exactByKey: [String: Double]
-    private let candidates: [Candidate]
-    private static let stopWords: Set<String> = [
-        "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk", "club", "de", "the", "and"
-    ]
-    private static let aliasMap: [String: String] = [
-        "manchesterunited": "manunited",
-        "manchestercity": "mancity",
-        "tottenhamhotspur": "tottenham",
-        "wolverhamptonwanderers": "wolves",
-        "sheffieldunited": "sheffutd",
-        "sheffieldwednesday": "sheffwed",
-        "nottinghamforest": "nottmforest",
-        "brightonhovealbion": "brighton",
-        "brightonandhovealbion": "brighton",
-        "borussiadortmund": "dortmund",
-        "intermilan": "inter",
-    ]
-
-    init(entries: [TeamRankingEntry]) {
-        var exact: [String: Double] = [:]
-        var candidateList: [Candidate] = []
-        candidateList.reserveCapacity(entries.count * 2)
-
-        for entry in entries {
-            guard let points = entry.points, points.isFinite else { continue }
-            var names = [entry.name]
-            names.append(contentsOf: entry.aliases)
-            let dedupedNames = Array(Set(names)).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-
-            for name in dedupedNames {
-                let key = Self.normalizedKey(name)
-                guard !key.isEmpty else { continue }
-                exact[key] = exact[key] ?? points
-                candidateList.append(
-                    Candidate(key: key, tokens: Self.normalizedTokens(name), rating: points)
-                )
-            }
-        }
-
-        exactByKey = exact
-        candidates = candidateList
-    }
-
-    func rating(for teamName: String) -> Double? {
-        let key = Self.normalizedKey(teamName)
-        guard !key.isEmpty else { return nil }
-
-        if let direct = exactByKey[key] {
-            return direct
-        }
-        if let alias = Self.aliasMap[key], let mapped = exactByKey[alias] {
-            return mapped
-        }
-
-        let sourceTokens = Self.normalizedTokens(teamName)
-        var bestRating: Double?
-        var bestConfidence = 0.0
-
-        for candidate in candidates {
-            let confidence = Self.similarity(
-                lhsKey: key,
-                rhsKey: candidate.key,
-                lhsTokens: sourceTokens,
-                rhsTokens: candidate.tokens
-            )
-            if confidence > bestConfidence {
-                bestConfidence = confidence
-                bestRating = candidate.rating
-            }
-        }
-
-        guard bestConfidence >= 0.86 else { return nil }
-        return bestRating
-    }
-
-    private static func normalizedTokens(_ value: String) -> [String] {
-        let normalized = value
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased()
-            .replacingOccurrences(of: "&", with: " and ")
-            .replacingOccurrences(of: "'", with: "")
-            .replacingOccurrences(of: ".", with: " ")
-            .replacingOccurrences(of: "-", with: " ")
-            .replacingOccurrences(of: "_", with: " ")
-
-        return normalized
-            .split { !$0.isLetter && !$0.isNumber }
-            .map { String($0) }
-            .filter { !stopWords.contains($0) }
-    }
-
-    private static func normalizedKey(_ value: String) -> String {
-        let tokens = normalizedTokens(value)
-        if !tokens.isEmpty {
-            return tokens.joined()
-        }
-        return value
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased()
-            .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
-    }
-
-    private static func similarity(lhsKey: String, rhsKey: String, lhsTokens: [String], rhsTokens: [String]) -> Double {
-        let base = normalizedEditSimilarity(lhsKey, rhsKey)
-        let dice = diceCoefficient(lhsTokens, rhsTokens)
-        let prefix = prefixSimilarity(lhsKey, rhsKey, lhsTokens, rhsTokens)
-        return max(base, dice, prefix)
-    }
-
-    private static func normalizedEditSimilarity(_ lhs: String, _ rhs: String) -> Double {
-        let maxLength = max(lhs.count, rhs.count)
-        guard maxLength > 0 else { return 1 }
-        return 1 - (Double(levenshtein(lhs, rhs)) / Double(maxLength))
-    }
-
-    private static func diceCoefficient(_ lhs: [String], _ rhs: [String]) -> Double {
-        guard !lhs.isEmpty || !rhs.isEmpty else { return 1 }
-        let left = Set(lhs)
-        let right = Set(rhs)
-        let overlap = left.intersection(right).count
-        return (2 * Double(overlap)) / Double(lhs.count + rhs.count)
-    }
-
-    private static func prefixSimilarity(
-        _ lhsKey: String,
-        _ rhsKey: String,
-        _ lhsTokens: [String],
-        _ rhsTokens: [String]
-    ) -> Double {
-        guard min(lhsTokens.count, rhsTokens.count) == 1 else { return 0 }
-        if lhsKey.hasPrefix(rhsKey) || rhsKey.hasPrefix(lhsKey) {
-            let shorter = min(lhsKey.count, rhsKey.count)
-            let longer = max(lhsKey.count, rhsKey.count)
-            guard longer > 0 else { return 1 }
-            return min(1, (Double(shorter) / Double(longer)) + 0.30)
-        }
-        return 0
-    }
-
-    private static func levenshtein(_ lhs: String, _ rhs: String) -> Int {
-        let lhsChars = Array(lhs)
-        let rhsChars = Array(rhs)
-        var previous = Array(0...rhsChars.count)
-        var current = Array(repeating: 0, count: rhsChars.count + 1)
-
-        for (i, lhsChar) in lhsChars.enumerated() {
-            current[0] = i + 1
-            for (j, rhsChar) in rhsChars.enumerated() {
-                let cost = lhsChar == rhsChar ? 0 : 1
-                current[j + 1] = min(
-                    previous[j + 1] + 1,
-                    current[j] + 1,
-                    previous[j] + cost
-                )
-            }
-            previous = current
-        }
-
-        return previous[rhsChars.count]
-    }
 }
 
 private struct ScorelineEstimate {

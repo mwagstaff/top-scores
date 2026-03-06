@@ -480,6 +480,9 @@ const MATCH_DETAILS_STALE_MINUTE_THRESHOLD = Number.isFinite(parsedMatchDetailsS
 const TEAM_RANKING_DEFAULT_SOURCE =
   normalizeTeamRankingSource(SERVER_CONFIG.teamRankingDefaultSource) ||
   TEAM_RANKING_SOURCE_MERGED;
+const TEAM_RANKING_DEFAULT_ELO = Number.isFinite(SERVER_CONFIG.teamRankingDefaultElo)
+  ? SERVER_CONFIG.teamRankingDefaultElo
+  : 1000;
 
 const app = express();
 const API_PREFIX = "/api/v1";
@@ -9734,6 +9737,17 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
   res.json(toTeamsApiTeamPayload(filteredRows));
 });
 
+app.get(`${API_PREFIX}/teams/config`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+  const updatedAt = new Date().toISOString();
+  res.set("X-Last-Updated", updatedAt);
+  res.set("X-Operational-Source", "server_config");
+  res.status(200).json({
+    default_elo: TEAM_RANKING_DEFAULT_ELO,
+    updated_at: updatedAt,
+  });
+});
+
 app.post(`${API_PREFIX}/teams/club-elo/sync`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   const result = await updateClubEloTeams({ trigger: "api_on_demand" });
@@ -10901,6 +10915,7 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     national_elo_updating: nationalEloUpdating,
     national_elo_redis_ttl_seconds: NATIONAL_ELO_REDIS_TTL_SECONDS,
     team_ranking_default_source: TEAM_RANKING_DEFAULT_SOURCE,
+    team_ranking_default_elo: TEAM_RANKING_DEFAULT_ELO,
     recent_count: recentDataset.items.length,
     recent_last_updated: recentDataset.updated_at || recentLastUpdated,
     recent_output_path: path.resolve(RECENT_OUTPUT_PATH),
@@ -11922,6 +11937,13 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
   const fallbackKickoff = liveActivityNowTimeLabel(now);
   const fallbackHome = index % 2 === 0 ? "Atalanta" : "Norwich City";
   const fallbackAway = index % 2 === 0 ? "Borussia Dortmund" : "Sheffield Wednesday";
+  const homeTeamScore = Number(match.homeTeamScore ?? match.home_team_score);
+  const awayTeamScore = Number(match.awayTeamScore ?? match.away_team_score);
+  const explicitTotalTeamScore = Number(match.totalTeamScore ?? match.total_team_score);
+  const totalTeamScore = Number.isFinite(explicitTotalTeamScore)
+    ? explicitTotalTeamScore
+    : (Number.isFinite(homeTeamScore) ? homeTeamScore : 0) +
+      (Number.isFinite(awayTeamScore) ? awayTeamScore : 0);
 
   return {
     matchId: String(match.matchId || match.match_id || `test_match_${index + 1}`).trim(),
@@ -11948,6 +11970,9 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
       : Number.isFinite(Number(match.aggregate_away_score))
         ? Number(match.aggregate_away_score)
         : null,
+    homeTeamScore: Number.isFinite(homeTeamScore) ? homeTeamScore : null,
+    awayTeamScore: Number.isFinite(awayTeamScore) ? awayTeamScore : null,
+    totalTeamScore: Number.isFinite(totalTeamScore) ? totalTeamScore : null,
     matchTime:
       match.matchTime !== undefined && match.matchTime !== null
         ? String(match.matchTime).trim()
@@ -11974,6 +11999,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
           leagueSubcategory: "Round of 16",
           homeTeam: "Atalanta",
           awayTeam: "Borussia Dortmund",
+          homeTeamScore: 1780,
+          awayTeamScore: 1768,
           homeScore: null,
           awayScore: null,
           aggregateHomeScore: 2,
@@ -11997,6 +12024,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
           leagueSubcategory: "Round of 16",
           homeTeam: "Atalanta",
           awayTeam: "Borussia Dortmund",
+          homeTeamScore: 1780,
+          awayTeamScore: 1768,
           homeScore: 1,
           awayScore: 0,
           aggregateHomeScore: 3,
@@ -12019,6 +12048,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
           league: "Premier League",
           homeTeam: "Norwich City",
           awayTeam: "Sheffield Wednesday",
+          homeTeamScore: 1442,
+          awayTeamScore: 1413,
           tvChannels: ["Sky Sports Main Event"],
         },
         0,
@@ -12032,6 +12063,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
           league: "UEFA Champions League",
           homeTeam: "Atalanta",
           awayTeam: "Borussia Dortmund",
+          homeTeamScore: 1780,
+          awayTeamScore: 1768,
           tvChannels: ["TNT Sports 1"],
         },
         1,
@@ -12049,6 +12082,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         leagueSubcategory: "Round of 16",
         homeTeam: "Atalanta",
         awayTeam: "Borussia Dortmund",
+        homeTeamScore: 1780,
+        awayTeamScore: 1768,
         homeScore: 2,
         awayScore: 0,
         aggregateHomeScore: 4,
@@ -12067,6 +12102,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         league: "Premier League",
         homeTeam: "Norwich City",
         awayTeam: "Sheffield Wednesday",
+        homeTeamScore: 1442,
+        awayTeamScore: 1413,
         homeScore: 1,
         awayScore: 1,
         matchTime: "55'",
@@ -12084,6 +12121,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         leagueSubcategory: "Round of 16",
         homeTeam: "Inter Milan",
         awayTeam: "Benfica",
+        homeTeamScore: 1822,
+        awayTeamScore: 1771,
         homeScore: 2,
         awayScore: 1,
         aggregateHomeScore: 3,
@@ -12102,6 +12141,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         league: "Premier League",
         homeTeam: "Arsenal",
         awayTeam: "Chelsea",
+        homeTeamScore: 1911,
+        awayTeamScore: 1823,
         homeScore: 3,
         awayScore: 2,
         matchTime: "78'",
@@ -12118,6 +12159,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         league: "UEFA Europa League",
         homeTeam: "Roma",
         awayTeam: "Leverkusen",
+        homeTeamScore: 1795,
+        awayTeamScore: 1912,
         homeScore: 1,
         awayScore: 1,
         matchTime: "67'",
@@ -12134,6 +12177,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         league: "FA Cup",
         homeTeam: "Liverpool",
         awayTeam: "Everton",
+        homeTeamScore: 1961,
+        awayTeamScore: 1704,
         homeScore: 0,
         awayScore: 1,
         matchTime: "52'",
@@ -12150,6 +12195,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         league: "UEFA Conference League",
         homeTeam: "Fiorentina",
         awayTeam: "Lille",
+        homeTeamScore: 1750,
+        awayTeamScore: 1754,
         homeScore: 1,
         awayScore: 0,
         matchTime: "61'",
@@ -12166,6 +12213,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         league: "EFL Cup",
         homeTeam: "Newcastle United",
         awayTeam: "Man City",
+        homeTeamScore: 1848,
+        awayTeamScore: 2001,
         homeScore: 2,
         awayScore: 2,
         matchTime: "84'",
@@ -12182,6 +12231,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         league: "Premier League",
         homeTeam: "Spurs",
         awayTeam: "West Ham",
+        homeTeamScore: 1835,
+        awayTeamScore: 1718,
         homeScore: 1,
         awayScore: 1,
         matchTime: "73'",
@@ -12198,6 +12249,8 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         league: "UEFA Champions League",
         homeTeam: "Real Madrid",
         awayTeam: "Bayern Munich",
+        homeTeamScore: 1986,
+        awayTeamScore: 1936,
         homeScore: 0,
         awayScore: 0,
         matchTime: "33'",
