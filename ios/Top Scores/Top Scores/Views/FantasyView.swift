@@ -604,6 +604,7 @@ struct FantasyView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(data.gameweekTitle)
                     .font(.headline)
+                    .padding(.bottom, 5)
                 if showRivalPills && !visibleRivalPills.isEmpty {
                     HStack(spacing: 6) {
                         ForEach(visibleRivalPills) { pill in
@@ -642,6 +643,7 @@ struct FantasyView: View {
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(Color.accentColor)
                                     .underline()
+                                    .padding(.horizontal, 4)
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Show \(hiddenRivalCount) more rivals")
@@ -1896,8 +1898,6 @@ struct FantasyView: View {
 
     private func pitchSection(_ data: FantasySquadDisplayData, playerSelectionEnabled: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Pitch")
-                .font(.headline)
 
             ZStack {
                 FantasyPitchBackground()
