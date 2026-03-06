@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "NODE_ENV=development node server.mjs",
-    "build": "vite build",
-    "start": "NODE_ENV=production node server.mjs"
+    "prepare-assets": "node scripts/prepare-assets.mjs",
+    "dev": "npm run prepare-assets && NODE_ENV=development node server.mjs",
+    "build": "npm run prepare-assets && vite build",
+    "start": "npm run prepare-assets && NODE_ENV=production node server.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

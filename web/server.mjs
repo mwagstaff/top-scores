@@ -5,29 +5,18 @@ import express from "express";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, "..");
-const mediaAssetsRoot = path.join(repoRoot, "ios", "Top Scores", "Media.xcassets");
-const teamLogoManifestPath = path.join(
-  repoRoot,
-  "ios",
-  "Top Scores",
-  "Top Scores",
-  "team_logo_assets.json"
-);
-const tvLogosRoot = path.join(repoRoot, "ios", "Top Scores", "Top Scores", "tv-logos");
-const shareExtensionLogoPath = path.join(
-  repoRoot,
-  "ios",
-  "Top Scores",
-  "Top Scores Share Extension",
-  "top-scores-logo.png"
-);
 const productionClientRoot = path.join(__dirname, "dist");
 const apiBaseUrl = (process.env.TOP_SCORES_API_BASE_URL ||
   process.env.API_BASE_URL ||
   "https://api.skynolimit.dev/top-scores/api/v1").replace(/\/+$/, "");
 const port = Number(process.env.PORT || 3020);
 const isProduction = process.env.NODE_ENV === "production";
+const generatedAssetsRoot = isProduction
+  ? path.join(productionClientRoot, "generated-assets")
+  : path.join(__dirname, "public", "generated-assets");
+const teamLogoManifestPath = path.join(generatedAssetsRoot, "team-logo-manifest.json");
+const tvLogosRoot = path.join(generatedAssetsRoot, "tv-logos");
+const appIconPath = path.join(generatedAssetsRoot, "app-icon.png");
 
 const teamLogoIndex = buildTeamLogoIndex();
 const tvLogoIndex = buildTvLogoIndex();
@@ -68,12 +57,12 @@ app.get("/healthcheck", (_req, res) => {
 });
 
 app.get("/brand/app-icon", (_req, res) => {
-  if (!fs.existsSync(shareExtensionLogoPath)) {
+  if (!fs.existsSync(appIconPath)) {
     res.status(404).json({ error: "App icon not found" });
     return;
   }
 
-  res.sendFile(shareExtensionLogoPath);
+  res.sendFile(appIconPath);
 });
 
 app.get("/logos/team/:teamName", (req, res) => {
@@ -199,24 +188,20 @@ function shouldSendBody(method) {
 }
 
 function buildTeamLogoIndex() {
-  const entries = [];
-  if (fs.existsSync(teamLogoManifestPath)) {
-    const assetNames = JSON.parse(fs.readFileSync(teamLogoManifestPath, "utf8"));
-    for (const assetName of assetNames) {
-      const imagesetPath = path.join(mediaAssetsRoot, `${assetName}.imageset`);
-      const resolvedPath = pickImagesetPng(imagesetPath);
-      if (resolvedPath) {
-        entries.push({
-          name: assetName,
-          normalized: normalizedKey(assetName),
-          core: normalizedCoreKey(assetName),
-          path: resolvedPath,
-        });
-      }
-    }
+  if (!fs.existsSync(teamLogoManifestPath)) {
+    return [];
   }
 
-  return entries;
+  const entries = JSON.parse(fs.readFileSync(teamLogoManifestPath, "utf8"));
+  return entries
+    .filter((entry) => typeof entry?.name === "string" && typeof entry?.relativePath === "string")
+    .map((entry) => ({
+      name: entry.name,
+      normalized: normalizedKey(entry.name),
+      core: normalizedCoreKey(entry.name),
+      path: path.join(generatedAssetsRoot, entry.relativePath),
+    }))
+    .filter((entry) => fs.existsSync(entry.path));
 }
 
 function buildTvLogoIndex() {
@@ -276,23 +261,6 @@ function resolveTvLogo(channelName) {
   if (normalized.includes("sky")) return tvLogoIndex.get("sky") || null;
   if (normalized.includes("tnt")) return tvLogoIndex.get("tnt") || null;
   return null;
-}
-
-function pickImagesetPng(imagesetPath) {
-  if (!fs.existsSync(imagesetPath)) {
-    return null;
-  }
-
-  const entries = fs
-    .readdirSync(imagesetPath)
-    .filter((entry) => entry.toLowerCase().endsWith(".png"))
-    .sort((left, right) => left.localeCompare(right));
-
-  if (entries.length === 0) {
-    return null;
-  }
-
-  return path.join(imagesetPath, entries[0]);
 }
 
 function normalizedCoreKey(value) {

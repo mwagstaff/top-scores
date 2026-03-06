@@ -1,0 +1,2390 @@
+[
+  {
+    "name": "AC Milan",
+    "relativePath": "team-logos/ac-milan.png"
+  },
+  {
+    "name": "AEK Athens",
+    "relativePath": "team-logos/aek-athens.png"
+  },
+  {
+    "name": "AEK Larnaca",
+    "relativePath": "team-logos/aek-larnaca.png"
+  },
+  {
+    "name": "AZ Alkmaar",
+    "relativePath": "team-logos/az-alkmaar.png"
+  },
+  {
+    "name": "Aberdeen",
+    "relativePath": "team-logos/aberdeen.png"
+  },
+  {
+    "name": "Accrington",
+    "relativePath": "team-logos/accrington.png"
+  },
+  {
+    "name": "Afghanistan",
+    "relativePath": "team-logos/afghanistan.png"
+  },
+  {
+    "name": "Ajax",
+    "relativePath": "team-logos/ajax.png"
+  },
+  {
+    "name": "Alavés",
+    "relativePath": "team-logos/alaves.png"
+  },
+  {
+    "name": "Albania",
+    "relativePath": "team-logos/albania.png"
+  },
+  {
+    "name": "Algeria",
+    "relativePath": "team-logos/algeria.png"
+  },
+  {
+    "name": "Almeria",
+    "relativePath": "team-logos/almeria.png"
+  },
+  {
+    "name": "American Samoa",
+    "relativePath": "team-logos/american-samoa.png"
+  },
+  {
+    "name": "Anderlecht",
+    "relativePath": "team-logos/anderlecht.png"
+  },
+  {
+    "name": "Andorra",
+    "relativePath": "team-logos/andorra.png"
+  },
+  {
+    "name": "Angers",
+    "relativePath": "team-logos/angers.png"
+  },
+  {
+    "name": "Angola",
+    "relativePath": "team-logos/angola.png"
+  },
+  {
+    "name": "Anguilla",
+    "relativePath": "team-logos/anguilla.png"
+  },
+  {
+    "name": "Antigua and Barbuda",
+    "relativePath": "team-logos/antigua-and-barbuda.png"
+  },
+  {
+    "name": "Argentina",
+    "relativePath": "team-logos/argentina.png"
+  },
+  {
+    "name": "Aris Limassol",
+    "relativePath": "team-logos/aris-limassol.png"
+  },
+  {
+    "name": "Armenia",
+    "relativePath": "team-logos/armenia.png"
+  },
+  {
+    "name": "Arsenal",
+    "relativePath": "team-logos/arsenal.png"
+  },
+  {
+    "name": "Aruba",
+    "relativePath": "team-logos/aruba.png"
+  },
+  {
+    "name": "Astana",
+    "relativePath": "team-logos/astana.png"
+  },
+  {
+    "name": "Aston Villa",
+    "relativePath": "team-logos/aston-villa.png"
+  },
+  {
+    "name": "Atalanta",
+    "relativePath": "team-logos/atalanta.png"
+  },
+  {
+    "name": "Athletic",
+    "relativePath": "team-logos/athletic.png"
+  },
+  {
+    "name": "Athletic Bilbao",
+    "relativePath": "team-logos/athletic-bilbao.png"
+  },
+  {
+    "name": "Athletic Bilbao 2",
+    "relativePath": "team-logos/athletic-bilbao-2.png"
+  },
+  {
+    "name": "Atlético Madrid",
+    "relativePath": "team-logos/atletico-madrid.png"
+  },
+  {
+    "name": "Augsburg",
+    "relativePath": "team-logos/augsburg.png"
+  },
+  {
+    "name": "Australia",
+    "relativePath": "team-logos/australia.png"
+  },
+  {
+    "name": "Austria",
+    "relativePath": "team-logos/austria.png"
+  },
+  {
+    "name": "Austria Wien",
+    "relativePath": "team-logos/austria-wien.png"
+  },
+  {
+    "name": "Auxerre",
+    "relativePath": "team-logos/auxerre.png"
+  },
+  {
+    "name": "Azerbaijan",
+    "relativePath": "team-logos/azerbaijan.png"
+  },
+  {
+    "name": "Backa Topola",
+    "relativePath": "team-logos/backa-topola.png"
+  },
+  {
+    "name": "Bahamas",
+    "relativePath": "team-logos/bahamas.png"
+  },
+  {
+    "name": "Bahrain",
+    "relativePath": "team-logos/bahrain.png"
+  },
+  {
+    "name": "Ballkani",
+    "relativePath": "team-logos/ballkani.png"
+  },
+  {
+    "name": "Bangladesh",
+    "relativePath": "team-logos/bangladesh.png"
+  },
+  {
+    "name": "Barbados",
+    "relativePath": "team-logos/barbados.png"
+  },
+  {
+    "name": "Barcelona",
+    "relativePath": "team-logos/barcelona.png"
+  },
+  {
+    "name": "Barnet",
+    "relativePath": "team-logos/barnet.png"
+  },
+  {
+    "name": "Barnsley",
+    "relativePath": "team-logos/barnsley.png"
+  },
+  {
+    "name": "Barrow",
+    "relativePath": "team-logos/barrow.png"
+  },
+  {
+    "name": "Basel",
+    "relativePath": "team-logos/basel.png"
+  },
+  {
+    "name": "Başakşehir",
+    "relativePath": "team-logos/basaksehir.png"
+  },
+  {
+    "name": "Bayer Leverkusen",
+    "relativePath": "team-logos/bayer-leverkusen.png"
+  },
+  {
+    "name": "Bayern Munich",
+    "relativePath": "team-logos/bayern-munich.png"
+  },
+  {
+    "name": "Beitar",
+    "relativePath": "team-logos/beitar.png"
+  },
+  {
+    "name": "Belarus",
+    "relativePath": "team-logos/belarus.png"
+  },
+  {
+    "name": "Belgium",
+    "relativePath": "team-logos/belgium.png"
+  },
+  {
+    "name": "Belize",
+    "relativePath": "team-logos/belize.png"
+  },
+  {
+    "name": "Benfica",
+    "relativePath": "team-logos/benfica.png"
+  },
+  {
+    "name": "Benin",
+    "relativePath": "team-logos/benin.png"
+  },
+  {
+    "name": "Bermuda",
+    "relativePath": "team-logos/bermuda.png"
+  },
+  {
+    "name": "Besiktas",
+    "relativePath": "team-logos/besiktas.png"
+  },
+  {
+    "name": "Beşiktaş 1",
+    "relativePath": "team-logos/besiktas-1.png"
+  },
+  {
+    "name": "Betis",
+    "relativePath": "team-logos/betis.png"
+  },
+  {
+    "name": "Bhutan",
+    "relativePath": "team-logos/bhutan.png"
+  },
+  {
+    "name": "Birmingham City",
+    "relativePath": "team-logos/birmingham-city.png"
+  },
+  {
+    "name": "Blackburn Rovers",
+    "relativePath": "team-logos/blackburn-rovers.png"
+  },
+  {
+    "name": "Blackpool",
+    "relativePath": "team-logos/blackpool.png"
+  },
+  {
+    "name": "Bodø-Glimt",
+    "relativePath": "team-logos/bod-glimt.png"
+  },
+  {
+    "name": "Bolivia",
+    "relativePath": "team-logos/bolivia.png"
+  },
+  {
+    "name": "Bologna",
+    "relativePath": "team-logos/bologna.png"
+  },
+  {
+    "name": "Bolton",
+    "relativePath": "team-logos/bolton.png"
+  },
+  {
+    "name": "Borussia Dortmund",
+    "relativePath": "team-logos/borussia-dortmund.png"
+  },
+  {
+    "name": "Borussia Mönchengladbach",
+    "relativePath": "team-logos/borussia-monchengladbach.png"
+  },
+  {
+    "name": "Bosnia",
+    "relativePath": "team-logos/bosnia.png"
+  },
+  {
+    "name": "Botswana",
+    "relativePath": "team-logos/botswana.png"
+  },
+  {
+    "name": "Bournemouth",
+    "relativePath": "team-logos/bournemouth.png"
+  },
+  {
+    "name": "Bradford",
+    "relativePath": "team-logos/bradford.png"
+  },
+  {
+    "name": "Braga",
+    "relativePath": "team-logos/braga.png"
+  },
+  {
+    "name": "Brann",
+    "relativePath": "team-logos/brann.png"
+  },
+  {
+    "name": "Brazil",
+    "relativePath": "team-logos/brazil.png"
+  },
+  {
+    "name": "Breidablik",
+    "relativePath": "team-logos/breidablik.png"
+  },
+  {
+    "name": "Brentford",
+    "relativePath": "team-logos/brentford.png"
+  },
+  {
+    "name": "Brest",
+    "relativePath": "team-logos/brest.png"
+  },
+  {
+    "name": "Brighton & Hove Albion",
+    "relativePath": "team-logos/brighton-hove-albion.png"
+  },
+  {
+    "name": "Bristol City",
+    "relativePath": "team-logos/bristol-city.png"
+  },
+  {
+    "name": "Bristol Rovers",
+    "relativePath": "team-logos/bristol-rovers.png"
+  },
+  {
+    "name": "British VI",
+    "relativePath": "team-logos/british-vi.png"
+  },
+  {
+    "name": "British Virgin Islands",
+    "relativePath": "team-logos/british-virgin-islands.png"
+  },
+  {
+    "name": "Bromley",
+    "relativePath": "team-logos/bromley.png"
+  },
+  {
+    "name": "Brunei Darussalam",
+    "relativePath": "team-logos/brunei-darussalam.png"
+  },
+  {
+    "name": "Brøndby",
+    "relativePath": "team-logos/br-ndby.png"
+  },
+  {
+    "name": "Bulgaria",
+    "relativePath": "team-logos/bulgaria.png"
+  },
+  {
+    "name": "Burkina Faso",
+    "relativePath": "team-logos/burkina-faso.png"
+  },
+  {
+    "name": "Burnley",
+    "relativePath": "team-logos/burnley.png"
+  },
+  {
+    "name": "Burton",
+    "relativePath": "team-logos/burton.png"
+  },
+  {
+    "name": "Burton Albion",
+    "relativePath": "team-logos/burton-albion.png"
+  },
+  {
+    "name": "Burundi",
+    "relativePath": "team-logos/burundi.png"
+  },
+  {
+    "name": "CAR",
+    "relativePath": "team-logos/car.png"
+  },
+  {
+    "name": "CFR",
+    "relativePath": "team-logos/cfr.png"
+  },
+  {
+    "name": "Cabo Verde",
+    "relativePath": "team-logos/cabo-verde.png"
+  },
+  {
+    "name": "Cadiz",
+    "relativePath": "team-logos/cadiz.png"
+  },
+  {
+    "name": "Cagliari",
+    "relativePath": "team-logos/cagliari.png"
+  },
+  {
+    "name": "Cambodia",
+    "relativePath": "team-logos/cambodia.png"
+  },
+  {
+    "name": "Cambridge Utd",
+    "relativePath": "team-logos/cambridge-utd.png"
+  },
+  {
+    "name": "Cameroon",
+    "relativePath": "team-logos/cameroon.png"
+  },
+  {
+    "name": "Canada",
+    "relativePath": "team-logos/canada.png"
+  },
+  {
+    "name": "Cardiff",
+    "relativePath": "team-logos/cardiff.png"
+  },
+  {
+    "name": "Carlisle",
+    "relativePath": "team-logos/carlisle.png"
+  },
+  {
+    "name": "Cayman Islands",
+    "relativePath": "team-logos/cayman-islands.png"
+  },
+  {
+    "name": "Celta Vigo",
+    "relativePath": "team-logos/celta-vigo.png"
+  },
+  {
+    "name": "Celtic",
+    "relativePath": "team-logos/celtic.png"
+  },
+  {
+    "name": "Central African Republic",
+    "relativePath": "team-logos/central-african-republic.png"
+  },
+  {
+    "name": "Chad",
+    "relativePath": "team-logos/chad.png"
+  },
+  {
+    "name": "Charlton",
+    "relativePath": "team-logos/charlton.png"
+  },
+  {
+    "name": "Chelsea",
+    "relativePath": "team-logos/chelsea.png"
+  },
+  {
+    "name": "Cheltenham",
+    "relativePath": "team-logos/cheltenham.png"
+  },
+  {
+    "name": "Chesterfield",
+    "relativePath": "team-logos/chesterfield.png"
+  },
+  {
+    "name": "Chile",
+    "relativePath": "team-logos/chile.png"
+  },
+  {
+    "name": "China PR",
+    "relativePath": "team-logos/china-pr.png"
+  },
+  {
+    "name": "Chinese Taipei",
+    "relativePath": "team-logos/chinese-taipei.png"
+  },
+  {
+    "name": "Clermont Foot",
+    "relativePath": "team-logos/clermont-foot.png"
+  },
+  {
+    "name": "Club Brugge",
+    "relativePath": "team-logos/club-brugge.png"
+  },
+  {
+    "name": "Colchester",
+    "relativePath": "team-logos/colchester.png"
+  },
+  {
+    "name": "Colombia",
+    "relativePath": "team-logos/colombia.png"
+  },
+  {
+    "name": "Como",
+    "relativePath": "team-logos/como.png"
+  },
+  {
+    "name": "Comoros",
+    "relativePath": "team-logos/comoros.png"
+  },
+  {
+    "name": "Congo",
+    "relativePath": "team-logos/congo.png"
+  },
+  {
+    "name": "Congo DR",
+    "relativePath": "team-logos/congo-dr.png"
+  },
+  {
+    "name": "Cook Islands",
+    "relativePath": "team-logos/cook-islands.png"
+  },
+  {
+    "name": "Copenhagen",
+    "relativePath": "team-logos/copenhagen.png"
+  },
+  {
+    "name": "Costa Rica",
+    "relativePath": "team-logos/costa-rica.png"
+  },
+  {
+    "name": "Cote d'Ivoire",
+    "relativePath": "team-logos/cote-d-ivoire.png"
+  },
+  {
+    "name": "Coventry City",
+    "relativePath": "team-logos/coventry-city.png"
+  },
+  {
+    "name": "Crawley",
+    "relativePath": "team-logos/crawley.png"
+  },
+  {
+    "name": "Cremonese",
+    "relativePath": "team-logos/cremonese.png"
+  },
+  {
+    "name": "Crewe",
+    "relativePath": "team-logos/crewe.png"
+  },
+  {
+    "name": "Croatia",
+    "relativePath": "team-logos/croatia.png"
+  },
+  {
+    "name": "Crystal Palace",
+    "relativePath": "team-logos/crystal-palace.png"
+  },
+  {
+    "name": "Cuba",
+    "relativePath": "team-logos/cuba.png"
+  },
+  {
+    "name": "Curaçao",
+    "relativePath": "team-logos/curacao.png"
+  },
+  {
+    "name": "Cyprus",
+    "relativePath": "team-logos/cyprus.png"
+  },
+  {
+    "name": "Czech Republic",
+    "relativePath": "team-logos/czech-republic.png"
+  },
+  {
+    "name": "Dartford",
+    "relativePath": "team-logos/dartford.png"
+  },
+  {
+    "name": "Denmark",
+    "relativePath": "team-logos/denmark.png"
+  },
+  {
+    "name": "Deportivo Alaves",
+    "relativePath": "team-logos/deportivo-alaves.png"
+  },
+  {
+    "name": "Derby County",
+    "relativePath": "team-logos/derby-county.png"
+  },
+  {
+    "name": "Dinamo",
+    "relativePath": "team-logos/dinamo.png"
+  },
+  {
+    "name": "Dinamo Minsk",
+    "relativePath": "team-logos/dinamo-minsk.png"
+  },
+  {
+    "name": "Dinamo Zagreb",
+    "relativePath": "team-logos/dinamo-zagreb.png"
+  },
+  {
+    "name": "Djibouti",
+    "relativePath": "team-logos/djibouti.png"
+  },
+  {
+    "name": "Dominica",
+    "relativePath": "team-logos/dominica.png"
+  },
+  {
+    "name": "Dominican Rep",
+    "relativePath": "team-logos/dominican-rep.png"
+  },
+  {
+    "name": "Doncaster",
+    "relativePath": "team-logos/doncaster.png"
+  },
+  {
+    "name": "Drita",
+    "relativePath": "team-logos/drita.png"
+  },
+  {
+    "name": "Dundee",
+    "relativePath": "team-logos/dundee.png"
+  },
+  {
+    "name": "Dundee Utd",
+    "relativePath": "team-logos/dundee-utd.png"
+  },
+  {
+    "name": "Dunfermline Athletic",
+    "relativePath": "team-logos/dunfermline-athletic.png"
+  },
+  {
+    "name": "Dynamo Kyiv",
+    "relativePath": "team-logos/dynamo-kyiv.png"
+  },
+  {
+    "name": "Ecuador",
+    "relativePath": "team-logos/ecuador.png"
+  },
+  {
+    "name": "Egypt",
+    "relativePath": "team-logos/egypt.png"
+  },
+  {
+    "name": "Eintracht Frankfurt",
+    "relativePath": "team-logos/eintracht-frankfurt.png"
+  },
+  {
+    "name": "El Salvador",
+    "relativePath": "team-logos/el-salvador.png"
+  },
+  {
+    "name": "Elche",
+    "relativePath": "team-logos/elche.png"
+  },
+  {
+    "name": "Elfsborg",
+    "relativePath": "team-logos/elfsborg.png"
+  },
+  {
+    "name": "Empoli",
+    "relativePath": "team-logos/empoli.png"
+  },
+  {
+    "name": "England",
+    "relativePath": "team-logos/england.png"
+  },
+  {
+    "name": "Equatorial Guinea",
+    "relativePath": "team-logos/equatorial-guinea.png"
+  },
+  {
+    "name": "Eritrea",
+    "relativePath": "team-logos/eritrea.png"
+  },
+  {
+    "name": "Espanyol",
+    "relativePath": "team-logos/espanyol.png"
+  },
+  {
+    "name": "Estonia",
+    "relativePath": "team-logos/estonia.png"
+  },
+  {
+    "name": "Eswatini",
+    "relativePath": "team-logos/eswatini.png"
+  },
+  {
+    "name": "Ethiopia",
+    "relativePath": "team-logos/ethiopia.png"
+  },
+  {
+    "name": "Everton",
+    "relativePath": "team-logos/everton.png"
+  },
+  {
+    "name": "Exeter",
+    "relativePath": "team-logos/exeter.png"
+  },
+  {
+    "name": "FC Heidenheim",
+    "relativePath": "team-logos/fc-heidenheim.png"
+  },
+  {
+    "name": "FC Nordsjaelland",
+    "relativePath": "team-logos/fc-nordsjaelland.png"
+  },
+  {
+    "name": "FC Porto",
+    "relativePath": "team-logos/fc-porto.png"
+  },
+  {
+    "name": "FC St. Coloma",
+    "relativePath": "team-logos/fc-st-coloma.png"
+  },
+  {
+    "name": "FCSB",
+    "relativePath": "team-logos/fcsb.png"
+  },
+  {
+    "name": "FK Cukaricki",
+    "relativePath": "team-logos/fk-cukaricki.png"
+  },
+  {
+    "name": "Falkirk",
+    "relativePath": "team-logos/falkirk.png"
+  },
+  {
+    "name": "Faroe Islands",
+    "relativePath": "team-logos/faroe-islands.png"
+  },
+  {
+    "name": "Fenerbahçe",
+    "relativePath": "team-logos/fenerbahce.png"
+  },
+  {
+    "name": "Ferencváros",
+    "relativePath": "team-logos/ferencvaros.png"
+  },
+  {
+    "name": "Feyenoord",
+    "relativePath": "team-logos/feyenoord.png"
+  },
+  {
+    "name": "Fiji",
+    "relativePath": "team-logos/fiji.png"
+  },
+  {
+    "name": "Finland",
+    "relativePath": "team-logos/finland.png"
+  },
+  {
+    "name": "Fiorentina",
+    "relativePath": "team-logos/fiorentina.png"
+  },
+  {
+    "name": "Fleetwood",
+    "relativePath": "team-logos/fleetwood.png"
+  },
+  {
+    "name": "Football Union of Russia",
+    "relativePath": "team-logos/football-union-of-russia.png"
+  },
+  {
+    "name": "Forest Green",
+    "relativePath": "team-logos/forest-green.png"
+  },
+  {
+    "name": "Forest Green Rovers",
+    "relativePath": "team-logos/forest-green-rovers.png"
+  },
+  {
+    "name": "France",
+    "relativePath": "team-logos/france.png"
+  },
+  {
+    "name": "Frankfurt",
+    "relativePath": "team-logos/frankfurt.png"
+  },
+  {
+    "name": "Freiburg",
+    "relativePath": "team-logos/freiburg.png"
+  },
+  {
+    "name": "Frosinone",
+    "relativePath": "team-logos/frosinone.png"
+  },
+  {
+    "name": "Fulham",
+    "relativePath": "team-logos/fulham.png"
+  },
+  {
+    "name": "Gabon",
+    "relativePath": "team-logos/gabon.png"
+  },
+  {
+    "name": "Galatasaray",
+    "relativePath": "team-logos/galatasaray.png"
+  },
+  {
+    "name": "Genk",
+    "relativePath": "team-logos/genk.png"
+  },
+  {
+    "name": "Genoa",
+    "relativePath": "team-logos/genoa.png"
+  },
+  {
+    "name": "Gent",
+    "relativePath": "team-logos/gent.png"
+  },
+  {
+    "name": "Georgia",
+    "relativePath": "team-logos/georgia.png"
+  },
+  {
+    "name": "Germany",
+    "relativePath": "team-logos/germany.png"
+  },
+  {
+    "name": "Getafe",
+    "relativePath": "team-logos/getafe.png"
+  },
+  {
+    "name": "Ghana",
+    "relativePath": "team-logos/ghana.png"
+  },
+  {
+    "name": "Gibraltar",
+    "relativePath": "team-logos/gibraltar.png"
+  },
+  {
+    "name": "Gillingham",
+    "relativePath": "team-logos/gillingham.png"
+  },
+  {
+    "name": "Girona",
+    "relativePath": "team-logos/girona.png"
+  },
+  {
+    "name": "Go Ahead",
+    "relativePath": "team-logos/go-ahead.png"
+  },
+  {
+    "name": "Granada",
+    "relativePath": "team-logos/granada.png"
+  },
+  {
+    "name": "Grazer AK",
+    "relativePath": "team-logos/grazer-ak.png"
+  },
+  {
+    "name": "Greece",
+    "relativePath": "team-logos/greece.png"
+  },
+  {
+    "name": "Greenock Morton",
+    "relativePath": "team-logos/greenock-morton.png"
+  },
+  {
+    "name": "Grenada",
+    "relativePath": "team-logos/grenada.png"
+  },
+  {
+    "name": "Grimsby Town",
+    "relativePath": "team-logos/grimsby-town.png"
+  },
+  {
+    "name": "Guam",
+    "relativePath": "team-logos/guam.png"
+  },
+  {
+    "name": "Guatemala",
+    "relativePath": "team-logos/guatemala.png"
+  },
+  {
+    "name": "Guinea",
+    "relativePath": "team-logos/guinea.png"
+  },
+  {
+    "name": "Guinea-Bissau",
+    "relativePath": "team-logos/guinea-bissau.png"
+  },
+  {
+    "name": "Guyana",
+    "relativePath": "team-logos/guyana.png"
+  },
+  {
+    "name": "H Be'er Sheva",
+    "relativePath": "team-logos/h-be-er-sheva.png"
+  },
+  {
+    "name": "HJK",
+    "relativePath": "team-logos/hjk.png"
+  },
+  {
+    "name": "HNK Gorica",
+    "relativePath": "team-logos/hnk-gorica.png"
+  },
+  {
+    "name": "Hacken",
+    "relativePath": "team-logos/hacken.png"
+  },
+  {
+    "name": "Haiti",
+    "relativePath": "team-logos/haiti.png"
+  },
+  {
+    "name": "Hajduk",
+    "relativePath": "team-logos/hajduk.png"
+  },
+  {
+    "name": "Hajduk Split",
+    "relativePath": "team-logos/hajduk-split.png"
+  },
+  {
+    "name": "Hamburg",
+    "relativePath": "team-logos/hamburg.png"
+  },
+  {
+    "name": "Hamburger SV",
+    "relativePath": "team-logos/hamburger-sv.png"
+  },
+  {
+    "name": "Hammarby",
+    "relativePath": "team-logos/hammarby.png"
+  },
+  {
+    "name": "Hamrun",
+    "relativePath": "team-logos/hamrun.png"
+  },
+  {
+    "name": "Harrogate Town",
+    "relativePath": "team-logos/harrogate-town.png"
+  },
+  {
+    "name": "Häcken 1",
+    "relativePath": "team-logos/hacken-1.png"
+  },
+  {
+    "name": "Hearts",
+    "relativePath": "team-logos/hearts.png"
+  },
+  {
+    "name": "Hibernian",
+    "relativePath": "team-logos/hibernian.png"
+  },
+  {
+    "name": "Hibernians",
+    "relativePath": "team-logos/hibernians.png"
+  },
+  {
+    "name": "Hoffenheim",
+    "relativePath": "team-logos/hoffenheim.png"
+  },
+  {
+    "name": "Honduras",
+    "relativePath": "team-logos/honduras.png"
+  },
+  {
+    "name": "Hong Kong",
+    "relativePath": "team-logos/hong-kong.png"
+  },
+  {
+    "name": "Huddersfield",
+    "relativePath": "team-logos/huddersfield.png"
+  },
+  {
+    "name": "Hull City",
+    "relativePath": "team-logos/hull-city.png"
+  },
+  {
+    "name": "Hungary",
+    "relativePath": "team-logos/hungary.png"
+  },
+  {
+    "name": "Iceland",
+    "relativePath": "team-logos/iceland.png"
+  },
+  {
+    "name": "India",
+    "relativePath": "team-logos/india.png"
+  },
+  {
+    "name": "Indonesia",
+    "relativePath": "team-logos/indonesia.png"
+  },
+  {
+    "name": "Inter Milan",
+    "relativePath": "team-logos/inter-milan.png"
+  },
+  {
+    "name": "Ipswich Town",
+    "relativePath": "team-logos/ipswich-town.png"
+  },
+  {
+    "name": "Iran",
+    "relativePath": "team-logos/iran.png"
+  },
+  {
+    "name": "Iraq",
+    "relativePath": "team-logos/iraq.png"
+  },
+  {
+    "name": "Israel",
+    "relativePath": "team-logos/israel.png"
+  },
+  {
+    "name": "Italy",
+    "relativePath": "team-logos/italy.png"
+  },
+  {
+    "name": "Jagiellonia Bialystok",
+    "relativePath": "team-logos/jagiellonia-bialystok.png"
+  },
+  {
+    "name": "Jagiellonia Białystok",
+    "relativePath": "team-logos/jagiellonia-bia-ystok.png"
+  },
+  {
+    "name": "Jamaica",
+    "relativePath": "team-logos/jamaica.png"
+  },
+  {
+    "name": "Japan",
+    "relativePath": "team-logos/japan.png"
+  },
+  {
+    "name": "Jordan",
+    "relativePath": "team-logos/jordan.png"
+  },
+  {
+    "name": "Juventus",
+    "relativePath": "team-logos/juventus.png"
+  },
+  {
+    "name": "KAA Gent",
+    "relativePath": "team-logos/kaa-gent.png"
+  },
+  {
+    "name": "KI Klaksvik",
+    "relativePath": "team-logos/ki-klaksvik.png"
+  },
+  {
+    "name": "KRC Genk",
+    "relativePath": "team-logos/krc-genk.png"
+  },
+  {
+    "name": "Kairat",
+    "relativePath": "team-logos/kairat.png"
+  },
+  {
+    "name": "Kazakhstan",
+    "relativePath": "team-logos/kazakhstan.png"
+  },
+  {
+    "name": "Kenya",
+    "relativePath": "team-logos/kenya.png"
+  },
+  {
+    "name": "Kilmarnock",
+    "relativePath": "team-logos/kilmarnock.png"
+  },
+  {
+    "name": "Koln",
+    "relativePath": "team-logos/koln.png"
+  },
+  {
+    "name": "Korea DPR",
+    "relativePath": "team-logos/korea-dpr.png"
+  },
+  {
+    "name": "Korea Republic",
+    "relativePath": "team-logos/korea-republic.png"
+  },
+  {
+    "name": "Kosovo",
+    "relativePath": "team-logos/kosovo.png"
+  },
+  {
+    "name": "KuPS",
+    "relativePath": "team-logos/kups.png"
+  },
+  {
+    "name": "Kuwait",
+    "relativePath": "team-logos/kuwait.png"
+  },
+  {
+    "name": "Kyrgyz Republic",
+    "relativePath": "team-logos/kyrgyz-republic.png"
+  },
+  {
+    "name": "L Orient",
+    "relativePath": "team-logos/l-orient.png"
+  },
+  {
+    "name": "LASK",
+    "relativePath": "team-logos/lask.png"
+  },
+  {
+    "name": "Laos",
+    "relativePath": "team-logos/laos.png"
+  },
+  {
+    "name": "Las Palmas",
+    "relativePath": "team-logos/las-palmas.png"
+  },
+  {
+    "name": "Latvia",
+    "relativePath": "team-logos/latvia.png"
+  },
+  {
+    "name": "Lausanne",
+    "relativePath": "team-logos/lausanne.png"
+  },
+  {
+    "name": "Lausanne Sport",
+    "relativePath": "team-logos/lausanne-sport.png"
+  },
+  {
+    "name": "Lazio",
+    "relativePath": "team-logos/lazio.png"
+  },
+  {
+    "name": "Le Havre",
+    "relativePath": "team-logos/le-havre.png"
+  },
+  {
+    "name": "Lebanon",
+    "relativePath": "team-logos/lebanon.png"
+  },
+  {
+    "name": "Lecce",
+    "relativePath": "team-logos/lecce.png"
+  },
+  {
+    "name": "Lech",
+    "relativePath": "team-logos/lech.png"
+  },
+  {
+    "name": "Lech Poznan",
+    "relativePath": "team-logos/lech-poznan.png"
+  },
+  {
+    "name": "Leeds United",
+    "relativePath": "team-logos/leeds-united.png"
+  },
+  {
+    "name": "Leganés",
+    "relativePath": "team-logos/leganes.png"
+  },
+  {
+    "name": "Legia",
+    "relativePath": "team-logos/legia.png"
+  },
+  {
+    "name": "Legia Warszawa",
+    "relativePath": "team-logos/legia-warszawa.png"
+  },
+  {
+    "name": "Leicester City",
+    "relativePath": "team-logos/leicester-city.png"
+  },
+  {
+    "name": "Leipzig",
+    "relativePath": "team-logos/leipzig.png"
+  },
+  {
+    "name": "Lens",
+    "relativePath": "team-logos/lens.png"
+  },
+  {
+    "name": "Lesotho",
+    "relativePath": "team-logos/lesotho.png"
+  },
+  {
+    "name": "Levante",
+    "relativePath": "team-logos/levante.png"
+  },
+  {
+    "name": "Leverkusen",
+    "relativePath": "team-logos/leverkusen.png"
+  },
+  {
+    "name": "Liberia",
+    "relativePath": "team-logos/liberia.png"
+  },
+  {
+    "name": "Libya",
+    "relativePath": "team-logos/libya.png"
+  },
+  {
+    "name": "Liechtenstein",
+    "relativePath": "team-logos/liechtenstein.png"
+  },
+  {
+    "name": "Lille",
+    "relativePath": "team-logos/lille.png"
+  },
+  {
+    "name": "Lincoln",
+    "relativePath": "team-logos/lincoln.png"
+  },
+  {
+    "name": "Lithuania",
+    "relativePath": "team-logos/lithuania.png"
+  },
+  {
+    "name": "Liverpool",
+    "relativePath": "team-logos/liverpool.png"
+  },
+  {
+    "name": "Livingston",
+    "relativePath": "team-logos/livingston.png"
+  },
+  {
+    "name": "Lorient",
+    "relativePath": "team-logos/lorient.png"
+  },
+  {
+    "name": "Ludogorets",
+    "relativePath": "team-logos/ludogorets.png"
+  },
+  {
+    "name": "Ludogorets Razgrad",
+    "relativePath": "team-logos/ludogorets-razgrad.png"
+  },
+  {
+    "name": "Lugano",
+    "relativePath": "team-logos/lugano.png"
+  },
+  {
+    "name": "Luton",
+    "relativePath": "team-logos/luton.png"
+  },
+  {
+    "name": "Luxembourg",
+    "relativePath": "team-logos/luxembourg.png"
+  },
+  {
+    "name": "Lyon",
+    "relativePath": "team-logos/lyon.png"
+  },
+  {
+    "name": "M Haifa",
+    "relativePath": "team-logos/m-haifa.png"
+  },
+  {
+    "name": "M'gladbach",
+    "relativePath": "team-logos/m-gladbach.png"
+  },
+  {
+    "name": "MK Dons",
+    "relativePath": "team-logos/mk-dons.png"
+  },
+  {
+    "name": "Macau",
+    "relativePath": "team-logos/macau.png"
+  },
+  {
+    "name": "Maccabi TA",
+    "relativePath": "team-logos/maccabi-ta.png"
+  },
+  {
+    "name": "Maccabi Tel Aviv",
+    "relativePath": "team-logos/maccabi-tel-aviv.png"
+  },
+  {
+    "name": "Maccabi Tel-Aviv",
+    "relativePath": "team-logos/maccabi-tel-aviv.png"
+  },
+  {
+    "name": "Macclesfield FC",
+    "relativePath": "team-logos/macclesfield-fc.png"
+  },
+  {
+    "name": "Madagascar",
+    "relativePath": "team-logos/madagascar.png"
+  },
+  {
+    "name": "Mainz",
+    "relativePath": "team-logos/mainz.png"
+  },
+  {
+    "name": "Mainz 5",
+    "relativePath": "team-logos/mainz-5.png"
+  },
+  {
+    "name": "Malawi",
+    "relativePath": "team-logos/malawi.png"
+  },
+  {
+    "name": "Malaysia",
+    "relativePath": "team-logos/malaysia.png"
+  },
+  {
+    "name": "Maldives",
+    "relativePath": "team-logos/maldives.png"
+  },
+  {
+    "name": "Mali",
+    "relativePath": "team-logos/mali.png"
+  },
+  {
+    "name": "Mallorca",
+    "relativePath": "team-logos/mallorca.png"
+  },
+  {
+    "name": "Malmö",
+    "relativePath": "team-logos/malmo.png"
+  },
+  {
+    "name": "Malta",
+    "relativePath": "team-logos/malta.png"
+  },
+  {
+    "name": "Man City",
+    "relativePath": "team-logos/man-city.png"
+  },
+  {
+    "name": "Man United",
+    "relativePath": "team-logos/man-united.png"
+  },
+  {
+    "name": "Mansfield",
+    "relativePath": "team-logos/mansfield.png"
+  },
+  {
+    "name": "Maribor",
+    "relativePath": "team-logos/maribor.png"
+  },
+  {
+    "name": "Marseille",
+    "relativePath": "team-logos/marseille.png"
+  },
+  {
+    "name": "Mauritania",
+    "relativePath": "team-logos/mauritania.png"
+  },
+  {
+    "name": "Mauritius",
+    "relativePath": "team-logos/mauritius.png"
+  },
+  {
+    "name": "Metz",
+    "relativePath": "team-logos/metz.png"
+  },
+  {
+    "name": "Mexico",
+    "relativePath": "team-logos/mexico.png"
+  },
+  {
+    "name": "Middlesbrough",
+    "relativePath": "team-logos/middlesbrough.png"
+  },
+  {
+    "name": "Midtjylland",
+    "relativePath": "team-logos/midtjylland.png"
+  },
+  {
+    "name": "Millwall",
+    "relativePath": "team-logos/millwall.png"
+  },
+  {
+    "name": "Molde",
+    "relativePath": "team-logos/molde.png"
+  },
+  {
+    "name": "Moldova",
+    "relativePath": "team-logos/moldova.png"
+  },
+  {
+    "name": "Monaco",
+    "relativePath": "team-logos/monaco.png"
+  },
+  {
+    "name": "Mongolia",
+    "relativePath": "team-logos/mongolia.png"
+  },
+  {
+    "name": "Montenegro",
+    "relativePath": "team-logos/montenegro.png"
+  },
+  {
+    "name": "Montpellier",
+    "relativePath": "team-logos/montpellier.png"
+  },
+  {
+    "name": "Montserrat",
+    "relativePath": "team-logos/montserrat.png"
+  },
+  {
+    "name": "Monza",
+    "relativePath": "team-logos/monza.png"
+  },
+  {
+    "name": "Morecambe",
+    "relativePath": "team-logos/morecambe.png"
+  },
+  {
+    "name": "Morocco",
+    "relativePath": "team-logos/morocco.png"
+  },
+  {
+    "name": "Motherwell",
+    "relativePath": "team-logos/motherwell.png"
+  },
+  {
+    "name": "Mozambique",
+    "relativePath": "team-logos/mozambique.png"
+  },
+  {
+    "name": "Myanmar",
+    "relativePath": "team-logos/myanmar.png"
+  },
+  {
+    "name": "N. Ireland",
+    "relativePath": "team-logos/n-ireland.png"
+  },
+  {
+    "name": "N. Macedonia",
+    "relativePath": "team-logos/n-macedonia.png"
+  },
+  {
+    "name": "NK Lokomotiva",
+    "relativePath": "team-logos/nk-lokomotiva.png"
+  },
+  {
+    "name": "NK Varazdin",
+    "relativePath": "team-logos/nk-varazdin.png"
+  },
+  {
+    "name": "Namibia",
+    "relativePath": "team-logos/namibia.png"
+  },
+  {
+    "name": "Nantes",
+    "relativePath": "team-logos/nantes.png"
+  },
+  {
+    "name": "Napoli",
+    "relativePath": "team-logos/napoli.png"
+  },
+  {
+    "name": "Nepal",
+    "relativePath": "team-logos/nepal.png"
+  },
+  {
+    "name": "Netherlands",
+    "relativePath": "team-logos/netherlands.png"
+  },
+  {
+    "name": "New Caledonia",
+    "relativePath": "team-logos/new-caledonia.png"
+  },
+  {
+    "name": "New Zealand",
+    "relativePath": "team-logos/new-zealand.png"
+  },
+  {
+    "name": "Newcastle United",
+    "relativePath": "team-logos/newcastle-united.png"
+  },
+  {
+    "name": "Newport",
+    "relativePath": "team-logos/newport.png"
+  },
+  {
+    "name": "Nicaragua",
+    "relativePath": "team-logos/nicaragua.png"
+  },
+  {
+    "name": "Nice",
+    "relativePath": "team-logos/nice.png"
+  },
+  {
+    "name": "Niger",
+    "relativePath": "team-logos/niger.png"
+  },
+  {
+    "name": "Nigeria",
+    "relativePath": "team-logos/nigeria.png"
+  },
+  {
+    "name": "Northampton",
+    "relativePath": "team-logos/northampton.png"
+  },
+  {
+    "name": "Norway",
+    "relativePath": "team-logos/norway.png"
+  },
+  {
+    "name": "Norwich City",
+    "relativePath": "team-logos/norwich-city.png"
+  },
+  {
+    "name": "Nottm Forest",
+    "relativePath": "team-logos/nottm-forest.png"
+  },
+  {
+    "name": "Notts County",
+    "relativePath": "team-logos/notts-county.png"
+  },
+  {
+    "name": "Oleksandria",
+    "relativePath": "team-logos/oleksandria.png"
+  },
+  {
+    "name": "Olimpija",
+    "relativePath": "team-logos/olimpija.png"
+  },
+  {
+    "name": "Olimpija Ljubljana",
+    "relativePath": "team-logos/olimpija-ljubljana.png"
+  },
+  {
+    "name": "Olomouc",
+    "relativePath": "team-logos/olomouc.png"
+  },
+  {
+    "name": "Olympiacos",
+    "relativePath": "team-logos/olympiacos.png"
+  },
+  {
+    "name": "Olympiacos Piraeus",
+    "relativePath": "team-logos/olympiacos-piraeus.png"
+  },
+  {
+    "name": "Olympiakos",
+    "relativePath": "team-logos/olympiakos.png"
+  },
+  {
+    "name": "Oman",
+    "relativePath": "team-logos/oman.png"
+  },
+  {
+    "name": "Omonia",
+    "relativePath": "team-logos/omonia.png"
+  },
+  {
+    "name": "Osasuna",
+    "relativePath": "team-logos/osasuna.png"
+  },
+  {
+    "name": "Osijek",
+    "relativePath": "team-logos/osijek.png"
+  },
+  {
+    "name": "Ostrava",
+    "relativePath": "team-logos/ostrava.png"
+  },
+  {
+    "name": "Oviedo",
+    "relativePath": "team-logos/oviedo.png"
+  },
+  {
+    "name": "Oxford United",
+    "relativePath": "team-logos/oxford-united.png"
+  },
+  {
+    "name": "PAOK",
+    "relativePath": "team-logos/paok.png"
+  },
+  {
+    "name": "PAOK Thessaloniki FC",
+    "relativePath": "team-logos/paok-thessaloniki-fc.png"
+  },
+  {
+    "name": "PSG",
+    "relativePath": "team-logos/psg.png"
+  },
+  {
+    "name": "PSV",
+    "relativePath": "team-logos/psv.png"
+  },
+  {
+    "name": "Pafos",
+    "relativePath": "team-logos/pafos.png"
+  },
+  {
+    "name": "Pakistan",
+    "relativePath": "team-logos/pakistan.png"
+  },
+  {
+    "name": "Palestine",
+    "relativePath": "team-logos/palestine.png"
+  },
+  {
+    "name": "Panama",
+    "relativePath": "team-logos/panama.png"
+  },
+  {
+    "name": "Panathinaikos",
+    "relativePath": "team-logos/panathinaikos.png"
+  },
+  {
+    "name": "Papua New Guinea",
+    "relativePath": "team-logos/papua-new-guinea.png"
+  },
+  {
+    "name": "Paraguay",
+    "relativePath": "team-logos/paraguay.png"
+  },
+  {
+    "name": "Paris Saint-Germain",
+    "relativePath": "team-logos/paris-saint-germain.png"
+  },
+  {
+    "name": "Parma",
+    "relativePath": "team-logos/parma.png"
+  },
+  {
+    "name": "Partick",
+    "relativePath": "team-logos/partick.png"
+  },
+  {
+    "name": "Partick Thistle",
+    "relativePath": "team-logos/partick-thistle.png"
+  },
+  {
+    "name": "Partizan",
+    "relativePath": "team-logos/partizan.png"
+  },
+  {
+    "name": "Peru",
+    "relativePath": "team-logos/peru.png"
+  },
+  {
+    "name": "Peterborough",
+    "relativePath": "team-logos/peterborough.png"
+  },
+  {
+    "name": "Philippines",
+    "relativePath": "team-logos/philippines.png"
+  },
+  {
+    "name": "Pisa",
+    "relativePath": "team-logos/pisa.png"
+  },
+  {
+    "name": "Plymouth",
+    "relativePath": "team-logos/plymouth.png"
+  },
+  {
+    "name": "Plzeň",
+    "relativePath": "team-logos/plzen.png"
+  },
+  {
+    "name": "Poland",
+    "relativePath": "team-logos/poland.png"
+  },
+  {
+    "name": "Port Vale",
+    "relativePath": "team-logos/port-vale.png"
+  },
+  {
+    "name": "Porto",
+    "relativePath": "team-logos/porto.png"
+  },
+  {
+    "name": "Portsmouth",
+    "relativePath": "team-logos/portsmouth.png"
+  },
+  {
+    "name": "Portugal",
+    "relativePath": "team-logos/portugal.png"
+  },
+  {
+    "name": "Preston North End",
+    "relativePath": "team-logos/preston-north-end.png"
+  },
+  {
+    "name": "Puerto Rico",
+    "relativePath": "team-logos/puerto-rico.png"
+  },
+  {
+    "name": "Pyunik",
+    "relativePath": "team-logos/pyunik.png"
+  },
+  {
+    "name": "QPR",
+    "relativePath": "team-logos/qpr.png"
+  },
+  {
+    "name": "Qarabag FK",
+    "relativePath": "team-logos/qarabag-fk.png"
+  },
+  {
+    "name": "Qarabağ",
+    "relativePath": "team-logos/qarabag.png"
+  },
+  {
+    "name": "Qatar",
+    "relativePath": "team-logos/qatar.png"
+  },
+  {
+    "name": "Queens Park Rangers",
+    "relativePath": "team-logos/queens-park-rangers.png"
+  },
+  {
+    "name": "R. Union SG",
+    "relativePath": "team-logos/r-union-sg.png"
+  },
+  {
+    "name": "RB Leipzig",
+    "relativePath": "team-logos/rb-leipzig.png"
+  },
+  {
+    "name": "RB Salzburg",
+    "relativePath": "team-logos/rb-salzburg.png"
+  },
+  {
+    "name": "Raith Rovers",
+    "relativePath": "team-logos/raith-rovers.png"
+  },
+  {
+    "name": "Raków Czestochowa",
+    "relativePath": "team-logos/rakow-czestochowa.png"
+  },
+  {
+    "name": "Rangers",
+    "relativePath": "team-logos/rangers.png"
+  },
+  {
+    "name": "Rapid Vienna",
+    "relativePath": "team-logos/rapid-vienna.png"
+  },
+  {
+    "name": "Rayo",
+    "relativePath": "team-logos/rayo.png"
+  },
+  {
+    "name": "Rayo Vallecano",
+    "relativePath": "team-logos/rayo-vallecano.png"
+  },
+  {
+    "name": "Reading",
+    "relativePath": "team-logos/reading.png"
+  },
+  {
+    "name": "Real Madrid",
+    "relativePath": "team-logos/real-madrid.png"
+  },
+  {
+    "name": "Real Mallorca",
+    "relativePath": "team-logos/real-mallorca.png"
+  },
+  {
+    "name": "Real Oviedo",
+    "relativePath": "team-logos/real-oviedo.png"
+  },
+  {
+    "name": "Real Sociedad",
+    "relativePath": "team-logos/real-sociedad.png"
+  },
+  {
+    "name": "Red Imps",
+    "relativePath": "team-logos/red-imps.png"
+  },
+  {
+    "name": "Red Star",
+    "relativePath": "team-logos/red-star.png"
+  },
+  {
+    "name": "Red Star Belgrade",
+    "relativePath": "team-logos/red-star-belgrade.png"
+  },
+  {
+    "name": "Reims",
+    "relativePath": "team-logos/reims.png"
+  },
+  {
+    "name": "Rennes",
+    "relativePath": "team-logos/rennes.png"
+  },
+  {
+    "name": "Rep. Ireland",
+    "relativePath": "team-logos/rep-ireland.png"
+  },
+  {
+    "name": "Rheindorf Altach",
+    "relativePath": "team-logos/rheindorf-altach.png"
+  },
+  {
+    "name": "Rijeka",
+    "relativePath": "team-logos/rijeka.png"
+  },
+  {
+    "name": "Roma",
+    "relativePath": "team-logos/roma.png"
+  },
+  {
+    "name": "Romania",
+    "relativePath": "team-logos/romania.png"
+  },
+  {
+    "name": "Rosenborg",
+    "relativePath": "team-logos/rosenborg.png"
+  },
+  {
+    "name": "Ross County",
+    "relativePath": "team-logos/ross-county.png"
+  },
+  {
+    "name": "Rotherham",
+    "relativePath": "team-logos/rotherham.png"
+  },
+  {
+    "name": "Royal Antwerp",
+    "relativePath": "team-logos/royal-antwerp.png"
+  },
+  {
+    "name": "Rudes",
+    "relativePath": "team-logos/rudes.png"
+  },
+  {
+    "name": "Russia",
+    "relativePath": "team-logos/russia.png"
+  },
+  {
+    "name": "Rwanda",
+    "relativePath": "team-logos/rwanda.png"
+  },
+  {
+    "name": "SJK",
+    "relativePath": "team-logos/sjk.png"
+  },
+  {
+    "name": "SV Darmstadt",
+    "relativePath": "team-logos/sv-darmstadt.png"
+  },
+  {
+    "name": "Saint Martin",
+    "relativePath": "team-logos/saint-martin.png"
+  },
+  {
+    "name": "Saint-Etienne",
+    "relativePath": "team-logos/saint-etienne.png"
+  },
+  {
+    "name": "Salernitana",
+    "relativePath": "team-logos/salernitana.png"
+  },
+  {
+    "name": "Salford",
+    "relativePath": "team-logos/salford.png"
+  },
+  {
+    "name": "Salzburg",
+    "relativePath": "team-logos/salzburg.png"
+  },
+  {
+    "name": "Samoa",
+    "relativePath": "team-logos/samoa.png"
+  },
+  {
+    "name": "Samsunspor",
+    "relativePath": "team-logos/samsunspor.png"
+  },
+  {
+    "name": "San Marino",
+    "relativePath": "team-logos/san-marino.png"
+  },
+  {
+    "name": "Sarajevo",
+    "relativePath": "team-logos/sarajevo.png"
+  },
+  {
+    "name": "Sassuolo",
+    "relativePath": "team-logos/sassuolo.png"
+  },
+  {
+    "name": "Saudi Arabia",
+    "relativePath": "team-logos/saudi-arabia.png"
+  },
+  {
+    "name": "São Tomé and Príncipe",
+    "relativePath": "team-logos/sao-tome-and-principe.png"
+  },
+  {
+    "name": "Scotland",
+    "relativePath": "team-logos/scotland.png"
+  },
+  {
+    "name": "Senegal",
+    "relativePath": "team-logos/senegal.png"
+  },
+  {
+    "name": "Serbia",
+    "relativePath": "team-logos/serbia.png"
+  },
+  {
+    "name": "Servette",
+    "relativePath": "team-logos/servette.png"
+  },
+  {
+    "name": "Sevilla",
+    "relativePath": "team-logos/sevilla.png"
+  },
+  {
+    "name": "Seychelles",
+    "relativePath": "team-logos/seychelles.png"
+  },
+  {
+    "name": "Shakhtar D",
+    "relativePath": "team-logos/shakhtar-d.png"
+  },
+  {
+    "name": "Shakhtar Donetsk",
+    "relativePath": "team-logos/shakhtar-donetsk.png"
+  },
+  {
+    "name": "Shamrock",
+    "relativePath": "team-logos/shamrock.png"
+  },
+  {
+    "name": "Sheff Utd",
+    "relativePath": "team-logos/sheff-utd.png"
+  },
+  {
+    "name": "Sheff Wed",
+    "relativePath": "team-logos/sheff-wed.png"
+  },
+  {
+    "name": "Shelbourne",
+    "relativePath": "team-logos/shelbourne.png"
+  },
+  {
+    "name": "Sheriff",
+    "relativePath": "team-logos/sheriff.png"
+  },
+  {
+    "name": "Sheriff Tiraspol",
+    "relativePath": "team-logos/sheriff-tiraspol.png"
+  },
+  {
+    "name": "Shrewsbury",
+    "relativePath": "team-logos/shrewsbury.png"
+  },
+  {
+    "name": "Sierra Leone",
+    "relativePath": "team-logos/sierra-leone.png"
+  },
+  {
+    "name": "Singapore",
+    "relativePath": "team-logos/singapore.png"
+  },
+  {
+    "name": "Slavia Prague",
+    "relativePath": "team-logos/slavia-prague.png"
+  },
+  {
+    "name": "Slovakia",
+    "relativePath": "team-logos/slovakia.png"
+  },
+  {
+    "name": "Slovan",
+    "relativePath": "team-logos/slovan.png"
+  },
+  {
+    "name": "Slovan Bratislava",
+    "relativePath": "team-logos/slovan-bratislava.png"
+  },
+  {
+    "name": "Slovenia",
+    "relativePath": "team-logos/slovenia.png"
+  },
+  {
+    "name": "Soloman Islands",
+    "relativePath": "team-logos/soloman-islands.png"
+  },
+  {
+    "name": "Somalia",
+    "relativePath": "team-logos/somalia.png"
+  },
+  {
+    "name": "South Africa",
+    "relativePath": "team-logos/south-africa.png"
+  },
+  {
+    "name": "South Korea",
+    "relativePath": "team-logos/south-korea.png"
+  },
+  {
+    "name": "South Sudan",
+    "relativePath": "team-logos/south-sudan.png"
+  },
+  {
+    "name": "Southampton",
+    "relativePath": "team-logos/southampton.png"
+  },
+  {
+    "name": "Spain",
+    "relativePath": "team-logos/spain.png"
+  },
+  {
+    "name": "Sparta Prague",
+    "relativePath": "team-logos/sparta-prague.png"
+  },
+  {
+    "name": "Spartak",
+    "relativePath": "team-logos/spartak.png"
+  },
+  {
+    "name": "Spartak Trnava",
+    "relativePath": "team-logos/spartak-trnava.png"
+  },
+  {
+    "name": "Sporting",
+    "relativePath": "team-logos/sporting.png"
+  },
+  {
+    "name": "Sporting CP",
+    "relativePath": "team-logos/sporting-cp.png"
+  },
+  {
+    "name": "Spurs",
+    "relativePath": "team-logos/spurs.png"
+  },
+  {
+    "name": "Sri Lanka",
+    "relativePath": "team-logos/sri-lanka.png"
+  },
+  {
+    "name": "St Kitts and Nevis",
+    "relativePath": "team-logos/st-kitts-and-nevis.png"
+  },
+  {
+    "name": "St Lucia",
+    "relativePath": "team-logos/st-lucia.png"
+  },
+  {
+    "name": "St Vincent and the Grenadines",
+    "relativePath": "team-logos/st-vincent-and-the-grenadines.png"
+  },
+  {
+    "name": "St. Johnstone",
+    "relativePath": "team-logos/st-johnstone.png"
+  },
+  {
+    "name": "St. Kitts",
+    "relativePath": "team-logos/st-kitts.png"
+  },
+  {
+    "name": "St. Mirren",
+    "relativePath": "team-logos/st-mirren.png"
+  },
+  {
+    "name": "St. Vincent",
+    "relativePath": "team-logos/st-vincent.png"
+  },
+  {
+    "name": "Stevenage",
+    "relativePath": "team-logos/stevenage.png"
+  },
+  {
+    "name": "Stockport County",
+    "relativePath": "team-logos/stockport-county.png"
+  },
+  {
+    "name": "Stoke City",
+    "relativePath": "team-logos/stoke-city.png"
+  },
+  {
+    "name": "Strasbourg",
+    "relativePath": "team-logos/strasbourg.png"
+  },
+  {
+    "name": "Sturm",
+    "relativePath": "team-logos/sturm.png"
+  },
+  {
+    "name": "Sturm Graz",
+    "relativePath": "team-logos/sturm-graz.png"
+  },
+  {
+    "name": "Sudan",
+    "relativePath": "team-logos/sudan.png"
+  },
+  {
+    "name": "Sunderland",
+    "relativePath": "team-logos/sunderland.png"
+  },
+  {
+    "name": "Suriname",
+    "relativePath": "team-logos/suriname.png"
+  },
+  {
+    "name": "Sutton United",
+    "relativePath": "team-logos/sutton-united.png"
+  },
+  {
+    "name": "Swansea City",
+    "relativePath": "team-logos/swansea-city.png"
+  },
+  {
+    "name": "Sweden",
+    "relativePath": "team-logos/sweden.png"
+  },
+  {
+    "name": "Swindon",
+    "relativePath": "team-logos/swindon.png"
+  },
+  {
+    "name": "Switzerland",
+    "relativePath": "team-logos/switzerland.png"
+  },
+  {
+    "name": "Syria",
+    "relativePath": "team-logos/syria.png"
+  },
+  {
+    "name": "TNS",
+    "relativePath": "team-logos/tns.png"
+  },
+  {
+    "name": "TSC",
+    "relativePath": "team-logos/tsc.png"
+  },
+  {
+    "name": "Tahiti",
+    "relativePath": "team-logos/tahiti.png"
+  },
+  {
+    "name": "Tajikistan",
+    "relativePath": "team-logos/tajikistan.png"
+  },
+  {
+    "name": "Tanzania",
+    "relativePath": "team-logos/tanzania.png"
+  },
+  {
+    "name": "Thailand",
+    "relativePath": "team-logos/thailand.png"
+  },
+  {
+    "name": "The Gambia",
+    "relativePath": "team-logos/the-gambia.png"
+  },
+  {
+    "name": "Timor-Leste",
+    "relativePath": "team-logos/timor-leste.png"
+  },
+  {
+    "name": "Togo",
+    "relativePath": "team-logos/togo.png"
+  },
+  {
+    "name": "Tonga",
+    "relativePath": "team-logos/tonga.png"
+  },
+  {
+    "name": "Torino",
+    "relativePath": "team-logos/torino.png"
+  },
+  {
+    "name": "Tottenham",
+    "relativePath": "team-logos/tottenham.png"
+  },
+  {
+    "name": "Toulouse",
+    "relativePath": "team-logos/toulouse.png"
+  },
+  {
+    "name": "Tranmere",
+    "relativePath": "team-logos/tranmere.png"
+  },
+  {
+    "name": "Tre Fiori",
+    "relativePath": "team-logos/tre-fiori.png"
+  },
+  {
+    "name": "Trinidad and Tobago",
+    "relativePath": "team-logos/trinidad-and-tobago.png"
+  },
+  {
+    "name": "Tunisia",
+    "relativePath": "team-logos/tunisia.png"
+  },
+  {
+    "name": "Turkey",
+    "relativePath": "team-logos/turkey.png"
+  },
+  {
+    "name": "Turkmenistan",
+    "relativePath": "team-logos/turkmenistan.png"
+  },
+  {
+    "name": "Turks & Caicos",
+    "relativePath": "team-logos/turks-caicos.png"
+  },
+  {
+    "name": "U Cluj",
+    "relativePath": "team-logos/u-cluj.png"
+  },
+  {
+    "name": "UAE",
+    "relativePath": "team-logos/uae.png"
+  },
+  {
+    "name": "US Virgin Islands",
+    "relativePath": "team-logos/us-virgin-islands.png"
+  },
+  {
+    "name": "Udinese",
+    "relativePath": "team-logos/udinese.png"
+  },
+  {
+    "name": "Uganda",
+    "relativePath": "team-logos/uganda.png"
+  },
+  {
+    "name": "Ukraine",
+    "relativePath": "team-logos/ukraine.png"
+  },
+  {
+    "name": "Union Berlin",
+    "relativePath": "team-logos/union-berlin.png"
+  },
+  {
+    "name": "Union St.Gilloise",
+    "relativePath": "team-logos/union-st-gilloise.png"
+  },
+  {
+    "name": "United Arab Emirates",
+    "relativePath": "team-logos/united-arab-emirates.png"
+  },
+  {
+    "name": "United States",
+    "relativePath": "team-logos/united-states.png"
+  },
+  {
+    "name": "Uruguay",
+    "relativePath": "team-logos/uruguay.png"
+  },
+  {
+    "name": "Utrecht",
+    "relativePath": "team-logos/utrecht.png"
+  },
+  {
+    "name": "Uzbekistan",
+    "relativePath": "team-logos/uzbekistan.png"
+  },
+  {
+    "name": "Vaduz",
+    "relativePath": "team-logos/vaduz.png"
+  },
+  {
+    "name": "Valencia",
+    "relativePath": "team-logos/valencia.png"
+  },
+  {
+    "name": "Valladolid",
+    "relativePath": "team-logos/valladolid.png"
+  },
+  {
+    "name": "Vanuatu",
+    "relativePath": "team-logos/vanuatu.png"
+  },
+  {
+    "name": "Vardar",
+    "relativePath": "team-logos/vardar.png"
+  },
+  {
+    "name": "Venezia",
+    "relativePath": "team-logos/venezia.png"
+  },
+  {
+    "name": "Venezuela",
+    "relativePath": "team-logos/venezuela.png"
+  },
+  {
+    "name": "Verona",
+    "relativePath": "team-logos/verona.png"
+  },
+  {
+    "name": "VfB Stuttgart",
+    "relativePath": "team-logos/vfb-stuttgart.png"
+  },
+  {
+    "name": "VfL Bochum",
+    "relativePath": "team-logos/vfl-bochum.png"
+  },
+  {
+    "name": "Vietnam",
+    "relativePath": "team-logos/vietnam.png"
+  },
+  {
+    "name": "Viktoria Plzen",
+    "relativePath": "team-logos/viktoria-plzen.png"
+  },
+  {
+    "name": "Villarreal",
+    "relativePath": "team-logos/villarreal.png"
+  },
+  {
+    "name": "WSG Tirol",
+    "relativePath": "team-logos/wsg-tirol.png"
+  },
+  {
+    "name": "Wales",
+    "relativePath": "team-logos/wales.png"
+  },
+  {
+    "name": "Walsall",
+    "relativePath": "team-logos/walsall.png"
+  },
+  {
+    "name": "Watford",
+    "relativePath": "team-logos/watford.png"
+  },
+  {
+    "name": "Werder Bremen",
+    "relativePath": "team-logos/werder-bremen.png"
+  },
+  {
+    "name": "West Brom",
+    "relativePath": "team-logos/west-brom.png"
+  },
+  {
+    "name": "West Bromwich Albion",
+    "relativePath": "team-logos/west-bromwich-albion.png"
+  },
+  {
+    "name": "West Ham United",
+    "relativePath": "team-logos/west-ham-united.png"
+  },
+  {
+    "name": "Wigan",
+    "relativePath": "team-logos/wigan.png"
+  },
+  {
+    "name": "Wimbledon",
+    "relativePath": "team-logos/wimbledon.png"
+  },
+  {
+    "name": "Wolfsberger AC",
+    "relativePath": "team-logos/wolfsberger-ac.png"
+  },
+  {
+    "name": "Wolfsburg",
+    "relativePath": "team-logos/wolfsburg.png"
+  },
+  {
+    "name": "Wolves",
+    "relativePath": "team-logos/wolves.png"
+  },
+  {
+    "name": "Wrexham",
+    "relativePath": "team-logos/wrexham.png"
+  },
+  {
+    "name": "Wycombe",
+    "relativePath": "team-logos/wycombe.png"
+  },
+  {
+    "name": "Yemen",
+    "relativePath": "team-logos/yemen.png"
+  },
+  {
+    "name": "Yeovil",
+    "relativePath": "team-logos/yeovil.png"
+  },
+  {
+    "name": "York",
+    "relativePath": "team-logos/york.png"
+  },
+  {
+    "name": "Young Boys",
+    "relativePath": "team-logos/young-boys.png"
+  },
+  {
+    "name": "Zambia",
+    "relativePath": "team-logos/zambia.png"
+  },
+  {
+    "name": "Zimbabwe",
+    "relativePath": "team-logos/zimbabwe.png"
+  },
+  {
+    "name": "Zorya Luhansk",
+    "relativePath": "team-logos/zorya-luhansk.png"
+  },
+  {
+    "name": "Zrinjski",
+    "relativePath": "team-logos/zrinjski.png"
+  },
+  {
+    "name": "Zrinjski Mostar",
+    "relativePath": "team-logos/zrinjski-mostar.png"
+  },
+  {
+    "name": "Žalgiris",
+    "relativePath": "team-logos/zalgiris.png"
+  },
+  {
+    "name": "_noTeamLogo 1",
+    "relativePath": "team-logos/noteamlogo-1.png"
+  }
+]
