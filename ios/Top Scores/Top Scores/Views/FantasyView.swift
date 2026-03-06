@@ -65,7 +65,7 @@ struct FantasyView: View {
     @State private var fantasyLoadingInterstitialSessionID = UUID()
 
     private let rivalsSectionScrollID = "fantasy-rivals-section"
-    private let fantasyLoadingInterstitialMinimumDurationNanoseconds: UInt64 = 10_000_000_000
+    private let fantasyLoadingInterstitialMinimumDurationNanoseconds: UInt64 = 3_000_000_000
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
     private let sharedEntryPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     private let addSheetClipboardPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
