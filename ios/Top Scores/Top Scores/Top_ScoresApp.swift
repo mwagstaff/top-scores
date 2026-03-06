@@ -40,10 +40,15 @@ struct Top_ScoresApp: App {
                         FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(
                             apiBaseURL: preferences.snapshot.apiBaseURL
                         )
+                    async let fantasyLoadingMessagesWarmTask: Void =
+                        FantasyLoadingMessagesCatalog.shared.ensureFresh(
+                            apiBaseURL: preferences.snapshot.apiBaseURL
+                        )
                     _ = await (
                         teamRankingsWarmTask,
                         teamRankingSettingsWarmTask,
-                        fantasyMappingsWarmTask
+                        fantasyMappingsWarmTask,
+                        fantasyLoadingMessagesWarmTask
                     )
                 }
         }
@@ -74,13 +79,18 @@ struct Top_ScoresApp: App {
                         FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(
                             apiBaseURL: snapshot.apiBaseURL
                         )
+                    async let fantasyLoadingMessagesWarmTask: Void =
+                        FantasyLoadingMessagesCatalog.shared.ensureFresh(
+                            apiBaseURL: snapshot.apiBaseURL
+                        )
                     _ = await (
                         refreshTask,
                         syncTask,
                         metricTask,
                         teamRankingWarmTask,
                         teamRankingSettingsWarmTask,
-                        fantasyMappingsWarmTask
+                        fantasyMappingsWarmTask,
+                        fantasyLoadingMessagesWarmTask
                     )
                 }
             default:

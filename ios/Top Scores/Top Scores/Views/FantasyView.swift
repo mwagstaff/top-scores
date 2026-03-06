@@ -60,8 +60,12 @@ struct FantasyView: View {
     @State private var showUnlinkAccountConfirmation = false
     @FocusState private var isRivalEntryInputFocused: Bool
     @State private var lastObservedClipboardChangeCount = UIPasteboard.general.changeCount
+    @State private var isFantasyLoadingInterstitialActive = false
+    @State private var isFantasyLoadingInterstitialMinimumDurationMet = false
+    @State private var fantasyLoadingInterstitialSessionID = UUID()
 
     private let rivalsSectionScrollID = "fantasy-rivals-section"
+    private let fantasyLoadingInterstitialMinimumDurationNanoseconds: UInt64 = 10_000_000_000
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
     private let sharedEntryPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     private let addSheetClipboardPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
@@ -237,6 +241,7 @@ struct FantasyView: View {
             .onChange(of: managerEntryID) { _, newValue in
                 syncManagerEntryIDToSharedDefaults()
                 if newValue.isEmpty {
+                    resetFantasyLoadingInterstitial()
                     fantasyViewModel.reset()
                     managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
                     managerValidationErrorMessage = nil
@@ -264,6 +269,9 @@ struct FantasyView: View {
             .onChange(of: preferences.apiBaseURL) { _, _ in
                 guard !managerEntryID.isEmpty else { return }
                 triggerFantasyRefresh(force: true)
+            }
+            .onChange(of: fantasyViewModel.isLoading) { _, isLoading in
+                handleFantasyLoadingInterstitialChange(isLoading: isLoading)
             }
             .onChange(of: rivalManagersJSON) { _, _ in
                 loadRivalManagersFromStorage()
@@ -355,7 +363,7 @@ struct FantasyView: View {
     }
 
     private var showFantasyLoadingInterstitial: Bool {
-        !managerEntryID.isEmpty && fantasyViewModel.data == nil && fantasyViewModel.isLoading
+        !managerEntryID.isEmpty && isFantasyLoadingInterstitialActive
     }
 
     private var linkedFantasyView: some View {
@@ -2162,6 +2170,41 @@ struct FantasyView: View {
             .animation(.easeInOut(duration: 0.2), value: showFantasyLoadingInterstitial)
     }
 
+    private func handleFantasyLoadingInterstitialChange(isLoading: Bool) {
+        let isInitialLoad = !managerEntryID.isEmpty && fantasyViewModel.data == nil
+        if isLoading && isInitialLoad {
+            beginFantasyLoadingInterstitialMinimumDisplay()
+            return
+        }
+
+        guard !isLoading else { return }
+        if isFantasyLoadingInterstitialMinimumDurationMet {
+            isFantasyLoadingInterstitialActive = false
+        }
+    }
+
+    private func beginFantasyLoadingInterstitialMinimumDisplay() {
+        let sessionID = UUID()
+        fantasyLoadingInterstitialSessionID = sessionID
+        isFantasyLoadingInterstitialActive = true
+        isFantasyLoadingInterstitialMinimumDurationMet = false
+
+        Task {
+            try? await Task.sleep(nanoseconds: fantasyLoadingInterstitialMinimumDurationNanoseconds)
+            guard fantasyLoadingInterstitialSessionID == sessionID else { return }
+            isFantasyLoadingInterstitialMinimumDurationMet = true
+            if !fantasyViewModel.isLoading {
+                isFantasyLoadingInterstitialActive = false
+            }
+        }
+    }
+
+    private func resetFantasyLoadingInterstitial() {
+        fantasyLoadingInterstitialSessionID = UUID()
+        isFantasyLoadingInterstitialActive = false
+        isFantasyLoadingInterstitialMinimumDurationMet = false
+    }
+
     private func triggerFantasyRefresh(force: Bool) {
         guard !managerEntryID.isEmpty else { return }
         guard isSelected else { return }
@@ -3619,7 +3662,7 @@ private struct FantasyLeagueShareSnapshotView: View {
 
 private struct FantasyLoadingInterstitialView: View {
     @State private var animate = false
-    @State private var statusMessage = FantasyInterstitialMessages.random()
+    @State private var statusMessage = "Loading Fantasy Football..."
 
     var body: some View {
         ZStack {
@@ -3682,9 +3725,9 @@ private struct FantasyLoadingInterstitialView: View {
                             )
                     }
 
-                    FantasyLoadingLogoView(size: 104)
-                        .rotationEffect(.degrees(animate ? 3 : -3))
-                        .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: animate)
+                    Image(systemName: "trophy")
+                        .font(.system(size: 56, weight: .regular))
+                        .foregroundStyle(.white)
                         .shadow(color: Color.black.opacity(0.18), radius: 12, x: 0, y: 8)
                 }
 
@@ -3707,79 +3750,10 @@ private struct FantasyLoadingInterstitialView: View {
         }
         .onAppear {
             animate = true
-            statusMessage = FantasyInterstitialMessages.random()
+            Task {
+                statusMessage = await FantasyLoadingMessagesCatalog.shared.randomMessage()
+            }
         }
-    }
-}
-
-private struct FantasyLoadingLogoView: View {
-    let size: CGFloat
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.16, green: 0.84, blue: 0.98),
-                            Color(red: 0.13, green: 0.70, blue: 0.92),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-
-            FantasyLionGlyph()
-                .fill(Color(red: 0.23, green: 0.0, blue: 0.29))
-                .padding(size * 0.17)
-
-            Image(systemName: "crown.fill")
-                .font(.system(size: size * 0.18, weight: .black))
-                .foregroundStyle(Color(red: 0.23, green: 0.0, blue: 0.29))
-                .offset(x: size * 0.10, y: size * 0.10)
-        }
-        .frame(width: size, height: size)
-        .overlay(
-            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-                .stroke(Color.white.opacity(0.18), lineWidth: 1)
-        )
-    }
-}
-
-private struct FantasyLionGlyph: Shape {
-    func path(in rect: CGRect) -> Path {
-        let width = rect.width
-        let height = rect.height
-
-        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: rect.minX + (x * width), y: rect.minY + (y * height))
-        }
-
-        var path = Path()
-        path.move(to: point(0.18, 0.34))
-        path.addCurve(to: point(0.30, 0.16), control1: point(0.18, 0.24), control2: point(0.23, 0.17))
-        path.addLine(to: point(0.41, 0.10))
-        path.addLine(to: point(0.45, 0.03))
-        path.addLine(to: point(0.50, 0.10))
-        path.addLine(to: point(0.58, 0.04))
-        path.addLine(to: point(0.58, 0.14))
-        path.addCurve(to: point(0.73, 0.29), control1: point(0.66, 0.16), control2: point(0.72, 0.21))
-        path.addCurve(to: point(0.67, 0.47), control1: point(0.75, 0.37), control2: point(0.73, 0.44))
-        path.addCurve(to: point(0.57, 0.60), control1: point(0.62, 0.52), control2: point(0.60, 0.58))
-        path.addCurve(to: point(0.64, 0.77), control1: point(0.58, 0.66), control2: point(0.62, 0.71))
-        path.addCurve(to: point(0.49, 0.90), control1: point(0.65, 0.86), control2: point(0.57, 0.90))
-        path.addCurve(to: point(0.38, 0.82), control1: point(0.45, 0.90), control2: point(0.40, 0.87))
-        path.addLine(to: point(0.28, 0.88))
-        path.addLine(to: point(0.26, 0.76))
-        path.addLine(to: point(0.17, 0.79))
-        path.addLine(to: point(0.12, 0.68))
-        path.addLine(to: point(0.04, 0.66))
-        path.addLine(to: point(0.10, 0.55))
-        path.addLine(to: point(0.02, 0.48))
-        path.addLine(to: point(0.10, 0.41))
-        path.addLine(to: point(0.07, 0.33))
-        path.closeSubpath()
-        return path
     }
 }
 
@@ -3815,35 +3789,6 @@ private struct FantasyShareAppIconView: View {
             return nil
         }
         return image
-    }
-}
-
-private enum FantasyInterstitialMessages {
-    private static let rawMessages = """
-Loading your squad...
-Checking live bonus points...
-Sizing up the rivals...
-Pulling in your latest picks...
-Refreshing your Gameweek score...
-Scanning the bench...
-Lining up the captains...
-Fetching rival teams...
-Updating live Fantasy data...
-Crunching bonus point swings...
-Building your pitch view...
-Calculating rank movement...
-Checking who blanked...
-Checking who hauled...
-Finalising your Fantasy dashboard...
-"""
-
-    static let all: [String] = rawMessages
-        .split(separator: "\n")
-        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty }
-
-    static func random() -> String {
-        all.randomElement() ?? "Loading Fantasy Football..."
     }
 }
 

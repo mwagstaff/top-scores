@@ -477,6 +477,16 @@ struct FantasyTeamShortNameMappingsResponse: Codable, Hashable {
     }
 }
 
+struct FantasyLoadingMessagesResponse: Codable, Hashable {
+    let updatedAt: String?
+    let messages: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case updatedAt = "updated_at"
+        case messages
+    }
+}
+
 struct FantasyTransferRecommendationsResponse: Codable, Hashable {
     struct Criteria: Codable, Hashable {
         let elementID: Int

@@ -417,6 +417,9 @@ const FPL_TRANSFER_MAX_LIMIT = 25;
 const FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH =
   process.env.FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH ||
   path.join(__dirname, "fantasy_team_short_name_mappings.json");
+const FANTASY_LOADING_MESSAGES_PATH =
+  process.env.FANTASY_LOADING_MESSAGES_PATH ||
+  path.join(__dirname, "fantasy_loading_messages.json");
 const DEFAULT_FPL_FIXTURES_SOURCE_URL = "https://fantasy.premierleague.com/api/fixtures/";
 const FPL_FIXTURES_SOURCE_URL =
   process.env.FPL_FIXTURES_SOURCE_URL || DEFAULT_FPL_FIXTURES_SOURCE_URL;
@@ -687,6 +690,9 @@ let fantasyTransferRecommendationFailuresTotal = 0;
 let fantasyTeamShortNameMappings = Object.freeze({});
 let fantasyTeamShortNameMappingsLoadedAt = null;
 let fantasyTeamShortNameMappingsMtimeMs = null;
+let fantasyLoadingMessages = Object.freeze([]);
+let fantasyLoadingMessagesLoadedAt = null;
+let fantasyLoadingMessagesMtimeMs = null;
 
 const STAGE_PATTERNS = [
   /\s*[-:–]\s*Round\s+\w+$/i,
@@ -3155,6 +3161,58 @@ function loadFantasyTeamShortNameMappings() {
   }
 
   return fantasyTeamShortNameMappings;
+}
+
+function loadFantasyLoadingMessages() {
+  let stat = null;
+  try {
+    stat = fs.statSync(FANTASY_LOADING_MESSAGES_PATH);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      fantasyLoadingMessages = Object.freeze([]);
+      fantasyLoadingMessagesLoadedAt = new Date().toISOString();
+      fantasyLoadingMessagesMtimeMs = null;
+      console.warn(
+        `[FantasyLoadingMessages] Message file not found at ${FANTASY_LOADING_MESSAGES_PATH}; using empty list.`
+      );
+      return fantasyLoadingMessages;
+    }
+    console.warn(
+      `[FantasyLoadingMessages] Failed to stat message file: ${error.message || error}`
+    );
+    return fantasyLoadingMessages;
+  }
+
+  const mtimeMs = Number(stat && stat.mtimeMs);
+  if (Number.isFinite(mtimeMs) && fantasyLoadingMessagesMtimeMs === mtimeMs) {
+    return fantasyLoadingMessages;
+  }
+
+  try {
+    const raw = fs.readFileSync(FANTASY_LOADING_MESSAGES_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      throw new Error("Message file must be a JSON array.");
+    }
+
+    const next = parsed
+      .map((message) => String(message || "").trim())
+      .filter(Boolean);
+
+    fantasyLoadingMessages = Object.freeze(next);
+    fantasyLoadingMessagesLoadedAt = new Date().toISOString();
+    fantasyLoadingMessagesMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+    console.log(
+      `[FantasyLoadingMessages] Loaded ${next.length} messages from ${FANTASY_LOADING_MESSAGES_PATH}`
+    );
+  } catch (error) {
+    console.warn(
+      `[FantasyLoadingMessages] Failed to load message file: ${error.message || error}`
+    );
+    fantasyLoadingMessagesMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+  }
+
+  return fantasyLoadingMessages;
 }
 
 function resolveManualMappingCandidates(normalizedName, manualMappings) {
@@ -10073,6 +10131,19 @@ app.get(`${API_PREFIX}/fantasy/team-short-name-mappings`, (_req, res) => {
   res.json({
     updated_at: fantasyTeamShortNameMappingsLoadedAt,
     mappings,
+  });
+});
+
+app.get(`${API_PREFIX}/fantasy/loading-messages`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+  const messages = loadFantasyLoadingMessages();
+  if (fantasyLoadingMessagesLoadedAt) {
+    res.set("X-Last-Updated", fantasyLoadingMessagesLoadedAt);
+  }
+  res.set("X-Operational-Source", "filesystem_config");
+  res.json({
+    updated_at: fantasyLoadingMessagesLoadedAt,
+    messages,
   });
 });
 

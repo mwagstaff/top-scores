@@ -176,6 +176,16 @@ struct APIClient {
         return try JSONDecoder().decode(FantasyTeamShortNameMappingsResponse.self, from: data)
     }
 
+    func fetchFantasyLoadingMessages() async throws -> FantasyLoadingMessagesResponse {
+        let request = try buildRequest(path: "fantasy/loading-messages", queryItems: [])
+        let (data, http) = try await performRequest(
+            request,
+            operation: "fantasy_loading_messages"
+        )
+        try validateSuccess(http, data: data, operation: "fantasy_loading_messages")
+        return try JSONDecoder().decode(FantasyLoadingMessagesResponse.self, from: data)
+    }
+
     func fetchFantasyTransferRecommendations(
         elementID: Int,
         valueWindowMillions: Double = 1.5,
