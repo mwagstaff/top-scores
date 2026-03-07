@@ -21,6 +21,15 @@ const tabs = [
     ),
   },
   {
+    to: "/tables",
+    label: "Tables",
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h16v14H4zM4 10h16M9 5v14M15 5v14" />
+      </svg>
+    ),
+  },
+  {
     to: "/preferences",
     label: "Preferences",
     icon: (
@@ -36,14 +45,14 @@ export function AppShell({ children }: PropsWithChildren) {
     <div className="app-shell">
       <header className="app-header">
         <div className="brand">
-          <img src="/brand/app-icon" alt="" className="brand-logo" />
+          <img src="/generated-assets/app-icon.png" alt="" className="brand-logo" />
           <div>
             <div className="brand-kicker">Top Scores</div>
             <h1>Web client</h1>
           </div>
         </div>
         <p className="brand-copy">
-          Fixtures, results, and local browser preferences with the same core model as the iOS app.
+          Fixtures, results, tables, and local browser preferences with the same core model as the iOS app.
         </p>
         <nav className="tab-strip tab-strip-desktop" aria-label="Primary">
           {tabs.map((tab) => (

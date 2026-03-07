@@ -37,15 +37,10 @@ enum BackgroundRefreshManager {
 
             do {
                 let client = APIClient(baseURL: baseURL)
-                async let matchesTask = client.fetchMatches(preferences: snapshot)
-                async let bbcTask: [BbcMatch] = client.fetchBbcLiveMatches()
-
-                let response = try await matchesTask
-                let bbcMatches = (try? await bbcTask) ?? []
-                let withScores = MatchScoreResolver.applyScores(to: response.matches, using: bbcMatches)
-                let preferenceFiltered = applyPreferenceFilters(to: withScores, snapshot: snapshot)
+                let response = try await client.fetchMatches(preferences: snapshot)
+                let preferenceFiltered = applyPreferenceFilters(to: response.matches, snapshot: snapshot)
                 let sorted = sortedMatches(preferenceFiltered)
-                let unfilteredSorted = sortedMatches(withScores)
+                let unfilteredSorted = sortedMatches(response.matches)
 
                 MatchCache.save(matches: unfilteredSorted, lastUpdated: response.lastUpdated, snapshot: snapshot)
                 SharedMatchesBridge.saveAndSync(

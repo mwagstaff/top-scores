@@ -480,6 +480,30 @@ const parsedMatchDetailsStaleMinuteThreshold = Number(
 const MATCH_DETAILS_STALE_MINUTE_THRESHOLD = Number.isFinite(parsedMatchDetailsStaleMinuteThreshold)
   ? Math.max(1, Math.floor(parsedMatchDetailsStaleMinuteThreshold))
   : 90;
+const parsedMatchDetailsBackfillCooldownMs = Number(
+  process.env.MATCH_DETAILS_BACKFILL_COOLDOWN_MS || 60 * 1000
+);
+const MATCH_DETAILS_BACKFILL_COOLDOWN_MS = Number.isFinite(parsedMatchDetailsBackfillCooldownMs)
+  ? Math.max(5 * 1000, Math.floor(parsedMatchDetailsBackfillCooldownMs))
+  : 60 * 1000;
+const parsedMatchDetailsBackfillIdleCooldownMs = Number(
+  process.env.MATCH_DETAILS_BACKFILL_IDLE_COOLDOWN_MS || 10 * 60 * 1000
+);
+const MATCH_DETAILS_BACKFILL_IDLE_COOLDOWN_MS = Number.isFinite(parsedMatchDetailsBackfillIdleCooldownMs)
+  ? Math.max(30 * 1000, Math.floor(parsedMatchDetailsBackfillIdleCooldownMs))
+  : 10 * 60 * 1000;
+const parsedMatchDetailsBackfillFailureCooldownMs = Number(
+  process.env.MATCH_DETAILS_BACKFILL_FAILURE_COOLDOWN_MS || 2 * 60 * 1000
+);
+const MATCH_DETAILS_BACKFILL_FAILURE_COOLDOWN_MS = Number.isFinite(parsedMatchDetailsBackfillFailureCooldownMs)
+  ? Math.max(10 * 1000, Math.floor(parsedMatchDetailsBackfillFailureCooldownMs))
+  : 2 * 60 * 1000;
+const parsedMatchDetailsBackfillInFlightCooldownMs = Number(
+  process.env.MATCH_DETAILS_BACKFILL_IN_FLIGHT_COOLDOWN_MS || 15 * 1000
+);
+const MATCH_DETAILS_BACKFILL_IN_FLIGHT_COOLDOWN_MS = Number.isFinite(parsedMatchDetailsBackfillInFlightCooldownMs)
+  ? Math.max(5 * 1000, Math.floor(parsedMatchDetailsBackfillInFlightCooldownMs))
+  : 15 * 1000;
 const TEAM_RANKING_DEFAULT_SOURCE =
   normalizeTeamRankingSource(SERVER_CONFIG.teamRankingDefaultSource) ||
   TEAM_RANKING_SOURCE_MERGED;
@@ -659,6 +683,8 @@ let clubEloManualMappingsMtimeMs = null;
 let matchDetailsById = new Map();
 let matchDetailsLastUpdated = null;
 let matchDetailsUpdating = false;
+const matchDetailsBackfillTasks = new Map();
+const matchDetailsBackfillNextAttemptAt = new Map();
 let missingTeamLogosByKey = new Map();
 let missingTeamLogosLastUpdated = null;
 let cachedFantasyBootstrap = null;
@@ -3830,6 +3856,7 @@ function normalizeMatchDetailsPayload(match) {
     ? String(match.time).trim()
     : null;
   const league = String(match.league || "").trim() || null;
+  const leagueSubcategory = String(match.league_subcategory || "").trim() || null;
   const homeScore = parseNumericScore(match.home_score);
   const awayScore = parseNumericScore(match.away_score);
   const aggregateHomeScore = parseNumericScore(match.aggregate_home_score);
@@ -3842,6 +3869,7 @@ function normalizeMatchDetailsPayload(match) {
     date,
     time,
     league,
+    league_subcategory: leagueSubcategory,
     home_team: homeTeam,
     away_team: awayTeam,
     home_score: homeScore,
@@ -3873,6 +3901,8 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     date: incoming.date || (existing ? existing.date : null),
     time: incoming.time || (existing ? existing.time : null),
     league: incoming.league || (existing ? existing.league : null),
+    league_subcategory:
+      incoming.league_subcategory || (existing ? existing.league_subcategory : null),
     home_team: incoming.home_team || (existing ? existing.home_team : null),
     away_team: incoming.away_team || (existing ? existing.away_team : null),
     updated_at: updatedAtIso,
@@ -3957,13 +3987,51 @@ function upsertMatchDetailsFromMatch(match, updatedAtIso = new Date().toISOStrin
   return incoming.id;
 }
 
+function countGoalsFromScorers(goalScorers) {
+  if (!Array.isArray(goalScorers)) return 0;
+  return goalScorers.reduce((total, scorer) => {
+    const goalTimes = Array.isArray(scorer && scorer.goal_times) ? scorer.goal_times.length : 0;
+    const ownGoalTimes = Array.isArray(scorer && scorer.own_goal_times)
+      ? scorer.own_goal_times.length
+      : 0;
+    return total + goalTimes + ownGoalTimes;
+  }, 0);
+}
+
 function matchDetailsNeedsEnrichment(payload) {
   if (!payload || typeof payload !== "object") return false;
-  const hasAnyEvents = MATCH_DETAILS_EVENT_FIELDS.some((field) => {
-    const value = payload[field];
-    return Array.isArray(value) && value.length > 0;
-  });
-  return !hasAnyEvents;
+  const homeScore = parseNumericScore(payload.home_score);
+  const awayScore = parseNumericScore(payload.away_score);
+  const totalScore =
+    (homeScore !== null ? homeScore : 0) + (awayScore !== null ? awayScore : 0);
+  const recordedGoals =
+    countGoalsFromScorers(payload.home_goal_scorers) +
+    countGoalsFromScorers(payload.away_goal_scorers);
+  if (totalScore <= 0) return false;
+  return recordedGoals < totalScore;
+}
+
+function matchDetailsMissingCoreMetadata(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  if (!payload.details_url) return false;
+
+  const hasDate = isDateOnly(String(payload.date || "").trim());
+  const hasTime = TIME_ONLY_PATTERN.test(String(payload.time || "").trim());
+  const hasLeague = String(payload.league || "").trim().length > 0;
+  const hasHomeTeam = String(payload.home_team || "").trim().length > 0;
+  const hasAwayTeam = String(payload.away_team || "").trim().length > 0;
+
+  return !hasDate || !hasTime || !hasLeague || !hasHomeTeam || !hasAwayTeam;
+}
+
+function matchDetailsHasMalformedCompetitionMetadata(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  if (!payload.details_url) return false;
+
+  const league = String(payload.league || "").trim();
+  if (!league) return false;
+
+  return /\s*[-–—]\s*$/.test(league);
 }
 
 function matchDetailsHasStaleInProgressStatus(payload, nowMs = Date.now()) {
@@ -3991,9 +4059,98 @@ function matchDetailsNeedsBackfill(payload, nowMs = Date.now()) {
   if (!payload || typeof payload !== "object") return false;
   if (!payload.details_url) return false;
   return (
+    matchDetailsMissingCoreMetadata(payload) ||
+    matchDetailsHasMalformedCompetitionMetadata(payload) ||
     matchDetailsNeedsEnrichment(payload) ||
     matchDetailsHasStaleInProgressStatus(payload, nowMs)
   );
+}
+
+function matchDetailsBackfillCooldownMs(payload, reason = "success") {
+  if (reason === "failure") return MATCH_DETAILS_BACKFILL_FAILURE_COOLDOWN_MS;
+  const isInProgress =
+    payload && payload.in_progress !== undefined
+      ? Boolean(payload.in_progress)
+      : isInProgressMatchStatus(resolveMatchScoreStatus(payload));
+  return isInProgress
+    ? MATCH_DETAILS_BACKFILL_COOLDOWN_MS
+    : MATCH_DETAILS_BACKFILL_IDLE_COOLDOWN_MS;
+}
+
+function scheduleMatchDetailsBackfill(payload, options = {}) {
+  if (!payload || typeof payload !== "object") return false;
+
+  const matchId = normalizeMatchDetailsId(payload.id);
+  if (!matchId || !payload.details_url) return false;
+
+  const nowMs = Date.now();
+  const nextAllowedAt = matchDetailsBackfillNextAttemptAt.get(matchId) || 0;
+  if (matchDetailsBackfillTasks.has(matchId) || nextAllowedAt > nowMs) return false;
+  if (!matchDetailsNeedsBackfill(payload, nowMs)) return false;
+
+  const trigger = options && options.trigger ? String(options.trigger) : "request";
+  matchDetailsBackfillNextAttemptAt.set(
+    matchId,
+    nowMs + MATCH_DETAILS_BACKFILL_IN_FLIGHT_COOLDOWN_MS
+  );
+
+  const task = (async () => {
+    try {
+      const fetched = await fetchBbcMatchByDetailsUrl(payload.details_url);
+      if (!fetched) {
+        matchDetailsBackfillNextAttemptAt.set(
+          matchId,
+          Date.now() + MATCH_DETAILS_BACKFILL_FAILURE_COOLDOWN_MS
+        );
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const currentPayload = matchDetailsById.get(matchId) || payload;
+      const combined = buildMergedMatchDetailsCandidate(
+        currentPayload,
+        fetched,
+        payload.details_url
+      );
+      const upsertedMatchId = upsertMatchDetailsFromMatch(combined, nowIso);
+      const updatedPayload = upsertedMatchId ? matchDetailsById.get(upsertedMatchId) : null;
+      if (upsertedMatchId && updatedPayload) {
+        await persistOperationalMatchDetailsSafe(
+          {
+            [upsertedMatchId]: updatedPayload,
+          },
+          {
+            replace: false,
+            updated_at: nowIso,
+            source: `async_match_details_backfill:${trigger}`,
+          }
+        );
+      }
+
+      if (updatedPayload && matchDetailsNeedsBackfill(updatedPayload)) {
+        matchDetailsBackfillNextAttemptAt.set(
+          matchId,
+          Date.now() + matchDetailsBackfillCooldownMs(updatedPayload, "success")
+        );
+      } else {
+        matchDetailsBackfillNextAttemptAt.delete(matchId);
+      }
+    } catch (error) {
+      matchDetailsBackfillNextAttemptAt.set(
+        matchId,
+        Date.now() + MATCH_DETAILS_BACKFILL_FAILURE_COOLDOWN_MS
+      );
+      console.warn(
+        `Failed to asynchronously backfill match details for ${matchId}:`,
+        error.message || error
+      );
+    } finally {
+      matchDetailsBackfillTasks.delete(matchId);
+    }
+  })();
+
+  matchDetailsBackfillTasks.set(matchId, task);
+  return true;
 }
 
 function buildMergedMatchDetailsCandidate(seedMatch, fetchedMatch, detailsUrl) {
@@ -4368,7 +4525,15 @@ function isCompatibleMatchDetailsCandidate(candidate, normalizedMatch) {
 
   const matchLeague = normalizeLeagueIdentity(normalizedMatch.league);
   if (candidate.league && matchLeague && candidate.league !== matchLeague) {
-    return false;
+    const normalizedHome = normalizeTeamIdentity(normalizedMatch.home_team);
+    const normalizedAway = normalizeTeamIdentity(normalizedMatch.away_team);
+    const exactTeamMatch =
+      candidate.home === normalizedHome && candidate.away === normalizedAway;
+    const exactDateMatch = candidate.date === normalizedMatch.date;
+    const exactTimeMatch = candidate.time === matchTime;
+    if (!(exactTeamMatch && exactDateMatch && exactTimeMatch)) {
+      return false;
+    }
   }
 
   return true;
@@ -4464,12 +4629,6 @@ function toMatchListPayload(match, options = {}) {
   const matchDetailsIdentityIndex =
     options && options.matchDetailsIdentityIndex ? options.matchDetailsIdentityIndex : null;
 
-  let resolvedHomeScore = normalized.home_score;
-  let resolvedAwayScore = normalized.away_score;
-  let resolvedScoreStatus = normalized.score_status
-    ? String(normalized.score_status).trim()
-    : null;
-
   const payload = {
     date: normalized.date,
     time: normalized.time,
@@ -4481,14 +4640,6 @@ function toMatchListPayload(match, options = {}) {
 
   if (normalized.league_subcategory) {
     payload.league_subcategory = normalized.league_subcategory;
-  } else {
-  }
-
-  if (normalized.aggregate_home_score !== undefined && normalized.aggregate_home_score !== null) {
-    payload.aggregate_home_score = normalized.aggregate_home_score;
-  }
-  if (normalized.aggregate_away_score !== undefined && normalized.aggregate_away_score !== null) {
-    payload.aggregate_away_score = normalized.aggregate_away_score;
   }
 
   // Try to get match details ID from details_url or explicit match_details_id field
@@ -4505,126 +4656,6 @@ function toMatchListPayload(match, options = {}) {
   }
   if (detailsId) {
     payload.match_details_id = detailsId;
-  }
-
-  // Check if we have enriched match details (including penalty_result) in the cache
-  let penaltyResult = normalized.penalty_result;
-  let aggregateHomeScore = normalized.aggregate_home_score;
-  let aggregateAwayScore = normalized.aggregate_away_score;
-  if (detailsId && matchDetailsLookup) {
-    const matchDetails =
-      matchDetailsLookup instanceof Map
-        ? matchDetailsLookup.get(detailsId)
-        : matchDetailsLookup[detailsId];
-    if (matchDetails) {
-      const baseStatus = normalizeMatchStatusValue(resolvedScoreStatus);
-      const detailsStatus = normalizeMatchStatusValue(matchDetails.score_status);
-      const preferredStatus = pickPreferredMatchStatus(baseStatus, detailsStatus, {
-        preferIncomingOnTie: true,
-        allowTerminalRegression: false,
-      });
-      if (preferredStatus) {
-        resolvedScoreStatus = preferredStatus;
-      }
-
-      // CRITICAL FIX: Only use penalty_result if the cached details match this actual match
-      const teamsMatch = (() => {
-        const normalizedHome = normalizeTeamName(normalized.home_team || "");
-        const normalizedAway = normalizeTeamName(normalized.away_team || "");
-        const detailsHome = normalizeTeamName(matchDetails.home_team || "");
-        const detailsAway = normalizeTeamName(matchDetails.away_team || "");
-        if (!normalizedHome || !normalizedAway || !detailsHome || !detailsAway) return false;
-        return normalizedHome === detailsHome && normalizedAway === detailsAway;
-      })();
-      if (
-        teamsMatch
-      ) {
-        const detailsHomeScore = parseNumericScore(matchDetails.home_score);
-        const detailsAwayScore = parseNumericScore(matchDetails.away_score);
-        const baseHasScore =
-          resolvedHomeScore !== undefined &&
-          resolvedHomeScore !== null &&
-          resolvedAwayScore !== undefined &&
-          resolvedAwayScore !== null;
-        const detailsHasScore = detailsHomeScore !== null && detailsAwayScore !== null;
-        const baseTotal = baseHasScore ? resolvedHomeScore + resolvedAwayScore : null;
-        const detailsTotal = detailsHasScore ? detailsHomeScore + detailsAwayScore : null;
-        const baseMinute = parseMatchStatusMinute(baseStatus);
-        const detailsMinute = parseMatchStatusMinute(detailsStatus);
-
-        let useDetailsScores = false;
-        if (detailsHasScore) {
-          if (!baseHasScore) {
-            useDetailsScores = true;
-          } else if (detailsTotal > baseTotal) {
-            useDetailsScores = true;
-          } else if (detailsTotal === baseTotal) {
-            if (detailsMinute !== null && baseMinute !== null) {
-              useDetailsScores = detailsMinute >= baseMinute;
-            } else if (detailsMinute !== null && baseMinute === null) {
-              useDetailsScores = true;
-            } else if (preferredStatus && preferredStatus === detailsStatus) {
-              useDetailsScores = true;
-            }
-          }
-        }
-
-        if (useDetailsScores) {
-          resolvedHomeScore = detailsHomeScore;
-          resolvedAwayScore = detailsAwayScore;
-        }
-
-        if (!penaltyResult && matchDetails.penalty_result) {
-          penaltyResult = matchDetails.penalty_result;
-        }
-        if (aggregateHomeScore === undefined || aggregateHomeScore === null) {
-          aggregateHomeScore = parseNumericScore(matchDetails.aggregate_home_score);
-        }
-        if (aggregateAwayScore === undefined || aggregateAwayScore === null) {
-          aggregateAwayScore = parseNumericScore(matchDetails.aggregate_away_score);
-        }
-      }
-    }
-  }
-
-  if (resolvedHomeScore !== undefined && resolvedHomeScore !== null) {
-    payload.home_score = resolvedHomeScore;
-  }
-  if (resolvedAwayScore !== undefined && resolvedAwayScore !== null) {
-    payload.away_score = resolvedAwayScore;
-  }
-  if (resolvedScoreStatus) {
-    payload.score_status = resolvedScoreStatus;
-  }
-
-  if (aggregateHomeScore !== undefined && aggregateHomeScore !== null) {
-    payload.aggregate_home_score = aggregateHomeScore;
-  }
-  if (aggregateAwayScore !== undefined && aggregateAwayScore !== null) {
-    payload.aggregate_away_score = aggregateAwayScore;
-  }
-
-  // Clean up penalty_result - only use it if it's a non-empty string
-  if (penaltyResult !== null && penaltyResult !== undefined) {
-    if (typeof penaltyResult === 'string') {
-      penaltyResult = penaltyResult.trim();
-      if (!penaltyResult) {
-        penaltyResult = null;
-      }
-    } else {
-      penaltyResult = null;
-    }
-  }
-
-  // If we have a penalty result (shootout complete) and status is "Pens", change to "AET"
-  if (penaltyResult && (payload.score_status === "Pens" || payload.score_status === "PEN" || payload.score_status === "PEN.")) {
-    payload.score_status = "AET";
-  }
-
-  // Include penalty_result in the payload only if it exists, is non-empty, AND the match status is AET
-  // (AET means the penalty shootout is complete, so we should show the result)
-  if (penaltyResult && payload.score_status === "AET") {
-    payload.penalty_result = penaltyResult;
   }
 
   return payload;
@@ -4646,17 +4677,19 @@ function monitorCandidateSortAsc(lhs, rhs) {
   return lhsId.localeCompare(rhsId);
 }
 
-function toMonitorCandidateFromDetailsPayload(payload) {
+function toMonitorCandidateFromDetailsPayload(payload, options = {}) {
   if (!payload || typeof payload !== "object") return null;
   const matchId = normalizeMatchDetailsId(payload.id);
   if (!matchId) return null;
 
   const date = isDateOnly(payload.date) ? String(payload.date).trim() : null;
-  if (!date) return null;
+  if (!date && !options.allowMissingDate) return null;
 
   const time = TIME_ONLY_PATTERN.test(String(payload.time || "").trim())
     ? String(payload.time).trim()
-    : "00:00";
+    : date
+      ? "00:00"
+      : null;
   const homeScore = parseNumericScore(payload.home_score);
   const awayScore = parseNumericScore(payload.away_score);
 
@@ -7433,14 +7466,116 @@ async function getOperationalArrayDataset(name, fallback = []) {
   };
 }
 
+function getMatchDetailsStatePayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const id = normalizeMatchDetailsId(payload.id);
+  if (!id) return null;
+
+  const homeScore = parseNumericScore(payload.home_score);
+  const awayScore = parseNumericScore(payload.away_score);
+  const aggregateHomeScore = parseNumericScore(payload.aggregate_home_score);
+  const aggregateAwayScore = parseNumericScore(payload.aggregate_away_score);
+  const scoreStatus = resolveMatchScoreStatus(payload) || payload.score_status || null;
+
+  const statePayload = {
+    id,
+    details_url: payload.details_url || null,
+    date: payload.date || null,
+    time: payload.time || null,
+    league: payload.league || null,
+    home_team: payload.home_team || null,
+    away_team: payload.away_team || null,
+    home_score: homeScore,
+    away_score: awayScore,
+    aggregate_home_score: aggregateHomeScore,
+    aggregate_away_score: aggregateAwayScore,
+    score_status: scoreStatus,
+    penalty_result: payload.penalty_result || null,
+    in_progress:
+      payload.in_progress !== undefined
+        ? Boolean(payload.in_progress)
+        : isInProgressMatchStatus(scoreStatus),
+    updated_at: payload.updated_at || null,
+  };
+
+  return statePayload;
+}
+
+function currentMatchDetailsLookupSnapshot() {
+  if (matchDetailsById.size > 0) {
+    return {
+      lookup: matchDetailsById,
+      updated_at: matchDetailsLastUpdated,
+      source: "memory",
+    };
+  }
+  return null;
+}
+
 async function getOperationalMatchDetailsByIdSafe(matchId) {
-  const payload = await getOperationalMatchDetails(matchId);
+  const normalized = normalizeMatchDetailsId(matchId);
+  if (!normalized) {
+    return { payload: null, source: "invalid_match_id" };
+  }
+
+  const cached = matchDetailsById.get(normalized);
+  if (cached && typeof cached === "object") {
+    return { payload: cached, source: "memory" };
+  }
+
+  const payload = await getOperationalMatchDetails(normalized);
   if (payload && typeof payload === "object") {
+    matchDetailsById.set(normalized, payload);
+    if (payload.updated_at && (!matchDetailsLastUpdated || payload.updated_at > matchDetailsLastUpdated)) {
+      matchDetailsLastUpdated = payload.updated_at;
+    }
     return { payload, source: "redis" };
   }
   return {
     payload: null,
     source: "redis_missing",
+  };
+}
+
+async function getOperationalMatchDetailsBatchSafe(matchIds) {
+  const uniqueIds = [];
+  const seen = new Set();
+  (Array.isArray(matchIds) ? matchIds : []).forEach((matchId) => {
+    const normalized = normalizeMatchDetailsId(matchId);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    uniqueIds.push(normalized);
+  });
+
+  const payloadsById = new Map();
+  const missingIds = [];
+
+  uniqueIds.forEach((matchId) => {
+    const cached = matchDetailsById.get(matchId);
+    if (cached && typeof cached === "object") {
+      payloadsById.set(matchId, cached);
+    } else {
+      missingIds.push(matchId);
+    }
+  });
+
+  if (missingIds.length > 0) {
+    await Promise.all(
+      missingIds.map(async (matchId) => {
+        const payload = await getOperationalMatchDetails(matchId);
+        if (!payload || typeof payload !== "object") return;
+        matchDetailsById.set(matchId, payload);
+        payloadsById.set(matchId, payload);
+        if (payload.updated_at && (!matchDetailsLastUpdated || payload.updated_at > matchDetailsLastUpdated)) {
+          matchDetailsLastUpdated = payload.updated_at;
+        }
+      })
+    );
+  }
+
+  return {
+    payloadsById,
+    source: missingIds.length > 0 ? "memory+redis" : "memory",
   };
 }
 
@@ -8801,24 +8936,48 @@ function sortAdminMatchesByKickoff(lhs, rhs, direction = "asc") {
 function toAdminListMatchPayload(match, options = {}) {
   const payload = toMatchListPayload(match, options);
   if (!payload) return null;
+  const normalized = normalizeMatchRecord(match);
+  let statePayload = null;
+
+  if (payload.match_details_id && options && options.matchDetailsLookup) {
+    const matchDetailsLookup = options.matchDetailsLookup;
+    const matchDetails =
+      matchDetailsLookup instanceof Map
+        ? matchDetailsLookup.get(payload.match_details_id)
+        : matchDetailsLookup[payload.match_details_id];
+    statePayload = getMatchDetailsStatePayload(matchDetails);
+  }
+
+  if (!statePayload && normalized) {
+    statePayload = {
+      home_score: parseNumericScore(normalized.home_score),
+      away_score: parseNumericScore(normalized.away_score),
+      aggregate_home_score: parseNumericScore(normalized.aggregate_home_score),
+      aggregate_away_score: parseNumericScore(normalized.aggregate_away_score),
+      score_status: resolveMatchScoreStatus(normalized),
+      penalty_result: normalized.penalty_result || null,
+    };
+  }
 
   const kickoffMs = kickoffTimestampMs(payload);
-  const inProgress = isInProgressMatchStatus(payload.score_status);
-  const finished = isFinishedMatchStatus(payload.score_status);
+  const inProgress = isInProgressMatchStatus(statePayload && statePayload.score_status);
+  const finished = isFinishedMatchStatus(statePayload && statePayload.score_status);
   const hasScore =
-    payload.home_score !== undefined &&
-    payload.home_score !== null &&
-    payload.away_score !== undefined &&
-    payload.away_score !== null;
+    statePayload &&
+    statePayload.home_score !== undefined &&
+    statePayload.home_score !== null &&
+    statePayload.away_score !== undefined &&
+    statePayload.away_score !== null;
 
   return {
     ...payload,
+    ...(statePayload || {}),
     id: payload.match_details_id || matchKey(payload),
     kickoff_ts_ms: Number.isFinite(kickoffMs) ? kickoffMs : null,
     in_progress: inProgress,
     finished,
     has_score: hasScore,
-    display_score_status: displayMatchStatusForAdmin(payload.score_status),
+    display_score_status: displayMatchStatusForAdmin(statePayload && statePayload.score_status),
   };
 }
 
@@ -9419,11 +9578,15 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       return;
     }
 
-    const [mergedDataset, premierLeagueDataset, matchDetailsSnapshot] = await Promise.all([
+    const [mergedDataset, premierLeagueDataset] = await Promise.all([
       getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
       getOperationalArrayDataset(OP_DATASET_PREMIER_LEAGUE_TEAMS, cachedPremierLeagueTeams),
-      getOperationalMatchDetailsSnapshotSafe(),
     ]);
+    const matchDetailsSnapshot = currentMatchDetailsLookupSnapshot() || {
+      lookup: {},
+      updated_at: null,
+      source: "memory_missing",
+    };
 
     const latestUpdated = newestIsoTimestamp([
       mergedDataset.updated_at,
@@ -9527,7 +9690,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     res.set("X-Has-More", hasMore ? "true" : "false");
     res.set("X-Sort-Order", sortOrder);
 
-    const matchDetailsLookup = matchDetailsSnapshot.records || {};
+    const matchDetailsLookup = matchDetailsSnapshot.lookup || {};
     const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(matchDetailsLookup);
     const payload = paged
       .map((match) =>
@@ -9542,6 +9705,51 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     console.warn("Failed to serve /matches from cache:", err.message || err);
     res.status(500).json({ error: "Failed to serve matches from cache" });
   }
+});
+
+app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
+  const uniqueIds = [];
+  const seen = new Set();
+  ids.forEach((value) => {
+    const normalized = normalizeMatchDetailsId(value);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    uniqueIds.push(normalized);
+  });
+
+  if (uniqueIds.length === 0) {
+    res.status(400).json({ error: "Expected non-empty ids array of BBC match detail ids." });
+    return;
+  }
+
+  if (uniqueIds.length > 500) {
+    res.status(400).json({ error: "Too many ids. Maximum 500 per request." });
+    return;
+  }
+
+  const lookup = await getOperationalMatchDetailsBatchSafe(uniqueIds);
+  res.set("X-Operational-Source", lookup.source || "unknown");
+
+  const payload = uniqueIds
+    .map((matchId) => {
+      const detailsPayload = lookup.payloadsById.get(matchId) || null;
+      if (!detailsPayload) return null;
+      scheduleMatchDetailsBackfill(detailsPayload, { trigger: "batch_states" });
+      return getMatchDetailsStatePayload(detailsPayload);
+    })
+    .filter(Boolean);
+
+  const latestUpdated = newestIsoTimestamp(
+    payload.map((item) => (item && item.updated_at ? item.updated_at : null))
+  );
+  if (latestUpdated) {
+    res.set("X-Last-Updated", latestUpdated);
+  }
+
+  res.json(payload);
 });
 
 app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
@@ -9583,47 +9791,15 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     return;
   }
 
-  let detailsLookup = await getOperationalMatchDetailsByIdSafe(matchId);
-  let payload = detailsLookup.payload;
+  const detailsLookup = await getOperationalMatchDetailsByIdSafe(matchId);
+  const payload = detailsLookup.payload;
   if (!payload) {
     res.status(404).json({ error: "No cached match details found for match id." });
     return;
   }
   res.set("X-Operational-Source", detailsLookup.source || "unknown");
 
-  if (matchDetailsNeedsBackfill(payload) && payload.details_url) {
-    try {
-      const nowIso = new Date().toISOString();
-      const fetched = await fetchBbcMatchByDetailsUrl(payload.details_url);
-      if (fetched) {
-        const combined = buildMergedMatchDetailsCandidate(
-          payload,
-          fetched,
-          payload.details_url
-        );
-        const upsertedMatchId = upsertMatchDetailsFromMatch(combined, nowIso);
-        payload = matchDetailsById.get(matchId);
-        if (upsertedMatchId && payload) {
-          await persistOperationalMatchDetailsSafe(
-            {
-              [upsertedMatchId]: payload,
-            },
-            {
-              replace: false,
-              updated_at: nowIso,
-              source: "lazy_match_details_backfill",
-            }
-          );
-        }
-        console.log(`Lazy backfilled match details for ${matchId} at ${nowIso}`);
-      }
-    } catch (err) {
-      console.warn(
-        `Failed to lazy backfill match details for ${matchId}:`,
-        err.message || err
-      );
-    }
-  }
+  scheduleMatchDetailsBackfill(payload, { trigger: "match_details_request" });
 
   if (payload.updated_at) {
     res.set("X-Last-Updated", payload.updated_at);
@@ -9671,18 +9847,19 @@ app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
       if (!candidate || !matchId) continue;
       if (String(candidate.date || "") !== date) continue;
 
-      const existing = candidatesById.get(matchId);
-      candidatesById.set(matchId, mergeMonitorCandidate(existing, candidate));
-      markSource(matchId, "merged");
-    }
+    const existing = candidatesById.get(matchId);
+    candidatesById.set(matchId, mergeMonitorCandidate(existing, candidate));
+    markSource(matchId, "merged");
+  }
 
-    for (const payload of Object.values(matchDetailsLookup)) {
-      const candidate = toMonitorCandidateFromDetailsPayload(payload);
+  for (const payload of Object.values(matchDetailsLookup)) {
+      const candidate = toMonitorCandidateFromDetailsPayload(payload, { allowMissingDate: true });
       const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
       if (!candidate || !matchId) continue;
-      if (String(candidate.date || "") !== date) continue;
-
       const existing = candidatesById.get(matchId);
+      const effectiveDate = String(candidate.date || (existing && existing.date) || "");
+      if (effectiveDate !== date) continue;
+
       candidatesById.set(matchId, mergeMonitorCandidate(existing, candidate));
       markSource(matchId, "details");
     }
@@ -11248,6 +11425,78 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
     console.error("[API] Error marking live activity as ended:", error);
     res.status(500).json({
       error: "Failed to mark live activity as ended",
+      message: error.message,
+    });
+  }
+});
+
+// Clear the stored current Live Activity token/id for a device so the next reconcile
+// can push-to-start a fresh activity from the saved push-to-start token.
+app.post(`${API_PREFIX}/live-activity/restart`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const explicitDeviceToken =
+    typeof req.body?.userDeviceToken === "string" ? req.body.userDeviceToken : req.body?.deviceToken;
+  const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(explicitDeviceToken);
+
+  if (!resolvedDeviceToken) {
+    res.status(400).json({
+      error: "Missing user device token. Provide X-Device-Token header or userDeviceToken/deviceToken body field.",
+    });
+    return;
+  }
+
+  try {
+    const record = await getUserPreferences(resolvedDeviceToken);
+    if (!record) {
+      res.status(404).json({
+        error: "No preferences found for user device token.",
+        userDeviceToken: resolvedDeviceToken,
+      });
+      return;
+    }
+
+    const liveActivityState =
+      record.liveActivity && typeof record.liveActivity === "object" ? record.liveActivity : {};
+    const pushToStartToken = normalizeLiveActivityToken(liveActivityState.pushToStartToken);
+    if (!pushToStartToken) {
+      res.status(400).json({
+        error: "No push-to-start token is stored for this device, so the activity cannot be restarted from the server.",
+        userDeviceToken: resolvedDeviceToken,
+      });
+      return;
+    }
+
+    await updateUserLiveActivityState(
+      resolvedDeviceToken,
+      {
+        currentActivityPushToken: null,
+        currentActivityId: null,
+        pendingStartAt: null,
+        lastPayloadHash: null,
+        lastMode: null,
+      },
+      {
+        isDevelopmentBuild:
+          typeof record.isDevelopmentBuild === "boolean" ? record.isDevelopmentBuild : undefined,
+      }
+    );
+
+    const reconcileResult = await matchMonitor.runLiveActivityEvaluationNow({
+      forceDispatch: true,
+      preserveExistingOnEmpty: false,
+    });
+
+    res.status(200).json({
+      success: true,
+      restarted: true,
+      userDeviceToken: resolvedDeviceToken,
+      reconcile: reconcileResult,
+    });
+  } catch (error) {
+    console.error("[API] Error restarting live activity:", error);
+    res.status(500).json({
+      error: "Failed to restart live activity",
       message: error.message,
     });
   }
@@ -13311,9 +13560,18 @@ app.get(`${API_PREFIX}/monitor/status`, (req, res) => {
 app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   try {
-    const result = await matchMonitor.runLiveActivityEvaluationNow();
+    const force = String(_req.query.force || _req.body?.force || "").trim().toLowerCase();
+    const forceDispatch = force === "1" || force === "true" || force === "yes";
+    const allowEndRaw = String(_req.query.allowEnd || _req.body?.allowEnd || "").trim().toLowerCase();
+    const allowEnd = allowEndRaw === "1" || allowEndRaw === "true" || allowEndRaw === "yes";
+    const result = await matchMonitor.runLiveActivityEvaluationNow({
+      forceDispatch,
+      preserveExistingOnEmpty: forceDispatch && !allowEnd,
+    });
     res.status(200).json({
       success: true,
+      forceDispatch,
+      preserveExistingOnEmpty: forceDispatch && !allowEnd,
       ...result,
     });
   } catch (error) {
@@ -13366,6 +13624,9 @@ module.exports = {
   app,
   __private: {
     toMatchListPayload,
+    toMonitorCandidateFromDetailsPayload,
+    mergeMonitorCandidate,
+    matchDetailsNeedsBackfill,
     pickPreferredMatchStatus,
     normalizeMatchStatusValue,
     parseMatchStatusMinute,

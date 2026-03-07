@@ -494,9 +494,6 @@ final class MatchesStore: ObservableObject {
 
         do {
             let client = APIClient(baseURL: baseURL)
-            if mode == .fixtures && cachedBbcLiveMatches.isEmpty {
-                await hydrateBbcLiveCacheIfNeeded(client: client)
-            }
             var requestedPage = reset ? 1 : max(1, current.page + 1)
             var pagesFetched = 0
             var nextHasMore = false
@@ -522,10 +519,6 @@ final class MatchesStore: ObservableObject {
                 // Debug log for Birmingham vs Leeds match
                 if let birdsMatch = incoming.first(where: { $0.homeTeam.contains("Birmingham") && $0.awayTeam.contains("Leeds") }) {
                     NSLog("[DEBUG fetchPage] Birmingham vs Leeds decoded with status=%@ hasScore=%d", birdsMatch.scoreStatus ?? "nil", birdsMatch.hasScore)
-                }
-                if mode == .fixtures {
-                    incoming = MatchScoreResolver.applyScores(to: incoming, using: cachedBbcLiveMatches)
-                    scheduleBbcLiveRefreshIfNeeded(client: client, force: cachedBbcLiveMatches.isEmpty)
                 }
 
                 let competitionFiltered = Self.applyCompetitionFilters(

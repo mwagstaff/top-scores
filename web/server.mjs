@@ -17,6 +17,8 @@ const generatedAssetsRoot = isProduction
 const teamLogoManifestPath = path.join(generatedAssetsRoot, "team-logo-manifest.json");
 const tvLogosRoot = path.join(generatedAssetsRoot, "tv-logos");
 const appIconPath = path.join(generatedAssetsRoot, "app-icon.png");
+const faviconPath = path.join(generatedAssetsRoot, "favicon-32.png");
+const appleTouchIconPath = path.join(generatedAssetsRoot, "apple-touch-icon.png");
 
 const teamLogoIndex = buildTeamLogoIndex();
 const tvLogoIndex = buildTvLogoIndex();
@@ -42,6 +44,12 @@ const teamLogoAliases = new Map(
     "paok thessaloniki fc": "paok",
     "inter milan": "inter",
     "ac milan": "ac milan",
+    "bodo/glimt": "bodo-glimt",
+    "bodoglimt": "bodo-glimt",
+    "rakow": "rakow czestochowa",
+    "sigma olomouc": "olomouc",
+    "bosnia-herzegovina": "bosnia",
+    "bosnia and herzegovina": "bosnia",
   })
 );
 
@@ -65,10 +73,39 @@ app.get("/brand/app-icon", (_req, res) => {
   res.sendFile(appIconPath);
 });
 
+app.get("/favicon.ico", (_req, res) => {
+  if (!fs.existsSync(faviconPath)) {
+    res.status(404).end();
+    return;
+  }
+
+  res.sendFile(faviconPath);
+});
+
+app.get("/apple-touch-icon.png", (_req, res) => {
+  if (!fs.existsSync(appleTouchIconPath)) {
+    res.status(404).end();
+    return;
+  }
+
+  res.sendFile(appleTouchIconPath);
+});
+
 app.get("/logos/team/:teamName", (req, res) => {
   const resolved = resolveTeamLogo(req.params.teamName || "");
   if (!resolved) {
-    res.status(404).json({ error: "Team logo not found" });
+    sendTeamPlaceholder(res, req.params.teamName || "");
+    return;
+  }
+
+  res.sendFile(resolved);
+});
+
+app.get("/logos/team", (req, res) => {
+  const requestedName = typeof req.query.name === "string" ? req.query.name : "";
+  const resolved = resolveTeamLogo(requestedName);
+  if (!resolved) {
+    sendTeamPlaceholder(res, requestedName);
     return;
   }
 
@@ -77,6 +114,17 @@ app.get("/logos/team/:teamName", (req, res) => {
 
 app.get("/logos/tv/:channelName", (req, res) => {
   const channelName = decodeURIComponent(req.params.channelName || "");
+  const resolved = resolveTvLogo(channelName);
+  if (!resolved) {
+    res.status(404).json({ error: "TV logo not found" });
+    return;
+  }
+
+  res.sendFile(resolved);
+});
+
+app.get("/logos/tv", (req, res) => {
+  const channelName = typeof req.query.name === "string" ? req.query.name : "";
   const resolved = resolveTvLogo(channelName);
   if (!resolved) {
     res.status(404).json({ error: "TV logo not found" });
@@ -246,6 +294,21 @@ function resolveTeamLogo(teamName) {
     }
   }
 
+  const normalizedQuery = normalizedKey(trimmed);
+  let bestMatch = null;
+  let bestScore = 0;
+  for (const entry of teamLogoIndex) {
+    const score = similarity(normalizedQuery, entry.normalized);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = entry;
+    }
+  }
+
+  if (bestMatch && bestScore >= 0.82) {
+    return bestMatch.path;
+  }
+
   return null;
 }
 
@@ -301,4 +364,64 @@ function logoCandidates(teamName) {
     candidates.unshift(alias);
   }
   return candidates;
+}
+
+function similarity(left, right) {
+  const maxLength = Math.max(left.length, right.length);
+  if (maxLength === 0) {
+    return 1;
+  }
+
+  return 1 - levenshtein(left, right) / maxLength;
+}
+
+function levenshtein(left, right) {
+  const leftChars = Array.from(left);
+  const rightChars = Array.from(right);
+  let previous = Array.from({ length: rightChars.length + 1 }, (_, index) => index);
+
+  for (let row = 0; row < leftChars.length; row += 1) {
+    const current = [row + 1];
+    for (let column = 0; column < rightChars.length; column += 1) {
+      const cost = leftChars[row] === rightChars[column] ? 0 : 1;
+      current[column + 1] = Math.min(
+        previous[column + 1] + 1,
+        current[column] + 1,
+        previous[column] + cost
+      );
+    }
+    previous = current;
+  }
+
+  return previous[rightChars.length];
+}
+
+function sendTeamPlaceholder(res, teamName) {
+  const initials = String(teamName || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((token) => stripDiacritics(token).charAt(0).toUpperCase())
+    .join("") || "?";
+
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <rect width="96" height="96" rx="20" fill="#163055"/>
+  <rect x="2" y="2" width="92" height="92" rx="18" fill="none" stroke="#2a4f86"/>
+  <text x="48" y="57" text-anchor="middle" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="700" fill="#78aaff">${escapeXml(initials)}</text>
+</svg>`;
+
+  res.setHeader("Content-Type", "image/svg+xml; charset=utf-8");
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.status(200).send(svg);
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }

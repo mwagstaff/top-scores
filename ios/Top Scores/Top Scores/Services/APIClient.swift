@@ -91,7 +91,9 @@ struct APIClient {
         let request = try buildRequest(path: "matches", queryItems: queryItems)
         let (data, http) = try await performRequest(request, operation: "matches_page")
         try validateSuccess(http, data: data, operation: "matches_page")
-        let matches = try decodeMatches(from: data, operation: "matches_page")
+        let matches = try await hydrateMatchStates(
+            try decodeMatches(from: data, operation: "matches_page")
+        )
 
         let lastUpdated = http
             .value(forHTTPHeaderField: "X-Last-Updated")
@@ -217,6 +219,28 @@ struct APIClient {
         let (data, http) = try await performRequest(request, operation: "match_details")
         try validateSuccess(http, data: data, operation: "match_details")
         return try JSONDecoder().decode(MatchDetailsPayload.self, from: data)
+    }
+
+    func fetchMatchStates(matchIDs: [String]) async throws -> [String: MatchDetailsPayload] {
+        let normalizedIDs = Array(
+            Set(matchIDs.compactMap { Self.normalizedMatchDetailsID($0) })
+        ).sorted()
+        guard !normalizedIDs.isEmpty else { return [:] }
+
+        var request = try buildRequest(path: "matches/states", queryItems: [])
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(MatchStatesRequestBody(ids: normalizedIDs))
+
+        let (data, http) = try await performRequest(request, operation: "match_states")
+        try validateSuccess(http, data: data, operation: "match_states")
+        let payloads = try JSONDecoder().decode([MatchDetailsPayload].self, from: data)
+
+        var byID: [String: MatchDetailsPayload] = [:]
+        payloads.forEach { payload in
+            byID[payload.id] = payload
+        }
+        return byID
     }
 
     func fetchChannels() async throws -> [String] {
@@ -385,6 +409,22 @@ struct APIClient {
         }
 
         return MatchResponse(matches: allMatches, lastUpdated: lastUpdated)
+    }
+
+    private func hydrateMatchStates(_ matches: [Match]) async throws -> [Match] {
+        let ids = matches.compactMap(\.matchDetailsID)
+        guard !ids.isEmpty else { return matches }
+
+        let statesByID = try await fetchMatchStates(matchIDs: ids)
+        guard !statesByID.isEmpty else { return matches }
+
+        return matches.map { match in
+            guard let matchDetailsID = match.matchDetailsID,
+                  let details = statesByID[matchDetailsID] else {
+                return match
+            }
+            return match.withDetails(details)
+        }
     }
 
     private static let dateFormatter: DateFormatter = {
@@ -621,6 +661,10 @@ struct MatchPageResponse {
     let pageSize: Int
     let totalCount: Int
     let hasMore: Bool
+}
+
+private struct MatchStatesRequestBody: Encodable {
+    let ids: [String]
 }
 
 struct LeagueTablesResponse {

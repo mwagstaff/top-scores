@@ -1797,10 +1797,13 @@ private struct TopScoresLiveActivityWidget: Widget {
 
     private func compactTrailingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
         guard let first = state.matches.first else { return "" }
-        if state.mode.contains("live"),
+        if (state.mode.contains("live") || state.mode.contains("finished")),
            let home = first.homeScore,
            let away = first.awayScore {
             return "\(home)-\(away)"
+        }
+        if state.mode.contains("finished") {
+            return first.matchTime ?? first.time
         }
         return first.time
     }
@@ -1811,7 +1814,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
 
     var body: some View {
-        let isMultiMode = state.mode == "multi_live" || state.mode == "multi_upcoming"
+        let isMultiMode = state.mode == "multi_live" || state.mode == "multi_upcoming" || state.mode == "multi_finished"
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 switch state.mode {
@@ -1827,9 +1830,17 @@ private struct TopScoresLiveActivityLockScreenView: View {
                     } else {
                         EmptyLiveActivityView()
                     }
+                case "single_finished":
+                    if let match = state.matches.first {
+                        SingleFinishedMatchView(match: match)
+                    } else {
+                        EmptyLiveActivityView()
+                    }
                 case "multi_upcoming":
                     MultiMatchListView(matches: state.matches, live: false)
                 case "multi_live":
+                    MultiMatchListView(matches: state.matches, live: true)
+                case "multi_finished":
                     MultiMatchListView(matches: state.matches, live: true)
                 case "ended":
                     EndedLiveActivityView()
@@ -1886,6 +1897,10 @@ private struct TopScoresLiveActivityExpandedView: View {
         switch state.mode {
         case "single_live", "multi_live":
             Text("Live Matches")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        case "single_finished", "multi_finished":
+            Text("Full-time")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         case "single_upcoming":
@@ -1985,17 +2000,56 @@ private struct SingleLiveMatchView: View {
                 TeamNamesWithAggregateRow(
                     homeTeam: match.homeTeam,
                     awayTeam: match.awayTeam,
-                    aggregateInfo: aggregateInfoText
+                    aggregateInfo: " "
                 )
             }
         }
     }
 
-    private var aggregateInfoText: String {
-        if let aggregateHome = match.aggregateHomeScore, let aggregateAway = match.aggregateAwayScore {
-            return "Agg \(aggregateHome)-\(aggregateAway)"
+    private var primaryChannel: String? {
+        let primary = match.tvChannels.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return primary?.isEmpty == false ? primary : nil
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct SingleFinishedMatchView: View {
+    let match: TopScoresLiveActivityMatchState
+
+    var body: some View {
+        SingleMatchCardChrome {
+            VStack(alignment: .leading, spacing: 8) {
+                CompetitionHeaderRow(
+                    league: match.league,
+                    subheading: match.leagueSubcategory ?? "Full time",
+                    primaryChannel: primaryChannel
+                )
+
+                HStack(spacing: 10) {
+                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
+                    Spacer(minLength: 8)
+                    HStack(spacing: 9) {
+                        Text("\(match.homeScore ?? 0)")
+                            .font(.title3.monospacedDigit().weight(.bold))
+                            .foregroundStyle(.white)
+                        Text(match.matchTime ?? "FT")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.75))
+                        Text("\(match.awayScore ?? 0)")
+                            .font(.title3.monospacedDigit().weight(.bold))
+                            .foregroundStyle(.white)
+                    }
+                    Spacer(minLength: 8)
+                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
+                }
+
+                TeamNamesWithAggregateRow(
+                    homeTeam: match.homeTeam,
+                    awayTeam: match.awayTeam,
+                    aggregateInfo: " "
+                )
+            }
         }
-        return " "
     }
 
     private var primaryChannel: String? {
@@ -2217,66 +2271,13 @@ private struct MultiMatchListView: View {
     }
 
     private var visibleMatches: [TopScoresLiveActivityMatchState] {
-        let sorted = matches.sorted { lhs, rhs in
-            let leftTeamScore = totalTeamScore(for: lhs)
-            let rightTeamScore = totalTeamScore(for: rhs)
-            if leftTeamScore != rightTeamScore {
-                return leftTeamScore > rightTeamScore
-            }
-
-            let leftWeight = competitionWeight(for: lhs)
-            let rightWeight = competitionWeight(for: rhs)
-            if leftWeight != rightWeight {
-                return leftWeight > rightWeight
-            }
-
-            let leftKickoff = kickoffSortKey(for: lhs)
-            let rightKickoff = kickoffSortKey(for: rhs)
-            if leftKickoff != rightKickoff {
-                return leftKickoff < rightKickoff
-            }
-
-            let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
-            if homeCompare != .orderedSame {
-                return homeCompare == .orderedAscending
-            }
-
-            let awayCompare = lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam)
-            if awayCompare != .orderedSame {
-                return awayCompare == .orderedAscending
-            }
-
-            return lhs.matchId.localizedCaseInsensitiveCompare(rhs.matchId) == .orderedAscending
-        }
-        return Array(sorted.prefix(8))
+        Array(matches.prefix(8))
     }
 
     private var chunkedMatches: [[TopScoresLiveActivityMatchState]] {
         stride(from: 0, to: visibleMatches.count, by: 2).map { index in
             Array(visibleMatches[index..<min(index + 2, visibleMatches.count)])
         }
-    }
-
-    private func competitionWeight(for match: TopScoresLiveActivityMatchState) -> Double {
-        if let subcategory = match.leagueSubcategory?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !subcategory.isEmpty {
-            let displayLeague = "\(match.league): \(subcategory)"
-            if let displayWeight = WidgetCompetitionWeightConfig.weight(for: displayLeague) {
-                return displayWeight
-            }
-        }
-        return WidgetCompetitionWeightConfig.weight(for: match.league) ?? 0
-    }
-
-    private func totalTeamScore(for match: TopScoresLiveActivityMatchState) -> Double {
-        if let explicitTotal = match.totalTeamScore {
-            return explicitTotal
-        }
-        return (match.homeTeamScore ?? 0) + (match.awayTeamScore ?? 0)
-    }
-
-    private func kickoffSortKey(for match: TopScoresLiveActivityMatchState) -> Date {
-        WidgetMatchDateParser.shared.parse(date: match.date, time: match.time) ?? .distantFuture
     }
 }
 
@@ -2309,20 +2310,8 @@ private struct MultiMatchEntryCell: View {
     @ViewBuilder
     private var scoreView: some View {
         HStack(spacing: 2) {
-            if let homeAgg = match.aggregateHomeScore {
-                Text("(\(homeAgg))")
-                    .font(.callout.monospacedDigit())
-                    .fontWeight(.regular)
-            }
-
             Text(scoreCoreText)
                 .font(.callout.monospacedDigit().weight(.bold))
-
-            if let awayAgg = match.aggregateAwayScore {
-                Text("(\(awayAgg))")
-                    .font(.callout.monospacedDigit())
-                    .fontWeight(.regular)
-            }
         }
         .lineLimit(1)
         .minimumScaleFactor(0.7)

@@ -11,6 +11,8 @@ const outputTeamLogosRoot = path.join(outputRoot, "team-logos");
 const outputTvLogosRoot = path.join(outputRoot, "tv-logos");
 const outputManifestPath = path.join(outputRoot, "team-logo-manifest.json");
 const outputAppIconPath = path.join(outputRoot, "app-icon.png");
+const outputFaviconPath = path.join(outputRoot, "favicon-32.png");
+const outputAppleTouchIconPath = path.join(outputRoot, "apple-touch-icon.png");
 const teamLogoManifestPath = path.join(
   repoRoot,
   "ios",
@@ -35,12 +37,14 @@ if (hasSourceAssets()) {
   const tempTvLogosRoot = path.join(tempRoot, "tv-logos");
   const tempManifestPath = path.join(tempRoot, "team-logo-manifest.json");
   const tempAppIconPath = path.join(tempRoot, "app-icon.png");
+  const tempFaviconPath = path.join(tempRoot, "favicon-32.png");
+  const tempAppleTouchIconPath = path.join(tempRoot, "apple-touch-icon.png");
 
   fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   fs.mkdirSync(tempTeamLogosRoot, { recursive: true });
   fs.mkdirSync(tempTvLogosRoot, { recursive: true });
 
-  copyAppIcon(tempAppIconPath);
+  await copyAppIcons(tempAppIconPath, tempFaviconPath, tempAppleTouchIconPath);
   const teamEntries = copyTeamLogos(tempTeamLogosRoot);
   copyTvLogos(tempTvLogosRoot);
 
@@ -81,17 +85,36 @@ function hasBundledAssets() {
   return (
     Array.isArray(manifest) &&
     manifest.length > 0 &&
+    fs.existsSync(outputFaviconPath) &&
+    fs.existsSync(outputAppleTouchIconPath) &&
     fs.readdirSync(outputTeamLogosRoot).some((entry) => entry.toLowerCase().endsWith(".png")) &&
     fs.readdirSync(outputTvLogosRoot).some((entry) => entry.toLowerCase().endsWith(".png"))
   );
 }
 
-function copyAppIcon(destinationPath) {
+async function copyAppIcons(appIconDestinationPath, faviconDestinationPath, appleTouchDestinationPath) {
   if (!fs.existsSync(appIconSourcePath)) {
     throw new Error(`Missing app icon source: ${appIconSourcePath}`);
   }
 
-  fs.copyFileSync(appIconSourcePath, destinationPath);
+  const sharpModule = await import("sharp");
+  const sharp = sharpModule.default;
+  const sourceBuffer = fs.readFileSync(appIconSourcePath);
+
+  await sharp(sourceBuffer)
+    .resize(96, 96, { fit: "cover" })
+    .png({ compressionLevel: 9, palette: true })
+    .toFile(appIconDestinationPath);
+
+  await sharp(sourceBuffer)
+    .resize(32, 32, { fit: "cover" })
+    .png({ compressionLevel: 9, palette: true })
+    .toFile(faviconDestinationPath);
+
+  await sharp(sourceBuffer)
+    .resize(180, 180, { fit: "cover" })
+    .png({ compressionLevel: 9, palette: true })
+    .toFile(appleTouchDestinationPath);
 }
 
 function copyTeamLogos(destinationRoot) {

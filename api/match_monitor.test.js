@@ -30,6 +30,15 @@ function formatLocalDateTimeParts(timestampMs) {
   };
 }
 
+function liveActivityUser(delayMinutes = 5, extraPreferences = {}) {
+  return {
+    preferences: {
+      liveActivityDelayMinutes: delayMinutes,
+      ...extraPreferences,
+    },
+  };
+}
+
 test("mergeSnapshotWithFallback preserves existing league when new payload omits it", () => {
   const merged = __testHooks.mergeSnapshotWithFallback(
     {
@@ -71,13 +80,50 @@ test("mergeSnapshotWithFallback clears stale aggregate when incoming payload set
   assert.equal(merged.aggregate_away_score, null);
 });
 
+test("shouldSkipLiveActivityUpdate bypasses payload dedupe when forceDispatch is enabled", () => {
+  const state = {
+    lastPayloadHash: "abc123",
+    lastMode: "multi_live",
+  };
+
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "abc123", "multi_live", false),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "abc123", "multi_live", true),
+    false
+  );
+});
+
+test("shouldPreserveExistingLiveActivityOnEmpty keeps active activity during forced startup reconcile", () => {
+  assert.equal(
+    __testHooks.shouldPreserveExistingLiveActivityOnEmpty("activity-token-123", {
+      preserveExistingOnEmpty: true,
+    }),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldPreserveExistingLiveActivityOnEmpty("activity-token-123", {
+      preserveExistingOnEmpty: false,
+    }),
+    false
+  );
+  assert.equal(
+    __testHooks.shouldPreserveExistingLiveActivityOnEmpty("", {
+      preserveExistingOnEmpty: true,
+    }),
+    false
+  );
+});
+
 test("buildLiveActivityPresentationForUser suppresses stale high-minute live status and ends activity", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 130 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
 
   const presentation = __testHooks.buildLiveActivityPresentationForUser(
-    { preferences: { notificationDelayMinutes: 5 } },
+    liveActivityUser(),
     [
       {
         state: null,
@@ -101,6 +147,586 @@ test("buildLiveActivityPresentationForUser suppresses stale high-minute live sta
   assert.equal(presentation.mode, null);
   assert.equal(Array.isArray(presentation.matches), true);
   assert.equal(presentation.matches.length, 0);
+});
+
+test("buildLiveActivityPresentationForUser clears delayed aggregate when current snapshot explicitly clears it", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 8 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(),
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "ce8nq755jqdt",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Bundesliga",
+            home_team: "Bayern Munich",
+            away_team: "Borussia M'gladbach",
+            home_score: 0,
+            away_score: 0,
+            score_status: "8",
+            aggregate_home_score: null,
+            aggregate_away_score: null,
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 6 * 60 * 1000,
+              match: {
+                match_details_id: "ce8nq755jqdt",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Bundesliga",
+                home_team: "Bayern Munich",
+                away_team: "Borussia M'gladbach",
+                home_score: 0,
+                away_score: 0,
+                score_status: null,
+                aggregate_home_score: 0,
+                aggregate_away_score: 0,
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "ce8nq755jqdt",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Bundesliga",
+          home_team: "Bayern Munich",
+          away_team: "Borussia M'gladbach",
+          home_score: 0,
+          away_score: 0,
+          score_status: "8",
+          aggregate_home_score: null,
+          aggregate_away_score: null,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "3");
+  assert.equal(presentation.matches[0].aggregate_home_score, null);
+  assert.equal(presentation.matches[0].aggregate_away_score, null);
+});
+
+test("buildLiveActivityPresentationForUser suppresses zero aggregate for upcoming live activity entries", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 10 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "ce8nq755jqdt",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Bundesliga",
+          home_team: "Bayern Munich",
+          away_team: "Borussia M'gladbach",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          aggregate_home_score: 0,
+          aggregate_away_score: 0,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+      {
+        state: null,
+        match: {
+          match_details_id: "c14mvd1104xt",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "FA Cup",
+          home_team: "Wolves",
+          away_team: "Liverpool",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          aggregate_home_score: 0,
+          aggregate_away_score: 0,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "multi_upcoming");
+  assert.equal(presentation.matches.length, 2);
+  assert.equal(presentation.matches[0].aggregate_home_score, null);
+  assert.equal(presentation.matches[0].aggregate_away_score, null);
+  assert.equal(presentation.matches[1].aggregate_home_score, null);
+  assert.equal(presentation.matches[1].aggregate_away_score, null);
+});
+
+test("buildLiveActivityPresentationForUser derives delayed live score from goal timeline up to delayed minute", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 23 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(),
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "c1mj8v11py9t",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Serie A",
+            home_team: "Napoli",
+            away_team: "Torino",
+            home_score: 1,
+            away_score: 0,
+            score_status: "23",
+            home_goal_scorers: [
+              {
+                player: "Alisson Santos",
+                goal_times: ["7'"],
+                own_goal_times: [],
+              },
+            ],
+            away_goal_scorers: [],
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 6 * 60 * 1000,
+              match: {
+                match_details_id: "c1mj8v11py9t",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Serie A",
+                home_team: "Napoli",
+                away_team: "Torino",
+                home_score: 0,
+                away_score: 0,
+                score_status: "18",
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "c1mj8v11py9t",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Serie A",
+          home_team: "Napoli",
+          away_team: "Torino",
+          home_score: 1,
+          away_score: 0,
+          score_status: "23",
+          home_goal_scorers: [
+            {
+              player: "Alisson Santos",
+              goal_times: ["7'"],
+              own_goal_times: [],
+            },
+          ],
+          away_goal_scorers: [],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "18");
+  assert.equal(presentation.matches[0].home_score, 1);
+  assert.equal(presentation.matches[0].away_score, 0);
+});
+
+test("buildLiveActivityPresentationForUser derives delayed live minute from current status when delayed snapshot status is missing", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 23 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(),
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "c1mj8v11py9t",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Serie A",
+            home_team: "Napoli",
+            away_team: "Torino",
+            home_score: 1,
+            away_score: 0,
+            score_status: "23",
+            home_goal_scorers: [
+              {
+                player: "Alisson Santos",
+                goal_times: ["7'"],
+                own_goal_times: [],
+              },
+            ],
+            away_goal_scorers: [],
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 6 * 60 * 1000,
+              match: {
+                match_details_id: "c1mj8v11py9t",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Serie A",
+                home_team: "Napoli",
+                away_team: "Torino",
+                home_score: 0,
+                away_score: 0,
+                score_status: null,
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "c1mj8v11py9t",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Serie A",
+          home_team: "Napoli",
+          away_team: "Torino",
+          home_score: 1,
+          away_score: 0,
+          score_status: "23",
+          home_goal_scorers: [
+            {
+              player: "Alisson Santos",
+              goal_times: ["7'"],
+              own_goal_times: [],
+            },
+          ],
+          away_goal_scorers: [],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "18");
+  assert.equal(presentation.matches[0].home_score, 1);
+  assert.equal(presentation.matches[0].away_score, 0);
+});
+
+test("buildLiveActivityPresentationForUser keeps live match visible during restart before full delay buffer exists", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 23 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(),
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "c1mj8v11py9t",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Serie A",
+            home_team: "Napoli",
+            away_team: "Torino",
+            home_score: 1,
+            away_score: 0,
+            score_status: "23",
+            home_goal_scorers: [
+              {
+                player: "Alisson Santos",
+                goal_times: ["7'"],
+                own_goal_times: [],
+              },
+            ],
+            away_goal_scorers: [],
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 60 * 1000,
+              match: {
+                match_details_id: "c1mj8v11py9t",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Serie A",
+                home_team: "Napoli",
+                away_team: "Torino",
+                home_score: 1,
+                away_score: 0,
+                score_status: "23",
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "c1mj8v11py9t",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Serie A",
+          home_team: "Napoli",
+          away_team: "Torino",
+          home_score: 1,
+          away_score: 0,
+          score_status: "23",
+          home_goal_scorers: [
+            {
+              player: "Alisson Santos",
+              goal_times: ["7'"],
+              own_goal_times: [],
+            },
+          ],
+          away_goal_scorers: [],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "23");
+  assert.equal(presentation.matches[0].home_score, 1);
+  assert.equal(presentation.matches[0].away_score, 0);
+});
+
+test("buildLiveActivityPresentationForUser uses notification delay when no dedicated live activity delay is configured", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 23 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    { preferences: { notificationDelayMinutes: 5 } },
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "ce8nq755jqdt",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Bundesliga",
+            home_team: "Bayern Munich",
+            away_team: "Borussia M'gladbach",
+            home_score: 4,
+            away_score: 0,
+            score_status: "86",
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 6 * 60 * 1000,
+              match: {
+                match_details_id: "ce8nq755jqdt",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Bundesliga",
+                home_team: "Bayern Munich",
+                away_team: "Borussia M'gladbach",
+                home_score: 3,
+                away_score: 0,
+                score_status: "81",
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "ce8nq755jqdt",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Bundesliga",
+          home_team: "Bayern Munich",
+          away_team: "Borussia M'gladbach",
+          home_score: 4,
+          away_score: 0,
+          score_status: "86",
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.delayMinutes, 5);
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "81");
+  assert.equal(presentation.matches[0].home_score, 3);
+  assert.equal(presentation.matches[0].away_score, 0);
+});
+
+test("buildLiveActivityPresentationForUser preserves delayed scores when current scorer arrays lag behind history", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 95 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    { preferences: { notificationDelayMinutes: 5 } },
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "ce8nq755jqdt",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Bundesliga",
+            home_team: "Bayern Munich",
+            away_team: "Borussia M'gladbach",
+            home_score: 4,
+            away_score: 1,
+            score_status: "90+4",
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 7 * 60 * 1000,
+              match: {
+                match_details_id: "ce8nq755jqdt",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Bundesliga",
+                home_team: "Bayern Munich",
+                away_team: "Borussia M'gladbach",
+                home_score: 4,
+                away_score: 0,
+                score_status: "87",
+              },
+            },
+            {
+              timestampMs: nowMs - 5 * 60 * 1000,
+              match: {
+                match_details_id: "ce8nq755jqdt",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Bundesliga",
+                home_team: "Bayern Munich",
+                away_team: "Borussia M'gladbach",
+                home_score: 3,
+                away_score: 1,
+                score_status: "89",
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "ce8nq755jqdt",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Bundesliga",
+          home_team: "Bayern Munich",
+          away_team: "Borussia M'gladbach",
+          home_score: 4,
+          away_score: 1,
+          score_status: "90+4",
+          home_goal_scorers: [
+            { player: "L. Diaz", goal_times: ["33'"], own_goal_times: [] },
+            { player: "K. Laimer", goal_times: ["45+1'"], own_goal_times: [] },
+            { player: "J. Musiala", goal_times: ["57'"], own_goal_times: [] },
+          ],
+          away_goal_scorers: [
+            { player: "W. Mohya", goal_times: ["89'"], own_goal_times: [] },
+          ],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.delayMinutes, 5);
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "89");
+  assert.equal(presentation.matches[0].home_score, 4);
+  assert.equal(presentation.matches[0].away_score, 1);
+});
+
+test("buildLiveActivityPresentationForUser keeps delayed minute and score aligned when timeline is complete", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 80 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    { preferences: { notificationDelayMinutes: 5 } },
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "c14mvd1104xt",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "FA Cup",
+            home_team: "Wolverhampton Wanderers",
+            away_team: "Liverpool",
+            home_score: 0,
+            away_score: 3,
+            score_status: "77",
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 5 * 60 * 1000,
+              match: {
+                match_details_id: "c14mvd1104xt",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "FA Cup",
+                home_team: "Wolverhampton Wanderers",
+                away_team: "Liverpool",
+                home_score: 0,
+                away_score: 3,
+                score_status: "74",
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "c14mvd1104xt",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "FA Cup",
+          home_team: "Wolverhampton Wanderers",
+          away_team: "Liverpool",
+          home_score: 0,
+          away_score: 3,
+          score_status: "77",
+          home_goal_scorers: [],
+          away_goal_scorers: [
+            { player: "A. Robertson", goal_times: ["51'"], own_goal_times: [] },
+            { player: "M. Salah", goal_times: ["53'"], own_goal_times: [] },
+            { player: "C. Jones", goal_times: ["74'"], own_goal_times: [] },
+          ],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.delayMinutes, 5);
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "74");
+  assert.equal(presentation.matches[0].home_score, 0);
+  assert.equal(presentation.matches[0].away_score, 3);
 });
 
 test("compareLiveActivityMatches sorts higher total team score first", () => {
@@ -129,6 +755,196 @@ test("compareLiveActivityMatches sorts higher total team score first", () => {
 
   const sorted = [lowScoreMatch, highScoreMatch].sort(__testHooks.compareLiveActivityMatches);
   assert.equal(sorted[0].match_details_id, "high");
+});
+
+test("buildLiveActivityPresentationForUser keeps live matches ahead of full-time matches", () => {
+  const nowMs = Date.now();
+  const liveKickoff = formatLocalDateTimeParts(nowMs - 55 * 60 * 1000);
+  const finishedKickoff = formatLocalDateTimeParts(nowMs - 3 * 60 * 60 * 1000);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "finished-first",
+          date: finishedKickoff.date,
+          time: finishedKickoff.time,
+          league: "La Liga",
+          home_team: "Real Madrid",
+          away_team: "Barcelona",
+          home_score: 2,
+          away_score: 1,
+          score_status: "FT",
+          updated_at: new Date(nowMs - 2 * 60 * 60 * 1000).toISOString(),
+        },
+      },
+      {
+        state: {
+          lastState: {
+            match_details_id: "live-now",
+            date: liveKickoff.date,
+            time: liveKickoff.time,
+            league: "Premier League",
+            home_team: "Liverpool",
+            away_team: "Chelsea",
+            home_score: 1,
+            away_score: 0,
+            score_status: "67",
+          },
+          history: [],
+        },
+        match: {
+          match_details_id: "live-now",
+          date: liveKickoff.date,
+          time: liveKickoff.time,
+          league: "Premier League",
+          home_team: "Liverpool",
+          away_team: "Chelsea",
+          home_score: 1,
+          away_score: 0,
+          score_status: "67",
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "multi_live");
+  assert.deepEqual(
+    presentation.matches.map((match) => match.match_details_id),
+    ["live-now", "finished-first"]
+  );
+});
+
+test("buildLiveActivityPresentationForUser keeps recent full-time matches visible for 8 hours", () => {
+  const nowMs = Date.now();
+  const kickoff = formatLocalDateTimeParts(nowMs - 3 * 60 * 60 * 1000);
+
+  const withinRetention = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0),
+    [
+      {
+        state: {
+          finishedAtMs: nowMs - 7 * 60 * 60 * 1000,
+          lastState: {
+            match_details_id: "recent-ft",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Premier League",
+            home_team: "Arsenal",
+            away_team: "Tottenham Hotspur",
+            home_score: 2,
+            away_score: 2,
+            score_status: "FT",
+          },
+        },
+        match: {
+          match_details_id: "recent-ft",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Tottenham Hotspur",
+          home_score: 2,
+          away_score: 2,
+          score_status: "FT",
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(withinRetention.mode, "single_finished");
+  assert.equal(withinRetention.matches.length, 1);
+  assert.equal(withinRetention.matches[0].match_details_id, "recent-ft");
+
+  const expired = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0),
+    [
+      {
+        state: {
+          finishedAtMs: nowMs - 8 * 60 * 60 * 1000 - 1000,
+          lastState: {
+            match_details_id: "expired-ft",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Premier League",
+            home_team: "Arsenal",
+            away_team: "Tottenham Hotspur",
+            home_score: 1,
+            away_score: 0,
+            score_status: "FT",
+          },
+        },
+        match: {
+          match_details_id: "expired-ft",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Tottenham Hotspur",
+          home_score: 1,
+          away_score: 0,
+          score_status: "FT",
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(expired.mode, null);
+  assert.equal(expired.matches.length, 0);
+});
+
+test("compareLiveActivityMatches prioritizes premier league involvement buckets", () => {
+  const bothPremierLeague = {
+    match_details_id: "both-epl",
+    league: "UEFA Champions League",
+    home_team: "Liverpool",
+    away_team: "Chelsea",
+    home_team_score: 1500,
+    away_team_score: 1500,
+    total_team_score: 3000,
+    score_status: "45",
+    date: "2026-03-06",
+    time: "20:00",
+  };
+  const onePremierLeague = {
+    match_details_id: "one-epl",
+    league: "UEFA Champions League",
+    home_team: "Liverpool",
+    away_team: "Real Madrid",
+    home_team_score: 1900,
+    away_team_score: 1900,
+    total_team_score: 3800,
+    score_status: "45",
+    date: "2026-03-06",
+    time: "20:00",
+  };
+  const noPremierLeague = {
+    match_details_id: "no-epl",
+    league: "UEFA Champions League",
+    home_team: "Real Madrid",
+    away_team: "Barcelona",
+    home_team_score: 2000,
+    away_team_score: 2000,
+    total_team_score: 4000,
+    score_status: "45",
+    date: "2026-03-06",
+    time: "20:00",
+  };
+
+  const sorted = [noPremierLeague, onePremierLeague, bothPremierLeague].sort(
+    __testHooks.compareLiveActivityMatches
+  );
+
+  assert.deepEqual(
+    sorted.map((match) => match.match_details_id),
+    ["both-epl", "one-epl", "no-epl"]
+  );
 });
 
 test("does not emit delayed kickoff when first live status seen is HT", () => {

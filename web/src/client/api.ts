@@ -1,6 +1,13 @@
 import {
   channelApiQueryValues,
   selectableChannels,
+  type LeagueTable,
+  type LeagueTableRow,
+  type LeagueTablesPayload,
+  type MatchAssistProvider,
+  type MatchDetails,
+  type MatchGoalScorer,
+  type MatchRedCardEvent,
   type Match,
   type MatchesMode,
   type MatchesPayload,
@@ -14,6 +21,9 @@ let teamRankingsPromise: Promise<TeamRankingEntry[]> | null = null;
 let competitionsCache: string[] | null = null;
 let channelsCache: string[] | null = null;
 let teamRankingsCache: TeamRankingEntry[] | null = null;
+const matchDetailsCache = new Map<string, MatchDetails>();
+const matchDetailsPromises = new Map<string, Promise<MatchDetails>>();
+const matchDetailsHydrationConcurrency = 8;
 
 export async function fetchMatches(
   mode: MatchesMode,
@@ -35,9 +45,10 @@ export async function fetchMatches(
     lastUpdated = response.headers.get("X-Last-Updated") || lastUpdated;
     totalCount = Number(response.headers.get("X-Total-Count") || totalCount);
     const pageMatches = (await response.json()).map(normalizeMatch);
-    matches.push(...pageMatches);
+    const hydratedMatches = await hydrateMatchesWithState(pageMatches, signal);
+    matches.push(...hydratedMatches);
 
-    if (response.headers.get("X-Has-More") !== "true" || pageMatches.length === 0) {
+    if (response.headers.get("X-Has-More") !== "true" || hydratedMatches.length === 0) {
       break;
     }
 
@@ -107,10 +118,120 @@ export function fetchTeamRankings(): Promise<TeamRankingEntry[]> {
   return teamRankingsPromise;
 }
 
-async function requestJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(url, { signal });
+export function fetchMatchDetails(matchDetailsId: string): Promise<MatchDetails> {
+  const normalizedId = matchDetailsId.trim();
+  if (!normalizedId) {
+    return Promise.reject(new Error("Missing match details id"));
+  }
+
+  const cached = matchDetailsCache.get(normalizedId);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+
+  const inFlight = matchDetailsPromises.get(normalizedId);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const request = requestJson<Record<string, unknown>>(
+    `/api/v1/matches/${encodeURIComponent(normalizedId)}`
+  )
+    .then(normalizeMatchDetails)
+    .then((details) => {
+      matchDetailsCache.set(normalizedId, details);
+      matchDetailsPromises.delete(normalizedId);
+      return details;
+    })
+    .catch((error) => {
+      matchDetailsPromises.delete(normalizedId);
+      throw error;
+    });
+
+  matchDetailsPromises.set(normalizedId, request);
+  return request;
+}
+
+export async function fetchLeagueTables(signal?: AbortSignal): Promise<LeagueTablesPayload> {
+  const response = await fetch("/api/v1/tables", { signal });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    throw new Error(`Failed to load tables: ${response.status}`);
+  }
+
+  const payload = await response.json() as Record<string, unknown>;
+  return {
+    leagues: normalizeLeagueTables(payload.leagues),
+    lastUpdated:
+      response.headers.get("X-Last-Updated") ||
+      optionalString(payload.updated_at) ||
+      null,
+  };
+}
+
+async function hydrateMatchesWithState(matches: Match[], signal?: AbortSignal): Promise<Match[]> {
+  const ids = matches
+    .map((match) => match.matchDetailsId?.trim() || "")
+    .filter(Boolean);
+  if (ids.length === 0) {
+    return matches;
+  }
+
+  const uniqueIds = Array.from(new Set(ids));
+  const statesById = new Map<string, MatchDetails>();
+
+  for (let index = 0; index < uniqueIds.length; index += matchDetailsHydrationConcurrency) {
+    if (signal?.aborted) {
+      break;
+    }
+
+    const batch = uniqueIds.slice(index, index + matchDetailsHydrationConcurrency);
+    const settled = await Promise.allSettled(batch.map((id) => fetchMatchDetails(id)));
+
+    settled.forEach((result, settledIndex) => {
+      if (result.status === "fulfilled") {
+        const requestedId = batch[settledIndex];
+        statesById.set(requestedId, result.value);
+      }
+    });
+  }
+
+  return matches.map((match) => mergeMatchState(match, statesById.get(match.matchDetailsId || "")));
+}
+
+function mergeMatchState(match: Match, details?: MatchDetails): Match {
+  if (!details) {
+    return match;
+  }
+
+  return {
+    ...match,
+    matchDetails: details,
+    detailsUrl: details.detailsUrl ?? match.detailsUrl,
+    homeScore: details.homeScore ?? match.homeScore,
+    awayScore: details.awayScore ?? match.awayScore,
+    aggregateHomeScore: details.aggregateHomeScore ?? match.aggregateHomeScore,
+    aggregateAwayScore: details.aggregateAwayScore ?? match.aggregateAwayScore,
+    scoreStatus: details.scoreStatus ?? match.scoreStatus,
+    penaltyResult: details.penaltyResult ?? match.penaltyResult,
+  };
+}
+
+async function requestJson<T>(url: string, signal?: AbortSignal, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { ...init, signal });
+  if (!response.ok) {
+    let bodySnippet = "";
+    try {
+      bodySnippet = await response.text();
+    } catch {
+      bodySnippet = "";
+    }
+
+    const error = new Error(`Request failed: ${response.status}`);
+    Object.assign(error, {
+      status: response.status,
+      bodySnippet,
+    });
+    throw error;
   }
 
   return response.json() as Promise<T>;
@@ -188,6 +309,7 @@ function normalizeMatch(raw: Record<string, unknown>): Match {
     penaltyResult: optionalString(raw.penalty_result),
     detailsUrl: optionalString(raw.details_url),
     matchDetailsId: optionalString(raw.match_details_id),
+    matchDetails: null,
   };
 }
 
@@ -202,6 +324,125 @@ function normalizeTeamRanking(raw: unknown): TeamRankingEntry {
         ? source.Aliases.filter((item): item is string => typeof item === "string")
         : [],
   };
+}
+
+function normalizeMatchDetails(raw: Record<string, unknown>): MatchDetails {
+  return {
+    id: asString(raw.id),
+    detailsUrl: optionalString(raw.details_url),
+    date: optionalString(raw.date),
+    time: optionalString(raw.time),
+    league: optionalString(raw.league),
+    homeTeam: optionalString(raw.home_team),
+    awayTeam: optionalString(raw.away_team),
+    homeScore: optionalNumber(raw.home_score),
+    awayScore: optionalNumber(raw.away_score),
+    aggregateHomeScore: optionalNumber(raw.aggregate_home_score),
+    aggregateAwayScore: optionalNumber(raw.aggregate_away_score),
+    scoreStatus: optionalString(raw.score_status),
+    homeGoalScorers: normalizeGoalScorers(raw.home_goal_scorers),
+    awayGoalScorers: normalizeGoalScorers(raw.away_goal_scorers),
+    homeAssists: normalizeAssistProviders(raw.home_assists),
+    awayAssists: normalizeAssistProviders(raw.away_assists),
+    homeRedCards: normalizeRedCards(raw.home_red_cards),
+    awayRedCards: normalizeRedCards(raw.away_red_cards),
+    penaltyResult: optionalString(raw.penalty_result),
+    inProgress: optionalBoolean(raw.in_progress),
+    updatedAt: optionalString(raw.updated_at),
+  };
+}
+
+function normalizeLeagueTables(value: unknown): LeagueTable[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    const leagueID = asString(source.league_id);
+    const leagueName = asString(source.league_name);
+
+    return {
+      id: leagueID || leagueName,
+      leagueID,
+      leagueName,
+      stageName: optionalString(source.stage_name),
+      sourceUrl: optionalString(source.source_url),
+      updatedAt: optionalString(source.updated_at),
+      rows: normalizeLeagueTableRows(source.rows),
+    };
+  });
+}
+
+function normalizeLeagueTableRows(value: unknown): LeagueTableRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    const position = optionalNumber(source.position) ?? 0;
+    const team = asString(source.team);
+
+    return {
+      id: `${position}-${team}`,
+      position,
+      team,
+      played: optionalNumber(source.played) ?? 0,
+      won: optionalNumber(source.won) ?? 0,
+      drawn: optionalNumber(source.drawn) ?? 0,
+      lost: optionalNumber(source.lost) ?? 0,
+      goalsFor: optionalNumber(source.goals_for) ?? 0,
+      goalsAgainst: optionalNumber(source.goals_against) ?? 0,
+      goalDifference: optionalNumber(source.goal_difference) ?? 0,
+      points: optionalNumber(source.points) ?? 0,
+      form: normalizeStringArray(source.form),
+      rankStatus: optionalString(source.rank_status),
+    };
+  });
+}
+
+function normalizeGoalScorers(value: unknown): MatchGoalScorer[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    return {
+      player: asString(source.player ?? source.player_name),
+      goalTimes: normalizeStringArray(source.goal_times),
+      ownGoalTimes: normalizeStringArray(source.own_goal_times),
+    };
+  });
+}
+
+function normalizeAssistProviders(value: unknown): MatchAssistProvider[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    return {
+      player: asString(source.player ?? source.player_name),
+      assistTimes: normalizeStringArray(source.assist_times),
+    };
+  });
+}
+
+function normalizeRedCards(value: unknown): MatchRedCardEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    return {
+      player: asString(source.player ?? source.player_name),
+      redCardTimes: normalizeStringArray(source.red_card_times),
+    };
+  });
 }
 
 function asString(value: unknown): string {
@@ -221,4 +462,12 @@ function optionalNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function optionalBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }

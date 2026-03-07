@@ -33,6 +33,47 @@ export interface Match {
   penaltyResult?: string | null;
   detailsUrl?: string | null;
   matchDetailsId?: string | null;
+  matchDetails?: MatchDetails | null;
+}
+
+export interface MatchGoalScorer {
+  player: string;
+  goalTimes: string[];
+  ownGoalTimes: string[];
+}
+
+export interface MatchAssistProvider {
+  player: string;
+  assistTimes: string[];
+}
+
+export interface MatchRedCardEvent {
+  player: string;
+  redCardTimes: string[];
+}
+
+export interface MatchDetails {
+  id: string;
+  detailsUrl?: string | null;
+  date?: string | null;
+  time?: string | null;
+  league?: string | null;
+  homeTeam?: string | null;
+  awayTeam?: string | null;
+  homeScore?: number | null;
+  awayScore?: number | null;
+  aggregateHomeScore?: number | null;
+  aggregateAwayScore?: number | null;
+  scoreStatus?: string | null;
+  homeGoalScorers: MatchGoalScorer[];
+  awayGoalScorers: MatchGoalScorer[];
+  homeAssists: MatchAssistProvider[];
+  awayAssists: MatchAssistProvider[];
+  homeRedCards: MatchRedCardEvent[];
+  awayRedCards: MatchRedCardEvent[];
+  penaltyResult?: string | null;
+  inProgress?: boolean | null;
+  updatedAt?: string | null;
 }
 
 export interface MatchLeagueGroup {
@@ -54,6 +95,37 @@ export interface MatchesPayload {
   matches: Match[];
   lastUpdated: string | null;
   totalCount: number;
+}
+
+export interface LeagueTableRow {
+  id: string;
+  position: number;
+  team: string;
+  played: number;
+  won: number;
+  drawn: number;
+  lost: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+  form: string[];
+  rankStatus?: string | null;
+}
+
+export interface LeagueTable {
+  id: string;
+  leagueID: string;
+  leagueName: string;
+  stageName?: string | null;
+  sourceUrl?: string | null;
+  updatedAt?: string | null;
+  rows: LeagueTableRow[];
+}
+
+export interface LeagueTablesPayload {
+  leagues: LeagueTable[];
+  lastUpdated: string | null;
 }
 
 export interface TeamRankingEntry {

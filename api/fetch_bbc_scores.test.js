@@ -144,6 +144,115 @@ test("parseMatchDetailsFromHtml parses aggregate score when only aggregate marku
   assert.deepStrictEqual(parsed.away_goal_scorers, []);
 });
 
+test("parseMatchDetailsFromHtml extracts header metadata from BBC live match pages", () => {
+  const html = `
+    <html>
+      <head>
+        <title>Celta Vigo vs Real Madrid: Spanish La Liga stats &amp; head-to-head - BBC Sport</title>
+      </head>
+      <body>
+        <div class="ssrcss-18cf29i-CompetitionFormatter">Spanish La Liga</div>
+        <div data-participant-id="home">
+          <div class="ssrcss-1ff7ivz-TeamNameWrapper">
+            <span aria-hidden="true">Celta Vigo</span>
+          </div>
+        </div>
+        <div data-testid="score" class="ssrcss-kfbgyz-StyledScore">
+          <div class="ssrcss-qsbptj-HomeScore">1</div>
+          <div class="ssrcss-fri5a2-AwayScore">1</div>
+        </div>
+        <div data-participant-id="away">
+          <div class="ssrcss-1ff7ivz-TeamNameWrapper">
+            <span aria-hidden="true">Real Madrid</span>
+          </div>
+        </div>
+        <script type="application/json">
+          {"coverageStartTime":"2026-03-06T20:00:00.000Z"}
+        </script>
+      </body>
+    </html>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.equal(parsed.date, "2026-03-06");
+  assert.equal(parsed.time, "20:00");
+  assert.equal(parsed.league, "Spanish La Liga");
+  assert.equal(parsed.home_team, "Celta Vigo");
+  assert.equal(parsed.away_team, "Real Madrid");
+  assert.equal(parsed.home_score, 1);
+  assert.equal(parsed.away_score, 1);
+});
+
+test("parseMatchDetailsFromHtml splits competition name and subheading across formatter nodes", () => {
+  const html = `
+    <html>
+      <head>
+        <title>FA Cup LIVE: Wolves vs Liverpool - BBC Sport</title>
+      </head>
+      <body>
+        <div class="ssrcss-18cf29i-CompetitionFormatter">FA Cup - </div>
+        <div class="ssrcss-18cf29i-CompetitionFormatter">5th Round</div>
+        <div data-participant-id="home">
+          <div class="ssrcss-1ff7ivz-TeamNameWrapper">
+            <span aria-hidden="true">Wolverhampton Wanderers</span>
+          </div>
+        </div>
+        <div data-testid="score" class="ssrcss-kfbgyz-StyledScore">
+          <div class="ssrcss-qsbptj-HomeScore">1</div>
+          <div class="ssrcss-fri5a2-AwayScore">3</div>
+        </div>
+        <div data-participant-id="away">
+          <div class="ssrcss-1ff7ivz-TeamNameWrapper">
+            <span aria-hidden="true">Liverpool</span>
+          </div>
+        </div>
+        <script type="application/json">
+          {"coverageStartTime":"2026-03-06T18:45:00.000Z"}
+        </script>
+      </body>
+    </html>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.equal(parsed.league, "FA Cup");
+  assert.equal(parsed.league_subcategory, "5th Round");
+  assert.equal(parsed.date, "2026-03-06");
+  assert.equal(parsed.time, "18:45");
+  assert.equal(parsed.home_team, "Wolverhampton Wanderers");
+  assert.equal(parsed.away_team, "Liverpool");
+  assert.equal(parsed.home_score, 1);
+  assert.equal(parsed.away_score, 3);
+});
+
+test("parseMatchDetailsFromHtml falls back to title and metadata when header competition is absent", () => {
+  const html = `
+    <html>
+      <head>
+        <title>Celta Vigo vs Real Madrid: Spanish La Liga stats &amp; head-to-head - BBC Sport</title>
+        <meta
+          name="description"
+          content="Follow live text commentary, score updates and match stats from Celta Vigo vs Real Madrid in the Spanish La Liga"
+        />
+      </head>
+      <body>
+        <script type="application/json">
+          {"coverageStartTime":"2026-03-06T20:00:00.000Z"}
+        </script>
+      </body>
+    </html>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.equal(parsed.date, "2026-03-06");
+  assert.equal(parsed.time, "20:00");
+  assert.equal(parsed.league, "Spanish La Liga");
+  assert.equal(parsed.home_team, "Celta Vigo");
+  assert.equal(parsed.away_team, "Real Madrid");
+});
+
 test("extractStatusFromText does not treat aggregate text as live minute", () => {
   assert.equal(__private.extractStatusFromText("(Agg 3-3)"), null);
   assert.equal(

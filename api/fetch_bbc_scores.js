@@ -32,6 +32,7 @@ const BBC_GROUPED_HOME_EVENT_SELECTOR = "[class$='GroupedHomeEvent'], [class*='G
 const BBC_GROUPED_AWAY_EVENT_SELECTOR = "[class$='GroupedAwayEvent'], [class*='GroupedAwayEvent']";
 const BBC_HIDDEN_TEXT_SELECTOR = ".visually-hidden, [class*='VisuallyHidden']";
 const BBC_SECONDARY_HEADING_SELECTOR = "h3[class$='SecondaryHeading'], h3[class*='SecondaryHeading-']";
+const BBC_COMPETITION_FORMATTER_SELECTOR = "[class*='CompetitionFormatter']";
 
 const BBC_DETAILS_CONCURRENCY = 4;
 const BBC_DETAIL_TTL_LIVE_MS = 5 * 1000; // Reduced from 30s to 5s for fresher live match data
@@ -747,13 +748,176 @@ function parseAssistEvents($container, $) {
   return assists;
 }
 
+function extractMetaContent($, attribute, value) {
+  return normalizeText($(`meta[${attribute}="${value}"]`).first().attr("content"));
+}
+
+function parseBbcHumanDate(dateText) {
+  const normalized = normalizeText(dateText);
+  if (!normalized) return null;
+
+  const match = normalized.match(/^(?:[A-Za-z]{3,9}\s+)?(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+  if (!match) return null;
+
+  const monthToken = String(match[2] || "").slice(0, 3).toLowerCase();
+  const monthByToken = {
+    jan: "01",
+    feb: "02",
+    mar: "03",
+    apr: "04",
+    may: "05",
+    jun: "06",
+    jul: "07",
+    aug: "08",
+    sep: "09",
+    oct: "10",
+    nov: "11",
+    dec: "12",
+  };
+  const month = monthByToken[monthToken];
+  if (!month) return null;
+
+  return `${match[3]}-${String(match[1]).padStart(2, "0")}-${month}`;
+}
+
+function extractMatchIdentityFromText(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return null;
+
+  const match = normalized.match(/^(.+?)\s+vs\s+(.+?)(?::|\s+in\s+the\b|$)/i);
+  if (!match) return null;
+
+  const homeTeam = normalizeText(match[1]);
+  const awayTeam = normalizeText(match[2]);
+  if (!homeTeam || !awayTeam) return null;
+
+  return {
+    home_team: homeTeam,
+    away_team: awayTeam,
+  };
+}
+
+function extractLeagueFromText(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return null;
+
+  const fromTitle = normalized.match(/:\s*(.+?)\s+stats(?:\s*&\s*head-to-head)?(?:\s+-\s+BBC Sport)?$/i);
+  if (fromTitle) {
+    return normalizeText(fromTitle[1]);
+  }
+
+  const fromDescription = normalized.match(/\bin\s+the\s+(.+?)(?:[.!?]|$)/i);
+  if (fromDescription) {
+    return normalizeText(fromDescription[1]);
+  }
+
+  return null;
+}
+
+function splitCompetitionAndSubcategory(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return { league: null, league_subcategory: null };
+
+  const parts = normalized
+    .split(/\s*[-–—]\s*/)
+    .map((part) => normalizeText(part))
+    .filter(Boolean);
+
+  if (parts.length >= 2) {
+    return {
+      league: parts[0],
+      league_subcategory: parts.slice(1).join(" - "),
+    };
+  }
+
+  return {
+    league: normalized.replace(/\s*[-–—]\s*$/, "").trim() || null,
+    league_subcategory: null,
+  };
+}
+
+function extractCompetitionMetadata($, html) {
+  const formatterParts = $(BBC_COMPETITION_FORMATTER_SELECTOR)
+    .map((_, el) => normalizeText($(el).text()))
+    .get()
+    .filter(Boolean);
+
+  if (formatterParts.length > 0) {
+    return splitCompetitionAndSubcategory(formatterParts.join(" "));
+  }
+
+  const tournamentDescriptionMatch = html.match(/"tournamentDescriptionLabel":"([^"]+)"/i);
+  if (tournamentDescriptionMatch) {
+    return splitCompetitionAndSubcategory(tournamentDescriptionMatch[1]);
+  }
+
+  return {
+    league:
+      extractLeagueFromText($("title").first().text())
+      || extractLeagueFromText(extractMetaContent($, "name", "description"))
+      || extractLeagueFromText(extractMetaContent($, "property", "og:description")),
+    league_subcategory: null,
+  };
+}
+
+function extractDetailsPageMetadata($, html) {
+  const metadata = {};
+  const competition = extractCompetitionMetadata($, html);
+  if (competition.league) {
+    metadata.league = competition.league;
+  }
+  if (competition.league_subcategory) {
+    metadata.league_subcategory = competition.league_subcategory;
+  }
+
+  const coverageStartMatch = html.match(/"coverageStartTime":"([^"]+)"/i);
+  if (coverageStartMatch) {
+    const parsedCoverageStart = parseDateTimeCandidate(
+      coverageStartMatch[1],
+      null,
+      DEFAULT_BBC_MATCH_TIMEZONE
+    );
+    if (parsedCoverageStart) {
+      metadata.date = parsedCoverageStart.date;
+      metadata.time = parsedCoverageStart.time;
+    }
+  }
+
+  if (!metadata.date || !metadata.time) {
+    const dateMatch = html.match(/"date":"([^"]+)"/i);
+    const accessibleTimeMatch = html.match(/"accessibleTime":"([^"]+)"/i);
+    const fallbackDate = dateMatch ? parseBbcHumanDate(dateMatch[1]) : null;
+    const fallbackTime = accessibleTimeMatch
+      ? normalizeKickoffTimeToken(accessibleTimeMatch[1])
+      : null;
+    if (fallbackDate) metadata.date = metadata.date || fallbackDate;
+    if (fallbackTime) metadata.time = metadata.time || fallbackTime;
+  }
+
+  const titleIdentity = extractMatchIdentityFromText($("title").first().text());
+  const descriptionIdentity = extractMatchIdentityFromText(extractMetaContent($, "name", "description"));
+  const identity = titleIdentity || descriptionIdentity;
+  if (identity) {
+    metadata.home_team = identity.home_team;
+    metadata.away_team = identity.away_team;
+  }
+
+  return metadata;
+}
+
 function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   if (!html) return null;
   const $ = cheerio.load(html);
+  const $root = $.root();
   const $homeGoals = $(BBC_KEY_EVENTS_HOME_SELECTOR).first();
   const $awayGoals = $(BBC_KEY_EVENTS_AWAY_SELECTOR).first();
   const $homeAssists = $(BBC_GROUPED_HOME_EVENT_SELECTOR).first();
   const $awayAssists = $(BBC_GROUPED_AWAY_EVENT_SELECTOR).first();
+  const pageMetadata = extractDetailsPageMetadata($, html);
+  const teamsFromHeader = extractTeamsFromBbcNode($root, $);
+  const scoresFromHeader = extractScoresFromBbcNode($root, $);
+  const resolvedHomeTeam = normalizeText(homeTeam) || teamsFromHeader[0] || pageMetadata.home_team || null;
+  const resolvedAwayTeam = normalizeText(awayTeam) || teamsFromHeader[1] || pageMetadata.away_team || null;
 
   // Parse match status/time from the page
   const $status = $(BBC_STATUS_SELECTOR).first();
@@ -778,7 +942,13 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
     !$homeAssists.length &&
     !$awayAssists.length &&
     !matchTime &&
-    !aggregate
+    !aggregate &&
+    !pageMetadata.league &&
+    !pageMetadata.date &&
+    !pageMetadata.time &&
+    !resolvedHomeTeam &&
+    !resolvedAwayTeam &&
+    !scoresFromHeader
   ) {
     return null;
   }
@@ -792,6 +962,29 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
     away_assists: parseAssistEvents($awayAssists, $),
   };
 
+  if (pageMetadata.date) {
+    result.date = pageMetadata.date;
+  }
+  if (pageMetadata.time) {
+    result.time = pageMetadata.time;
+  }
+  if (pageMetadata.league) {
+    result.league = pageMetadata.league;
+  }
+  if (pageMetadata.league_subcategory) {
+    result.league_subcategory = pageMetadata.league_subcategory;
+  }
+  if (resolvedHomeTeam) {
+    result.home_team = resolvedHomeTeam;
+  }
+  if (resolvedAwayTeam) {
+    result.away_team = resolvedAwayTeam;
+  }
+  if (scoresFromHeader && isScoreValue(scoresFromHeader[0]) && isScoreValue(scoresFromHeader[1])) {
+    result.home_score = toScoreValue(scoresFromHeader[0]);
+    result.away_score = toScoreValue(scoresFromHeader[1]);
+  }
+
   // Include match time/status if parsed
   if (matchTime) {
     result.match_time = matchTime;
@@ -804,8 +997,8 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   }
 
   // Only parse penalty result if we have team names to validate against
-  if (homeTeam && awayTeam) {
-    const penaltyResult = parsePenaltyShootoutResult($, html, homeTeam, awayTeam);
+  if (resolvedHomeTeam && resolvedAwayTeam) {
+    const penaltyResult = parsePenaltyShootoutResult($, html, resolvedHomeTeam, resolvedAwayTeam);
     if (penaltyResult) {
       result.penalty_result = penaltyResult;
     }

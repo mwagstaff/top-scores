@@ -7,6 +7,7 @@ const {
 } = require("./redis_client");
 const { sendNotification, sendLiveActivityPush } = require("./apns_client");
 const crypto = require("crypto");
+const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.json");
 
 // Configuration
 const POLL_INTERVAL_MS = 10 * 1000; // Poll every 10 seconds for monitored matches
@@ -30,16 +31,9 @@ const LIVE_ACTIVITY_PENDING_MAX_MS = 2 * 60 * 1000;
 const LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS = 30 * 60;
 const LIVE_ACTIVITY_STALE_LIVE_UPDATED_GRACE_MS = 5 * 60 * 1000;
 const LIVE_ACTIVITY_STALE_LIVE_KICKOFF_GRACE_MS = 2 * 60 * 60 * 1000;
+const LIVE_ACTIVITY_FINISHED_RETENTION_MS = 8 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
-const LIVE_ACTIVITY_COMPETITION_WEIGHTS = {
-  "Premier League": 100,
-  "UEFA Champions League": 90,
-  "UEFA Europa League": 80,
-  "UEFA Conference League": 70,
-  "FA Cup": 65,
-  "EFL Cup": 60,
-};
 const LIVE_ACTIVITY_TEAM_RATING_STOP_WORDS = new Set([
   "fc",
   "cf",
@@ -81,6 +75,7 @@ const monitoredMatches = new Map(); // matchId -> matchState
 const scheduledNotifications = new Map(); // notificationId -> timeout handle
 const sentNotifications = new Set(); // Local process dedupe; Redis enforces cross-process idempotency
 const finishedMatchIds = new Set(); // Match IDs that have been fully processed - never restart these
+const retainedFinishedMatches = new Map(); // matchId -> terminal snapshot kept for post-match Live Activity display
 const monitorDiagnostics = {
   lastCheck: null,
   lastError: null,
@@ -93,6 +88,7 @@ let liveActivityTeamRatingDefaultElo = 1000;
 let liveActivityTeamRatingFetchedAtMs = 0;
 let liveActivityTeamRatingLastAttemptAtMs = 0;
 let liveActivityTeamRatingRefreshPromise = null;
+let liveActivityPremierLeagueTeamLookup = null;
 
 // Match status helpers - mirrors server.js MATCH_STATUS_* constants
 const MATCH_STATUS_MINUTE_PATTERN = /^(\d{1,3})(?:\+(\d{1,2}))?'?$/;
@@ -172,6 +168,115 @@ function parseStatusMinute(status) {
   const added = Number(match[2] || 0);
   if (!Number.isFinite(base) || !Number.isFinite(added)) return null;
   return base + added;
+}
+
+function parseMatchEventMinute(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim().replace(/'/g, "");
+  if (!normalized) return null;
+  const match = normalized.match(/^(\d{1,3})(?:\+(\d{1,2}))?$/);
+  if (!match) return null;
+  const base = Number(match[1]);
+  const added = Number(match[2] || 0);
+  if (!Number.isFinite(base) || !Number.isFinite(added)) return null;
+  return base + added;
+}
+
+function countGoalsUpToMinute(goalScorers, limitMinute) {
+  if (!Number.isFinite(limitMinute) || !Array.isArray(goalScorers)) return 0;
+
+  let total = 0;
+  goalScorers.forEach((scorer) => {
+    const goalTimes = Array.isArray(scorer && scorer.goal_times) ? scorer.goal_times : [];
+    const ownGoalTimes = Array.isArray(scorer && scorer.own_goal_times) ? scorer.own_goal_times : [];
+    goalTimes.forEach((goalTime) => {
+      const minute = parseMatchEventMinute(goalTime);
+      if (Number.isFinite(minute) && minute <= limitMinute) {
+        total += 1;
+      }
+    });
+    ownGoalTimes.forEach((goalTime) => {
+      const minute = parseMatchEventMinute(goalTime);
+      if (Number.isFinite(minute) && minute <= limitMinute) {
+        total += 1;
+      }
+    });
+  });
+
+  return total;
+}
+
+function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
+  if (!currentMatch || typeof currentMatch !== "object") return null;
+  const currentMinute = parseStatusMinute(currentMatch.score_status);
+  if (!Number.isFinite(currentMinute) || !Number.isFinite(delayMinutes) || delayMinutes <= 0) {
+    return null;
+  }
+
+  const delayedStatusMinute = parseStatusMinute(delayedMatch && delayedMatch.score_status);
+  const delayedMinute = Number.isFinite(delayedStatusMinute)
+    ? delayedStatusMinute
+    : Math.max(0, currentMinute - delayMinutes);
+  if (delayedMinute <= 0) {
+    return null;
+  }
+  const hasGoalTimeline =
+    Array.isArray(currentMatch.home_goal_scorers) || Array.isArray(currentMatch.away_goal_scorers);
+  const timelineHomeGoals = countGoalsUpToMinute(currentMatch.home_goal_scorers, delayedMinute);
+  const timelineAwayGoals = countGoalsUpToMinute(currentMatch.away_goal_scorers, delayedMinute);
+  const delayedHomeScore = toNumericScore(delayedMatch && delayedMatch.home_score);
+  const delayedAwayScore = toNumericScore(delayedMatch && delayedMatch.away_score);
+  const currentHomeScore = toNumericScore(currentMatch.home_score);
+  const currentAwayScore = toNumericScore(currentMatch.away_score);
+  const timelineHomeGoalCount = countGoals(currentMatch.home_goal_scorers);
+  const timelineAwayGoalCount = countGoals(currentMatch.away_goal_scorers);
+  const homeTimelineComplete =
+    Number.isFinite(currentHomeScore) && timelineHomeGoalCount >= currentHomeScore;
+  const awayTimelineComplete =
+    Number.isFinite(currentAwayScore) && timelineAwayGoalCount >= currentAwayScore;
+
+  if (hasGoalTimeline) {
+    return {
+      home_score: homeTimelineComplete
+        ? timelineHomeGoals
+        : Math.max(timelineHomeGoals, delayedHomeScore || 0),
+      away_score: awayTimelineComplete
+        ? timelineAwayGoals
+        : Math.max(timelineAwayGoals, delayedAwayScore || 0),
+      score_status:
+        delayedMatch && delayedMatch.score_status ? String(delayedMatch.score_status) : String(delayedMinute),
+    };
+  }
+
+  if (!delayedMatch || typeof delayedMatch !== "object") {
+    return {
+      home_score: null,
+      away_score: null,
+      score_status: String(delayedMinute),
+    };
+  }
+
+  return {
+    home_score: delayedMatch.home_score,
+    away_score: delayedMatch.away_score,
+    score_status: String(delayedMinute),
+  };
+}
+
+function delayedScoreOverrideFromTimeline(currentMatch, delayedMatch) {
+  const delayedMinute = parseStatusMinute(delayedMatch && delayedMatch.score_status);
+  if (!Number.isFinite(delayedMinute)) return null;
+  if (!currentMatch || typeof currentMatch !== "object") return null;
+
+  const homeGoalsByMinute = countGoalsUpToMinute(currentMatch.home_goal_scorers, delayedMinute);
+  const awayGoalsByMinute = countGoalsUpToMinute(currentMatch.away_goal_scorers, delayedMinute);
+  const hasTimelineEvidence = homeGoalsByMinute > 0 || awayGoalsByMinute > 0;
+  if (!hasTimelineEvidence) return null;
+
+  return {
+    home_score: homeGoalsByMinute,
+    away_score: awayGoalsByMinute,
+  };
 }
 
 function isLiveMatchStatus(status) {
@@ -449,6 +554,67 @@ function liveActivityTeamScoreTotal(match) {
   const total = (Number.isFinite(homeTeamScore) ? homeTeamScore : 0) +
     (Number.isFinite(awayTeamScore) ? awayTeamScore : 0);
   return Number.isFinite(total) ? total : 0;
+}
+
+function buildLiveActivityPremierLeagueTeamLookup(teams) {
+  const exactByKey = new Set();
+  const candidates = [];
+
+  (Array.isArray(teams) ? teams : []).forEach((team) => {
+    const name = String(team || "").trim();
+    if (!name) return;
+    const key = normalizeLiveActivityTeamKey(name);
+    if (!key) return;
+    exactByKey.add(key);
+    candidates.push({
+      key,
+      tokens: normalizeLiveActivityTeamTokens(name),
+    });
+  });
+
+  return {
+    exactByKey,
+    candidates,
+  };
+}
+
+function getLiveActivityPremierLeagueTeamLookup() {
+  if (!liveActivityPremierLeagueTeamLookup) {
+    liveActivityPremierLeagueTeamLookup = buildLiveActivityPremierLeagueTeamLookup(
+      LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS
+    );
+  }
+  return liveActivityPremierLeagueTeamLookup;
+}
+
+function isEnglishPremierLeagueTeam(teamName) {
+  const key = normalizeLiveActivityTeamKey(teamName);
+  if (!key) return false;
+
+  const lookup = getLiveActivityPremierLeagueTeamLookup();
+  if (lookup.exactByKey.has(key)) return true;
+
+  const aliasedKey = LIVE_ACTIVITY_TEAM_RATING_ALIAS_MAP[key];
+  if (aliasedKey && lookup.exactByKey.has(aliasedKey)) {
+    return true;
+  }
+
+  const sourceTokens = normalizeLiveActivityTeamTokens(teamName);
+  let bestConfidence = 0;
+
+  lookup.candidates.forEach((candidate) => {
+    const confidence = liveActivityTeamSimilarity(
+      key,
+      candidate.key,
+      sourceTokens,
+      candidate.tokens
+    );
+    if (confidence > bestConfidence) {
+      bestConfidence = confidence;
+    }
+  });
+
+  return bestConfidence >= 0.86;
 }
 
 async function ensureLiveActivityTeamRatingCache(nowMs = Date.now()) {
@@ -1199,7 +1365,11 @@ async function runStartupLiveActivityKick(reason = "startup") {
       error && error.message ? error.message : error
     );
   }
-  await evaluateAndDispatchLiveActivities();
+  await evaluateAndDispatchLiveActivities({
+    forceDispatch: true,
+    preserveExistingOnEmpty: true,
+    reason,
+  });
 }
 
 function clearStartupLiveActivityKickTimers() {
@@ -1288,6 +1458,7 @@ function stopMonitoring() {
     stopMonitoringMatch(matchId, "monitor_service_stop");
   }
   finishedMatchIds.clear();
+  retainedFinishedMatches.clear();
   resetMonitorDiagnostics();
 }
 
@@ -1758,6 +1929,11 @@ async function pollMatchDetails(matchId) {
         reason: "terminal_status",
         score_status: currentMatch.score_status || null,
       });
+      monitorState.finishedAtMs = monitorState.lastPollTime;
+      if (monitorState.lifecycle) {
+        monitorState.lifecycle.fulltimeAtMs = monitorState.lastPollTime;
+      }
+      retainFinishedMatchForLiveActivity(matchId, monitorState, monitorState.lastPollTime);
       finishedMatchIds.add(matchId);
       stopMonitoringMatch(matchId, "terminal_status");
       return;
@@ -2020,19 +2196,35 @@ function channelMatchesSelection(channelName, selection) {
   return normalizedChannel.includes(normalizedSelection);
 }
 
-function competitionWeightForMatch(match) {
-  const league = String(match && match.league ? match.league : "").trim();
-  if (!league) return 0;
-  return Number(LIVE_ACTIVITY_COMPETITION_WEIGHTS[league] || 0);
+function liveActivityStatusSortBucket(match) {
+  const status = match && match.score_status;
+  if (isLiveMatchStatus(status)) return 0;
+  if (isFinishedMatchStatus(status) || isPenaltyShootoutStatus(status)) return 1;
+  return 2;
+}
+
+function liveActivityPremierLeagueSortBucket(match) {
+  const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
+  const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
+  if (homeInPremierLeague && awayInPremierLeague) return 0;
+  if (homeInPremierLeague || awayInPremierLeague) return 1;
+  return 2;
 }
 
 function compareLiveActivityMatches(lhs, rhs) {
+  const lhsStatusBucket = liveActivityStatusSortBucket(lhs);
+  const rhsStatusBucket = liveActivityStatusSortBucket(rhs);
+  if (lhsStatusBucket !== rhsStatusBucket) return lhsStatusBucket - rhsStatusBucket;
+
+  const lhsPremierLeagueBucket = liveActivityPremierLeagueSortBucket(lhs);
+  const rhsPremierLeagueBucket = liveActivityPremierLeagueSortBucket(rhs);
+  if (lhsPremierLeagueBucket !== rhsPremierLeagueBucket) {
+    return lhsPremierLeagueBucket - rhsPremierLeagueBucket;
+  }
+
   const lhsTeamScore = liveActivityTeamScoreTotal(lhs);
   const rhsTeamScore = liveActivityTeamScoreTotal(rhs);
   if (lhsTeamScore !== rhsTeamScore) return rhsTeamScore - lhsTeamScore;
-  const lhsWeight = competitionWeightForMatch(lhs);
-  const rhsWeight = competitionWeightForMatch(rhs);
-  if (lhsWeight !== rhsWeight) return rhsWeight - lhsWeight;
   const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
   const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
   if (leftKickoff !== rightKickoff) return leftKickoff - rightKickoff;
@@ -2135,12 +2327,34 @@ function delayedSnapshotForMatch(monitorState, delayMinutes, nowMs = Date.now())
   }
   const targetMs = nowMs - delayMinutes * 60 * 1000;
   const history = monitorState.history;
+  let latestEligible = null;
+  let maxHomeScore = null;
+  let maxAwayScore = null;
   for (let index = history.length - 1; index >= 0; index -= 1) {
     const entry = history[index];
     if (!entry || !entry.match) continue;
     if (Number(entry.timestampMs) <= targetMs) {
-      return entry.match;
+      if (!latestEligible) {
+        latestEligible = entry.match;
+      }
+      const candidateHomeScore = toNumericScore(entry.match.home_score);
+      const candidateAwayScore = toNumericScore(entry.match.away_score);
+      if (Number.isFinite(candidateHomeScore)) {
+        maxHomeScore =
+          maxHomeScore === null ? candidateHomeScore : Math.max(maxHomeScore, candidateHomeScore);
+      }
+      if (Number.isFinite(candidateAwayScore)) {
+        maxAwayScore =
+          maxAwayScore === null ? candidateAwayScore : Math.max(maxAwayScore, candidateAwayScore);
+      }
     }
+  }
+  if (latestEligible) {
+    return {
+      ...latestEligible,
+      home_score: maxHomeScore === null ? latestEligible.home_score : maxHomeScore,
+      away_score: maxAwayScore === null ? latestEligible.away_score : maxAwayScore,
+    };
   }
   const first = history[0];
   return first && first.match ? first.match : monitorState.lastState || null;
@@ -2158,8 +2372,90 @@ function hasFullDelayBufferForMatch(monitorState, delayMinutes, nowMs = Date.now
   return firstTimestampMs <= targetMs;
 }
 
-function monitoredMatchStatesSnapshot() {
-  return Array.from(monitoredMatches.entries())
+function inferLiveActivityFinishedAtMs(entry, nowMs = Date.now()) {
+  const state = entry && entry.state && typeof entry.state === "object" ? entry.state : {};
+  const match = entry && entry.match && typeof entry.match === "object" ? entry.match : null;
+
+  const directFinishedAtMs = Number(state.finishedAtMs);
+  if (Number.isFinite(directFinishedAtMs)) return directFinishedAtMs;
+
+  const lifecycleFinishedAtMs = Number(state.lifecycle && state.lifecycle.fulltimeAtMs);
+  if (Number.isFinite(lifecycleFinishedAtMs)) return lifecycleFinishedAtMs;
+
+  if (Array.isArray(state.history)) {
+    for (let index = state.history.length - 1; index >= 0; index -= 1) {
+      const historyEntry = state.history[index];
+      const historyMatch = historyEntry && historyEntry.match ? historyEntry.match : null;
+      if (!historyMatch) continue;
+      if (
+        isFinishedMatchStatus(historyMatch.score_status) ||
+        isPenaltyShootoutStatus(historyMatch.score_status)
+      ) {
+        const historyTimestampMs = Number(historyEntry.timestampMs);
+        if (Number.isFinite(historyTimestampMs)) {
+          return historyTimestampMs;
+        }
+      }
+    }
+  }
+
+  const updatedAtMs = Date.parse(String(match && match.updated_at ? match.updated_at : "").trim());
+  if (Number.isFinite(updatedAtMs)) return updatedAtMs;
+
+  if (
+    match &&
+    (isFinishedMatchStatus(match.score_status) || isPenaltyShootoutStatus(match.score_status))
+  ) {
+    return nowMs;
+  }
+
+  return null;
+}
+
+function shouldRetainFinishedMatchForLiveActivity(entry, nowMs = Date.now()) {
+  const finishedAtMs = inferLiveActivityFinishedAtMs(entry, nowMs);
+  return Number.isFinite(finishedAtMs) && nowMs - finishedAtMs < LIVE_ACTIVITY_FINISHED_RETENTION_MS;
+}
+
+function retainFinishedMatchForLiveActivity(matchId, monitorState, nowMs = Date.now()) {
+  if (!matchId || !monitorState || !monitorState.lastState) return;
+  retainedFinishedMatches.set(matchId, {
+    ...monitorState,
+    lastState: { ...monitorState.lastState },
+    history: Array.isArray(monitorState.history)
+      ? monitorState.history.map((entry) => ({
+        timestampMs: entry && entry.timestampMs,
+        match: entry && entry.match ? { ...entry.match } : null,
+      }))
+      : [],
+    finishedAtMs: Number.isFinite(Number(monitorState.finishedAtMs))
+      ? Number(monitorState.finishedAtMs)
+      : nowMs,
+  });
+}
+
+function cleanupRetainedFinishedMatches(nowMs = Date.now()) {
+  for (const [matchId, state] of retainedFinishedMatches.entries()) {
+    const entry = {
+      matchId,
+      state,
+      match: state && state.lastState ? state.lastState : null,
+    };
+    if (!shouldRetainFinishedMatchForLiveActivity(entry, nowMs)) {
+      retainedFinishedMatches.delete(matchId);
+    }
+  }
+}
+
+function monitoredMatchStatesSnapshot(nowMs = Date.now()) {
+  cleanupRetainedFinishedMatches(nowMs);
+
+  const entries = [
+    ...Array.from(monitoredMatches.entries()),
+    ...Array.from(retainedFinishedMatches.entries()),
+  ];
+
+  return entries
     .map(([matchId, state]) => ({
       matchId,
       state,
@@ -2177,12 +2473,40 @@ function displayStatusToken(status) {
   return value.toUpperCase();
 }
 
-function liveActivityModeForMatches(liveMatches, upcomingMatches) {
-  if (liveMatches.length > 1) return "multi_live";
-  if (liveMatches.length === 1) return "single_live";
+function liveActivityDelayMinutesFromPreferences(prefs) {
+  if (!prefs || typeof prefs !== "object") return 0;
+  if (prefs.liveActivityDelayMinutes !== undefined && prefs.liveActivityDelayMinutes !== null) {
+    return Math.max(0, Number(prefs.liveActivityDelayMinutes || 0));
+  }
+  return Math.max(0, Number(prefs.notificationDelayMinutes || 0));
+}
+
+function liveActivityModeForMatches(liveMatches, finishedMatches, upcomingMatches) {
+  const liveAndFinishedCount = liveMatches.length + finishedMatches.length;
+  if (liveAndFinishedCount > 1) return liveMatches.length > 0 ? "multi_live" : "multi_finished";
+  if (liveAndFinishedCount === 1) return liveMatches.length > 0 ? "single_live" : "single_finished";
   if (upcomingMatches.length > 1) return "multi_upcoming";
   if (upcomingMatches.length === 1) return "single_upcoming";
   return null;
+}
+
+function sanitizeAggregateForLiveActivity(match) {
+  if (!match || typeof match !== "object") return match;
+
+  const aggregateHomeScore = toNumericScore(match.aggregate_home_score);
+  const aggregateAwayScore = toNumericScore(match.aggregate_away_score);
+  if (!Number.isFinite(aggregateHomeScore) || !Number.isFinite(aggregateAwayScore)) {
+    return match;
+  }
+  if (aggregateHomeScore !== 0 || aggregateAwayScore !== 0) {
+    return match;
+  }
+
+  return {
+    ...match,
+    aggregate_home_score: null,
+    aggregate_away_score: null,
+  };
 }
 
 function buildLiveActivityContentState(mode, matches, delayMinutes, nowMs = Date.now()) {
@@ -2250,8 +2574,24 @@ async function persistLiveActivityPatch(user, patch = {}) {
   }
 }
 
-async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now()) {
+function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = false) {
+  if (forceDispatch) return false;
+  return state.lastPayloadHash === payloadHash && state.lastMode === mode;
+}
+
+function shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, options = {}) {
+  return Boolean(
+    options &&
+      options.preserveExistingOnEmpty &&
+      activityPushToken &&
+      String(activityPushToken).trim()
+  );
+}
+
+async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(), options = {}) {
   const state = user && user.liveActivity && typeof user.liveActivity === "object" ? user.liveActivity : {};
+  const forceDispatch = Boolean(options && options.forceDispatch);
+  const preserveExistingOnEmpty = Boolean(options && options.preserveExistingOnEmpty);
   const pushToStartToken = String(state.pushToStartToken || "").trim();
   const activityPushToken = String(state.currentActivityPushToken || "").trim();
   const pendingStartAtMs = Date.parse(String(state.pendingStartAt || ""));
@@ -2262,6 +2602,9 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const shouldDisplay = Boolean(presentation && presentation.mode && presentation.matches.length > 0);
 
   if (!shouldDisplay) {
+    if (shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, { preserveExistingOnEmpty })) {
+      return;
+    }
     if (isTestHoldActive) {
       return;
     }
@@ -2312,7 +2655,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const payloadHash = stableHash(contentState);
 
   if (activityPushToken) {
-    if (state.lastPayloadHash === payloadHash && state.lastMode === presentation.mode) {
+    if (shouldSkipLiveActivityUpdate(state, payloadHash, presentation.mode, forceDispatch)) {
       return;
     }
     const updateResult = await sendLiveActivityPush({
@@ -2356,7 +2699,11 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   }
 
   const first = presentation.matches[0];
-  const title = presentation.mode.includes("live") ? "Live now" : "Kick-off soon";
+  const title = presentation.mode.includes("live")
+    ? "Live now"
+    : presentation.mode.includes("finished")
+    ? "Full time"
+    : "Kick-off soon";
   const body = first
     ? `${first.home_team} vs ${first.away_team}`
     : "Top Scores";
@@ -2399,7 +2746,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
 
 function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now()) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
-  const delayMinutes = Math.max(0, Number(prefs.notificationDelayMinutes || 0));
+  const delayMinutes = liveActivityDelayMinutesFromPreferences(prefs);
   const eligible = [];
 
   for (const entry of entries) {
@@ -2419,6 +2766,7 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
   }
 
   const liveMatches = [];
+  const finishedMatches = [];
   const upcomingMatches = [];
 
   for (const entry of eligible) {
@@ -2432,57 +2780,106 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
     }
 
     if (isLiveMatchStatus(status)) {
+      const delayed = delayedSnapshotForMatch(state, delayMinutes, nowMs) || currentMatch;
+      const delayedLiveState = buildDelayedLiveState(currentMatch, delayed, delayMinutes);
+
       if (!hasFullDelayBufferForMatch(state, delayMinutes, nowMs)) {
-        // Avoid spoilers: keep the activity active but suppress live scores/minute until full
-        // delay buffer is available.
-        upcomingMatches.push({
+        if (delayedLiveState) {
+          liveMatches.push(sanitizeAggregateForLiveActivity({
+            ...currentMatch,
+            home_score: delayedLiveState.home_score,
+            away_score: delayedLiveState.away_score,
+            score_status: delayedLiveState.score_status,
+            aggregate_home_score: null,
+            aggregate_away_score: null,
+          }));
+          continue;
+        }
+
+        // Avoid spoilers when we cannot safely reconstruct the delayed live state yet.
+        upcomingMatches.push(sanitizeAggregateForLiveActivity({
           ...currentMatch,
           home_score: null,
           away_score: null,
           score_status: null,
           aggregate_home_score: null,
           aggregate_away_score: null,
-        });
+        }));
         continue;
       }
-      const delayed = delayedSnapshotForMatch(state, delayMinutes, nowMs) || currentMatch;
       const delayedHasAggregateHome =
         delayed && Object.prototype.hasOwnProperty.call(delayed, "aggregate_home_score");
       const delayedHasAggregateAway =
         delayed && Object.prototype.hasOwnProperty.call(delayed, "aggregate_away_score");
-      liveMatches.push({
+      const delayedScoreOverride = delayedScoreOverrideFromTimeline(currentMatch, delayed);
+      const currentClearsAggregateHome =
+        currentMatch &&
+        Object.prototype.hasOwnProperty.call(currentMatch, "aggregate_home_score") &&
+        currentMatch.aggregate_home_score === null;
+      const currentClearsAggregateAway =
+        currentMatch &&
+        Object.prototype.hasOwnProperty.call(currentMatch, "aggregate_away_score") &&
+        currentMatch.aggregate_away_score === null;
+      liveMatches.push(sanitizeAggregateForLiveActivity({
         ...currentMatch,
-        home_score: delayed.home_score,
-        away_score: delayed.away_score,
-        score_status: delayed.score_status || currentMatch.score_status,
+        home_score:
+          delayedLiveState && delayedLiveState.home_score !== undefined
+            ? delayedLiveState.home_score
+            : delayedScoreOverride && Number.isFinite(delayedScoreOverride.home_score)
+            ? delayedScoreOverride.home_score
+            : delayed.home_score,
+        away_score:
+          delayedLiveState && delayedLiveState.away_score !== undefined
+            ? delayedLiveState.away_score
+            : delayedScoreOverride && Number.isFinite(delayedScoreOverride.away_score)
+            ? delayedScoreOverride.away_score
+            : delayed.away_score,
+        score_status:
+          delayedLiveState && delayedLiveState.score_status
+            ? delayedLiveState.score_status
+            : delayed.score_status || currentMatch.score_status,
         // Keep aggregate values on the same delayed timeline as primary scores/status.
-        aggregate_home_score: delayedHasAggregateHome
+        aggregate_home_score: currentClearsAggregateHome
+          ? null
+          : delayedHasAggregateHome
           ? delayed.aggregate_home_score
           : null,
-        aggregate_away_score: delayedHasAggregateAway
+        aggregate_away_score: currentClearsAggregateAway
+          ? null
+          : delayedHasAggregateAway
           ? delayed.aggregate_away_score
           : null,
-      });
+      }));
+      continue;
+    }
+
+    if (isFinishedMatchStatus(status) || isPenaltyShootoutStatus(status)) {
+      if (shouldRetainFinishedMatchForLiveActivity(entry, nowMs)) {
+        finishedMatches.push(sanitizeAggregateForLiveActivity(currentMatch));
+      }
       continue;
     }
 
     if (Number.isFinite(kickoffMs)) {
       const diff = kickoffMs - nowMs;
       if (diff > 0 && diff <= UPCOMING_MONITOR_WINDOW_MS) {
-        upcomingMatches.push(currentMatch);
+        upcomingMatches.push(sanitizeAggregateForLiveActivity(currentMatch));
       }
     }
   }
 
   const sortedLive = liveMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
-    .sort(compareLiveActivityMatches)
-    .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
+    .sort(compareLiveActivityMatches);
+  const sortedFinished = finishedMatches
+    .map(annotateMatchWithLiveActivityTeamRatings)
+    .sort(compareLiveActivityMatches);
+  const sortedLiveAndFinished = [...sortedLive, ...sortedFinished].slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const sortedUpcoming = upcomingMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
     .sort(compareLiveActivityMatches)
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
-  const mode = liveActivityModeForMatches(sortedLive, sortedUpcoming);
+  const mode = liveActivityModeForMatches(sortedLive, sortedFinished, sortedUpcoming);
   if (!mode) {
     return {
       mode: null,
@@ -2493,16 +2890,18 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
 
   return {
     mode,
-    matches: mode.includes("live") ? sortedLive : sortedUpcoming,
+    matches: mode.includes("upcoming") ? sortedUpcoming : sortedLiveAndFinished,
     delayMinutes,
   };
 }
 
-async function evaluateAndDispatchLiveActivities() {
+async function evaluateAndDispatchLiveActivities(options = {}) {
   if (!isMonitoring) return;
   if (liveActivityEvalInFlight) return;
   liveActivityEvalInFlight = true;
   const nowMs = Date.now();
+  const forceDispatch = Boolean(options && options.forceDispatch);
+  const preserveExistingOnEmpty = Boolean(options && options.preserveExistingOnEmpty);
 
   try {
     await ensureLiveActivityTeamRatingCache(nowMs);
@@ -2524,7 +2923,10 @@ async function evaluateAndDispatchLiveActivities() {
 
       const presentation = buildLiveActivityPresentationForUser(user, entries, nowMs);
       try {
-        await dispatchLiveActivityForUser(user, presentation, nowMs);
+        await dispatchLiveActivityForUser(user, presentation, nowMs, {
+          forceDispatch,
+          preserveExistingOnEmpty,
+        });
       } catch (userError) {
         console.warn(
           `[MatchMonitor] Live Activity dispatch failed for ${shortDeviceToken(
@@ -2541,8 +2943,8 @@ async function evaluateAndDispatchLiveActivities() {
   }
 }
 
-async function runLiveActivityEvaluationNow() {
-  await evaluateAndDispatchLiveActivities();
+async function runLiveActivityEvaluationNow(options = {}) {
+  await evaluateAndDispatchLiveActivities(options);
   return {
     success: true,
     isMonitoring,
@@ -2789,6 +3191,8 @@ function cleanup() {
   const now = Date.now();
   const MAX_ERROR_POLL_AGE_MS = 30 * 60 * 1000; // Stop if we haven't updated state due repeated fetch failures
 
+  cleanupRetainedFinishedMatches(now);
+
   for (const [matchId, state] of monitoredMatches) {
     if (now - state.lastPollTime > MAX_ERROR_POLL_AGE_MS) {
       console.log(`[MatchMonitor] Cleaning up stale match ${matchId}`);
@@ -2802,7 +3206,7 @@ function cleanup() {
     }
   }
 
-  console.log(`[MatchMonitor] Cleanup: ${monitoredMatches.size} matches being monitored, ${sentNotifications.size} notifications in dedup set, ${scheduledNotifications.size} notifications scheduled`);
+  console.log(`[MatchMonitor] Cleanup: ${monitoredMatches.size} matches being monitored, ${retainedFinishedMatches.size} finished matches retained, ${sentNotifications.size} notifications in dedup set, ${scheduledNotifications.size} notifications scheduled`);
 }
 
 /**
@@ -2937,5 +3341,7 @@ module.exports = {
     buildLiveActivityPresentationForUser,
     compareLiveActivityMatches,
     isLikelyTerminalStaleLiveMatch,
+    shouldSkipLiveActivityUpdate,
+    shouldPreserveExistingLiveActivityOnEmpty,
   },
 };

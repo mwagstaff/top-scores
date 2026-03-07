@@ -238,7 +238,8 @@ struct MatchesView: View {
                                     match: match,
                                     highlightToday: day.isToday,
                                     showLeague: false,
-                                    centerFooterText: matchDebugFooterText(for: match)
+                                    // Only enable this if needing to debug elo scores
+                                    // centerFooterText: matchDebugFooterText(for: match)
                                 )
                             }
                             .onAppear {
