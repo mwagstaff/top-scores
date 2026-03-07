@@ -1333,6 +1333,50 @@ test("emits goal when timeline appears before score delta", () => {
   );
 });
 
+test("emits goal when score delta appears before timeline details", () => {
+  const monitorState = newMonitorState();
+  const snap0 = {
+    home_team: "Newcastle United",
+    away_team: "Manchester City",
+    score_status: "37'",
+    home_score: 1,
+    away_score: 0,
+    home_goal_scorers: [{ player: "H. Barnes", goal_times: ["18'"] }],
+    away_goal_scorers: [],
+    home_assists: [{ player: "S. Tonali", assist_times: ["18'"] }],
+    away_assists: [],
+  };
+
+  const snap1 = {
+    ...snap0,
+    score_status: "40'",
+    home_score: 1,
+    away_score: 1,
+  };
+
+  const poll1Goals = __testHooks
+    .buildMatchEvents(snap0, snap1, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+  assert.equal(poll1Goals.length, 0);
+
+  const snap2 = {
+    ...snap1,
+    score_status: "HT",
+    away_goal_scorers: [{ player: "Savinho", goal_times: ["39'"] }],
+    away_assists: [{ player: "J. Doku", assist_times: ["39'"] }],
+  };
+
+  const poll2Goals = __testHooks
+    .buildMatchEvents(snap1, snap2, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+  assert.equal(poll2Goals.length, 1);
+  assert.equal(poll2Goals[0].title, "Goal 39'");
+  assert.equal(
+    poll2Goals[0].body,
+    "Newcastle United 1 - 1 Manchester City (Savinho, assist: J. Doku)"
+  );
+});
+
 test("prefers newest timeline entries when score catches up after backfill", () => {
   const monitorState = newMonitorState();
   const snap0 = {

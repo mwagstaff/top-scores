@@ -27,8 +27,6 @@ enum MatchScoreResolver {
     private static let swappedPenalty = 0.08
     private static let prefixBoost = 0.35
     private static let singleTokenPenalty = 0.12
-    private static let finishedStatuses: Set<String> = ["FT", "AET"]
-    private static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
 
     static func applyScores(to matches: [Match], using bbcMatches: [BbcMatch]) -> [Match] {
         guard !bbcMatches.isEmpty else { return matches }
@@ -42,8 +40,8 @@ enum MatchScoreResolver {
             guard let candidate = bestCandidate(for: match, in: bbcMatches) else { return match }
 
             // Check for stale BBC data - reject if time or scores have regressed
-            let matchTime = parseMatchTimeMinutes(match.scoreStatus)
-            let bbcTime = parseMatchTimeMinutes(candidate.match.matchTime)
+            let matchTime = MatchStatusFormatter.parseMatchTimeMinutes(match.scoreStatus)
+            let bbcTime = MatchStatusFormatter.parseMatchTimeMinutes(candidate.match.matchTime)
 
             NSLog("[DEBUG applyScores] Comparing times for %@ vs %@ - matchStatus=\"%@\" parsed=%@ bbcStatus=\"%@\" parsed=%@",
                   match.homeTeam, match.awayTeam,
@@ -69,7 +67,10 @@ enum MatchScoreResolver {
                 }
             }
 
-            let finalStatus = preferredStatus(current: match.scoreStatus, incoming: candidate.match.matchTime)
+            let finalStatus = MatchStatusFormatter.preferredStatus(
+                current: match.scoreStatus,
+                incoming: candidate.match.matchTime
+            )
 
             return match.withScore(
                 home: candidate.match.homeScore,
@@ -81,89 +82,8 @@ enum MatchScoreResolver {
         }
     }
 
-    private static func parseMatchTimeMinutes(_ matchTime: String?) -> Int? {
-        guard let matchTime = matchTime?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
-
-        // Extract minute value (e.g., "45+2" -> 47, "90" -> 90)
-        if let match = matchTime.range(of: #"^(\d+)(?:\+(\d+))?[']?$"#, options: .regularExpression) {
-            let components = matchTime[match].split(separator: "+")
-            let base = Int(components[0].trimmingCharacters(in: CharacterSet(charactersIn: "'"))) ?? 0
-            let added = components.count > 1 ? Int(components[1].trimmingCharacters(in: CharacterSet(charactersIn: "'"))) ?? 0 : 0
-            return base + added
-        }
-
-        // Handle special statuses
-        let upper = matchTime.uppercased()
-        if upper.contains("HT") || upper.contains("HALF") { return 45 }
-        if upper.contains("FT") || upper.contains("FULL") { return 90 }
-        if upper == "AET" { return 120 }
-        if upper == "PENS" || upper == "PEN" || upper == "PEN." { return 120 }
-
-        return nil
-    }
-
     static func preferredStatus(current: String?, incoming: String?) -> String? {
-        let currentStatus = normalizedStatus(current)
-        let incomingStatus = normalizedStatus(incoming)
-
-        guard let currentStatus else { return incomingStatus }
-        guard let incomingStatus else { return currentStatus }
-
-        let currentState = statusState(for: currentStatus)
-        let incomingState = statusState(for: incomingStatus)
-
-        if currentState == .finished && incomingState != .finished {
-            return currentStatus
-        }
-        if incomingState == .finished && currentState != .finished {
-            return incomingStatus
-        }
-        if currentState == .finished && incomingState == .finished {
-            if currentStatus == "AET" && incomingStatus == "FT" {
-                return currentStatus
-            }
-            if incomingStatus == "AET" && currentStatus == "FT" {
-                return incomingStatus
-            }
-            return incomingStatus
-        }
-
-        let currentMinute = parseMatchTimeMinutes(currentStatus)
-        let incomingMinute = parseMatchTimeMinutes(incomingStatus)
-        if let currentMinute, let incomingMinute {
-            return incomingMinute >= currentMinute ? incomingStatus : currentStatus
-        }
-        if currentMinute != nil && incomingMinute == nil {
-            return currentStatus
-        }
-        if incomingMinute != nil && currentMinute == nil {
-            return incomingStatus
-        }
-
-        return incomingStatus
-    }
-
-    private static func normalizedStatus(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
-            return nil
-        }
-        return value.uppercased()
-    }
-
-    private static func statusState(for status: String) -> StatusState {
-        if finishedStatuses.contains(status) {
-            return .finished
-        }
-        if parseMatchTimeMinutes(status) != nil || inProgressTokens.contains(status) {
-            return .inProgress
-        }
-        return .unknown
-    }
-
-    private enum StatusState {
-        case finished
-        case inProgress
-        case unknown
+        MatchStatusFormatter.preferredStatus(current: current, incoming: incoming)
     }
 
     private static func bestCandidate(for match: Match, in bbcMatches: [BbcMatch]) -> ScoreCandidate? {
@@ -563,10 +483,10 @@ final class MatchesStore: ObservableObject {
 
             var nextState = state(for: mode)
             let mergedVisibleMatches = reset
-                ? mergedModeFiltered
+                ? Self.mergeRefreshedMatches(existing: nextState.matches, incoming: mergedModeFiltered)
                 : Self.mergePages(existing: nextState.matches, incoming: mergedModeFiltered)
             let mergedUnfilteredMatches = reset
-                ? mergedIncoming
+                ? Self.mergeRefreshedMatches(existing: nextState.unfilteredMatches, incoming: mergedIncoming)
                 : Self.mergePages(existing: nextState.unfilteredMatches, incoming: mergedIncoming)
 
             nextState.matches = Self.sortedMatches(mergedVisibleMatches, descendingDates: mode == .results)
@@ -859,6 +779,18 @@ final class MatchesStore: ObservableObject {
             }
         }
         return merged
+    }
+
+    static func mergeRefreshedMatches(existing: [Match], incoming: [Match]) -> [Match] {
+        guard !existing.isEmpty else { return incoming }
+
+        let existingByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        return incoming.map { incomingMatch in
+            guard let existingMatch = existingByID[incomingMatch.id] else {
+                return incomingMatch
+            }
+            return preferredMatch(existing: existingMatch, incoming: incomingMatch)
+        }
     }
 
     private static func preferredMatch(existing: Match, incoming: Match) -> Match {

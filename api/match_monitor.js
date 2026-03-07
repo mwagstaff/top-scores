@@ -958,7 +958,11 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   const goalTimelineBacklog = Array.isArray(monitorState.goalTimelineBacklog)
     ? monitorState.goalTimelineBacklog
     : [];
+  const unresolvedGoalCount = Number.isFinite(monitorState.unresolvedGoalCount)
+    ? Math.max(0, Math.floor(monitorState.unresolvedGoalCount))
+    : 0;
   monitorState.goalTimelineBacklog = goalTimelineBacklog;
+  monitorState.unresolvedGoalCount = unresolvedGoalCount;
   const oldStatus = normalizeStatusToken(oldMatch && oldMatch.score_status);
   const newStatus = normalizeStatusToken(newMatch && newMatch.score_status);
 
@@ -1024,12 +1028,16 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   const homeScoreDelta = currentSnapshot.home_score - previousSnapshot.home_score;
   const awayScoreDelta = currentSnapshot.away_score - previousSnapshot.away_score;
   const expectedGoalDelta = Math.max(0, homeScoreDelta) + Math.max(0, awayScoreDelta);
+  if (expectedGoalDelta > 0) {
+    monitorState.unresolvedGoalCount += expectedGoalDelta;
+  }
 
   let newGoalEvents = [];
-  if (expectedGoalDelta > 0 && goalTimelineBacklog.length > 0) {
-    const emitCount = Math.min(expectedGoalDelta, goalTimelineBacklog.length);
+  if (monitorState.unresolvedGoalCount > 0 && goalTimelineBacklog.length > 0) {
+    const emitCount = Math.min(monitorState.unresolvedGoalCount, goalTimelineBacklog.length);
     // Use the latest timeline entries so delayed backfills do not replay stale historical goals.
     newGoalEvents = goalTimelineBacklog.splice(goalTimelineBacklog.length - emitCount, emitCount);
+    monitorState.unresolvedGoalCount = Math.max(0, monitorState.unresolvedGoalCount - emitCount);
   }
 
   let newHomeGoalsCount = 0;
@@ -1783,6 +1791,7 @@ async function monitorMatch(matchId, initialMatch) {
     startedAtMs,
     kickoffTimeMs,
     history: [],
+    unresolvedGoalCount: 0,
     lifecycle: {
       // If the first state is already live, don't send a synthetic delayed kickoff later.
       kickoffEmitted: isLiveMatchStatus(initialStatus),

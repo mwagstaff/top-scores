@@ -4750,6 +4750,63 @@ function mergeMonitorCandidate(existing, incoming) {
   return merged;
 }
 
+function buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup) {
+  if (!isDateOnly(date)) return [];
+
+  const candidatesById = new Map();
+  const sourceTagsById = new Map();
+  const markSource = (matchId, source) => {
+    if (!sourceTagsById.has(matchId)) sourceTagsById.set(matchId, new Set());
+    sourceTagsById.get(matchId).add(source);
+  };
+
+  const mergedList = Array.isArray(mergedItems) ? mergedItems : [];
+  const detailsLookup =
+    matchDetailsLookup && typeof matchDetailsLookup === "object" ? matchDetailsLookup : {};
+
+  for (const rawMatch of mergedList) {
+    const candidate = toMatchListPayload(rawMatch, { matchDetailsLookup: detailsLookup });
+    const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
+    if (!candidate || !matchId) continue;
+    if (String(candidate.date || "") !== date) continue;
+
+    const existing = candidatesById.get(matchId);
+    candidatesById.set(matchId, mergeMonitorCandidate(existing, candidate));
+    markSource(matchId, "merged");
+  }
+
+  for (const payload of Object.values(detailsLookup)) {
+    const candidate = toMonitorCandidateFromDetailsPayload(payload, { allowMissingDate: true });
+    const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
+    if (!candidate || !matchId) continue;
+
+    const existing = candidatesById.get(matchId);
+    if (!existing) {
+      // Keep monitor candidates aligned with /matches; details may enrich, but not add new rows.
+      continue;
+    }
+
+    const effectiveDate = String(candidate.date || existing.date || "");
+    if (effectiveDate !== date) continue;
+
+    candidatesById.set(matchId, mergeMonitorCandidate(existing, candidate));
+    markSource(matchId, "details");
+  }
+
+  return Array.from(candidatesById.values())
+    .map((candidate) => {
+      const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
+      const sources = matchId && sourceTagsById.has(matchId)
+        ? Array.from(sourceTagsById.get(matchId).values()).sort()
+        : [];
+      return {
+        ...candidate,
+        sources,
+      };
+    })
+    .sort(monitorCandidateSortAsc);
+}
+
 function mergeTvChannels(lhs, rhs) {
   const merged = uniqueChannels(lhs);
   uniqueChannels(rhs).forEach((channel) => {
@@ -9830,52 +9887,10 @@ app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
       matchDetailsSnapshot && matchDetailsSnapshot.records && typeof matchDetailsSnapshot.records === "object"
         ? matchDetailsSnapshot.records
         : {};
-
-    const candidatesById = new Map();
-    const sourceTagsById = new Map();
-    const markSource = (matchId, source) => {
-      if (!sourceTagsById.has(matchId)) sourceTagsById.set(matchId, new Set());
-      sourceTagsById.get(matchId).add(source);
-    };
-
     const mergedItems = Array.isArray(mergedDataset && mergedDataset.items)
       ? mergedDataset.items
       : [];
-    for (const rawMatch of mergedItems) {
-      const candidate = toMatchListPayload(rawMatch, { matchDetailsLookup });
-      const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
-      if (!candidate || !matchId) continue;
-      if (String(candidate.date || "") !== date) continue;
-
-    const existing = candidatesById.get(matchId);
-    candidatesById.set(matchId, mergeMonitorCandidate(existing, candidate));
-    markSource(matchId, "merged");
-  }
-
-  for (const payload of Object.values(matchDetailsLookup)) {
-      const candidate = toMonitorCandidateFromDetailsPayload(payload, { allowMissingDate: true });
-      const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
-      if (!candidate || !matchId) continue;
-      const existing = candidatesById.get(matchId);
-      const effectiveDate = String(candidate.date || (existing && existing.date) || "");
-      if (effectiveDate !== date) continue;
-
-      candidatesById.set(matchId, mergeMonitorCandidate(existing, candidate));
-      markSource(matchId, "details");
-    }
-
-    const candidates = Array.from(candidatesById.values())
-      .map((candidate) => {
-        const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
-        const sources = matchId && sourceTagsById.has(matchId)
-          ? Array.from(sourceTagsById.get(matchId).values()).sort()
-          : [];
-        return {
-          ...candidate,
-          sources,
-        };
-      })
-      .sort(monitorCandidateSortAsc);
+    const candidates = buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup);
 
     res.status(200).json({
       success: true,
@@ -13626,6 +13641,7 @@ module.exports = {
     toMatchListPayload,
     toMonitorCandidateFromDetailsPayload,
     mergeMonitorCandidate,
+    buildMonitorCandidatesForDate,
     matchDetailsNeedsBackfill,
     pickPreferredMatchStatus,
     normalizeMatchStatusValue,

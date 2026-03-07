@@ -272,17 +272,17 @@ struct Match: Identifiable, Codable, Hashable {
     }
 
     var displayScoreStatus: String? {
-        guard let scoreStatus else { return nil }
+        guard let scoreStatus = stabilizedScoreStatus() else { return nil }
         return MatchStatusFormatter.displayValue(for: scoreStatus)
     }
 
     var isInProgress: Bool {
-        guard let scoreStatus else { return false }
+        guard let scoreStatus = stabilizedScoreStatus() else { return false }
         return MatchStatusFormatter.isInProgress(scoreStatus)
     }
 
     var isFinished: Bool {
-        guard let scoreStatus else { return false }
+        guard let scoreStatus = stabilizedScoreStatus() else { return false }
         return MatchStatusFormatter.isFinished(scoreStatus)
     }
 
@@ -415,20 +415,10 @@ struct Match: Identifiable, Codable, Hashable {
     }
 
     func withDetails(_ details: MatchDetailsPayload) -> Match {
-        // Prefer AET over Pens when merging - if base match has AET and details have Pens, keep AET
-        // This handles the case where the main matches list has been updated but cached details are stale
-        let mergedScoreStatus: String?
-        if let baseStatus = scoreStatus?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
-           let detailStatus = details.scoreStatus?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
-           baseStatus == "AET" && (detailStatus == "PENS" || detailStatus == "PEN" || detailStatus == "PEN.") {
-            NSLog("[DEBUG withDetails] Keeping AET from base match (base=%@ details=%@) for %@ vs %@", scoreStatus ?? "nil", details.scoreStatus ?? "nil", homeTeam, awayTeam)
-            mergedScoreStatus = scoreStatus
-        } else {
-            mergedScoreStatus = details.scoreStatus ?? scoreStatus
-            if (scoreStatus?.uppercased() == "PENS" || scoreStatus?.uppercased() == "PEN" || scoreStatus?.uppercased() == "PEN." || details.scoreStatus?.uppercased() == "PENS" || details.scoreStatus?.uppercased() == "PEN" || details.scoreStatus?.uppercased() == "PEN.") {
-                NSLog("[DEBUG withDetails] Status merge: base=%@ details=%@ merged=%@ for %@ vs %@", scoreStatus ?? "nil", details.scoreStatus ?? "nil", mergedScoreStatus ?? "nil", homeTeam, awayTeam)
-            }
-        }
+        let mergedScoreStatus = MatchStatusFormatter.preferredStatus(
+            current: scoreStatus,
+            incoming: details.scoreStatus
+        )
 
         return Match(
             date: details.date ?? date,
@@ -453,6 +443,15 @@ struct Match: Identifiable, Codable, Hashable {
             awayRedCards: details.awayRedCards,
             penaltyResult: details.penaltyResult ?? penaltyResult,
             isTestMatch: isTestMatch
+        )
+    }
+
+    func stabilizedScoreStatus(now: Date = Date()) -> String? {
+        MatchStatusFormatter.stabilizedStatus(
+            scoreStatus,
+            kickoff: dateTime,
+            hasScore: hasScore,
+            now: now
         )
     }
 
@@ -485,10 +484,11 @@ struct Match: Identifiable, Codable, Hashable {
     }
 }
 
-private enum MatchStatusFormatter {
+enum MatchStatusFormatter {
     private static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
     private static let completeTokens: Set<String> = ["FT", "AET"]
     private static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
+    private static let maximumLiveWindow: TimeInterval = 3.5 * 60 * 60
 
     static func displayValue(for rawStatus: String) -> String {
         let status = normalized(rawStatus)
@@ -517,12 +517,122 @@ private enum MatchStatusFormatter {
         return completeTokens.contains(token)
     }
 
+    static func preferredStatus(current: String?, incoming: String?) -> String? {
+        let currentStatus = normalizedStatus(current)
+        let incomingStatus = normalizedStatus(incoming)
+
+        guard let currentStatus else { return incomingStatus }
+        guard let incomingStatus else { return currentStatus }
+
+        let currentState = statusState(for: currentStatus)
+        let incomingState = statusState(for: incomingStatus)
+
+        if currentState == .finished && incomingState != .finished {
+            return currentStatus
+        }
+        if incomingState == .finished && currentState != .finished {
+            return incomingStatus
+        }
+        if currentState == .finished && incomingState == .finished {
+            if currentStatus == "AET" && incomingStatus == "FT" {
+                return currentStatus
+            }
+            if incomingStatus == "AET" && currentStatus == "FT" {
+                return incomingStatus
+            }
+            return incomingStatus
+        }
+
+        let currentMinute = parseMatchTimeMinutes(currentStatus)
+        let incomingMinute = parseMatchTimeMinutes(incomingStatus)
+        if let currentMinute, let incomingMinute {
+            return incomingMinute >= currentMinute ? incomingStatus : currentStatus
+        }
+        if currentMinute != nil && incomingMinute == nil {
+            return currentStatus
+        }
+        if incomingMinute != nil && currentMinute == nil {
+            return incomingStatus
+        }
+
+        return incomingStatus
+    }
+
+    static func stabilizedStatus(
+        _ rawStatus: String?,
+        kickoff: Date?,
+        hasScore: Bool,
+        now: Date = Date()
+    ) -> String? {
+        guard let trimmed = trimmedStatus(rawStatus) else { return nil }
+
+        guard hasScore, isInProgress(trimmed), let kickoff else {
+            return trimmed
+        }
+
+        let elapsed = now.timeIntervalSince(kickoff)
+        guard elapsed >= maximumLiveWindow else {
+            return trimmed
+        }
+
+        return "FT"
+    }
+
+    static func parseMatchTimeMinutes(_ matchTime: String?) -> Int? {
+        guard let matchTime = matchTime?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+
+        if let match = matchTime.range(of: #"^(\d+)(?:\+(\d+))?[']?$"#, options: .regularExpression) {
+            let components = matchTime[match].split(separator: "+")
+            let base = Int(components[0].trimmingCharacters(in: CharacterSet(charactersIn: "'"))) ?? 0
+            let added = components.count > 1 ? Int(components[1].trimmingCharacters(in: CharacterSet(charactersIn: "'"))) ?? 0 : 0
+            return base + added
+        }
+
+        let upper = matchTime.uppercased()
+        if upper.contains("HT") || upper.contains("HALF") { return 45 }
+        if upper.contains("FT") || upper.contains("FULL") { return 90 }
+        if upper == "AET" { return 120 }
+        if upper == "PENS" || upper == "PEN" || upper == "PEN." { return 120 }
+
+        return nil
+    }
+
     private static func normalized(_ rawStatus: String) -> String {
         rawStatus.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func isMinuteStatus(_ status: String) -> Bool {
         status.range(of: minutePattern, options: .regularExpression) != nil
+    }
+
+    private static func normalizedStatus(_ value: String?) -> String? {
+        guard let value = trimmedStatus(value) else {
+            return nil
+        }
+        return value.uppercased()
+    }
+
+    private static func trimmedStatus(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+
+    private static func statusState(for status: String) -> StatusState {
+        if completeTokens.contains(status) {
+            return .finished
+        }
+        if parseMatchTimeMinutes(status) != nil || inProgressTokens.contains(status) {
+            return .inProgress
+        }
+        return .unknown
+    }
+
+    private enum StatusState {
+        case finished
+        case inProgress
+        case unknown
     }
 }
 

@@ -162,7 +162,7 @@ final class LiveActivitySyncService {
             await uploadPushToStartToken(pushToStartToken)
         }
 
-        let activeActivities = Activity<TopScoresLiveActivityAttributes>.activities
+        let activeActivities = await enforceSingleActiveActivity(among: Activity<TopScoresLiveActivityAttributes>.activities)
         if activeActivities.isEmpty {
             await uploadActivityEnded(activityID: "")
         } else {
@@ -173,6 +173,37 @@ final class LiveActivitySyncService {
             }
         }
         await requestLiveActivityReconcile()
+    }
+
+    @available(iOS 16.1, *)
+    private func enforceSingleActiveActivity(
+        among activities: [Activity<TopScoresLiveActivityAttributes>]
+    ) async -> [Activity<TopScoresLiveActivityAttributes>] {
+        guard activities.count > 1 else { return activities }
+
+        let sortedActivities = activities.sorted { lhs, rhs in
+            if lhs.contentState.generatedAtEpochSeconds != rhs.contentState.generatedAtEpochSeconds {
+                return lhs.contentState.generatedAtEpochSeconds > rhs.contentState.generatedAtEpochSeconds
+            }
+            return lhs.id > rhs.id
+        }
+
+        guard let survivor = sortedActivities.first else { return [] }
+
+        NSLog(
+            "[LiveActivitySync] Found %d active activities; keeping %@ and ending duplicates",
+            activities.count,
+            survivor.id
+        )
+
+        for duplicate in sortedActivities.dropFirst() {
+            NSLog("[LiveActivitySync] Ending duplicate activity %@", duplicate.id)
+            stopObserving(activityID: duplicate.id, cancelStateTask: true)
+            await duplicate.end(nil, dismissalPolicy: .immediate)
+            await uploadActivityEnded(activityID: duplicate.id)
+        }
+
+        return [survivor]
     }
 
     private func uploadPushToStartToken(_ tokenData: Data) async {

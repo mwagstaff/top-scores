@@ -6,6 +6,7 @@ const {
     toMatchListPayload,
     toMonitorCandidateFromDetailsPayload,
     mergeMonitorCandidate,
+    buildMonitorCandidatesForDate,
     matchDetailsNeedsBackfill,
   },
 } = require("./server");
@@ -230,6 +231,56 @@ test("mergeMonitorCandidate preserves merged schedule data while importing live 
   assert.equal(merged.score_status, "86");
   assert.equal(merged.home_score, 1);
   assert.equal(merged.away_score, 1);
+});
+
+test("buildMonitorCandidatesForDate excludes details-only matches absent from merged schedule", () => {
+  const candidates = buildMonitorCandidatesForDate(
+    "2026-03-06",
+    [
+      {
+        date: "2026-03-06",
+        time: "20:00",
+        league: "FA Cup",
+        home_team: "Wolves",
+        away_team: "Liverpool",
+        tv_channels: ["BBC One"],
+        match_details_id: "c14mvd1104xt",
+      },
+    ],
+    {
+      c14mvd1104xt: {
+        id: "c14mvd1104xt",
+        date: null,
+        time: null,
+        league: null,
+        home_team: "Wolves",
+        away_team: "Liverpool",
+        home_score: 1,
+        away_score: 3,
+        score_status: "FT",
+        updated_at: "2026-03-06T22:00:00.000Z",
+      },
+      c20z8lddp2rt: {
+        id: "c20z8lddp2rt",
+        date: "2026-03-06",
+        time: "19:45",
+        league: "Ligue 1",
+        home_team: "Paris Saint-Germain",
+        away_team: "Monaco",
+        home_score: 1,
+        away_score: 3,
+        score_status: "FT",
+        updated_at: "2026-03-06T22:00:00.000Z",
+      },
+    }
+  );
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].match_details_id, "c14mvd1104xt");
+  assert.deepEqual(candidates[0].sources, ["details", "merged"]);
+  assert.equal(candidates[0].score_status, "FT");
+  assert.equal(candidates[0].home_score, 1);
+  assert.equal(candidates[0].away_score, 3);
 });
 
 test("matchDetailsNeedsBackfill refreshes cached records that are missing core metadata", () => {

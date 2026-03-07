@@ -255,8 +255,7 @@ struct MatchDetailView: View {
     }
 
     private var isMatchFinished: Bool {
-        guard let status = activeMatch.scoreStatus?.uppercased() else { return false }
-        return status == "FT" || status == "AET"
+        activeMatch.isFinished
     }
 
     private var sortedChannels: [String] {
