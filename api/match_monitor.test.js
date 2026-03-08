@@ -899,6 +899,52 @@ test("buildLiveActivityPresentationForUser keeps recent full-time matches visibl
   assert.equal(expired.matches.length, 0);
 });
 
+test("buildLiveActivityPresentationForUser caps live activity payloads to 8 matches", () => {
+  const nowMs = Date.now();
+  const kickoff = formatLocalDateTimeParts(nowMs - 20 * 60 * 1000);
+
+  const entries = Array.from({ length: 10 }, (_, index) => {
+    const id = index + 1;
+    return {
+      state: {
+        lastState: {
+          match_details_id: `live-${id}`,
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: `Home ${id}`,
+          away_team: `Away ${id}`,
+          home_score: id % 3,
+          away_score: id % 2,
+          score_status: String(10 + id),
+        },
+        history: [],
+      },
+      match: {
+        match_details_id: `live-${id}`,
+        date: kickoff.date,
+        time: kickoff.time,
+        league: "Premier League",
+        home_team: `Home ${id}`,
+        away_team: `Away ${id}`,
+        home_score: id % 3,
+        away_score: id % 2,
+        score_status: String(10 + id),
+        updated_at: new Date(nowMs).toISOString(),
+      },
+    };
+  });
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0),
+    entries,
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "multi_live");
+  assert.equal(presentation.matches.length, 8);
+});
+
 test("compareLiveActivityMatches prioritizes premier league involvement buckets", () => {
   const bothPremierLeague = {
     match_details_id: "both-epl",

@@ -1,0 +1,216 @@
+{
+  "uid": "top-scores-live-activities",
+  "title": "top-scores API • Live Activities",
+  "tags": ["top-scores", "live-activity", "apns", "ios"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active Live Activities (Production)",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_live_activity_active{job=\"top-scores\",build_type=\"production\"}",
+          "legendFormat": "production"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Active Live Activities (Development)",
+      "gridPos": { "x": 0, "y": 4, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_live_activity_active{job=\"top-scores\",build_type=\"development\"}",
+          "legendFormat": "development"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Active Live Activities Over Time",
+      "gridPos": { "x": 6, "y": 0, "w": 18, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(top_scores_live_activity_active{job=\"top-scores\"}) by (build_type)",
+          "legendFormat": "{{build_type}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Live Activity Start Rate (by build type)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(top_scores_live_activity_starts_total{job=\"top-scores\"}[$__rate_interval])) by (build_type)",
+          "legendFormat": "{{build_type}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Live Activity End Rate (by reason)",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(top_scores_live_activity_ends_total{job=\"top-scores\"}[$__rate_interval])) by (reason)",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Live Activity Event Rate (by event & status)",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(top_scores_live_activity_pushes_total{job=\"top-scores\"}[$__rate_interval])) by (event, status)",
+          "legendFormat": "{{event}} / {{status}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cumulative Starts vs Ends",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(top_scores_live_activity_starts_total{job=\"top-scores\"})",
+          "legendFormat": "Started"
+        },
+        {
+          "expr": "sum(top_scores_live_activity_ends_total{job=\"top-scores\"})",
+          "legendFormat": "Ended"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Payload Size Stats Over Time",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max by (event) (top_scores_live_activity_payload_size_bytes_min{job=\"top-scores\",kind=\"archive_estimate\",event=~\"start|update\"})",
+          "legendFormat": "{{event}} min"
+        },
+        {
+          "expr": "max by (event) (top_scores_live_activity_payload_size_bytes_avg{job=\"top-scores\",kind=\"archive_estimate\",event=~\"start|update\"})",
+          "legendFormat": "{{event}} avg"
+        },
+        {
+          "expr": "max by (event) (top_scores_live_activity_payload_size_bytes_max{job=\"top-scores\",kind=\"archive_estimate\",event=~\"start|update\"})",
+          "legendFormat": "{{event}} max"
+        }
+      ]
+    }
+  ]
+}

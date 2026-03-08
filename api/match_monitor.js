@@ -6,6 +6,7 @@ const {
   claimBbcNotificationIdempotency,
 } = require("./redis_client");
 const { sendNotification, sendLiveActivityPush } = require("./apns_client");
+const liveActivityMetrics = require("./live_activity_metrics");
 const crypto = require("crypto");
 const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.json");
 
@@ -22,13 +23,16 @@ const MONITOR_DIAGNOSTICS_RECENT_LIMIT = 300; // Keep a rolling in-memory diagno
 const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG !== "0";
 const LIVE_ACTIVITY_EVAL_INTERVAL_MS = 15 * 1000;
 const LIVE_ACTIVITY_STARTUP_KICK_DELAYS_MS = [0, 3000, 9000];
-const LIVE_ACTIVITY_MAX_MATCHES = 10;
+// Keep server payloads aligned with the widget's 8 visible live-activity slots.
+const LIVE_ACTIVITY_MAX_MATCHES = 8;
 const LIVE_ACTIVITY_TEAM_RANKING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_TEAM_RANKING_RETRY_MS = 5 * 60 * 1000;
 const LIVE_ACTIVITY_TEAM_RANKING_FETCH_TIMEOUT_MS = 15 * 1000;
 // If APNS accepts a start but the app never reports an activity token, retry quickly.
 const LIVE_ACTIVITY_PENDING_MAX_MS = 2 * 60 * 1000;
 const LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS = 30 * 60;
+const LIVE_ACTIVITY_PAYLOAD_WARN_BYTES = 3500;
+const LIVE_ACTIVITY_PAYLOAD_HARD_LIMIT_BYTES = 4096;
 const LIVE_ACTIVITY_STALE_LIVE_UPDATED_GRACE_MS = 5 * 60 * 1000;
 const LIVE_ACTIVITY_STALE_LIVE_KICKOFF_GRACE_MS = 2 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_FINISHED_RETENTION_MS = 8 * 60 * 60 * 1000;
@@ -2571,6 +2575,64 @@ function buildLiveActivityContentState(mode, matches, delayMinutes, nowMs = Date
   };
 }
 
+function liveActivityPayloadMetrics(contentState) {
+  const contentStateJSON = JSON.stringify(contentState);
+  const archiveEstimateJSON = JSON.stringify({
+    attributes: LIVE_ACTIVITY_ATTRIBUTES,
+    "content-state": contentState,
+  });
+
+  return {
+    contentStateBytes: Buffer.byteLength(contentStateJSON),
+    archiveEstimateBytes: Buffer.byteLength(archiveEstimateJSON),
+    matchCount: Array.isArray(contentState && contentState.matches) ? contentState.matches.length : 0,
+  };
+}
+
+function logLiveActivityPayloadDiagnostics(user, event, presentation, contentState, nowMs, payloadHash) {
+  const metrics = liveActivityPayloadMetrics(contentState);
+  liveActivityMetrics.recordPayloadSample({
+    event,
+    isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+    kind: "content_state",
+    bytes: metrics.contentStateBytes,
+  });
+  liveActivityMetrics.recordPayloadSample({
+    event,
+    isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+    kind: "archive_estimate",
+    bytes: metrics.archiveEstimateBytes,
+  });
+  const staleAtEpochSeconds = Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS;
+  const diagnostics = {
+    user_device_short: shortDeviceToken(user.deviceToken),
+    event,
+    mode: presentation && presentation.mode ? presentation.mode : null,
+    match_count: metrics.matchCount,
+    content_state_bytes: metrics.contentStateBytes,
+    archive_estimate_bytes: metrics.archiveEstimateBytes,
+    payload_hash_prefix: payloadHash ? String(payloadHash).slice(0, 12) : null,
+    delay_minutes: Number(presentation && presentation.delayMinutes ? presentation.delayMinutes : 0),
+    stale_at: new Date(staleAtEpochSeconds * 1000).toISOString(),
+    seconds_until_stale: LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
+  };
+
+  console.log(`[MatchMonitor] Live Activity payload ${JSON.stringify(diagnostics)}`);
+
+  if (
+    metrics.contentStateBytes >= LIVE_ACTIVITY_PAYLOAD_WARN_BYTES ||
+    metrics.archiveEstimateBytes >= LIVE_ACTIVITY_PAYLOAD_WARN_BYTES
+  ) {
+    console.warn(
+      `[MatchMonitor] Live Activity payload nearing limit ${JSON.stringify({
+        ...diagnostics,
+        warning_threshold_bytes: LIVE_ACTIVITY_PAYLOAD_WARN_BYTES,
+        hard_limit_bytes: LIVE_ACTIVITY_PAYLOAD_HARD_LIMIT_BYTES,
+      })}`
+    );
+  }
+}
+
 function stableHash(value) {
   const normalized = JSON.stringify(value);
   return crypto.createHash("sha1").update(normalized).digest("hex");
@@ -2656,6 +2718,11 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       dismissalDate: Math.floor(nowMs / 1000),
       isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
     });
+    liveActivityMetrics.recordPush({
+      event: "end",
+      status: result.success ? "success" : "failure",
+      isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+    });
     const patch = {
       currentActivityPushToken: null,
       currentActivityId: null,
@@ -2666,6 +2733,13 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       lastEndedAt: new Date(nowMs).toISOString(),
       testHoldUntil: null,
     };
+    if (result.success) {
+      liveActivityMetrics.markActivityInactive({ deviceToken: user.deviceToken });
+      liveActivityMetrics.recordEnd({
+        isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+        reason: "no_matches",
+      });
+    }
     if (!result.success && !isTerminalLiveActivityError(result)) {
       return;
     }
@@ -2685,11 +2759,17 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     if (shouldSkipLiveActivityUpdate(state, payloadHash, presentation.mode, forceDispatch)) {
       return;
     }
+    logLiveActivityPayloadDiagnostics(user, "update", presentation, contentState, nowMs, payloadHash);
     const updateResult = await sendLiveActivityPush({
       token: activityPushToken,
       event: "update",
       contentState,
       staleDate: Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
+      isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+    });
+    liveActivityMetrics.recordPush({
+      event: "update",
+      status: updateResult.success ? "success" : "failure",
       isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
     });
     if (updateResult.success) {
@@ -2701,6 +2781,12 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       return;
     }
     if (isTerminalLiveActivityError(updateResult)) {
+      if (liveActivityMetrics.markActivityInactive({ deviceToken: user.deviceToken })) {
+        liveActivityMetrics.recordEnd({
+          isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+          reason: "terminal_error",
+        });
+      }
       await persistLiveActivityPatch(user, {
         currentActivityPushToken: null,
         currentActivityId: null,
@@ -2734,6 +2820,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const body = first
     ? `${first.home_team} vs ${first.away_team}`
     : "Top Scores";
+  logLiveActivityPayloadDiagnostics(user, "start", presentation, contentState, nowMs, payloadHash);
   const startResult = await sendLiveActivityPush({
     token: pushToStartToken,
     event: "start",
@@ -2747,7 +2834,15 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     },
     isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
   });
+  liveActivityMetrics.recordPush({
+    event: "start",
+    status: startResult.success ? "success" : "failure",
+    isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+  });
   if (startResult.success) {
+    liveActivityMetrics.recordStart({
+      isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+    });
     await persistLiveActivityPatch(user, {
       pendingStartAt: new Date(nowMs).toISOString(),
       lastStartAt: new Date(nowMs).toISOString(),

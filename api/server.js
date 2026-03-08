@@ -8,6 +8,7 @@ const v8 = require("v8");
 const zlib = require("zlib");
 const { monitorEventLoopDelay, performance } = require("perf_hooks");
 const express = require("express");
+const liveActivityMetrics = require("./live_activity_metrics");
 const {
   SERVER_CONFIG,
   TEAM_RANKING_SOURCE_MERGED,
@@ -2709,6 +2710,8 @@ function buildPrometheusMetricsText() {
         platform: entry.labels.platform,
       });
     });
+
+  liveActivityMetrics.appendPrometheusMetrics(lines, pushPrometheusSample);
 
   if (appMetricEventsLastUpdated) {
     const timestampSeconds = Math.floor(Date.parse(appMetricEventsLastUpdated) / 1000);
@@ -12416,6 +12419,18 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
         isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
       }
     );
+    const activeResult = liveActivityMetrics.markActivityActive({
+      deviceToken: resolvedDeviceToken,
+      activityId: normalizedActivityId,
+      isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : false,
+    });
+    if (activeResult.changed) {
+      liveActivityMetrics.recordPush({
+        event: "arrival_confirmation",
+        status: "success",
+        isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : false,
+      });
+    }
     res.status(200).json({
       success: true,
       data: saved,
@@ -12433,7 +12448,7 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
 app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
-  const { deviceToken, activityId, isDevelopmentBuild } = req.body || {};
+  const { deviceToken, activityId, isDevelopmentBuild, reason } = req.body || {};
   const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
   const normalizedActivityId = normalizeDeviceToken(activityId);
 
@@ -12466,6 +12481,16 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
         isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
       }
     );
+    const removedActivity = liveActivityMetrics.markActivityInactive({ deviceToken: resolvedDeviceToken });
+    if (removedActivity) {
+      liveActivityMetrics.recordEnd({
+        isDevelopmentBuild:
+          typeof isDevelopmentBuild === "boolean"
+            ? isDevelopmentBuild
+            : removedActivity.buildType === "development",
+        reason: String(reason || "user"),
+      });
+    }
     res.status(200).json({
       success: true,
       data: saved,
@@ -12530,6 +12555,12 @@ app.post(`${API_PREFIX}/live-activity/restart`, async (req, res) => {
           typeof record.isDevelopmentBuild === "boolean" ? record.isDevelopmentBuild : undefined,
       }
     );
+    if (liveActivityMetrics.markActivityInactive({ deviceToken: resolvedDeviceToken })) {
+      liveActivityMetrics.recordEnd({
+        isDevelopmentBuild: Boolean(record.isDevelopmentBuild),
+        reason: "restart",
+      });
+    }
 
     const reconcileResult = await matchMonitor.runLiveActivityEvaluationNow({
       forceDispatch: true,

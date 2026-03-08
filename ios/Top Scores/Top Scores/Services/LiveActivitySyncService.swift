@@ -167,6 +167,13 @@ final class LiveActivitySyncService {
             await uploadActivityEnded(activityID: "")
         } else {
             for activity in activeActivities {
+                NSLog(
+                    "[LiveActivitySync] Foreground reconcile active activity %@ mode=%@ matches=%d generatedAt=%d",
+                    activity.id,
+                    activity.contentState.mode,
+                    activity.contentState.matches.count,
+                    activity.contentState.generatedAtEpochSeconds
+                )
                 if let tokenData = activity.pushToken {
                     await uploadActivityPushToken(activityID: activity.id, tokenData: tokenData)
                 }
