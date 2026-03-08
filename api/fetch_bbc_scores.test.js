@@ -55,6 +55,15 @@ function buildPlayerListItem(player) {
               </span>
             `
             : ""}
+          ${Array.isArray(player.yellowCards)
+            ? player.yellowCards.map((minute) => `
+              <span>
+                <img src="https://static.files.bbci.co.uk/core/website/assets/static/sport/football/yellowcard.fb3d320343.svg" alt="" aria-hidden="true">
+                <span aria-hidden="true">${minute}</span>
+                <span class="visually-hidden">, Yellow Card at ${minuteToAccessibleText(minute)}</span>
+              </span>
+            `).join("")
+            : ""}
         </div>
       </button>
     </li>
@@ -320,7 +329,7 @@ test("parseMatchDetailsFromHtml parses team lineups, bench players, and substitu
     { number: 2, short_name: "Knoyle", role: "Defender", name: "K. Knoyle", substitution: { name: "E. Hewitt", minute: "87'" } },
     { number: 23, short_name: "Oshilaja", role: "Defender", name: "A. Oshilaja" },
     { number: 20, short_name: "Blake-Tracy", role: "Defender", name: "F. Blake-Tracy" },
-    { number: 7, short_name: "Akins", role: "Midfielder", name: "L. Akins" },
+    { number: 7, short_name: "Akins", role: "Midfielder", name: "L. Akins", yellowCards: ["77'"] },
     { number: 13, short_name: "Russell", role: "Midfielder", name: "J. Russell" },
     { number: 25, short_name: "Reed", role: "Midfielder", name: "L. Reed", captain: true },
     { number: 40, short_name: "Abbott", role: "Midfielder", name: "G. Abbott" },
@@ -337,7 +346,7 @@ test("parseMatchDetailsFromHtml parses team lineups, bench players, and substitu
     { number: 13, short_name: "Arrizabalaga", role: "Goalkeeper", name: "Kepa Arrizabalaga" },
     { number: 89, short_name: "Salmon", role: "Defender", name: "M. Salmon", substitution: { name: "J. Timber", minute: "62'" } },
     { number: 3, short_name: "Mosquera", role: "Defender", name: "Cristhian Mosquera" },
-    { number: 33, short_name: "Calafiori", role: "Defender", name: "R. Calafiori" },
+    { number: 33, short_name: "Calafiori", role: "Defender", name: "R. Calafiori", yellowCards: ["70'"] },
     { number: 20, short_name: "Madueke", role: "Midfielder", name: "N. Madueke" },
     { number: 56, short_name: "Dowman", role: "Midfielder", name: "M. Dowman" },
     { number: 16, short_name: "Nørgaard", role: "Midfielder", name: "C. Nørgaard" },
@@ -348,7 +357,7 @@ test("parseMatchDetailsFromHtml parses team lineups, bench players, and substitu
   ];
   const awaySubstitutes = [
     { number: 12, short_name: "Timber", role: "Substitute", name: "J. Timber" },
-    { number: 10, short_name: "Eze", role: "Substitute", name: "E. Eze" },
+    { number: 10, short_name: "Eze", role: "Substitute", name: "E. Eze", yellowCards: ["74'"] },
     { number: 7, short_name: "Saka", role: "Substitute", name: "B. Saka" },
   ];
 
@@ -421,6 +430,12 @@ test("parseMatchDetailsFromHtml parses team lineups, bench players, and substitu
       },
     },
   ]);
+  assert.deepStrictEqual(parsed.home_yellow_cards, [
+    {
+      player: "L. Akins",
+      yellow_card_times: ["77'"],
+    },
+  ]);
 
   assert.equal(parsed.team_lineups.away.team, "Arsenal");
   assert.equal(parsed.team_lineups.away.formation, "3-5-1-1");
@@ -446,6 +461,16 @@ test("parseMatchDetailsFromHtml parses team lineups, bench players, and substitu
         number: 12,
         name: "J. Timber",
       },
+    },
+  ]);
+  assert.deepStrictEqual(parsed.away_yellow_cards, [
+    {
+      player: "R. Calafiori",
+      yellow_card_times: ["70'"],
+    },
+    {
+      player: "E. Eze",
+      yellow_card_times: ["74'"],
     },
   ]);
 });

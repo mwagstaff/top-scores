@@ -264,6 +264,17 @@ struct MatchDetailView: View {
         }
     }
 
+    private var shouldShowLineupPitch: Bool {
+        guard let teamLineups = activeMatch.teamLineups,
+              let home = teamLineups.home,
+              let away = teamLineups.away
+        else {
+            return false
+        }
+
+        return home.startingLineup.count == 11 && away.startingLineup.count == 11
+    }
+
     private var tvChannelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if sortedChannels.isEmpty {
@@ -305,6 +316,11 @@ struct MatchDetailView: View {
                     Text(detailsErrorMessage)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal)
+                }
+
+                if shouldShowLineupPitch {
+                    MatchLineupPitchSection(match: activeMatch)
                         .padding(.horizontal)
                 }
 
@@ -972,6 +988,572 @@ private struct MatchTimeStatusView: View {
     private var statusFont: Font {
         isLargePresentation ? .subheadline : .caption
     }
+}
+
+private struct MatchLineupPitchSection: View {
+    let match: Match
+
+    var body: some View {
+        if let teamLineups = match.teamLineups,
+           let home = teamLineups.home,
+           let away = teamLineups.away,
+           home.startingLineup.count == 11,
+           away.startingLineup.count == 11 {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Starting Line-ups")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                MatchLineupPitchView(
+                    homeLineup: home,
+                    awayLineup: away,
+                    homeGoals: match.homeGoalScorers,
+                    awayGoals: match.awayGoalScorers,
+                    homeAssists: match.homeAssists,
+                    awayAssists: match.awayAssists,
+                    homeYellowCards: match.homeYellowCards,
+                    awayYellowCards: match.awayYellowCards,
+                    homeRedCards: match.homeRedCards,
+                    awayRedCards: match.awayRedCards
+                )
+            }
+        }
+    }
+}
+
+private struct MatchLineupPitchView: View {
+    let homeLineup: MatchTeamLineup
+    let awayLineup: MatchTeamLineup
+    let homeGoals: [MatchGoalScorer]
+    let awayGoals: [MatchGoalScorer]
+    let homeAssists: [MatchAssistProvider]
+    let awayAssists: [MatchAssistProvider]
+    let homeYellowCards: [MatchYellowCardEvent]
+    let awayYellowCards: [MatchYellowCardEvent]
+    let homeRedCards: [MatchRedCardEvent]
+    let awayRedCards: [MatchRedCardEvent]
+
+    private var homeLookup: MatchLineupEventLookup {
+        MatchLineupEventLookup(
+            goals: homeGoals,
+            assists: homeAssists,
+            yellowCards: homeYellowCards,
+            redCards: homeRedCards,
+            substitutions: homeLineup.substitutions
+        )
+    }
+
+    private var awayLookup: MatchLineupEventLookup {
+        MatchLineupEventLookup(
+            goals: awayGoals,
+            assists: awayAssists,
+            yellowCards: awayYellowCards,
+            redCards: awayRedCards,
+            substitutions: awayLineup.substitutions
+        )
+    }
+
+    var body: some View {
+        ZStack {
+            MatchLineupPitchBackground()
+
+            VStack(spacing: 0) {
+                MatchLineupHalfView(
+                    teamName: homeLineup.team ?? "Home",
+                    formation: homeLineup.formation,
+                    starters: homeLineup.startingLineup,
+                    lookup: homeLookup,
+                    side: .home
+                )
+
+                MatchLineupHalfView(
+                    teamName: awayLineup.team ?? "Away",
+                    formation: awayLineup.formation,
+                    starters: awayLineup.startingLineup,
+                    lookup: awayLookup,
+                    side: .away
+                )
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 18)
+        }
+        .aspectRatio(0.62, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        }
+    }
+}
+
+private struct MatchLineupHalfView: View {
+    let teamName: String
+    let formation: String?
+    let starters: [MatchLineupPlayer]
+    let lookup: MatchLineupEventLookup
+    let side: MatchLineupDisplaySide
+
+    private var groupedRows: [[MatchLineupPlayer]] {
+        let goalkeepers = starters.filter { $0.positionCategory == "goalkeeper" }
+        let defenders = starters.filter { $0.positionCategory == "defender" }
+        let midfielders = starters.filter { $0.positionCategory == "midfielder" }
+        let attackers = starters.filter { $0.positionCategory == "attacker" }
+
+        if side == .home {
+            return [goalkeepers, defenders, midfielders, attackers].filter { !$0.isEmpty }
+        }
+        return [attackers, midfielders, defenders, goalkeepers].filter { !$0.isEmpty }
+    }
+
+    private var titleText: String {
+        return teamName.uppercased()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if side == .away {
+                Spacer(minLength: 0)
+            }
+
+            if side == .home {
+                titleView
+            }
+
+            ForEach(Array(groupedRows.enumerated()), id: \.offset) { _, row in
+                HStack(alignment: .top, spacing: 8) {
+                    ForEach(row) { player in
+                        MatchLineupPlayerMarkerView(
+                            player: player,
+                            summary: lookup.summary(for: player),
+                            replacementSummary: lookup.replacementSummary(for: player),
+                            side: side
+                        )
+                    }
+                }
+            }
+
+            if side == .home {
+                Spacer(minLength: 0)
+            } else {
+                titleView
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var titleView: some View {
+        Text(titleText)
+            .font(.system(size: 15, weight: .black, design: .rounded))
+            .tracking(0.4)
+            .foregroundStyle(Color.white.opacity(0.96))
+            .shadow(color: .black.opacity(0.18), radius: 1, x: 0, y: 1)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+    }
+}
+
+private struct MatchLineupPlayerMarkerView: View {
+    let player: MatchLineupPlayer
+    let summary: MatchLineupPlayerEventSummary
+    let replacementSummary: MatchLineupPlayerEventSummary?
+    let side: MatchLineupDisplaySide
+
+    private var circleFill: Color {
+        side == .home ? Color.black.opacity(0.92) : Color.white.opacity(0.94)
+    }
+
+    private var circleText: Color {
+        side == .home ? .white : .black
+    }
+
+    private var replacementPlayer: MatchLineupPlayer? {
+        summary.substitution?.playerOn
+    }
+
+    private var displayName: String {
+        abbreviatedLineupPlayerName(player.name)
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Circle()
+                    .fill(circleFill)
+                    .frame(width: 44, height: 44)
+                    .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
+
+                Text("\(player.number)")
+                    .font(.system(size: 14, weight: .black, design: .rounded))
+                    .foregroundStyle(circleText)
+            }
+
+            if summary.hasStatBadges {
+                MatchLineupEventBadgeRow(summary: summary)
+            }
+
+            VStack(spacing: 2) {
+                HStack(spacing: 3) {
+                    if summary.substitution != nil {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color(red: 0.95, green: 0.14, blue: 0.46))
+                    }
+
+                    Text(displayName)
+                        .font(.system(size: 10, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.96))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.7)
+                }
+                .multilineTextAlignment(.center)
+
+                if let replacementPlayer {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color(red: 0.21, green: 0.83, blue: 0.39))
+
+                        Text("\(abbreviatedLineupPlayerName(replacementPlayer.name)) (\(replacementPlayer.number))")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .multilineTextAlignment(.center)
+
+                    if let replacementSummary, replacementSummary.hasStatBadges {
+                        MatchLineupEventBadgeRow(summary: replacementSummary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+}
+
+private struct MatchLineupEventBadgeRow: View {
+    let summary: MatchLineupPlayerEventSummary
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if summary.goals > 0 {
+                MatchLineupEventBadge(icon: .system("soccerball"), tint: .white, count: summary.goals)
+            }
+            if summary.assists > 0 {
+                MatchLineupEventBadge(icon: .emoji("🅰️"), tint: .mint, count: summary.assists)
+            }
+            if summary.yellowCards > 0 {
+                MatchLineupEventBadge(icon: .card(Color.yellow, .black), tint: .black, count: summary.yellowCards)
+            }
+            if summary.redCards > 0 {
+                MatchLineupEventBadge(icon: .card(Color.red, .white), tint: .white, count: summary.redCards)
+            }
+        }
+    }
+}
+
+private struct MatchLineupEventBadge: View {
+    enum IconStyle {
+        case system(String)
+        case emoji(String)
+        case card(Color, Color)
+    }
+
+    let icon: IconStyle
+    let tint: Color
+    let count: Int?
+
+    var body: some View {
+        HStack(spacing: 3) {
+            switch icon {
+            case .system(let name):
+                Image(systemName: name)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(tint)
+            case .emoji(let value):
+                Text(value)
+                    .font(.system(size: 10))
+            case .card(let fill, _):
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    .fill(fill)
+                    .frame(width: 7, height: 10)
+            }
+
+            if let count, count > 1 {
+                Text("\(count)")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.95))
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.42))
+        )
+    }
+}
+
+private struct MatchLineupPitchBackground: View {
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.37, green: 0.50, blue: 0.10),
+                        Color(red: 0.31, green: 0.44, blue: 0.08),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                VStack(spacing: 0) {
+                    ForEach(0..<8, id: \.self) { index in
+                        Rectangle()
+                            .fill(index.isMultiple(of: 2) ? Color.white.opacity(0.04) : Color.clear)
+                    }
+                }
+
+                Path { path in
+                    let width = proxy.size.width
+                    let height = proxy.size.height
+                    let inset: CGFloat = 14
+
+                    let pitchRect = CGRect(
+                        x: inset,
+                        y: inset,
+                        width: width - (inset * 2),
+                        height: height - (inset * 2)
+                    )
+
+                    path.addRoundedRect(in: pitchRect, cornerSize: CGSize(width: 8, height: 8))
+
+                    let halfwayY = pitchRect.midY
+                    path.move(to: CGPoint(x: pitchRect.minX, y: halfwayY))
+                    path.addLine(to: CGPoint(x: pitchRect.maxX, y: halfwayY))
+
+                    let centerCircleRadius: CGFloat = min(42, width * 0.15)
+                    path.addEllipse(
+                        in: CGRect(
+                            x: pitchRect.midX - centerCircleRadius,
+                            y: halfwayY - centerCircleRadius,
+                            width: centerCircleRadius * 2,
+                            height: centerCircleRadius * 2
+                        )
+                    )
+
+                    let centerSpotRadius: CGFloat = 3.5
+                    path.addEllipse(
+                        in: CGRect(
+                            x: pitchRect.midX - centerSpotRadius,
+                            y: halfwayY - centerSpotRadius,
+                            width: centerSpotRadius * 2,
+                            height: centerSpotRadius * 2
+                        )
+                    )
+
+                    let penaltyWidth = pitchRect.width * 0.50
+                    let penaltyDepth = pitchRect.height * 0.10
+                    path.addRect(
+                        CGRect(
+                            x: pitchRect.midX - (penaltyWidth / 2),
+                            y: pitchRect.minY,
+                            width: penaltyWidth,
+                            height: penaltyDepth
+                        )
+                    )
+                    path.addRect(
+                        CGRect(
+                            x: pitchRect.midX - (penaltyWidth / 2),
+                            y: pitchRect.maxY - penaltyDepth,
+                            width: penaltyWidth,
+                            height: penaltyDepth
+                        )
+                    )
+
+                    let sixYardWidth = penaltyWidth * 0.44
+                    let sixYardDepth = penaltyDepth * 0.42
+                    path.addRect(
+                        CGRect(
+                            x: pitchRect.midX - (sixYardWidth / 2),
+                            y: pitchRect.minY,
+                            width: sixYardWidth,
+                            height: sixYardDepth
+                        )
+                    )
+                    path.addRect(
+                        CGRect(
+                            x: pitchRect.midX - (sixYardWidth / 2),
+                            y: pitchRect.maxY - sixYardDepth,
+                            width: sixYardWidth,
+                            height: sixYardDepth
+                        )
+                    )
+                }
+                .stroke(Color.white.opacity(0.50), lineWidth: 2)
+            }
+        }
+    }
+}
+
+private struct MatchLineupPlayerEventSummary {
+    let goals: Int
+    let assists: Int
+    let yellowCards: Int
+    let redCards: Int
+    let substitution: MatchLineupSubstitution?
+
+    var hasStatBadges: Bool {
+        goals > 0 || assists > 0 || yellowCards > 0 || redCards > 0
+    }
+
+    var hasCardOrBallStats: Bool {
+        hasStatBadges
+    }
+}
+
+private struct MatchLineupEventLookup {
+    private let goalEntries: [MatchPlayerStatEntry]
+    private let assistEntries: [MatchPlayerStatEntry]
+    private let yellowCardEntries: [MatchPlayerStatEntry]
+    private let redCardEntries: [MatchPlayerStatEntry]
+    private let substitutions: [MatchLineupSubstitution]
+
+    init(
+        goals: [MatchGoalScorer],
+        assists: [MatchAssistProvider],
+        yellowCards: [MatchYellowCardEvent],
+        redCards: [MatchRedCardEvent],
+        substitutions: [MatchLineupSubstitution]
+    ) {
+        goalEntries = goals.map {
+            MatchPlayerStatEntry(playerName: $0.player, count: $0.goalTimes.count)
+        }
+        assistEntries = assists.map {
+            MatchPlayerStatEntry(playerName: $0.player, count: $0.assistTimes.count)
+        }
+        yellowCardEntries = yellowCards.map {
+            MatchPlayerStatEntry(playerName: $0.player, count: $0.yellowCardTimes.count)
+        }
+        redCardEntries = redCards.map {
+            MatchPlayerStatEntry(playerName: $0.player, count: $0.redCardTimes.count)
+        }
+        self.substitutions = substitutions
+    }
+
+    func summary(for player: MatchLineupPlayer) -> MatchLineupPlayerEventSummary {
+        MatchLineupPlayerEventSummary(
+            goals: bestCount(for: player.name, entries: goalEntries),
+            assists: bestCount(for: player.name, entries: assistEntries),
+            yellowCards: bestCount(for: player.name, entries: yellowCardEntries),
+            redCards: bestCount(for: player.name, entries: redCardEntries),
+            substitution: substitutions.first { $0.playerOff.number == player.number }
+        )
+    }
+
+    func replacementSummary(for player: MatchLineupPlayer) -> MatchLineupPlayerEventSummary? {
+        guard let substitution = substitutions.first(where: { $0.playerOff.number == player.number }) else {
+            return nil
+        }
+
+        return MatchLineupPlayerEventSummary(
+            goals: bestCount(for: substitution.playerOn.name, entries: goalEntries),
+            assists: bestCount(for: substitution.playerOn.name, entries: assistEntries),
+            yellowCards: bestCount(for: substitution.playerOn.name, entries: yellowCardEntries),
+            redCards: bestCount(for: substitution.playerOn.name, entries: redCardEntries),
+            substitution: nil
+        )
+    }
+
+    private func bestCount(for playerName: String, entries: [MatchPlayerStatEntry]) -> Int {
+        let playerLookup = MatchPlayerNameLookup(name: playerName)
+        let bestEntry = entries.max { lhs, rhs in
+            let leftScore = playerLookup.matchScore(against: lhs.lookup)
+            let rightScore = playerLookup.matchScore(against: rhs.lookup)
+            if leftScore == rightScore {
+                return lhs.count < rhs.count
+            }
+            return leftScore < rightScore
+        }
+
+        guard let bestEntry else { return 0 }
+        return playerLookup.matchScore(against: bestEntry.lookup) > 0 ? bestEntry.count : 0
+    }
+}
+
+private struct MatchPlayerStatEntry {
+    let count: Int
+    let lookup: MatchPlayerNameLookup
+
+    init(playerName: String, count: Int) {
+        self.count = count
+        self.lookup = MatchPlayerNameLookup(name: playerName)
+    }
+}
+
+private struct MatchPlayerNameLookup {
+    let full: String
+    let initialAndLast: String
+    let last: String
+
+    init(name: String) {
+        let cleaned = name
+            .replacingOccurrences(of: "(c)", with: "", options: .caseInsensitive)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        let tokens = cleaned
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .map { $0.lowercased() }
+
+        full = tokens.joined(separator: " ")
+        let first = tokens.first ?? ""
+        let lastToken = tokens.last ?? ""
+        last = lastToken
+        if !first.isEmpty, !lastToken.isEmpty {
+            initialAndLast = "\(String(first.prefix(1))) \(lastToken)"
+        } else {
+            initialAndLast = full
+        }
+    }
+
+    func matchScore(against other: MatchPlayerNameLookup) -> Int {
+        guard !full.isEmpty, !other.full.isEmpty else { return 0 }
+        if full == other.full { return 3 }
+        if !initialAndLast.isEmpty, initialAndLast == other.initialAndLast { return 2 }
+        if !last.isEmpty, last == other.last { return 1 }
+        return 0
+    }
+}
+
+private func abbreviatedLineupPlayerName(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return trimmed }
+
+    let hasCaptainSuffix = trimmed.range(of: "(c)", options: .caseInsensitive) != nil
+    let baseName = trimmed.replacingOccurrences(of: "(c)", with: "", options: .caseInsensitive)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let parts = baseName.split(separator: " ").map(String.init)
+    guard let first = parts.first, let last = parts.last else {
+        return trimmed
+    }
+
+    let initial: String
+    if first.hasSuffix(".") {
+        initial = first.count == 2 ? first : "\(first.prefix(1))."
+    } else if first.count == 1 {
+        initial = "\(first)."
+    } else {
+        initial = "\(first.prefix(1))."
+    }
+
+    let abbreviated = parts.count > 1 ? "\(initial) \(last)" : baseName
+    return hasCaptainSuffix ? "\(abbreviated) (c)" : abbreviated
+}
+
+private enum MatchLineupDisplaySide {
+    case home
+    case away
 }
 
 private struct CalendarChoice: Identifiable {

@@ -1113,6 +1113,46 @@ function parseLineupPlayersList($list, $, options = {}) {
     .filter(Boolean);
 }
 
+function parseLineupCardEvents($lists, $, descriptor, fieldName) {
+  const byPlayer = new Map();
+  if (!$lists || !$lists.length || !descriptor || !fieldName) return [];
+
+  $lists.each((_, listEl) => {
+    $(listEl)
+      .find("[data-testid='player-list-item']")
+      .each((__, itemEl) => {
+        const $item = $(itemEl);
+        const notation = parseLineupPlayerNotation(
+          $item.find("[data-testid='player-notation-circle']").first(),
+          $
+        );
+        const player = extractLineupPlayerName($item, $);
+        if (!notation || !player) return;
+
+        const cardTimes = $item
+          .find(BBC_HIDDEN_TEXT_SELECTOR)
+          .map((___, hiddenEl) => normalizeText($(hiddenEl).text()))
+          .get()
+          .filter((text) => text.toLowerCase().includes(descriptor))
+          .flatMap((text) => extractMinuteTokens(text));
+        if (!cardTimes.length) return;
+
+        const current = byPlayer.get(player) || {
+          player,
+          [fieldName]: [],
+        };
+        cardTimes.forEach((time) => {
+          if (!current[fieldName].includes(time)) {
+            current[fieldName].push(time);
+          }
+        });
+        byPlayer.set(player, current);
+      });
+  });
+
+  return Array.from(byPlayer.values());
+}
+
 function parseFormationPositionMap($teamPlayersSection, $) {
   const positions = new Map();
   if (!$teamPlayersSection || !$teamPlayersSection.length) return positions;
@@ -1221,6 +1261,10 @@ function parseTeamLineups($) {
   if (!$grid.length) return null;
 
   const teams = {};
+  const yellowCardsBySide = {
+    home: [],
+    away: [],
+  };
   const children = $grid.children().toArray();
 
   for (let i = 0; i < children.length; i += 1) {
@@ -1249,6 +1293,15 @@ function parseTeamLineups($) {
         substitutes: block.substitutes,
         substitutions: block.substitutions,
       };
+      yellowCardsBySide[block.side] = parseLineupCardEvents(
+        $([
+          children[i + 2],
+          children[i + 3],
+        ]),
+        $,
+        "yellow card",
+        "yellow_card_times"
+      );
       i += 3;
     }
   }
@@ -1258,8 +1311,12 @@ function parseTeamLineups($) {
   }
 
   return {
-    home: teams.home,
-    away: teams.away,
+    team_lineups: {
+      home: teams.home,
+      away: teams.away,
+    },
+    home_yellow_cards: yellowCardsBySide.home,
+    away_yellow_cards: yellowCardsBySide.away,
   };
 }
 
@@ -1283,7 +1340,8 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
     ? teamsFromHeader
     : extractTeams($primaryScope, $);
   const scoresFromHeader = extractScoresFromBbcNode($primaryScope, $);
-  const teamLineups = parseTeamLineups($);
+  const parsedLineups = parseTeamLineups($);
+  const teamLineups = parsedLineups && parsedLineups.team_lineups;
   const resolvedHomeTeam = requestedHomeTeam || fallbackTeamsFromHeader[0] || pageMetadata.home_team || null;
   const resolvedAwayTeam = requestedAwayTeam || fallbackTeamsFromHeader[1] || pageMetadata.away_team || null;
 
@@ -1331,6 +1389,8 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
     away_red_cards: parseRedCards($awayGoals, $),
     home_assists: parseAssistEvents($homeAssists, $),
     away_assists: parseAssistEvents($awayAssists, $),
+    home_yellow_cards: parsedLineups ? parsedLineups.home_yellow_cards : [],
+    away_yellow_cards: parsedLineups ? parsedLineups.away_yellow_cards : [],
   };
 
   if (pageMetadata.date) {

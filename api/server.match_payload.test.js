@@ -763,6 +763,8 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
       { player: "Gabriel Martinelli", assist_times: ["41'"] },
       { player: "C. Nørgaard", assist_times: ["66'"] },
     ],
+    home_yellow_cards: [],
+    away_yellow_cards: [],
     home_red_cards: [],
     away_red_cards: [],
     team_lineups: {
@@ -820,6 +822,8 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
       { player: "Gabriel Martinelli", assist_times: ["41'"] },
       { player: "C. Nørgaard", assist_times: ["66'"] },
     ],
+    home_yellow_cards: [],
+    away_yellow_cards: [],
     home_red_cards: [],
     away_red_cards: [],
     team_lineups: {

@@ -3875,6 +3875,8 @@ const MATCH_DETAILS_EVENT_FIELDS = [
   "away_goal_scorers",
   "home_assists",
   "away_assists",
+  "home_yellow_cards",
+  "away_yellow_cards",
   "home_red_cards",
   "away_red_cards",
 ];
@@ -4879,6 +4881,8 @@ function normalizeMatchRecord(match) {
     "away_goal_scorers",
     "home_assists",
     "away_assists",
+    "home_yellow_cards",
+    "away_yellow_cards",
     "home_red_cards",
     "away_red_cards",
   ].forEach((field) => {
@@ -5359,6 +5363,8 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
     "away_goal_scorers",
     "home_assists",
     "away_assists",
+    "home_yellow_cards",
+    "away_yellow_cards",
     "home_red_cards",
     "away_red_cards",
   ].forEach((field) => {
@@ -5529,6 +5535,8 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
     away_goal_scorers: testMatch.away_goal_scorers || [],
     home_assists: testMatch.home_assists || [],
     away_assists: testMatch.away_assists || [],
+    home_yellow_cards: testMatch.home_yellow_cards || [],
+    away_yellow_cards: testMatch.away_yellow_cards || [],
     home_red_cards: testMatch.home_red_cards || [],
     away_red_cards: testMatch.away_red_cards || [],
     penalty_result: testMatch.penalty_result,
@@ -5635,6 +5643,12 @@ function mergeScoreFields(base, scored) {
   if (Array.isArray(scored.away_assists)) {
     merged.away_assists = scored.away_assists;
   }
+  if (Array.isArray(scored.home_yellow_cards)) {
+    merged.home_yellow_cards = scored.home_yellow_cards;
+  }
+  if (Array.isArray(scored.away_yellow_cards)) {
+    merged.away_yellow_cards = scored.away_yellow_cards;
+  }
   if (Array.isArray(scored.home_red_cards)) {
     merged.home_red_cards = scored.home_red_cards;
   }
@@ -5675,6 +5689,8 @@ function applyScoresToMatches(matches, bbcMatches, now = new Date()) {
     const awayGoalScorers = swapped ? source.home_goal_scorers : source.away_goal_scorers;
     const homeAssists = swapped ? source.away_assists : source.home_assists;
     const awayAssists = swapped ? source.home_assists : source.away_assists;
+    const homeYellowCards = swapped ? source.away_yellow_cards : source.home_yellow_cards;
+    const awayYellowCards = swapped ? source.home_yellow_cards : source.away_yellow_cards;
     const homeRedCards = swapped ? source.away_red_cards : source.home_red_cards;
     const awayRedCards = swapped ? source.home_red_cards : source.away_red_cards;
 
@@ -5682,6 +5698,8 @@ function applyScoresToMatches(matches, bbcMatches, now = new Date()) {
     if (Array.isArray(awayGoalScorers)) merged.away_goal_scorers = awayGoalScorers;
     if (Array.isArray(homeAssists)) merged.home_assists = homeAssists;
     if (Array.isArray(awayAssists)) merged.away_assists = awayAssists;
+    if (Array.isArray(homeYellowCards)) merged.home_yellow_cards = homeYellowCards;
+    if (Array.isArray(awayYellowCards)) merged.away_yellow_cards = awayYellowCards;
     if (Array.isArray(homeRedCards)) merged.home_red_cards = homeRedCards;
     if (Array.isArray(awayRedCards)) merged.away_red_cards = awayRedCards;
 
@@ -8411,6 +8429,8 @@ function toOperationalAdminMatchPayload(payload) {
     away_goal_scorers: Array.isArray(payload.away_goal_scorers) ? payload.away_goal_scorers : [],
     home_assists: Array.isArray(payload.home_assists) ? payload.home_assists : [],
     away_assists: Array.isArray(payload.away_assists) ? payload.away_assists : [],
+    home_yellow_cards: Array.isArray(payload.home_yellow_cards) ? payload.home_yellow_cards : [],
+    away_yellow_cards: Array.isArray(payload.away_yellow_cards) ? payload.away_yellow_cards : [],
     home_red_cards: Array.isArray(payload.home_red_cards) ? payload.home_red_cards : [],
     away_red_cards: Array.isArray(payload.away_red_cards) ? payload.away_red_cards : [],
     team_lineups: normalizeTeamLineupsPayload(payload.team_lineups),
@@ -8689,6 +8709,12 @@ function buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord) {
       : [],
     away_assists: Array.isArray(fallbackMatchRecord.away_assists)
       ? fallbackMatchRecord.away_assists
+      : [],
+    home_yellow_cards: Array.isArray(fallbackMatchRecord.home_yellow_cards)
+      ? fallbackMatchRecord.home_yellow_cards
+      : [],
+    away_yellow_cards: Array.isArray(fallbackMatchRecord.away_yellow_cards)
+      ? fallbackMatchRecord.away_yellow_cards
       : [],
     home_red_cards: Array.isArray(fallbackMatchRecord.home_red_cards)
       ? fallbackMatchRecord.home_red_cards
@@ -10417,6 +10443,16 @@ function toAdminResultMatchPayload(detailsPayload, fallbackMatchRecord = null, f
       : Array.isArray(fallbackMatchRecord && fallbackMatchRecord.away_assists)
         ? fallbackMatchRecord.away_assists
         : [],
+    home_yellow_cards: Array.isArray(detailsPayload && detailsPayload.home_yellow_cards)
+      ? detailsPayload.home_yellow_cards
+      : Array.isArray(fallbackMatchRecord && fallbackMatchRecord.home_yellow_cards)
+        ? fallbackMatchRecord.home_yellow_cards
+        : [],
+    away_yellow_cards: Array.isArray(detailsPayload && detailsPayload.away_yellow_cards)
+      ? detailsPayload.away_yellow_cards
+      : Array.isArray(fallbackMatchRecord && fallbackMatchRecord.away_yellow_cards)
+        ? fallbackMatchRecord.away_yellow_cards
+        : [],
     home_red_cards: Array.isArray(detailsPayload && detailsPayload.home_red_cards)
       ? detailsPayload.home_red_cards
       : Array.isArray(fallbackMatchRecord && fallbackMatchRecord.home_red_cards)
@@ -10782,6 +10818,8 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
       away_goal_scorers: testMatch.away_goal_scorers || [],
       home_assists: testMatch.home_assists || [],
       away_assists: testMatch.away_assists || [],
+      home_yellow_cards: testMatch.home_yellow_cards || [],
+      away_yellow_cards: testMatch.away_yellow_cards || [],
       home_red_cards: testMatch.home_red_cards || [],
       away_red_cards: testMatch.away_red_cards || [],
       penalty_result: testMatch.penalty_result,
