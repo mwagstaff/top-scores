@@ -19,6 +19,7 @@ enum AppGroupConfig {
     static let refreshIntervalMinutesKey = "preferences.refreshIntervalMinutes"
     static let showAllMatchesKey = "preferences.showAllMatches"
     static let matchGroupSortOrderKey = "preferences.matchGroupSortOrder"
+    static let showFantasyMatchPillsKey = "preferences.showFantasyMatchPills"
 }
 
 struct SharedMatchesPayload: Codable {
@@ -70,6 +71,7 @@ enum SharedMatchesBridge {
         defaults.set(snapshot.refreshIntervalMinutes, forKey: AppGroupConfig.refreshIntervalMinutesKey)
         defaults.set(snapshot.showAllMatches, forKey: AppGroupConfig.showAllMatchesKey)
         defaults.set(snapshot.matchGroupSortOrder.rawValue, forKey: AppGroupConfig.matchGroupSortOrderKey)
+        defaults.set(snapshot.showFantasyMatchPills, forKey: AppGroupConfig.showFantasyMatchPillsKey)
     }
 
     static func clear() {

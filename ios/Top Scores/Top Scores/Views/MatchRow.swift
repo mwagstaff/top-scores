@@ -3,6 +3,7 @@ import SwiftUI
 import EventKit
 
 struct MatchRow: View {
+    @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
 
@@ -87,26 +88,8 @@ struct MatchRow: View {
                 }
             }
 
-            if showBroadcastDetails && !isMatchFinished {
-                HStack(alignment: .center, spacing: 8) {
-                    Text(match.tvChannels.isEmpty ? "TV TBA" : match.tvChannels.joined(separator: " • "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .layoutPriority(1)
-
-                    Spacer(minLength: 8)
-
-                    TvLogoRow(channels: match.tvChannels)
-                        .fixedSize(horizontal: true, vertical: false)
-
-                    if let fantasyBadgeMode {
-                        FantasyMatchParticipationBadge(mode: fantasyBadgeMode)
-                            .padding(.leading, 4)
-                    }
-                }
+            if shouldShowFooterRow {
+                footerRow
             }
         }
         .padding(cardPadding)
@@ -149,6 +132,7 @@ struct MatchRow: View {
 
     private var fantasyBadgeMode: FantasyMatchParticipationBadge.Mode? {
         guard !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              preferences.showFantasyMatchPills,
               isPremierLeagueMatch,
               let lookup = FantasySquadMembershipLookup(squad: fantasyViewModel.data)
         else {
@@ -163,6 +147,39 @@ struct MatchRow: View {
         }
 
         return .score(lookup.effectiveScore(in: match))
+    }
+
+    private var shouldShowFooterRow: Bool {
+        (showBroadcastDetails && !isMatchFinished) || fantasyBadgeMode != nil
+    }
+
+    @ViewBuilder
+    private var footerRow: some View {
+        HStack(alignment: .center, spacing: 8) {
+            if showBroadcastDetails && !isMatchFinished {
+                Text(match.tvChannels.isEmpty ? "TV TBA" : match.tvChannels.joined(separator: " • "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+            } else {
+                Spacer(minLength: 0)
+            }
+
+            if showBroadcastDetails && !isMatchFinished {
+                Spacer(minLength: 8)
+
+                TvLogoRow(channels: match.tvChannels)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+
+            if let fantasyBadgeMode {
+                FantasyMatchParticipationBadge(mode: fantasyBadgeMode)
+                    .padding(.leading, showBroadcastDetails && !isMatchFinished ? 4 : 0)
+            }
+        }
     }
 
     private var scoreAndStatusRow: some View {
@@ -1887,6 +1904,7 @@ private struct TvChannelRow: View {
 
 #Preview {
     MatchRow(match: Match(date: "2026-02-11", time: "19:45", homeTeam: "Arsenal", awayTeam: "Chelsea", league: "Premier League", tvChannels: ["NBC", "Peacock"]))
+        .environmentObject(PreferencesStore())
         .environmentObject(FantasyViewModel())
         .padding()
 }

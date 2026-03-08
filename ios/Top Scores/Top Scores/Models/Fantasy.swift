@@ -5,12 +5,14 @@ struct FantasyGameweek: Codable, Hashable {
     let name: String?
     let isCurrent: Bool?
     let isNext: Bool?
+    let deadlineTime: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case name
         case isCurrent = "is_current"
         case isNext = "is_next"
+        case deadlineTime = "deadline_time"
     }
 }
 
@@ -844,8 +846,11 @@ struct FantasyEffectivePlayerContribution: Hashable {
 struct FantasySquadDisplayData: Hashable {
     let gameweekID: Int
     let gameweekTitle: String
+    let deadlineGameweekID: Int?
+    let deadlineTime: String?
     let totalPoints: Int
     let hasActiveFixtures: Bool
+    let hasStartedFixturesInGameweek: Bool
     let hasFixturesPlayedToday: Bool
     let isEstimatedScore: Bool
     let estimatedCurrentScore: Int
@@ -1497,6 +1502,11 @@ enum FantasySquadBuilder {
             }
         )
         let hasActiveFixtures = !activeTeamIDs.isEmpty
+        let hasStartedFixturesInGameweek = fixtures.contains { fixture in
+            fixture.started == true ||
+            fixture.finished == true ||
+            fixture.finishedProvisional == true
+        }
         let hasFixturesPlayedToday = {
             let calendar = Calendar.current
             let startOfToday = calendar.startOfDay(for: now)
@@ -1588,6 +1598,11 @@ enum FantasySquadBuilder {
             }
             return "Gameweek \(gameweek.id)"
         }()
+        let resolvedDeadline = resolveDisplayedDeadline(
+            currentGameweek: gameweek,
+            events: bootstrap.events,
+            now: now
+        )
 
         let players = picksResponse.picks.compactMap { pick -> FantasyDisplayPlayer? in
             let element = elementByID[pick.element]
@@ -1814,8 +1829,11 @@ enum FantasySquadBuilder {
         return FantasySquadDisplayData(
             gameweekID: gameweek.id,
             gameweekTitle: resolvedGameweekTitle,
+            deadlineGameweekID: resolvedDeadline?.id,
+            deadlineTime: resolvedDeadline?.deadlineTime,
             totalPoints: picksResponse.entryHistory.points,
             hasActiveFixtures: hasActiveFixtures,
+            hasStartedFixturesInGameweek: hasStartedFixturesInGameweek,
             hasFixturesPlayedToday: hasFixturesPlayedToday,
             isEstimatedScore: isEstimatedScore,
             estimatedCurrentScore: estimatedCurrentScore,
@@ -1831,4 +1849,52 @@ enum FantasySquadBuilder {
             bench: bench
         )
     }
+
+    private static func resolveDisplayedDeadline(
+        currentGameweek: FantasyGameweek,
+        events: [FantasyGameweek],
+        now: Date
+    ) -> FantasyGameweek? {
+        if let currentDeadline = parseDeadline(currentGameweek.deadlineTime),
+           currentDeadline > now {
+            return currentGameweek
+        }
+
+        let sortedEvents = events.sorted { lhs, rhs in
+            if lhs.id != rhs.id {
+                return lhs.id < rhs.id
+            }
+            return (lhs.deadlineTime ?? "") < (rhs.deadlineTime ?? "")
+        }
+
+        for event in sortedEvents {
+            guard let deadline = parseDeadline(event.deadlineTime), deadline > now else {
+                continue
+            }
+            return event
+        }
+
+        return currentGameweek
+    }
+
+    private static func parseDeadline(_ rawValue: String?) -> Date? {
+        let trimmed = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let date = deadlineFormatterWithFractionalSeconds.date(from: trimmed) {
+            return date
+        }
+        return deadlineFormatter.date(from: trimmed)
+    }
+
+    private static let deadlineFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let deadlineFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 }

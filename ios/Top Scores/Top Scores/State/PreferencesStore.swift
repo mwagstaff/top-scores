@@ -48,6 +48,7 @@ struct PreferencesSnapshot: Codable, Equatable {
     let notificationUseViewingFilter: Bool
     let notificationCompetitionFilterEnabled: Bool
     let notificationSelectedLeagues: [String]
+    let showFantasyMatchPills: Bool
 
     nonisolated init(
         selectedLeagues: [String],
@@ -64,7 +65,8 @@ struct PreferencesSnapshot: Codable, Equatable {
         notificationEventTypes: Set<String> = PreferencesStore.defaultNotificationEventTypes,
         notificationUseViewingFilter: Bool = true,
         notificationCompetitionFilterEnabled: Bool = true,
-        notificationSelectedLeagues: [String] = []
+        notificationSelectedLeagues: [String] = [],
+        showFantasyMatchPills: Bool = PreferencesStore.defaultShowFantasyMatchPills
     ) {
         self.selectedLeagues = selectedLeagues
         self.selectedChannels = selectedChannels
@@ -81,6 +83,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         self.notificationUseViewingFilter = notificationUseViewingFilter
         self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
         self.notificationSelectedLeagues = notificationSelectedLeagues
+        self.showFantasyMatchPills = showFantasyMatchPills
     }
 
     enum CodingKeys: String, CodingKey {
@@ -99,6 +102,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         case notificationUseViewingFilter
         case notificationCompetitionFilterEnabled
         case notificationSelectedLeagues
+        case showFantasyMatchPills
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -121,6 +125,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         notificationUseViewingFilter = try container.decodeIfPresent(Bool.self, forKey: .notificationUseViewingFilter) ?? true
         notificationCompetitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationCompetitionFilterEnabled) ?? true
         notificationSelectedLeagues = try container.decodeIfPresent([String].self, forKey: .notificationSelectedLeagues) ?? []
+        showFantasyMatchPills = try container.decodeIfPresent(Bool.self, forKey: .showFantasyMatchPills) ?? PreferencesStore.defaultShowFantasyMatchPills
     }
 }
 
@@ -149,6 +154,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultNotificationUseViewingFilter = true
     nonisolated static let defaultNotificationCompetitionFilterEnabled = true
     nonisolated static let defaultNotificationSelectedLeagues: [String] = []
+    nonisolated static let defaultShowFantasyMatchPills = true
 
     @Published var selectedLeagues: [String] {
         didSet { persist() }
@@ -210,6 +216,10 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var showFantasyMatchPills: Bool {
+        didSet { persist() }
+    }
+
     init(userDefaults: UserDefaults = .standard) {
         let leagues = userDefaults.stringArray(forKey: Keys.selectedLeagues) ?? Self.defaultSelectedLeagues
         let channels = userDefaults.stringArray(forKey: Keys.selectedChannels) ?? Self.defaultSelectedChannels
@@ -240,6 +250,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationCompetitionFilterEnabled
         let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
             ?? Self.defaultNotificationSelectedLeagues
+        let showFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
+            ?? Self.defaultShowFantasyMatchPills
 
         self.selectedLeagues = leagues
         self.selectedChannels = ChannelSelection.normalizedSelectedOptions(channels)
@@ -256,6 +268,7 @@ final class PreferencesStore: ObservableObject {
         self.notificationUseViewingFilter = notificationUseViewingFilter
         self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
         self.notificationSelectedLeagues = notificationSelectedLeagues
+        self.showFantasyMatchPills = showFantasyMatchPills
     }
 
     var snapshot: PreferencesSnapshot {
@@ -274,7 +287,8 @@ final class PreferencesStore: ObservableObject {
             notificationEventTypes: notificationEventTypes,
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
-            notificationSelectedLeagues: notificationSelectedLeagues
+            notificationSelectedLeagues: notificationSelectedLeagues,
+            showFantasyMatchPills: showFantasyMatchPills
         )
     }
 
@@ -294,7 +308,8 @@ final class PreferencesStore: ObservableObject {
             notificationEventTypes: notificationEventTypes,
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
-            notificationSelectedLeagues: notificationSelectedLeagues
+            notificationSelectedLeagues: notificationSelectedLeagues,
+            showFantasyMatchPills: showFantasyMatchPills
         )
     }
 
@@ -314,6 +329,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(notificationUseViewingFilter, forKey: Keys.notificationUseViewingFilter)
         userDefaults.set(notificationCompetitionFilterEnabled, forKey: Keys.notificationCompetitionFilterEnabled)
         userDefaults.set(notificationSelectedLeagues, forKey: Keys.notificationSelectedLeagues)
+        userDefaults.set(showFantasyMatchPills, forKey: Keys.showFantasyMatchPills)
         SharedMatchesBridge.saveSnapshotToSharedDefaults(snapshot)
 
         // Sync preferences to Redis
@@ -352,6 +368,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationCompetitionFilterEnabled
         let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
             ?? Self.defaultNotificationSelectedLeagues
+        let showFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
+            ?? Self.defaultShowFantasyMatchPills
 
         return PreferencesSnapshot(
             selectedLeagues: leagues,
@@ -368,7 +386,8 @@ final class PreferencesStore: ObservableObject {
             notificationEventTypes: notificationEventTypes,
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
-            notificationSelectedLeagues: notificationSelectedLeagues
+            notificationSelectedLeagues: notificationSelectedLeagues,
+            showFantasyMatchPills: showFantasyMatchPills
         )
     }
 
@@ -388,5 +407,6 @@ final class PreferencesStore: ObservableObject {
         static let notificationUseViewingFilter = "preferences.notificationUseViewingFilter"
         static let notificationCompetitionFilterEnabled = "preferences.notificationCompetitionFilterEnabled"
         static let notificationSelectedLeagues = "preferences.notificationSelectedLeagues"
+        static let showFantasyMatchPills = "preferences.showFantasyMatchPills"
     }
 }

@@ -14,21 +14,6 @@ struct PreferencesView: View {
     var body: some View {
         NavigationStack {
             Form {
-                #if DEBUG
-                Section("API (Debug)") {
-                    Picker("Environment", selection: apiEnvironmentBinding) {
-                        ForEach(APIEnvironment.allCases) { environment in
-                            Text(environment.title).tag(environment)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    Text("Base URL: \(preferences.apiBaseURL)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                #endif
-
                 Section("Refresh") {
                     Stepper(value: refreshIntervalBinding, in: 1...60) {
                         Text("Refresh every \(preferences.refreshIntervalMinutes) min")
@@ -53,6 +38,13 @@ struct PreferencesView: View {
                 Section("Filters") {
                     Toggle("Premier League teams only", isOn: englishPremierLeagueTeamsOnlyBinding)
                     Text("Show only matches where at least one team is in the BBC Premier League table.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Fantasy Football") {
+                    Toggle("Show Fantasy match pills", isOn: showFantasyMatchPillsBinding)
+                    Text("Displays the Fantasy trophy icon before kick-off once line-ups are available, then shows total estimated points for the players involved while matches are in play.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -184,21 +176,6 @@ struct PreferencesView: View {
                     }
                 }
 
-                #if DEBUG
-                Section("Push Notifications (Debug)") {
-                    Button(isSendingTestNotification ? "Sending test notification..." : "Send test notification") {
-                        sendDebugTestNotification()
-                    }
-                    .disabled(isSendingTestNotification)
-
-                    if let message = testNotificationStatusMessage {
-                        Text(message)
-                            .font(.footnote)
-                            .foregroundStyle(testNotificationStatusIsError ? .red : .secondary)
-                    }
-                }
-                #endif
-
                 if let error = viewModel.errorMessage {
                     Section {
                         Text(error)
@@ -212,6 +189,50 @@ struct PreferencesView: View {
                         preferences.selectedChannels = []
                     }
                 }
+
+                #if DEBUG
+                Section("Debug") {
+                    Text("These settings are available in debug builds only and will not appear in production.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("API")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+
+                        Picker("Environment", selection: apiEnvironmentBinding) {
+                            ForEach(APIEnvironment.allCases) { environment in
+                                Text(environment.title).tag(environment)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("Base URL: \(preferences.apiBaseURL)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Push Notifications")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+
+                        Button(isSendingTestNotification ? "Sending test notification..." : "Send test notification") {
+                            sendDebugTestNotification()
+                        }
+                        .disabled(isSendingTestNotification)
+
+                        if let message = testNotificationStatusMessage {
+                            Text(message)
+                                .font(.footnote)
+                                .foregroundStyle(testNotificationStatusIsError ? .red : .secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                #endif
             }
             .navigationTitle("Preferences")
             .toolbarTitleDisplayMode(.inline)
@@ -247,6 +268,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.matchGroupSortOrder },
             set: { preferences.matchGroupSortOrder = $0 }
+        )
+    }
+
+    private var showFantasyMatchPillsBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showFantasyMatchPills },
+            set: { preferences.showFantasyMatchPills = $0 }
         )
     }
 

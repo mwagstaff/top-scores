@@ -222,7 +222,8 @@ struct MatchesView: View {
     }
 
     private func ensureFantasySquadLoadedIfNeeded() {
-        guard !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard preferences.showFantasyMatchPills,
+              !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               fantasyViewModel.data == nil,
               !fantasyViewModel.isLoading,
               !fantasyViewModel.isRefreshing,

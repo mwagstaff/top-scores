@@ -595,7 +595,7 @@ struct FantasyView: View {
     ) -> some View {
         let currentScore = data.resolvedCurrentScore
         let displayedScore = data.isEstimatedScore ? "\(currentScore)*" : "\(currentScore)"
-        let rivalPills = rivalScorePills()
+        let rivalPills = data.hasStartedFixturesInGameweek ? rivalScorePills() : []
         let visibleRivalPills = Array(rivalPills.prefix(3))
         let hiddenRivalCount = max(0, rivalPills.count - visibleRivalPills.count)
 
@@ -603,26 +603,33 @@ struct FantasyView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(data.gameweekTitle)
                     .font(.headline)
-                    .padding(.bottom, 5)
+                if showRivalPills {
+                    FantasyTransferDeadlineLabel(
+                        gameweekID: data.deadlineGameweekID,
+                        deadlineTime: data.deadlineTime
+                    )
+                        .padding(.bottom, visibleRivalPills.isEmpty ? 1 : 3)
+                }
                 if showRivalPills && !visibleRivalPills.isEmpty {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 5) {
                         ForEach(visibleRivalPills) { pill in
                             Button {
                                 openRivalFromScorePill(entryID: pill.entryID)
                             } label: {
                                 HStack(spacing: 0) {
                                     Text(pill.initials)
-                                        .font(.caption2.weight(.semibold))
+                                        .font(.system(size: 10, weight: .semibold))
                                         .foregroundStyle(.white)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 5)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 4)
                                         .background(rivalInitialsColor(for: pill.initials))
 
                                     Text("\(pill.score)")
-                                        .font(.caption.monospacedDigit().weight(.semibold))
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                        .monospacedDigit()
                                         .foregroundStyle(.primary)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 5)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 4)
                                         .background(Color(.tertiarySystemGroupedBackground))
                                 }
                                 .clipShape(Capsule(style: .continuous))
@@ -639,7 +646,7 @@ struct FantasyView: View {
                                 moreRivalsTapAction()
                             } label: {
                                 Text("+\(hiddenRivalCount)")
-                                    .font(.caption.weight(.semibold))
+                                    .font(.caption2.weight(.semibold))
                                     .foregroundStyle(Color.accentColor)
                                     .underline()
                                     .padding(.horizontal, 4)
@@ -3413,6 +3420,121 @@ private struct FantasyScoreLozenge: View {
             isPulsing = newValue
         }
     }
+}
+
+private struct FantasyTransferDeadlineLabel: View {
+    let gameweekID: Int?
+    let deadlineTime: String?
+
+    var body: some View {
+        if let deadline = Self.parseDeadline(deadlineTime) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(Self.displayText(deadline: deadline, gameweekID: gameweekID, now: context.date))
+                    .font(.caption2.monospacedDigit().weight(.medium))
+                    .foregroundStyle(Self.labelColor(deadline: deadline, now: context.date))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private static func displayText(deadline: Date, gameweekID: Int?, now: Date) -> String {
+        let calendar = Calendar.autoupdatingCurrent
+        let weekday = weekdayFormatter.string(from: deadline)
+        let day = calendar.component(.day, from: deadline)
+        let time = timeFormatter.string(from: deadline)
+        let prefix = prefixText(
+            gameweekID: gameweekID,
+            weekday: weekday,
+            day: day,
+            time: time
+        )
+
+        let remainingInterval = deadline.timeIntervalSince(now)
+        guard remainingInterval > 0 else {
+            return prefix
+        }
+
+        if remainingInterval >= 24 * 60 * 60 {
+            let remainingDays = max(1, Int(floor(remainingInterval / (24 * 60 * 60))))
+            let dayLabel = remainingDays == 1 ? "day" : "days"
+            return "\(prefix) (\(remainingDays) \(dayLabel))"
+        }
+
+        let remainingSeconds = Int(remainingInterval)
+        let hours = remainingSeconds / 3600
+        let minutes = (remainingSeconds % 3600) / 60
+        let seconds = remainingSeconds % 60
+        return "\(prefix) (\(String(format: "%02d:%02d:%02d", hours, minutes, seconds)))"
+    }
+
+    private static func prefixText(gameweekID: Int?, weekday: String, day: Int, time: String) -> String {
+        if let gameweekID {
+            return "GW \(gameweekID) deadline: \(weekday) \(day)\(ordinalSuffix(for: day)), \(time)"
+        }
+        return "Deadline: \(weekday) \(day)\(ordinalSuffix(for: day)), \(time)"
+    }
+
+    private static func labelColor(deadline: Date, now: Date) -> Color {
+        let remainingSeconds = deadline.timeIntervalSince(now)
+        if remainingSeconds > 5 * 24 * 60 * 60 {
+            return Color.white.opacity(0.58)
+        }
+        return Color.white.opacity(0.94)
+    }
+
+    private static func parseDeadline(_ rawValue: String?) -> Date? {
+        let trimmed = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let date = deadlineFormatterWithFractionalSeconds.date(from: trimmed) {
+            return date
+        }
+        return deadlineFormatter.date(from: trimmed)
+    }
+
+    private static func ordinalSuffix(for day: Int) -> String {
+        let remainder100 = day % 100
+        if remainder100 >= 11 && remainder100 <= 13 {
+            return "th"
+        }
+
+        switch day % 10 {
+        case 1:
+            return "st"
+        case 2:
+            return "nd"
+        case 3:
+            return "rd"
+        default:
+            return "th"
+        }
+    }
+
+    private static let deadlineFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let deadlineFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private static let weekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.setLocalizedDateFormatFromTemplate("EEEE")
+        return formatter
+    }()
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB_POSIX")
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
 }
 
 struct FantasySelectedPlayerSelection: Identifiable {
