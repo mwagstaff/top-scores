@@ -13,6 +13,7 @@ struct Top_ScoresApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var preferences = PreferencesStore()
     @StateObject private var matchesStore = MatchesStore()
+    @StateObject private var fantasyViewModel = FantasyViewModel()
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     init() {
@@ -28,6 +29,7 @@ struct Top_ScoresApp: App {
             ContentView()
                 .environmentObject(preferences)
                 .environmentObject(matchesStore)
+                .environmentObject(fantasyViewModel)
                 .task {
                     async let leagueTablesWarmTask: Void = LeagueTablesCatalog.shared.prefetch(
                         apiBaseURL: preferences.snapshot.apiBaseURL

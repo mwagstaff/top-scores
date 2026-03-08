@@ -7,13 +7,12 @@ struct FantasyView: View {
     let isSelected: Bool
 
     @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @AppStorage(StorageKeys.managerEntryID) private var managerEntryID = ""
     @AppStorage(StorageKeys.rivalManagersJSON) private var rivalManagersJSON = "[]"
     @AppStorage(StorageKeys.trackedLeaguesJSON) private var trackedLeaguesJSON = "[]"
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
-
-    @StateObject private var fantasyViewModel = FantasyViewModel()
 
     @State private var managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
     @State private var shareImportStatusMessage: String?
@@ -3795,4 +3794,5 @@ private struct FantasyShareAppIconView: View {
 #Preview {
     FantasyView(isSelected: true)
         .environmentObject(PreferencesStore())
+        .environmentObject(FantasyViewModel())
 }

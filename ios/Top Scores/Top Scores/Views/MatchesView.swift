@@ -65,6 +65,8 @@ struct MatchesView: View {
 
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var matchesStore: MatchesStore
+    @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var predictionDateKeys = FixturePredictionStore.storedDateKeys()
@@ -162,6 +164,7 @@ struct MatchesView: View {
             matchesStore.configure(with: snapshot, mode: mode)
             let days = matchesStore.groupedMatches
             rebuildSearchIndex(from: days)
+            ensureFantasySquadLoadedIfNeeded()
             reportMissingTeamLogosIfNeeded(days: days)
             predictionDateKeys = FixturePredictionStore.storedDateKeys()
             refreshPredictorAvailability(days: days)
@@ -169,6 +172,7 @@ struct MatchesView: View {
         .onChange(of: preferences.snapshot) { _, _ in
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             matchesStore.configure(with: snapshot, mode: mode)
+            ensureFantasySquadLoadedIfNeeded()
             refreshPredictorAvailability(days: matchesStore.groupedMatches)
         }
         .onChange(of: preferences.showAllMatches) { _, newValue in
@@ -187,6 +191,7 @@ struct MatchesView: View {
         }
         .onChange(of: matchesStore.groupedMatches) { _, days in
             rebuildSearchIndex(from: days)
+            ensureFantasySquadLoadedIfNeeded()
             reportMissingTeamLogosIfNeeded(days: days)
             refreshPredictorAvailability(days: days)
         }
@@ -213,6 +218,33 @@ struct MatchesView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(predictionErrorMessage ?? "Unable to generate predictions right now.")
+        }
+    }
+
+    private func ensureFantasySquadLoadedIfNeeded() {
+        guard !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              fantasyViewModel.data == nil,
+              !fantasyViewModel.isLoading,
+              !fantasyViewModel.isRefreshing,
+              matchesStore.groupedMatches.contains(where: { day in
+                  day.leagues.contains(where: { league in
+                      league.matches.contains(where: {
+                          $0.league.trimmingCharacters(in: .whitespacesAndNewlines)
+                              .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+                      })
+                  })
+              })
+        else {
+            return
+        }
+
+        Task {
+            await fantasyViewModel.refresh(
+                managerEntryID: fantasyManagerEntryID,
+                apiBaseURL: preferences.apiBaseURL,
+                rivalManagers: [],
+                trackedLeagues: []
+            )
         }
     }
 
@@ -1689,4 +1721,5 @@ private struct ToastView: View {
     MatchesView(mode: .fixtures)
         .environmentObject(PreferencesStore())
         .environmentObject(MatchesStore())
+        .environmentObject(FantasyViewModel())
 }

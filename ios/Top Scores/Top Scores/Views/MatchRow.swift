@@ -3,6 +3,9 @@ import SwiftUI
 import EventKit
 
 struct MatchRow: View {
+    @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
+
     let match: Match
     var highlightToday: Bool = false
     var showTeamEvents: Bool = false
@@ -98,6 +101,11 @@ struct MatchRow: View {
 
                     TvLogoRow(channels: match.tvChannels)
                         .fixedSize(horizontal: true, vertical: false)
+
+                    if let fantasyBadgeMode {
+                        FantasyMatchParticipationBadge(mode: fantasyBadgeMode)
+                            .padding(.leading, 4)
+                    }
                 }
             }
         }
@@ -132,6 +140,29 @@ struct MatchRow: View {
 
     private var isMatchFinished: Bool {
         match.isFinished
+    }
+
+    private var isPremierLeagueMatch: Bool {
+        match.league.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+    }
+
+    private var fantasyBadgeMode: FantasyMatchParticipationBadge.Mode? {
+        guard !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              isPremierLeagueMatch,
+              let lookup = FantasySquadMembershipLookup(squad: fantasyViewModel.data)
+        else {
+            return nil
+        }
+
+        let participationCount = lookup.participationCount(in: match)
+        guard participationCount > 0 else { return nil }
+
+        if match.isUpcomingScorelessFixture {
+            return .upcoming
+        }
+
+        return .score(lookup.effectiveScore(in: match))
     }
 
     private var scoreAndStatusRow: some View {
@@ -217,8 +248,61 @@ struct MatchRow: View {
     }
 }
 
+private struct FantasyMatchParticipationBadge: View {
+    enum Mode {
+        case upcoming
+        case score(Int)
+    }
+
+    let mode: Mode
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.95, green: 0.20, blue: 0.66),
+                            Color(red: 1.0, green: 0.29, blue: 0.29)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+            Circle()
+                .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
+
+            switch mode {
+            case .upcoming:
+                Image(systemName: "trophy.fill")
+                    .font(.system(size: 13, weight: .black))
+                    .foregroundStyle(Color.white)
+            case .score(let score):
+                Text("\(score)")
+                    .font(.system(size: score >= 10 ? 11 : 12, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.white)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+            .frame(width: 28, height: 28)
+            .shadow(color: Color.red.opacity(0.18), radius: 3, x: 0, y: 1)
+            .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        switch mode {
+        case .upcoming:
+            return "Fantasy players involved"
+        case .score(let score):
+            return "\(score) fantasy points involved"
+        }
+    }
+}
+
 struct MatchDetailView: View {
     @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
 
     let match: Match
     var highlightToday: Bool = false
@@ -275,6 +359,16 @@ struct MatchDetailView: View {
         return home.startingLineup.count == 11 && away.startingLineup.count == 11
     }
 
+    private var isPremierLeagueMatch: Bool {
+        activeMatch.league.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+    }
+
+    private var fantasyHighlightLookup: FantasySquadMembershipLookup? {
+        guard isPremierLeagueMatch else { return nil }
+        return FantasySquadMembershipLookup(squad: fantasyViewModel.data)
+    }
+
     private var tvChannelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if sortedChannels.isEmpty {
@@ -320,7 +414,10 @@ struct MatchDetailView: View {
                 }
 
                 if shouldShowLineupPitch {
-                    MatchLineupPitchSection(match: activeMatch)
+                    MatchLineupPitchSection(
+                        match: activeMatch,
+                        fantasyHighlightLookup: fantasyHighlightLookup
+                    )
                         .padding(.horizontal)
                 }
 
@@ -340,6 +437,7 @@ struct MatchDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             startDetailsRefresh()
+            ensureFantasySquadLoadedIfNeeded()
             reportMissingTeamLogosIfNeeded(for: activeMatch)
         }
         .onDisappear {
@@ -348,6 +446,10 @@ struct MatchDetailView: View {
         }
         .onChange(of: preferences.apiBaseURL) { _, _ in
             startDetailsRefresh()
+            ensureFantasySquadLoadedIfNeeded()
+        }
+        .onChange(of: shouldShowLineupPitch) { _, _ in
+            ensureFantasySquadLoadedIfNeeded()
         }
         .alert(item: $actionAlert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
@@ -470,6 +572,10 @@ struct MatchDetailView: View {
         detailsErrorMessage = nil
 
         guard let detailsID = match.matchDetailsID else {
+            if match.isTestMatch == true {
+                detailedMatch = match
+                return
+            }
             NSLog(
                 "Match details id missing for %@ vs %@ (league=%@ date=%@ time=%@)",
                 match.homeTeam,
@@ -535,6 +641,27 @@ struct MatchDetailView: View {
                     : "Using cached match events."
             }
             return false
+        }
+    }
+
+    private func ensureFantasySquadLoadedIfNeeded() {
+        guard shouldShowLineupPitch,
+              isPremierLeagueMatch,
+              !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              fantasyViewModel.data == nil,
+              !fantasyViewModel.isLoading,
+              !fantasyViewModel.isRefreshing
+        else {
+            return
+        }
+
+        Task {
+            await fantasyViewModel.refresh(
+                managerEntryID: fantasyManagerEntryID,
+                apiBaseURL: preferences.apiBaseURL,
+                rivalManagers: [],
+                trackedLeagues: []
+            )
         }
     }
 
@@ -992,6 +1119,7 @@ private struct MatchTimeStatusView: View {
 
 private struct MatchLineupPitchSection: View {
     let match: Match
+    let fantasyHighlightLookup: FantasySquadMembershipLookup?
 
     var body: some View {
         if let teamLineups = match.teamLineups,
@@ -1014,7 +1142,8 @@ private struct MatchLineupPitchSection: View {
                     homeYellowCards: match.homeYellowCards,
                     awayYellowCards: match.awayYellowCards,
                     homeRedCards: match.homeRedCards,
-                    awayRedCards: match.awayRedCards
+                    awayRedCards: match.awayRedCards,
+                    fantasyHighlightLookup: fantasyHighlightLookup
                 )
             }
         }
@@ -1032,6 +1161,7 @@ private struct MatchLineupPitchView: View {
     let awayYellowCards: [MatchYellowCardEvent]
     let homeRedCards: [MatchRedCardEvent]
     let awayRedCards: [MatchRedCardEvent]
+    let fantasyHighlightLookup: FantasySquadMembershipLookup?
 
     private var homeLookup: MatchLineupEventLookup {
         MatchLineupEventLookup(
@@ -1063,6 +1193,7 @@ private struct MatchLineupPitchView: View {
                     formation: homeLineup.formation,
                     starters: homeLineup.startingLineup,
                     lookup: homeLookup,
+                    fantasyHighlightLookup: fantasyHighlightLookup,
                     side: .home
                 )
 
@@ -1071,6 +1202,7 @@ private struct MatchLineupPitchView: View {
                     formation: awayLineup.formation,
                     starters: awayLineup.startingLineup,
                     lookup: awayLookup,
+                    fantasyHighlightLookup: fantasyHighlightLookup,
                     side: .away
                 )
             }
@@ -1091,6 +1223,7 @@ private struct MatchLineupHalfView: View {
     let formation: String?
     let starters: [MatchLineupPlayer]
     let lookup: MatchLineupEventLookup
+    let fantasyHighlightLookup: FantasySquadMembershipLookup?
     let side: MatchLineupDisplaySide
 
     private var groupedRows: [[MatchLineupPlayer]] {
@@ -1145,6 +1278,7 @@ private struct MatchLineupHalfView: View {
                             player: player,
                             summary: lookup.summary(for: player),
                             replacementSummary: lookup.replacementSummary(for: player),
+                            isFantasyHighlighted: fantasyHighlightLookup?.contains(player: player, teamName: teamName) ?? false,
                             side: side
                         )
                     }
@@ -1175,14 +1309,28 @@ private struct MatchLineupPlayerMarkerView: View {
     let player: MatchLineupPlayer
     let summary: MatchLineupPlayerEventSummary
     let replacementSummary: MatchLineupPlayerEventSummary?
+    let isFantasyHighlighted: Bool
     let side: MatchLineupDisplaySide
 
-    private var circleFill: Color {
-        side == .home ? Color.black.opacity(0.92) : Color.white.opacity(0.94)
+    private var circleFill: AnyShapeStyle {
+        if isFantasyHighlighted {
+            return AnyShapeStyle(LinearGradient(
+                colors: [
+                    Color(red: 0.95, green: 0.20, blue: 0.66),
+                    Color(red: 1.0, green: 0.29, blue: 0.29)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            ))
+        }
+        return AnyShapeStyle(side == .home ? Color.black.opacity(0.92) : Color.white.opacity(0.94))
     }
 
     private var circleText: Color {
-        side == .home ? .white : .black
+        if isFantasyHighlighted {
+            return Color.white
+        }
+        return side == .home ? Color.white : Color.black
     }
 
     private var replacementPlayer: MatchLineupPlayer? {
@@ -1545,6 +1693,96 @@ private struct MatchPlayerNameLookup {
     }
 }
 
+private struct FantasySquadMembershipLookup {
+    private let memberKeys: Set<String>
+    private let teamCounts: [String: Int]
+    private let effectiveScoresByTeam: [String: Int]
+
+    init?(squad: FantasySquadDisplayData?) {
+        guard let squad else { return nil }
+
+        var keys = Set<String>()
+        var counts: [String: Int] = [:]
+        var effectiveScores: [String: Int] = [:]
+        for player in squad.allPlayers {
+            let teamKey = Self.normalizeTeamName(player.teamName)
+            counts[teamKey, default: 0] += 1
+            for nameVariant in Self.nameVariants(
+                fullName: player.fullName,
+                displayName: player.displayName
+            ) {
+                keys.insert("\(teamKey)|\(nameVariant)")
+            }
+        }
+        for contribution in squad.effectivePlayerContributions {
+            let teamKey = Self.normalizeTeamName(contribution.teamName)
+            effectiveScores[teamKey, default: 0] += contribution.points
+        }
+        memberKeys = keys
+        teamCounts = counts
+        effectiveScoresByTeam = effectiveScores
+    }
+
+    func contains(player: MatchLineupPlayer, teamName: String) -> Bool {
+        let teamKey = Self.normalizeTeamName(teamName)
+        let candidateKeys = Self.nameVariants(
+            fullName: player.name,
+            displayName: condensedLineupPlayerName(player.name)
+        )
+        return candidateKeys.contains { memberKeys.contains("\(teamKey)|\($0)") }
+    }
+
+    func participationCount(in match: Match) -> Int {
+        let homeCount = teamCounts[Self.normalizeTeamName(match.homeTeam), default: 0]
+        let awayCount = teamCounts[Self.normalizeTeamName(match.awayTeam), default: 0]
+        return homeCount + awayCount
+    }
+
+    func effectiveScore(in match: Match) -> Int {
+        let homeScore = effectiveScore(for: match.homeTeam)
+        let awayScore = effectiveScore(for: match.awayTeam)
+        return homeScore + awayScore
+    }
+
+    private func effectiveScore(for teamName: String) -> Int {
+        let teamKey = Self.normalizeTeamName(teamName)
+        return effectiveScoresByTeam[teamKey, default: 0]
+    }
+
+    private static func nameVariants(fullName: String, displayName: String) -> Set<String> {
+        var variants = Set<String>()
+        for candidate in [
+            fullName,
+            displayName,
+            condensedLineupPlayerName(fullName),
+            condensedLineupPlayerName(displayName)
+        ] {
+            let normalized = normalizeName(candidate)
+            if !normalized.isEmpty {
+                variants.insert(normalized)
+            }
+        }
+        return variants
+    }
+
+    private static func normalizeTeamName(_ value: String) -> String {
+        let resolved = FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: value)
+        return normalizeName(resolved)
+    }
+
+    private static func normalizeName(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "(c)", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: "-", with: " ")
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+            .joined(separator: " ")
+    }
+}
+
 private func condensedLineupPlayerName(_ value: String) -> String {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return trimmed }
@@ -1649,5 +1887,6 @@ private struct TvChannelRow: View {
 
 #Preview {
     MatchRow(match: Match(date: "2026-02-11", time: "19:45", homeTeam: "Arsenal", awayTeam: "Chelsea", league: "Premier League", tvChannels: ["NBC", "Peacock"]))
+        .environmentObject(FantasyViewModel())
         .padding()
 }

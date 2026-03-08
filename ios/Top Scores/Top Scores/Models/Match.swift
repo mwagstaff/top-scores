@@ -68,6 +68,11 @@ struct MatchRedCardEvent: Codable, Hashable {
     let player: String
     let redCardTimes: [String]
 
+    init(player: String, redCardTimes: [String]) {
+        self.player = player
+        self.redCardTimes = redCardTimes
+    }
+
     enum CodingKeys: String, CodingKey {
         case player
         case redCardTimes = "red_card_times"
@@ -92,6 +97,11 @@ struct MatchRedCardEvent: Codable, Hashable {
 struct MatchYellowCardEvent: Codable, Hashable {
     let player: String
     let yellowCardTimes: [String]
+
+    init(player: String, yellowCardTimes: [String]) {
+        self.player = player
+        self.yellowCardTimes = yellowCardTimes
+    }
 
     enum CodingKeys: String, CodingKey {
         case player

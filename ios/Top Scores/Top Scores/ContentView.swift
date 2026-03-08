@@ -54,4 +54,5 @@ struct ContentView: View {
     ContentView()
         .environmentObject(PreferencesStore())
         .environmentObject(MatchesStore())
+        .environmentObject(FantasyViewModel())
 }
