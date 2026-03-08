@@ -72,6 +72,14 @@ enum SharedMatchesBridge {
         defaults.set(snapshot.matchGroupSortOrder.rawValue, forKey: AppGroupConfig.matchGroupSortOrderKey)
     }
 
+    static func clear() {
+        guard let url = sharedFileURL else { return }
+        if FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.removeItem(at: url)
+        }
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
     private static var sharedFileURL: URL? {
         FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: AppGroupConfig.identifier)?

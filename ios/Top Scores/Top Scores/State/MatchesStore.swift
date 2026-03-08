@@ -318,6 +318,7 @@ final class MatchesStore: ObservableObject {
     ]
     private var cachedBbcLiveMatches: [BbcMatch] = []
     private var bbcLiveLastFetchedAt: Date?
+    private var cacheStateLastFetchedAt: Date?
     private var bbcLiveRefreshTask: Task<Void, Never>?
     private var teamRankingsRefreshTask: Task<Void, Never>?
     private var teamRatingLookup = TeamRatingLookup(
@@ -327,6 +328,7 @@ final class MatchesStore: ObservableObject {
 
     private let liveRefreshInterval: TimeInterval = 30
     private let bbcLiveRefreshInterval: TimeInterval = 90
+    private let cacheStateRefreshInterval: TimeInterval = 30
     private let pageSize = 120
     // Results are filtered client-side after paging; advance a few pages to avoid empty-first-page windows.
     private let resultsAutoAdvancePageLimit = 8
@@ -397,6 +399,11 @@ final class MatchesStore: ObservableObject {
             return
         }
 
+        let client = APIClient(baseURL: baseURL)
+        if reset {
+            await reconcileServerCacheStateIfNeeded(client: client)
+        }
+
         var current = state(for: mode)
         if current.isLoading { return }
         if !reset && !current.hasMore { return }
@@ -413,7 +420,6 @@ final class MatchesStore: ObservableObject {
         }
 
         do {
-            let client = APIClient(baseURL: baseURL)
             var requestedPage = reset ? 1 : max(1, current.page + 1)
             var pagesFetched = 0
             var nextHasMore = false
@@ -522,6 +528,40 @@ final class MatchesStore: ObservableObject {
             }
             NSLog("Matches refresh failed for mode=%@ error=%@", mode.rawValue, String(describing: error))
             setError("Unable to load matches. Check your API URL or connection.", for: mode)
+        }
+    }
+
+    private func reconcileServerCacheStateIfNeeded(client: APIClient, force: Bool = false) async {
+        guard shouldRefreshCacheState(force: force) else { return }
+        do {
+            let serverState = try await client.fetchCacheState()
+            cacheStateLastFetchedAt = Date()
+            applyCacheInvalidation(MatchCache.applyServerCacheState(serverState))
+        } catch {
+            NSLog("Cache state refresh failed error=%@", String(describing: error))
+        }
+    }
+
+    private func shouldRefreshCacheState(force: Bool = false, now: Date = Date()) -> Bool {
+        if force { return true }
+        guard let last = cacheStateLastFetchedAt else { return true }
+        return now.timeIntervalSince(last) >= cacheStateRefreshInterval
+    }
+
+    private func applyCacheInvalidation(_ invalidation: CacheInvalidationResult) {
+        guard invalidation.hasChanges else { return }
+
+        if invalidation.shouldClearMatchCaches {
+            MatchCache.clear()
+            SharedMatchesBridge.clear()
+            modeStates = [.fixtures: ModeState(), .results: ModeState()]
+        }
+
+        if invalidation.shouldClearBbcLiveCache {
+            cachedBbcLiveMatches = []
+            bbcLiveLastFetchedAt = nil
+            bbcLiveRefreshTask?.cancel()
+            bbcLiveRefreshTask = nil
         }
     }
 
@@ -805,6 +845,9 @@ final class MatchesStore: ObservableObject {
             return existing
         }
         if preferredStatus == incomingStatus && preferredStatus != existingStatus {
+            return incoming
+        }
+        if incoming.isUpcomingScorelessFixture && !existing.isUpcomingScorelessFixture {
             return incoming
         }
         if incoming.hasScore && !existing.hasScore {

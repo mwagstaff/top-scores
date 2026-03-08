@@ -37,6 +37,13 @@ enum BackgroundRefreshManager {
 
             do {
                 let client = APIClient(baseURL: baseURL)
+                if let cacheState = try? await client.fetchCacheState() {
+                    let invalidation = MatchCache.applyServerCacheState(cacheState)
+                    if invalidation.shouldClearMatchCaches {
+                        MatchCache.clear()
+                        SharedMatchesBridge.clear()
+                    }
+                }
                 let response = try await client.fetchMatches(preferences: snapshot)
                 let preferenceFiltered = applyPreferenceFilters(to: response.matches, snapshot: snapshot)
                 let sorted = sortedMatches(preferenceFiltered)

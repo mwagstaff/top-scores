@@ -129,6 +129,16 @@ struct APIClient {
         return try JSONDecoder().decode([String].self, from: data)
     }
 
+    func fetchCacheState() async throws -> CacheGenerationSnapshot {
+        let request = try buildRequest(path: "cache-state", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "cache_state")
+        try validateSuccess(http, data: data, operation: "cache_state")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let payload = try decoder.decode(CacheStateResponse.self, from: data)
+        return payload.generations
+    }
+
     func fetchBbcLiveMatches() async throws -> [BbcMatch] {
         let request = try buildRequest(path: "bbc/live", queryItems: [])
         let (data, http) = try await performRequest(request, operation: "bbc_live")
@@ -665,6 +675,41 @@ struct MatchPageResponse {
 
 private struct MatchStatesRequestBody: Encodable {
     let ids: [String]
+}
+
+private struct CacheStateResponse: Decodable {
+    let updatedAt: Date?
+    let domains: CacheStateDomainsResponse
+
+    enum CodingKeys: String, CodingKey {
+        case updatedAt = "updated_at"
+        case domains
+    }
+
+    var generations: CacheGenerationSnapshot {
+        CacheGenerationSnapshot(
+            matches: domains.matches?.generation ?? 0,
+            matchDetails: domains.matchDetails?.generation ?? 0,
+            bbcLive: domains.bbcLive?.generation ?? 0,
+            updatedAt: updatedAt
+        )
+    }
+}
+
+private struct CacheStateDomainsResponse: Decodable {
+    let matches: CacheStateDomainResponse?
+    let matchDetails: CacheStateDomainResponse?
+    let bbcLive: CacheStateDomainResponse?
+
+    enum CodingKeys: String, CodingKey {
+        case matches
+        case matchDetails = "match_details"
+        case bbcLive = "bbc_live"
+    }
+}
+
+private struct CacheStateDomainResponse: Decodable {
+    let generation: Int
 }
 
 struct LeagueTablesResponse: Codable, Hashable {

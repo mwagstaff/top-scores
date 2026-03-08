@@ -596,6 +596,29 @@ const OP_DATASET_CLUB_ELO_TEAMS = "club_elo_teams";
 const OP_DATASET_FOOTBALL_DATABASE_TEAMS = "football_database_teams";
 const OP_DATASET_NATIONAL_ELO_TEAMS = "national_elo_teams";
 const OP_DATASET_MISSING_TEAM_LOGOS = "missing_team_logos";
+const OP_DATASET_CACHE_STATE = "cache_state";
+const CACHE_STATE_DOMAINS = Object.freeze(["matches", "match_details", "bbc_live"]);
+const CACHE_STATE_DOMAIN_ALIASES = Object.freeze({
+  matches: "matches",
+  match: "matches",
+  fixture: "matches",
+  fixtures: "matches",
+  result: "matches",
+  results: "matches",
+  match_details: "match_details",
+  "match-details": "match_details",
+  matchdetails: "match_details",
+  details: "match_details",
+  bbc_live: "bbc_live",
+  "bbc-live": "bbc_live",
+  bbclive: "bbc_live",
+  bbc: "bbc_live",
+});
+const CACHE_STATE_HEADERS_BY_DOMAIN = Object.freeze({
+  matches: "X-Cache-Generation-Matches",
+  match_details: "X-Cache-Generation-Match-Details",
+  bbc_live: "X-Cache-Generation-Bbc-Live",
+});
 const eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
 eventLoopDelayMonitor.enable();
 
@@ -707,6 +730,7 @@ const matchDetailsWarmTasks = new Map();
 let matchDetailsSnapshotWarmTask = null;
 const matchDetailsActiveRefreshUntilById = new Map();
 const matchDetailsBackfillNextAttemptAt = new Map();
+let operationalCacheState = buildDefaultOperationalCacheState();
 let missingTeamLogosByKey = new Map();
 let missingTeamLogosLastUpdated = null;
 let cachedFantasyBootstrap = null;
@@ -7786,6 +7810,188 @@ async function persistOperationalMatchDetailsSafe(recordsById, options = {}) {
   }
 }
 
+function normalizeCacheStateGeneration(value, fallback = 1) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : fallback;
+}
+
+function normalizeCacheStateLabel(value, fallback) {
+  const normalized = String(value || "").trim();
+  return normalized || fallback;
+}
+
+function buildCacheStateDomainSnapshot(options = {}) {
+  return {
+    generation: normalizeCacheStateGeneration(options.generation, 1),
+    updated_at: options.updated_at || null,
+    reason: normalizeCacheStateLabel(options.reason, "initial_seed"),
+    source: normalizeCacheStateLabel(options.source, "startup"),
+  };
+}
+
+function buildDefaultOperationalCacheState(nowIso = new Date().toISOString()) {
+  return {
+    updated_at: nowIso,
+    domains: {
+      matches: buildCacheStateDomainSnapshot({
+        generation: 1,
+        updated_at: nowIso,
+      }),
+      match_details: buildCacheStateDomainSnapshot({
+        generation: 1,
+        updated_at: nowIso,
+      }),
+      bbc_live: buildCacheStateDomainSnapshot({
+        generation: 1,
+        updated_at: nowIso,
+      }),
+    },
+  };
+}
+
+function normalizeOperationalCacheState(payload, fallbackUpdatedAt = null) {
+  const base = buildDefaultOperationalCacheState(
+    fallbackUpdatedAt || new Date().toISOString()
+  );
+  if (!payload || typeof payload !== "object") {
+    return base;
+  }
+
+  const payloadDomains =
+    payload.domains && typeof payload.domains === "object" ? payload.domains : payload;
+  const next = {
+    updated_at: payload.updated_at || base.updated_at,
+    domains: {},
+  };
+
+  CACHE_STATE_DOMAINS.forEach((domain) => {
+    const domainPayload =
+      payloadDomains && typeof payloadDomains[domain] === "object"
+        ? payloadDomains[domain]
+        : null;
+    const fallbackDomain = base.domains[domain];
+    next.domains[domain] = buildCacheStateDomainSnapshot({
+      generation:
+        domainPayload && domainPayload.generation !== undefined
+          ? domainPayload.generation
+          : fallbackDomain.generation,
+      updated_at:
+        (domainPayload && domainPayload.updated_at) ||
+        payload.updated_at ||
+        fallbackDomain.updated_at,
+      reason:
+        (domainPayload && domainPayload.reason) || fallbackDomain.reason,
+      source:
+        (domainPayload && domainPayload.source) || fallbackDomain.source,
+    });
+  });
+
+  next.updated_at =
+    payload.updated_at ||
+    newestIsoTimestamp(
+      CACHE_STATE_DOMAINS.map((domain) => next.domains[domain].updated_at)
+    ) ||
+    base.updated_at;
+
+  return next;
+}
+
+function currentCacheStateSnapshot() {
+  return normalizeOperationalCacheState(
+    operationalCacheState,
+    operationalCacheState && operationalCacheState.updated_at
+      ? operationalCacheState.updated_at
+      : null
+  );
+}
+
+function normalizeCacheStateDomains(input) {
+  if (input === undefined || input === null) {
+    return {
+      domains: CACHE_STATE_DOMAINS.slice(),
+      invalid: [],
+    };
+  }
+
+  const rawValues = Array.isArray(input) ? input : [input];
+  const domains = [];
+  const invalid = [];
+  const seen = new Set();
+
+  rawValues.forEach((value) => {
+    const normalizedKey = String(value || "").trim().toLowerCase();
+    if (!normalizedKey) return;
+    const domain = CACHE_STATE_DOMAIN_ALIASES[normalizedKey] || null;
+    if (!domain) {
+      invalid.push(String(value));
+      return;
+    }
+    if (seen.has(domain)) return;
+    seen.add(domain);
+    domains.push(domain);
+  });
+
+  return { domains, invalid };
+}
+
+function bumpCacheStateSnapshot(existingState, domains, options = {}) {
+  const base = normalizeOperationalCacheState(existingState);
+  const normalized = normalizeCacheStateDomains(domains);
+  const selectedDomains = normalized.domains.length
+    ? normalized.domains
+    : CACHE_STATE_DOMAINS.slice();
+  const updatedAt = options.updated_at || new Date().toISOString();
+  const reason = normalizeCacheStateLabel(options.reason, "manual_invalidation");
+  const source = normalizeCacheStateLabel(options.source, "admin_api");
+  const next = {
+    updated_at: updatedAt,
+    domains: {},
+  };
+
+  CACHE_STATE_DOMAINS.forEach((domain) => {
+    next.domains[domain] = { ...base.domains[domain] };
+  });
+
+  selectedDomains.forEach((domain) => {
+    const previous = base.domains[domain] || buildCacheStateDomainSnapshot();
+    next.domains[domain] = buildCacheStateDomainSnapshot({
+      generation: previous.generation + 1,
+      updated_at: updatedAt,
+      reason,
+      source,
+    });
+  });
+
+  return next;
+}
+
+function invalidateCacheDomains(domains, options = {}) {
+  const nextState = bumpCacheStateSnapshot(operationalCacheState, domains, options);
+  operationalCacheState = nextState;
+  void persistOperationalDatasetSafe(OP_DATASET_CACHE_STATE, nextState, {
+    updated_at: nextState.updated_at || new Date().toISOString(),
+    source: normalizeCacheStateLabel(options.source, "admin_api"),
+  });
+  return currentCacheStateSnapshot();
+}
+
+function setOperationalCacheStateHeaders(res, state = operationalCacheState) {
+  const snapshot = normalizeOperationalCacheState(state);
+  if (snapshot.updated_at) {
+    res.set("X-Cache-State-Updated-At", snapshot.updated_at);
+  }
+  CACHE_STATE_DOMAINS.forEach((domain) => {
+    const headerName = CACHE_STATE_HEADERS_BY_DOMAIN[domain];
+    const generation =
+      snapshot.domains &&
+      snapshot.domains[domain] &&
+      snapshot.domains[domain].generation !== undefined
+        ? snapshot.domains[domain].generation
+        : 1;
+    res.set(headerName, String(generation));
+  });
+}
+
 async function hydrateOperationalStateFromRedis() {
   try {
     const datasetRecords = await getOperationalDatasets([
@@ -7800,6 +8006,7 @@ async function hydrateOperationalStateFromRedis() {
       OP_DATASET_FOOTBALL_DATABASE_TEAMS,
       OP_DATASET_NATIONAL_ELO_TEAMS,
       OP_DATASET_MISSING_TEAM_LOGOS,
+      OP_DATASET_CACHE_STATE,
     ]);
     const matchDetailsSnapshot = await getAllOperationalMatchDetails();
 
@@ -7898,6 +8105,14 @@ async function hydrateOperationalStateFromRedis() {
       missingTeamLogosLastUpdated = missingLogosRecord.updated_at || missingTeamLogosLastUpdated;
     }
 
+    const cacheStateRecord = datasetRecords[OP_DATASET_CACHE_STATE];
+    if (cacheStateRecord && cacheStateRecord.payload && typeof cacheStateRecord.payload === "object") {
+      operationalCacheState = normalizeOperationalCacheState(
+        cacheStateRecord.payload,
+        cacheStateRecord.updated_at || null
+      );
+    }
+
     if (matchDetailsSnapshot && matchDetailsSnapshot.records) {
       const entries = Object.entries(matchDetailsSnapshot.records);
       matchDetailsById = new Map(entries);
@@ -7927,6 +8142,7 @@ async function hydrateOperationalStateFromRedis() {
         football_database_teams: cachedFootballDatabaseTeams.length,
         national_elo_teams: cachedNationalEloTeams.length,
         match_details: matchDetailsById.size,
+        cache_state_updated_at: operationalCacheState.updated_at,
       })
     );
   } catch (error) {
@@ -7985,6 +8201,11 @@ async function persistStartupOperationalStateFromDisk() {
     }),
     persistOperationalDatasetSafe(OP_DATASET_MISSING_TEAM_LOGOS, sortedMissingTeamLogoNames(), {
       updated_at: missingTeamLogosLastUpdated || new Date().toISOString(),
+      source: "startup_disk_seed",
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_CACHE_STATE, currentCacheStateSnapshot(), {
+      updated_at:
+        (operationalCacheState && operationalCacheState.updated_at) || new Date().toISOString(),
       source: "startup_disk_seed",
     }),
     persistOperationalMatchDetailsSafe(Object.fromEntries(matchDetailsById), {
@@ -8155,6 +8376,7 @@ const ADMIN_OPERATIONAL_DATASET_NAMES = [
   OP_DATASET_FOOTBALL_DATABASE_TEAMS,
   OP_DATASET_NATIONAL_ELO_TEAMS,
   OP_DATASET_LEAGUE_TABLES,
+  OP_DATASET_CACHE_STATE,
 ];
 
 function toOperationalAdminMatchPayload(payload) {
@@ -10221,6 +10443,7 @@ function toAdminResultMatchPayload(detailsPayload, fallbackMatchRecord = null, f
 function setCacheOnlyHeaders(res) {
   res.set("X-Data-Source", APP_DATA_SOURCE);
   res.set("X-External-Dependency", "none");
+  setOperationalCacheStateHeaders(res);
 }
 
 app.get("/", (_req, res) => {
@@ -10251,6 +10474,45 @@ app.get("/admin/results/:matchId", (_req, res) => {
 
 app.get(["/healthcheck", `${API_PREFIX}/healthcheck`], (_req, res) => {
   res.json({ status: "ok" });
+});
+
+app.get(`${API_PREFIX}/cache-state`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+  res.json(currentCacheStateSnapshot());
+});
+
+app.post(`${API_PREFIX}/admin/cache-state/invalidate`, (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const normalized = normalizeCacheStateDomains(req.body && req.body.domains);
+  if (normalized.invalid.length > 0) {
+    res.status(400).json({
+      error: "Invalid cache domains.",
+      invalid_domains: normalized.invalid,
+      allowed_domains: CACHE_STATE_DOMAINS,
+    });
+    return;
+  }
+
+  if (req.body && req.body.domains !== undefined && normalized.domains.length === 0) {
+    res.status(400).json({
+      error: "Expected at least one cache domain when domains is provided.",
+      allowed_domains: CACHE_STATE_DOMAINS,
+    });
+    return;
+  }
+
+  const nextState = invalidateCacheDomains(normalized.domains, {
+    reason: req.body && req.body.reason ? req.body.reason : "manual_invalidation",
+    source: "admin_api",
+  });
+
+  res.status(202).json({
+    success: true,
+    invalidated_domains:
+      normalized.domains.length > 0 ? normalized.domains : CACHE_STATE_DOMAINS,
+    cache_state: nextState,
+  });
 });
 
 app.post(`${API_PREFIX}/app-metrics`, (req, res) => {
@@ -13960,16 +14222,29 @@ app.post(`${API_PREFIX}/notifications/test`, async (req, res) => {
 // ===== End User Preferences Endpoints =====
 
 async function seedOperationalStateFromDiskIfNeeded() {
-  const [mergedDataset, clubEloDataset, footballDatabaseDataset, nationalEloDataset, matchDetailsSummary] = await Promise.all([
+  const [
+    mergedDataset,
+    clubEloDataset,
+    footballDatabaseDataset,
+    nationalEloDataset,
+    cacheStateDataset,
+    matchDetailsSummary,
+  ] = await Promise.all([
     loadOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES),
     loadOperationalDatasetSafe(OP_DATASET_CLUB_ELO_TEAMS),
     loadOperationalDatasetSafe(OP_DATASET_FOOTBALL_DATABASE_TEAMS),
     loadOperationalDatasetSafe(OP_DATASET_NATIONAL_ELO_TEAMS),
+    loadOperationalDatasetSafe(OP_DATASET_CACHE_STATE),
     getOperationalMatchDetailsSummary(),
   ]);
   const hasMergedState =
     mergedDataset && Array.isArray(mergedDataset.payload) && mergedDataset.payload.length > 0;
   const hasMatchDetails = Number(matchDetailsSummary && matchDetailsSummary.total) > 0;
+  const hasCacheState = Boolean(
+    cacheStateDataset &&
+      cacheStateDataset.payload &&
+      typeof cacheStateDataset.payload === "object"
+  );
   const hasClubEloState =
     clubEloDataset && Array.isArray(clubEloDataset.payload) && clubEloDataset.payload.length > 0;
   const hasClubEloSeedData = Array.isArray(cachedClubEloTeams) && cachedClubEloTeams.length > 0;
@@ -13987,7 +14262,14 @@ async function seedOperationalStateFromDiskIfNeeded() {
   const footballDatabaseReady =
     hasFootballDatabaseState || !hasFootballDatabaseSeedData;
   const nationalEloReady = hasNationalEloState || !hasNationalEloSeedData;
-  if (hasMergedState && hasMatchDetails && clubEloReady && footballDatabaseReady && nationalEloReady) {
+  if (
+    hasMergedState &&
+    hasMatchDetails &&
+    hasCacheState &&
+    clubEloReady &&
+    footballDatabaseReady &&
+    nationalEloReady
+  ) {
     return { seeded: false, reason: "redis_has_state" };
   }
 
@@ -14364,5 +14646,9 @@ module.exports = {
     normalizeTeamName,
     matchDetailsIdFromUrl,
     filterStaleBbcMatches,
+    buildDefaultOperationalCacheState,
+    normalizeCacheStateDomains,
+    normalizeOperationalCacheState,
+    bumpCacheStateSnapshot,
   },
 };

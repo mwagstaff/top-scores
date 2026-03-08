@@ -286,6 +286,17 @@ struct Match: Identifiable, Codable, Hashable {
         return MatchStatusFormatter.isFinished(scoreStatus)
     }
 
+    var isUpcomingScorelessFixture: Bool {
+        Self.isUpcomingScorelessFixture(
+            date: date,
+            time: time,
+            homeScore: homeScore,
+            awayScore: awayScore,
+            scoreStatus: scoreStatus,
+            inProgress: nil
+        )
+    }
+
     var displayLeague: String {
         if let subcategory = leagueSubcategory, !subcategory.isEmpty {
             return "\(league): \(subcategory)"
@@ -415,6 +426,16 @@ struct Match: Identifiable, Codable, Hashable {
     }
 
     func withDetails(_ details: MatchDetailsPayload) -> Match {
+        let nextDate = details.date ?? date
+        let nextTime = details.time ?? time
+        let shouldClearScores = Self.isUpcomingScorelessFixture(
+            date: nextDate,
+            time: nextTime,
+            homeScore: details.homeScore,
+            awayScore: details.awayScore,
+            scoreStatus: details.scoreStatus,
+            inProgress: details.inProgress
+        )
         let mergedScoreStatus = MatchStatusFormatter.preferredStatus(
             current: scoreStatus,
             incoming: details.scoreStatus
@@ -430,11 +451,11 @@ struct Match: Identifiable, Codable, Hashable {
             detailsURL: details.detailsURL ?? detailsURL,
             matchDetailsID: details.id,
             tvChannels: tvChannels,
-            homeScore: details.homeScore ?? homeScore,
-            awayScore: details.awayScore ?? awayScore,
-            aggregateHomeScore: details.aggregateHomeScore ?? aggregateHomeScore,
-            aggregateAwayScore: details.aggregateAwayScore ?? aggregateAwayScore,
-            scoreStatus: mergedScoreStatus,
+            homeScore: shouldClearScores ? nil : (details.homeScore ?? homeScore),
+            awayScore: shouldClearScores ? nil : (details.awayScore ?? awayScore),
+            aggregateHomeScore: shouldClearScores ? nil : (details.aggregateHomeScore ?? aggregateHomeScore),
+            aggregateAwayScore: shouldClearScores ? nil : (details.aggregateAwayScore ?? aggregateAwayScore),
+            scoreStatus: shouldClearScores ? nil : mergedScoreStatus,
             homeGoalScorers: details.homeGoalScorers,
             awayGoalScorers: details.awayGoalScorers,
             homeAssists: details.homeAssists,
@@ -481,6 +502,34 @@ struct Match: Identifiable, Codable, Hashable {
         guard let base else { return nil }
         guard let previousScore else { return base }
         return base + (nextScore - previousScore)
+    }
+
+    private static func isUpcomingScorelessFixture(
+        date: String,
+        time: String,
+        homeScore: Int?,
+        awayScore: Int?,
+        scoreStatus: String?,
+        inProgress: Bool?,
+        now: Date = Date()
+    ) -> Bool {
+        guard homeScore == nil, awayScore == nil else { return false }
+        guard inProgress != true else { return false }
+
+        let normalizedStatus = scoreStatus?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        if let normalizedStatus, !normalizedStatus.isEmpty {
+            if MatchStatusFormatter.isInProgress(normalizedStatus) ||
+                MatchStatusFormatter.isFinished(normalizedStatus) {
+                return false
+            }
+        }
+
+        guard let kickoff = MatchDateParser.shared.parse(date: date, time: time) else {
+            return normalizedStatus == nil || normalizedStatus?.isEmpty == true
+        }
+        return kickoff.timeIntervalSince(now) > -(15 * 60)
     }
 }
 

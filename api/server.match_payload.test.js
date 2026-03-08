@@ -16,6 +16,10 @@ const {
     resolveStableMatchScoreStatus,
     withStableMatchDetailsState,
     filterStaleBbcMatches,
+    buildDefaultOperationalCacheState,
+    normalizeCacheStateDomains,
+    normalizeOperationalCacheState,
+    bumpCacheStateSnapshot,
   },
 } = require("./server");
 
@@ -234,6 +238,51 @@ test("filterStaleBbcMatches accepts a corrected scoreless kickoff fixture over s
   assert.equal(filtered[0].home_score, null);
   assert.equal(filtered[0].away_score, null);
   assert.equal(filtered[0].match_time, "12:00");
+});
+
+test("normalizeCacheStateDomains resolves aliases and rejects unknown values", () => {
+  const normalized = normalizeCacheStateDomains(["fixtures", "match-details", "bbc", "bogus"]);
+
+  assert.deepStrictEqual(normalized.domains, ["matches", "match_details", "bbc_live"]);
+  assert.deepStrictEqual(normalized.invalid, ["bogus"]);
+});
+
+test("bumpCacheStateSnapshot increments only requested cache generations", () => {
+  const base = buildDefaultOperationalCacheState("2026-03-08T09:00:00.000Z");
+  const bumped = bumpCacheStateSnapshot(base, ["matches", "bbc_live"], {
+    updated_at: "2026-03-08T09:05:00.000Z",
+    reason: "incident_fix",
+    source: "admin_api",
+  });
+
+  assert.equal(bumped.domains.matches.generation, base.domains.matches.generation + 1);
+  assert.equal(
+    bumped.domains.match_details.generation,
+    base.domains.match_details.generation
+  );
+  assert.equal(bumped.domains.bbc_live.generation, base.domains.bbc_live.generation + 1);
+  assert.equal(bumped.domains.matches.reason, "incident_fix");
+  assert.equal(bumped.domains.bbc_live.source, "admin_api");
+  assert.equal(bumped.updated_at, "2026-03-08T09:05:00.000Z");
+});
+
+test("normalizeOperationalCacheState backfills missing domains", () => {
+  const normalized = normalizeOperationalCacheState({
+    updated_at: "2026-03-08T09:10:00.000Z",
+    domains: {
+      matches: {
+        generation: 4,
+        updated_at: "2026-03-08T09:10:00.000Z",
+        reason: "manual",
+        source: "admin_api",
+      },
+    },
+  });
+
+  assert.equal(normalized.domains.matches.generation, 4);
+  assert.equal(normalized.domains.match_details.generation, 1);
+  assert.equal(normalized.domains.bbc_live.generation, 1);
+  assert.equal(normalized.updated_at, "2026-03-08T09:10:00.000Z");
 });
 
 test("toMatchListPayload resolves match_details_id from details lookup when list row lacks details_url", () => {
