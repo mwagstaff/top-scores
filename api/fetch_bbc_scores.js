@@ -1160,12 +1160,24 @@ function parseFormationPositionMap($teamPlayersSection, $) {
   const $formation = $teamPlayersSection.find("[data-testid='formation-container']").first();
   if (!$formation.length) return positions;
 
-  $formation.find("[data-testid='player-notation-circle']").each((_, el) => {
-    const notation = parseLineupPlayerNotation($(el), $);
-    if (!notation || !notation.position_category || !Number.isFinite(notation.number)) return;
-    if (!positions.has(notation.number)) {
-      positions.set(notation.number, notation.position_category);
-    }
+  $formation.find(".FormationRows > li, ul li").each((rowIndex, rowEl) => {
+    const $row = $(rowEl);
+    const rowPlayers = $row.find("[data-testid='player-notation-circle']").toArray();
+    const rowSize = rowPlayers.length;
+    if (!rowSize) return;
+
+    rowPlayers.forEach((playerEl, slotIndex) => {
+      const notation = parseLineupPlayerNotation($(playerEl), $);
+      if (!notation || !Number.isFinite(notation.number)) return;
+      if (!positions.has(notation.number)) {
+        positions.set(notation.number, {
+          position_category: notation.position_category || null,
+          formation_row_index: rowIndex,
+          formation_slot_index: slotIndex,
+          formation_row_size: rowSize,
+        });
+      }
+    });
   });
 
   return positions;
@@ -1218,7 +1230,24 @@ function parseTeamLineupBlock(nodes, $, explicitSide = null, explicitTeam = null
     number: player.number,
     name: player.name,
     position_category:
-      positionsByNumber.get(player.number) || player.position_category || null,
+      (positionsByNumber.get(player.number) && positionsByNumber.get(player.number).position_category) ||
+      player.position_category ||
+      null,
+    formation_row_index:
+      positionsByNumber.get(player.number) &&
+      Number.isFinite(positionsByNumber.get(player.number).formation_row_index)
+        ? positionsByNumber.get(player.number).formation_row_index
+        : null,
+    formation_slot_index:
+      positionsByNumber.get(player.number) &&
+      Number.isFinite(positionsByNumber.get(player.number).formation_slot_index)
+        ? positionsByNumber.get(player.number).formation_slot_index
+        : null,
+    formation_row_size:
+      positionsByNumber.get(player.number) &&
+      Number.isFinite(positionsByNumber.get(player.number).formation_row_size)
+        ? positionsByNumber.get(player.number).formation_row_size
+        : null,
   }));
 
   const substitutions = startingEntries

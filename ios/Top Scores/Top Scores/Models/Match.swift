@@ -118,6 +118,9 @@ struct MatchLineupPlayer: Codable, Hashable, Identifiable {
     let number: Int
     let name: String
     let positionCategory: String?
+    let formationRowIndex: Int?
+    let formationSlotIndex: Int?
+    let formationRowSize: Int?
 
     var id: String {
         "\(number)|\(normalizedNameKey)"
@@ -131,6 +134,9 @@ struct MatchLineupPlayer: Codable, Hashable, Identifiable {
         case number
         case name
         case positionCategory = "position_category"
+        case formationRowIndex = "formation_row_index"
+        case formationSlotIndex = "formation_slot_index"
+        case formationRowSize = "formation_row_size"
     }
 
     private static func normalizeName(_ value: String) -> String {

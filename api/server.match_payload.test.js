@@ -59,10 +59,13 @@ function detailsPayload(overrides = {}) {
 }
 
 function buildCompleteTeamLineups() {
-  const buildStarter = (number, name, position_category) => ({
+  const buildStarter = (number, name, position_category, formation_row_index, formation_slot_index, formation_row_size) => ({
     number,
     name,
     position_category,
+    formation_row_index,
+    formation_slot_index,
+    formation_row_size,
   });
 
   return {
@@ -71,17 +74,17 @@ function buildCompleteTeamLineups() {
       manager: "Vitor Pereira",
       formation: "4-3-3",
       starting_lineup: [
-        buildStarter(1, "J. Sa", "goalkeeper"),
-        buildStarter(2, "M. Doherty", "defender"),
-        buildStarter(4, "S. Bueno", "defender"),
-        buildStarter(12, "E. Agbadou", "defender"),
-        buildStarter(24, "Toti Gomes", "defender"),
-        buildStarter(3, "R. Ait-Nouri", "midfielder"),
-        buildStarter(7, "André", "midfielder"),
-        buildStarter(8, "João Gomes", "midfielder"),
-        buildStarter(5, "M. Munetsi", "midfielder"),
-        buildStarter(10, "Matheus Cunha", "attacker"),
-        buildStarter(9, "J. Strand Larsen", "attacker"),
+        buildStarter(1, "J. Sa", "goalkeeper", 0, 0, 1),
+        buildStarter(2, "M. Doherty", "defender", 1, 0, 4),
+        buildStarter(4, "S. Bueno", "defender", 1, 1, 4),
+        buildStarter(12, "E. Agbadou", "defender", 1, 2, 4),
+        buildStarter(24, "Toti Gomes", "defender", 1, 3, 4),
+        buildStarter(3, "R. Ait-Nouri", "midfielder", 2, 0, 4),
+        buildStarter(7, "André", "midfielder", 2, 1, 4),
+        buildStarter(8, "João Gomes", "midfielder", 2, 2, 4),
+        buildStarter(5, "M. Munetsi", "midfielder", 2, 3, 4),
+        buildStarter(10, "Matheus Cunha", "attacker", 3, 0, 2),
+        buildStarter(9, "J. Strand Larsen", "attacker", 3, 1, 2),
       ],
       substitutes: [
         { number: 21, name: "Pablo Sarabia" },
@@ -100,17 +103,17 @@ function buildCompleteTeamLineups() {
       manager: "Arne Slot",
       formation: "4-2-3-1",
       starting_lineup: [
-        buildStarter(1, "Alisson", "goalkeeper"),
-        buildStarter(84, "C. Bradley", "defender"),
-        buildStarter(5, "I. Konaté", "defender"),
-        buildStarter(4, "V. van Dijk", "defender"),
-        buildStarter(26, "A. Robertson", "defender"),
-        buildStarter(38, "R. Gravenberch", "midfielder"),
-        buildStarter(10, "A. Mac Allister", "midfielder"),
-        buildStarter(11, "Mohamed Salah", "attacker"),
-        buildStarter(8, "D. Szoboszlai", "midfielder"),
-        buildStarter(18, "C. Gakpo", "attacker"),
-        buildStarter(20, "Diogo Jota", "attacker"),
+        buildStarter(1, "Alisson", "goalkeeper", 0, 0, 1),
+        buildStarter(84, "C. Bradley", "defender", 1, 0, 4),
+        buildStarter(5, "I. Konaté", "defender", 1, 1, 4),
+        buildStarter(4, "V. van Dijk", "defender", 1, 2, 4),
+        buildStarter(26, "A. Robertson", "defender", 1, 3, 4),
+        buildStarter(38, "R. Gravenberch", "midfielder", 2, 0, 2),
+        buildStarter(10, "A. Mac Allister", "midfielder", 2, 1, 2),
+        buildStarter(11, "Mohamed Salah", "attacker", 3, 0, 3),
+        buildStarter(8, "D. Szoboszlai", "midfielder", 3, 1, 3),
+        buildStarter(18, "C. Gakpo", "attacker", 3, 2, 3),
+        buildStarter(20, "Diogo Jota", "attacker", 4, 0, 1),
       ],
       substitutes: [
         { number: 7, name: "L. Díaz" },
@@ -125,6 +128,23 @@ function buildCompleteTeamLineups() {
       ],
     },
   };
+}
+
+function buildStartingLineupFromRows(startNumber, rows) {
+  let offset = 0;
+  return rows.flatMap((row, rowIndex) =>
+    Array.from({ length: row.count }, (_, slotIndex) => {
+      const index = offset++;
+      return {
+        number: startNumber + index,
+        name: `${row.prefix} Player ${index + 1}`,
+        position_category: row.position_category,
+        formation_row_index: rowIndex,
+        formation_slot_index: slotIndex,
+        formation_row_size: row.count,
+      };
+    })
+  );
 }
 
 test("toMatchListPayload upgrades status from match details by match id despite team alias mismatch", () => {
@@ -772,11 +792,12 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
         team: "Mansfield Town",
         manager: "Nigel Clough",
         formation: "3-5-2",
-        starting_lineup: Array.from({ length: 11 }, (_, index) => ({
-          number: index + 1,
-          name: `Home Player ${index + 1}`,
-          position_category: index === 0 ? "goalkeeper" : index < 5 ? "defender" : index < 9 ? "midfielder" : "attacker",
-        })),
+        starting_lineup: buildStartingLineupFromRows(1, [
+          { prefix: "Home", count: 1, position_category: "goalkeeper" },
+          { prefix: "Home", count: 4, position_category: "defender" },
+          { prefix: "Home", count: 4, position_category: "midfielder" },
+          { prefix: "Home", count: 2, position_category: "attacker" },
+        ]),
         substitutes: [{ number: 12, name: "Home Sub 1" }],
         substitutions: [],
       },
@@ -784,11 +805,13 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
         team: "Arsenal",
         manager: "Mikel Arteta",
         formation: "3-5-1-1",
-        starting_lineup: Array.from({ length: 11 }, (_, index) => ({
-          number: index + 20,
-          name: `Away Player ${index + 1}`,
-          position_category: index === 0 ? "goalkeeper" : index < 4 ? "defender" : index < 9 ? "midfielder" : "attacker",
-        })),
+        starting_lineup: buildStartingLineupFromRows(20, [
+          { prefix: "Away", count: 1, position_category: "goalkeeper" },
+          { prefix: "Away", count: 3, position_category: "defender" },
+          { prefix: "Away", count: 5, position_category: "midfielder" },
+          { prefix: "Away", count: 1, position_category: "midfielder" },
+          { prefix: "Away", count: 1, position_category: "attacker" },
+        ]),
         substitutes: [{ number: 40, name: "Away Sub 1" }],
         substitutions: [],
       },
@@ -831,11 +854,12 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
         team: "Mansfield Town",
         manager: "Nigel Clough",
         formation: "3-5-2",
-        starting_lineup: Array.from({ length: 11 }, (_, index) => ({
-          number: index + 1,
-          name: `Home Player ${index + 1}`,
-          position_category: index === 0 ? "goalkeeper" : index < 5 ? "defender" : index < 9 ? "midfielder" : "attacker",
-        })),
+        starting_lineup: buildStartingLineupFromRows(1, [
+          { prefix: "Home", count: 1, position_category: "goalkeeper" },
+          { prefix: "Home", count: 4, position_category: "defender" },
+          { prefix: "Home", count: 4, position_category: "midfielder" },
+          { prefix: "Home", count: 2, position_category: "attacker" },
+        ]),
         substitutes: [{ number: 12, name: "Home Sub 1" }],
         substitutions: [],
       },
@@ -843,11 +867,13 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
         team: "Arsenal",
         manager: "Mikel Arteta",
         formation: "3-5-1-1",
-        starting_lineup: Array.from({ length: 11 }, (_, index) => ({
-          number: index + 20,
-          name: `Away Player ${index + 1}`,
-          position_category: index === 0 ? "goalkeeper" : index < 4 ? "defender" : index < 9 ? "midfielder" : "attacker",
-        })),
+        starting_lineup: buildStartingLineupFromRows(20, [
+          { prefix: "Away", count: 1, position_category: "goalkeeper" },
+          { prefix: "Away", count: 3, position_category: "defender" },
+          { prefix: "Away", count: 5, position_category: "midfielder" },
+          { prefix: "Away", count: 1, position_category: "midfielder" },
+          { prefix: "Away", count: 1, position_category: "attacker" },
+        ]),
         substitutes: [{ number: 40, name: "Away Sub 1" }],
         substitutions: [],
       },

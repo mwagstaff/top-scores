@@ -640,11 +640,11 @@ private struct MatchTeamEventLineView: View {
             if entry.side == .home {
                 MatchEventIconView(kind: entry.event.kind)
                 Text(entry.event.displayMinute)
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                 Text(entry.event.homePlayerAssistText)
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -652,12 +652,12 @@ private struct MatchTeamEventLineView: View {
             } else {
                 Spacer(minLength: 0)
                 Text(entry.event.awayPlayerAssistText)
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(entry.event.displayMinute)
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                 MatchEventIconView(kind: entry.event.kind)
@@ -688,7 +688,7 @@ private struct MatchEventIconView: View {
             }
         }
         .font(.caption2)
-        .frame(width: 16, height: 16, alignment: .center)
+        .frame(width: 18, height: 18, alignment: .center)
     }
 }
 
@@ -1094,6 +1094,25 @@ private struct MatchLineupHalfView: View {
     let side: MatchLineupDisplaySide
 
     private var groupedRows: [[MatchLineupPlayer]] {
+        let playersWithFormationRows = starters.filter { $0.formationRowIndex != nil && $0.formationSlotIndex != nil }
+        if playersWithFormationRows.count == starters.count {
+            let groupedByIndex = Dictionary(grouping: starters) { $0.formationRowIndex ?? 0 }
+            let grouped = groupedByIndex.keys.sorted().compactMap { rowIndex in
+                groupedByIndex[rowIndex]?.sorted {
+                    let leftSlot = $0.formationSlotIndex ?? 0
+                    let rightSlot = $1.formationSlotIndex ?? 0
+                    if leftSlot != rightSlot {
+                        return leftSlot < rightSlot
+                    }
+                    return $0.number < $1.number
+                }
+            }
+            if side == .home {
+                return grouped
+            }
+            return Array(grouped.reversed())
+        }
+
         let goalkeepers = starters.filter { $0.positionCategory == "goalkeeper" }
         let defenders = starters.filter { $0.positionCategory == "defender" }
         let midfielders = starters.filter { $0.positionCategory == "midfielder" }
@@ -1171,7 +1190,7 @@ private struct MatchLineupPlayerMarkerView: View {
     }
 
     private var displayName: String {
-        abbreviatedLineupPlayerName(player.name)
+        condensedLineupPlayerName(player.name)
     }
 
     var body: some View {
@@ -1203,7 +1222,7 @@ private struct MatchLineupPlayerMarkerView: View {
                         .font(.system(size: 10, weight: .heavy, design: .rounded))
                         .foregroundStyle(Color.white.opacity(0.96))
                         .lineLimit(2)
-                        .minimumScaleFactor(0.7)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .multilineTextAlignment(.center)
 
@@ -1213,11 +1232,11 @@ private struct MatchLineupPlayerMarkerView: View {
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(Color(red: 0.21, green: 0.83, blue: 0.39))
 
-                        Text("\(abbreviatedLineupPlayerName(replacementPlayer.name)) (\(replacementPlayer.number))")
+                        Text("\(condensedLineupPlayerName(replacementPlayer.name)) (\(summary.substitution?.minute ?? ""))")
                             .font(.system(size: 10, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.white.opacity(0.92))
                             .lineLimit(2)
-                            .minimumScaleFactor(0.7)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .multilineTextAlignment(.center)
 
@@ -1526,7 +1545,7 @@ private struct MatchPlayerNameLookup {
     }
 }
 
-private func abbreviatedLineupPlayerName(_ value: String) -> String {
+private func condensedLineupPlayerName(_ value: String) -> String {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return trimmed }
 
@@ -1534,21 +1553,28 @@ private func abbreviatedLineupPlayerName(_ value: String) -> String {
     let baseName = trimmed.replacingOccurrences(of: "(c)", with: "", options: .caseInsensitive)
         .trimmingCharacters(in: .whitespacesAndNewlines)
     let parts = baseName.split(separator: " ").map(String.init)
-    guard let first = parts.first, let last = parts.last else {
+    guard let last = parts.last else {
         return trimmed
     }
+    let particles = Set([
+        "al", "bin", "bint", "da", "de", "del", "della", "den", "der", "di", "dos", "du",
+        "el", "la", "le", "st", "ten", "ter", "van", "von"
+    ])
 
-    let initial: String
-    if first.hasSuffix(".") {
-        initial = first.count == 2 ? first : "\(first.prefix(1))."
-    } else if first.count == 1 {
-        initial = "\(first)."
-    } else {
-        initial = "\(first.prefix(1))."
+    var surnameParts = [last]
+    var index = parts.count - 2
+    while index >= 0 {
+        let candidate = parts[index].lowercased().trimmingCharacters(in: .punctuationCharacters)
+        if particles.contains(candidate) {
+            surnameParts.insert(parts[index], at: 0)
+            index -= 1
+            continue
+        }
+        break
     }
 
-    let abbreviated = parts.count > 1 ? "\(initial) \(last)" : baseName
-    return hasCaptainSuffix ? "\(abbreviated) (c)" : abbreviated
+    let condensed = surnameParts.joined(separator: " ")
+    return hasCaptainSuffix ? "\(condensed) (c)" : condensed
 }
 
 private enum MatchLineupDisplaySide {

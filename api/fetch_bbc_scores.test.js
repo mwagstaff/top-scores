@@ -411,11 +411,17 @@ test("parseMatchDetailsFromHtml parses team lineups, bench players, and substitu
     number: 1,
     name: "L. Roberts",
     position_category: "goalkeeper",
+    formation_row_index: 0,
+    formation_slot_index: 0,
+    formation_row_size: 1,
   });
   assert.deepStrictEqual(parsed.team_lineups.home.starting_lineup[9], {
     number: 18,
     name: "R. Oates",
     position_category: "attacker",
+    formation_row_index: 3,
+    formation_slot_index: 0,
+    formation_row_size: 2,
   });
   assert.deepStrictEqual(parsed.team_lineups.home.substitutions, [
     {
@@ -444,11 +450,17 @@ test("parseMatchDetailsFromHtml parses team lineups, bench players, and substitu
     number: 29,
     name: "K. Havertz",
     position_category: "midfielder",
+    formation_row_index: 3,
+    formation_slot_index: 0,
+    formation_row_size: 1,
   });
   assert.deepStrictEqual(parsed.team_lineups.away.starting_lineup[10], {
     number: 9,
     name: "Gabriel Jesus (c)",
     position_category: "attacker",
+    formation_row_index: 4,
+    formation_slot_index: 0,
+    formation_row_size: 1,
   });
   assert.deepStrictEqual(parsed.team_lineups.away.substitutions, [
     {

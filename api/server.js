@@ -3908,6 +3908,21 @@ function normalizeMatchLineupPlayer(value, options = {}) {
     } else {
       normalized.position_category = null;
     }
+
+    const formationRowIndex = Number(value.formation_row_index);
+    normalized.formation_row_index = Number.isInteger(formationRowIndex) && formationRowIndex >= 0
+      ? formationRowIndex
+      : null;
+
+    const formationSlotIndex = Number(value.formation_slot_index);
+    normalized.formation_slot_index = Number.isInteger(formationSlotIndex) && formationSlotIndex >= 0
+      ? formationSlotIndex
+      : null;
+
+    const formationRowSize = Number(value.formation_row_size);
+    normalized.formation_row_size = Number.isInteger(formationRowSize) && formationRowSize > 0
+      ? formationRowSize
+      : null;
   }
 
   return normalized;
@@ -3978,11 +3993,23 @@ function normalizeTeamLineupsPayload(value) {
 function hasCompleteTeamLineups(value) {
   const lineups = normalizeTeamLineupsPayload(value);
   if (!lineups || !lineups.home || !lineups.away) return false;
+  const hasFormationMetadata = (players) =>
+    Array.isArray(players) &&
+    players.every((player) =>
+      Number.isInteger(player.formation_row_index) &&
+      player.formation_row_index >= 0 &&
+      Number.isInteger(player.formation_slot_index) &&
+      player.formation_slot_index >= 0 &&
+      Number.isInteger(player.formation_row_size) &&
+      player.formation_row_size > 0
+    );
   return (
     Array.isArray(lineups.home.starting_lineup) &&
     lineups.home.starting_lineup.length === 11 &&
+    hasFormationMetadata(lineups.home.starting_lineup) &&
     Array.isArray(lineups.away.starting_lineup) &&
-    lineups.away.starting_lineup.length === 11
+    lineups.away.starting_lineup.length === 11 &&
+    hasFormationMetadata(lineups.away.starting_lineup)
   );
 }
 
