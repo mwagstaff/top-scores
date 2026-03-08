@@ -447,6 +447,9 @@ const RECENT_OUTPUT_PATH =
   process.env.RECENT_OUTPUT_PATH || path.join(__dirname, "recent_matches.json");
 const MISSING_TEAM_LOGOS_OUTPUT_PATH =
   process.env.MISSING_TEAM_LOGOS_OUTPUT_PATH || path.join(__dirname, "missing_team_logos.json");
+const TEAM_LOGO_ASSETS_PATH =
+  process.env.TEAM_LOGO_ASSETS_PATH ||
+  path.join(__dirname, "..", "ios", "Top Scores", "Top Scores", "team_logo_assets.json");
 const RECENT_CACHE_HOURS = Number(process.env.RECENT_CACHE_HOURS || 24);
 const RECENT_CACHE_MS = Number.isFinite(RECENT_CACHE_HOURS)
   ? RECENT_CACHE_HOURS * 60 * 60 * 1000
@@ -734,6 +737,10 @@ const matchDetailsBackfillNextAttemptAt = new Map();
 let operationalCacheState = buildDefaultOperationalCacheState();
 let missingTeamLogosByKey = new Map();
 let missingTeamLogosLastUpdated = null;
+let knownTeamLogoCatalogLoaded = false;
+let knownTeamLogoNormalizedLookup = new Map();
+let knownTeamLogoCoreLookup = new Map();
+let knownTeamLogoOriginalLookup = new Map();
 let cachedFantasyBootstrap = null;
 let fantasyBootstrapLastUpdated = null;
 let fantasyBootstrapUpdating = false;
@@ -885,6 +892,187 @@ function filterMatchesByCompetition(matches) {
 
 function compareInsensitive(a, b) {
   return a.localeCompare(b, undefined, { sensitivity: "base" });
+}
+
+const TEAM_LOGO_STOP_WORDS = new Set([
+  "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk",
+  "club", "de", "the", "and", "atletico", "athletic", "sporting",
+]);
+
+const TEAM_LOGO_CLUB_AFFIX_WORDS = new Set([
+  "city", "town", "united", "rovers", "county", "albion", "wanderers",
+  "hotspur", "saint", "st", "calcio",
+]);
+
+const TEAM_LOGO_ALIAS_MAP = {
+  "manchester united": "man united",
+  "man utd": "man united",
+  "manchester utd": "man united",
+  "man u": "man united",
+  "manchester city": "man city",
+  "tottenham hotspur": "tottenham",
+  "wolverhampton wanderers": "wolves",
+  "sheffield united": "sheff utd",
+  "sheffield wednesday": "sheff wed",
+  "nottingham forest": "nottm forest",
+  "borussia dortmund": "dortmund",
+  "borussia m'gladbach": "m'gladbach",
+  "athletic club": "athletic",
+  "real betis": "betis",
+  "real sociedad": "real sociedad",
+  "fc copenhagen": "copenhagen",
+  "fc porto": "porto",
+  "paok thessaloniki": "paok",
+  "paok thessaloniki fc": "paok",
+  "inter milan": "inter",
+  "ac milan": "ac milan",
+};
+
+function normalizeTeamLogoCatalogTokens(value, stripClubAffixes = false) {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/'/g, "")
+    .replace(/\./g, " ")
+    .replace(/-/g, " ")
+    .replace(/_/g, " ");
+
+  return normalized
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .filter((token) => {
+      if (TEAM_LOGO_STOP_WORDS.has(token)) return false;
+      if (stripClubAffixes && TEAM_LOGO_CLUB_AFFIX_WORDS.has(token)) return false;
+      return true;
+    });
+}
+
+function normalizeTeamLogoCatalogKey(value) {
+  return normalizeTeamLogoCatalogTokens(value).join("");
+}
+
+function normalizeTeamLogoCatalogCoreKey(value) {
+  return normalizeTeamLogoCatalogTokens(value, true).join("");
+}
+
+function resetKnownTeamLogoCatalog() {
+  knownTeamLogoNormalizedLookup = new Map();
+  knownTeamLogoCoreLookup = new Map();
+  knownTeamLogoOriginalLookup = new Map();
+}
+
+function registerKnownTeamLogoName(name) {
+  const normalizedName = String(name || "").trim();
+  if (!normalizedName) return;
+
+  const normalizedKey = normalizeTeamLogoCatalogKey(normalizedName);
+  if (normalizedKey) {
+    knownTeamLogoNormalizedLookup.set(normalizedKey, normalizedName);
+  }
+
+  const coreKey = normalizeTeamLogoCatalogCoreKey(normalizedName);
+  if (coreKey) {
+    const existing = knownTeamLogoCoreLookup.get(coreKey) || [];
+    existing.push(normalizedName);
+    knownTeamLogoCoreLookup.set(coreKey, existing);
+  }
+
+  knownTeamLogoOriginalLookup.set(normalizedName.toLowerCase(), normalizedName);
+}
+
+function loadKnownTeamLogoCatalog() {
+  if (knownTeamLogoCatalogLoaded) return;
+  knownTeamLogoCatalogLoaded = true;
+  resetKnownTeamLogoCatalog();
+
+  try {
+    if (!fs.existsSync(TEAM_LOGO_ASSETS_PATH)) return;
+    const raw = fs.readFileSync(TEAM_LOGO_ASSETS_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    parsed.forEach((name) => registerKnownTeamLogoName(name));
+  } catch (err) {
+    console.warn("Failed to load team logo assets catalog:", err.message || err);
+  }
+}
+
+function knownTeamLogoAliases(name) {
+  const lowered = String(name || "").trim().toLowerCase();
+  if (!lowered) return [];
+  if (TEAM_LOGO_ALIAS_MAP[lowered]) {
+    return [TEAM_LOGO_ALIAS_MAP[lowered], lowered];
+  }
+  return [lowered];
+}
+
+function uniqueKnownTeamLogoCoreMatch(coreKey) {
+  if (!coreKey) return null;
+  const candidates = knownTeamLogoCoreLookup.get(coreKey) || [];
+  const unique = Array.from(new Set(candidates));
+  return unique.length === 1 ? unique[0] : null;
+}
+
+function resolveKnownTeamLogoAsset(name) {
+  loadKnownTeamLogoCatalog();
+
+  const trimmed = normalizeMissingTeamLogoName(name);
+  if (!trimmed || knownTeamLogoNormalizedLookup.size === 0) return null;
+
+  const direct = knownTeamLogoOriginalLookup.get(trimmed.toLowerCase());
+  if (direct) return direct;
+
+  for (const alias of knownTeamLogoAliases(trimmed)) {
+    const directAlias = knownTeamLogoOriginalLookup.get(alias);
+    if (directAlias) return directAlias;
+
+    const aliasKey = normalizeTeamLogoCatalogKey(alias);
+    if (aliasKey && knownTeamLogoNormalizedLookup.has(aliasKey)) {
+      return knownTeamLogoNormalizedLookup.get(aliasKey);
+    }
+  }
+
+  const normalizedKey = normalizeTeamLogoCatalogKey(trimmed);
+  if (normalizedKey && knownTeamLogoNormalizedLookup.has(normalizedKey)) {
+    return knownTeamLogoNormalizedLookup.get(normalizedKey);
+  }
+
+  const coreKey = normalizeTeamLogoCatalogCoreKey(trimmed);
+  const coreMatch = uniqueKnownTeamLogoCoreMatch(coreKey);
+  if (coreMatch) return coreMatch;
+
+  let bestMatch = null;
+  let bestScore = 0;
+  for (const [candidateKey, candidateName] of knownTeamLogoNormalizedLookup.entries()) {
+    const score = similarity(normalizedKey, candidateKey);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = candidateName;
+    }
+  }
+
+  return bestScore >= 0.78 ? bestMatch : null;
+}
+
+function pruneResolvableMissingTeamLogos() {
+  loadKnownTeamLogoCatalog();
+  if (knownTeamLogoNormalizedLookup.size === 0 || missingTeamLogosByKey.size === 0) {
+    return [];
+  }
+
+  const retained = new Map();
+  const removed = [];
+  for (const teamName of missingTeamLogosByKey.values()) {
+    if (resolveKnownTeamLogoAsset(teamName)) {
+      removed.push(teamName);
+      continue;
+    }
+    retained.set(missingTeamLogoKey(teamName), teamName);
+  }
+
+  missingTeamLogosByKey = retained;
+  return removed.sort(compareInsensitive);
 }
 
 function normalizeDeviceToken(value) {
@@ -2761,6 +2949,8 @@ function missingTeamLogoNamesFromPayload(payload) {
 }
 
 function ingestMissingTeamLogoNames(teamNames) {
+  pruneResolvableMissingTeamLogos();
+
   let acceptedCount = 0;
   let addedCount = 0;
   const added = [];
@@ -2774,6 +2964,7 @@ function ingestMissingTeamLogoNames(teamNames) {
     if (!key || seenInRequest.has(key)) return;
     seenInRequest.add(key);
     acceptedCount += 1;
+    if (resolveKnownTeamLogoAsset(normalized)) return;
     if (missingTeamLogosByKey.has(key)) return;
     missingTeamLogosByKey.set(key, normalized);
     added.push(normalized);
@@ -7758,6 +7949,11 @@ function loadMissingTeamLogosFromDisk() {
       });
       const stat = fs.statSync(MISSING_TEAM_LOGOS_OUTPUT_PATH);
       missingTeamLogosLastUpdated = stat.mtime.toISOString();
+      const removed = pruneResolvableMissingTeamLogos();
+      if (removed.length > 0) {
+        missingTeamLogosLastUpdated = new Date().toISOString();
+        writeMissingTeamLogos(MISSING_TEAM_LOGOS_OUTPUT_PATH, sortedMissingTeamLogoNames());
+      }
     }
   } catch (err) {
     console.warn("Failed to load missing team logos from disk:", err.message || err);
@@ -8151,6 +8347,16 @@ async function hydrateOperationalStateFromRedis() {
         missingTeamLogosByKey.set(missingTeamLogoKey(normalized), normalized);
       });
       missingTeamLogosLastUpdated = missingLogosRecord.updated_at || missingTeamLogosLastUpdated;
+      const removedResolvedEntries = pruneResolvableMissingTeamLogos();
+      if (removedResolvedEntries.length > 0) {
+        missingTeamLogosLastUpdated = new Date().toISOString();
+        const names = sortedMissingTeamLogoNames();
+        writeMissingTeamLogos(MISSING_TEAM_LOGOS_OUTPUT_PATH, names);
+        await persistOperationalDatasetSafe(OP_DATASET_MISSING_TEAM_LOGOS, names, {
+          updated_at: missingTeamLogosLastUpdated,
+          source: "missing_team_logos_prune_resolved",
+        });
+      }
     }
 
     const cacheStateRecord = datasetRecords[OP_DATASET_CACHE_STATE];
