@@ -23,7 +23,6 @@ let channelsCache: string[] | null = null;
 let teamRankingsCache: TeamRankingEntry[] | null = null;
 const matchDetailsCache = new Map<string, MatchDetails>();
 const matchDetailsPromises = new Map<string, Promise<MatchDetails>>();
-const matchDetailsHydrationConcurrency = 8;
 
 export async function fetchMatches(
   mode: MatchesMode,
@@ -45,10 +44,9 @@ export async function fetchMatches(
     lastUpdated = response.headers.get("X-Last-Updated") || lastUpdated;
     totalCount = Number(response.headers.get("X-Total-Count") || totalCount);
     const pageMatches = (await response.json()).map(normalizeMatch);
-    const hydratedMatches = await hydrateMatchesWithState(pageMatches, signal);
-    matches.push(...hydratedMatches);
+    matches.push(...pageMatches);
 
-    if (response.headers.get("X-Has-More") !== "true" || hydratedMatches.length === 0) {
+    if (response.headers.get("X-Has-More") !== "true" || pageMatches.length === 0) {
       break;
     }
 
@@ -165,54 +163,6 @@ export async function fetchLeagueTables(signal?: AbortSignal): Promise<LeagueTab
       response.headers.get("X-Last-Updated") ||
       optionalString(payload.updated_at) ||
       null,
-  };
-}
-
-async function hydrateMatchesWithState(matches: Match[], signal?: AbortSignal): Promise<Match[]> {
-  const ids = matches
-    .map((match) => match.matchDetailsId?.trim() || "")
-    .filter(Boolean);
-  if (ids.length === 0) {
-    return matches;
-  }
-
-  const uniqueIds = Array.from(new Set(ids));
-  const statesById = new Map<string, MatchDetails>();
-
-  for (let index = 0; index < uniqueIds.length; index += matchDetailsHydrationConcurrency) {
-    if (signal?.aborted) {
-      break;
-    }
-
-    const batch = uniqueIds.slice(index, index + matchDetailsHydrationConcurrency);
-    const settled = await Promise.allSettled(batch.map((id) => fetchMatchDetails(id)));
-
-    settled.forEach((result, settledIndex) => {
-      if (result.status === "fulfilled") {
-        const requestedId = batch[settledIndex];
-        statesById.set(requestedId, result.value);
-      }
-    });
-  }
-
-  return matches.map((match) => mergeMatchState(match, statesById.get(match.matchDetailsId || "")));
-}
-
-function mergeMatchState(match: Match, details?: MatchDetails): Match {
-  if (!details) {
-    return match;
-  }
-
-  return {
-    ...match,
-    matchDetails: details,
-    detailsUrl: details.detailsUrl ?? match.detailsUrl,
-    homeScore: details.homeScore ?? match.homeScore,
-    awayScore: details.awayScore ?? match.awayScore,
-    aggregateHomeScore: details.aggregateHomeScore ?? match.aggregateHomeScore,
-    aggregateAwayScore: details.aggregateAwayScore ?? match.aggregateAwayScore,
-    scoreStatus: details.scoreStatus ?? match.scoreStatus,
-    penaltyResult: details.penaltyResult ?? match.penaltyResult,
   };
 }
 

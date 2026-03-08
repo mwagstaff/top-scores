@@ -7,6 +7,88 @@ const {
   __private,
 } = require("./fetch_bbc_scores");
 
+function minuteToAccessibleText(minute) {
+  const normalized = String(minute || "").trim().replace(/'$/, "");
+  const match = normalized.match(/^(\d+)\+(\d+)$/);
+  if (match) {
+    return `${match[1]} minutes plus ${match[2]}`;
+  }
+  return `${normalized} minutes`;
+}
+
+function buildFormationPlayer(player) {
+  return `
+    <div class="PlayerItem">
+      <div data-testid="player-notation-circle">
+        <div aria-hidden="true">${player.number}</div>
+        <span class="visually-hidden">${player.number}, ${player.short_name}, ${player.role}</span>
+      </div>
+      <span data-testid="player-name">${player.short_name}</span>
+    </div>
+  `;
+}
+
+function buildPlayerListItem(player) {
+  return `
+    <li data-testid="player-list-item">
+      <button>
+        <div>
+          <div data-testid="player-notation-circle">
+            <div aria-hidden="true">${player.number}</div>
+            <span class="visually-hidden">${player.number}, ${player.short_name}, ${player.role}</span>
+          </div>
+        </div>
+        <div>
+          <span class="PlayerNameWrapper">
+            <span>${player.name}</span>
+            ${player.captain
+              ? ' <span role="text"><span aria-hidden="true">(c)</span><span class="visually-hidden">, Captain</span></span>'
+              : ""}
+          </span>
+          ${player.substitution
+            ? `
+              <span class="PlayerSubstitutes">
+                <span>
+                  <span aria-hidden="true">${player.substitution.name} ${player.substitution.minute}</span>
+                  <span class="visually-hidden">, substituted for ${player.substitution.name} at ${minuteToAccessibleText(player.substitution.minute)}</span>
+                </span>
+              </span>
+            `
+            : ""}
+        </div>
+      </button>
+    </li>
+  `;
+}
+
+function buildTeamBlock(side, teamName, manager, formation, formationRows, starters, substitutes) {
+  return `
+    <div>${side} team, ${teamName}</div>
+    <div>
+      <p data-testid="match-lineups-${side}-manager">Manager: ${manager}</p>
+      <p data-testid="match-lineups-${side}-formation">Formation: ${formation.replace(/-/g, " - ")}</p>
+    </div>
+    <section>
+      <h4>Pitch Formation</h4>
+      <div data-testid="formation-container">
+        <ul class="FormationRows">
+          ${formationRows.map((row) => `<li>${row.map(buildFormationPlayer).join("")}</li>`).join("")}
+        </ul>
+      </div>
+      <h4>Starting lineup</h4>
+      <ul data-testid="player-list">
+        ${starters.map(buildPlayerListItem).join("")}
+      </ul>
+    </section>
+    <section>
+      <h4>Substitutes</h4>
+      <ul data-testid="player-list">
+        ${substitutes.map(buildPlayerListItem).join("")}
+      </ul>
+    </section>
+  `;
+}
+
 test("parseMatchDetailsFromHtml parses own goals and red cards from key events", () => {
   const html = `
     <div class="KeyEventsHome">
@@ -182,6 +264,142 @@ test("parseMatchDetailsFromHtml extracts header metadata from BBC live match pag
   assert.equal(parsed.away_team, "Real Madrid");
   assert.equal(parsed.home_score, 1);
   assert.equal(parsed.away_score, 1);
+});
+
+test("parseMatchDetailsFromHtml parses team lineups, bench players, and substitutions", () => {
+  const homeStarters = [
+    { number: 1, short_name: "Roberts", role: "Goalkeeper", name: "L. Roberts" },
+    { number: 2, short_name: "Knoyle", role: "Defender", name: "K. Knoyle", substitution: { name: "E. Hewitt", minute: "87'" } },
+    { number: 23, short_name: "Oshilaja", role: "Defender", name: "A. Oshilaja" },
+    { number: 20, short_name: "Blake-Tracy", role: "Defender", name: "F. Blake-Tracy" },
+    { number: 7, short_name: "Akins", role: "Midfielder", name: "L. Akins" },
+    { number: 13, short_name: "Russell", role: "Midfielder", name: "J. Russell" },
+    { number: 25, short_name: "Reed", role: "Midfielder", name: "L. Reed", captain: true },
+    { number: 40, short_name: "Abbott", role: "Midfielder", name: "G. Abbott" },
+    { number: 3, short_name: "McLaughlin", role: "Midfielder", name: "S. McLaughlin" },
+    { number: 18, short_name: "Oates", role: "Striker", name: "R. Oates" },
+    { number: 29, short_name: "Roberts", role: "Striker", name: "T. Roberts" },
+  ];
+  const homeSubstitutes = [
+    { number: 4, short_name: "Hewitt", role: "Substitute", name: "E. Hewitt" },
+    { number: 19, short_name: "Adeboyejo", role: "Substitute", name: "V. Adeboyejo" },
+    { number: 11, short_name: "Evans", role: "Substitute", name: "W. Evans" },
+  ];
+  const awayStarters = [
+    { number: 13, short_name: "Arrizabalaga", role: "Goalkeeper", name: "Kepa Arrizabalaga" },
+    { number: 89, short_name: "Salmon", role: "Defender", name: "M. Salmon", substitution: { name: "J. Timber", minute: "62'" } },
+    { number: 3, short_name: "Mosquera", role: "Defender", name: "Cristhian Mosquera" },
+    { number: 33, short_name: "Calafiori", role: "Defender", name: "R. Calafiori" },
+    { number: 20, short_name: "Madueke", role: "Midfielder", name: "N. Madueke" },
+    { number: 56, short_name: "Dowman", role: "Midfielder", name: "M. Dowman" },
+    { number: 16, short_name: "Nørgaard", role: "Midfielder", name: "C. Nørgaard" },
+    { number: 19, short_name: "Trossard", role: "Midfielder", name: "L. Trossard" },
+    { number: 11, short_name: "Gabriel Martinelli", role: "Midfielder", name: "Gabriel Martinelli" },
+    { number: 29, short_name: "Havertz", role: "Attacking Midfielder", name: "K. Havertz" },
+    { number: 9, short_name: "Gabriel Jesus", role: "Striker", name: "Gabriel Jesus", captain: true },
+  ];
+  const awaySubstitutes = [
+    { number: 12, short_name: "Timber", role: "Substitute", name: "J. Timber" },
+    { number: 10, short_name: "Eze", role: "Substitute", name: "E. Eze" },
+    { number: 7, short_name: "Saka", role: "Substitute", name: "B. Saka" },
+  ];
+
+  const html = `
+    <section id="Line-ups">
+      <div data-testid="styled-match-lineup">
+        <div class="GridContainer-LineupsGridContainer">
+          ${buildTeamBlock(
+            "home",
+            "Mansfield Town",
+            "Nigel Clough",
+            "3-5-2",
+            [
+              [homeStarters[0]],
+              [homeStarters[1], homeStarters[2], homeStarters[3]],
+              [homeStarters[4], homeStarters[5], homeStarters[6], homeStarters[7], homeStarters[8]],
+              [homeStarters[9], homeStarters[10]],
+            ],
+            homeStarters,
+            homeSubstitutes
+          )}
+          ${buildTeamBlock(
+            "away",
+            "Arsenal",
+            "Mikel Arteta",
+            "3-5-1-1",
+            [
+              [awayStarters[0]],
+              [awayStarters[1], awayStarters[2], awayStarters[3]],
+              [awayStarters[4], awayStarters[5], awayStarters[6], awayStarters[7], awayStarters[8]],
+              [awayStarters[9]],
+              [awayStarters[10]],
+            ],
+            awayStarters,
+            awaySubstitutes
+          )}
+        </div>
+      </div>
+    </section>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.ok(parsed.team_lineups);
+
+  assert.equal(parsed.team_lineups.home.team, "Mansfield Town");
+  assert.equal(parsed.team_lineups.home.manager, "Nigel Clough");
+  assert.equal(parsed.team_lineups.home.formation, "3-5-2");
+  assert.equal(parsed.team_lineups.home.starting_lineup.length, 11);
+  assert.deepStrictEqual(parsed.team_lineups.home.starting_lineup[0], {
+    number: 1,
+    name: "L. Roberts",
+    position_category: "goalkeeper",
+  });
+  assert.deepStrictEqual(parsed.team_lineups.home.starting_lineup[9], {
+    number: 18,
+    name: "R. Oates",
+    position_category: "attacker",
+  });
+  assert.deepStrictEqual(parsed.team_lineups.home.substitutions, [
+    {
+      minute: "87'",
+      player_off: {
+        number: 2,
+        name: "K. Knoyle",
+      },
+      player_on: {
+        number: 4,
+        name: "E. Hewitt",
+      },
+    },
+  ]);
+
+  assert.equal(parsed.team_lineups.away.team, "Arsenal");
+  assert.equal(parsed.team_lineups.away.formation, "3-5-1-1");
+  assert.equal(parsed.team_lineups.away.starting_lineup.length, 11);
+  assert.deepStrictEqual(parsed.team_lineups.away.starting_lineup[9], {
+    number: 29,
+    name: "K. Havertz",
+    position_category: "midfielder",
+  });
+  assert.deepStrictEqual(parsed.team_lineups.away.starting_lineup[10], {
+    number: 9,
+    name: "Gabriel Jesus (c)",
+    position_category: "attacker",
+  });
+  assert.deepStrictEqual(parsed.team_lineups.away.substitutions, [
+    {
+      minute: "62'",
+      player_off: {
+        number: 89,
+        name: "M. Salmon",
+      },
+      player_on: {
+        number: 12,
+        name: "J. Timber",
+      },
+    },
+  ]);
 });
 
 test("parseMatchDetailsFromHtml splits competition name and subheading across formatter nodes", () => {

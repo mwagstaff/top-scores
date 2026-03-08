@@ -480,6 +480,12 @@ const parsedMatchDetailsStaleMinuteThreshold = Number(
 const MATCH_DETAILS_STALE_MINUTE_THRESHOLD = Number.isFinite(parsedMatchDetailsStaleMinuteThreshold)
   ? Math.max(1, Math.floor(parsedMatchDetailsStaleMinuteThreshold))
   : 90;
+const parsedMatchStatusMaximumLiveWindowMs = Number(
+  process.env.MATCH_STATUS_MAXIMUM_LIVE_WINDOW_MS || 3.5 * 60 * 60 * 1000
+);
+const MATCH_STATUS_MAXIMUM_LIVE_WINDOW_MS = Number.isFinite(parsedMatchStatusMaximumLiveWindowMs)
+  ? Math.max(30 * 60 * 1000, Math.floor(parsedMatchStatusMaximumLiveWindowMs))
+  : 3.5 * 60 * 60 * 1000;
 const parsedMatchDetailsBackfillCooldownMs = Number(
   process.env.MATCH_DETAILS_BACKFILL_COOLDOWN_MS || 60 * 1000
 );
@@ -504,6 +510,12 @@ const parsedMatchDetailsBackfillInFlightCooldownMs = Number(
 const MATCH_DETAILS_BACKFILL_IN_FLIGHT_COOLDOWN_MS = Number.isFinite(parsedMatchDetailsBackfillInFlightCooldownMs)
   ? Math.max(5 * 1000, Math.floor(parsedMatchDetailsBackfillInFlightCooldownMs))
   : 15 * 1000;
+const parsedMatchDetailsActiveRefreshWindowMs = Number(
+  process.env.MATCH_DETAILS_ACTIVE_REFRESH_WINDOW_MS || 15 * 60 * 1000
+);
+const MATCH_DETAILS_ACTIVE_REFRESH_WINDOW_MS = Number.isFinite(parsedMatchDetailsActiveRefreshWindowMs)
+  ? Math.max(30 * 1000, Math.floor(parsedMatchDetailsActiveRefreshWindowMs))
+  : 15 * 60 * 1000;
 const TEAM_RANKING_DEFAULT_SOURCE =
   normalizeTeamRankingSource(SERVER_CONFIG.teamRankingDefaultSource) ||
   TEAM_RANKING_SOURCE_MERGED;
@@ -684,6 +696,9 @@ let matchDetailsById = new Map();
 let matchDetailsLastUpdated = null;
 let matchDetailsUpdating = false;
 const matchDetailsBackfillTasks = new Map();
+const matchDetailsWarmTasks = new Map();
+let matchDetailsSnapshotWarmTask = null;
+const matchDetailsActiveRefreshUntilById = new Map();
 const matchDetailsBackfillNextAttemptAt = new Map();
 let missingTeamLogosByKey = new Map();
 let missingTeamLogosLastUpdated = null;
@@ -3707,6 +3722,111 @@ const MATCH_DETAILS_EVENT_FIELDS = [
   "home_red_cards",
   "away_red_cards",
 ];
+const MATCH_LINEUP_POSITION_CATEGORIES = new Set([
+  "goalkeeper",
+  "defender",
+  "midfielder",
+  "attacker",
+]);
+
+function normalizeMatchLineupPlayer(value, options = {}) {
+  if (!value || typeof value !== "object") return null;
+
+  const rawNumber = Number(value.number);
+  if (!Number.isFinite(rawNumber)) return null;
+
+  const name = String(value.name || "").trim();
+  if (!name) return null;
+
+  const normalized = {
+    number: Math.trunc(rawNumber),
+    name,
+  };
+
+  if (options.includePositionCategory) {
+    const positionCategory = String(value.position_category || "").trim().toLowerCase();
+    if (MATCH_LINEUP_POSITION_CATEGORIES.has(positionCategory)) {
+      normalized.position_category = positionCategory;
+    } else {
+      normalized.position_category = null;
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeMatchLineupSubstitution(value) {
+  if (!value || typeof value !== "object") return null;
+
+  const minute = String(value.minute || "").trim();
+  const playerOff = normalizeMatchLineupPlayer(value.player_off);
+  const playerOn = normalizeMatchLineupPlayer(value.player_on);
+  if (!minute || !playerOff || !playerOn) return null;
+
+  return {
+    minute,
+    player_off: playerOff,
+    player_on: playerOn,
+  };
+}
+
+function normalizeMatchLineupSide(value) {
+  if (!value || typeof value !== "object") return null;
+
+  const team = String(value.team || "").trim() || null;
+  const manager = String(value.manager || "").trim() || null;
+  const formation = String(value.formation || "").trim() || null;
+  const startingLineup = Array.isArray(value.starting_lineup)
+    ? value.starting_lineup
+        .map((player) => normalizeMatchLineupPlayer(player, { includePositionCategory: true }))
+        .filter(Boolean)
+    : [];
+  const substitutes = Array.isArray(value.substitutes)
+    ? value.substitutes
+        .map((player) => normalizeMatchLineupPlayer(player))
+        .filter(Boolean)
+    : [];
+  const substitutions = Array.isArray(value.substitutions)
+    ? value.substitutions.map(normalizeMatchLineupSubstitution).filter(Boolean)
+    : [];
+
+  if (!team && startingLineup.length === 0 && substitutes.length === 0 && substitutions.length === 0) {
+    return null;
+  }
+
+  return {
+    team,
+    manager,
+    formation,
+    starting_lineup: startingLineup,
+    substitutes,
+    substitutions,
+  };
+}
+
+function normalizeTeamLineupsPayload(value) {
+  if (!value || typeof value !== "object") return null;
+
+  const home = normalizeMatchLineupSide(value.home);
+  const away = normalizeMatchLineupSide(value.away);
+  if (!home && !away) return null;
+
+  return {
+    home,
+    away,
+  };
+}
+
+function hasCompleteTeamLineups(value) {
+  const lineups = normalizeTeamLineupsPayload(value);
+  if (!lineups || !lineups.home || !lineups.away) return false;
+  return (
+    Array.isArray(lineups.home.starting_lineup) &&
+    lineups.home.starting_lineup.length === 11 &&
+    Array.isArray(lineups.away.starting_lineup) &&
+    lineups.away.starting_lineup.length === 11
+  );
+}
 
 function normalizeMatchStatusValue(status) {
   const normalized = String(status || "").trim();
@@ -3840,7 +3960,141 @@ function normalizeMatchDetailsId(value) {
   return normalized;
 }
 
-function normalizeMatchDetailsPayload(match) {
+function matchKickoffTimeMs(date, time) {
+  if (!isDateOnly(date)) return null;
+  const normalizedTime = normalizeTimeValue(time);
+  const kickoff = new Date(`${String(date).trim()}T${normalizedTime}:00`);
+  const kickoffMs = kickoff.getTime();
+  return Number.isFinite(kickoffMs) ? kickoffMs : null;
+}
+
+function stabilizeMatchStatus(status, options = {}) {
+  const normalized = normalizeMatchStatusValue(status);
+  if (!normalized) return null;
+  if (!options.hasScore || !isInProgressMatchStatus(normalized)) return normalized;
+
+  const kickoffMs = matchKickoffTimeMs(options.date, options.time);
+  if (!Number.isFinite(kickoffMs)) return normalized;
+
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  return nowMs - kickoffMs >= MATCH_STATUS_MAXIMUM_LIVE_WINDOW_MS ? "FT" : normalized;
+}
+
+function resolveStableMatchScoreStatus(match, options = {}) {
+  if (!match || typeof match !== "object") return null;
+  const homeScore = parseNumericScore(match.home_score);
+  const awayScore = parseNumericScore(match.away_score);
+  return stabilizeMatchStatus(resolveMatchScoreStatus(match) || match.score_status || null, {
+    date: match.date || null,
+    time: match.time || null,
+    hasScore: homeScore !== null && awayScore !== null,
+    nowMs: options.nowMs,
+  });
+}
+
+function withStableMatchDetailsState(payload, options = {}) {
+  if (!payload || typeof payload !== "object") return null;
+  const scoreStatus = resolveStableMatchScoreStatus(payload, options);
+  return {
+    ...payload,
+    score_status: scoreStatus,
+    in_progress: isInProgressMatchStatus(scoreStatus),
+  };
+}
+
+function pruneInactiveMatchDetailsRefreshEntries(nowMs = Date.now()) {
+  matchDetailsActiveRefreshUntilById.forEach((refreshUntilMs, matchId) => {
+    if (!Number.isFinite(refreshUntilMs) || refreshUntilMs <= nowMs) {
+      matchDetailsActiveRefreshUntilById.delete(matchId);
+    }
+  });
+}
+
+function markMatchDetailsActive(matchId, ttlMs = MATCH_DETAILS_ACTIVE_REFRESH_WINDOW_MS) {
+  const normalizedMatchId = normalizeMatchDetailsId(matchId);
+  if (!normalizedMatchId) return false;
+  const normalizedTtlMs = Number.isFinite(ttlMs)
+    ? Math.max(30 * 1000, Math.floor(ttlMs))
+    : MATCH_DETAILS_ACTIVE_REFRESH_WINDOW_MS;
+  const refreshUntilMs = Date.now() + normalizedTtlMs;
+  const existing = matchDetailsActiveRefreshUntilById.get(normalizedMatchId) || 0;
+  if (refreshUntilMs > existing) {
+    matchDetailsActiveRefreshUntilById.set(normalizedMatchId, refreshUntilMs);
+  }
+  return true;
+}
+
+function isMatchDetailsActive(matchId, nowMs = Date.now()) {
+  const normalizedMatchId = normalizeMatchDetailsId(matchId);
+  if (!normalizedMatchId) return false;
+  const refreshUntilMs = matchDetailsActiveRefreshUntilById.get(normalizedMatchId);
+  if (!Number.isFinite(refreshUntilMs) || refreshUntilMs <= nowMs) {
+    matchDetailsActiveRefreshUntilById.delete(normalizedMatchId);
+    return false;
+  }
+  return true;
+}
+
+function getMatchDetailsLookupEntry(matchDetailsLookup, detailsId) {
+  if (!matchDetailsLookup || !detailsId) return null;
+  if (matchDetailsLookup instanceof Map) {
+    return matchDetailsLookup.get(detailsId) || null;
+  }
+  if (typeof matchDetailsLookup === "object") {
+    return matchDetailsLookup[detailsId] || null;
+  }
+  return null;
+}
+
+function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now()) {
+  const listHomeScore = parseNumericScore(listMatch && listMatch.home_score);
+  const listAwayScore = parseNumericScore(listMatch && listMatch.away_score);
+  const detailsHomeScore = parseNumericScore(detailsPayload && detailsPayload.home_score);
+  const detailsAwayScore = parseNumericScore(detailsPayload && detailsPayload.away_score);
+  const homeScore = detailsHomeScore !== null ? detailsHomeScore : listHomeScore;
+  const awayScore = detailsAwayScore !== null ? detailsAwayScore : listAwayScore;
+
+  const listAggregateHomeScore = parseNumericScore(listMatch && listMatch.aggregate_home_score);
+  const listAggregateAwayScore = parseNumericScore(listMatch && listMatch.aggregate_away_score);
+  const detailsAggregateHomeScore = parseNumericScore(
+    detailsPayload && detailsPayload.aggregate_home_score
+  );
+  const detailsAggregateAwayScore = parseNumericScore(
+    detailsPayload && detailsPayload.aggregate_away_score
+  );
+
+  const listStatus = resolveMatchScoreStatus(listMatch) || (listMatch && listMatch.score_status) || null;
+  const detailsStatus =
+    resolveMatchScoreStatus(detailsPayload) || (detailsPayload && detailsPayload.score_status) || null;
+  const preferredStatus = pickPreferredMatchStatus(listStatus, detailsStatus, {
+    preferIncomingOnTie: true,
+  });
+
+  const kickoffDate = (listMatch && listMatch.date) || (detailsPayload && detailsPayload.date) || null;
+  const kickoffTime = (listMatch && listMatch.time) || (detailsPayload && detailsPayload.time) || null;
+  const scoreStatus = stabilizeMatchStatus(preferredStatus, {
+    date: kickoffDate,
+    time: kickoffTime,
+    hasScore: homeScore !== null && awayScore !== null,
+    nowMs,
+  });
+
+  return {
+    home_score: homeScore,
+    away_score: awayScore,
+    aggregate_home_score:
+      detailsAggregateHomeScore !== null ? detailsAggregateHomeScore : listAggregateHomeScore,
+    aggregate_away_score:
+      detailsAggregateAwayScore !== null ? detailsAggregateAwayScore : listAggregateAwayScore,
+    score_status: scoreStatus,
+    penalty_result:
+      String((detailsPayload && detailsPayload.penalty_result) || "").trim() ||
+      String((listMatch && listMatch.penalty_result) || "").trim() ||
+      null,
+  };
+}
+
+function normalizeMatchDetailsPayload(match, options = {}) {
   if (!match || typeof match !== "object") return null;
   const detailsUrl = String(match.details_url || "").trim();
   if (!detailsUrl) return null;
@@ -3861,7 +4115,9 @@ function normalizeMatchDetailsPayload(match) {
   const awayScore = parseNumericScore(match.away_score);
   const aggregateHomeScore = parseNumericScore(match.aggregate_home_score);
   const aggregateAwayScore = parseNumericScore(match.aggregate_away_score);
-  const scoreStatus = resolveMatchScoreStatus(match);
+  const scoreStatus = resolveStableMatchScoreStatus(match, {
+    nowMs: options.nowMs,
+  });
 
   const payload = {
     id: detailsId,
@@ -3887,6 +4143,11 @@ function normalizeMatchDetailsPayload(match) {
   const penaltyResult = String(match.penalty_result || "").trim();
   if (penaltyResult) {
     payload.penalty_result = penaltyResult;
+  }
+
+  const teamLineups = normalizeTeamLineupsPayload(match.team_lineups);
+  if (teamLineups) {
+    payload.team_lineups = teamLineups;
   }
 
   return payload;
@@ -3968,6 +4229,14 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     merged.penalty_result = existing.penalty_result;
   }
 
+  const incomingTeamLineups = normalizeTeamLineupsPayload(incoming && incoming.team_lineups);
+  const existingTeamLineups = normalizeTeamLineupsPayload(existing && existing.team_lineups);
+  if (incomingTeamLineups) {
+    merged.team_lineups = incomingTeamLineups;
+  } else if (existingTeamLineups) {
+    merged.team_lineups = existingTeamLineups;
+  }
+
   // If we have a penalty result (shootout complete) and status is "Pens", change to "AET"
   // The JSON data often has "Pens" status, but the HTML shows "AET" when complete
   if (merged.penalty_result && (merged.score_status === "Pens" || merged.score_status === "PEN" || merged.score_status === "PEN.")) {
@@ -4034,19 +4303,22 @@ function matchDetailsHasMalformedCompetitionMetadata(payload) {
   return /\s*[-–—]\s*$/.test(league);
 }
 
+function matchDetailsMissingTeamLineups(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  if (!payload.details_url) return false;
+  return !hasCompleteTeamLineups(payload.team_lineups);
+}
+
 function matchDetailsHasStaleInProgressStatus(payload, nowMs = Date.now()) {
   if (!payload || typeof payload !== "object") return false;
 
-  const scoreStatus = normalizeMatchStatusValue(payload.score_status);
+  const scoreStatus = resolveStableMatchScoreStatus(payload, { nowMs });
   const statusMinute = parseMatchStatusMinute(scoreStatus);
   if (statusMinute === null || statusMinute < MATCH_DETAILS_STALE_MINUTE_THRESHOLD) {
     return false;
   }
 
-  const inProgressFlag =
-    payload.in_progress !== undefined
-      ? Boolean(payload.in_progress)
-      : isInProgressMatchStatus(scoreStatus);
+  const inProgressFlag = isInProgressMatchStatus(scoreStatus);
   if (!inProgressFlag) return false;
 
   const updatedAtMs = Date.parse(String(payload.updated_at || "").trim());
@@ -4060,6 +4332,7 @@ function matchDetailsNeedsBackfill(payload, nowMs = Date.now()) {
   if (!payload.details_url) return false;
   return (
     matchDetailsMissingCoreMetadata(payload) ||
+    matchDetailsMissingTeamLineups(payload) ||
     matchDetailsHasMalformedCompetitionMetadata(payload) ||
     matchDetailsNeedsEnrichment(payload) ||
     matchDetailsHasStaleInProgressStatus(payload, nowMs)
@@ -4225,30 +4498,36 @@ async function rebuildMatchDetailsCache(source = "match_details_rebuild") {
 }
 
 function collectInProgressMatchDetailTargets() {
+  const nowMs = Date.now();
+  pruneInactiveMatchDetailsRefreshEntries(nowMs);
+  if (matchDetailsActiveRefreshUntilById.size === 0) return [];
+
   const targets = new Map();
-  const sources = [cachedBbcMatches, cachedMergedMatches];
   const upsertTarget = (detailsPayload) => {
-    if (!detailsPayload || typeof detailsPayload !== "object") return;
+    const stablePayload = withStableMatchDetailsState(detailsPayload);
+    if (!stablePayload || typeof stablePayload !== "object") return;
 
-    const detailsId = normalizeMatchDetailsId(detailsPayload.id);
+    const detailsId = normalizeMatchDetailsId(stablePayload.id);
     if (!detailsId) return;
+    if (!isMatchDetailsActive(detailsId, nowMs)) return;
 
-    const detailsUrl = String(detailsPayload.details_url || "").trim();
+    const detailsUrl = String(stablePayload.details_url || "").trim();
     if (!detailsUrl) return;
 
-    const scoreStatus = normalizeMatchStatusValue(detailsPayload.score_status);
-    const isInProgress =
-      isInProgressMatchStatus(scoreStatus) || Boolean(detailsPayload.in_progress);
-    if (!isInProgress) return;
+    const isInProgress = Boolean(stablePayload.in_progress);
+    if (!isInProgress) {
+      targets.delete(detailsId);
+      return;
+    }
 
     const existing = targets.get(detailsId);
     const mergedSeedMatch = existing && existing.seed_match
-      ? { ...existing.seed_match, ...detailsPayload }
-      : { ...detailsPayload };
+      ? { ...existing.seed_match, ...stablePayload }
+      : { ...stablePayload };
 
     const preferredStatus = pickPreferredMatchStatus(
       existing && existing.seed_match ? existing.seed_match.score_status : null,
-      detailsPayload.score_status,
+      stablePayload.score_status,
       { preferIncomingOnTie: true }
     );
     if (preferredStatus) {
@@ -4267,22 +4546,13 @@ function collectInProgressMatchDetailTargets() {
     });
   };
 
-  sources.forEach((matches) => {
-    (Array.isArray(matches) ? matches : []).forEach((rawMatch) => {
-      const detailsPayload = normalizeMatchDetailsPayload(rawMatch);
-      if (!detailsPayload) return;
-      upsertTarget(detailsPayload);
-    });
-  });
-
   matchDetailsById.forEach((payload, matchId) => {
     if (!payload || typeof payload !== "object") return;
     const normalizedId = normalizeMatchDetailsId(payload.id || matchId);
     if (!normalizedId) return;
     upsertTarget({
-      ...payload,
+      ...withStableMatchDetailsState(payload),
       id: normalizedId,
-      score_status: resolveMatchScoreStatus(payload) || payload.score_status || null,
     });
   });
 
@@ -4438,6 +4708,11 @@ function normalizeMatchRecord(match) {
   const penaltyResult = String(match.penalty_result || "").trim();
   if (penaltyResult) {
     record.penalty_result = penaltyResult;
+  }
+
+  const teamLineups = normalizeTeamLineupsPayload(match.team_lineups);
+  if (teamLineups) {
+    record.team_lineups = teamLineups;
   }
 
   return record;
@@ -4658,6 +4933,30 @@ function toMatchListPayload(match, options = {}) {
     payload.match_details_id = detailsId;
   }
 
+  const resolvedState = buildResolvedListMatchState(
+    normalized,
+    getMatchDetailsLookupEntry(matchDetailsLookup, detailsId),
+    Number.isFinite(options.nowMs) ? options.nowMs : Date.now()
+  );
+
+  if (resolvedState.home_score !== null && resolvedState.away_score !== null) {
+    payload.home_score = resolvedState.home_score;
+    payload.away_score = resolvedState.away_score;
+  }
+  if (
+    resolvedState.aggregate_home_score !== null &&
+    resolvedState.aggregate_away_score !== null
+  ) {
+    payload.aggregate_home_score = resolvedState.aggregate_home_score;
+    payload.aggregate_away_score = resolvedState.aggregate_away_score;
+  }
+  if (resolvedState.score_status) {
+    payload.score_status = resolvedState.score_status;
+  }
+  if (resolvedState.penalty_result) {
+    payload.penalty_result = resolvedState.penalty_result;
+  }
+
   return payload;
 }
 
@@ -4763,9 +5062,18 @@ function buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup) {
   const mergedList = Array.isArray(mergedItems) ? mergedItems : [];
   const detailsLookup =
     matchDetailsLookup && typeof matchDetailsLookup === "object" ? matchDetailsLookup : {};
+  const detailsIdentityIndex = buildMatchDetailsIdentityIndex(detailsLookup);
+  const detailPayloads =
+    detailsLookup instanceof Map ? Array.from(detailsLookup.values()) : Object.values(detailsLookup);
 
   for (const rawMatch of mergedList) {
-    const candidate = toMatchListPayload(rawMatch, { matchDetailsLookup: detailsLookup });
+    const rawDate = String(rawMatch && rawMatch.date ? rawMatch.date : "").trim();
+    if (rawDate && rawDate !== date) continue;
+
+    const candidate = toMatchListPayload(rawMatch, {
+      matchDetailsLookup: detailsLookup,
+      matchDetailsIdentityIndex: detailsIdentityIndex,
+    });
     const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
     if (!candidate || !matchId) continue;
     if (String(candidate.date || "") !== date) continue;
@@ -4775,7 +5083,7 @@ function buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup) {
     markSource(matchId, "merged");
   }
 
-  for (const payload of Object.values(detailsLookup)) {
+  for (const payload of detailPayloads) {
     const candidate = toMonitorCandidateFromDetailsPayload(payload, { allowMissingDate: true });
     const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
     if (!candidate || !matchId) continue;
@@ -4866,6 +5174,16 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
 
   if (incoming.penalty_result) {
     merged.penalty_result = incoming.penalty_result;
+  }
+
+  const incomingTeamLineups = normalizeTeamLineupsPayload(incoming.team_lineups);
+  if (incomingTeamLineups) {
+    merged.team_lineups = incomingTeamLineups;
+  } else if (!merged.team_lineups) {
+    const existingTeamLineups = normalizeTeamLineupsPayload(existing.team_lineups);
+    if (existingTeamLineups) {
+      merged.team_lineups = existingTeamLineups;
+    }
   }
 
   // If we have a penalty result (shootout complete) and status is "Pens", change to "AET"
@@ -7532,7 +7850,7 @@ function getMatchDetailsStatePayload(payload) {
   const awayScore = parseNumericScore(payload.away_score);
   const aggregateHomeScore = parseNumericScore(payload.aggregate_home_score);
   const aggregateAwayScore = parseNumericScore(payload.aggregate_away_score);
-  const scoreStatus = resolveMatchScoreStatus(payload) || payload.score_status || null;
+  const scoreStatus = resolveStableMatchScoreStatus(payload);
 
   const statePayload = {
     id,
@@ -7548,12 +7866,14 @@ function getMatchDetailsStatePayload(payload) {
     aggregate_away_score: aggregateAwayScore,
     score_status: scoreStatus,
     penalty_result: payload.penalty_result || null,
-    in_progress:
-      payload.in_progress !== undefined
-        ? Boolean(payload.in_progress)
-        : isInProgressMatchStatus(scoreStatus),
+    in_progress: isInProgressMatchStatus(scoreStatus),
     updated_at: payload.updated_at || null,
   };
+
+  const teamLineups = normalizeTeamLineupsPayload(payload.team_lineups);
+  if (teamLineups) {
+    statePayload.team_lineups = teamLineups;
+  }
 
   return statePayload;
 }
@@ -7700,6 +8020,7 @@ function toOperationalAdminMatchPayload(payload) {
     away_assists: Array.isArray(payload.away_assists) ? payload.away_assists : [],
     home_red_cards: Array.isArray(payload.home_red_cards) ? payload.home_red_cards : [],
     away_red_cards: Array.isArray(payload.away_red_cards) ? payload.away_red_cards : [],
+    team_lineups: normalizeTeamLineupsPayload(payload.team_lineups),
     updated_at: payload.updated_at || null,
   };
 }
@@ -7866,6 +8187,185 @@ function mergedMatchesForResponse() {
   return Array.isArray(cachedMergedMatches) ? cachedMergedMatches : [];
 }
 
+function currentMergedMatchesDatasetSnapshot() {
+  return {
+    items: mergedMatchesForResponse(),
+    updated_at:
+      newestIsoTimestamp([bbcRangeLastUpdated, lastUpdated, bbcLastUpdated, recentLastUpdated]) ||
+      null,
+    source: "memory",
+  };
+}
+
+function currentPremierLeagueTeamsDatasetSnapshot() {
+  return {
+    items: Array.isArray(cachedPremierLeagueTeams) ? cachedPremierLeagueTeams : [],
+    updated_at: eplLastUpdated || null,
+    source: "memory",
+  };
+}
+
+function scheduleMatchDetailsSnapshotWarm(trigger = "request") {
+  if (matchDetailsById.size > 0 || matchDetailsSnapshotWarmTask) return false;
+
+  matchDetailsSnapshotWarmTask = (async () => {
+    try {
+      const snapshot = await getAllOperationalMatchDetails();
+      if (!snapshot || !snapshot.records || typeof snapshot.records !== "object") return;
+      const entries = Object.entries(snapshot.records);
+      if (entries.length === 0) return;
+      matchDetailsById = new Map(entries);
+      if (snapshot.updated_at) {
+        matchDetailsLastUpdated = snapshot.updated_at;
+      }
+      setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, matchDetailsById.size);
+    } catch (error) {
+      console.warn(
+        `[API] Failed to warm match details snapshot (${trigger}):`,
+        error.message || error
+      );
+    } finally {
+      matchDetailsSnapshotWarmTask = null;
+    }
+  })();
+
+  return true;
+}
+
+function currentFastMatchDetailsLookupSnapshot(trigger = "request") {
+  const current = currentMatchDetailsLookupSnapshot();
+  if (current) return current;
+  scheduleMatchDetailsSnapshotWarm(trigger);
+  return {
+    lookup: {},
+    updated_at: matchDetailsLastUpdated,
+    source: "memory_missing",
+  };
+}
+
+function findInMemoryMatchRecordByMatchId(matchId) {
+  const normalizedMatchId = normalizeMatchDetailsId(matchId);
+  if (!normalizedMatchId) return null;
+
+  const sources = [
+    mergedMatchesForResponse(),
+    Array.isArray(cachedRecentMatches) ? cachedRecentMatches : [],
+    Array.isArray(cachedBbcRangeMatches) ? cachedBbcRangeMatches : [],
+    Array.isArray(cachedBbcMatches) ? cachedBbcMatches : [],
+    Array.isArray(cachedMatches) ? cachedMatches : [],
+  ];
+
+  for (const source of sources) {
+    for (const candidate of source) {
+      const detailsId =
+        matchDetailsIdFromUrl(candidate && candidate.details_url) ||
+        normalizeMatchDetailsId(candidate && candidate.match_details_id);
+      if (detailsId !== normalizedMatchId) continue;
+      const normalized = normalizeMatchRecord(candidate);
+      if (normalized) return normalized;
+    }
+  }
+
+  return null;
+}
+
+function buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord) {
+  const normalizedMatchId = normalizeMatchDetailsId(matchId);
+  if (!normalizedMatchId || !fallbackMatchRecord || typeof fallbackMatchRecord !== "object") {
+    return null;
+  }
+
+  const statePayload = getMatchDetailsStatePayload({
+    id: normalizedMatchId,
+    ...fallbackMatchRecord,
+    updated_at: matchDetailsLastUpdated || null,
+  });
+  if (!statePayload) return null;
+
+  const payload = {
+    ...statePayload,
+    league_subcategory: fallbackMatchRecord.league_subcategory || null,
+    home_goal_scorers: Array.isArray(fallbackMatchRecord.home_goal_scorers)
+      ? fallbackMatchRecord.home_goal_scorers
+      : [],
+    away_goal_scorers: Array.isArray(fallbackMatchRecord.away_goal_scorers)
+      ? fallbackMatchRecord.away_goal_scorers
+      : [],
+    home_assists: Array.isArray(fallbackMatchRecord.home_assists)
+      ? fallbackMatchRecord.home_assists
+      : [],
+    away_assists: Array.isArray(fallbackMatchRecord.away_assists)
+      ? fallbackMatchRecord.away_assists
+      : [],
+    home_red_cards: Array.isArray(fallbackMatchRecord.home_red_cards)
+      ? fallbackMatchRecord.home_red_cards
+      : [],
+    away_red_cards: Array.isArray(fallbackMatchRecord.away_red_cards)
+      ? fallbackMatchRecord.away_red_cards
+      : [],
+  };
+
+  const teamLineups = normalizeTeamLineupsPayload(fallbackMatchRecord.team_lineups);
+  if (teamLineups) {
+    payload.team_lineups = teamLineups;
+  }
+
+  return payload;
+}
+
+function scheduleMatchDetailsWarm(matchId, options = {}) {
+  const normalizedMatchId = normalizeMatchDetailsId(matchId);
+  if (!normalizedMatchId) return false;
+  if (matchDetailsById.has(normalizedMatchId) || matchDetailsWarmTasks.has(normalizedMatchId)) {
+    return false;
+  }
+
+  const trigger = options && options.trigger ? String(options.trigger) : "request";
+  const fallbackMatchRecord =
+    options && options.fallbackMatchRecord && typeof options.fallbackMatchRecord === "object"
+      ? options.fallbackMatchRecord
+      : null;
+
+  const task = (async () => {
+    try {
+      const payload = await getOperationalMatchDetails(normalizedMatchId);
+      if (payload && typeof payload === "object") {
+        matchDetailsById.set(normalizedMatchId, payload);
+        if (
+          payload.updated_at &&
+          (!matchDetailsLastUpdated || payload.updated_at > matchDetailsLastUpdated)
+        ) {
+          matchDetailsLastUpdated = payload.updated_at;
+        }
+        if (payload.details_url) {
+          scheduleMatchDetailsBackfill(payload, { trigger: `${trigger}_warm` });
+        }
+        return;
+      }
+
+      if (fallbackMatchRecord && fallbackMatchRecord.details_url) {
+        scheduleMatchDetailsBackfill(
+          {
+            id: normalizedMatchId,
+            ...fallbackMatchRecord,
+          },
+          { trigger: `${trigger}_fallback` }
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `[API] Failed to warm match details for ${normalizedMatchId}:`,
+        error.message || error
+      );
+    } finally {
+      matchDetailsWarmTasks.delete(normalizedMatchId);
+    }
+  })();
+
+  matchDetailsWarmTasks.set(normalizedMatchId, task);
+  return true;
+}
+
 async function updateMatches(options = {}) {
   if (updating) return;
   updating = true;
@@ -7921,6 +8421,8 @@ function filterStaleBbcMatches(newMatches, cachedMatches) {
 
   const filtered = [];
   let staleCount = 0;
+  const staleSamples = [];
+  let terminalRecoveryCount = 0;
 
   newMatches.forEach((newMatch) => {
     const key = `${newMatch.home_team}|${newMatch.away_team}`.toLowerCase();
@@ -7944,21 +8446,18 @@ function filterStaleBbcMatches(newMatches, cachedMatches) {
     const allowTerminalRecovery = cachedIsTerminal && newIsInProgress;
 
     if (!allowTerminalRecovery && newTime !== null && cachedTime !== null && newTime < cachedTime) {
-      console.log(
-        `[STALE DATA] Rejecting stale BBC data for ${newMatch.home_team} vs ${newMatch.away_team} - ` +
-        `new time=${newTime}' cached time=${cachedTime}' (time regressed)`
-      );
       staleCount++;
+      if (staleSamples.length < 5) {
+        staleSamples.push(
+          `${newMatch.home_team} vs ${newMatch.away_team}: time ${newTime}' < ${cachedTime}'`
+        );
+      }
       filtered.push(cached); // Keep the cached version
       return;
     }
 
     if (allowTerminalRecovery) {
-      console.log(
-        `[STALE DATA] Allowing terminal recovery for ${newMatch.home_team} vs ${newMatch.away_team} - ` +
-        `cached status=${cached.match_time || cached.score_status || "unknown"}, ` +
-        `incoming status=${newMatch.match_time || newMatch.score_status || "unknown"}`
-      );
+      terminalRecoveryCount += 1;
     }
 
     // Check if scores have regressed
@@ -7969,11 +8468,12 @@ function filterStaleBbcMatches(newMatches, cachedMatches) {
         newTime !== null && cachedTime !== null ? newTime <= cachedTime : true;
 
       if (!allowTerminalRecovery && newTotal < cachedTotal && timeNotAhead) {
-        console.log(
-          `[STALE DATA] Rejecting stale BBC data for ${newMatch.home_team} vs ${newMatch.away_team} - ` +
-          `scores regressed from ${cached.home_score}-${cached.away_score} to ${newMatch.home_score}-${newMatch.away_score}`
-        );
         staleCount++;
+        if (staleSamples.length < 5) {
+          staleSamples.push(
+            `${newMatch.home_team} vs ${newMatch.away_team}: score ${newMatch.home_score}-${newMatch.away_score} < ${cached.home_score}-${cached.away_score}`
+          );
+        }
         filtered.push(cached); // Keep the cached version
         return;
       }
@@ -7984,7 +8484,12 @@ function filterStaleBbcMatches(newMatches, cachedMatches) {
   });
 
   if (staleCount > 0) {
-    console.log(`[STALE DATA] Filtered out ${staleCount} stale match(es) from BBC update`);
+    const sampleSuffix =
+      staleSamples.length > 0 ? ` samples=${staleSamples.join(" | ")}` : "";
+    console.log(`[STALE DATA] Filtered out ${staleCount} stale match(es) from BBC update${sampleSuffix}`);
+  }
+  if (terminalRecoveryCount > 0) {
+    console.log(`[STALE DATA] Allowed terminal recovery for ${terminalRecoveryCount} match(es)`);
   }
 
   return filtered;
@@ -9527,6 +10032,11 @@ function toAdminResultMatchPayload(detailsPayload, fallbackMatchRecord = null, f
       : Array.isArray(fallbackMatchRecord && fallbackMatchRecord.away_red_cards)
         ? fallbackMatchRecord.away_red_cards
         : [],
+    team_lineups: normalizeTeamLineupsPayload(
+      (detailsPayload && detailsPayload.team_lineups) ||
+      (fallbackMatchRecord && fallbackMatchRecord.team_lineups) ||
+      null
+    ),
   };
 
   const kickoffMs = kickoffTimestampMs(payload);
@@ -9635,15 +10145,9 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       return;
     }
 
-    const [mergedDataset, premierLeagueDataset] = await Promise.all([
-      getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
-      getOperationalArrayDataset(OP_DATASET_PREMIER_LEAGUE_TEAMS, cachedPremierLeagueTeams),
-    ]);
-    const matchDetailsSnapshot = currentMatchDetailsLookupSnapshot() || {
-      lookup: {},
-      updated_at: null,
-      source: "memory_missing",
-    };
+    const mergedDataset = currentMergedMatchesDatasetSnapshot();
+    const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
+    const matchDetailsSnapshot = currentFastMatchDetailsLookupSnapshot("matches_list_request");
 
     const latestUpdated = newestIsoTimestamp([
       mergedDataset.updated_at,
@@ -9787,6 +10291,10 @@ app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
     return;
   }
 
+  uniqueIds.forEach((matchId) => {
+    markMatchDetailsActive(matchId);
+  });
+
   const lookup = await getOperationalMatchDetailsBatchSafe(uniqueIds);
   res.set("X-Operational-Source", lookup.source || "unknown");
 
@@ -9816,6 +10324,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     res.status(400).json({ error: "Invalid match id. Expected BBC details id (e.g. c043pne0q3kt)." });
     return;
   }
+  markMatchDetailsActive(matchId);
 
   // Check if this is a test match (search all test matches by their ID)
   const allTestMatches = testMatchState.getAllMatches();
@@ -9848,22 +10357,35 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     return;
   }
 
-  const detailsLookup = await getOperationalMatchDetailsByIdSafe(matchId);
-  const payload = detailsLookup.payload;
-  if (!payload) {
+  const payload = matchDetailsById.get(matchId) || null;
+  const fallbackMatchRecord = findInMemoryMatchRecordByMatchId(matchId);
+  const responsePayload = payload || buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord);
+  if (!responsePayload) {
+    scheduleMatchDetailsWarm(matchId, {
+      trigger: "match_details_request",
+      fallbackMatchRecord,
+    });
     res.status(404).json({ error: "No cached match details found for match id." });
     return;
   }
-  res.set("X-Operational-Source", detailsLookup.source || "unknown");
+  const stableResponsePayload = withStableMatchDetailsState(responsePayload) || responsePayload;
 
-  scheduleMatchDetailsBackfill(payload, { trigger: "match_details_request" });
+  if (payload) {
+    scheduleMatchDetailsBackfill(payload, { trigger: "match_details_request" });
+  } else {
+    scheduleMatchDetailsWarm(matchId, {
+      trigger: "match_details_request",
+      fallbackMatchRecord,
+    });
+  }
 
-  if (payload.updated_at) {
-    res.set("X-Last-Updated", payload.updated_at);
+  res.set("X-Operational-Source", payload ? "memory" : "memory_fallback");
+  if (stableResponsePayload.updated_at) {
+    res.set("X-Last-Updated", stableResponsePayload.updated_at);
   } else if (matchDetailsLastUpdated) {
     res.set("X-Last-Updated", matchDetailsLastUpdated);
   }
-  res.json(payload);
+  res.json(stableResponsePayload);
 });
 
 app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
@@ -9879,17 +10401,10 @@ app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
   }
 
   try {
-    const [mergedDataset, matchDetailsSnapshot] = await Promise.all([
-      getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
-      getOperationalMatchDetailsSnapshotSafe(),
-    ]);
-    const matchDetailsLookup =
-      matchDetailsSnapshot && matchDetailsSnapshot.records && typeof matchDetailsSnapshot.records === "object"
-        ? matchDetailsSnapshot.records
-        : {};
-    const mergedItems = Array.isArray(mergedDataset && mergedDataset.items)
-      ? mergedDataset.items
-      : [];
+    const mergedDataset = currentMergedMatchesDatasetSnapshot();
+    const matchDetailsSnapshot = currentFastMatchDetailsLookupSnapshot("monitor_candidates_request");
+    const matchDetailsLookup = matchDetailsSnapshot.lookup || {};
+    const mergedItems = Array.isArray(mergedDataset.items) ? mergedDataset.items : [];
     const candidates = buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup);
 
     res.status(200).json({
@@ -10876,18 +11391,37 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
     res.status(400).json({ error: "Invalid BBC football details URL" });
     return;
   }
+  markMatchDetailsActive(detailsId);
 
-  const detailsLookup = await getOperationalMatchDetailsByIdSafe(detailsId);
-  const payload = detailsLookup.payload;
-  if (!payload) {
+  const payload = matchDetailsById.get(detailsId) || null;
+  const fallbackMatchRecord = findInMemoryMatchRecordByMatchId(detailsId);
+  const responsePayload = payload || buildFallbackMatchDetailsPayload(detailsId, fallbackMatchRecord);
+  if (!responsePayload) {
+    scheduleMatchDetailsWarm(detailsId, {
+      trigger: "bbc_details_request",
+      fallbackMatchRecord,
+    });
     res.status(404).json({ error: "No cached match details found for provided details URL" });
     return;
   }
-  res.set("X-Operational-Source", detailsLookup.source || "unknown");
-  if (payload.updated_at) {
-    res.set("X-Last-Updated", payload.updated_at);
+  const stableResponsePayload = withStableMatchDetailsState(responsePayload) || responsePayload;
+
+  if (payload) {
+    scheduleMatchDetailsBackfill(payload, { trigger: "bbc_details_request" });
+  } else {
+    scheduleMatchDetailsWarm(detailsId, {
+      trigger: "bbc_details_request",
+      fallbackMatchRecord,
+    });
   }
-  res.json(payload);
+
+  res.set("X-Operational-Source", payload ? "memory" : "memory_fallback");
+  if (stableResponsePayload.updated_at) {
+    res.set("X-Last-Updated", stableResponsePayload.updated_at);
+  } else if (matchDetailsLastUpdated) {
+    res.set("X-Last-Updated", matchDetailsLastUpdated);
+  }
+  res.json(stableResponsePayload);
 });
 
 app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
@@ -13642,7 +14176,13 @@ module.exports = {
     toMonitorCandidateFromDetailsPayload,
     mergeMonitorCandidate,
     buildMonitorCandidatesForDate,
+    buildFallbackMatchDetailsPayload,
     matchDetailsNeedsBackfill,
+    markMatchDetailsActive,
+    isMatchDetailsActive,
+    normalizeMatchDetailsPayload,
+    resolveStableMatchScoreStatus,
+    withStableMatchDetailsState,
     pickPreferredMatchStatus,
     normalizeMatchStatusValue,
     parseMatchStatusMinute,

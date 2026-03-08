@@ -1360,13 +1360,29 @@ let dailyMatchesCheckTimer = null;
 let cleanupTimer = null;
 let liveActivityEvalTimer = null;
 let liveActivityEvalInFlight = false;
+let dailyMatchesCheckInFlight = false;
 let liveActivityStartupKickTimers = [];
 let apiBaseURL = "http://localhost:3000/api/v1";
+
+async function runScheduledDailyMatchesCheck(reason = "interval") {
+  if (!isMonitoring) return;
+  if (dailyMatchesCheckInFlight) {
+    console.log(`[MatchMonitor] Skipping overlapping daily match check (${reason})`);
+    return;
+  }
+
+  dailyMatchesCheckInFlight = true;
+  try {
+    await checkTodaysMatches();
+  } finally {
+    dailyMatchesCheckInFlight = false;
+  }
+}
 
 async function runStartupLiveActivityKick(reason = "startup") {
   if (!isMonitoring) return;
   try {
-    await checkTodaysMatches();
+    await runScheduledDailyMatchesCheck(reason);
   } catch (error) {
     console.warn(
       `[MatchMonitor] Startup kick checkTodaysMatches failed (${reason}):`,
@@ -1421,7 +1437,9 @@ function startMonitoring() {
   }
 
   // Start daily matches check
-  dailyMatchesCheckTimer = setInterval(checkTodaysMatches, DAILY_MATCHES_CHECK_INTERVAL_MS);
+  dailyMatchesCheckTimer = setInterval(() => {
+    void runScheduledDailyMatchesCheck("interval");
+  }, DAILY_MATCHES_CHECK_INTERVAL_MS);
 
   // Start cleanup timer
   cleanupTimer = setInterval(cleanup, CLEANUP_INTERVAL_MS);

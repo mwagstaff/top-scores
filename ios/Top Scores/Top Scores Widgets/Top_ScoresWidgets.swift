@@ -175,6 +175,15 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let awayTeamScore: Double?
     let totalTeamScore: Double?
     let tvChannels: [String]
+
+    var isFinished: Bool {
+        guard let matchTime else { return false }
+        let normalized = matchTime
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .replacingOccurrences(of: ".", with: "")
+        return normalized.hasPrefix("FT") || normalized.hasPrefix("AET")
+    }
 }
 
 @available(iOSApplicationExtension 16.1, *)
@@ -1783,6 +1792,7 @@ private struct TopScoresLiveActivityWidget: Widget {
             } compactTrailing: {
                 Text(compactTrailingText(state: context.state))
                     .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(compactTrailingOpacity(state: context.state)))
             } minimal: {
                 Text("TS")
                     .font(.caption2.weight(.bold))
@@ -1806,6 +1816,16 @@ private struct TopScoresLiveActivityWidget: Widget {
             return first.matchTime ?? first.time
         }
         return first.time
+    }
+
+    private func compactTrailingOpacity(state: TopScoresLiveActivityAttributes.ContentState) -> Double {
+        guard state.mode.contains("finished"),
+              let first = state.matches.first,
+              first.homeScore != nil,
+              first.awayScore != nil else {
+            return 1.0
+        }
+        return LiveActivityScoreStyle.finishedOpacity
     }
 }
 
@@ -1982,17 +2002,7 @@ private struct SingleLiveMatchView: View {
                 HStack(spacing: 10) {
                     LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
                     Spacer(minLength: 8)
-                    HStack(spacing: 9) {
-                        Text("\(match.homeScore ?? 0)")
-                            .font(.title3.monospacedDigit().weight(.bold))
-                            .foregroundStyle(.white)
-                        Text(match.matchTime ?? "LIVE")
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.75))
-                        Text("\(match.awayScore ?? 0)")
-                            .font(.title3.monospacedDigit().weight(.bold))
-                            .foregroundStyle(.white)
-                    }
+                    LiveActivitySingleScoreRow(match: match)
                     Spacer(minLength: 8)
                     LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
                 }
@@ -2028,17 +2038,7 @@ private struct SingleFinishedMatchView: View {
                 HStack(spacing: 10) {
                     LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
                     Spacer(minLength: 8)
-                    HStack(spacing: 9) {
-                        Text("\(match.homeScore ?? 0)")
-                            .font(.title3.monospacedDigit().weight(.bold))
-                            .foregroundStyle(.white)
-                        Text(match.matchTime ?? "FT")
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.75))
-                        Text("\(match.awayScore ?? 0)")
-                            .font(.title3.monospacedDigit().weight(.bold))
-                            .foregroundStyle(.white)
-                    }
+                    LiveActivitySingleScoreRow(match: match)
                     Spacer(minLength: 8)
                     LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
                 }
@@ -2055,6 +2055,38 @@ private struct SingleFinishedMatchView: View {
     private var primaryChannel: String? {
         let primary = match.tvChannels.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         return primary?.isEmpty == false ? primary : nil
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private enum LiveActivityScoreStyle {
+    static let finishedOpacity = 0.74
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct LiveActivitySingleScoreRow: View {
+    let match: TopScoresLiveActivityMatchState
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Text("\(match.homeScore ?? 0)")
+                .font(.title3.monospacedDigit().weight(.bold))
+                .foregroundStyle(.white.opacity(scoreOpacity))
+            Text(match.matchTime ?? fallbackStatus)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.white.opacity(0.75))
+            Text("\(match.awayScore ?? 0)")
+                .font(.title3.monospacedDigit().weight(.bold))
+                .foregroundStyle(.white.opacity(scoreOpacity))
+        }
+    }
+
+    private var scoreOpacity: Double {
+        match.isFinished ? LiveActivityScoreStyle.finishedOpacity : 1.0
+    }
+
+    private var fallbackStatus: String {
+        match.isFinished ? "FT" : "LIVE"
     }
 }
 
@@ -2312,6 +2344,7 @@ private struct MultiMatchEntryCell: View {
         HStack(spacing: 2) {
             Text(scoreCoreText)
                 .font(.callout.monospacedDigit().weight(.bold))
+                .foregroundStyle(.white.opacity(scoreOpacity))
         }
         .lineLimit(1)
         .minimumScaleFactor(0.7)
@@ -2328,6 +2361,9 @@ private struct MultiMatchEntryCell: View {
         live ? (match.matchTime ?? match.time) : match.time
     }
 
+    private var scoreOpacity: Double {
+        match.isFinished ? LiveActivityScoreStyle.finishedOpacity : 1.0
+    }
 }
 
 @available(iOSApplicationExtension 16.1, *)

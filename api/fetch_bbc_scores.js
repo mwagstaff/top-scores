@@ -905,6 +905,314 @@ function extractDetailsPageMetadata($, html) {
   return metadata;
 }
 
+function normalizeFormationValue(value) {
+  const normalized = normalizeText(String(value || "").replace(/^Formation:\s*/i, ""));
+  if (!normalized) return null;
+  return normalized.split(/\s*-\s*/).filter(Boolean).join("-");
+}
+
+function normalizeLineupNameForLookup(name) {
+  return normalizeText(name)
+    .replace(/\(c\)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function toLineupPositionCategory(roleLabel) {
+  const normalized = normalizeText(roleLabel).toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes("goalkeeper")) return "goalkeeper";
+  if (normalized.includes("defend") || normalized.includes("full-back") || normalized.includes("wing-back")) {
+    return "defender";
+  }
+  if (
+    normalized.includes("striker") ||
+    normalized.includes("forward") ||
+    normalized.includes("attacker") ||
+    normalized.includes("winger")
+  ) {
+    return "attacker";
+  }
+  if (normalized.includes("midfield")) return "midfielder";
+  return null;
+}
+
+function extractVisibleLineupText($node, $) {
+  if (!$node || !$node.length) return "";
+  const $clone = $node.clone();
+  $clone.find(BBC_HIDDEN_TEXT_SELECTOR).remove();
+  return normalizeText($clone.text());
+}
+
+function parseLineupNotationDescriptor(text) {
+  const normalized = normalizeText(text);
+  const match = normalized.match(/^(\d+),\s*(.+?),\s*(.+)$/);
+  if (!match) return null;
+
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+
+  return {
+    number,
+    short_name: normalizeText(match[2]),
+    role_label: normalizeText(match[3]),
+  };
+}
+
+function parseLineupPlayerNotation($circle, $) {
+  if (!$circle || !$circle.length) return null;
+
+  const visibleNumber = $circle
+    .find("[aria-hidden='true']")
+    .map((_, el) => {
+      const value = normalizeText($(el).text());
+      return /^\d+$/.test(value) ? Number(value) : null;
+    })
+    .get()
+    .find((value) => Number.isFinite(value));
+
+  const descriptor = $circle
+    .find(BBC_HIDDEN_TEXT_SELECTOR)
+    .map((_, el) => parseLineupNotationDescriptor($(el).text()))
+    .get()
+    .find(Boolean);
+
+  const number = Number.isFinite(visibleNumber)
+    ? visibleNumber
+    : descriptor && Number.isFinite(descriptor.number)
+      ? descriptor.number
+      : null;
+  if (!Number.isFinite(number)) return null;
+
+  return {
+    number,
+    short_name: descriptor ? descriptor.short_name : null,
+    role_label: descriptor ? descriptor.role_label : null,
+    position_category: descriptor ? toLineupPositionCategory(descriptor.role_label) : null,
+  };
+}
+
+function extractLineupPlayerName($item, $) {
+  const $nameWrapper = $item.find("[class*='PlayerNameWrapper']").first();
+  if (!$nameWrapper.length) return null;
+  return extractVisibleLineupText($nameWrapper, $) || null;
+}
+
+function parseLineupSubstitution($item, $, substitutesByName = new Map()) {
+  if (!$item || !$item.length) return null;
+
+  const $substitutionText = $item
+    .find(BBC_HIDDEN_TEXT_SELECTOR)
+    .filter((_, el) => /substituted for/i.test(normalizeText($(el).text())))
+    .first();
+  if (!$substitutionText.length) return null;
+
+  const description = normalizeText($substitutionText.text());
+  const nameMatch = description.match(/substituted for\s+(.+?)\s+at\s+/i);
+  const substituteName = normalizeText(nameMatch && nameMatch[1]);
+  const minute = extractMinuteTokens(description)[0] || null;
+
+  if (!substituteName || !minute) return null;
+
+  const substitute =
+    substitutesByName.get(normalizeLineupNameForLookup(substituteName)) || null;
+
+  return {
+    minute,
+    player_on: {
+      number: substitute && Number.isFinite(substitute.number) ? substitute.number : null,
+      name: substitute && substitute.name ? substitute.name : substituteName,
+    },
+  };
+}
+
+function parseLineupPlayersList($list, $, options = {}) {
+  if (!$list || !$list.length) return [];
+
+  return $list
+    .find("[data-testid='player-list-item']")
+    .map((_, el) => {
+      const $item = $(el);
+      const notation = parseLineupPlayerNotation(
+        $item.find("[data-testid='player-notation-circle']").first(),
+        $
+      );
+      const name = extractLineupPlayerName($item, $);
+      if (!notation || !name) return null;
+
+      const entry = {
+        number: notation.number,
+        name,
+      };
+
+      if (options.includePosition && notation.position_category) {
+        entry.position_category = notation.position_category;
+      }
+
+      if (options.substitutesByName) {
+        const substitution = parseLineupSubstitution($item, $, options.substitutesByName);
+        if (substitution) {
+          entry.substitution = substitution;
+        }
+      }
+
+      return entry;
+    })
+    .get()
+    .filter(Boolean);
+}
+
+function parseFormationPositionMap($teamPlayersSection, $) {
+  const positions = new Map();
+  if (!$teamPlayersSection || !$teamPlayersSection.length) return positions;
+
+  const $formation = $teamPlayersSection.find("[data-testid='formation-container']").first();
+  if (!$formation.length) return positions;
+
+  $formation.find("[data-testid='player-notation-circle']").each((_, el) => {
+    const notation = parseLineupPlayerNotation($(el), $);
+    if (!notation || !notation.position_category || !Number.isFinite(notation.number)) return;
+    if (!positions.has(notation.number)) {
+      positions.set(notation.number, notation.position_category);
+    }
+  });
+
+  return positions;
+}
+
+function parseTeamLineupBlock(nodes, $, explicitSide = null, explicitTeam = null) {
+  const $nameNode = $(nodes.nameNode);
+  const headingText = normalizeText($nameNode.text());
+  const headingMatch = headingText.match(/^(home|away)\s+team,\s*(.+)$/i);
+  const side = explicitSide || (headingMatch ? headingMatch[1].toLowerCase() : null);
+  const teamName = explicitTeam || (headingMatch ? normalizeText(headingMatch[2]) : null);
+  if (!side || !teamName) return null;
+
+  const $detailsNode = $(nodes.detailsNode);
+  const $teamPlayersSection = $(nodes.teamPlayersNode);
+  const $substitutesSection = $(nodes.substitutesNode);
+
+  const manager =
+    normalizeText(
+      String(
+        $detailsNode.find("[data-testid$='-manager']").first().text() || ""
+      ).replace(/^Manager:\s*/i, "")
+    ) || null;
+  const formation = normalizeFormationValue(
+    $detailsNode.find("[data-testid$='-formation']").first().text()
+  );
+
+  const substitutes = parseLineupPlayersList(
+    $substitutesSection.find("[data-testid='player-list']").first(),
+    $
+  ).map((player) => ({
+    number: player.number,
+    name: player.name,
+  }));
+
+  const substitutesByName = new Map();
+  substitutes.forEach((player) => {
+    const key = normalizeLineupNameForLookup(player.name);
+    if (!key || substitutesByName.has(key)) return;
+    substitutesByName.set(key, player);
+  });
+
+  const positionsByNumber = parseFormationPositionMap($teamPlayersSection, $);
+  const startingEntries = parseLineupPlayersList(
+    $teamPlayersSection.find("[data-testid='player-list']").first(),
+    $,
+    { includePosition: true, substitutesByName }
+  );
+  const startingLineup = startingEntries.map((player) => ({
+    number: player.number,
+    name: player.name,
+    position_category:
+      positionsByNumber.get(player.number) || player.position_category || null,
+  }));
+
+  const substitutions = startingEntries
+    .filter((player) => player.substitution)
+    .map((player) => ({
+      minute: player.substitution.minute,
+      player_off: {
+        number: player.number,
+        name: player.name,
+      },
+      player_on: player.substitution.player_on,
+    }));
+
+  return {
+    side,
+    team: teamName,
+    manager,
+    formation,
+    starting_lineup: startingLineup,
+    substitutes,
+    substitutions,
+  };
+}
+
+function isCompleteTeamLineup(teamLineup) {
+  return Boolean(
+    teamLineup &&
+      Array.isArray(teamLineup.starting_lineup) &&
+      teamLineup.starting_lineup.length === 11 &&
+      Array.isArray(teamLineup.substitutes) &&
+      Array.isArray(teamLineup.substitutions)
+  );
+}
+
+function parseTeamLineups($) {
+  const $lineupsSection = $("#Line-ups").first();
+  if (!$lineupsSection.length) return null;
+
+  const $grid = $lineupsSection.find("[class*='GridContainer-LineupsGridContainer']").first();
+  if (!$grid.length) return null;
+
+  const teams = {};
+  const children = $grid.children().toArray();
+
+  for (let i = 0; i < children.length; i += 1) {
+    const headingText = normalizeText($(children[i]).text());
+    const headingMatch = headingText.match(/^(home|away)\s+team,\s*(.+)$/i);
+    if (!headingMatch) continue;
+
+    const block = parseTeamLineupBlock(
+      {
+        nameNode: children[i],
+        detailsNode: children[i + 1],
+        teamPlayersNode: children[i + 2],
+        substitutesNode: children[i + 3],
+      },
+      $,
+      headingMatch[1].toLowerCase(),
+      normalizeText(headingMatch[2])
+    );
+
+    if (block) {
+      teams[block.side] = {
+        team: block.team,
+        manager: block.manager,
+        formation: block.formation,
+        starting_lineup: block.starting_lineup,
+        substitutes: block.substitutes,
+        substitutions: block.substitutions,
+      };
+      i += 3;
+    }
+  }
+
+  if (!isCompleteTeamLineup(teams.home) || !isCompleteTeamLineup(teams.away)) {
+    return null;
+  }
+
+  return {
+    home: teams.home,
+    away: teams.away,
+  };
+}
+
 function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   if (!html) return null;
   const $ = cheerio.load(html);
@@ -916,6 +1224,7 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   const pageMetadata = extractDetailsPageMetadata($, html);
   const teamsFromHeader = extractTeamsFromBbcNode($root, $);
   const scoresFromHeader = extractScoresFromBbcNode($root, $);
+  const teamLineups = parseTeamLineups($);
   const resolvedHomeTeam = normalizeText(homeTeam) || teamsFromHeader[0] || pageMetadata.home_team || null;
   const resolvedAwayTeam = normalizeText(awayTeam) || teamsFromHeader[1] || pageMetadata.away_team || null;
 
@@ -948,7 +1257,8 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
     !pageMetadata.time &&
     !resolvedHomeTeam &&
     !resolvedAwayTeam &&
-    !scoresFromHeader
+    !scoresFromHeader &&
+    !teamLineups
   ) {
     return null;
   }
@@ -994,6 +1304,10 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   if (aggregate) {
     result.aggregate_home_score = aggregate[0];
     result.aggregate_away_score = aggregate[1];
+  }
+
+  if (teamLineups) {
+    result.team_lineups = teamLineups;
   }
 
   // Only parse penalty result if we have team names to validate against

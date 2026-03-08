@@ -3,12 +3,14 @@ import SwiftUI
 struct TablesView: View {
     @EnvironmentObject private var preferences: PreferencesStore
 
-    @State private var leagues: [LeagueTable] = []
-    @State private var selectedLeagueID = "premier-league"
-    @State private var isLoading = false
+    @State private var leagues: [LeagueTable]
+    @State private var selectedLeagueID: String
+    @State private var isLoading: Bool
     @State private var errorMessage: String?
     @State private var lastUpdated: Date?
     @State private var hasLoaded = false
+
+    private static let apiBaseURLDefaultsKey = "preferences.apiBaseURL"
 
     private let refreshFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -16,6 +18,18 @@ struct TablesView: View {
         formatter.timeStyle = .short
         return formatter
     }()
+
+    init() {
+        let apiBaseURL = UserDefaults.standard.string(forKey: Self.apiBaseURLDefaultsKey)
+            ?? PreferencesStore.defaultApiBaseURL
+        let cachedResponse = LeagueTablesCache.load(for: apiBaseURL)?.response
+        let initialLeagues = cachedResponse?.leagues ?? []
+
+        _leagues = State(initialValue: initialLeagues)
+        _selectedLeagueID = State(initialValue: Self.defaultLeagueID(from: initialLeagues))
+        _isLoading = State(initialValue: initialLeagues.isEmpty)
+        _lastUpdated = State(initialValue: cachedResponse?.lastUpdated)
+    }
 
     var body: some View {
         NavigationStack {
@@ -31,11 +45,13 @@ struct TablesView: View {
         .onAppear {
             guard !hasLoaded else { return }
             hasLoaded = true
+            applyCachedTables(for: preferences.apiBaseURL, clearWhenMissing: false)
             Task {
-                await loadTables(force: true)
+                await loadTables(force: false)
             }
         }
-        .onChange(of: preferences.apiBaseURL) { _, _ in
+        .onChange(of: preferences.apiBaseURL) { _, newValue in
+            applyCachedTables(for: newValue, clearWhenMissing: true)
             Task {
                 await loadTables(force: true)
             }
@@ -148,7 +164,12 @@ struct TablesView: View {
     }
 
     private func loadTables(force: Bool) async {
-        guard let baseURL = URL(string: preferences.apiBaseURL) else {
+        let apiBaseURL = preferences.apiBaseURL
+        await MainActor.run {
+            applyCachedTables(for: apiBaseURL, clearWhenMissing: false)
+        }
+
+        guard !apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             await MainActor.run {
                 errorMessage = "Invalid API base URL"
                 isLoading = false
@@ -163,32 +184,60 @@ struct TablesView: View {
             errorMessage = nil
         }
 
-        let client = APIClient(baseURL: baseURL)
         do {
-            let response = try await client.fetchLeagueTables()
+            let response = try await LeagueTablesCatalog.shared.refresh(
+                apiBaseURL: apiBaseURL,
+                force: force
+            )
             await MainActor.run {
-                leagues = response.leagues
-                selectedLeagueID = resolvedLeagueID(
-                    from: response.leagues,
-                    currentSelection: selectedLeagueID
-                )
-                lastUpdated = response.lastUpdated
+                apply(response: response)
                 isLoading = false
                 errorMessage = nil
             }
         } catch {
+            let cachedResponse = await LeagueTablesCatalog.shared.cachedResponse(apiBaseURL: apiBaseURL)
             await MainActor.run {
+                if let cachedResponse {
+                    apply(response: cachedResponse)
+                }
                 isLoading = false
-                errorMessage = "Failed to load tables: \(error.localizedDescription)"
+                errorMessage = leagues.isEmpty
+                    ? "Failed to load tables: \(error.localizedDescription)"
+                    : "Couldn't refresh tables. Showing saved data."
             }
         }
     }
 
+    private func applyCachedTables(for apiBaseURL: String, clearWhenMissing: Bool) {
+        guard let cachedResponse = LeagueTablesCache.load(for: apiBaseURL)?.response else {
+            guard clearWhenMissing else { return }
+            leagues = []
+            selectedLeagueID = Self.defaultLeagueID(from: [])
+            lastUpdated = nil
+            return
+        }
+
+        apply(response: cachedResponse)
+    }
+
+    private func apply(response: LeagueTablesResponse) {
+        leagues = response.leagues
+        selectedLeagueID = resolvedLeagueID(
+            from: response.leagues,
+            currentSelection: selectedLeagueID
+        )
+        lastUpdated = response.lastUpdated
+    }
+
     private func resolvedLeagueID(from leagues: [LeagueTable], currentSelection: String) -> String {
-        guard !leagues.isEmpty else { return "premier-league" }
+        guard !leagues.isEmpty else { return Self.defaultLeagueID(from: leagues) }
         if leagues.contains(where: { $0.leagueID == currentSelection }) {
             return currentSelection
         }
+        return Self.defaultLeagueID(from: leagues)
+    }
+
+    private static func defaultLeagueID(from leagues: [LeagueTable]) -> String {
         if leagues.contains(where: { $0.leagueID == "premier-league" }) {
             return "premier-league"
         }

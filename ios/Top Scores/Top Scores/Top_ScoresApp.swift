@@ -29,6 +29,9 @@ struct Top_ScoresApp: App {
                 .environmentObject(preferences)
                 .environmentObject(matchesStore)
                 .task {
+                    async let leagueTablesWarmTask: Void = LeagueTablesCatalog.shared.prefetch(
+                        apiBaseURL: preferences.snapshot.apiBaseURL
+                    )
                     async let teamRankingsWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
                         apiBaseURL: preferences.snapshot.apiBaseURL
                     )
@@ -45,6 +48,7 @@ struct Top_ScoresApp: App {
                             apiBaseURL: preferences.snapshot.apiBaseURL
                         )
                     _ = await (
+                        leagueTablesWarmTask,
                         teamRankingsWarmTask,
                         teamRankingSettingsWarmTask,
                         fantasyMappingsWarmTask,
@@ -68,6 +72,9 @@ struct Top_ScoresApp: App {
                     async let metricTask: Void = AppMetricsService.shared.sendAppOpenMetric(
                         apiBaseURL: snapshot.apiBaseURL
                     )
+                    async let leagueTablesWarmTask: Void = LeagueTablesCatalog.shared.prefetch(
+                        apiBaseURL: snapshot.apiBaseURL
+                    )
                     async let teamRankingWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
                         apiBaseURL: snapshot.apiBaseURL
                     )
@@ -87,6 +94,7 @@ struct Top_ScoresApp: App {
                         refreshTask,
                         syncTask,
                         metricTask,
+                        leagueTablesWarmTask,
                         teamRankingWarmTask,
                         teamRankingSettingsWarmTask,
                         fantasyMappingsWarmTask,

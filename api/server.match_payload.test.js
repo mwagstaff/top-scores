@@ -7,7 +7,13 @@ const {
     toMonitorCandidateFromDetailsPayload,
     mergeMonitorCandidate,
     buildMonitorCandidatesForDate,
+    buildFallbackMatchDetailsPayload,
     matchDetailsNeedsBackfill,
+    markMatchDetailsActive,
+    isMatchDetailsActive,
+    normalizeMatchDetailsPayload,
+    resolveStableMatchScoreStatus,
+    withStableMatchDetailsState,
   },
 } = require("./server");
 
@@ -46,6 +52,75 @@ function detailsPayload(overrides = {}) {
   };
 }
 
+function buildCompleteTeamLineups() {
+  const buildStarter = (number, name, position_category) => ({
+    number,
+    name,
+    position_category,
+  });
+
+  return {
+    home: {
+      team: "Wolverhampton Wanderers",
+      manager: "Vitor Pereira",
+      formation: "4-3-3",
+      starting_lineup: [
+        buildStarter(1, "J. Sa", "goalkeeper"),
+        buildStarter(2, "M. Doherty", "defender"),
+        buildStarter(4, "S. Bueno", "defender"),
+        buildStarter(12, "E. Agbadou", "defender"),
+        buildStarter(24, "Toti Gomes", "defender"),
+        buildStarter(3, "R. Ait-Nouri", "midfielder"),
+        buildStarter(7, "André", "midfielder"),
+        buildStarter(8, "João Gomes", "midfielder"),
+        buildStarter(5, "M. Munetsi", "midfielder"),
+        buildStarter(10, "Matheus Cunha", "attacker"),
+        buildStarter(9, "J. Strand Larsen", "attacker"),
+      ],
+      substitutes: [
+        { number: 21, name: "Pablo Sarabia" },
+        { number: 11, name: "Hwang Hee-Chan" },
+      ],
+      substitutions: [
+        {
+          minute: "72'",
+          player_off: { number: 5, name: "M. Munetsi" },
+          player_on: { number: 21, name: "Pablo Sarabia" },
+        },
+      ],
+    },
+    away: {
+      team: "Liverpool",
+      manager: "Arne Slot",
+      formation: "4-2-3-1",
+      starting_lineup: [
+        buildStarter(1, "Alisson", "goalkeeper"),
+        buildStarter(84, "C. Bradley", "defender"),
+        buildStarter(5, "I. Konaté", "defender"),
+        buildStarter(4, "V. van Dijk", "defender"),
+        buildStarter(26, "A. Robertson", "defender"),
+        buildStarter(38, "R. Gravenberch", "midfielder"),
+        buildStarter(10, "A. Mac Allister", "midfielder"),
+        buildStarter(11, "Mohamed Salah", "attacker"),
+        buildStarter(8, "D. Szoboszlai", "midfielder"),
+        buildStarter(18, "C. Gakpo", "attacker"),
+        buildStarter(20, "Diogo Jota", "attacker"),
+      ],
+      substitutes: [
+        { number: 7, name: "L. Díaz" },
+        { number: 9, name: "D. Núñez" },
+      ],
+      substitutions: [
+        {
+          minute: "81'",
+          player_off: { number: 18, name: "C. Gakpo" },
+          player_on: { number: 7, name: "L. Díaz" },
+        },
+      ],
+    },
+  };
+}
+
 test("toMatchListPayload upgrades status from match details by match id despite team alias mismatch", () => {
   const payload = toMatchListPayload(baseMatch(), {
     matchDetailsLookup: {
@@ -54,24 +129,24 @@ test("toMatchListPayload upgrades status from match details by match id despite 
   });
 
   assert.equal(payload.match_details_id, DETAILS_ID);
-  assert.equal(payload.score_status, undefined);
+  assert.equal(payload.score_status, "FT");
 });
 
-test("toMatchListPayload omits score fields even when list match has scores", () => {
+test("toMatchListPayload includes score fields from resolved match state", () => {
   const payload = toMatchListPayload(baseMatch(), {
     matchDetailsLookup: {
       [DETAILS_ID]: detailsPayload(),
     },
   });
 
-  assert.equal(payload.home_score, undefined);
-  assert.equal(payload.away_score, undefined);
+  assert.equal(payload.home_score, 2);
+  assert.equal(payload.away_score, 1);
   assert.equal(payload.aggregate_home_score, undefined);
   assert.equal(payload.aggregate_away_score, undefined);
   assert.equal(payload.penalty_result, undefined);
 });
 
-test("toMatchListPayload omits score fields even when details teams exactly match", () => {
+test("toMatchListPayload includes details state even when details teams exactly match", () => {
   const payload = toMatchListPayload(baseMatch(), {
     matchDetailsLookup: {
       [DETAILS_ID]: detailsPayload({
@@ -80,9 +155,9 @@ test("toMatchListPayload omits score fields even when details teams exactly matc
     },
   });
 
-  assert.equal(payload.score_status, undefined);
-  assert.equal(payload.home_score, undefined);
-  assert.equal(payload.away_score, undefined);
+  assert.equal(payload.score_status, "FT");
+  assert.equal(payload.home_score, 2);
+  assert.equal(payload.away_score, 1);
 });
 
 test("toMatchListPayload resolves match_details_id from details lookup when list row lacks details_url", () => {
@@ -170,6 +245,41 @@ test("toMatchListPayload resolves match_details_id when league label differs but
   );
 
   assert.equal(payload.match_details_id, fallbackId);
+});
+
+test("toMatchListPayload stabilizes stale in-progress status to FT once kickoff is well past the live window", () => {
+  const payload = toMatchListPayload(
+    {
+      date: "2026-03-06",
+      time: "15:00",
+      league: "Championship",
+      home_team: "Hull City",
+      away_team: "Millwall",
+      tv_channels: ["Sky Sports Football"],
+      match_details_id: "stale123abc",
+    },
+    {
+      matchDetailsLookup: {
+        stale123abc: {
+          id: "stale123abc",
+          date: "2026-03-06",
+          time: "15:00",
+          league: "Championship",
+          home_team: "Hull City",
+          away_team: "Millwall",
+          home_score: 1,
+          away_score: 3,
+          score_status: "90+9",
+          updated_at: "2026-03-06T17:05:00.000Z",
+        },
+      },
+      nowMs: Date.parse("2026-03-06T19:00:00.000Z"),
+    }
+  );
+
+  assert.equal(payload.score_status, "FT");
+  assert.equal(payload.home_score, 1);
+  assert.equal(payload.away_score, 3);
 });
 
 test("toMonitorCandidateFromDetailsPayload can expose live fields without a date when explicitly allowed", () => {
@@ -283,6 +393,126 @@ test("buildMonitorCandidatesForDate excludes details-only matches absent from me
   assert.equal(candidates[0].away_score, 3);
 });
 
+test("buildMonitorCandidatesForDate supports Map lookups and reuses details to resolve ids", () => {
+  const detailsLookup = new Map([
+    [
+      "cgqgzd55nq1t",
+      {
+        id: "cgqgzd55nq1t",
+        date: "2026-03-06",
+        time: "20:00",
+        league: "Spanish La Liga",
+        home_team: "Celta Vigo",
+        away_team: "Real Madrid",
+        home_score: 1,
+        away_score: 3,
+        score_status: "FT",
+        updated_at: "2026-03-06T22:00:00.000Z",
+      },
+    ],
+  ]);
+
+  const candidates = buildMonitorCandidatesForDate(
+    "2026-03-06",
+    [
+      {
+        date: "2026-03-06",
+        time: "20:00",
+        league: "La Liga",
+        home_team: "Celta Vigo",
+        away_team: "Real Madrid",
+        tv_channels: ["Premier Sports 1"],
+      },
+      {
+        date: "2026-03-07",
+        time: "15:00",
+        league: "Premier League",
+        home_team: "Arsenal",
+        away_team: "Chelsea",
+        tv_channels: ["Sky Sports Main Event"],
+      },
+    ],
+    detailsLookup
+  );
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].match_details_id, "cgqgzd55nq1t");
+  assert.deepEqual(candidates[0].sources, ["details", "merged"]);
+  assert.equal(candidates[0].score_status, "FT");
+  assert.equal(candidates[0].home_score, 1);
+  assert.equal(candidates[0].away_score, 3);
+});
+
+test("resolveStableMatchScoreStatus converts stale added-time statuses to FT after the live window", () => {
+  const scoreStatus = resolveStableMatchScoreStatus(
+    {
+      date: "2026-03-07",
+      time: "12:15",
+      home_score: 1,
+      away_score: 2,
+      score_status: "90+7",
+    },
+    {
+      nowMs: Date.parse("2026-03-07T23:30:00.000Z"),
+    }
+  );
+
+  assert.equal(scoreStatus, "FT");
+});
+
+test("normalizeMatchDetailsPayload stabilizes stale live-looking detail payloads before storage", () => {
+  const payload = normalizeMatchDetailsPayload(
+    {
+      details_url: "https://www.bbc.co.uk/sport/football/live/cj98rz2ypvdt",
+      date: "2026-03-07",
+      time: "12:15",
+      league: "FA Cup",
+      home_team: "Mansfield Town",
+      away_team: "Arsenal",
+      home_score: 1,
+      away_score: 2,
+      score_status: "90+7",
+    },
+    {
+      nowMs: Date.parse("2026-03-07T23:30:00.000Z"),
+    }
+  );
+
+  assert.equal(payload.score_status, "FT");
+  assert.equal(payload.in_progress, false);
+});
+
+test("withStableMatchDetailsState clears stale in-progress flags when a match is long finished", () => {
+  const payload = withStableMatchDetailsState(
+    {
+      id: "cj98rz2ypvdt",
+      details_url: "https://www.bbc.co.uk/sport/football/live/cj98rz2ypvdt",
+      date: "2026-03-07",
+      time: "12:15",
+      league: "FA Cup",
+      home_team: "Mansfield Town",
+      away_team: "Arsenal",
+      home_score: 1,
+      away_score: 2,
+      score_status: "90+7",
+      in_progress: true,
+    },
+    {
+      nowMs: Date.parse("2026-03-07T23:30:00.000Z"),
+    }
+  );
+
+  assert.equal(payload.score_status, "FT");
+  assert.equal(payload.in_progress, false);
+});
+
+test("markMatchDetailsActive enables short-lived refresh tracking for requested ids", () => {
+  assert.equal(markMatchDetailsActive(DETAILS_ID), true);
+  assert.equal(isMatchDetailsActive(DETAILS_ID), true);
+  assert.equal(markMatchDetailsActive("not-valid!"), false);
+  assert.equal(isMatchDetailsActive("not-valid!"), false);
+});
+
 test("matchDetailsNeedsBackfill refreshes cached records that are missing core metadata", () => {
   assert.equal(
     matchDetailsNeedsBackfill({
@@ -335,4 +565,163 @@ test("matchDetailsNeedsBackfill refreshes cached records with malformed competit
     }),
     true
   );
+});
+
+test("matchDetailsNeedsBackfill refreshes cached records that are missing parsed team lineups", () => {
+  assert.equal(
+    matchDetailsNeedsBackfill({
+      id: "cgqgzd55nq1t",
+      details_url: "https://www.bbc.co.uk/sport/football/live/cgqgzd55nq1t",
+      date: "2026-03-06",
+      time: "20:00",
+      league: "FA Cup",
+      home_team: "Mansfield Town",
+      away_team: "Arsenal",
+      home_score: 1,
+      away_score: 2,
+      score_status: "FT",
+      home_goal_scorers: [{ player: "W. Evans", goal_times: ["50'"] }],
+      away_goal_scorers: [
+        { player: "N. Madueke", goal_times: ["41'"] },
+        { player: "E. Eze", goal_times: ["66'"] },
+      ],
+    }),
+    true
+  );
+});
+
+test("matchDetailsNeedsBackfill keeps fully populated records with lineups out of the backfill queue", () => {
+  assert.equal(
+    matchDetailsNeedsBackfill({
+      id: "cgqgzd55nq1t",
+      details_url: "https://www.bbc.co.uk/sport/football/live/cgqgzd55nq1t",
+      date: "2026-03-06",
+      time: "20:00",
+      league: "FA Cup",
+      home_team: "Wolverhampton Wanderers",
+      away_team: "Liverpool",
+      home_score: 1,
+      away_score: 3,
+      score_status: "FT",
+      updated_at: "2026-03-06T22:00:00.000Z",
+      home_goal_scorers: [{ player: "Hwang Hee-Chan", goal_times: ["90+1'"] }],
+      away_goal_scorers: [
+        { player: "Darwin Núñez", goal_times: ["15'"] },
+        { player: "Mohamed Salah", goal_times: ["47'"] },
+        { player: "Luis Díaz", goal_times: ["82'"] },
+      ],
+      team_lineups: buildCompleteTeamLineups(),
+    }),
+    false
+  );
+});
+
+test("buildFallbackMatchDetailsPayload synthesizes a details response from in-memory match records", () => {
+  const payload = buildFallbackMatchDetailsPayload("cgqgzd55nq1t", {
+    date: "2026-03-06",
+    time: "20:00",
+    league: "FA Cup",
+    league_subcategory: "5th Round",
+    home_team: "Mansfield Town",
+    away_team: "Arsenal",
+    home_score: 1,
+    away_score: 2,
+    score_status: "FT",
+    details_url: "https://www.bbc.co.uk/sport/football/live/cgqgzd55nq1t",
+    home_goal_scorers: [{ player: "W. Evans", goal_times: ["50'"] }],
+    away_goal_scorers: [
+      { player: "N. Madueke", goal_times: ["41'"] },
+      { player: "E. Eze", goal_times: ["66'"] },
+    ],
+    home_assists: [],
+    away_assists: [
+      { player: "Gabriel Martinelli", assist_times: ["41'"] },
+      { player: "C. Nørgaard", assist_times: ["66'"] },
+    ],
+    home_red_cards: [],
+    away_red_cards: [],
+    team_lineups: {
+      home: {
+        team: "Mansfield Town",
+        manager: "Nigel Clough",
+        formation: "3-5-2",
+        starting_lineup: Array.from({ length: 11 }, (_, index) => ({
+          number: index + 1,
+          name: `Home Player ${index + 1}`,
+          position_category: index === 0 ? "goalkeeper" : index < 5 ? "defender" : index < 9 ? "midfielder" : "attacker",
+        })),
+        substitutes: [{ number: 12, name: "Home Sub 1" }],
+        substitutions: [],
+      },
+      away: {
+        team: "Arsenal",
+        manager: "Mikel Arteta",
+        formation: "3-5-1-1",
+        starting_lineup: Array.from({ length: 11 }, (_, index) => ({
+          number: index + 20,
+          name: `Away Player ${index + 1}`,
+          position_category: index === 0 ? "goalkeeper" : index < 4 ? "defender" : index < 9 ? "midfielder" : "attacker",
+        })),
+        substitutes: [{ number: 40, name: "Away Sub 1" }],
+        substitutions: [],
+      },
+    },
+  });
+
+  assert.deepStrictEqual(payload, {
+    id: "cgqgzd55nq1t",
+    details_url: "https://www.bbc.co.uk/sport/football/live/cgqgzd55nq1t",
+    date: "2026-03-06",
+    time: "20:00",
+    league: "FA Cup",
+    home_team: "Mansfield Town",
+    away_team: "Arsenal",
+    home_score: 1,
+    away_score: 2,
+    aggregate_home_score: null,
+    aggregate_away_score: null,
+    score_status: "FT",
+    penalty_result: null,
+    in_progress: false,
+    updated_at: null,
+    league_subcategory: "5th Round",
+    home_goal_scorers: [{ player: "W. Evans", goal_times: ["50'"] }],
+    away_goal_scorers: [
+      { player: "N. Madueke", goal_times: ["41'"] },
+      { player: "E. Eze", goal_times: ["66'"] },
+    ],
+    home_assists: [],
+    away_assists: [
+      { player: "Gabriel Martinelli", assist_times: ["41'"] },
+      { player: "C. Nørgaard", assist_times: ["66'"] },
+    ],
+    home_red_cards: [],
+    away_red_cards: [],
+    team_lineups: {
+      home: {
+        team: "Mansfield Town",
+        manager: "Nigel Clough",
+        formation: "3-5-2",
+        starting_lineup: Array.from({ length: 11 }, (_, index) => ({
+          number: index + 1,
+          name: `Home Player ${index + 1}`,
+          position_category: index === 0 ? "goalkeeper" : index < 5 ? "defender" : index < 9 ? "midfielder" : "attacker",
+        })),
+        substitutes: [{ number: 12, name: "Home Sub 1" }],
+        substitutions: [],
+      },
+      away: {
+        team: "Arsenal",
+        manager: "Mikel Arteta",
+        formation: "3-5-1-1",
+        starting_lineup: Array.from({ length: 11 }, (_, index) => ({
+          number: index + 20,
+          name: `Away Player ${index + 1}`,
+          position_category: index === 0 ? "goalkeeper" : index < 4 ? "defender" : index < 9 ? "midfielder" : "attacker",
+        })),
+        substitutes: [{ number: 40, name: "Away Sub 1" }],
+        substitutions: [],
+      },
+    },
+  });
 });

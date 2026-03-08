@@ -667,7 +667,7 @@ private struct MatchStatesRequestBody: Encodable {
     let ids: [String]
 }
 
-struct LeagueTablesResponse {
+struct LeagueTablesResponse: Codable, Hashable {
     let leagues: [LeagueTable]
     let lastUpdated: Date?
 }
