@@ -12,8 +12,10 @@ const {
     markMatchDetailsActive,
     isMatchDetailsActive,
     normalizeMatchDetailsPayload,
+    mergeMatchDetailsPayload,
     resolveStableMatchScoreStatus,
     withStableMatchDetailsState,
+    filterStaleBbcMatches,
   },
 } = require("./server");
 
@@ -158,6 +160,80 @@ test("toMatchListPayload includes details state even when details teams exactly 
   assert.equal(payload.score_status, "FT");
   assert.equal(payload.home_score, 2);
   assert.equal(payload.away_score, 1);
+});
+
+test("mergeMatchDetailsPayload clears stale scores when refreshed details show a pre-match state", () => {
+  const existing = {
+    id: DETAILS_ID,
+    details_url: DETAILS_URL,
+    date: "2026-03-08",
+    time: "12:00",
+    league: "FA Cup",
+    league_subcategory: "5th Round",
+    home_team: "Fulham",
+    away_team: "Southampton",
+    home_score: 1,
+    away_score: 2,
+    score_status: "67",
+    home_goal_scorers: [{ player: "A", goal_times: ["10'"] }],
+    away_goal_scorers: [{ player: "B", goal_times: ["12'"] }],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+    updated_at: "2026-03-08T00:00:00.000Z",
+  };
+
+  const incoming = normalizeMatchDetailsPayload({
+    details_url: DETAILS_URL,
+    date: "2026-03-08",
+    time: "12:00",
+    league: "FA Cup",
+    league_subcategory: "5th Round",
+    home_team: "Fulham",
+    away_team: "Southampton",
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+  });
+
+  const merged = mergeMatchDetailsPayload(existing, incoming, "2026-03-08T00:19:33.483Z");
+  assert.equal(merged.home_score, null);
+  assert.equal(merged.away_score, null);
+  assert.equal(merged.score_status, null);
+  assert.deepStrictEqual(merged.home_goal_scorers, []);
+  assert.deepStrictEqual(merged.away_goal_scorers, []);
+});
+
+test("filterStaleBbcMatches accepts a corrected scoreless kickoff fixture over stale cached scores", () => {
+  const filtered = filterStaleBbcMatches(
+    [
+      {
+        home_team: "Fulham",
+        away_team: "Southampton",
+        home_score: null,
+        away_score: null,
+        match_time: "12:00",
+      },
+    ],
+    [
+      {
+        home_team: "Fulham",
+        away_team: "Southampton",
+        home_score: 1,
+        away_score: 2,
+        match_time: "67",
+      },
+    ]
+  );
+
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].home_score, null);
+  assert.equal(filtered[0].away_score, null);
+  assert.equal(filtered[0].match_time, "12:00");
 });
 
 test("toMatchListPayload resolves match_details_id from details lookup when list row lacks details_url", () => {

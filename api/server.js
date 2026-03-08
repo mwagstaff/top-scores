@@ -6,7 +6,7 @@ const http = require("http");
 const https = require("https");
 const v8 = require("v8");
 const zlib = require("zlib");
-const { monitorEventLoopDelay } = require("perf_hooks");
+const { monitorEventLoopDelay, performance } = require("perf_hooks");
 const express = require("express");
 const {
   SERVER_CONFIG,
@@ -548,6 +548,13 @@ const deviceLastSeenAtMs = new Map();
 let appMetricEventsLastUpdated = null;
 const PROCESS_START_TIME_SECONDS = Math.floor(Date.now() / 1000);
 const PROCESS_CPU_USAGE_START = process.cpuUsage();
+let processCpuUsageSample = {
+  capturedAtMs: Date.now(),
+  usage: process.cpuUsage(),
+};
+let eventLoopUtilizationSample = performance.eventLoopUtilization();
+const RUNTIME_SERVICE_NAME = "top-scores-api";
+const RUNTIME_ENVIRONMENT = String(process.env.NODE_ENV || "development").trim() || "development";
 const HTTP_REQUEST_DURATION_BUCKETS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5];
 const SOURCE_FETCH_DURATION_BUCKETS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
 const FPL_TRANSFER_RECOMMENDATION_DURATION_BUCKETS = [0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1];
@@ -1818,11 +1825,27 @@ function buildTransferRecommendation(
 
 function buildPrometheusMetricsText() {
   const lines = [];
+  const nowMs = Date.now();
   const cpuUsage = process.cpuUsage(PROCESS_CPU_USAGE_START);
   const cpuUserSeconds = cpuUsage.user / 1_000_000;
   const cpuSystemSeconds = cpuUsage.system / 1_000_000;
+  const cpuUsageSinceLastSample = process.cpuUsage(processCpuUsageSample.usage);
+  const cpuSampleElapsedMs = Math.max(1, nowMs - processCpuUsageSample.capturedAtMs);
+  const processCpuUsageRatio =
+    (cpuUsageSinceLastSample.user + cpuUsageSinceLastSample.system) / (cpuSampleElapsedMs * 1_000);
+  processCpuUsageSample = {
+    capturedAtMs: nowMs,
+    usage: process.cpuUsage(),
+  };
   const memoryUsage = process.memoryUsage();
   const heapStats = v8.getHeapStatistics();
+  const heapSpaceStats = v8.getHeapSpaceStatistics();
+  const currentEventLoopUtilization = performance.eventLoopUtilization();
+  const eventLoopUtilizationDelta = performance.eventLoopUtilization(
+    eventLoopUtilizationSample,
+    currentEventLoopUtilization
+  );
+  eventLoopUtilizationSample = currentEventLoopUtilization;
 
   const normalizeLagSeconds = (valueNs) => {
     if (!Number.isFinite(valueNs) || valueNs < 0 || valueNs > 1e16) return 0;
@@ -1835,6 +1858,19 @@ function buildPrometheusMetricsText() {
   const eventLoopLagP50Seconds = normalizeLagSeconds(eventLoopDelayMonitor.percentile(50));
   const eventLoopLagP90Seconds = normalizeLagSeconds(eventLoopDelayMonitor.percentile(90));
   const eventLoopLagP99Seconds = normalizeLagSeconds(eventLoopDelayMonitor.percentile(99));
+  const eventLoopUtilizationRatio =
+    eventLoopUtilizationDelta && Number.isFinite(eventLoopUtilizationDelta.utilization)
+      ? Math.max(0, eventLoopUtilizationDelta.utilization)
+      : 0;
+  const processUptimeSeconds = Math.max(0, process.uptime());
+  const heapUtilizationRatio =
+    heapStats.total_heap_size > 0
+      ? heapStats.used_heap_size / heapStats.total_heap_size
+      : 0;
+  const heapLimitUtilizationRatio =
+    heapStats.heap_size_limit > 0
+      ? heapStats.used_heap_size / heapStats.heap_size_limit
+      : 0;
 
   lines.push("# HELP process_cpu_user_seconds_total Total user CPU time spent in seconds.");
   lines.push("# TYPE process_cpu_user_seconds_total counter");
@@ -1868,6 +1904,23 @@ function buildPrometheusMetricsText() {
   lines.push("# TYPE process_heap_bytes gauge");
   pushPrometheusSample(lines, "process_heap_bytes", memoryUsage.heapTotal);
 
+  lines.push("# HELP top_scores_runtime_info Runtime identity for the top-scores API process.");
+  lines.push("# TYPE top_scores_runtime_info gauge");
+  pushPrometheusSample(lines, "top_scores_runtime_info", 1, {
+    service: RUNTIME_SERVICE_NAME,
+    environment: RUNTIME_ENVIRONMENT,
+    node_version: process.version,
+    pid: String(process.pid),
+  });
+
+  lines.push("# HELP top_scores_process_uptime_seconds Current uptime of the top-scores API process.");
+  lines.push("# TYPE top_scores_process_uptime_seconds gauge");
+  pushPrometheusSample(lines, "top_scores_process_uptime_seconds", processUptimeSeconds);
+
+  lines.push("# HELP top_scores_process_cpu_usage_ratio CPU usage ratio since the previous metrics scrape.");
+  lines.push("# TYPE top_scores_process_cpu_usage_ratio gauge");
+  pushPrometheusSample(lines, "top_scores_process_cpu_usage_ratio", processCpuUsageRatio);
+
   lines.push("# HELP nodejs_eventloop_lag_seconds Lag of event loop in seconds.");
   lines.push("# TYPE nodejs_eventloop_lag_seconds gauge");
   pushPrometheusSample(lines, "nodejs_eventloop_lag_seconds", eventLoopLagSeconds);
@@ -1899,6 +1952,10 @@ function buildPrometheusMetricsText() {
   lines.push("# HELP nodejs_eventloop_lag_p99_seconds The 99th percentile of the recorded event loop delays.");
   lines.push("# TYPE nodejs_eventloop_lag_p99_seconds gauge");
   pushPrometheusSample(lines, "nodejs_eventloop_lag_p99_seconds", eventLoopLagP99Seconds);
+
+  lines.push("# HELP nodejs_eventloop_utilization_ratio Event loop utilization since the previous metrics scrape.");
+  lines.push("# TYPE nodejs_eventloop_utilization_ratio gauge");
+  pushPrometheusSample(lines, "nodejs_eventloop_utilization_ratio", eventLoopUtilizationRatio);
 
   const activeResourceCounts = countByType(
     typeof process.getActiveResourcesInfo === "function" ? process.getActiveResourcesInfo() : [],
@@ -1965,9 +2022,85 @@ function buildPrometheusMetricsText() {
   lines.push("# TYPE nodejs_heap_size_used_bytes gauge");
   pushPrometheusSample(lines, "nodejs_heap_size_used_bytes", heapStats.used_heap_size);
 
+  lines.push("# HELP nodejs_heap_size_physical_bytes Process physical heap size from Node.js in bytes.");
+  lines.push("# TYPE nodejs_heap_size_physical_bytes gauge");
+  pushPrometheusSample(lines, "nodejs_heap_size_physical_bytes", heapStats.total_physical_size);
+
+  lines.push("# HELP nodejs_heap_size_limit_bytes Process heap size limit from Node.js in bytes.");
+  lines.push("# TYPE nodejs_heap_size_limit_bytes gauge");
+  pushPrometheusSample(lines, "nodejs_heap_size_limit_bytes", heapStats.heap_size_limit);
+
+  lines.push("# HELP nodejs_heap_size_available_bytes Available heap size from Node.js in bytes.");
+  lines.push("# TYPE nodejs_heap_size_available_bytes gauge");
+  pushPrometheusSample(lines, "nodejs_heap_size_available_bytes", heapStats.total_available_size);
+
+  lines.push("# HELP nodejs_heap_utilization_ratio Ratio of used heap to total heap.");
+  lines.push("# TYPE nodejs_heap_utilization_ratio gauge");
+  pushPrometheusSample(lines, "nodejs_heap_utilization_ratio", heapUtilizationRatio);
+
+  lines.push("# HELP nodejs_heap_limit_utilization_ratio Ratio of used heap to heap limit.");
+  lines.push("# TYPE nodejs_heap_limit_utilization_ratio gauge");
+  pushPrometheusSample(lines, "nodejs_heap_limit_utilization_ratio", heapLimitUtilizationRatio);
+
   lines.push("# HELP nodejs_external_memory_bytes Node.js external memory size in bytes.");
   lines.push("# TYPE nodejs_external_memory_bytes gauge");
   pushPrometheusSample(lines, "nodejs_external_memory_bytes", heapStats.external_memory);
+
+  lines.push("# HELP nodejs_array_buffers_bytes Node.js array buffer memory size in bytes.");
+  lines.push("# TYPE nodejs_array_buffers_bytes gauge");
+  pushPrometheusSample(lines, "nodejs_array_buffers_bytes", memoryUsage.arrayBuffers || 0);
+
+  lines.push("# HELP nodejs_malloced_memory_bytes Node.js malloced memory size in bytes.");
+  lines.push("# TYPE nodejs_malloced_memory_bytes gauge");
+  pushPrometheusSample(lines, "nodejs_malloced_memory_bytes", heapStats.malloced_memory);
+
+  lines.push("# HELP nodejs_peak_malloced_memory_bytes Peak Node.js malloced memory size in bytes.");
+  lines.push("# TYPE nodejs_peak_malloced_memory_bytes gauge");
+  pushPrometheusSample(lines, "nodejs_peak_malloced_memory_bytes", heapStats.peak_malloced_memory);
+
+  lines.push("# HELP nodejs_native_contexts_total Number of active native contexts.");
+  lines.push("# TYPE nodejs_native_contexts_total gauge");
+  pushPrometheusSample(lines, "nodejs_native_contexts_total", heapStats.number_of_native_contexts);
+
+  lines.push("# HELP nodejs_detached_contexts_total Number of detached contexts.");
+  lines.push("# TYPE nodejs_detached_contexts_total gauge");
+  pushPrometheusSample(lines, "nodejs_detached_contexts_total", heapStats.number_of_detached_contexts);
+
+  lines.push("# HELP nodejs_heap_space_size_total_bytes Node.js heap space size in bytes by space.");
+  lines.push("# TYPE nodejs_heap_space_size_total_bytes gauge");
+  heapSpaceStats.forEach((space) => {
+    pushPrometheusSample(lines, "nodejs_heap_space_size_total_bytes", space.space_size, {
+      space: space.space_name,
+    });
+  });
+
+  lines.push("# HELP nodejs_heap_space_size_used_bytes Node.js heap space used size in bytes by space.");
+  lines.push("# TYPE nodejs_heap_space_size_used_bytes gauge");
+  heapSpaceStats.forEach((space) => {
+    pushPrometheusSample(lines, "nodejs_heap_space_size_used_bytes", space.space_used_size, {
+      space: space.space_name,
+    });
+  });
+
+  lines.push("# HELP nodejs_heap_space_size_available_bytes Node.js heap space available size in bytes by space.");
+  lines.push("# TYPE nodejs_heap_space_size_available_bytes gauge");
+  heapSpaceStats.forEach((space) => {
+    pushPrometheusSample(lines, "nodejs_heap_space_size_available_bytes", space.space_available_size, {
+      space: space.space_name,
+    });
+  });
+
+  lines.push("# HELP top_scores_match_details_active_refresh_targets Active match details refresh targets.");
+  lines.push("# TYPE top_scores_match_details_active_refresh_targets gauge");
+  pushPrometheusSample(lines, "top_scores_match_details_active_refresh_targets", matchDetailsActiveRefreshUntilById.size);
+
+  lines.push("# HELP top_scores_match_details_backfill_tasks Active match details backfill tasks.");
+  lines.push("# TYPE top_scores_match_details_backfill_tasks gauge");
+  pushPrometheusSample(lines, "top_scores_match_details_backfill_tasks", matchDetailsBackfillTasks.size);
+
+  lines.push("# HELP top_scores_match_details_warm_tasks Active match details warm tasks.");
+  lines.push("# TYPE top_scores_match_details_warm_tasks gauge");
+  pushPrometheusSample(lines, "top_scores_match_details_warm_tasks", matchDetailsWarmTasks.size);
 
   const nodeVersion = process.version.replace(/^v/, "");
   const versionParts = nodeVersion.split(".");
@@ -2566,7 +2699,6 @@ function buildPrometheusMetricsText() {
     }
   }
 
-  const nowMs = Date.now();
   lines.push("# HELP unique_users Number of unique users (by device token) over time periods");
   lines.push("# TYPE unique_users gauge");
   UNIQUE_USER_WINDOWS.forEach(({ period, windowMs }) => {
@@ -3992,6 +4124,17 @@ function resolveStableMatchScoreStatus(match, options = {}) {
   });
 }
 
+function hasExplicitNoScoreState(match) {
+  if (!match || typeof match !== "object") return false;
+  const homeScore = parseNumericScore(match.home_score);
+  const awayScore = parseNumericScore(match.away_score);
+  if (homeScore !== null || awayScore !== null) return false;
+
+  const status = resolveMatchScoreStatus(match) || match.score_status || match.match_time || null;
+  const normalizedStatus = normalizeMatchStatusValue(status);
+  return !normalizedStatus || TIME_ONLY_PATTERN.test(normalizedStatus);
+}
+
 function withStableMatchDetailsState(payload, options = {}) {
   if (!payload || typeof payload !== "object") return null;
   const scoreStatus = resolveStableMatchScoreStatus(payload, options);
@@ -4154,6 +4297,7 @@ function normalizeMatchDetailsPayload(match, options = {}) {
 }
 
 function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
+  const incomingClearsScoreState = hasExplicitNoScoreState(incoming);
   const merged = {
     ...(existing || {}),
     ...incoming,
@@ -4169,7 +4313,9 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     updated_at: updatedAtIso,
   };
 
-  if (incoming.home_score !== null && incoming.home_score !== undefined) {
+  if (incomingClearsScoreState) {
+    merged.home_score = null;
+  } else if (incoming.home_score !== null && incoming.home_score !== undefined) {
     merged.home_score = incoming.home_score;
   } else if (existing && existing.home_score !== undefined) {
     merged.home_score = existing.home_score;
@@ -4177,7 +4323,9 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     merged.home_score = null;
   }
 
-  if (incoming.away_score !== null && incoming.away_score !== undefined) {
+  if (incomingClearsScoreState) {
+    merged.away_score = null;
+  } else if (incoming.away_score !== null && incoming.away_score !== undefined) {
     merged.away_score = incoming.away_score;
   } else if (existing && existing.away_score !== undefined) {
     merged.away_score = existing.away_score;
@@ -4185,7 +4333,9 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     merged.away_score = null;
   }
 
-  if (incoming.aggregate_home_score !== null && incoming.aggregate_home_score !== undefined) {
+  if (incomingClearsScoreState) {
+    merged.aggregate_home_score = null;
+  } else if (incoming.aggregate_home_score !== null && incoming.aggregate_home_score !== undefined) {
     merged.aggregate_home_score = incoming.aggregate_home_score;
   } else if (existing && existing.aggregate_home_score !== undefined) {
     merged.aggregate_home_score = existing.aggregate_home_score;
@@ -4193,7 +4343,9 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     merged.aggregate_home_score = null;
   }
 
-  if (incoming.aggregate_away_score !== null && incoming.aggregate_away_score !== undefined) {
+  if (incomingClearsScoreState) {
+    merged.aggregate_away_score = null;
+  } else if (incoming.aggregate_away_score !== null && incoming.aggregate_away_score !== undefined) {
     merged.aggregate_away_score = incoming.aggregate_away_score;
   } else if (existing && existing.aggregate_away_score !== undefined) {
     merged.aggregate_away_score = existing.aggregate_away_score;
@@ -4201,18 +4353,20 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     merged.aggregate_away_score = null;
   }
 
-  merged.score_status = pickPreferredMatchStatus(
-    existing && existing.score_status !== undefined ? existing.score_status : null,
-    incoming && incoming.score_status !== undefined ? incoming.score_status : null,
-    {
-      preferIncomingOnTie: true,
-      allowTerminalRegression: true,
-    }
-  );
+  merged.score_status = incomingClearsScoreState
+    ? null
+    : pickPreferredMatchStatus(
+      existing && existing.score_status !== undefined ? existing.score_status : null,
+      incoming && incoming.score_status !== undefined ? incoming.score_status : null,
+      {
+        preferIncomingOnTie: true,
+        allowTerminalRegression: true,
+      }
+    );
 
   MATCH_DETAILS_EVENT_FIELDS.forEach((field) => {
     const incomingValue = incoming[field];
-    if (Array.isArray(incomingValue) && incomingValue.length > 0) {
+    if (Array.isArray(incomingValue)) {
       merged[field] = incomingValue;
       return;
     }
@@ -4225,6 +4379,8 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
 
   if (incoming.penalty_result) {
     merged.penalty_result = incoming.penalty_result;
+  } else if (incomingClearsScoreState) {
+    merged.penalty_result = null;
   } else if (existing && existing.penalty_result) {
     merged.penalty_result = existing.penalty_result;
   }
@@ -5125,6 +5281,7 @@ function mergeTvChannels(lhs, rhs) {
 
 function mergePreferredMatch(existing, incoming, preferIncoming) {
   const merged = { ...existing };
+  const incomingClearsScoreState = hasExplicitNoScoreState(incoming);
 
   if (preferIncoming && incoming.league) merged.league = incoming.league;
   if (!merged.league && incoming.league) merged.league = incoming.league;
@@ -5144,19 +5301,33 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
     merged.time = incoming.time;
   }
 
-  if (incoming.home_score !== undefined && incoming.home_score !== null) {
+  if (incomingClearsScoreState) {
+    merged.home_score = null;
+    merged.away_score = null;
+    merged.aggregate_home_score = null;
+    merged.aggregate_away_score = null;
+    merged.score_status = null;
+  } else if (incoming.home_score !== undefined && incoming.home_score !== null) {
     merged.home_score = incoming.home_score;
   }
-  if (incoming.away_score !== undefined && incoming.away_score !== null) {
+  if (!incomingClearsScoreState && incoming.away_score !== undefined && incoming.away_score !== null) {
     merged.away_score = incoming.away_score;
   }
-  if (incoming.aggregate_home_score !== undefined && incoming.aggregate_home_score !== null) {
+  if (
+    !incomingClearsScoreState &&
+    incoming.aggregate_home_score !== undefined &&
+    incoming.aggregate_home_score !== null
+  ) {
     merged.aggregate_home_score = incoming.aggregate_home_score;
   }
-  if (incoming.aggregate_away_score !== undefined && incoming.aggregate_away_score !== null) {
+  if (
+    !incomingClearsScoreState &&
+    incoming.aggregate_away_score !== undefined &&
+    incoming.aggregate_away_score !== null
+  ) {
     merged.aggregate_away_score = incoming.aggregate_away_score;
   }
-  if (incoming.score_status) merged.score_status = incoming.score_status;
+  if (!incomingClearsScoreState && incoming.score_status) merged.score_status = incoming.score_status;
   if (incoming.details_url) merged.details_url = incoming.details_url;
 
   [
@@ -8461,7 +8632,9 @@ function filterStaleBbcMatches(newMatches, cachedMatches) {
     }
 
     // Check if scores have regressed
-    if (cached.home_score !== null && cached.away_score !== null) {
+    const newHasScore =
+      parseNumericScore(newMatch.home_score) !== null && parseNumericScore(newMatch.away_score) !== null;
+    if (newHasScore && cached.home_score !== null && cached.away_score !== null) {
       const cachedTotal = cached.home_score + cached.away_score;
       const newTotal = (newMatch.home_score || 0) + (newMatch.away_score || 0);
       const timeNotAhead =
@@ -14177,10 +14350,12 @@ module.exports = {
     mergeMonitorCandidate,
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
+    buildPrometheusMetricsText,
     matchDetailsNeedsBackfill,
     markMatchDetailsActive,
     isMatchDetailsActive,
     normalizeMatchDetailsPayload,
+    mergeMatchDetailsPayload,
     resolveStableMatchScoreStatus,
     withStableMatchDetailsState,
     pickPreferredMatchStatus,
@@ -14188,5 +14363,6 @@ module.exports = {
     parseMatchStatusMinute,
     normalizeTeamName,
     matchDetailsIdFromUrl,
+    filterStaleBbcMatches,
   },
 };

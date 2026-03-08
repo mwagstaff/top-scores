@@ -266,6 +266,54 @@ test("parseMatchDetailsFromHtml extracts header metadata from BBC live match pag
   assert.equal(parsed.away_score, 1);
 });
 
+test("parseMatchDetailsFromHtml ignores head-to-head score widgets for pre-match fixtures", () => {
+  const html = `
+    <html>
+      <head>
+        <title>Fulham vs Southampton: FA Cup stats &amp; head-to-head - BBC Sport</title>
+      </head>
+      <body>
+        <div class="CompetitionFormatter">FA Cup - 5th Round</div>
+        <article data-event-id="match-1">
+          <div data-participant-id="home">
+            <div class="TeamNameWrapper">
+              <span>Fulham</span>
+            </div>
+          </div>
+          <time datetime="2026-03-08T12:00:00Z">12:00</time>
+          <div data-participant-id="away">
+            <div class="TeamNameWrapper">
+              <span>Southampton</span>
+            </div>
+          </div>
+        </article>
+        <section>
+          <div data-testid="score" class="HistoricalScore">
+            <div class="HomeScore">1</div>
+            <div class="AwayScore">2</div>
+          </div>
+          <div class="MatchProgress">
+            <div class="StyledPeriod">26 APR 2025</div>
+          </div>
+        </section>
+        <script type="application/json">
+          {"coverageStartTime":"2026-03-08T12:00:00.000Z"}
+        </script>
+      </body>
+    </html>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.equal(parsed.date, "2026-03-08");
+  assert.equal(parsed.time, "12:00");
+  assert.equal(parsed.home_team, "Fulham");
+  assert.equal(parsed.away_team, "Southampton");
+  assert.equal(parsed.home_score, undefined);
+  assert.equal(parsed.away_score, undefined);
+  assert.equal(parsed.score_status, undefined);
+});
+
 test("parseMatchDetailsFromHtml parses team lineups, bench players, and substitutions", () => {
   const homeStarters = [
     { number: 1, short_name: "Roberts", role: "Goalkeeper", name: "L. Roberts" },

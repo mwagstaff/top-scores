@@ -1,83 +1,234 @@
 {
-  "title": "Node.js Runtime Health",
+  "uid": "top-scores-node-runtime",
+  "title": "top-scores API • Node.js Runtime Health",
+  "tags": ["top-scores", "nodejs", "runtime", "performance"],
   "timezone": "browser",
   "schemaVersion": 38,
-  "version": 3,
-  "refresh": "5s",
+  "version": 4,
+  "refresh": "10s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "panels": [
     {
       "type": "timeseries",
-      "title": "Process Memory (MB)",
-      "gridPos": {
-        "x": 0,
-        "y": 0,
-        "w": 12,
-        "h": 8
+      "title": "Process Memory",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
       },
       "targets": [
         {
-          "expr": "process_resident_memory_bytes{job=\"top-scores\"} / 1024 / 1024",
-          "legendFormat": "RSS Memory"
+          "expr": "process_resident_memory_bytes{job=\"top-scores\"}",
+          "legendFormat": "RSS"
+        },
+        {
+          "expr": "process_virtual_memory_bytes{job=\"top-scores\"}",
+          "legendFormat": "Virtual"
+        },
+        {
+          "expr": "nodejs_external_memory_bytes{job=\"top-scores\"}",
+          "legendFormat": "External"
+        },
+        {
+          "expr": "nodejs_array_buffers_bytes{job=\"top-scores\"}",
+          "legendFormat": "Array Buffers"
         }
       ]
     },
     {
       "type": "timeseries",
-      "title": "Heap Used (MB)",
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 12,
-        "h": 8
+      "title": "Heap",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
       },
       "targets": [
         {
-          "expr": "nodejs_heap_size_used_bytes{job=\"top-scores\"} / 1024 / 1024",
+          "expr": "nodejs_heap_size_used_bytes{job=\"top-scores\"}",
           "legendFormat": "Heap Used"
+        },
+        {
+          "expr": "nodejs_heap_size_total_bytes{job=\"top-scores\"}",
+          "legendFormat": "Heap Total"
+        },
+        {
+          "expr": "nodejs_heap_size_physical_bytes{job=\"top-scores\"}",
+          "legendFormat": "Heap Physical"
+        },
+        {
+          "expr": "nodejs_heap_size_limit_bytes{job=\"top-scores\"}",
+          "legendFormat": "Heap Limit"
         }
       ]
     },
     {
       "type": "timeseries",
       "title": "CPU Usage",
-      "gridPos": {
-        "x": 0,
-        "y": 8,
-        "w": 12,
-        "h": 8
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
       },
       "targets": [
         {
-          "expr": "rate(process_cpu_seconds_total{job=\"top-scores\"}[1m])",
-          "legendFormat": "CPU/sec"
+          "expr": "100 * top_scores_process_cpu_usage_ratio{job=\"top-scores\"}",
+          "legendFormat": "CPU"
         }
       ]
     },
     {
       "type": "timeseries",
-      "title": "Event Loop Lag (p99)",
-      "gridPos": {
-        "x": 12,
-        "y": 8,
-        "w": 12,
-        "h": 8
+      "title": "Event Loop Lag",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
       },
       "targets": [
         {
-          "expr": "nodejs_eventloop_lag_p99_seconds{job=\"top-scores\"}",
-          "legendFormat": "p99 lag"
+          "expr": "1000 * nodejs_eventloop_lag_p50_seconds{job=\"top-scores\"}",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "1000 * nodejs_eventloop_lag_p90_seconds{job=\"top-scores\"}",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "1000 * nodejs_eventloop_lag_p99_seconds{job=\"top-scores\"}",
+          "legendFormat": "p99"
+        },
+        {
+          "expr": "1000 * nodejs_eventloop_lag_max_seconds{job=\"top-scores\"}",
+          "legendFormat": "max"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Event Loop Utilization",
+      "gridPos": { "x": 0, "y": 16, "w": 8, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "100 * nodejs_eventloop_utilization_ratio{job=\"top-scores\"}",
+          "legendFormat": "ELU"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Active Runtime Objects",
+      "gridPos": { "x": 8, "y": 16, "w": 8, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "nodejs_active_handles_total{job=\"top-scores\"}",
+          "legendFormat": "Handles"
+        },
+        {
+          "expr": "nodejs_active_resources_total{job=\"top-scores\"}",
+          "legendFormat": "Resources"
+        },
+        {
+          "expr": "nodejs_active_requests_total{job=\"top-scores\"}",
+          "legendFormat": "Requests"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Match Details Refresh Workload",
+      "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_details_active_refresh_targets{job=\"top-scores\"}",
+          "legendFormat": "Active Targets"
+        },
+        {
+          "expr": "top_scores_match_details_backfill_tasks{job=\"top-scores\"}",
+          "legendFormat": "Backfill Tasks"
+        },
+        {
+          "expr": "top_scores_match_details_warm_tasks{job=\"top-scores\"}",
+          "legendFormat": "Warm Tasks"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Heap Spaces (Used)",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "nodejs_heap_space_size_used_bytes{job=\"top-scores\",space!~\"read_only_space|shared_space|shared_trusted_space|shared_large_object_space|shared_trusted_large_object_space|trusted_space|trusted_large_object_space\"}",
+          "legendFormat": "{{space}}"
         }
       ]
     },
     {
       "type": "stat",
       "title": "Uptime",
-      "gridPos": {
-        "x": 0,
-        "y": 16,
-        "w": 12,
-        "h": 6
-      },
+      "gridPos": { "x": 0, "y": 32, "w": 6, "h": 6 },
       "fieldConfig": {
         "defaults": {
           "unit": "s"
@@ -87,9 +238,7 @@
       "options": {
         "reduceOptions": {
           "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
+          "calcs": ["lastNotNull"],
           "fields": ""
         },
         "orientation": "auto",
@@ -101,31 +250,24 @@
       },
       "targets": [
         {
-          "expr": "max(time() - process_start_time_seconds{job=\"top-scores\"})"
+          "expr": "top_scores_process_uptime_seconds{job=\"top-scores\"}"
         }
       ]
     },
     {
       "type": "stat",
       "title": "Server Start Date",
-      "gridPos": {
-        "x": 12,
-        "y": 16,
-        "w": 12,
-        "h": 6
-      },
+      "gridPos": { "x": 6, "y": 32, "w": 6, "h": 6 },
       "fieldConfig": {
         "defaults": {
-          "unit": "time:dddd, MMM D, YYYY HH:mm:ss"
+          "unit": "time:YYYY-MM-DD HH:mm:ss"
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
           "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
+          "calcs": ["lastNotNull"],
           "fields": ""
         },
         "orientation": "auto",
@@ -137,7 +279,65 @@
       },
       "targets": [
         {
-          "expr": "1000 * min(process_start_time_seconds{job=\"top-scores\"})"
+          "expr": "1000 * process_start_time_seconds{job=\"top-scores\"}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Heap Used %",
+      "gridPos": { "x": 12, "y": 32, "w": 6, "h": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "100 * nodejs_heap_utilization_ratio{job=\"top-scores\"}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Heap Limit Used %",
+      "gridPos": { "x": 18, "y": 32, "w": 6, "h": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "100 * nodejs_heap_limit_utilization_ratio{job=\"top-scores\"}"
         }
       ]
     }

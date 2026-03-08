@@ -385,6 +385,56 @@ function extractTeamsFromBbcNode($node, $) {
   return [];
 }
 
+function normalizeTeamMatchKey(value) {
+  return normalizeText(value).toLowerCase();
+}
+
+function selectPrimaryMatchNode($, preferredHomeTeam = null, preferredAwayTeam = null) {
+  const nodes = $("[data-event-id]").toArray();
+  if (!nodes.length) return null;
+
+  const preferredHomeKey = normalizeTeamMatchKey(preferredHomeTeam);
+  const preferredAwayKey = normalizeTeamMatchKey(preferredAwayTeam);
+  let bestNode = null;
+  let bestScore = -Infinity;
+
+  nodes.forEach((node, index) => {
+    const $node = $(node);
+    const teams = extractTeamsFromBbcNode($node, $);
+    const fallbackTeams = teams.length >= 2 ? teams : extractTeams($node, $);
+    const homeKey = normalizeTeamMatchKey(fallbackTeams[0]);
+    const awayKey = normalizeTeamMatchKey(fallbackTeams[1]);
+    const text = normalizeText($node.text());
+    let score = 0;
+
+    if (fallbackTeams.length >= 2) score += 8;
+    if (preferredHomeKey && preferredAwayKey && homeKey && awayKey) {
+      if (homeKey === preferredHomeKey && awayKey === preferredAwayKey) {
+        score += 50;
+      } else if (homeKey === preferredAwayKey && awayKey === preferredHomeKey) {
+        score += 20;
+      } else {
+        if (homeKey === preferredHomeKey || awayKey === preferredAwayKey) score += 8;
+        if (homeKey === preferredAwayKey || awayKey === preferredHomeKey) score += 4;
+      }
+    }
+    if ($node.find(BBC_SCORE_CONTAINER_SELECTOR).length) score += 6;
+    if ($node.find(BBC_STATUS_SELECTOR).length) score += 4;
+    if ($node.find(BBC_KICKOFF_TIME_SELECTOR).length) score += 3;
+    if (/match summary/i.test(text)) score += 2;
+
+    // Prefer the earliest matching event wrapper when scores are otherwise equal.
+    score -= index / 1000;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestNode = node;
+    }
+  });
+
+  return bestNode;
+}
+
 function parseScorePair(text) {
   if (!text) return null;
   const cleaned = normalizeText(text).replace(/[–—]/g, "-");
@@ -1222,14 +1272,23 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   const $homeAssists = $(BBC_GROUPED_HOME_EVENT_SELECTOR).first();
   const $awayAssists = $(BBC_GROUPED_AWAY_EVENT_SELECTOR).first();
   const pageMetadata = extractDetailsPageMetadata($, html);
-  const teamsFromHeader = extractTeamsFromBbcNode($root, $);
-  const scoresFromHeader = extractScoresFromBbcNode($root, $);
+  const requestedHomeTeam = normalizeText(homeTeam) || null;
+  const requestedAwayTeam = normalizeText(awayTeam) || null;
+  const preferredHomeTeam = requestedHomeTeam || pageMetadata.home_team || null;
+  const preferredAwayTeam = requestedAwayTeam || pageMetadata.away_team || null;
+  const primaryMatchNode = selectPrimaryMatchNode($, preferredHomeTeam, preferredAwayTeam);
+  const $primaryScope = primaryMatchNode ? $(primaryMatchNode) : $root;
+  const teamsFromHeader = extractTeamsFromBbcNode($primaryScope, $);
+  const fallbackTeamsFromHeader = teamsFromHeader.length >= 2
+    ? teamsFromHeader
+    : extractTeams($primaryScope, $);
+  const scoresFromHeader = extractScoresFromBbcNode($primaryScope, $);
   const teamLineups = parseTeamLineups($);
-  const resolvedHomeTeam = normalizeText(homeTeam) || teamsFromHeader[0] || pageMetadata.home_team || null;
-  const resolvedAwayTeam = normalizeText(awayTeam) || teamsFromHeader[1] || pageMetadata.away_team || null;
+  const resolvedHomeTeam = requestedHomeTeam || fallbackTeamsFromHeader[0] || pageMetadata.home_team || null;
+  const resolvedAwayTeam = requestedAwayTeam || fallbackTeamsFromHeader[1] || pageMetadata.away_team || null;
 
   // Parse match status/time from the page
-  const $status = $(BBC_STATUS_SELECTOR).first();
+  const $status = $primaryScope.find(BBC_STATUS_SELECTOR).first();
   let matchTime = null;
   if ($status.length) {
     const statusText = normalizeText($status.text());
@@ -1243,7 +1302,9 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
     }
   }
 
-  const aggregate = extractAggregateFromDocument($);
+  const aggregate = primaryMatchNode
+    ? extractAggregateFromBbcNode($primaryScope, $)
+    : extractAggregateFromDocument($);
 
   if (
     !$homeGoals.length &&
