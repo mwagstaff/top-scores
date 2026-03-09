@@ -10836,6 +10836,14 @@ app.get("/admin/preferences", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_preferences_ui.html"));
 });
 
+app.get("/admin/devices", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_devices_ui.html"));
+});
+
+app.get("/admin/devices/:deviceSuffix", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_devices_ui.html"));
+});
+
 app.get("/admin/fixtures", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_matches_ui.html"));
 });
@@ -13038,6 +13046,125 @@ function preferenceObjectToSearchText(preferences) {
   }
 }
 
+const ADMIN_DEVICE_SUFFIX_LENGTH = 8;
+const ADMIN_DEVICE_NOTIFICATIONS_LIMIT = 100;
+const ADMIN_DEVICE_LIST_PAGE_SIZE_MAX = 50;
+const ADMIN_DEVICE_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function normalizeAdminDeviceSuffix(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (!/^[a-z0-9]+$/.test(normalized)) return "";
+  return normalized;
+}
+
+function deviceSuffixForAdmin(deviceToken) {
+  const normalized = normalizeDeviceToken(deviceToken);
+  if (!normalized) return "";
+  return normalized.slice(-ADMIN_DEVICE_SUFFIX_LENGTH).toLowerCase();
+}
+
+function devicePreferenceRecordSearchText(record) {
+  if (!record || typeof record !== "object") return "";
+  const preferencesText = preferenceObjectToSearchText(record.preferences);
+  const deviceToken = normalizeDeviceToken(record.deviceToken) || "";
+  const apnsToken = normalizeDeviceToken(record.apnsToken) || "";
+  const deviceName = extractDeviceNameFromPreferenceRecord(record) || "";
+  const updatedAt = String(record.updatedAt || "").trim();
+  const suffix = deviceSuffixForAdmin(deviceToken);
+  return `${deviceToken} ${suffix} ${apnsToken} ${deviceName} ${updatedAt} ${preferencesText}`
+    .trim()
+    .toLowerCase();
+}
+
+function buildDeviceSuffixCounts(records) {
+  const counts = new Map();
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    const suffix = deviceSuffixForAdmin(record && record.deviceToken);
+    if (!suffix) return;
+    counts.set(suffix, (counts.get(suffix) || 0) + 1);
+  });
+  return counts;
+}
+
+function summarizeAdminDeviceRecord(record, suffixCounts = new Map()) {
+  const deviceToken = normalizeDeviceToken(record && record.deviceToken);
+  const apnsToken = normalizeDeviceToken(record && record.apnsToken);
+  const preferences =
+    record && record.preferences && typeof record.preferences === "object" ? record.preferences : {};
+  const suffix = deviceSuffixForAdmin(deviceToken);
+  const deviceName = extractDeviceNameFromPreferenceRecord(record);
+
+  return {
+    device_token: deviceToken,
+    device_token_short: shortDeviceTokenForAdmin(deviceToken),
+    device_token_suffix: suffix || null,
+    suffix_collision_count: suffix ? suffixCounts.get(suffix) || 0 : 0,
+    admin_path: suffix ? `/admin/devices/${suffix}` : null,
+    admin_resolved_path:
+      suffix && deviceToken
+        ? `/admin/devices/${suffix}?device_token=${encodeURIComponent(deviceToken)}`
+        : null,
+    apns_token_present: Boolean(apnsToken),
+    apns_token_short: apnsToken ? shortDeviceTokenForAdmin(apnsToken, 10, 8) : null,
+    is_development_build: Boolean(record && record.isDevelopmentBuild),
+    updated_at: record && record.updatedAt ? record.updatedAt : null,
+    device_name: deviceName,
+    notifications_enabled: preferences.notificationsEnabled === true,
+    english_premier_league_teams_only: preferences.englishPremierLeagueTeamsOnly === true,
+    competition_filter_enabled: preferences.competitionFilterEnabled === true,
+    notification_use_viewing_filter: preferences.notificationUseViewingFilter !== false,
+    selected_leagues_count: Array.isArray(preferences.selectedLeagues)
+      ? preferences.selectedLeagues.length
+      : 0,
+    notification_selected_leagues_count: Array.isArray(preferences.notificationSelectedLeagues)
+      ? preferences.notificationSelectedLeagues.length
+      : 0,
+  };
+}
+
+function buildAdminDeviceNotificationEntry(record) {
+  const matchContext = record && record.match && typeof record.match === "object" ? record.match : {};
+  return {
+    notification_id: record && record.notification_id ? String(record.notification_id) : null,
+    timestamp_ms: adminHistoryTimestampMs(record && record.timestamp_ms),
+    timestamp: record && record.timestamp ? record.timestamp : null,
+    status: normalizeNotificationStatusForAdmin(record && record.status),
+    event_type: record && record.event_type ? String(record.event_type) : "unknown",
+    event_key: record && record.event_key ? String(record.event_key) : null,
+    title: record && record.title ? String(record.title) : null,
+    body: record && record.body ? String(record.body) : null,
+    delay_minutes: Number.isFinite(Number(record && record.delay_minutes))
+      ? Number(record.delay_minutes)
+      : 0,
+    dispatch_mode: record && record.dispatch_mode ? String(record.dispatch_mode) : null,
+    environment: record && record.environment ? String(record.environment) : null,
+    error: record && record.error ? String(record.error) : null,
+    apns_result_success: Boolean(record && record.apns_result_success),
+    match_id: record && record.match_id ? String(record.match_id) : null,
+    match_label:
+      matchContext.home_team && matchContext.away_team
+        ? `${matchContext.home_team} vs ${matchContext.away_team}`
+        : null,
+    match: {
+      league: matchContext.league || null,
+      home_team: matchContext.home_team || null,
+      away_team: matchContext.away_team || null,
+      date: matchContext.date || null,
+      time: matchContext.time || null,
+    },
+    payload: record,
+  };
+}
+
+function buildAdminDeviceNotificationStatusCounts(records) {
+  return (Array.isArray(records) ? records : []).reduce((acc, record) => {
+    const key = normalizeNotificationStatusForAdmin(record && record.status);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
 // Admin preferences query endpoint
 app.get(`${API_PREFIX}/admin/preferences`, async (req, res) => {
   setCacheOnlyHeaders(res);
@@ -13083,6 +13210,132 @@ app.get(`${API_PREFIX}/admin/preferences`, async (req, res) => {
     console.error("[API] Error retrieving admin preferences:", error);
     res.status(500).json({
       error: "Failed to retrieve admin preferences",
+      message: error.message,
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/admin/devices`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const searchFilter = normalizePreferenceFilterText(req.query.q);
+  const pageSize = parsePositiveInt(
+    req.query.page_size,
+    ADMIN_DEVICE_LIST_PAGE_SIZE_MAX,
+    1,
+    ADMIN_DEVICE_LIST_PAGE_SIZE_MAX
+  );
+  const requestedPage = parsePositiveInt(req.query.page, 1, 1, 100000);
+
+  try {
+    const allPreferences = await getAllUserPreferences();
+    const sorted = sortPreferencesByUpdatedAtDescending(allPreferences);
+    const filtered = sorted.filter((record) => {
+      if (!searchFilter) return true;
+      return devicePreferenceRecordSearchText(record).includes(searchFilter);
+    });
+    const suffixCounts = buildDeviceSuffixCounts(filtered);
+    const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const startIndex = (page - 1) * pageSize;
+    const pageRecords = filtered.slice(startIndex, startIndex + pageSize);
+
+    res.status(200).json({
+      success: true,
+      generated_at: new Date().toISOString(),
+      page,
+      page_size: pageSize,
+      total_pages: totalPages,
+      total_matched: filtered.length,
+      total_available: sorted.length,
+      q: searchFilter || null,
+      data: pageRecords.map((record) => summarizeAdminDeviceRecord(record, suffixCounts)),
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving admin devices:", error);
+    res.status(500).json({
+      error: "Failed to retrieve admin devices",
+      message: error.message,
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/admin/devices/:deviceSuffix`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const deviceSuffix = normalizeAdminDeviceSuffix(req.params.deviceSuffix);
+  const explicitDeviceToken = normalizeDeviceToken(req.query.device_token);
+  if (!deviceSuffix || deviceSuffix.length !== ADMIN_DEVICE_SUFFIX_LENGTH) {
+    res.status(400).json({
+      error: `Invalid device suffix. Expected the last ${ADMIN_DEVICE_SUFFIX_LENGTH} characters of the device token.`,
+    });
+    return;
+  }
+
+  try {
+    const allPreferences = await getAllUserPreferences();
+    const suffixCounts = buildDeviceSuffixCounts(allPreferences);
+    const matches = allPreferences.filter((record) => deviceSuffixForAdmin(record && record.deviceToken) === deviceSuffix);
+    const exactMatch = explicitDeviceToken
+      ? matches.find((record) => normalizeDeviceToken(record && record.deviceToken) === explicitDeviceToken) || null
+      : null;
+
+    if (matches.length === 0 || (explicitDeviceToken && !exactMatch)) {
+      res.status(404).json({
+        error: "No device found for that suffix.",
+        device_suffix: deviceSuffix,
+        device_token: explicitDeviceToken || null,
+      });
+      return;
+    }
+
+    if (matches.length > 1 && !exactMatch) {
+      res.status(409).json({
+        error: "Device suffix is ambiguous.",
+        device_suffix: deviceSuffix,
+        matches: matches.map((record) => summarizeAdminDeviceRecord(record, suffixCounts)),
+      });
+      return;
+    }
+
+    const record = exactMatch || matches[0];
+    const deviceToken = normalizeDeviceToken(record && record.deviceToken);
+    const historySnapshot = await getBbcMatchHistoryGrouped({
+      start_ms: Date.now() - ADMIN_DEVICE_HISTORY_WINDOW_MS,
+      end_ms: Date.now(),
+      device_token: deviceToken,
+    });
+    const historyMatches = Array.isArray(historySnapshot && historySnapshot.matches)
+      ? historySnapshot.matches
+      : [];
+    const notificationRecords = historyMatches
+      .flatMap((entry) => (Array.isArray(entry && entry.notifications) ? entry.notifications : []))
+      .slice()
+      .sort((lhs, rhs) => adminHistoryTimestampMs(rhs && rhs.timestamp_ms) - adminHistoryTimestampMs(lhs && lhs.timestamp_ms));
+    const limitedNotifications = notificationRecords
+      .slice(0, ADMIN_DEVICE_NOTIFICATIONS_LIMIT)
+      .map(buildAdminDeviceNotificationEntry);
+
+    res.status(200).json({
+      success: true,
+      generated_at: new Date().toISOString(),
+      device: summarizeAdminDeviceRecord(record, suffixCounts),
+      preferences_record: record,
+      history: {
+        source: historySnapshot && historySnapshot.error ? "error" : "redis",
+        error: historySnapshot && historySnapshot.error ? historySnapshot.error : null,
+        window_start_ms: historySnapshot && historySnapshot.start_ms ? historySnapshot.start_ms : null,
+        window_end_ms: historySnapshot && historySnapshot.end_ms ? historySnapshot.end_ms : null,
+        total_notifications: notificationRecords.length,
+        returned_notifications: limitedNotifications.length,
+        status_counts: buildAdminDeviceNotificationStatusCounts(notificationRecords),
+      },
+      notifications: limitedNotifications,
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving admin device details:", error);
+    res.status(500).json({
+      error: "Failed to retrieve admin device details",
       message: error.message,
     });
   }

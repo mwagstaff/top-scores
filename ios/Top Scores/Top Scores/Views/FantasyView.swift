@@ -94,9 +94,6 @@ struct FantasyView: View {
                     if showFantasyLoadingInterstitial {
                         fantasyLoadingOverlay
                     }
-                    if showSuccessInterstitial {
-                        successOverlay
-                    }
                     if isLaunchingShareFlow {
                         shareLoadingOverlay
                     }
@@ -157,13 +154,13 @@ struct FantasyView: View {
                     Text("Remove \(leagueNamePendingDeletion) from your leagues?")
                 }
             }
-            .alert("Unlink Fantasy account?", isPresented: $showUnlinkAccountConfirmation) {
+            .alert("Disconnect Fantasy account?", isPresented: $showUnlinkAccountConfirmation) {
                 Button("Cancel", role: .cancel) {}
-                Button("Unlink", role: .destructive) {
+                Button("Disconnect", role: .destructive) {
                     unlinkFantasyAccountData()
                 }
             } message: {
-                Text("This will remove your linked manager account, rivals, and Fantasy Football data from this device.")
+                Text("This will remove your linked manager account, rivals, and Fantasy Football data from this device. You can always reconnect your account at any time.")
             }
             .sheet(item: $selectedPlayerSelection) { selection in
                 FantasyPlayerDetailsSheet(
@@ -315,8 +312,6 @@ struct FantasyView: View {
         Form {
             setupSection
             managerEntryInputSection
-            shareFromBrowserHelpSection
-            managerCaptureStatusSection
         }
     }
 
@@ -444,23 +439,21 @@ struct FantasyView: View {
     }
 
     private var setupSection: some View {
-        Section("Connect your Fantasy account") {
-            instructionStep(number: 1, text: "Open Fantasy Premier League in Safari or Chrome.")
-            instructionStep(number: 2, text: "Sign in and open your Points page URL.")
-            instructionStep(number: 3, text: "Tap Share and choose Top Scores.")
-            instructionStep(number: 4, text: "If Top Scores is missing, open More/Edit Actions and enable Top Scores.")
-            instructionStep(number: 5, text: "Return to Top Scores to complete setup or view your updated Rivals table.")
+        Section("Connect your Fantasy Football account") {
+            instructionStep(number: 1, text: "Open Fantasy Premier League (link below) and sign in.")
+            instructionStep(number: 2, text: "Open your Points page, then tap Share and choose Top Scores.")
+            instructionStep(number: 3, text: "Return to Top Scores to complete setup.")
 
             Button {
                 openFantasyWebsiteInBrowser()
             } label: {
-                Label("Open fantasy.premierleague.com", systemImage: "safari")
+                Label("Open Fantasy Premier League website", systemImage: "safari")
             }
         }
     }
 
     private var managerEntryInputSection: some View {
-        Section("Or enter manager ID manually") {
+        Section("Or enter your manager ID manually") {
             TextField("Enter manager ID", text: $managerEntryInput)
                 .keyboardType(.numberPad)
                 .textInputAutocapitalization(.never)
@@ -489,45 +482,6 @@ struct FantasyView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(!isManagerSubmitEnabled)
-        }
-    }
-
-    private var shareFromBrowserHelpSection: some View {
-        Section("Share Extension Flow") {
-            Text("First setup: share your own Points page to Top Scores.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Text("After setup: shared Fantasy entry URLs add rivals, and shared league URLs add leagues.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Text("The first successful shared entry URL is used as your manager ID.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Text("If Google sign-in blocks in-app browsers, use Safari or Chrome, then Share -> Top Scores.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Text("Example: https://fantasy.premierleague.com/entry/6653695/event/28")
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .foregroundStyle(.secondary)
-            Text("League example: https://fantasy.premierleague.com/leagues/844129/standings/c")
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var managerCaptureStatusSection: some View {
-        Section("Connection status") {
-            Text(managerCaptureStatusMessage)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-            if let managerValidationErrorMessage {
-                Text(managerValidationErrorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            }
         }
     }
 
@@ -570,13 +524,11 @@ struct FantasyView: View {
             Button(role: .destructive) {
                 showUnlinkAccountConfirmation = true
             } label: {
-                Label("Unlink account", systemImage: "person.crop.circle.badge.xmark")
+                // Center align
+                Label("Disconnect account", systemImage: "person.crop.circle.badge.xmark")
                     .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
-
-            Text("Removes your linked manager account and locally saved Fantasy data.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -2121,32 +2073,6 @@ struct FantasyView: View {
         )
     }
 
-    private var successOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.25)
-                .ignoresSafeArea()
-
-            VStack(spacing: 8) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 38))
-                    .foregroundStyle(.green)
-                Text("Manager ID saved")
-                    .font(.headline)
-                Text(managerEntryID)
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.ultraThinMaterial)
-            )
-        }
-        .transition(.opacity)
-        .animation(.easeInOut(duration: 0.2), value: showSuccessInterstitial)
-    }
-
     private var shareLoadingOverlay: some View {
         ZStack {
             Color.black.opacity(0.2)
@@ -2621,7 +2547,7 @@ struct FantasyView: View {
         }
 
         managerEntryID = capturedID
-        managerCaptureStatusMessage = "Manager ID \(capturedID) linked from shared URL."
+        managerCaptureStatusMessage = "Successfully connected your account! Add rivals and leagues below..."
         showSuccessInterstitial = true
 
         Task {
@@ -2667,7 +2593,7 @@ struct FantasyView: View {
             switch parsedTarget {
             case .manager(let parsedID):
                 applyCapturedManagerID(parsedID)
-                setShareImportStatus("Manager ID \(parsedID) linked from shared URL.", isError: false)
+                setShareImportStatus("Fantasy Football account linked successfully!", isError: false)
             case .league:
                 managerCaptureStatusMessage = "Link your own Fantasy manager account first by sharing your Points page URL."
                 setShareImportStatus(

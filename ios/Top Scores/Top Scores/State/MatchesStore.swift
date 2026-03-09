@@ -772,6 +772,13 @@ final class MatchesStore: ObservableObject {
         errorMessage = current.errorMessage
         lastUpdated = current.lastUpdated
         isUsingCache = current.isUsingCache
+
+        if let snapshot = currentSnapshot {
+            let allMatches = combinedLoadedMatches()
+            Task {
+                await AppIconBadgeManager.update(preferences: snapshot, matches: allMatches)
+            }
+        }
     }
 
     private func updateRefreshTimer(using snapshot: PreferencesSnapshot, matches: [Match]? = nil) {

@@ -20,6 +20,11 @@ struct PreferencesView: View {
                     Text("Show only matches where at least one team is in the English Premier League.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+
+                    Toggle("Show unfinished fixtures badge", isOn: showTodayUnfinishedFixturesBadgeBinding)
+                    Text("Shows the number of today's fixtures that have not started or are still in play on the app icon.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Competitions") {
@@ -260,6 +265,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.matchGroupSortOrder },
             set: { preferences.matchGroupSortOrder = $0 }
+        )
+    }
+
+    private var showTodayUnfinishedFixturesBadgeBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showTodayUnfinishedFixturesBadge },
+            set: { preferences.showTodayUnfinishedFixturesBadge = $0 }
         )
     }
 

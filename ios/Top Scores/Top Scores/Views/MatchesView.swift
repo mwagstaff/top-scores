@@ -213,6 +213,8 @@ struct MatchesView: View {
             NavigationStack {
                 DayPredictionsView(prediction: prediction)
             }
+            .environmentObject(preferences)
+            .environmentObject(fantasyViewModel)
         }
         .alert("Predictions Unavailable", isPresented: predictionErrorPresented) {
             Button("OK", role: .cancel) {}
@@ -1320,6 +1322,8 @@ private struct PredictionInterstitialView: View {
 private struct DayPredictionsView: View {
     let prediction: DailyFixturePredictions
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @State private var shareItems: [Any] = []
     @State private var isShareSheetPresented = false
     @State private var isLaunchingShareSheet = false
@@ -1484,7 +1488,9 @@ private struct DayPredictionsView: View {
             let rendered = PredictionShareImageRenderer.render(
                 title: displayDate,
                 generatedAtText: generated,
-                sections: snapshotSections
+                sections: snapshotSections,
+                preferences: preferences,
+                fantasyViewModel: fantasyViewModel
             )
             guard !Task.isCancelled else { return }
 
@@ -1564,7 +1570,13 @@ private enum PredictionShareImageRenderer {
     private static let viewportWidth: CGFloat = 360
 
     @MainActor
-    static func render(title: String, generatedAtText: String, sections: [PredictionLeagueSection]) -> UIImage? {
+    static func render(
+        title: String,
+        generatedAtText: String,
+        sections: [PredictionLeagueSection],
+        preferences: PreferencesStore,
+        fantasyViewModel: FantasyViewModel
+    ) -> UIImage? {
         let fixtureCount = sections.reduce(0) { partial, section in
             partial + section.fixtures.count
         }
@@ -1574,6 +1586,8 @@ private enum PredictionShareImageRenderer {
             sections: sections
         )
             .environment(\.colorScheme, .dark)
+            .environmentObject(preferences)
+            .environmentObject(fantasyViewModel)
             .frame(width: viewportWidth, alignment: .topLeading)
             .background(Color.black)
             .fixedSize(horizontal: false, vertical: true)

@@ -99,7 +99,8 @@ actor PreferencesSyncService {
                 "notificationEventTypes": Array(snapshot.notificationEventTypes),
                 "notificationUseViewingFilter": snapshot.notificationUseViewingFilter,
                 "notificationCompetitionFilterEnabled": snapshot.notificationCompetitionFilterEnabled,
-                "notificationSelectedLeagues": snapshot.notificationSelectedLeagues
+                "notificationSelectedLeagues": snapshot.notificationSelectedLeagues,
+                "showTodayUnfinishedFixturesBadge": snapshot.showTodayUnfinishedFixturesBadge
             ]
         ]
 
@@ -201,7 +202,8 @@ actor PreferencesSyncService {
                 notificationEventTypes: notificationEventTypes,
                 notificationUseViewingFilter: preferences["notificationUseViewingFilter"] as? Bool ?? PreferencesStore.defaultNotificationUseViewingFilter,
                 notificationCompetitionFilterEnabled: preferences["notificationCompetitionFilterEnabled"] as? Bool ?? PreferencesStore.defaultNotificationCompetitionFilterEnabled,
-                notificationSelectedLeagues: preferences["notificationSelectedLeagues"] as? [String] ?? PreferencesStore.defaultNotificationSelectedLeagues
+                notificationSelectedLeagues: preferences["notificationSelectedLeagues"] as? [String] ?? PreferencesStore.defaultNotificationSelectedLeagues,
+                showTodayUnfinishedFixturesBadge: preferences["showTodayUnfinishedFixturesBadge"] as? Bool ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
             )
 
             NSLog("[PreferencesSync] Successfully fetched preferences from Redis")

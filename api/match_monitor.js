@@ -2508,9 +2508,15 @@ function evaluateUserNotificationDecision(user, match, event) {
 
   // Check EPL teams filter
   if (prefs.englishPremierLeagueTeamsOnly) {
-    // This would require checking if either team is in the EPL
-    // For now, we'll skip this check as it requires loading EPL teams data
-    // You can implement this later if needed
+    const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
+    const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
+    if (!homeInPremierLeague && !awayInPremierLeague) {
+      return {
+        shouldNotify: false,
+        reason: "premier_league_team_filter",
+        delayMinutes,
+      };
+    }
   }
 
   return {
@@ -3784,6 +3790,8 @@ module.exports = {
     shouldStopMonitoringAsIrrelevant,
     buildLiveActivityPresentationForUser,
     compareLiveActivityMatches,
+    evaluateUserNotificationDecision,
+    isEnglishPremierLeagueTeam,
     isLikelyTerminalStaleLiveMatch,
     shouldSkipLiveActivityUpdate,
     shouldPreserveExistingLiveActivityOnEmpty,

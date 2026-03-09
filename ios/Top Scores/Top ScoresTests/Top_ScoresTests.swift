@@ -11,6 +11,40 @@ import Testing
 
 struct Top_ScoresTests {
 
+    @Test @MainActor func preferencesStore_usesRequestedDefaultsForNewInstalls() async throws {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+
+        let store = PreferencesStore(userDefaults: defaults)
+
+        #expect(store.englishPremierLeagueTeamsOnly)
+        #expect(!store.competitionFilterEnabled)
+        #expect(store.notificationsEnabled)
+        #expect(store.notificationDelayMinutes == 2)
+        #expect(store.notificationEventTypes == PreferencesStore.defaultNotificationEventTypes)
+        #expect(store.notificationUseViewingFilter)
+        #expect(store.matchGroupSortOrder == .kickoffThenTeamScore)
+        #expect(!store.showTodayUnfinishedFixturesBadge)
+        #expect(store.showFantasyMatchPills)
+        #expect(!store.channelFilterEnabled)
+    }
+
+    @Test func appIconBadgeManager_countsOnlyTodayUnfinishedFixtures() async throws {
+        let today = formattedDate(offsetDays: 0)
+        let yesterday = formattedDate(offsetDays: -1)
+        let tomorrow = formattedDate(offsetDays: 1)
+
+        let matches = [
+            makeMatch(date: today, time: "12:30", homeScore: nil, awayScore: nil, aggregateHomeScore: nil, aggregateAwayScore: nil, scoreStatus: nil),
+            makeMatch(date: today, time: "15:00", homeScore: 1, awayScore: 0, aggregateHomeScore: nil, aggregateAwayScore: nil, scoreStatus: "33"),
+            makeMatch(date: today, time: "17:30", homeScore: 2, awayScore: 1, aggregateHomeScore: nil, aggregateAwayScore: nil, scoreStatus: "FT"),
+            makeMatch(date: yesterday, time: "19:45", homeScore: 1, awayScore: 1, aggregateHomeScore: nil, aggregateAwayScore: nil, scoreStatus: "FT"),
+            makeMatch(date: tomorrow, time: "20:00", homeScore: nil, awayScore: nil, aggregateHomeScore: nil, aggregateAwayScore: nil, scoreStatus: nil)
+        ]
+
+        #expect(AppIconBadgeManager.unfinishedFixtureCount(for: matches) == 2)
+    }
+
     @Test func withScore_adjustsAggregateByScoreDelta() async throws {
         let match = makeMatch(
             homeScore: 0,
@@ -122,6 +156,15 @@ struct Top_ScoresTests {
             aggregateAwayScore: aggregateAwayScore,
             scoreStatus: scoreStatus
         )
+    }
+
+    private func formattedDate(offsetDays: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd"
+        let date = Calendar.current.date(byAdding: .day, value: offsetDays, to: Date())!
+        return formatter.string(from: date)
     }
 
     private func makeDetailsPayload(scoreStatus: String) -> MatchDetailsPayload {

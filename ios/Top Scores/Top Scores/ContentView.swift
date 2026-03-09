@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject private var preferences: PreferencesStore
     @State private var selectedTab = 0
 
     var body: some View {
@@ -46,6 +47,11 @@ struct ContentView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .background(Color(.systemBackground))
+            .onChange(of: selectedTab) { _, _ in
+                Task {
+                    await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
+                }
+            }
         }
     }
 }

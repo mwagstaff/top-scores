@@ -67,30 +67,33 @@ struct Top_ScoresApp: App {
                 )
             case .active:
                 LiveActivitySyncService.shared.reconcileOnForeground()
-                let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+                let syncSnapshot = preferences.snapshot
+                let refreshSnapshot = preferences.showAllMatches
+                    ? preferences.unfilteredSnapshot
+                    : syncSnapshot
                 Task {
-                    async let refreshTask: Void = matchesStore.refresh(preferences: snapshot)
-                    async let syncTask: Void = PreferencesSyncService.shared.syncPreferences(snapshot)
+                    async let refreshTask: Void = matchesStore.refresh(preferences: refreshSnapshot)
+                    async let syncTask: Void = PreferencesSyncService.shared.syncPreferences(syncSnapshot)
                     async let metricTask: Void = AppMetricsService.shared.sendAppOpenMetric(
-                        apiBaseURL: snapshot.apiBaseURL
+                        apiBaseURL: syncSnapshot.apiBaseURL
                     )
                     async let leagueTablesWarmTask: Void = LeagueTablesCatalog.shared.prefetch(
-                        apiBaseURL: snapshot.apiBaseURL
+                        apiBaseURL: syncSnapshot.apiBaseURL
                     )
                     async let teamRankingWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
-                        apiBaseURL: snapshot.apiBaseURL
+                        apiBaseURL: syncSnapshot.apiBaseURL
                     )
                     async let teamRankingSettingsWarmTask: Void =
                         TeamRankingSettingsCatalog.shared.ensureFresh(
-                            apiBaseURL: snapshot.apiBaseURL
+                            apiBaseURL: syncSnapshot.apiBaseURL
                         )
                     async let fantasyMappingsWarmTask: Void =
                         FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(
-                            apiBaseURL: snapshot.apiBaseURL
+                            apiBaseURL: syncSnapshot.apiBaseURL
                         )
                     async let fantasyLoadingMessagesWarmTask: Void =
                         FantasyLoadingMessagesCatalog.shared.ensureFresh(
-                            apiBaseURL: snapshot.apiBaseURL
+                            apiBaseURL: syncSnapshot.apiBaseURL
                         )
                     _ = await (
                         refreshTask,

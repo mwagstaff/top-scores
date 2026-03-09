@@ -4,6 +4,7 @@ import Foundation
 enum BackgroundRefreshManager {
     static let taskIdentifier = "dev.skynolimit.Top-Scores.refresh"
     private static let liveRefreshIntervalMinutes = 1
+    private static let preferencesSyncIntervalMinutes = 5
 
     static func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
@@ -13,9 +14,13 @@ enum BackgroundRefreshManager {
 
     static func scheduleNextRefresh(intervalMinutes: Int, hasInProgressMatches: Bool = false) {
         let request = BGAppRefreshTaskRequest(identifier: taskIdentifier)
-        let resolvedIntervalMinutes = hasInProgressMatches
+        let resolvedRefreshIntervalMinutes = hasInProgressMatches
             ? min(max(1, intervalMinutes), liveRefreshIntervalMinutes)
             : max(1, intervalMinutes)
+        let resolvedIntervalMinutes = min(
+            resolvedRefreshIntervalMinutes,
+            preferencesSyncIntervalMinutes
+        )
         request.earliestBeginDate = Date().addingTimeInterval(TimeInterval(resolvedIntervalMinutes * 60))
         do {
             BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskIdentifier)
@@ -37,6 +42,9 @@ enum BackgroundRefreshManager {
 
             do {
                 let client = APIClient(baseURL: baseURL)
+                let syncTask = Task {
+                    await PreferencesSyncService.shared.syncPreferences(snapshot)
+                }
                 if let cacheState = try? await client.fetchCacheState() {
                     let invalidation = MatchCache.applyServerCacheState(cacheState)
                     if invalidation.shouldClearMatchCaches {
@@ -56,12 +64,15 @@ enum BackgroundRefreshManager {
                     lastUpdated: response.lastUpdated,
                     snapshot: snapshot
                 )
+                await syncTask.value
+                await AppIconBadgeManager.update(preferences: snapshot, matches: sorted)
                 scheduleNextRefresh(
                     intervalMinutes: snapshot.refreshIntervalMinutes,
                     hasInProgressMatches: sorted.contains(where: \.isInProgress)
                 )
                 task.setTaskCompleted(success: true)
             } catch {
+                await PreferencesSyncService.shared.syncPreferences(snapshot)
                 task.setTaskCompleted(success: false)
             }
         }

@@ -1651,3 +1651,58 @@ test("getStatus includes monitor diagnostics envelope", () => {
   assert.ok(Array.isArray(status.diagnostics.recent_monitor_starts));
   assert.ok(Array.isArray(status.diagnostics.recent_monitor_stops));
 });
+
+test("evaluateUserNotificationDecision blocks non-Premier League matches when EPL-only filter is enabled", () => {
+  const decision = __testHooks.evaluateUserNotificationDecision(
+    {
+      apnsToken: "apns-token",
+      preferences: {
+        notificationsEnabled: true,
+        notificationDelayMinutes: 2,
+        notificationEventTypes: ["goal"],
+        englishPremierLeagueTeamsOnly: true,
+      },
+    },
+    {
+      home_team: "Lazio",
+      away_team: "Sassuolo",
+      league: "Serie A",
+      tv_channels: [],
+    },
+    {
+      type: "goal",
+    }
+  );
+
+  assert.deepStrictEqual(decision, {
+    shouldNotify: false,
+    reason: "premier_league_team_filter",
+    delayMinutes: 2,
+  });
+});
+
+test("evaluateUserNotificationDecision allows Premier League matches when EPL-only filter is enabled", () => {
+  const decision = __testHooks.evaluateUserNotificationDecision(
+    {
+      apnsToken: "apns-token",
+      preferences: {
+        notificationsEnabled: true,
+        notificationDelayMinutes: 0,
+        notificationEventTypes: ["goal"],
+        englishPremierLeagueTeamsOnly: true,
+      },
+    },
+    {
+      home_team: "West Ham United",
+      away_team: "Brentford",
+      league: "Premier League",
+      tv_channels: [],
+    },
+    {
+      type: "goal",
+    }
+  );
+
+  assert.equal(decision.shouldNotify, true);
+  assert.equal(decision.reason, "eligible");
+});

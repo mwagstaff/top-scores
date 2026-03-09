@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Devices</title>
+  <style>
+    :root {
+      --bg: #f3f5f7;
+      --panel: #ffffff;
+      --ink: #10202c;
+      --muted: #5c6b76;
+      --line: #d7e0e6;
+      --accent: #0f766e;
+      --accent-soft: #d8f3ef;
+      --warn: #b45309;
+      --fail: #b91c1c;
+      --ok: #166534;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #eef4f6 0%, #f8fafb 100%);
+      color: var(--ink);
+    }
+
+    a {
+      color: #0b5e58;
+    }
+
+    .container {
+      max-width: 1360px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(16, 32, 44, 0.05);
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .header-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 0.92rem;
+      margin-top: 10px;
+    }
+
+    form {
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 140px 140px;
+      gap: 10px;
+      align-items: end;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    input,
+    button {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    input:focus {
+      outline: 2px solid rgba(15, 118, 110, 0.25);
+      border-color: var(--accent);
+    }
+
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: 0;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    button.ghost {
+      background: #fff;
+      border: 1px solid var(--line);
+      color: var(--ink);
+    }
+
+    .status {
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .status.error {
+      color: var(--fail);
+      font-weight: 700;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: #f9fbfc;
+    }
+
+    .stat .label {
+      font-size: 0.74rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .stat .value {
+      margin-top: 4px;
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .list-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 980px;
+      font-size: 0.88rem;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f8fafc;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+
+    tbody td {
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    tbody tr:hover {
+      background: rgba(15, 118, 110, 0.04);
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.8rem;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 0.74rem;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      color: var(--ok);
+      border-color: rgba(22, 101, 52, 0.24);
+      background: rgba(22, 101, 52, 0.09);
+    }
+
+    .pill.fail {
+      color: var(--fail);
+      border-color: rgba(185, 28, 28, 0.24);
+      background: rgba(185, 28, 28, 0.08);
+    }
+
+    .pill.warn {
+      color: var(--warn);
+      border-color: rgba(180, 83, 9, 0.24);
+      background: rgba(180, 83, 9, 0.08);
+    }
+
+    .token-line,
+    .meta-line,
+    .notification-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 16px;
+    }
+
+    .kv-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .kv-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: #fbfcfd;
+    }
+
+    .kv-card .k {
+      font-size: 0.74rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+    }
+
+    .kv-card .v {
+      font-weight: 600;
+    }
+
+    .section-stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0f172a;
+      color: #d9e7ff;
+      border-radius: 12px;
+      padding: 14px;
+      overflow: auto;
+      font-size: 0.8rem;
+    }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #fff;
+    }
+
+    details summary {
+      cursor: pointer;
+      font-weight: 700;
+      list-style: none;
+    }
+
+    details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .notification-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .notification-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .empty {
+      text-align: center;
+      padding: 24px;
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.7);
+    }
+
+    .pagination {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .pagination-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    @media (max-width: 960px) {
+      .row,
+      .summary,
+      .grid-2,
+      .kv-grid {
+        grid-template-columns: 1fr;
+      }
+
+      body {
+        padding: 12px;
+      }
+
+      table {
+        min-width: 760px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="panel">
+      <h1 id="page-title">Devices Admin</h1>
+      <p id="page-subtitle">Search saved devices and inspect their current push preference state.</p>
+      <div class="header-links">
+        <a id="devices-home-link" href="./devices">Devices</a>
+        <a id="preferences-link" href="./preferences">Preferences</a>
+        <a id="fixtures-link" href="./fixtures">Fixtures</a>
+        <a id="history-link" href="./bbc-history">BBC History</a>
+      </div>
+    </section>
+
+    <section id="list-view" class="section-stack">
+      <section class="panel">
+        <form id="search-form">
+          <div class="row">
+            <div>
+              <label for="search">Search devices</label>
+              <input id="search" name="search" type="text" placeholder="suffix, full token, APNS token, device name, preferences">
+            </div>
+            <div>
+              <label for="page_size">Page size</label>
+              <input id="page_size" name="page_size" type="number" min="1" max="50" value="50">
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <button type="submit">Load devices</button>
+            </div>
+          </div>
+        </form>
+        <div id="list-status" class="status">Loading devices…</div>
+      </section>
+
+      <section id="list-summary" class="panel summary hidden"></section>
+
+      <section class="panel">
+        <div class="list-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Name</th>
+                <th>Updated</th>
+                <th>APNS</th>
+                <th>Build</th>
+                <th>Notifications</th>
+                <th>EPL Only</th>
+                <th>Filters</th>
+              </tr>
+            </thead>
+            <tbody id="device-rows"></tbody>
+          </table>
+        </div>
+        <div id="list-empty" class="empty hidden">No devices matched the current query.</div>
+        <div class="pagination">
+          <div id="pagination-text" class="subtle"></div>
+          <div class="pagination-controls">
+            <button id="prev-page" class="ghost" type="button">Previous</button>
+            <button id="next-page" class="ghost" type="button">Next</button>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section id="detail-view" class="section-stack hidden">
+      <section class="panel">
+        <div class="notification-header">
+          <div>
+            <h2 id="detail-title">Device</h2>
+            <p id="detail-subtitle">Loading device details…</p>
+          </div>
+          <a id="back-to-devices" href="./devices">Back to devices</a>
+        </div>
+        <div id="detail-status" class="status"></div>
+      </section>
+
+      <section id="detail-meta" class="panel hidden"></section>
+
+      <section class="grid-2">
+        <section id="friendly-preferences" class="panel hidden"></section>
+        <section id="raw-preferences" class="panel hidden"></section>
+      </section>
+
+      <section id="notifications-panel" class="panel hidden"></section>
+    </section>
+  </div>
+
+  <script>
+    function buildApiBasePrefix() {
+      const pathname = String(window.location.pathname || "");
+      const adminSuffixPattern = /\/admin\/devices(?:\/[^/]+)?\/?$/;
+      const basePrefix = pathname.replace(adminSuffixPattern, "");
+      return basePrefix && basePrefix !== "/" ? basePrefix : "";
+    }
+
+    function extractDeviceSuffixFromPath() {
+      const pathname = String(window.location.pathname || "");
+      const match = pathname.match(/\/admin\/devices\/([^/]+)\/?$/);
+      return match ? decodeURIComponent(match[1]) : "";
+    }
+
+    const API_BASE_PREFIX = buildApiBasePrefix();
+    const DEVICES_API_URL = `${API_BASE_PREFIX}/api/v1/admin/devices`;
+    const detailSuffix = extractDeviceSuffixFromPath();
+    const currentQueryParams = new URLSearchParams(window.location.search);
+
+    document.getElementById("devices-home-link").href = `${API_BASE_PREFIX}/admin/devices`;
+    document.getElementById("preferences-link").href = `${API_BASE_PREFIX}/admin/preferences`;
+    document.getElementById("fixtures-link").href = `${API_BASE_PREFIX}/admin/fixtures`;
+    document.getElementById("history-link").href = `${API_BASE_PREFIX}/admin/bbc-history`;
+    document.getElementById("back-to-devices").href = `${API_BASE_PREFIX}/admin/devices`;
+
+    const listView = document.getElementById("list-view");
+    const detailView = document.getElementById("detail-view");
+    const pageTitle = document.getElementById("page-title");
+    const pageSubtitle = document.getElementById("page-subtitle");
+
+    function escapeHTML(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function shortToken(token, leading = 10, trailing = 8) {
+      const raw = String(token || "");
+      if (!raw) return "-";
+      if (raw.length <= leading + trailing + 3) return raw;
+      return `${raw.slice(0, leading)}...${raw.slice(-trailing)}`;
+    }
+
+    function formatDateTime(value) {
+      const ts = Date.parse(String(value || ""));
+      if (!Number.isFinite(ts)) return "-";
+      return new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(ts);
+    }
+
+    function formatList(value) {
+      if (!Array.isArray(value) || value.length === 0) return "None";
+      return value.join(", ");
+    }
+
+    function boolPill(value, trueLabel = "Yes", falseLabel = "No") {
+      const label = value ? trueLabel : falseLabel;
+      const cls = value ? "pill ok" : "pill";
+      return `<span class="${cls}">${escapeHTML(label)}</span>`;
+    }
+
+    function renderStats(target, items) {
+      target.classList.toggle("hidden", !items.length);
+      target.innerHTML = items.map((item) => `
+        <div class="stat">
+          <div class="label">${escapeHTML(item.label)}</div>
+          <div class="value">${escapeHTML(item.value)}</div>
+        </div>
+      `).join("");
+    }
+
+    async function fetchJson(url) {
+      const response = await fetch(url, { headers: { Accept: "application/json" } });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && (payload.error || payload.message)
+          ? `${payload.error || payload.message}`
+          : `Request failed (${response.status})`;
+        const error = new Error(message);
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    }
+
+    function buildDetailHref(device) {
+      if (!device) return "#";
+      if (device.admin_resolved_path) {
+        return `${API_BASE_PREFIX}${device.admin_resolved_path}`;
+      }
+      if (!device.device_token_suffix) return "#";
+      return `${API_BASE_PREFIX}/admin/devices/${encodeURIComponent(device.device_token_suffix)}`;
+    }
+
+    async function loadListView() {
+      pageTitle.textContent = "Devices Admin";
+      pageSubtitle.textContent = "Search saved devices and inspect current preferences plus notification history.";
+      listView.classList.remove("hidden");
+      detailView.classList.add("hidden");
+
+      const params = new URLSearchParams(window.location.search);
+      const q = String(params.get("q") || "").trim();
+      const page = Math.max(1, Number(params.get("page") || 1) || 1);
+      const pageSize = Math.min(50, Math.max(1, Number(params.get("page_size") || 50) || 50));
+      document.getElementById("search").value = q;
+      document.getElementById("page_size").value = String(pageSize);
+
+      const listStatus = document.getElementById("list-status");
+      const rowsNode = document.getElementById("device-rows");
+      const emptyNode = document.getElementById("list-empty");
+      const summaryNode = document.getElementById("list-summary");
+      const paginationText = document.getElementById("pagination-text");
+      const prevPageBtn = document.getElementById("prev-page");
+      const nextPageBtn = document.getElementById("next-page");
+
+      listStatus.textContent = "Loading devices…";
+      listStatus.className = "status";
+      rowsNode.innerHTML = "";
+      emptyNode.classList.add("hidden");
+      summaryNode.innerHTML = "";
+      summaryNode.classList.add("hidden");
+
+      const apiUrl = new URL(DEVICES_API_URL, window.location.origin);
+      if (q) apiUrl.searchParams.set("q", q);
+      apiUrl.searchParams.set("page", String(page));
+      apiUrl.searchParams.set("page_size", String(pageSize));
+
+      try {
+        const payload = await fetchJson(apiUrl.toString());
+        const devices = Array.isArray(payload.data) ? payload.data : [];
+        renderStats(summaryNode, [
+          { label: "Matched Devices", value: String(payload.total_matched || 0) },
+          { label: "Page", value: `${payload.page || 1} / ${payload.total_pages || 1}` },
+          { label: "Page Size", value: String(payload.page_size || pageSize) },
+          { label: "Total Saved", value: String(payload.total_available || 0) },
+        ]);
+
+        rowsNode.innerHTML = devices.map((device) => `
+          <tr>
+            <td>
+              <div class="token-line">
+                <a class="mono" href="${escapeHTML(buildDetailHref(device))}">${escapeHTML(device.device_token_suffix || "-")}</a>
+                <span class="mono subtle">${escapeHTML(device.device_token_short || "-")}</span>
+                ${device.suffix_collision_count > 1 ? '<span class="pill warn">suffix collision</span>' : ""}
+              </div>
+            </td>
+            <td>${escapeHTML(device.device_name || "-")}</td>
+            <td>${escapeHTML(formatDateTime(device.updated_at))}</td>
+            <td>${device.apns_token_present ? '<span class="pill ok">Stored</span>' : '<span class="pill fail">Missing</span>'}</td>
+            <td>${device.is_development_build ? '<span class="pill warn">Dev</span>' : '<span class="pill ok">Prod</span>'}</td>
+            <td>${device.notifications_enabled ? '<span class="pill ok">Enabled</span>' : '<span class="pill">Disabled</span>'}</td>
+            <td>${device.english_premier_league_teams_only ? '<span class="pill ok">On</span>' : '<span class="pill">Off</span>'}</td>
+            <td>
+              <div class="chip-row">
+                ${device.competition_filter_enabled ? '<span class="pill ok">Comp</span>' : '<span class="pill">Comp off</span>'}
+                ${device.notification_use_viewing_filter ? '<span class="pill ok">Notif=view</span>' : '<span class="pill">Notif custom</span>'}
+              </div>
+            </td>
+          </tr>
+        `).join("");
+
+        emptyNode.classList.toggle("hidden", devices.length > 0);
+        listStatus.textContent = devices.length
+          ? `Loaded ${devices.length} device(s).`
+          : "No devices matched the current query.";
+        paginationText.textContent = `Showing page ${payload.page || 1} of ${payload.total_pages || 1}`;
+        prevPageBtn.disabled = (payload.page || 1) <= 1;
+        nextPageBtn.disabled = (payload.page || 1) >= (payload.total_pages || 1);
+
+        prevPageBtn.onclick = () => updateListQuery({ q, page: Math.max(1, (payload.page || 1) - 1), pageSize });
+        nextPageBtn.onclick = () => updateListQuery({ q, page: (payload.page || 1) + 1, pageSize });
+      } catch (error) {
+        listStatus.textContent = error.message || "Failed to load devices.";
+        listStatus.className = "status error";
+        paginationText.textContent = "";
+        prevPageBtn.disabled = true;
+        nextPageBtn.disabled = true;
+      }
+    }
+
+    function updateListQuery({ q, page, pageSize }) {
+      const url = new URL(`${API_BASE_PREFIX}/admin/devices`, window.location.origin);
+      if (q) url.searchParams.set("q", q);
+      if (page > 1) url.searchParams.set("page", String(page));
+      if (pageSize && pageSize !== 50) url.searchParams.set("page_size", String(pageSize));
+      window.location.assign(url.toString());
+    }
+
+    function renderFriendlyPreferences(record) {
+      const panel = document.getElementById("friendly-preferences");
+      const prefs = record && record.preferences && typeof record.preferences === "object" ? record.preferences : {};
+      const selectedLeagues = Array.isArray(prefs.selectedLeagues) ? prefs.selectedLeagues : [];
+      const notificationLeagues = Array.isArray(prefs.notificationSelectedLeagues) ? prefs.notificationSelectedLeagues : [];
+      const selectedChannels = Array.isArray(prefs.selectedChannels) ? prefs.selectedChannels : [];
+      const eventTypes = Array.isArray(prefs.notificationEventTypes) ? prefs.notificationEventTypes : [];
+
+      panel.classList.remove("hidden");
+      panel.innerHTML = `
+        <div class="section-stack">
+          <div>
+            <h3>Preferences Summary</h3>
+            <p>User-friendly view of the stored preference payload.</p>
+          </div>
+          <div class="kv-grid">
+            <div class="kv-card"><div class="k">Notifications</div><div class="v">${prefs.notificationsEnabled ? "Enabled" : "Disabled"}</div></div>
+            <div class="kv-card"><div class="k">Notification Delay</div><div class="v">${escapeHTML(String(prefs.notificationDelayMinutes ?? 0))} min</div></div>
+            <div class="kv-card"><div class="k">Premier League Teams Only</div><div class="v">${prefs.englishPremierLeagueTeamsOnly ? "On" : "Off"}</div></div>
+            <div class="kv-card"><div class="k">Competition Filter</div><div class="v">${prefs.competitionFilterEnabled ? "Enabled" : "Disabled"}</div></div>
+            <div class="kv-card"><div class="k">Channel Filter</div><div class="v">${prefs.channelFilterEnabled ? "Enabled" : "Disabled"}</div></div>
+            <div class="kv-card"><div class="k">Notification Uses Viewing Filter</div><div class="v">${prefs.notificationUseViewingFilter !== false ? "Yes" : "No"}</div></div>
+            <div class="kv-card"><div class="k">Refresh Interval</div><div class="v">${escapeHTML(String(prefs.refreshIntervalMinutes ?? "-"))} min</div></div>
+            <div class="kv-card"><div class="k">Show All Matches</div><div class="v">${prefs.showAllMatches ? "On" : "Off"}</div></div>
+          </div>
+          <div class="kv-card">
+            <div class="k">Selected Viewing Competitions</div>
+            <div class="v subtle">${escapeHTML(formatList(selectedLeagues))}</div>
+          </div>
+          <div class="kv-card">
+            <div class="k">Selected Notification Competitions</div>
+            <div class="v subtle">${escapeHTML(formatList(notificationLeagues))}</div>
+          </div>
+          <div class="kv-card">
+            <div class="k">Selected Channels</div>
+            <div class="v subtle">${escapeHTML(formatList(selectedChannels))}</div>
+          </div>
+          <div class="kv-card">
+            <div class="k">Notification Event Types</div>
+            <div class="v subtle">${escapeHTML(formatList(eventTypes))}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderRawPreferences(record) {
+      const panel = document.getElementById("raw-preferences");
+      panel.classList.remove("hidden");
+      panel.innerHTML = `
+        <div class="section-stack">
+          <div>
+            <h3>Raw JSON</h3>
+            <p>Complete stored preference record from Redis.</p>
+          </div>
+          <pre>${escapeHTML(JSON.stringify(record || {}, null, 2))}</pre>
+        </div>
+      `;
+    }
+
+    function renderDetailMeta(payload) {
+      const panel = document.getElementById("detail-meta");
+      const device = payload.device || {};
+      const history = payload.history || {};
+      panel.classList.remove("hidden");
+      panel.innerHTML = `
+        <div class="section-stack">
+          <div class="token-line">
+            <span class="pill ok">Suffix ${escapeHTML(device.device_token_suffix || "-")}</span>
+            ${device.device_name ? `<span class="pill">${escapeHTML(device.device_name)}</span>` : ""}
+            ${device.is_development_build ? '<span class="pill warn">Development build</span>' : '<span class="pill ok">Production build</span>'}
+            ${device.apns_token_present ? '<span class="pill ok">APNS token stored</span>' : '<span class="pill fail">APNS token missing</span>'}
+          </div>
+          <div class="kv-grid">
+            <div class="kv-card"><div class="k">Device Token</div><div class="v mono">${escapeHTML(device.device_token || "-")}</div></div>
+            <div class="kv-card"><div class="k">Updated</div><div class="v">${escapeHTML(formatDateTime(device.updated_at))}</div></div>
+            <div class="kv-card"><div class="k">Notifications In Window</div><div class="v">${escapeHTML(String(history.total_notifications || 0))}</div></div>
+            <div class="kv-card"><div class="k">Returned</div><div class="v">${escapeHTML(String(history.returned_notifications || 0))}</div></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderNotifications(payload) {
+      const panel = document.getElementById("notifications-panel");
+      const history = payload.history || {};
+      const notifications = Array.isArray(payload.notifications) ? payload.notifications : [];
+      panel.classList.remove("hidden");
+
+      const statusCounts = history.status_counts && typeof history.status_counts === "object"
+        ? Object.entries(history.status_counts).map(([key, value]) => `<span class="pill">${escapeHTML(`${key}: ${value}`)}</span>`).join("")
+        : "";
+
+      panel.innerHTML = `
+        <div class="section-stack">
+          <div class="notification-header">
+            <div>
+              <h3>Last ${escapeHTML(String(notifications.length))} Notifications</h3>
+              <p>Most recent device-specific notification dispatches retained in Redis history.</p>
+            </div>
+            <div class="chip-row">${statusCounts}</div>
+          </div>
+          ${notifications.length ? `<div class="notification-list">${notifications.map((notification) => {
+            const resultHref = notification.match_id
+              ? `${API_BASE_PREFIX}/admin/results/${encodeURIComponent(notification.match_id)}`
+              : null;
+            return `
+              <details>
+                <summary>
+                  <div class="notification-header">
+                    <div>
+                      <div>${escapeHTML(notification.title || notification.event_type || "Notification")}</div>
+                      <div class="subtle">${escapeHTML(notification.body || "-")}</div>
+                    </div>
+                    <div class="chip-row">
+                      <span class="pill ${notification.status === "sent" ? "ok" : notification.status === "failed" ? "fail" : ""}">${escapeHTML(notification.status || "unknown")}</span>
+                      <span class="pill">${escapeHTML(notification.event_type || "unknown")}</span>
+                    </div>
+                  </div>
+                </summary>
+                <div class="section-stack" style="margin-top:10px;">
+                  <div class="notification-line subtle">
+                    <span>${escapeHTML(formatDateTime(notification.timestamp))}</span>
+                    <span>delay=${escapeHTML(String(notification.delay_minutes ?? 0))}m</span>
+                    ${notification.environment ? `<span>env=${escapeHTML(notification.environment)}</span>` : ""}
+                    ${notification.dispatch_mode ? `<span>mode=${escapeHTML(notification.dispatch_mode)}</span>` : ""}
+                  </div>
+                  <div class="notification-line">
+                    ${notification.match_label ? `<span class="pill">${escapeHTML(notification.match_label)}</span>` : ""}
+                    ${notification.match && notification.match.league ? `<span class="pill">${escapeHTML(notification.match.league)}</span>` : ""}
+                    ${resultHref ? `<a href="${escapeHTML(resultHref)}">Open match history</a>` : ""}
+                  </div>
+                  ${notification.error ? `<div class="status error">${escapeHTML(notification.error)}</div>` : ""}
+                  <pre>${escapeHTML(JSON.stringify(notification.payload || {}, null, 2))}</pre>
+                </div>
+              </details>
+            `;
+          }).join("")}</div>` : '<div class="empty">No retained notifications found for this device in the current history window.</div>'}
+        </div>
+      `;
+    }
+
+    async function loadDetailView() {
+      pageTitle.textContent = "Device Detail";
+      pageSubtitle.textContent = "Bookmarkable device diagnostics by token suffix.";
+      listView.classList.add("hidden");
+      detailView.classList.remove("hidden");
+
+      const detailStatus = document.getElementById("detail-status");
+      const detailTitle = document.getElementById("detail-title");
+      const detailSubtitle = document.getElementById("detail-subtitle");
+      detailStatus.textContent = "Loading device details…";
+      detailStatus.className = "status";
+
+      try {
+        const detailUrl = new URL(`${DEVICES_API_URL}/${encodeURIComponent(detailSuffix)}`, window.location.origin);
+        const explicitDeviceToken = String(currentQueryParams.get("device_token") || "").trim();
+        if (explicitDeviceToken) {
+          detailUrl.searchParams.set("device_token", explicitDeviceToken);
+        }
+        const payload = await fetchJson(detailUrl.toString());
+        const device = payload.device || {};
+        detailTitle.textContent = device.device_name || `Device ${device.device_token_suffix || detailSuffix}`;
+        detailSubtitle.textContent = `${device.device_token_short || ""} ${device.apns_token_present ? "• APNS token stored" : "• APNS token missing"}`;
+        detailStatus.textContent = payload.history && payload.history.error
+          ? `History loaded with warning: ${payload.history.error}`
+          : "Device details loaded.";
+        if (payload.history && payload.history.error) {
+          detailStatus.className = "status error";
+        }
+        renderDetailMeta(payload);
+        renderFriendlyPreferences(payload.preferences_record || {});
+        renderRawPreferences(payload.preferences_record || {});
+        renderNotifications(payload);
+      } catch (error) {
+        const payload = error && error.payload ? error.payload : null;
+        detailTitle.textContent = `Device ${detailSuffix}`;
+        detailSubtitle.textContent = "Unable to load device details.";
+
+        if (error.status === 409 && payload && Array.isArray(payload.matches)) {
+          detailStatus.className = "status error";
+          detailStatus.textContent = "This suffix matches multiple devices. Choose one of the candidates below.";
+          document.getElementById("detail-meta").classList.remove("hidden");
+          document.getElementById("detail-meta").innerHTML = `
+            <div class="section-stack">
+              ${payload.matches.map((device) => `
+                <div class="kv-card">
+                  <div class="notification-header">
+                    <div>
+                      <div><a class="mono" href="${escapeHTML(buildDetailHref(device))}">${escapeHTML(device.device_token_short || "-")}</a></div>
+                      <div class="subtle">${escapeHTML(device.device_name || "Unnamed device")}</div>
+                    </div>
+                    <div class="chip-row">
+                      ${device.apns_token_present ? '<span class="pill ok">APNS</span>' : '<span class="pill fail">No APNS</span>'}
+                      ${device.is_development_build ? '<span class="pill warn">Dev</span>' : '<span class="pill ok">Prod</span>'}
+                    </div>
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+          `;
+          return;
+        }
+
+        detailStatus.textContent = error.message || "Failed to load device details.";
+        detailStatus.className = "status error";
+      }
+    }
+
+    document.getElementById("search-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const q = String(document.getElementById("search").value || "").trim();
+      const pageSize = Math.min(50, Math.max(1, Number(document.getElementById("page_size").value || 50) || 50));
+      updateListQuery({ q, page: 1, pageSize });
+    });
+
+    if (detailSuffix) {
+      loadDetailView();
+    } else {
+      loadListView();
+    }
+  </script>
+</body>
+</html>

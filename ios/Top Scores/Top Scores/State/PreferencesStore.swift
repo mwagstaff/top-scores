@@ -48,24 +48,26 @@ struct PreferencesSnapshot: Codable, Equatable {
     let notificationUseViewingFilter: Bool
     let notificationCompetitionFilterEnabled: Bool
     let notificationSelectedLeagues: [String]
+    let showTodayUnfinishedFixturesBadge: Bool
     let showFantasyMatchPills: Bool
 
     nonisolated init(
         selectedLeagues: [String],
         selectedChannels: [String],
-        competitionFilterEnabled: Bool = true,
-        channelFilterEnabled: Bool = true,
+        competitionFilterEnabled: Bool = PreferencesStore.defaultCompetitionFilterEnabled,
+        channelFilterEnabled: Bool = PreferencesStore.defaultChannelFilterEnabled,
         englishPremierLeagueTeamsOnly: Bool,
         apiBaseURL: String,
         refreshIntervalMinutes: Int,
         showAllMatches: Bool = false,
         matchGroupSortOrder: MatchGroupSortOrder = PreferencesStore.defaultMatchGroupSortOrder,
-        notificationsEnabled: Bool = false,
-        notificationDelayMinutes: Int = 0,
+        notificationsEnabled: Bool = PreferencesStore.defaultNotificationsEnabled,
+        notificationDelayMinutes: Int = PreferencesStore.defaultNotificationDelayMinutes,
         notificationEventTypes: Set<String> = PreferencesStore.defaultNotificationEventTypes,
-        notificationUseViewingFilter: Bool = true,
-        notificationCompetitionFilterEnabled: Bool = true,
-        notificationSelectedLeagues: [String] = [],
+        notificationUseViewingFilter: Bool = PreferencesStore.defaultNotificationUseViewingFilter,
+        notificationCompetitionFilterEnabled: Bool = PreferencesStore.defaultNotificationCompetitionFilterEnabled,
+        notificationSelectedLeagues: [String] = PreferencesStore.defaultNotificationSelectedLeagues,
+        showTodayUnfinishedFixturesBadge: Bool = PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
         showFantasyMatchPills: Bool = PreferencesStore.defaultShowFantasyMatchPills
     ) {
         self.selectedLeagues = selectedLeagues
@@ -83,6 +85,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         self.notificationUseViewingFilter = notificationUseViewingFilter
         self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
         self.notificationSelectedLeagues = notificationSelectedLeagues
+        self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.showFantasyMatchPills = showFantasyMatchPills
     }
 
@@ -102,6 +105,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         case notificationUseViewingFilter
         case notificationCompetitionFilterEnabled
         case notificationSelectedLeagues
+        case showTodayUnfinishedFixturesBadge
         case showFantasyMatchPills
     }
 
@@ -109,8 +113,8 @@ struct PreferencesSnapshot: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         selectedLeagues = try container.decode([String].self, forKey: .selectedLeagues)
         selectedChannels = try container.decode([String].self, forKey: .selectedChannels)
-        competitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .competitionFilterEnabled) ?? true
-        channelFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .channelFilterEnabled) ?? true
+        competitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .competitionFilterEnabled) ?? PreferencesStore.defaultCompetitionFilterEnabled
+        channelFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .channelFilterEnabled) ?? PreferencesStore.defaultChannelFilterEnabled
         englishPremierLeagueTeamsOnly = try container.decode(Bool.self, forKey: .englishPremierLeagueTeamsOnly)
         apiBaseURL = try container.decode(String.self, forKey: .apiBaseURL)
         refreshIntervalMinutes = try container.decode(Int.self, forKey: .refreshIntervalMinutes)
@@ -118,13 +122,14 @@ struct PreferencesSnapshot: Codable, Equatable {
         matchGroupSortOrder =
             try container.decodeIfPresent(MatchGroupSortOrder.self, forKey: .matchGroupSortOrder)
             ?? PreferencesStore.defaultMatchGroupSortOrder
-        notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? false
-        notificationDelayMinutes = try container.decodeIfPresent(Int.self, forKey: .notificationDelayMinutes) ?? 0
+        notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? PreferencesStore.defaultNotificationsEnabled
+        notificationDelayMinutes = try container.decodeIfPresent(Int.self, forKey: .notificationDelayMinutes) ?? PreferencesStore.defaultNotificationDelayMinutes
         let eventTypesArray = try container.decodeIfPresent([String].self, forKey: .notificationEventTypes)
         notificationEventTypes = eventTypesArray.map { Set($0) } ?? PreferencesStore.defaultNotificationEventTypes
-        notificationUseViewingFilter = try container.decodeIfPresent(Bool.self, forKey: .notificationUseViewingFilter) ?? true
-        notificationCompetitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationCompetitionFilterEnabled) ?? true
-        notificationSelectedLeagues = try container.decodeIfPresent([String].self, forKey: .notificationSelectedLeagues) ?? []
+        notificationUseViewingFilter = try container.decodeIfPresent(Bool.self, forKey: .notificationUseViewingFilter) ?? PreferencesStore.defaultNotificationUseViewingFilter
+        notificationCompetitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationCompetitionFilterEnabled) ?? PreferencesStore.defaultNotificationCompetitionFilterEnabled
+        notificationSelectedLeagues = try container.decodeIfPresent([String].self, forKey: .notificationSelectedLeagues) ?? PreferencesStore.defaultNotificationSelectedLeagues
+        showTodayUnfinishedFixturesBadge = try container.decodeIfPresent(Bool.self, forKey: .showTodayUnfinishedFixturesBadge) ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
         showFantasyMatchPills = try container.decodeIfPresent(Bool.self, forKey: .showFantasyMatchPills) ?? PreferencesStore.defaultShowFantasyMatchPills
     }
 }
@@ -143,17 +148,18 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultApiBaseURL = productionApiBaseURL
     nonisolated static let defaultRefreshIntervalMinutes = 10
     nonisolated static let defaultSelectedChannels = ["Amazon (all)", "BBC (all)", "ITV (all)", "Sky (all)", "TNT (all)"]
-    nonisolated static let defaultEnglishPremierLeagueTeamsOnly = false
-    nonisolated static let defaultCompetitionFilterEnabled = true
-    nonisolated static let defaultChannelFilterEnabled = true
+    nonisolated static let defaultEnglishPremierLeagueTeamsOnly = true
+    nonisolated static let defaultCompetitionFilterEnabled = false
+    nonisolated static let defaultChannelFilterEnabled = false
     nonisolated static let defaultShowAllMatches = false
-    nonisolated static let defaultMatchGroupSortOrder: MatchGroupSortOrder = .alphabetical
-    nonisolated static let defaultNotificationsEnabled = false
-    nonisolated static let defaultNotificationDelayMinutes = 0
+    nonisolated static let defaultMatchGroupSortOrder: MatchGroupSortOrder = .kickoffThenTeamScore
+    nonisolated static let defaultNotificationsEnabled = true
+    nonisolated static let defaultNotificationDelayMinutes = 2
     nonisolated static let defaultNotificationEventTypes: Set<String> = ["goal", "kickoff", "halftime", "fulltime", "redcard"]
     nonisolated static let defaultNotificationUseViewingFilter = true
     nonisolated static let defaultNotificationCompetitionFilterEnabled = true
     nonisolated static let defaultNotificationSelectedLeagues: [String] = []
+    nonisolated static let defaultShowTodayUnfinishedFixturesBadge = false
     nonisolated static let defaultShowFantasyMatchPills = true
 
     @Published var selectedLeagues: [String] {
@@ -216,6 +222,10 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var showTodayUnfinishedFixturesBadge: Bool {
+        didSet { persist() }
+    }
+
     @Published var showFantasyMatchPills: Bool {
         didSet { persist() }
     }
@@ -250,6 +260,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationCompetitionFilterEnabled
         let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
             ?? Self.defaultNotificationSelectedLeagues
+        let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
+            ?? Self.defaultShowTodayUnfinishedFixturesBadge
         let showFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
             ?? Self.defaultShowFantasyMatchPills
 
@@ -268,7 +280,14 @@ final class PreferencesStore: ObservableObject {
         self.notificationUseViewingFilter = notificationUseViewingFilter
         self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
         self.notificationSelectedLeagues = notificationSelectedLeagues
+        self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.showFantasyMatchPills = showFantasyMatchPills
+
+        if !showTodayUnfinishedFixturesBadge {
+            Task {
+                await AppIconBadgeManager.clear()
+            }
+        }
     }
 
     var snapshot: PreferencesSnapshot {
@@ -288,6 +307,7 @@ final class PreferencesStore: ObservableObject {
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
             notificationSelectedLeagues: notificationSelectedLeagues,
+            showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             showFantasyMatchPills: showFantasyMatchPills
         )
     }
@@ -309,6 +329,7 @@ final class PreferencesStore: ObservableObject {
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
             notificationSelectedLeagues: notificationSelectedLeagues,
+            showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             showFantasyMatchPills: showFantasyMatchPills
         )
     }
@@ -329,8 +350,15 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(notificationUseViewingFilter, forKey: Keys.notificationUseViewingFilter)
         userDefaults.set(notificationCompetitionFilterEnabled, forKey: Keys.notificationCompetitionFilterEnabled)
         userDefaults.set(notificationSelectedLeagues, forKey: Keys.notificationSelectedLeagues)
+        userDefaults.set(showTodayUnfinishedFixturesBadge, forKey: Keys.showTodayUnfinishedFixturesBadge)
         userDefaults.set(showFantasyMatchPills, forKey: Keys.showFantasyMatchPills)
         SharedMatchesBridge.saveSnapshotToSharedDefaults(snapshot)
+
+        if !showTodayUnfinishedFixturesBadge {
+            Task {
+                await AppIconBadgeManager.clear()
+            }
+        }
 
         // Sync preferences to Redis
         Task {
@@ -368,6 +396,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationCompetitionFilterEnabled
         let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
             ?? Self.defaultNotificationSelectedLeagues
+        let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
+            ?? Self.defaultShowTodayUnfinishedFixturesBadge
         let showFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
             ?? Self.defaultShowFantasyMatchPills
 
@@ -387,6 +417,7 @@ final class PreferencesStore: ObservableObject {
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
             notificationSelectedLeagues: notificationSelectedLeagues,
+            showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             showFantasyMatchPills: showFantasyMatchPills
         )
     }
@@ -407,6 +438,7 @@ final class PreferencesStore: ObservableObject {
         static let notificationUseViewingFilter = "preferences.notificationUseViewingFilter"
         static let notificationCompetitionFilterEnabled = "preferences.notificationCompetitionFilterEnabled"
         static let notificationSelectedLeagues = "preferences.notificationSelectedLeagues"
+        static let showTodayUnfinishedFixturesBadge = "preferences.showTodayUnfinishedFixturesBadge"
         static let showFantasyMatchPills = "preferences.showFantasyMatchPills"
     }
 }
