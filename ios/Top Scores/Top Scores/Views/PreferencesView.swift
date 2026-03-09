@@ -212,6 +212,19 @@ struct PreferencesView: View {
                     .padding(.vertical, 4)
 
                     VStack(alignment: .leading, spacing: 8) {
+                        Text("Predictions")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+
+                        Toggle("Show prediction redo button", isOn: showPredictionRedoButtonBinding)
+
+                        Text("Shows the \"Redo\" control for regenerating saved predictions. Off by default, even in debug builds.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 8) {
                         Text("Push Notifications")
                             .font(.subheadline)
                             .fontWeight(.semibold)
@@ -281,6 +294,15 @@ struct PreferencesView: View {
             set: { preferences.showFantasyMatchPills = $0 }
         )
     }
+
+    #if DEBUG
+    private var showPredictionRedoButtonBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showPredictionRedoButton },
+            set: { preferences.showPredictionRedoButton = $0 }
+        )
+    }
+    #endif
 
     private var competitionFilterEnabledBinding: Binding<Bool> {
         Binding(

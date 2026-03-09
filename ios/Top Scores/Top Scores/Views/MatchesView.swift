@@ -337,7 +337,7 @@ struct MatchesView: View {
         HStack(spacing: 8) {
             predictorButton(for: day)
             #if DEBUG
-            if predictionDateKeys.contains(day.dateKey) {
+            if preferences.showPredictionRedoButton && predictionDateKeys.contains(day.dateKey) {
                 redoPredictorButton(for: day)
             }
             #endif

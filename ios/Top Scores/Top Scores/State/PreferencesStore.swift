@@ -161,6 +161,9 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultNotificationSelectedLeagues: [String] = []
     nonisolated static let defaultShowTodayUnfinishedFixturesBadge = false
     nonisolated static let defaultShowFantasyMatchPills = true
+    #if DEBUG
+    nonisolated static let defaultShowPredictionRedoButton = false
+    #endif
 
     @Published var selectedLeagues: [String] {
         didSet { persist() }
@@ -230,6 +233,12 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    #if DEBUG
+    @Published var showPredictionRedoButton: Bool {
+        didSet { persist() }
+    }
+    #endif
+
     init(userDefaults: UserDefaults = .standard) {
         let leagues = userDefaults.stringArray(forKey: Keys.selectedLeagues) ?? Self.defaultSelectedLeagues
         let channels = userDefaults.stringArray(forKey: Keys.selectedChannels) ?? Self.defaultSelectedChannels
@@ -264,6 +273,10 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
         let showFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
             ?? Self.defaultShowFantasyMatchPills
+        #if DEBUG
+        let showPredictionRedoButton = userDefaults.object(forKey: Keys.showPredictionRedoButton) as? Bool
+            ?? Self.defaultShowPredictionRedoButton
+        #endif
 
         self.selectedLeagues = leagues
         self.selectedChannels = ChannelSelection.normalizedSelectedOptions(channels)
@@ -282,6 +295,9 @@ final class PreferencesStore: ObservableObject {
         self.notificationSelectedLeagues = notificationSelectedLeagues
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.showFantasyMatchPills = showFantasyMatchPills
+        #if DEBUG
+        self.showPredictionRedoButton = showPredictionRedoButton
+        #endif
 
         if !showTodayUnfinishedFixturesBadge {
             Task {
@@ -352,6 +368,9 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(notificationSelectedLeagues, forKey: Keys.notificationSelectedLeagues)
         userDefaults.set(showTodayUnfinishedFixturesBadge, forKey: Keys.showTodayUnfinishedFixturesBadge)
         userDefaults.set(showFantasyMatchPills, forKey: Keys.showFantasyMatchPills)
+        #if DEBUG
+        userDefaults.set(showPredictionRedoButton, forKey: Keys.showPredictionRedoButton)
+        #endif
         SharedMatchesBridge.saveSnapshotToSharedDefaults(snapshot)
 
         if !showTodayUnfinishedFixturesBadge {
@@ -440,5 +459,8 @@ final class PreferencesStore: ObservableObject {
         static let notificationSelectedLeagues = "preferences.notificationSelectedLeagues"
         static let showTodayUnfinishedFixturesBadge = "preferences.showTodayUnfinishedFixturesBadge"
         static let showFantasyMatchPills = "preferences.showFantasyMatchPills"
+        #if DEBUG
+        static let showPredictionRedoButton = "preferences.showPredictionRedoButton"
+        #endif
     }
 }
