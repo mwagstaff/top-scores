@@ -298,6 +298,39 @@
             color: #999;
         }
 
+        .event-icon-disallowed,
+        .event-text-disallowed {
+            text-decoration: line-through;
+            text-decoration-thickness: 2px;
+        }
+
+        .live-text-feed {
+            display: grid;
+            gap: 8px;
+        }
+
+        .live-text-entry {
+            display: grid;
+            grid-template-columns: 56px 1fr;
+            gap: 10px;
+            align-items: start;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: #f8f9fa;
+        }
+
+        .live-text-minute {
+            font-weight: 700;
+            color: #667eea;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .live-text-body {
+            color: #555;
+            line-height: 1.4;
+        }
+
         .no-events {
             text-align: center;
             color: #bbb;
@@ -388,6 +421,11 @@
                 <div id="eventsTimelineRows"></div>
             </div>
 
+            <div id="liveTextFeedCard" class="card" style="display:none; padding: 20px 25px;">
+                <h2 style="font-size: 1rem; margin-bottom: 14px; padding-bottom: 8px;">Synthetic BBC Live Text</h2>
+                <div id="liveTextFeedRows" class="live-text-feed"></div>
+            </div>
+
             <!-- Match Controls -->
             <div class="card">
                 <h2>Match Controls</h2>
@@ -425,6 +463,20 @@
                         <input type="text" id="awayGoalScorer" placeholder="Away goal scorer (optional)">
                         <input type="text" id="awayAssister" placeholder="Assister (optional)">
                         <button onclick="addGoal('away')" class="btn-success">⚽ Away Goal</button>
+                    </div>
+
+                    <div class="input-row" style="grid-template-columns: 1fr 1fr 140px auto;">
+                        <input type="text" id="homeVarGoalScorer" placeholder="Home scorer for VAR reversal">
+                        <input type="text" id="homeVarAssister" placeholder="Assister (optional)">
+                        <input type="number" id="varReversionDelaySeconds" min="1" value="12" placeholder="Delay (s)">
+                        <button onclick="simulateVarDisallowedGoal('home')" class="btn-warning">🚫 Home VAR No Goal</button>
+                    </div>
+
+                    <div class="input-row" style="grid-template-columns: 1fr 1fr 140px auto;">
+                        <input type="text" id="awayVarGoalScorer" placeholder="Away scorer for VAR reversal">
+                        <input type="text" id="awayVarAssister" placeholder="Assister (optional)">
+                        <input type="number" id="varReversionDelaySecondsAway" min="1" value="12" placeholder="Delay (s)">
+                        <button onclick="simulateVarDisallowedGoal('away')" class="btn-warning">🚫 Away VAR No Goal</button>
                     </div>
 
                     <div class="input-row">
@@ -690,6 +742,7 @@
             }
 
             renderEventsTimeline(match);
+            renderLiveTextFeed(match);
         }
 
         function parseMinute(raw) {
@@ -757,6 +810,12 @@
                         if (!min) continue;
                         events.push({ kind: 'owngoal', side, minute: min, player, assist: null, isPenalty: false });
                     }
+                    for (const raw of (scorer.disallowed_goal_times || [])) {
+                        const min = parseMinute(raw);
+                        if (!min) continue;
+                        const assist = getAssist(lookup, min);
+                        events.push({ kind: 'disallowedgoal', side, minute: min, player, assist, isPenalty: false });
+                    }
                 }
                 for (const card of (redCards || [])) {
                     const player = abbreviateName(card.player);
@@ -803,16 +862,20 @@
 
             const eventRows = timeline.map(ev => {
                 const icon = ev.kind === 'redcard' ? '🟥' : '⚽';
+                const iconClass = ev.kind === 'disallowedgoal' ? 'event-icon event-icon-disallowed' : 'event-icon';
+                const textClass = ev.kind === 'disallowedgoal' ? 'event-text event-text-disallowed' : 'event-text';
                 const ownGoalSuffix = ev.kind === 'owngoal' ? ' <span class="assist">(OG)</span>' : '';
                 const penSuffix = ev.isPenalty ? ' <span class="assist">(pen)</span>' : '';
                 const assistText = ev.assist ? ` <span class="assist">(${ev.assist})</span>` : '';
-                const playerHtml = `${ev.player}${ownGoalSuffix}${penSuffix}${assistText}`;
+                const playerHtml = ev.kind === 'disallowedgoal'
+                    ? `Goal disallowed for ${ev.player}${assistText}`
+                    : `${ev.player}${ownGoalSuffix}${penSuffix}${assistText}`;
 
                 if (ev.side === 'home') {
                     return `<div class="event-row">
                         <div class="event-home">
-                            <span class="event-icon">${icon}</span>
-                            <span class="event-text">${playerHtml}</span>
+                            <span class="${iconClass}">${icon}</span>
+                            <span class="${textClass}">${playerHtml}</span>
                         </div>
                         <div class="event-minute">${ev.minute.display}</div>
                         <div></div>
@@ -822,14 +885,34 @@
                         <div></div>
                         <div class="event-minute">${ev.minute.display}</div>
                         <div class="event-away">
-                            <span class="event-text">${playerHtml}</span>
-                            <span class="event-icon">${icon}</span>
+                            <span class="${textClass}">${playerHtml}</span>
+                            <span class="${iconClass}">${icon}</span>
                         </div>
                     </div>`;
                 }
             }).join('');
 
             rowsEl.innerHTML = headerRow + eventRows;
+        }
+
+        function renderLiveTextFeed(match) {
+            const container = document.getElementById('liveTextFeedCard');
+            const rowsEl = document.getElementById('liveTextFeedRows');
+            const entries = Array.isArray(match.live_text_entries) ? match.live_text_entries : [];
+
+            if (entries.length === 0) {
+                container.style.display = 'none';
+                rowsEl.innerHTML = '';
+                return;
+            }
+
+            container.style.display = 'block';
+            rowsEl.innerHTML = entries.slice(0, 8).map(entry => `
+                <div class="live-text-entry">
+                    <div class="live-text-minute">${entry.minute || '-'}</div>
+                    <div class="live-text-body">${entry.text || ''}</div>
+                </div>
+            `).join('');
         }
 
         async function createMatch() {
@@ -964,6 +1047,39 @@
                 await loadMatchStatus();
             } catch (err) {
                 console.error('Failed to add red card:', err);
+            }
+        }
+
+        async function simulateVarDisallowedGoal(team) {
+            const playerInput = team === 'home' ? 'homeVarGoalScorer' : 'awayVarGoalScorer';
+            const assisterInput = team === 'home' ? 'homeVarAssister' : 'awayVarAssister';
+            const delayInput = team === 'home' ? 'varReversionDelaySeconds' : 'varReversionDelaySecondsAway';
+            const delaySeconds = parseInt(document.getElementById(delayInput).value, 10);
+
+            const formData = {
+                team: team,
+                playerName: document.getElementById(playerInput).value || null,
+                assisterName: document.getElementById(assisterInput).value || null,
+                revertDelayMs: Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds * 1000 : 12000,
+            };
+
+            try {
+                const response = await fetch('/api/test-match/simulate-var-disallowed-goal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Request failed with status ${response.status}`);
+                }
+
+                document.getElementById(playerInput).value = '';
+                document.getElementById(assisterInput).value = '';
+                await loadMatchStatus();
+            } catch (err) {
+                console.error('Failed to simulate VAR-disallowed goal:', err);
+                alert('Failed to simulate VAR-disallowed goal');
             }
         }
 

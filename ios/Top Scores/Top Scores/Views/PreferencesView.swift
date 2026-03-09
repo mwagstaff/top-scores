@@ -14,37 +14,10 @@ struct PreferencesView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Refresh") {
-                    Stepper(value: refreshIntervalBinding, in: 1...60) {
-                        Text("Refresh every \(preferences.refreshIntervalMinutes) min")
-                    }
-                    Text("Controls automatic in-app and scheduled background refreshes. During live matches, in-app updates can run as often as every 30 seconds.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Sorting") {
-                    Picker("Match order", selection: matchGroupSortOrderBinding) {
-                        ForEach(MatchGroupSortOrder.allCases) { sortOrder in
-                            Text(sortOrder.title).tag(sortOrder)
-                        }
-                    }
-
-                    Text("Kick-off based modes order competition groups by the first visible match. The other modes rank competition groups by combined team Elo.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
 
                 Section("Filters") {
                     Toggle("Premier League teams only", isOn: englishPremierLeagueTeamsOnlyBinding)
-                    Text("Show only matches where at least one team is in the BBC Premier League table.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Fantasy Football") {
-                    Toggle("Show Fantasy match pills", isOn: showFantasyMatchPillsBinding)
-                    Text("Displays the Fantasy trophy icon before kick-off once line-ups are available, then shows total estimated points for the players involved while matches are in play.")
+                    Text("Show only matches where at least one team is in the English Premier League.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -74,38 +47,6 @@ struct PreferencesView: View {
                         }
                     } else {
                         Text("Competition filtering is off. Fixtures and results include all competitions.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Channels") {
-                    Toggle("Enable TV channel filter", isOn: channelFilterEnabledBinding)
-                    Text("TV channel filtering applies to Fixtures only.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    if preferences.channelFilterEnabled {
-                        TextField("Search channels", text: $channelSearch)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-
-                        if viewModel.isLoadingChannels {
-                            ProgressView("Loading channels")
-                        } else if viewModel.availableChannels.isEmpty {
-                            Text("No channels loaded")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(filteredChannels, id: \.self) { channel in
-                                MultiSelectRow(
-                                    title: channel,
-                                    isSelected: preferences.selectedChannels.contains(channel)
-                                ) {
-                                    toggleChannel(channel)
-                                }
-                            }
-                        }
-                    } else {
-                        Text("TV channel filtering is off. Fixtures include all channels.")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -173,6 +114,57 @@ struct PreferencesView: View {
                                 }
                             }
                         }
+                    }
+                }
+
+                Section("Sorting") {
+                    Picker("Match order", selection: matchGroupSortOrderBinding) {
+                        ForEach(MatchGroupSortOrder.allCases) { sortOrder in
+                            Text(sortOrder.title).tag(sortOrder)
+                        }
+                    }
+
+                    Text("Kick-off based modes order competition groups by the first visible match. The other modes rank competition groups by combined team ranking scores.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Fantasy Football") {
+                    Toggle("Show scores with fixtures", isOn: showFantasyMatchPillsBinding)
+                    Text("Displays the Fantasy Football icon before kick-off once line-ups are available against matches involving your players, then shows total estimated points for the players involved while matches are in play.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Channels") {
+                    Toggle("Enable TV channel filter", isOn: channelFilterEnabledBinding)
+                    Text("Show only fixtures on your preferred TV channels.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    if preferences.channelFilterEnabled {
+                        TextField("Search channels", text: $channelSearch)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        if viewModel.isLoadingChannels {
+                            ProgressView("Loading channels")
+                        } else if viewModel.availableChannels.isEmpty {
+                            Text("No channels loaded")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(filteredChannels, id: \.self) { channel in
+                                MultiSelectRow(
+                                    title: channel,
+                                    isSelected: preferences.selectedChannels.contains(channel)
+                                ) {
+                                    toggleChannel(channel)
+                                }
+                            }
+                        }
+                    } else {
+                        Text("TV channel filtering is off. Showing matches for all channels.")
+                            .foregroundStyle(.secondary)
                     }
                 }
 

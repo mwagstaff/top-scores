@@ -8968,6 +8968,110 @@ function buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord) {
   return payload;
 }
 
+async function mergeConfirmedVarDisallowedGoalsIntoPayload(payload, options = {}) {
+  const matchId = normalizeMatchDetailsId(payload && payload.id);
+  if (!matchId || !payload) {
+    return payload;
+  }
+
+  const nowMs = Date.now();
+  const loadHistory =
+    options && typeof options.loadHistory === "function"
+      ? options.loadHistory
+      : getBbcMatchHistoryGrouped;
+  const history = await loadHistory({
+    match_id: matchId,
+    start_ms: nowMs - 24 * 60 * 60 * 1000,
+    end_ms: nowMs + 60 * 60 * 1000,
+  });
+  if (!history || history.error || !Array.isArray(history.matches)) {
+    return payload;
+  }
+
+  const historyMatch =
+    history.matches.find((entry) => normalizeMatchDetailsId(entry && entry.match_id) === matchId) || null;
+  const disallowedEvents = Array.isArray(historyMatch && historyMatch.events)
+    ? historyMatch.events.filter(
+      (event) => event && event.event_type === "goal" && event.disallowed_by_var
+    )
+    : [];
+  if (disallowedEvents.length === 0) {
+    return payload;
+  }
+
+  const merged = {
+    ...payload,
+    home_goal_scorers: Array.isArray(payload.home_goal_scorers)
+      ? payload.home_goal_scorers.map((entry) => ({ ...entry }))
+      : [],
+    away_goal_scorers: Array.isArray(payload.away_goal_scorers)
+      ? payload.away_goal_scorers.map((entry) => ({ ...entry }))
+      : [],
+    home_assists: Array.isArray(payload.home_assists)
+      ? payload.home_assists.map((entry) => ({ ...entry }))
+      : [],
+    away_assists: Array.isArray(payload.away_assists)
+      ? payload.away_assists.map((entry) => ({ ...entry }))
+      : [],
+  };
+
+  const mergeEvent = (targetList, event) => {
+    const playerName = String(event && (event.scorer || event.player) ? (event.scorer || event.player) : "").trim();
+    const goalTime = String(event && event.goal_time ? event.goal_time : "").trim();
+    if (!playerName || !goalTime) return;
+
+    let target = targetList.find((entry) => String(entry && entry.player ? entry.player : "").trim() === playerName);
+    if (!target) {
+      target = {
+        player: playerName,
+        goal_times: [],
+        own_goal_times: [],
+        disallowed_goal_times: [],
+      };
+      targetList.push(target);
+    }
+    if (!Array.isArray(target.disallowed_goal_times)) {
+      target.disallowed_goal_times = [];
+    }
+    if (!target.disallowed_goal_times.includes(goalTime)) {
+      target.disallowed_goal_times.push(goalTime);
+    }
+  };
+
+  const mergeAssist = (targetList, event) => {
+    const assisterName = String(event && event.assister ? event.assister : "").trim();
+    const assistTime = String(event && event.goal_time ? event.goal_time : "").trim();
+    if (!assisterName || !assistTime) return;
+
+    let target = targetList.find((entry) => String(entry && entry.player ? entry.player : "").trim() === assisterName);
+    if (!target) {
+      target = {
+        player: assisterName,
+        assist_times: [],
+      };
+      targetList.push(target);
+    }
+    if (!Array.isArray(target.assist_times)) {
+      target.assist_times = [];
+    }
+    if (!target.assist_times.includes(assistTime)) {
+      target.assist_times.push(assistTime);
+    }
+  };
+
+  disallowedEvents.forEach((event) => {
+    if (event.team === "home") {
+      mergeEvent(merged.home_goal_scorers, event);
+      mergeAssist(merged.home_assists, event);
+    } else if (event.team === "away") {
+      mergeEvent(merged.away_goal_scorers, event);
+      mergeAssist(merged.away_assists, event);
+    }
+  });
+
+  return merged;
+}
+
 function scheduleMatchDetailsWarm(matchId, options = {}) {
   const normalizedMatchId = normalizeMatchDetailsId(matchId);
   if (!normalizedMatchId) return false;
@@ -11058,6 +11162,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
       away_yellow_cards: testMatch.away_yellow_cards || [],
       home_red_cards: testMatch.home_red_cards || [],
       away_red_cards: testMatch.away_red_cards || [],
+      live_text_entries: testMatch.live_text_entries || [],
       penalty_result: testMatch.penalty_result,
       in_progress: testMatch.in_progress,
       updated_at: testMatch.updated_at,
@@ -11078,6 +11183,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     return;
   }
   const stableResponsePayload = withStableMatchDetailsState(responsePayload) || responsePayload;
+  const enrichedResponsePayload = await mergeConfirmedVarDisallowedGoalsIntoPayload(stableResponsePayload);
 
   if (payload) {
     scheduleMatchDetailsBackfill(payload, { trigger: "match_details_request" });
@@ -11094,7 +11200,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   } else if (matchDetailsLastUpdated) {
     res.set("X-Last-Updated", matchDetailsLastUpdated);
   }
-  res.json(stableResponsePayload);
+  res.json(enrichedResponsePayload);
 });
 
 app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
@@ -11115,11 +11221,37 @@ app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
     const matchDetailsLookup = matchDetailsSnapshot.lookup || {};
     const mergedItems = Array.isArray(mergedDataset.items) ? mergedDataset.items : [];
     const candidates = buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup);
+    const existingCandidateIds = new Set(
+      candidates.map((candidate) => normalizeMatchDetailsId(candidate && candidate.match_details_id))
+    );
+    const testCandidates = testMatchState
+      .getAllMatches()
+      .filter((match) => match && match.date === date)
+      .map((match) => ({
+        match_details_id: String(match.match_details_id || match.id || "").trim() || null,
+        details_url: match.details_url || null,
+        date: match.date || null,
+        time: match.time || null,
+        league: match.league || null,
+        league_subcategory: match.league_subcategory || null,
+        home_team: match.home_team || null,
+        away_team: match.away_team || null,
+        home_score: match.home_score,
+        away_score: match.away_score,
+        score_status: match.score_status || null,
+        tv_channels: Array.isArray(match.tv_channels) ? match.tv_channels : [],
+        source: "test_harness",
+      }))
+      .filter((candidate) => {
+        const candidateId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
+        return candidateId && !existingCandidateIds.has(candidateId);
+      });
+    const allCandidates = [...candidates, ...testCandidates];
 
     res.status(200).json({
       success: true,
       date,
-      count: candidates.length,
+      count: allCandidates.length,
       source: {
         merged_matches: mergedDataset && mergedDataset.source ? mergedDataset.source : "unknown",
         merged_matches_updated_at: mergedDataset && mergedDataset.updated_at ? mergedDataset.updated_at : null,
@@ -11127,7 +11259,7 @@ app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
         match_details_updated_at:
           matchDetailsSnapshot && matchDetailsSnapshot.updated_at ? matchDetailsSnapshot.updated_at : null,
       },
-      candidates,
+      candidates: allCandidates,
     });
   } catch (error) {
     console.error("[API] Error retrieving monitor candidates:", error);
@@ -12114,6 +12246,7 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
     return;
   }
   const stableResponsePayload = withStableMatchDetailsState(responsePayload) || responsePayload;
+  const enrichedResponsePayload = await mergeConfirmedVarDisallowedGoalsIntoPayload(stableResponsePayload);
 
   if (payload) {
     scheduleMatchDetailsBackfill(payload, { trigger: "bbc_details_request" });
@@ -12130,7 +12263,7 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
   } else if (matchDetailsLastUpdated) {
     res.set("X-Last-Updated", matchDetailsLastUpdated);
   }
-  res.json(stableResponsePayload);
+  res.json(enrichedResponsePayload);
 });
 
 app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
@@ -14773,6 +14906,25 @@ app.post(`${API_PREFIX}/test-harness/match/add-red-card`, express.json(), (req, 
   }
 });
 
+app.post(`${API_PREFIX}/test-harness/match/simulate-var-disallowed-goal`, express.json(), (req, res) => {
+  try {
+    const matchId = req.query.matchId || null;
+    const isHome = req.body.team === "home";
+    const result = testMatchState.simulateVarDisallowedGoal(matchId, isHome, {
+      playerName: req.body.playerName,
+      assisterName: req.body.assisterName,
+      revertDelayMs: req.body.revertDelayMs,
+    });
+    if (!result) {
+      res.status(400).json({ error: "Failed to schedule VAR-disallowed goal simulation." });
+      return;
+    }
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post(`${API_PREFIX}/test-harness/match/jump-to-ht`, (req, res) => {
   try {
     const matchId = req.query.matchId || null;
@@ -14934,6 +15086,7 @@ module.exports = {
     mergeMonitorCandidate,
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
+    mergeConfirmedVarDisallowedGoalsIntoPayload,
     buildPrometheusMetricsText,
     matchDetailsNeedsBackfill,
     markMatchDetailsActive,

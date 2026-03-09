@@ -254,7 +254,7 @@ function ExpandedMatchDetails({ details }: ExpandedMatchDetailsProps) {
                 key={`${entry.side}-${entry.kind}-${entry.minute}-${entry.player}`}
               >
                 <span className="timeline-minute">{entry.minute}</span>
-                <span className="timeline-kind">{entry.icon}</span>
+                <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
                 <span className="timeline-text">{entry.text}</span>
               </div>
             ))}
@@ -397,6 +397,22 @@ function buildTimelineEntries(details: MatchDetails) {
         sequence: sequence++,
       });
     }
+    for (const minute of scorer.disallowedGoalTimes) {
+      const parsed = parseMinute(minute);
+      if (!parsed) continue;
+      const assist = homeAssistLookup.get(parsed.lookupKey) || homeAssistLookup.get(String(parsed.base));
+      entries.push({
+        side: "home",
+        minute: parsed.display,
+        player: scorer.player,
+        text: formatDisallowedGoalText(scorer.player, assist, parsed.isPenalty),
+        kind: "disallowed-goal",
+        icon: "⚽",
+        baseMinute: parsed.base,
+        extraMinute: parsed.extra,
+        sequence: sequence++,
+      });
+    }
   }
 
   for (const scorer of details.awayGoalScorers) {
@@ -425,6 +441,22 @@ function buildTimelineEntries(details: MatchDetails) {
         player: scorer.player,
         text: `${abbreviatePlayerName(scorer.player)} (OG)`,
         kind: "own-goal",
+        icon: "⚽",
+        baseMinute: parsed.base,
+        extraMinute: parsed.extra,
+        sequence: sequence++,
+      });
+    }
+    for (const minute of scorer.disallowedGoalTimes) {
+      const parsed = parseMinute(minute);
+      if (!parsed) continue;
+      const assist = awayAssistLookup.get(parsed.lookupKey) || awayAssistLookup.get(String(parsed.base));
+      entries.push({
+        side: "away",
+        minute: parsed.display,
+        player: scorer.player,
+        text: formatDisallowedGoalText(scorer.player, assist, parsed.isPenalty),
+        kind: "disallowed-goal",
         icon: "⚽",
         baseMinute: parsed.base,
         extraMinute: parsed.extra,
@@ -506,6 +538,10 @@ function formatGoalText(player: string, assist: string | undefined, isPenalty: b
     return `${name} (${assist})`;
   }
   return name;
+}
+
+function formatDisallowedGoalText(player: string, assist: string | undefined, isPenalty: boolean) {
+  return `Goal disallowed for ${formatGoalText(player, assist, isPenalty)}`;
 }
 
 function abbreviatePlayerName(fullName: string) {

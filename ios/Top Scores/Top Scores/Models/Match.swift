@@ -4,17 +4,20 @@ struct MatchGoalScorer: Codable, Hashable {
     let player: String
     let goalTimes: [String]
     let ownGoalTimes: [String]
+    let disallowedGoalTimes: [String]
 
-    init(player: String, goalTimes: [String], ownGoalTimes: [String] = []) {
+    init(player: String, goalTimes: [String], ownGoalTimes: [String] = [], disallowedGoalTimes: [String] = []) {
         self.player = player
         self.goalTimes = goalTimes
         self.ownGoalTimes = ownGoalTimes
+        self.disallowedGoalTimes = disallowedGoalTimes
     }
 
     enum CodingKeys: String, CodingKey {
         case player
         case goalTimes = "goal_times"
         case ownGoalTimes = "own_goal_times"
+        case disallowedGoalTimes = "disallowed_goal_times"
     }
 
     private enum AlternateCodingKeys: String, CodingKey {
@@ -31,6 +34,7 @@ struct MatchGoalScorer: Codable, Hashable {
         }
         goalTimes = try container.decodeIfPresent([String].self, forKey: .goalTimes) ?? []
         ownGoalTimes = try container.decodeIfPresent([String].self, forKey: .ownGoalTimes) ?? []
+        disallowedGoalTimes = try container.decodeIfPresent([String].self, forKey: .disallowedGoalTimes) ?? []
     }
 }
 

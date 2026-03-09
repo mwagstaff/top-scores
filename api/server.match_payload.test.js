@@ -8,6 +8,7 @@ const {
     mergeMonitorCandidate,
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
+    mergeConfirmedVarDisallowedGoalsIntoPayload,
     matchDetailsNeedsBackfill,
     markMatchDetailsActive,
     isMatchDetailsActive,
@@ -230,6 +231,74 @@ test("mergeMatchDetailsPayload clears stale scores when refreshed details show a
   assert.equal(merged.score_status, null);
   assert.deepStrictEqual(merged.home_goal_scorers, []);
   assert.deepStrictEqual(merged.away_goal_scorers, []);
+});
+
+test("mergeConfirmedVarDisallowedGoalsIntoPayload appends confirmed disallowed goals to scorer timelines", async () => {
+  const merged = await mergeConfirmedVarDisallowedGoalsIntoPayload(
+    {
+      id: DETAILS_ID,
+      home_team: "Leeds United",
+      away_team: "Norwich City",
+      home_goal_scorers: [
+        {
+          player: "Brenden Aaronson",
+          goal_times: ["45'"],
+          own_goal_times: [],
+        },
+      ],
+      away_goal_scorers: [],
+      home_assists: [],
+      away_assists: [],
+    },
+    {
+      loadHistory: async () => ({
+        matches: [
+          {
+            match_id: DETAILS_ID,
+            events: [
+              {
+                event_type: "goal",
+                disallowed_by_var: true,
+                team: "home",
+                scorer: "Lukas Nmecha",
+                assister: "Wilfried Gnonto",
+                goal_time: "19'",
+              },
+              {
+                event_type: "goal",
+                disallowed_by_var: true,
+                team: "home",
+                scorer: "Brenden Aaronson",
+                goal_time: "51'",
+              },
+            ],
+          },
+        ],
+      }),
+    }
+  );
+
+  assert.deepStrictEqual(merged.home_goal_scorers, [
+    {
+      player: "Brenden Aaronson",
+      goal_times: ["45'"],
+      own_goal_times: [],
+      disallowed_goal_times: ["51'"],
+    },
+    {
+      player: "Lukas Nmecha",
+      goal_times: [],
+      own_goal_times: [],
+      disallowed_goal_times: ["19'"],
+    },
+  ]);
+  assert.deepStrictEqual(merged.away_goal_scorers, []);
+  assert.deepStrictEqual(merged.home_assists, [
+    {
+      player: "Wilfried Gnonto",
+      assist_times: ["19'"],
+    },
+  ]);
 });
 
 test("filterStaleBbcMatches accepts a corrected scoreless kickoff fixture over stale cached scores", () => {

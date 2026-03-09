@@ -74,6 +74,7 @@ class TestMatchState {
       home_red_cards: [],
       away_red_cards: [],
       penalty_result: null,
+      live_text_entries: [],
       in_progress: false,
       is_test_match: true,
       updated_at: new Date().toISOString(),
@@ -107,6 +108,7 @@ class TestMatchState {
     this.timers.set(matchId, {
       simulationTimer: null,
       cleanupTimer: cleanupTimer,
+      actionTimers: [],
     });
 
     return match;
@@ -292,15 +294,57 @@ class TestMatchState {
     }
   }
 
-  addGoal(matchId, isHome, playerName = null, assisterName = null) {
-    const match = this.getMatch(matchId);
-    if (!match) return;
-
-    // Use score_status if it's a minute indicator (contains numbers), otherwise use matchMinute
+  currentEventMinuteLabel(match) {
+    if (!match) return "1'";
     const isMinuteStatus = match.score_status && /\d/.test(match.score_status);
-    const goalTime = isMinuteStatus ? match.score_status : `${match.matchMinute}'`;
-    const isPenalty = Math.random() < 0.1; // 10% chance of penalty
-    const hasAssist = !isPenalty && Math.random() < 0.8; // 80% chance of assist (if not penalty)
+    return isMinuteStatus ? match.score_status : `${Math.max(1, Number(match.matchMinute) || 1)}'`;
+  }
+
+  minuteLabelToValue(minuteLabel) {
+    const normalized = String(minuteLabel || "").trim().replace(/'/g, "");
+    const match = normalized.match(/^(\d+)(?:\+(\d+))?/);
+    if (!match) return null;
+    const base = Number(match[1]);
+    const extra = Number(match[2] || 0);
+    if (!Number.isFinite(base) || !Number.isFinite(extra)) return null;
+    return base + extra;
+  }
+
+  minuteValueToLabel(minuteValue) {
+    const numeric = Number(minuteValue);
+    if (!Number.isFinite(numeric) || numeric <= 0) return "1'";
+    return `${Math.floor(numeric)}'`;
+  }
+
+  prependLiveTextEntry(matchId, minuteLabel, text) {
+    const match = this.getMatch(matchId);
+    if (!match || !text) return;
+    if (!Array.isArray(match.live_text_entries)) {
+      match.live_text_entries = [];
+    }
+    match.live_text_entries.unshift({
+      minute: minuteLabel,
+      minute_value: this.minuteLabelToValue(minuteLabel),
+      text,
+    });
+    if (match.live_text_entries.length > 24) {
+      match.live_text_entries = match.live_text_entries.slice(0, 24);
+    }
+  }
+
+  addGoal(matchId, isHome, playerName = null, assisterName = null, options = {}) {
+    const match = this.getMatch(matchId);
+    if (!match) return null;
+
+    const goalTime = options.goalTime || this.currentEventMinuteLabel(match);
+    const isPenalty =
+      typeof options.isPenalty === "boolean" ? options.isPenalty : Math.random() < 0.1;
+    const hasAssist =
+      options.forceAssist === true
+        ? true
+        : options.forceAssist === false
+          ? false
+          : !isPenalty && Math.random() < 0.8; // 80% chance of assist (if not penalty)
 
     const scorer = playerName || this.generatePlayerName();
     const assister = hasAssist ? assisterName || this.generatePlayerName() : null;
@@ -320,6 +364,13 @@ class TestMatchState {
     }
 
     match.updated_at = new Date().toISOString();
+    return {
+      isHome,
+      scorer,
+      assister,
+      goalTime,
+      isPenalty,
+    };
   }
 
   addGoalScorer(matchId, isHome, playerName, goalTime, isPenalty = false) {
@@ -340,6 +391,7 @@ class TestMatchState {
         player: playerName,
         goal_times: [timeLabel],
         own_goal_times: [],
+        disallowed_goal_times: [],
       });
     }
   }
@@ -385,6 +437,128 @@ class TestMatchState {
     }
 
     match.updated_at = new Date().toISOString();
+  }
+
+  disallowGoalByVar(matchId, isHome, options = {}) {
+    const match = this.getMatch(matchId);
+    if (!match) return null;
+
+    const scorers = isHome ? match.home_goal_scorers : match.away_goal_scorers;
+    const assists = isHome ? match.home_assists : match.away_assists;
+    const scoreKey = isHome ? "home_score" : "away_score";
+    const goalTime = String(options.goalTime || "").trim();
+    const scorerName = String(options.playerName || "").trim();
+    const assisterName = String(options.assisterName || "").trim();
+
+    let targetScorer = null;
+    if (scorerName) {
+      targetScorer = scorers.find((entry) => entry.player === scorerName) || null;
+    }
+    if (!targetScorer && goalTime) {
+      targetScorer = scorers.find((entry) => Array.isArray(entry.goal_times) && entry.goal_times.includes(goalTime)) || null;
+    }
+    if (!targetScorer) {
+      return null;
+    }
+
+    const removableTimes = Array.isArray(targetScorer.goal_times) ? targetScorer.goal_times : [];
+    const selectedGoalTime = goalTime || removableTimes[removableTimes.length - 1];
+    if (!selectedGoalTime) {
+      return null;
+    }
+
+    targetScorer.goal_times = removableTimes.filter((entry) => entry !== selectedGoalTime);
+    if (!Array.isArray(targetScorer.disallowed_goal_times)) {
+      targetScorer.disallowed_goal_times = [];
+    }
+    if (!targetScorer.disallowed_goal_times.includes(selectedGoalTime)) {
+      targetScorer.disallowed_goal_times.push(selectedGoalTime);
+    }
+
+    const currentScore = Number(match[scoreKey] || 0);
+    match[scoreKey] = Math.max(0, currentScore - 1);
+
+    if (assisterName) {
+      const assistEntry = assists.find((entry) => entry.player === assisterName);
+      if (assistEntry) {
+        if (!Array.isArray(assistEntry.assist_times)) {
+          assistEntry.assist_times = [];
+        }
+        if (!assistEntry.assist_times.includes(selectedGoalTime)) {
+          assistEntry.assist_times.push(selectedGoalTime);
+        }
+      } else {
+        assists.push({
+          player: assisterName,
+          assist_times: [selectedGoalTime],
+        });
+      }
+    }
+
+    const goalMinuteValue = this.minuteLabelToValue(selectedGoalTime);
+    const decisionMinuteLabel =
+      options.decisionMinute ||
+      this.currentEventMinuteLabel(match) ||
+      this.minuteValueToLabel(goalMinuteValue !== null ? goalMinuteValue + 2 : null);
+
+    this.prependLiveTextEntry(
+      matchId,
+      decisionMinuteLabel,
+      `VAR Decision: No Goal ${match.home_team} ${match.home_score}-${match.away_score} ${match.away_team}.`
+    );
+    this.prependLiveTextEntry(
+      matchId,
+      selectedGoalTime,
+      `GOAL OVERTURNED BY VAR: ${targetScorer.player} (${isHome ? match.home_team : match.away_team}) scores but the goal is ruled out after a VAR review.`
+    );
+
+    match.updated_at = new Date().toISOString();
+    return {
+      scorer: targetScorer.player,
+      assister: assisterName || null,
+      goalTime: selectedGoalTime,
+      decisionMinute: decisionMinuteLabel,
+      team: isHome ? "home" : "away",
+    };
+  }
+
+  simulateVarDisallowedGoal(matchId, isHome, options = {}) {
+    const match = this.getMatch(matchId);
+    if (!match) return null;
+
+    const revertDelayMs = Math.max(1000, Number(options.revertDelayMs) || 12000);
+    const actualMatchId = match.id;
+    const goal = this.addGoal(actualMatchId, isHome, options.playerName, options.assisterName, {
+      isPenalty: false,
+      forceAssist: options.assisterName ? true : undefined,
+    });
+    if (!goal) {
+      return null;
+    }
+
+    const timers = this.timers.get(actualMatchId);
+    const actionTimer = setTimeout(() => {
+      this.disallowGoalByVar(actualMatchId, isHome, {
+        playerName: goal.scorer,
+        assisterName: goal.assister,
+        goalTime: goal.goalTime,
+      });
+      if (timers && Array.isArray(timers.actionTimers)) {
+        timers.actionTimers = timers.actionTimers.filter((timer) => timer !== actionTimer);
+      }
+    }, revertDelayMs);
+
+    if (timers) {
+      if (!Array.isArray(timers.actionTimers)) {
+        timers.actionTimers = [];
+      }
+      timers.actionTimers.push(actionTimer);
+    }
+
+    return {
+      goal,
+      revertDelayMs,
+    };
   }
 
   simulatePenaltyShootout(matchId) {
@@ -525,6 +699,11 @@ class TestMatchState {
     if (!match) return;
 
     this.stopSimulation(matchId);
+    const timers = this.timers.get(match.id);
+    if (timers && Array.isArray(timers.actionTimers)) {
+      timers.actionTimers.forEach((timer) => clearTimeout(timer));
+      timers.actionTimers = [];
+    }
     match.home_score = 0;
     match.away_score = 0;
     match.home_goal_scorers = [];
@@ -533,6 +712,7 @@ class TestMatchState {
     match.away_assists = [];
     match.home_red_cards = [];
     match.away_red_cards = [];
+    match.live_text_entries = [];
     match.penalty_result = null;
     match.in_progress = false;
     match.score_status = null;
@@ -553,6 +733,9 @@ class TestMatchState {
     if (timers && timers.cleanupTimer) {
       clearTimeout(timers.cleanupTimer);
     }
+    if (timers && Array.isArray(timers.actionTimers)) {
+      timers.actionTimers.forEach((timer) => clearTimeout(timer));
+    }
 
     this.timers.delete(actualMatchId);
     this.matches.delete(actualMatchId);
@@ -563,3 +746,4 @@ class TestMatchState {
 const testMatchState = new TestMatchState();
 
 module.exports = testMatchState;
+module.exports.TestMatchState = TestMatchState;

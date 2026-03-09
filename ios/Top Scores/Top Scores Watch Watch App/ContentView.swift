@@ -657,6 +657,21 @@ private struct WatchMatchDetailView: View {
                 )
                 sequence += 1
             }
+
+            for rawMinute in scorer.disallowedGoalTimes {
+                guard let minute = parseMinute(rawMinute) else { continue }
+                events.append(
+                    WatchTeamTimelineEvent(
+                        kind: .disallowedGoal,
+                        displayMinute: minute.display,
+                        playerName: playerName,
+                        assistName: assistLookup.name(for: minute),
+                        minute: minute,
+                        sequence: sequence
+                    )
+                )
+                sequence += 1
+            }
         }
 
         for redCard in redCards {
@@ -886,6 +901,15 @@ private struct WatchEventIconView: View {
                         .foregroundStyle(.red)
                         .shadow(color: .black.opacity(0.45), radius: 0.5, x: 0, y: 0)
                 }
+            case .disallowedGoal:
+                ZStack {
+                    Text("⚽️")
+                    Rectangle()
+                        .fill(Color.red)
+                        .frame(width: 12, height: 1.6)
+                        .rotationEffect(.degrees(-28))
+                        .shadow(color: .black.opacity(0.35), radius: 0.4, x: 0, y: 0)
+                }
             }
         }
         .font(.caption2)
@@ -897,6 +921,7 @@ private enum WatchEventKind {
     case goal
     case ownGoal
     case redCard
+    case disallowedGoal
 }
 
 private struct WatchParsedMinute {
@@ -933,6 +958,15 @@ private struct WatchTeamTimelineEvent {
     var awayPlayerAssistText: String {
         if kind == .ownGoal {
             return "\(playerName) (OG)"
+        }
+        if kind == .disallowedGoal {
+            var result = "Goal disallowed for \(playerName)"
+            if minute.isPenalty {
+                result += " (pen)"
+            } else if let assistName, !assistName.isEmpty {
+                result += " (\(assistName))"
+            }
+            return result
         }
         guard kind == .goal else {
             return playerName

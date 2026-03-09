@@ -33,12 +33,16 @@ const BBC_GROUPED_AWAY_EVENT_SELECTOR = "[class$='GroupedAwayEvent'], [class*='G
 const BBC_HIDDEN_TEXT_SELECTOR = ".visually-hidden, [class*='VisuallyHidden']";
 const BBC_SECONDARY_HEADING_SELECTOR = "h3[class$='SecondaryHeading'], h3[class*='SecondaryHeading-']";
 const BBC_COMPETITION_FORMATTER_SELECTOR = "[class*='CompetitionFormatter']";
+const BBC_LIVE_TEXT_POST_SELECTOR = "[data-testid='content-post']";
+const BBC_LIVE_TEXT_TIMESTAMP_SELECTOR = "[data-testid='accessible-timestamp'], [data-testid='timestamp']";
+const BBC_LIVE_TEXT_BODY_SELECTOR = "p";
 
 const BBC_DETAILS_CONCURRENCY = 4;
 const BBC_DETAIL_TTL_LIVE_MS = 5 * 1000; // Reduced from 30s to 5s for fresher live match data
 const BBC_DETAIL_TTL_COMPLETE_MS = 12 * 60 * 60 * 1000;
 const BBC_DETAIL_FAIL_TTL_MS = 2 * 60 * 1000;
 const BBC_DETAILS_CACHE_MAX_ENTRIES = 2000;
+const BBC_LIVE_TEXT_MAX_PAGES = 6;
 const BBC_COMPLETED_STATUSES = new Set(["FT", "AET", "Pens", "PENS", "PEN", "PEN."]);
 const bbcDetailsCache = new Map();
 
@@ -684,6 +688,164 @@ function normalizeDetailsUrlKey(url) {
   } catch (err) {
     return value.toLowerCase();
   }
+}
+
+function buildBbcLiveTextPageUrl(detailsUrl, page = 1) {
+  const normalized = normalizeDetailsUrl(detailsUrl);
+  if (!normalized) return null;
+
+  try {
+    const parsed = new URL(normalized);
+    parsed.hash = "LiveText";
+    if (Number(page) > 1) {
+      parsed.searchParams.set("page", String(page));
+    } else {
+      parsed.searchParams.delete("page");
+    }
+    return parsed.toString();
+  } catch (err) {
+    return null;
+  }
+}
+
+function parseLiveTextMinuteLabel(value) {
+  const normalized = normalizeText(value)
+    .replace(/^at\s+/i, "")
+    .replace(/\s*minutes?$/i, "")
+    .replace(/\s+/g, " ");
+  if (!normalized) return null;
+
+  const plusMatch = normalized.match(/^(\d{1,3})\s*(?:minutes?)?\s*plus\s*(\d{1,2})$/i);
+  if (plusMatch) {
+    return `${plusMatch[1]}+${plusMatch[2]}'`;
+  }
+
+  const minuteMatch = normalized.match(/^(\d{1,3})$/);
+  if (minuteMatch) {
+    return `${minuteMatch[1]}'`;
+  }
+
+  const directMatch = normalized.match(/^(\d{1,3}(?:\+\d{1,2})?)'?$/);
+  if (directMatch) {
+    return `${directMatch[1]}'`;
+  }
+
+  return null;
+}
+
+function parseLiveTextPagination($) {
+  const bodyText = normalizeText($.root().text());
+  const pageMatch = bodyText.match(/\bPage\s+(\d+)\s+of\s+(\d+)\b/i);
+  if (!pageMatch) {
+    return {
+      currentPage: 1,
+      totalPages: 1,
+    };
+  }
+
+  const currentPage = Number(pageMatch[1]);
+  const totalPages = Number(pageMatch[2]);
+  return {
+    currentPage: Number.isFinite(currentPage) && currentPage > 0 ? currentPage : 1,
+    totalPages: Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1,
+  };
+}
+
+function parseLiveTextEntriesFromHtml(html) {
+  if (!html) {
+    return {
+      entries: [],
+      pagination: {
+        currentPage: 1,
+        totalPages: 1,
+      },
+    };
+  }
+
+  const $ = cheerio.load(html);
+  const entries = [];
+
+  $(BBC_LIVE_TEXT_POST_SELECTOR).each((_, element) => {
+    const $post = $(element);
+    const paragraphText = normalizeText(
+      $post.find(BBC_LIVE_TEXT_BODY_SELECTOR)
+        .map((__, node) => $(node).text())
+        .get()
+        .join(" ")
+    );
+    const text = paragraphText || normalizeText($post.text());
+    if (!text) return;
+
+    const accessibleTimestamp = normalizeText($post.find(BBC_LIVE_TEXT_TIMESTAMP_SELECTOR).first().text());
+    const minuteFromAccessible = parseLiveTextMinuteLabel(accessibleTimestamp);
+    const minuteFromText = extractMinuteTokens(text)[0] || null;
+    const minute = minuteFromAccessible || minuteFromText || null;
+    const minuteValue = minute ? minuteToSortableValue(minute) : null;
+
+    entries.push({
+      minute,
+      minute_value: minuteValue,
+      text,
+    });
+  });
+
+  return {
+    entries,
+    pagination: parseLiveTextPagination($),
+  };
+}
+
+function minuteToSortableValue(minuteLabel) {
+  const normalized = String(minuteLabel || "").trim().replace(/'/g, "");
+  if (!normalized) return null;
+  const match = normalized.match(/^(\d{1,3})(?:\+(\d{1,2}))?(?:\s+pen)?$/i);
+  if (!match) return null;
+  const base = Number(match[1]);
+  const extra = Number(match[2] || 0);
+  if (!Number.isFinite(base) || !Number.isFinite(extra)) return null;
+  return base + extra;
+}
+
+async function fetchBbcLiveTextEntriesByDetailsUrl(detailsUrl, options = {}) {
+  const normalized = normalizeDetailsUrl(detailsUrl);
+  if (!normalized) {
+    return {
+      entries: [],
+      pagesFetched: 0,
+      totalPages: 0,
+    };
+  }
+
+  const maxPages = Math.max(
+    1,
+    Math.min(BBC_LIVE_TEXT_MAX_PAGES, Number(options.maxPages) || BBC_LIVE_TEXT_MAX_PAGES)
+  );
+  const entries = [];
+  let totalPages = 1;
+  let page = 1;
+
+  while (page <= maxPages) {
+    const pageUrl = buildBbcLiveTextPageUrl(normalized, page);
+    if (!pageUrl) break;
+    const html = await fetchHtml(pageUrl);
+    const parsed = parseLiveTextEntriesFromHtml(html);
+    totalPages = parsed.pagination.totalPages || totalPages;
+    parsed.entries.forEach((entry) => {
+      entries.push({
+        ...entry,
+        page,
+        url: pageUrl,
+      });
+    });
+    if (page >= totalPages) break;
+    page += 1;
+  }
+
+  return {
+    entries,
+    pagesFetched: Math.min(page, maxPages),
+    totalPages,
+  };
 }
 
 function parseGoalScorers($container, $) {
@@ -2987,13 +3149,17 @@ module.exports = {
   fetchBbcScoresFixturesByDate,
   fetchBbcScoresFixturesByDateRange,
   fetchBbcMatchByDetailsUrl,
+  fetchBbcLiveTextEntriesByDetailsUrl,
   parseMatchDetailsFromHtml,
   resolveScoresFixturesDateUrl,
   writeBbcFixtures,
   __private: {
+    buildBbcLiveTextPageUrl,
     extractStatusFromText,
+    minuteToSortableValue,
     normalizeDetailsUrl,
     normalizeDetailsUrlKey,
+    parseLiveTextEntriesFromHtml,
     parseMatchesFromDom,
     pickCompetitionName,
     selectMatchCandidateByDetailsUrl,

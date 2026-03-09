@@ -4,11 +4,13 @@ struct WatchGoalScorer: Codable, Hashable {
     let player: String
     let goalTimes: [String]
     let ownGoalTimes: [String]
+    let disallowedGoalTimes: [String]
 
     enum CodingKeys: String, CodingKey {
         case player
         case goalTimes = "goal_times"
         case ownGoalTimes = "own_goal_times"
+        case disallowedGoalTimes = "disallowed_goal_times"
     }
 
     private enum AlternateCodingKeys: String, CodingKey {
@@ -25,6 +27,7 @@ struct WatchGoalScorer: Codable, Hashable {
         }
         goalTimes = try container.decodeIfPresent([String].self, forKey: .goalTimes) ?? []
         ownGoalTimes = try container.decodeIfPresent([String].self, forKey: .ownGoalTimes) ?? []
+        disallowedGoalTimes = try container.decodeIfPresent([String].self, forKey: .disallowedGoalTimes) ?? []
     }
 }
 

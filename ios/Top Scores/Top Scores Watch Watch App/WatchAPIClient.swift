@@ -157,10 +157,20 @@ private extension WatchMatch {
             "league": league,
             "tv_channels": tvChannels,
             "home_goal_scorers": homeGoalScorers.map { scorer in
-                ["player": scorer.player, "goal_times": scorer.goalTimes, "own_goal_times": scorer.ownGoalTimes]
+                [
+                    "player": scorer.player,
+                    "goal_times": scorer.goalTimes,
+                    "own_goal_times": scorer.ownGoalTimes,
+                    "disallowed_goal_times": scorer.disallowedGoalTimes,
+                ]
             },
             "away_goal_scorers": awayGoalScorers.map { scorer in
-                ["player": scorer.player, "goal_times": scorer.goalTimes, "own_goal_times": scorer.ownGoalTimes]
+                [
+                    "player": scorer.player,
+                    "goal_times": scorer.goalTimes,
+                    "own_goal_times": scorer.ownGoalTimes,
+                    "disallowed_goal_times": scorer.disallowedGoalTimes,
+                ]
             },
             "home_assists": homeAssists.map { assist in
                 ["player": assist.player, "assist_times": assist.assistTimes]

@@ -620,6 +620,59 @@ test("parseMatchesFromDom ignores aggregate-only fixture cards", () => {
   assert.deepStrictEqual(parsed, []);
 });
 
+test("parseLiveTextEntriesFromHtml extracts VAR overturned goal commentary and pagination", () => {
+  const html = `
+    <html>
+      <body>
+        <nav>previous page <span>Page 2 of 3</span> next page</nav>
+        <article data-testid="content-post">
+          <header>
+            <span data-testid="accessible-timestamp">at 21 minutes</span>
+            <span data-testid="timestamp"><span aria-hidden="true">21'</span></span>
+          </header>
+          <p>VAR Decision: No Goal Leeds United 0-0 Norwich City.</p>
+        </article>
+        <article data-testid="content-post">
+          <header>
+            <span data-testid="accessible-timestamp">at 19 minutes</span>
+            <span data-testid="timestamp"><span aria-hidden="true">19'</span></span>
+          </header>
+          <p>GOAL OVERTURNED BY VAR: Lukas Nmecha (Leeds United) scores but the goal is ruled out after a VAR review.</p>
+        </article>
+      </body>
+    </html>
+  `;
+
+  const parsed = __private.parseLiveTextEntriesFromHtml(html);
+  assert.deepStrictEqual(parsed.pagination, {
+    currentPage: 2,
+    totalPages: 3,
+  });
+  assert.deepStrictEqual(parsed.entries, [
+    {
+      minute: "21'",
+      minute_value: 21,
+      text: "VAR Decision: No Goal Leeds United 0-0 Norwich City.",
+    },
+    {
+      minute: "19'",
+      minute_value: 19,
+      text: "GOAL OVERTURNED BY VAR: Lukas Nmecha (Leeds United) scores but the goal is ruled out after a VAR review.",
+    },
+  ]);
+});
+
+test("buildBbcLiveTextPageUrl preserves match path and only adds page for older posts", () => {
+  assert.equal(
+    __private.buildBbcLiveTextPageUrl("https://www.bbc.co.uk/sport/football/live/cr5lln18q4lt", 1),
+    "https://www.bbc.co.uk/sport/football/live/cr5lln18q4lt#LiveText"
+  );
+  assert.equal(
+    __private.buildBbcLiveTextPageUrl("https://www.bbc.co.uk/sport/football/live/cr5lln18q4lt", 2),
+    "https://www.bbc.co.uk/sport/football/live/cr5lln18q4lt?page=2#LiveText"
+  );
+});
+
 test("pickCompetitionName disambiguates non-English Premier League competitions", () => {
   const node = {
     competitionName: "Premier League",

@@ -363,6 +363,7 @@ function normalizeGoalScorers(value: unknown): MatchGoalScorer[] {
       player: asString(source.player ?? source.player_name),
       goalTimes: normalizeStringArray(source.goal_times),
       ownGoalTimes: normalizeStringArray(source.own_goal_times),
+      disallowedGoalTimes: normalizeStringArray(source.disallowed_goal_times),
     };
   });
 }

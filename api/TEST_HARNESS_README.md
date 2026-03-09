@@ -165,6 +165,14 @@ This is controlled by the `#if DEBUG` build configuration in `MatchesStore.swift
 2. Use manual controls to add goals and red cards
 3. Verify they appear correctly in the app
 
+### Test VAR-Disallowed Goals
+1. Create and start a match
+2. Use `Home VAR No Goal` or `Away VAR No Goal`
+3. Optionally set the scorer, assister, and the reversion delay in seconds
+4. Confirm the harness first shows the goal, then reverts the score after the delay
+5. Check the `Synthetic BBC Live Text` panel for the generated `GOAL OVERTURNED BY VAR` and `VAR Decision: No Goal ...` entries
+6. Leave the match monitor running long enough for 5 consecutive reverted BBC polls so the real push-notification path can confirm and emit the VAR-disallowed event
+
 ### Test Match Details
 1. Create and start a match
 2. Wait for some goals/events
@@ -197,6 +205,8 @@ The `test_match_state.js` module is imported by both:
 - Test harness server (test_harness_server.js)
 
 This allows them to share the same in-memory match state without database/Redis dependencies.
+
+The harness now also generates synthetic BBC-style LiveText entries for VAR-disallowed goals so the monitor can confirm the score reversion without needing the real BBC page.
 
 ### Match ID
 

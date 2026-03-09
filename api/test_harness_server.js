@@ -213,6 +213,21 @@ app.post("/api/test-match/add-red-card", async (req, res) => {
   }
 });
 
+// Simulate a goal being disallowed by VAR
+app.post("/api/test-match/simulate-var-disallowed-goal", async (req, res) => {
+  try {
+    const result = await proxyToMainAPI(
+      "/api/v1/test-harness/match/simulate-var-disallowed-goal",
+      "POST",
+      req.body
+    );
+    res.status(result.status).json(result.data);
+  } catch (err) {
+    console.error("Failed to simulate VAR-disallowed goal:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Jump to half time
 app.post("/api/test-match/jump-to-ht", async (_req, res) => {
   try {

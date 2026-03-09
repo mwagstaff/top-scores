@@ -80,6 +80,155 @@ test("mergeSnapshotWithFallback clears stale aggregate when incoming payload set
   assert.equal(merged.aggregate_away_score, null);
 });
 
+test("updateScoreReversionState tracks five consecutive BBC score reversions before confirmation", () => {
+  const state = newMonitorState();
+  const baseline = {
+    home_team: "Leeds United",
+    away_team: "Norwich City",
+    home_score: 1,
+    away_score: 0,
+    score_status: "20",
+    home_goal_scorers: [
+      {
+        player: "Lukas Nmecha",
+        goal_times: ["19'"],
+      },
+    ],
+    home_assists: [
+      {
+        player: "Wilfried Gnonto",
+        assist_times: ["19'"],
+      },
+    ],
+    away_goal_scorers: [],
+  };
+  const reverted = {
+    home_team: "Leeds United",
+    away_team: "Norwich City",
+    home_score: 0,
+    away_score: 0,
+    score_status: "21",
+    home_goal_scorers: [],
+    home_assists: [],
+    away_goal_scorers: [],
+  };
+
+  let reversion = __testHooks.updateScoreReversionState(state, baseline, reverted, 1000);
+  assert.equal(reversion.consecutivePolls, 1);
+  assert.equal(reversion.affectedTeam, "home");
+  assert.equal(reversion.removedGoal.goalTime, "19'");
+  assert.equal(reversion.removedGoal.player, "Lukas Nmecha");
+  assert.equal(reversion.removedGoal.assister, "Wilfried Gnonto");
+
+  for (let index = 0; index < 4; index += 1) {
+    reversion = __testHooks.updateScoreReversionState(state, reverted, reverted, 1001 + index);
+  }
+
+  assert.equal(reversion.consecutivePolls, 5);
+  assert.deepStrictEqual(reversion.baseline, {
+    home_score: 1,
+    away_score: 0,
+    score_status: "20",
+  });
+  assert.deepStrictEqual(reversion.reverted, {
+    home_score: 0,
+    away_score: 0,
+    score_status: "21",
+  });
+});
+
+test("confirmVarDisallowedGoal matches BBC LiveText overturned goal entries", async () => {
+  const reversionState = {
+    baseline: {
+      home_score: 1,
+      away_score: 0,
+      score_status: "20",
+    },
+    reverted: {
+      home_score: 0,
+      away_score: 0,
+      score_status: "21",
+    },
+    affectedTeam: "home",
+    consecutivePolls: 5,
+    removedGoal: {
+      team: "home",
+      player: "Lukas Nmecha",
+      goalTime: "19'",
+      assister: "Wilfried Gnonto",
+      minute: 19,
+    },
+  };
+
+  const confirmation = await __testHooks.confirmVarDisallowedGoal(
+    "cr5lln18q4lt",
+    {
+      home_team: "Leeds United",
+      away_team: "Norwich City",
+      details_url: "https://www.bbc.co.uk/sport/football/live/cr5lln18q4lt",
+    },
+    reversionState,
+    {
+      fetchLiveText: async () => ({
+        entries: [
+          {
+            minute: "21'",
+            minute_value: 21,
+            text: "VAR Decision: No Goal Leeds United 0-0 Norwich City.",
+          },
+          {
+            minute: "19'",
+            minute_value: 19,
+            text: "GOAL OVERTURNED BY VAR: Lukas Nmecha (Leeds United) scores but the goal is ruled out after a VAR review.",
+          },
+        ],
+      }),
+    }
+  );
+
+  assert.deepStrictEqual(confirmation, {
+    team: "home",
+    scorer: "Lukas Nmecha",
+    goalMinuteLabel: "19'",
+    decisionMinuteLabel: "21'",
+  });
+  assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
+});
+
+test("buildVarDisallowedGoalEvent uses goal notification semantics and reverted scoreline", () => {
+  const event = __testHooks.buildVarDisallowedGoalEvent(
+    "cr5lln18q4lt",
+    {
+      home_team: "Leeds United",
+      away_team: "Norwich City",
+      home_score: 0,
+      away_score: 0,
+    },
+    {
+      team: "home",
+      scorer: "Lukas Nmecha",
+      goalMinuteLabel: "19'",
+      decisionMinuteLabel: "21'",
+    },
+    {
+      affectedTeam: "home",
+      removedGoal: {
+        player: "Lukas Nmecha",
+        assister: "Wilfried Gnonto",
+        goalTime: "19'",
+      },
+    }
+  );
+
+  assert.equal(event.type, "goal");
+  assert.equal(event.disallowedByVar, true);
+  assert.equal(event.title, "Goal disallowed by VAR 19'");
+  assert.equal(event.body, "Leeds United 0 - 0 Norwich City");
+  assert.equal(event.scorer, "Lukas Nmecha");
+  assert.equal(event.assister, "Wilfried Gnonto");
+  assert.equal(event.varDecisionTime, "21'");
+});
+
 test("shouldSkipLiveActivityUpdate bypasses payload dedupe when forceDispatch is enabled", () => {
   const state = {
     lastPayloadHash: "abc123",

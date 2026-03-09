@@ -829,6 +829,15 @@ private struct MatchEventIconView: View {
                         .foregroundStyle(.red)
                         .shadow(color: .black.opacity(0.45), radius: 0.5, x: 0, y: 0)
                 }
+            case .disallowedGoal:
+                ZStack {
+                    Text("⚽️")
+                    Rectangle()
+                        .fill(Color.red)
+                        .frame(width: 16, height: 1.8)
+                        .rotationEffect(.degrees(-28))
+                        .shadow(color: .black.opacity(0.35), radius: 0.4, x: 0, y: 0)
+                }
             }
         }
         .font(.caption2)
@@ -840,6 +849,7 @@ private enum MatchEventKind {
     case goal
     case ownGoal
     case redCard
+    case disallowedGoal
 }
 
 private struct ParsedMinute {
@@ -876,6 +886,15 @@ private struct MatchTeamTimelineEvent {
     var awayPlayerAssistText: String {
         if kind == .ownGoal {
             return "\(playerName) (OG)"
+        }
+        if kind == .disallowedGoal {
+            var result = "Goal disallowed for \(playerName)"
+            if minute.isPenalty {
+                result += " (pen)"
+            } else if let assistName, !assistName.isEmpty {
+                result += " (\(assistName))"
+            }
+            return result
         }
         guard kind == .goal else {
             return playerName
@@ -970,6 +989,21 @@ private enum MatchTimelineBuilder {
                         displayMinute: minute.display,
                         playerName: playerName,
                         assistName: nil,
+                        minute: minute,
+                        sequence: sequence
+                    )
+                )
+                sequence += 1
+            }
+
+            for rawMinute in scorer.disallowedGoalTimes {
+                guard let minute = parseMinute(rawMinute) else { continue }
+                events.append(
+                    MatchTeamTimelineEvent(
+                        kind: .disallowedGoal,
+                        displayMinute: minute.display,
+                        playerName: playerName,
+                        assistName: assistLookup.name(for: minute),
                         minute: minute,
                         sequence: sequence
                     )
@@ -1162,6 +1196,11 @@ private struct MatchLineupPitchSection: View {
                     awayRedCards: match.awayRedCards,
                     fantasyHighlightLookup: fantasyHighlightLookup
                 )
+
+                MatchLineupSubstitutesSection(
+                    homeLineup: home,
+                    awayLineup: away
+                )
             }
         }
     }
@@ -1296,6 +1335,10 @@ private struct MatchLineupHalfView: View {
                             summary: lookup.summary(for: player),
                             replacementSummary: lookup.replacementSummary(for: player),
                             isFantasyHighlighted: fantasyHighlightLookup?.contains(player: player, teamName: teamName) ?? false,
+                            fantasyPoints: fantasyHighlightLookup?.points(for: player, teamName: teamName),
+                            replacementFantasyPoints: lookup.summary(for: player).substitution.flatMap { substitution in
+                                fantasyHighlightLookup?.points(for: substitution.playerOn, teamName: teamName)
+                            },
                             side: side
                         )
                     }
@@ -1327,6 +1370,8 @@ private struct MatchLineupPlayerMarkerView: View {
     let summary: MatchLineupPlayerEventSummary
     let replacementSummary: MatchLineupPlayerEventSummary?
     let isFantasyHighlighted: Bool
+    let fantasyPoints: Int?
+    let replacementFantasyPoints: Int?
     let side: MatchLineupDisplaySide
 
     private var circleFill: AnyShapeStyle {
@@ -1371,8 +1416,8 @@ private struct MatchLineupPlayerMarkerView: View {
                     .foregroundStyle(circleText)
             }
 
-            if summary.hasStatBadges {
-                MatchLineupEventBadgeRow(summary: summary)
+            if summary.hasStatBadges || fantasyPoints != nil {
+                MatchLineupEventBadgeRow(summary: summary, fantasyPoints: fantasyPoints)
             }
 
             VStack(spacing: 2) {
@@ -1405,8 +1450,8 @@ private struct MatchLineupPlayerMarkerView: View {
                     }
                     .multilineTextAlignment(.center)
 
-                    if let replacementSummary, replacementSummary.hasStatBadges {
-                        MatchLineupEventBadgeRow(summary: replacementSummary)
+                    if let replacementSummary, replacementSummary.hasStatBadges || replacementFantasyPoints != nil {
+                        MatchLineupEventBadgeRow(summary: replacementSummary, fantasyPoints: replacementFantasyPoints)
                     }
                 }
             }
@@ -1418,9 +1463,13 @@ private struct MatchLineupPlayerMarkerView: View {
 
 private struct MatchLineupEventBadgeRow: View {
     let summary: MatchLineupPlayerEventSummary
+    let fantasyPoints: Int?
 
     var body: some View {
         HStack(spacing: 4) {
+            if let fantasyPoints {
+                MatchLineupFantasyPointsBadge(points: fantasyPoints)
+            }
             if summary.goals > 0 {
                 MatchLineupEventBadge(icon: .system("soccerball"), tint: .white, count: summary.goals)
             }
@@ -1434,6 +1483,118 @@ private struct MatchLineupEventBadgeRow: View {
                 MatchLineupEventBadge(icon: .card(Color.red, .white), tint: .white, count: summary.redCards)
             }
         }
+    }
+}
+
+private struct MatchLineupFantasyPointsBadge: View {
+    let points: Int
+
+    var body: some View {
+        Text("\(points)")
+            .font(.system(size: 9, weight: .black, design: .rounded))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.95, green: 0.20, blue: 0.66),
+                                Color(red: 1.0, green: 0.29, blue: 0.29)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+            )
+    }
+}
+
+private struct MatchLineupSubstitutesSection: View {
+    let homeLineup: MatchTeamLineup
+    let awayLineup: MatchTeamLineup
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            MatchLineupSubstitutesTable(lineup: homeLineup)
+            MatchLineupSubstitutesTable(lineup: awayLineup)
+        }
+    }
+}
+
+private struct MatchLineupSubstitutesTable: View {
+    let lineup: MatchTeamLineup
+
+    private var rows: [MatchLineupSubstituteRow] {
+        lineup.substitutes.map { substitute in
+            let substitution = lineup.substitutions.first { $0.playerOn.number == substitute.number }
+            return MatchLineupSubstituteRow(
+                player: substitute,
+                substitution: substitution
+            )
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\((lineup.team ?? "Team").uppercased()) SUBSTITUTES")
+                .font(.system(size: 12, weight: .black, design: .rounded))
+                .tracking(0.3)
+                .foregroundStyle(.white.opacity(0.92))
+
+            VStack(spacing: 0) {
+                ForEach(rows) { row in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("\(row.player.number)")
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.96))
+                            .frame(width: 18, alignment: .leading)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(condensedLineupPlayerName(row.player.name))
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.white.opacity(0.96))
+
+                            if let substitution = row.substitution {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.up.circle.fill")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(Color(red: 0.21, green: 0.83, blue: 0.39))
+
+                                    Text("\(formattedMatchMinute(substitution.minute)) for \(condensedLineupPlayerName(substitution.playerOff.name))")
+                                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.white.opacity(0.78))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 7)
+
+                    if row.id != rows.last?.id {
+                        Divider()
+                            .overlay(Color.white.opacity(0.12))
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.black.opacity(0.20))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct MatchLineupSubstituteRow: Identifiable {
+    let player: MatchLineupPlayer
+    let substitution: MatchLineupSubstitution?
+
+    var id: String {
+        player.id
     }
 }
 
@@ -1581,6 +1742,15 @@ private struct MatchLineupPitchBackground: View {
     }
 }
 
+private func formattedMatchMinute(_ rawValue: String) -> String {
+    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "-" }
+    if trimmed.contains("'") {
+        return trimmed
+    }
+    return "\(trimmed)'"
+}
+
 private struct MatchLineupPlayerEventSummary {
     let goals: Int
     let assists: Int
@@ -1714,6 +1884,7 @@ private struct FantasySquadMembershipLookup {
     private let memberKeys: Set<String>
     private let teamCounts: [String: Int]
     private let effectiveScoresByTeam: [String: Int]
+    private let contributionPointsByKey: [String: Int]
 
     init?(squad: FantasySquadDisplayData?) {
         guard let squad else { return nil }
@@ -1721,6 +1892,7 @@ private struct FantasySquadMembershipLookup {
         var keys = Set<String>()
         var counts: [String: Int] = [:]
         var effectiveScores: [String: Int] = [:]
+        var contributionPoints: [String: Int] = [:]
         for player in squad.allPlayers {
             let teamKey = Self.normalizeTeamName(player.teamName)
             counts[teamKey, default: 0] += 1
@@ -1728,16 +1900,25 @@ private struct FantasySquadMembershipLookup {
                 fullName: player.fullName,
                 displayName: player.displayName
             ) {
-                keys.insert("\(teamKey)|\(nameVariant)")
+                let key = "\(teamKey)|\(nameVariant)"
+                keys.insert(key)
+                contributionPoints[key] = 0
             }
         }
         for contribution in squad.effectivePlayerContributions {
             let teamKey = Self.normalizeTeamName(contribution.teamName)
             effectiveScores[teamKey, default: 0] += contribution.points
+            for nameVariant in Self.nameVariants(
+                fullName: contribution.fullName,
+                displayName: contribution.displayName
+            ) {
+                contributionPoints["\(teamKey)|\(nameVariant)"] = contribution.points
+            }
         }
         memberKeys = keys
         teamCounts = counts
         effectiveScoresByTeam = effectiveScores
+        contributionPointsByKey = contributionPoints
     }
 
     func contains(player: MatchLineupPlayer, teamName: String) -> Bool {
@@ -1759,6 +1940,20 @@ private struct FantasySquadMembershipLookup {
         let homeScore = effectiveScore(for: match.homeTeam)
         let awayScore = effectiveScore(for: match.awayTeam)
         return homeScore + awayScore
+    }
+
+    func points(for player: MatchLineupPlayer, teamName: String) -> Int? {
+        let teamKey = Self.normalizeTeamName(teamName)
+        let candidateKeys = Self.nameVariants(
+            fullName: player.name,
+            displayName: condensedLineupPlayerName(player.name)
+        ).map { "\(teamKey)|\($0)" }
+
+        guard candidateKeys.contains(where: { memberKeys.contains($0) }) else {
+            return nil
+        }
+
+        return candidateKeys.compactMap { contributionPointsByKey[$0] }.max() ?? 0
     }
 
     private func effectiveScore(for teamName: String) -> Int {

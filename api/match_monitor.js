@@ -6,6 +6,7 @@ const {
   claimBbcNotificationIdempotency,
 } = require("./redis_client");
 const { sendNotification, sendLiveActivityPush } = require("./apns_client");
+const { fetchBbcLiveTextEntriesByDetailsUrl } = require("./fetch_bbc_scores");
 const liveActivityMetrics = require("./live_activity_metrics");
 const crypto = require("crypto");
 const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.json");
@@ -19,6 +20,8 @@ const MAX_MONITOR_DURATION_MS = 6 * 60 * 60 * 1000; // Keep monitoring up to 6h 
 const NOTIFICATION_DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000; // Keep event dedupe for a full match window
 const KICKOFF_STATUS_MINUTE_THRESHOLD = 15; // Ignore kickoff if first seen too late in the match
 const GOAL_TIMELINE_BACKLOG_LIMIT = 64; // Keep bounded unreconciled timeline events per match
+const SCORE_REVERSION_CONFIRMATION_POLLS = 5;
+const VAR_DECISION_REVIEW_WINDOW_MINUTES = 5;
 const MONITOR_DIAGNOSTICS_RECENT_LIMIT = 300; // Keep a rolling in-memory diagnostics window
 const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG !== "0";
 const LIVE_ACTIVITY_EVAL_INTERVAL_MS = 15 * 1000;
@@ -956,6 +959,308 @@ function diffGoalEvents(oldMatch, newMatch) {
   return newEvents;
 }
 
+function diffRemovedGoalEvents(oldMatch, newMatch) {
+  return diffGoalEvents(newMatch || {}, oldMatch || {});
+}
+
+function sameScoreSnapshot(lhs, rhs) {
+  if (!lhs || !rhs) return false;
+  return lhs.home_score === rhs.home_score && lhs.away_score === rhs.away_score;
+}
+
+function detectScoreReversion(oldMatch, newMatch) {
+  const previous = scoreSnapshot(oldMatch || {});
+  const current = scoreSnapshot(newMatch || {});
+  const homeDelta = current.home_score - previous.home_score;
+  const awayDelta = current.away_score - previous.away_score;
+  const totalGoalsRemoved = Math.max(0, -homeDelta) + Math.max(0, -awayDelta);
+
+  if (totalGoalsRemoved !== 1) {
+    return null;
+  }
+
+  let affectedTeam = null;
+  if (homeDelta === -1 && awayDelta === 0) {
+    affectedTeam = "home";
+  } else if (homeDelta === 0 && awayDelta === -1) {
+    affectedTeam = "away";
+  }
+  if (!affectedTeam) {
+    return null;
+  }
+
+  const removedGoalEvents = diffRemovedGoalEvents(oldMatch || {}, newMatch || {})
+    .filter((event) => event.team === affectedTeam)
+    .sort((lhs, rhs) => {
+      const leftMinute = Number.isFinite(lhs.minute) ? lhs.minute : -1;
+      const rightMinute = Number.isFinite(rhs.minute) ? rhs.minute : -1;
+      if (leftMinute !== rightMinute) return rightMinute - leftMinute;
+      return rhs.sourceOrder - lhs.sourceOrder;
+    });
+  const removedGoal = removedGoalEvents[0] || null;
+
+  return {
+    baseline: previous,
+    reverted: current,
+    affectedTeam,
+    removedGoal,
+  };
+}
+
+function updateScoreReversionState(monitorState, oldMatch, newMatch, nowMs = Date.now()) {
+  const current = scoreSnapshot(newMatch || {});
+  const directReversion = detectScoreReversion(oldMatch, newMatch);
+  const previousState =
+    monitorState && monitorState.scoreReversionState && typeof monitorState.scoreReversionState === "object"
+      ? monitorState.scoreReversionState
+      : null;
+
+  if (directReversion) {
+    monitorState.scoreReversionState = {
+      baseline: directReversion.baseline,
+      reverted: directReversion.reverted,
+      affectedTeam: directReversion.affectedTeam,
+      removedGoal: directReversion.removedGoal,
+      consecutivePolls: 1,
+      firstDetectedAtMs: nowMs,
+      lastDetectedAtMs: nowMs,
+      confirmedAtMs: null,
+    };
+    return monitorState.scoreReversionState;
+  }
+
+  if (!previousState) {
+    return null;
+  }
+
+  if (sameScoreSnapshot(current, previousState.baseline)) {
+    monitorState.scoreReversionState = null;
+    return null;
+  }
+
+  if (sameScoreSnapshot(current, previousState.reverted)) {
+    previousState.consecutivePolls = Number(previousState.consecutivePolls || 0) + 1;
+    previousState.lastDetectedAtMs = nowMs;
+    monitorState.scoreReversionState = previousState;
+    return previousState;
+  }
+
+  monitorState.scoreReversionState = null;
+  return null;
+}
+
+function escapedRegexFragment(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeLiveTextEntryText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function entryMinuteWithinWindow(entryMinute, targetMinute, tolerance = 2) {
+  if (!Number.isFinite(targetMinute)) return true;
+  if (!Number.isFinite(entryMinute)) return false;
+  return Math.abs(entryMinute - targetMinute) <= tolerance;
+}
+
+function matchesVarDecisionScoreline(entryText, newMatch, revertedSnapshot) {
+  const homeTeam = String(newMatch && newMatch.home_team ? newMatch.home_team : "").trim();
+  const awayTeam = String(newMatch && newMatch.away_team ? newMatch.away_team : "").trim();
+  const homeScore = Number(revertedSnapshot && revertedSnapshot.home_score);
+  const awayScore = Number(revertedSnapshot && revertedSnapshot.away_score);
+  if (!homeTeam || !awayTeam || !Number.isFinite(homeScore) || !Number.isFinite(awayScore)) {
+    return false;
+  }
+
+  const fragments = [
+    escapedRegexFragment(homeTeam.toLowerCase()),
+    String(homeScore),
+    "-",
+    String(awayScore),
+    escapedRegexFragment(awayTeam.toLowerCase()),
+  ];
+  return new RegExp(fragments.join("\\s*")).test(entryText);
+}
+
+function buildVarDisallowedGoalEvent(matchId, newMatch, confirmation, reversionState) {
+  const removedGoal = reversionState && reversionState.removedGoal ? reversionState.removedGoal : null;
+  const goalTime =
+    (removedGoal && removedGoal.goalTime) ||
+    (confirmation && confirmation.goalMinuteLabel) ||
+    (confirmation && confirmation.decisionMinuteLabel) ||
+    null;
+  const scorer = confirmation && confirmation.scorer ? confirmation.scorer : removedGoal && removedGoal.player;
+  const assister =
+    removedGoal && removedGoal.assister ? removedGoal.assister : null;
+  const team =
+    confirmation && confirmation.team
+      ? confirmation.team
+      : reversionState && reversionState.affectedTeam
+        ? reversionState.affectedTeam
+        : null;
+  const current = scoreSnapshot(newMatch || {});
+
+  return {
+    type: "goal",
+    team,
+    title: goalTime ? `Goal disallowed by VAR ${goalTime}` : "Goal disallowed by VAR",
+    body: formatScoreline(newMatch, current.home_score, current.away_score),
+    goalTime,
+    scorer: scorer || null,
+    assister,
+    ownGoal: false,
+    disallowedByVar: true,
+    varDecisionTime:
+      confirmation && confirmation.decisionMinuteLabel ? confirmation.decisionMinuteLabel : null,
+    eventKey: [
+      "var_disallowed",
+      String(team || ""),
+      String(goalTime || ""),
+      String(scorer || ""),
+      String(matchId || ""),
+    ].join(":"),
+  };
+}
+
+async function confirmVarDisallowedGoal(matchId, newMatch, reversionState, options = {}) {
+  if (!newMatch || !reversionState) return null;
+  if (Number(reversionState.consecutivePolls || 0) < SCORE_REVERSION_CONFIRMATION_POLLS) {
+    return null;
+  }
+  if (Number.isFinite(Number(reversionState.confirmedAtMs))) {
+    return null;
+  }
+
+  const targetGoalMinute = Number(
+    reversionState.removedGoal && Number.isFinite(reversionState.removedGoal.minute)
+      ? reversionState.removedGoal.minute
+      : null
+  );
+  const expectedScorer = String(
+    reversionState.removedGoal && reversionState.removedGoal.player
+      ? reversionState.removedGoal.player
+      : ""
+  ).trim();
+  const revertedSnapshot = reversionState.reverted || scoreSnapshot(newMatch || {});
+
+  let liveText;
+  if (Array.isArray(newMatch.live_text_entries) && newMatch.live_text_entries.length > 0) {
+    liveText = { entries: newMatch.live_text_entries };
+  } else {
+    if (!newMatch.details_url) return null;
+    try {
+      const fetchLiveText =
+        options && typeof options.fetchLiveText === "function"
+          ? options.fetchLiveText
+          : fetchBbcLiveTextEntriesByDetailsUrl;
+      liveText = await fetchLiveText(newMatch.details_url);
+    } catch (error) {
+      logDecision("var_disallowed_confirmation", {
+        match_id: matchId,
+        result: "fetch_error",
+        error: error && error.message ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  const entries = Array.isArray(liveText && liveText.entries) ? liveText.entries : [];
+  if (entries.length === 0) {
+    logDecision("var_disallowed_confirmation", {
+      match_id: matchId,
+      result: "no_live_text_entries",
+    });
+    return null;
+  }
+
+  let overturnedEntry = null;
+  let noGoalEntry = null;
+
+  entries.forEach((entry) => {
+    if (!entry || !entry.text) return;
+    const normalizedText = normalizeLiveTextEntryText(entry.text);
+    if (
+      normalizedText.includes("goal overturned by var") &&
+      (!expectedScorer || normalizedText.includes(normalizeLiveTextEntryText(expectedScorer))) &&
+      entryMinuteWithinWindow(entry.minute_value, targetGoalMinute, 2)
+    ) {
+      if (!overturnedEntry) overturnedEntry = entry;
+      return;
+    }
+
+    if (
+      normalizedText.includes("var decision: no goal") &&
+      matchesVarDecisionScoreline(normalizedText, newMatch, revertedSnapshot) &&
+      entryMinuteWithinWindow(
+        entry.minute_value,
+        Number.isFinite(targetGoalMinute) ? targetGoalMinute + VAR_DECISION_REVIEW_WINDOW_MINUTES : null,
+        VAR_DECISION_REVIEW_WINDOW_MINUTES
+      )
+    ) {
+      if (!noGoalEntry) noGoalEntry = entry;
+    }
+  });
+
+  if (!overturnedEntry && !noGoalEntry) {
+    logDecision("var_disallowed_confirmation", {
+      match_id: matchId,
+      result: "no_matching_live_text",
+      expected_scorer: expectedScorer || null,
+      reverted_home_score: revertedSnapshot.home_score,
+      reverted_away_score: revertedSnapshot.away_score,
+    });
+    return null;
+  }
+
+  const scorerMatch =
+    overturnedEntry && overturnedEntry.text
+      ? overturnedEntry.text.match(/^GOAL OVERTURNED BY VAR:\s+(.+?)\s+\((.+?)\)\s+scores\b/i)
+      : null;
+  const scorer = scorerMatch && scorerMatch[1] ? scorerMatch[1].trim() : expectedScorer || null;
+  const teamName = scorerMatch && scorerMatch[2] ? scorerMatch[2].trim() : null;
+  const team =
+    teamName && String(newMatch.home_team || "").trim() === teamName
+      ? "home"
+      : teamName && String(newMatch.away_team || "").trim() === teamName
+        ? "away"
+        : reversionState.affectedTeam;
+
+  const goalMinuteLabel =
+    reversionState.removedGoal && reversionState.removedGoal.goalTime
+      ? reversionState.removedGoal.goalTime
+      : overturnedEntry && overturnedEntry.minute
+        ? overturnedEntry.minute
+        : null;
+  const decisionMinuteLabel =
+    noGoalEntry && noGoalEntry.minute
+      ? noGoalEntry.minute
+      : overturnedEntry && overturnedEntry.minute
+        ? overturnedEntry.minute
+        : null;
+
+  reversionState.confirmedAtMs = Date.now();
+  logDecision("var_disallowed_confirmation", {
+    match_id: matchId,
+    result: "confirmed",
+    goal_minute: goalMinuteLabel || null,
+    decision_minute: decisionMinuteLabel || null,
+    scorer: scorer || null,
+    team: team || null,
+  });
+
+  return {
+    team,
+    scorer,
+    goalMinuteLabel,
+    decisionMinuteLabel,
+  };
+}
+
 function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), context = null) {
   const events = [];
   const lifecycle = monitorState.lifecycle;
@@ -1290,6 +1595,8 @@ async function persistMatchEventHistory(matchId, match, event, source = "match_m
       red_card_time: event && event.redCardTime ? event.redCardTime : null,
       player: event && event.player ? event.player : null,
       own_goal: Boolean(event && event.ownGoal),
+      disallowed_by_var: Boolean(event && event.disallowedByVar),
+      var_decision_time: event && event.varDecisionTime ? event.varDecisionTime : null,
       score_changed: Boolean(event && event.scoreChanged),
       status_changed: Boolean(event && event.statusChanged),
       previous: event && event.previous ? event.previous : null,
@@ -1336,6 +1643,8 @@ async function persistNotificationHistory({
       body: event && event.body ? event.body : null,
       delay_minutes: Number(delayMinutes || 0),
       dispatch_mode: dispatchMode || "unknown",
+      disallowed_by_var: Boolean(event && event.disallowedByVar),
+      var_decision_time: event && event.varDecisionTime ? event.varDecisionTime : null,
       environment:
         result && result.environment
           ? result.environment
@@ -1814,6 +2123,7 @@ async function monitorMatch(matchId, initialMatch) {
     kickoffTimeMs,
     history: [],
     unresolvedGoalCount: 0,
+    scoreReversionState: null,
     lifecycle: {
       // If the first state is already live, don't send a synthetic delayed kickoff later.
       kickoffEmitted: isLiveMatchStatus(initialStatus),
@@ -2045,6 +2355,12 @@ function stopMonitoringMatch(matchId, reason = "unspecified") {
 async function detectAndNotifyChanges(matchId, monitorState, oldMatch, newMatch) {
   const nowMs = Date.now();
   const events = buildMatchEvents(oldMatch, newMatch, monitorState, nowMs, { matchId });
+  const reversionState = updateScoreReversionState(monitorState, oldMatch, newMatch, nowMs);
+  const confirmedVarDisallowedGoal = await confirmVarDisallowedGoal(matchId, newMatch, reversionState);
+  if (confirmedVarDisallowedGoal) {
+    events.push(buildVarDisallowedGoalEvent(matchId, newMatch, confirmedVarDisallowedGoal, reversionState));
+    monitorState.scoreReversionState = null;
+  }
   const scoreChangeEvent = buildScoreChangeEvent(oldMatch, newMatch);
 
   if (scoreChangeEvent) {
@@ -3213,6 +3529,8 @@ async function sendNotificationToUser(user, matchId, match, event, notificationM
     };
     if (event.eventKey) payload.event_key = event.eventKey;
     if (event.goalTime) payload.goal_time = event.goalTime;
+    if (event.disallowedByVar) payload.disallowed_by_var = true;
+    if (event.varDecisionTime) payload.var_decision_time = event.varDecisionTime;
 
     const result = await sendNotification(
       user.apnsToken,
@@ -3452,7 +3770,11 @@ module.exports = {
     buildMatchEvents,
     buildScoreChangeEvent,
     buildNotificationId,
+    buildVarDisallowedGoalEvent,
+    confirmVarDisallowedGoal,
     countGoals,
+    detectScoreReversion,
+    diffRemovedGoalEvents,
     mergeSnapshotWithFallback,
     diffGoalEvents,
     isMatchRelevant,
@@ -3465,5 +3787,6 @@ module.exports = {
     isLikelyTerminalStaleLiveMatch,
     shouldSkipLiveActivityUpdate,
     shouldPreserveExistingLiveActivityOnEmpty,
+    updateScoreReversionState,
   },
 };

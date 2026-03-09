@@ -40,6 +40,7 @@ export interface MatchGoalScorer {
   player: string;
   goalTimes: string[];
   ownGoalTimes: string[];
+  disallowedGoalTimes: string[];
 }
 
 export interface MatchAssistProvider {
