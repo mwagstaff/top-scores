@@ -58,14 +58,20 @@ struct MatchRow: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                if let aggregateSummaryText = match.aggregateSummaryText {
+                if let winnerSummaryText = match.winnerSummaryText {
+                    Text(winnerSummaryText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 2)
+                } else if let aggregateSummaryText = match.aggregateSummaryText {
                     Text("(\(aggregateSummaryText))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
 
-                if let penaltyResult = match.penaltyResult {
+                if match.winnerSummaryText == nil, let penaltyResult = match.penaltyResult {
                     Text(penaltyResult)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -93,6 +99,7 @@ struct MatchRow: View {
             }
         }
         .padding(cardPadding)
+        .fixedSize(horizontal: false, vertical: true)
         .background(
             RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
                 .fill(Color(.secondarySystemBackground))

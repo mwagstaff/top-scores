@@ -329,6 +329,7 @@ final class MatchesStore: ObservableObject {
     private let liveRefreshInterval: TimeInterval = 30
     private let bbcLiveRefreshInterval: TimeInterval = 90
     private let cacheStateRefreshInterval: TimeInterval = 30
+    private let configureRefreshInterval: TimeInterval = 30
     private let pageSize = 120
     // Results are filtered client-side after paging; advance a few pages to avoid empty-first-page windows.
     private let resultsAutoAdvancePageLimit = 8
@@ -349,17 +350,24 @@ final class MatchesStore: ObservableObject {
         let snapshotChanged = currentSnapshot != snapshot
         currentSnapshot = snapshot
         activeMode = mode
+        let currentModeState = state(for: mode)
 
         if snapshotChanged {
             loadCache(snapshot: snapshot)
             Task { await refresh(preferences: snapshot, mode: mode) }
-        } else if state(for: mode).matches.isEmpty || modeChanged {
+        } else if currentModeState.matches.isEmpty || modeChanged || shouldRefreshOnConfigure(currentModeState) {
             Task { await refresh(preferences: snapshot, mode: mode) }
         }
 
         publishState(for: mode)
         refreshTeamRatingLookup(apiBaseURL: snapshot.apiBaseURL)
         updateRefreshTimer(using: snapshot, matches: combinedLoadedMatches())
+    }
+
+    private func shouldRefreshOnConfigure(_ state: ModeState, now: Date = Date()) -> Bool {
+        if state.isUsingCache { return true }
+        guard let lastUpdated = state.lastUpdated else { return true }
+        return now.timeIntervalSince(lastUpdated) >= configureRefreshInterval
     }
 
     func stopAutoRefresh() {
@@ -464,7 +472,6 @@ final class MatchesStore: ObservableObject {
                 } else {
                     modeFiltered = dateFiltered
                 }
-
                 mergedIncoming = Self.mergePages(existing: mergedIncoming, incoming: incoming)
                 mergedModeFiltered = Self.mergePages(existing: mergedModeFiltered, incoming: modeFiltered)
 
@@ -841,6 +848,13 @@ final class MatchesStore: ObservableObject {
     }
 
     private static func preferredMatch(existing: Match, incoming: Match) -> Match {
+        if hasRicherKnockoutMetadata(incoming, than: existing) {
+            return incoming
+        }
+        if hasRicherKnockoutMetadata(existing, than: incoming) {
+            return existing
+        }
+
         let preferredStatus = MatchScoreResolver.preferredStatus(
             current: existing.scoreStatus,
             incoming: incoming.scoreStatus
@@ -867,6 +881,17 @@ final class MatchesStore: ObservableObject {
             return incoming.tvChannels.count > existing.tvChannels.count ? incoming : existing
         }
         return incoming
+    }
+
+    private static func hasRicherKnockoutMetadata(_ lhs: Match, than rhs: Match) -> Bool {
+        if lhs.penaltyResult != nil && rhs.penaltyResult == nil {
+            return true
+        }
+        if lhs.aggregateHomeScore != nil && lhs.aggregateAwayScore != nil &&
+            (rhs.aggregateHomeScore == nil || rhs.aggregateAwayScore == nil) {
+            return true
+        }
+        return false
     }
 
     private static func normalizedStatus(_ value: String?) -> String? {

@@ -265,7 +265,7 @@ struct MatchesView: View {
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
 
-                        ForEach(league.matches) { match in
+                        ForEach(league.matches, id: \.self) { match in
                             NavigationLink {
                                 MatchDetailView(match: match, highlightToday: day.isToday)
                             } label: {

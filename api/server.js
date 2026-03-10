@@ -4247,6 +4247,15 @@ function isPenaltyShootoutStatusToken(status) {
   return token === "PENS" || token === "PEN" || token === "PEN.";
 }
 
+function finishedStatusRank(status) {
+  const normalized = normalizeMatchStatusValue(status);
+  if (!normalized) return 0;
+  const token = normalized.toUpperCase();
+  if (token === "AET") return 2;
+  if (token === "FT") return 1;
+  return 0;
+}
+
 function pickPreferredMatchStatus(existingStatus, incomingStatus, options = {}) {
   const preferIncomingOnTie = options.preferIncomingOnTie !== false;
   const allowTerminalRegression = options.allowTerminalRegression === true;
@@ -4271,6 +4280,13 @@ function pickPreferredMatchStatus(existingStatus, incomingStatus, options = {}) 
     return existing;
   }
   if (incomingFinished && !existingFinished) return incoming;
+  if (existingFinished && incomingFinished) {
+    const existingRank = finishedStatusRank(existing);
+    const incomingRank = finishedStatusRank(incoming);
+    if (existingRank > incomingRank) return existing;
+    if (incomingRank > existingRank) return incoming;
+    return preferIncomingOnTie ? incoming : existing;
+  }
 
   if (existingMinute !== null && incomingMinute !== null) {
     if (incomingMinute > existingMinute) return incoming;

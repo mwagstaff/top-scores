@@ -405,6 +405,27 @@ struct Match: Identifiable, Codable, Hashable {
         return "Agg: \(aggregateHomeScore)-\(aggregateAwayScore)"
     }
 
+    var winnerSummaryText: String? {
+        if let penaltyWinnerSummary = penaltyWinnerSummaryText {
+            return penaltyWinnerSummary
+        }
+
+        if let aggregateWinnerSummary = aggregateWinnerSummaryText {
+            return aggregateWinnerSummary
+        }
+
+        guard stabilizedScoreStatus() == "AET",
+              let homeScore,
+              let awayScore,
+              homeScore != awayScore
+        else {
+            return nil
+        }
+
+        let winner = homeScore > awayScore ? homeTeam : awayTeam
+        return "\(winner) win \(homeScore) - \(awayScore) after extra time"
+    }
+
     var displayScoreStatus: String? {
         guard let scoreStatus = stabilizedScoreStatus() else { return nil }
         return MatchStatusFormatter.displayValue(for: scoreStatus)
@@ -653,6 +674,45 @@ struct Match: Identifiable, Codable, Hashable {
         return base + (nextScore - previousScore)
     }
 
+    private var penaltyWinnerSummaryText: String? {
+        let trimmedPenaltyResult = penaltyResult?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmedPenaltyResult, !trimmedPenaltyResult.isEmpty else {
+            return nil
+        }
+
+        guard let scorePair = Self.firstScorePair(in: trimmedPenaltyResult) else {
+            return trimmedPenaltyResult
+        }
+
+        let homeMentioned = Self.containsTeamName(homeTeam, in: trimmedPenaltyResult)
+        let awayMentioned = Self.containsTeamName(awayTeam, in: trimmedPenaltyResult)
+        let winner: String
+        if homeMentioned != awayMentioned {
+            winner = homeMentioned ? homeTeam : awayTeam
+        } else if scorePair.0 == scorePair.1 {
+            return trimmedPenaltyResult
+        } else {
+            winner = scorePair.0 > scorePair.1 ? homeTeam : awayTeam
+        }
+
+        return "\(winner) win \(scorePair.0) - \(scorePair.1) on penalties"
+    }
+
+    private var aggregateWinnerSummaryText: String? {
+        guard isFinished,
+              let aggregateHomeScore,
+              let aggregateAwayScore,
+              (aggregateHomeScore != 0 || aggregateAwayScore != 0),
+              aggregateHomeScore != aggregateAwayScore
+        else {
+            return nil
+        }
+
+        let winner = aggregateHomeScore > aggregateAwayScore ? homeTeam : awayTeam
+        return "\(winner) win \(aggregateHomeScore) - \(aggregateAwayScore) on aggregate"
+    }
+
     private static func isUpcomingScorelessFixture(
         date: String,
         time: String,
@@ -679,6 +739,29 @@ struct Match: Identifiable, Codable, Hashable {
             return normalizedStatus == nil || normalizedStatus?.isEmpty == true
         }
         return kickoff.timeIntervalSince(now) > -(15 * 60)
+    }
+
+    private static func containsTeamName(_ teamName: String, in text: String) -> Bool {
+        let normalizedTeam = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTeam.isEmpty else { return false }
+        return text.range(of: normalizedTeam, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+
+    private static func firstScorePair(in text: String) -> (Int, Int)? {
+        guard let range = text.range(
+            of: #"(\d+)\s*[-–]\s*(\d+)"#,
+            options: .regularExpression
+        ) else {
+            return nil
+        }
+
+        let matched = String(text[range])
+        let numbers = matched
+            .split(whereSeparator: { !$0.isNumber })
+            .compactMap { Int($0) }
+
+        guard numbers.count >= 2 else { return nil }
+        return (numbers[0], numbers[1])
     }
 }
 

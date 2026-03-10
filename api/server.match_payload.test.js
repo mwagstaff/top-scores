@@ -14,6 +14,7 @@ const {
     isMatchDetailsActive,
     normalizeMatchDetailsPayload,
     mergeMatchDetailsPayload,
+    pickPreferredMatchStatus,
     resolveStableMatchScoreStatus,
     withStableMatchDetailsState,
     filterStaleBbcMatches,
@@ -231,6 +232,56 @@ test("mergeMatchDetailsPayload clears stale scores when refreshed details show a
   assert.equal(merged.score_status, null);
   assert.deepStrictEqual(merged.home_goal_scorers, []);
   assert.deepStrictEqual(merged.away_goal_scorers, []);
+});
+
+test("pickPreferredMatchStatus keeps AET over FT for finished matches", () => {
+  assert.equal(pickPreferredMatchStatus("AET", "FT"), "AET");
+  assert.equal(pickPreferredMatchStatus("FT", "AET"), "AET");
+});
+
+test("mergeMatchDetailsPayload preserves AET when refreshed data downgrades to FT", () => {
+  const existing = normalizeMatchDetailsPayload({
+    details_url: DETAILS_URL,
+    date: "2026-03-09",
+    time: "18:30",
+    league: "FA Cup",
+    league_subcategory: "5th Round",
+    home_team: "West Ham United",
+    away_team: "Brentford",
+    home_score: 2,
+    away_score: 2,
+    score_status: "AET",
+    penalty_result: "West Ham United win 5 - 3 on penalties",
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+  });
+
+  const incoming = normalizeMatchDetailsPayload({
+    details_url: DETAILS_URL,
+    date: "2026-03-09",
+    time: "18:30",
+    league: "FA Cup",
+    league_subcategory: "5th Round",
+    home_team: "West Ham United",
+    away_team: "Brentford",
+    home_score: 2,
+    away_score: 2,
+    score_status: "FT",
+    penalty_result: "West Ham United win 5 - 3 on penalties",
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+  });
+
+  const merged = mergeMatchDetailsPayload(existing, incoming, "2026-03-10T09:53:35.974Z");
+  assert.equal(merged.score_status, "AET");
 });
 
 test("mergeConfirmedVarDisallowedGoalsIntoPayload appends confirmed disallowed goals to scorer timelines", async () => {

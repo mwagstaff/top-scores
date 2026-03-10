@@ -108,6 +108,58 @@ struct Top_ScoresTests {
         #expect(match.stabilizedScoreStatus(now: now) == "FT")
     }
 
+    @Test func winnerSummaryText_formatsPenaltyShootoutWinners() async throws {
+        let match = Match(
+            date: "2026-03-01",
+            time: "19:45",
+            homeTeam: "West Ham United",
+            awayTeam: "Brentford",
+            league: "FA Cup",
+            tvChannels: [],
+            homeScore: 1,
+            awayScore: 1,
+            scoreStatus: "AET",
+            penaltyResult: "West Ham United win 5-3 on penalties"
+        )
+
+        #expect(match.winnerSummaryText == "West Ham United win 5 - 3 on penalties")
+    }
+
+    @Test func winnerSummaryText_formatsAggregateWinners() async throws {
+        let match = Match(
+            date: "2026-02-25",
+            time: "20:00",
+            homeTeam: "Paris Saint-Germain",
+            awayTeam: "Monaco",
+            league: "UEFA Champions League",
+            leagueSubcategory: "Knockout Round Play-offs",
+            tvChannels: [],
+            homeScore: 2,
+            awayScore: 2,
+            aggregateHomeScore: 5,
+            aggregateAwayScore: 4,
+            scoreStatus: "FT"
+        )
+
+        #expect(match.winnerSummaryText == "Paris Saint-Germain win 5 - 4 on aggregate")
+    }
+
+    @Test func winnerSummaryText_formatsExtraTimeWinners() async throws {
+        let match = Match(
+            date: "2026-03-01",
+            time: "20:00",
+            homeTeam: "Chelsea",
+            awayTeam: "Liverpool",
+            league: "FA Cup",
+            tvChannels: [],
+            homeScore: 2,
+            awayScore: 1,
+            scoreStatus: "AET"
+        )
+
+        #expect(match.winnerSummaryText == "Chelsea win 2 - 1 after extra time")
+    }
+
     @Test @MainActor func mergeRefreshedMatches_preservesTerminalStateAcrossResetRefresh() async throws {
         let existing = makeMatch(
             date: "2026-03-07",
