@@ -80,7 +80,7 @@ test("mergeSnapshotWithFallback clears stale aggregate when incoming payload set
   assert.equal(merged.aggregate_away_score, null);
 });
 
-test("updateScoreReversionState tracks five consecutive BBC score reversions before confirmation", () => {
+test("updateScoreReversionState tracks three consecutive BBC score reversions before confirmation", () => {
   const state = newMonitorState();
   const baseline = {
     home_team: "Leeds United",
@@ -120,11 +120,11 @@ test("updateScoreReversionState tracks five consecutive BBC score reversions bef
   assert.equal(reversion.removedGoal.player, "Lukas Nmecha");
   assert.equal(reversion.removedGoal.assister, "Wilfried Gnonto");
 
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < 2; index += 1) {
     reversion = __testHooks.updateScoreReversionState(state, reverted, reverted, 1001 + index);
   }
 
-  assert.equal(reversion.consecutivePolls, 5);
+  assert.equal(reversion.consecutivePolls, 3);
   assert.deepStrictEqual(reversion.baseline, {
     home_score: 1,
     away_score: 0,
@@ -150,7 +150,7 @@ test("confirmVarDisallowedGoal matches BBC LiveText overturned goal entries", as
       score_status: "21",
     },
     affectedTeam: "home",
-    consecutivePolls: 5,
+    consecutivePolls: 3,
     removedGoal: {
       team: "home",
       player: "Lukas Nmecha",
@@ -195,6 +195,114 @@ test("confirmVarDisallowedGoal matches BBC LiveText overturned goal entries", as
   assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
 });
 
+test("confirmScoreCorrection matches on-pitch offside reversions without VAR", async () => {
+  const reversionState = {
+    baseline: {
+      home_score: 1,
+      away_score: 0,
+      score_status: "74",
+    },
+    reverted: {
+      home_score: 0,
+      away_score: 0,
+      score_status: "74",
+    },
+    affectedTeam: "home",
+    consecutivePolls: 3,
+    removedGoal: {
+      team: "home",
+      player: "Joelinton",
+      goalTime: "74'",
+      assister: null,
+      minute: 74,
+    },
+  };
+
+  const confirmation = await __testHooks.confirmScoreCorrection(
+    "c0rjxqpdjert",
+    {
+      home_team: "Newcastle United",
+      away_team: "Barcelona",
+      details_url: "https://www.bbc.co.uk/sport/football/live/c0rjxqpdjert",
+    },
+    reversionState,
+    {
+      fetchLiveText: async () => ({
+        entries: [
+          {
+            minute: "74'",
+            minute_value: 74,
+            text: "Offside, Newcastle United. Joelinton is caught offside.",
+          },
+        ],
+      }),
+    }
+  );
+
+  assert.deepStrictEqual(confirmation, {
+    team: "home",
+    scorer: "Joelinton",
+    goalMinuteLabel: "74'",
+    correctionMinuteLabel: "74'",
+  });
+  assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
+});
+
+test("confirmScoreCorrection waits for longer stable reversion when live text has no explicit cause", async () => {
+  const reversionState = {
+    baseline: {
+      home_score: 1,
+      away_score: 0,
+      score_status: "74",
+    },
+    reverted: {
+      home_score: 0,
+      away_score: 0,
+      score_status: "75",
+    },
+    affectedTeam: "home",
+    consecutivePolls: 4,
+    removedGoal: {
+      team: "home",
+      player: "Joelinton",
+      goalTime: "74'",
+      assister: null,
+      minute: 74,
+    },
+  };
+
+  const match = {
+    home_team: "Newcastle United",
+    away_team: "Barcelona",
+    details_url: "https://www.bbc.co.uk/sport/football/live/c0rjxqpdjert",
+  };
+  const options = {
+    fetchLiveText: async () => ({
+      entries: [
+        {
+          minute: "75'",
+          minute_value: 75,
+          text: "Attempt missed. Harvey Barnes (Newcastle United) right footed shot from outside the box is close.",
+        },
+      ],
+    }),
+  };
+
+  assert.equal(await __testHooks.confirmScoreCorrection("c0rjxqpdjert", match, reversionState, options), null);
+  assert.equal(reversionState.confirmedAtMs, undefined);
+
+  reversionState.consecutivePolls = 5;
+
+  const confirmation = await __testHooks.confirmScoreCorrection("c0rjxqpdjert", match, reversionState, options);
+  assert.deepStrictEqual(confirmation, {
+    team: "home",
+    scorer: "Joelinton",
+    goalMinuteLabel: "74'",
+    correctionMinuteLabel: null,
+  });
+  assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
+});
+
 test("buildVarDisallowedGoalEvent uses goal notification semantics and reverted scoreline", () => {
   const event = __testHooks.buildVarDisallowedGoalEvent(
     "cr5lln18q4lt",
@@ -229,6 +337,39 @@ test("buildVarDisallowedGoalEvent uses goal notification semantics and reverted 
   assert.equal(event.varDecisionTime, "21'");
 });
 
+test("buildScoreCorrectionEvent uses goal notification semantics and reverted scoreline", () => {
+  const event = __testHooks.buildScoreCorrectionEvent(
+    "c0rjxqpdjert",
+    {
+      home_team: "Newcastle United",
+      away_team: "Barcelona",
+      home_score: 0,
+      away_score: 0,
+    },
+    {
+      team: "home",
+      scorer: "Joelinton",
+      goalMinuteLabel: "74'",
+      correctionMinuteLabel: "74'",
+    },
+    {
+      affectedTeam: "home",
+      removedGoal: {
+        player: "Joelinton",
+        assister: null,
+        goalTime: "74'",
+      },
+    }
+  );
+
+  assert.equal(event.type, "goal");
+  assert.equal(event.scoreCorrection, true);
+  assert.equal(event.title, "Score correction");
+  assert.equal(event.body, "Newcastle United 0 - 0 Barcelona");
+  assert.equal(event.scorer, "Joelinton");
+  assert.equal(event.goalTime, "74'");
+});
+
 test("buildNotificationPayload preserves disallowed-goal metadata for APNS delivery", () => {
   const payload = __testHooks.buildNotificationPayload("cr5lln18q4lt", {
     type: "goal",
@@ -245,6 +386,23 @@ test("buildNotificationPayload preserves disallowed-goal metadata for APNS deliv
     goal_time: "19'",
     disallowed_by_var: true,
     var_decision_time: "21'",
+  });
+});
+
+test("buildNotificationPayload preserves score-correction metadata for APNS delivery", () => {
+  const payload = __testHooks.buildNotificationPayload("c0rjxqpdjert", {
+    type: "goal",
+    eventKey: "score_correction:home:74':Joelinton:0:0:c0rjxqpdjert",
+    goalTime: "74'",
+    scoreCorrection: true,
+  });
+
+  assert.deepStrictEqual(payload, {
+    event_type: "goal",
+    match_id: "c0rjxqpdjert",
+    event_key: "score_correction:home:74':Joelinton:0:0:c0rjxqpdjert",
+    goal_time: "74'",
+    score_correction: true,
   });
 });
 
@@ -315,6 +473,274 @@ test("buildLiveActivityPresentationForUser suppresses stale high-minute live sta
   assert.equal(presentation.mode, null);
   assert.equal(Array.isArray(presentation.matches), true);
   assert.equal(presentation.matches.length, 0);
+});
+
+test("buildLiveActivityPresentationForUser excludes non-Premier League matches when EPL-only filter is enabled", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 12 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0, {
+      englishPremierLeagueTeamsOnly: true,
+    }),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "cexample123",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "UEFA Champions League",
+          home_team: "Galatasaray",
+          away_team: "Barcelona",
+          home_score: 1,
+          away_score: 0,
+          score_status: "12",
+          tv_channels: ["TNT Sports 1"],
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, null);
+  assert.deepStrictEqual(presentation.matches, []);
+});
+
+test("buildLiveActivityPresentationForUser excludes matches without matching TV channels when channel filtering is enabled", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 12 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0, {
+      channelFilterEnabled: true,
+      selectedChannels: ["TNT (all)"],
+    }),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "cexample456",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "UEFA Champions League",
+          home_team: "Real Madrid",
+          away_team: "Manchester City",
+          home_score: 0,
+          away_score: 0,
+          score_status: "12",
+          tv_channels: [],
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, null);
+  assert.deepStrictEqual(presentation.matches, []);
+});
+
+test("buildLiveActivityEntriesForUser uses the first filtered fixture section and ignores stale extra matches", () => {
+  const nowMs = Date.parse("2026-03-10T23:21:00Z");
+  const user = liveActivityUser(0, {
+    englishPremierLeagueTeamsOnly: true,
+  });
+
+  const monitoredEntries = [
+    {
+      matchId: "cnewbarca",
+      state: {
+        lastState: {
+          match_details_id: "cnewbarca",
+          date: "2026-03-10",
+          time: "19:45",
+          league: "UEFA Champions League",
+          home_team: "Newcastle United",
+          away_team: "Barcelona",
+          home_score: 1,
+          away_score: 0,
+          score_status: "90+8",
+          updated_at: "2026-03-10T22:15:00Z",
+        },
+      },
+      match: {
+        match_details_id: "cnewbarca",
+        date: "2026-03-10",
+        time: "19:45",
+        league: "UEFA Champions League",
+        home_team: "Newcastle United",
+        away_team: "Barcelona",
+        home_score: 1,
+        away_score: 0,
+        score_status: "90+8",
+        updated_at: "2026-03-10T22:15:00Z",
+      },
+    },
+    {
+      matchId: "coldmatch",
+      state: null,
+      match: {
+        match_details_id: "coldmatch",
+        date: "2026-03-08",
+        time: "16:30",
+        league: "Premier League",
+        home_team: "Brighton & Hove Albion",
+        away_team: "Arsenal",
+        home_score: 0,
+        away_score: 1,
+        score_status: "FT",
+      },
+    },
+  ];
+
+  const operationalMatches = [
+    {
+      match_details_id: "coldmatch",
+      date: "2026-03-08",
+      time: "16:30",
+      league: "Premier League",
+      home_team: "Brighton & Hove Albion",
+      away_team: "Arsenal",
+      home_score: 0,
+      away_score: 1,
+      score_status: "FT",
+      tv_channels: ["Sky Sports Premier League"],
+    },
+    {
+      match_details_id: "cshwwat",
+      date: "2026-03-10",
+      time: "19:45",
+      league: "Championship",
+      home_team: "Sheffield Wednesday",
+      away_team: "Watford",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+      tv_channels: ["Sky Sports Football"],
+    },
+    {
+      match_details_id: "cgalliv",
+      date: "2026-03-10",
+      time: "19:45",
+      league: "UEFA Champions League",
+      home_team: "Galatasaray",
+      away_team: "Liverpool",
+      home_score: 1,
+      away_score: 0,
+      score_status: "FT",
+      tv_channels: ["Amazon Prime Video"],
+    },
+    {
+      match_details_id: "cnewbarca",
+      date: "2026-03-10",
+      time: "19:45",
+      league: "UEFA Champions League",
+      home_team: "Newcastle United",
+      away_team: "Barcelona",
+      home_score: 1,
+      away_score: 1,
+      score_status: "FT",
+      tv_channels: ["Amazon Prime Video"],
+    },
+    {
+      match_details_id: "catmtot",
+      date: "2026-03-10",
+      time: "20:00",
+      league: "UEFA Champions League",
+      home_team: "Atletico Madrid",
+      away_team: "Tottenham Hotspur",
+      home_score: 5,
+      away_score: 2,
+      score_status: "FT",
+      tv_channels: ["Amazon Prime Video"],
+    },
+    {
+      match_details_id: "ctomorrow",
+      date: "2026-03-11",
+      time: "20:00",
+      league: "UEFA Champions League",
+      home_team: "Real Madrid",
+      away_team: "Manchester City",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+      tv_channels: ["TNT Sports 1"],
+    },
+  ];
+
+  const entries = __testHooks.buildLiveActivityEntriesForUser(
+    user,
+    monitoredEntries,
+    operationalMatches,
+    nowMs
+  );
+
+  assert.deepStrictEqual(
+    entries.map((entry) => entry.match.match_details_id),
+    ["cgalliv", "cnewbarca", "catmtot"]
+  );
+  assert.equal(entries[1].match.score_status, "FT");
+  assert.equal(entries[1].match.home_score, 1);
+  assert.equal(entries[1].match.away_score, 1);
+});
+
+test("mergeCanonicalLiveActivityMatch keeps fresher live state for active matches", () => {
+  const merged = __testHooks.mergeCanonicalLiveActivityMatch(
+    {
+      match_details_id: "clive123",
+      date: "2026-03-10",
+      time: "19:45",
+      league: "Premier League",
+      home_team: "Arsenal",
+      away_team: "Chelsea",
+      home_score: 0,
+      away_score: 0,
+      score_status: "12",
+      tv_channels: ["Sky Sports Main Event"],
+    },
+    {
+      match_details_id: "clive123",
+      date: "2026-03-10",
+      time: "19:45",
+      league: "Premier League",
+      home_team: "Arsenal",
+      away_team: "Chelsea",
+      home_score: 1,
+      away_score: 0,
+      score_status: "13",
+      tv_channels: ["Sky Sports Main Event"],
+    }
+  );
+
+  assert.equal(merged.score_status, "13");
+  assert.equal(merged.home_score, 1);
+  assert.equal(merged.away_score, 0);
+});
+
+test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly payloads", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_finished",
+    [
+      {
+        match_details_id: "cexample789",
+        date: "2026-03-10",
+        time: "19:45",
+        league: "UEFA Champions League",
+        home_team: "Newcastle United",
+        away_team: "Barcelona",
+        home_score: 1,
+        away_score: 1,
+        score_status: "FT",
+        tv_channels: ["Amazon Prime Video", "TNT Sports 1", "Amazon Prime Video"],
+      },
+    ],
+    2,
+    Date.now()
+  );
+
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["Amazon", "TNT Sports"]);
 });
 
 test("buildLiveActivityPresentationForUser clears delayed aggregate when current snapshot explicitly clears it", () => {

@@ -1,5 +1,6 @@
 const {
   getAllUserPreferences,
+  getOperationalDataset,
   updateUserLiveActivityState,
   saveBbcMatchEventHistory,
   saveBbcNotificationHistory,
@@ -20,7 +21,12 @@ const MAX_MONITOR_DURATION_MS = 6 * 60 * 60 * 1000; // Keep monitoring up to 6h 
 const NOTIFICATION_DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000; // Keep event dedupe for a full match window
 const KICKOFF_STATUS_MINUTE_THRESHOLD = 15; // Ignore kickoff if first seen too late in the match
 const GOAL_TIMELINE_BACKLOG_LIMIT = 64; // Keep bounded unreconciled timeline events per match
-const SCORE_REVERSION_CONFIRMATION_POLLS = 5;
+// BBC live data can briefly oscillate between reverted and stale scorelines after VAR.
+// Requiring five 10s polls delayed confirmation long enough to miss genuine reversals.
+const SCORE_REVERSION_CONFIRMATION_POLLS = 3;
+// Non-VAR score corrections are more likely to be BBC backend skew than a real correction.
+// Hold them longer unless live text explicitly shows an on-pitch cancellation like offside.
+const SCORE_CORRECTION_CONFIRMATION_POLLS = 5;
 const VAR_DECISION_REVIEW_WINDOW_MINUTES = 5;
 const MONITOR_DIAGNOSTICS_RECENT_LIMIT = 300; // Keep a rolling in-memory diagnostics window
 const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG !== "0";
@@ -41,6 +47,7 @@ const LIVE_ACTIVITY_STALE_LIVE_KICKOFF_GRACE_MS = 2 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_FINISHED_RETENTION_MS = 8 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
+const LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES = "merged_matches";
 const LIVE_ACTIVITY_TEAM_RATING_STOP_WORDS = new Set([
   "fc",
   "cf",
@@ -1087,6 +1094,32 @@ function matchesVarDecisionScoreline(entryText, newMatch, revertedSnapshot) {
   return new RegExp(fragments.join("\\s*")).test(entryText);
 }
 
+function matchesOnPitchScoreCorrection(entryText, newMatch, reversionState, expectedScorer, entryMinute) {
+  if (!entryText.includes("offside")) {
+    return false;
+  }
+
+  const targetGoalMinute =
+    reversionState && reversionState.removedGoal && Number.isFinite(reversionState.removedGoal.minute)
+      ? reversionState.removedGoal.minute
+      : null;
+  if (!entryMinuteWithinWindow(entryMinute, targetGoalMinute, 2)) {
+    return false;
+  }
+
+  const expectedTeamName =
+    reversionState && reversionState.affectedTeam === "away"
+      ? String(newMatch && newMatch.away_team ? newMatch.away_team : "").trim()
+      : String(newMatch && newMatch.home_team ? newMatch.home_team : "").trim();
+  const normalizedExpectedScorer = normalizeLiveTextEntryText(expectedScorer);
+  const normalizedExpectedTeam = normalizeLiveTextEntryText(expectedTeamName);
+
+  return (
+    (normalizedExpectedScorer && entryText.includes(normalizedExpectedScorer)) ||
+    (normalizedExpectedTeam && entryText.includes(normalizedExpectedTeam))
+  );
+}
+
 function buildVarDisallowedGoalEvent(matchId, newMatch, confirmation, reversionState) {
   const removedGoal = reversionState && reversionState.removedGoal ? reversionState.removedGoal : null;
   const goalTime =
@@ -1127,7 +1160,47 @@ function buildVarDisallowedGoalEvent(matchId, newMatch, confirmation, reversionS
   };
 }
 
-async function confirmVarDisallowedGoal(matchId, newMatch, reversionState, options = {}) {
+function buildScoreCorrectionEvent(matchId, newMatch, confirmation, reversionState) {
+  const removedGoal = reversionState && reversionState.removedGoal ? reversionState.removedGoal : null;
+  const current = scoreSnapshot(newMatch || {});
+  const goalTime =
+    (removedGoal && removedGoal.goalTime) ||
+    (confirmation && confirmation.goalMinuteLabel) ||
+    null;
+  const scorer =
+    (confirmation && confirmation.scorer) ||
+    (removedGoal && removedGoal.player) ||
+    null;
+  const assister =
+    removedGoal && removedGoal.assister ? removedGoal.assister : null;
+  const team =
+    (confirmation && confirmation.team) ||
+    (reversionState && reversionState.affectedTeam) ||
+    null;
+
+  return {
+    type: "goal",
+    team,
+    title: "Score correction",
+    body: formatScoreline(newMatch, current.home_score, current.away_score),
+    goalTime,
+    scorer,
+    assister,
+    ownGoal: Boolean(removedGoal && removedGoal.ownGoal),
+    scoreCorrection: true,
+    eventKey: [
+      "score_correction",
+      String(team || ""),
+      String(goalTime || ""),
+      String(scorer || ""),
+      String(current.home_score),
+      String(current.away_score),
+      String(matchId || ""),
+    ].join(":"),
+  };
+}
+
+async function resolveScoreReversion(matchId, newMatch, reversionState, options = {}) {
   if (!newMatch || !reversionState) return null;
   if (Number(reversionState.consecutivePolls || 0) < SCORE_REVERSION_CONFIRMATION_POLLS) {
     return null;
@@ -1180,10 +1253,32 @@ async function confirmVarDisallowedGoal(matchId, newMatch, reversionState, optio
 
   let overturnedEntry = null;
   let noGoalEntry = null;
+  let nearbyVarEntry = null;
+  let onPitchCorrectionEntry = null;
+  const varReviewMinute =
+    Number.isFinite(targetGoalMinute) ? targetGoalMinute + VAR_DECISION_REVIEW_WINDOW_MINUTES : null;
 
   entries.forEach((entry) => {
     if (!entry || !entry.text) return;
     const normalizedText = normalizeLiveTextEntryText(entry.text);
+    if (
+      !nearbyVarEntry &&
+      normalizedText.includes("var") &&
+      (
+        entryMinuteWithinWindow(entry.minute_value, targetGoalMinute, VAR_DECISION_REVIEW_WINDOW_MINUTES) ||
+        entryMinuteWithinWindow(entry.minute_value, varReviewMinute, VAR_DECISION_REVIEW_WINDOW_MINUTES)
+      )
+    ) {
+      nearbyVarEntry = entry;
+    }
+
+    if (
+      !onPitchCorrectionEntry &&
+      matchesOnPitchScoreCorrection(normalizedText, newMatch, reversionState, expectedScorer, entry.minute_value)
+    ) {
+      onPitchCorrectionEntry = entry;
+    }
+
     if (
       normalizedText.includes("goal overturned by var") &&
       (!expectedScorer || normalizedText.includes(normalizeLiveTextEntryText(expectedScorer))) &&
@@ -1198,7 +1293,7 @@ async function confirmVarDisallowedGoal(matchId, newMatch, reversionState, optio
       matchesVarDecisionScoreline(normalizedText, newMatch, revertedSnapshot) &&
       entryMinuteWithinWindow(
         entry.minute_value,
-        Number.isFinite(targetGoalMinute) ? targetGoalMinute + VAR_DECISION_REVIEW_WINDOW_MINUTES : null,
+        varReviewMinute,
         VAR_DECISION_REVIEW_WINDOW_MINUTES
       )
     ) {
@@ -1206,10 +1301,62 @@ async function confirmVarDisallowedGoal(matchId, newMatch, reversionState, optio
     }
   });
 
-  if (!overturnedEntry && !noGoalEntry) {
+  if (overturnedEntry || noGoalEntry) {
+    const scorerMatch =
+      overturnedEntry && overturnedEntry.text
+        ? overturnedEntry.text.match(/^GOAL OVERTURNED BY VAR:\s+(.+?)\s+\((.+?)\)\s+scores\b/i)
+        : null;
+    const scorer = scorerMatch && scorerMatch[1] ? scorerMatch[1].trim() : expectedScorer || null;
+    const teamName = scorerMatch && scorerMatch[2] ? scorerMatch[2].trim() : null;
+    const team =
+      teamName && String(newMatch.home_team || "").trim() === teamName
+        ? "home"
+        : teamName && String(newMatch.away_team || "").trim() === teamName
+          ? "away"
+          : reversionState.affectedTeam;
+
+    const goalMinuteLabel =
+      reversionState.removedGoal && reversionState.removedGoal.goalTime
+        ? reversionState.removedGoal.goalTime
+        : overturnedEntry && overturnedEntry.minute
+          ? overturnedEntry.minute
+          : null;
+    const decisionMinuteLabel =
+      noGoalEntry && noGoalEntry.minute
+        ? noGoalEntry.minute
+        : overturnedEntry && overturnedEntry.minute
+          ? overturnedEntry.minute
+          : null;
+
+    reversionState.confirmedAtMs = Date.now();
+    reversionState.resolutionKind = "var_disallowed";
     logDecision("var_disallowed_confirmation", {
       match_id: matchId,
-      result: "no_matching_live_text",
+      result: "confirmed",
+      goal_minute: goalMinuteLabel || null,
+      decision_minute: decisionMinuteLabel || null,
+      scorer: scorer || null,
+      team: team || null,
+    });
+
+    return {
+      kind: "var_disallowed",
+      team,
+      scorer,
+      goalMinuteLabel,
+      decisionMinuteLabel,
+    };
+  }
+
+  if (
+    !onPitchCorrectionEntry &&
+    Number(reversionState.consecutivePolls || 0) < SCORE_CORRECTION_CONFIRMATION_POLLS
+  ) {
+    logDecision("score_correction_confirmation", {
+      match_id: matchId,
+      result: "awaiting_stable_reversion",
+      consecutive_polls: Number(reversionState.consecutivePolls || 0),
+      required_polls: SCORE_CORRECTION_CONFIRMATION_POLLS,
       expected_scorer: expectedScorer || null,
       reverted_home_score: revertedSnapshot.home_score,
       reverted_away_score: revertedSnapshot.away_score,
@@ -1217,48 +1364,62 @@ async function confirmVarDisallowedGoal(matchId, newMatch, reversionState, optio
     return null;
   }
 
-  const scorerMatch =
-    overturnedEntry && overturnedEntry.text
-      ? overturnedEntry.text.match(/^GOAL OVERTURNED BY VAR:\s+(.+?)\s+\((.+?)\)\s+scores\b/i)
-      : null;
-  const scorer = scorerMatch && scorerMatch[1] ? scorerMatch[1].trim() : expectedScorer || null;
-  const teamName = scorerMatch && scorerMatch[2] ? scorerMatch[2].trim() : null;
-  const team =
-    teamName && String(newMatch.home_team || "").trim() === teamName
-      ? "home"
-      : teamName && String(newMatch.away_team || "").trim() === teamName
-        ? "away"
-        : reversionState.affectedTeam;
+  if (nearbyVarEntry) {
+    logDecision("score_correction_confirmation", {
+      match_id: matchId,
+      result: "awaiting_var_resolution",
+      consecutive_polls: Number(reversionState.consecutivePolls || 0),
+      var_minute: nearbyVarEntry.minute || null,
+      expected_scorer: expectedScorer || null,
+    });
+    return null;
+  }
 
   const goalMinuteLabel =
     reversionState.removedGoal && reversionState.removedGoal.goalTime
       ? reversionState.removedGoal.goalTime
-      : overturnedEntry && overturnedEntry.minute
-        ? overturnedEntry.minute
-        : null;
-  const decisionMinuteLabel =
-    noGoalEntry && noGoalEntry.minute
-      ? noGoalEntry.minute
-      : overturnedEntry && overturnedEntry.minute
-        ? overturnedEntry.minute
-        : null;
+      : null;
+  const correctionMinuteLabel =
+    onPitchCorrectionEntry && onPitchCorrectionEntry.minute ? onPitchCorrectionEntry.minute : null;
+  const team = reversionState.affectedTeam || null;
 
   reversionState.confirmedAtMs = Date.now();
-  logDecision("var_disallowed_confirmation", {
+  reversionState.resolutionKind = "score_correction";
+  logDecision("score_correction_confirmation", {
     match_id: matchId,
     result: "confirmed",
     goal_minute: goalMinuteLabel || null,
-    decision_minute: decisionMinuteLabel || null,
-    scorer: scorer || null,
-    team: team || null,
+    correction_minute: correctionMinuteLabel || null,
+    scorer: expectedScorer || null,
+    team,
+    consecutive_polls: Number(reversionState.consecutivePolls || 0),
   });
 
   return {
+    kind: "score_correction",
     team,
-    scorer,
+    scorer: expectedScorer || null,
     goalMinuteLabel,
-    decisionMinuteLabel,
+    correctionMinuteLabel,
   };
+}
+
+async function confirmVarDisallowedGoal(matchId, newMatch, reversionState, options = {}) {
+  const resolution = await resolveScoreReversion(matchId, newMatch, reversionState, options);
+  if (!resolution || resolution.kind !== "var_disallowed") {
+    return null;
+  }
+  const { kind, ...confirmation } = resolution;
+  return confirmation;
+}
+
+async function confirmScoreCorrection(matchId, newMatch, reversionState, options = {}) {
+  const resolution = await resolveScoreReversion(matchId, newMatch, reversionState, options);
+  if (!resolution || resolution.kind !== "score_correction") {
+    return null;
+  }
+  const { kind, ...confirmation } = resolution;
+  return confirmation;
 }
 
 function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), context = null) {
@@ -1507,6 +1668,7 @@ function buildNotificationPayload(matchId, event) {
   if (event && event.eventKey) payload.event_key = event.eventKey;
   if (event && event.goalTime) payload.goal_time = event.goalTime;
   if (event && event.disallowedByVar) payload.disallowed_by_var = true;
+  if (event && event.scoreCorrection) payload.score_correction = true;
   if (event && event.varDecisionTime) payload.var_decision_time = event.varDecisionTime;
   return payload;
 }
@@ -2368,9 +2530,12 @@ async function detectAndNotifyChanges(matchId, monitorState, oldMatch, newMatch)
   const nowMs = Date.now();
   const events = buildMatchEvents(oldMatch, newMatch, monitorState, nowMs, { matchId });
   const reversionState = updateScoreReversionState(monitorState, oldMatch, newMatch, nowMs);
-  const confirmedVarDisallowedGoal = await confirmVarDisallowedGoal(matchId, newMatch, reversionState);
-  if (confirmedVarDisallowedGoal) {
-    events.push(buildVarDisallowedGoalEvent(matchId, newMatch, confirmedVarDisallowedGoal, reversionState));
+  const confirmedReversion = await resolveScoreReversion(matchId, newMatch, reversionState);
+  if (confirmedReversion && confirmedReversion.kind === "var_disallowed") {
+    events.push(buildVarDisallowedGoalEvent(matchId, newMatch, confirmedReversion, reversionState));
+    monitorState.scoreReversionState = null;
+  } else if (confirmedReversion && confirmedReversion.kind === "score_correction") {
+    events.push(buildScoreCorrectionEvent(matchId, newMatch, confirmedReversion, reversionState));
     monitorState.scoreReversionState = null;
   }
   const scoreChangeEvent = buildScoreChangeEvent(oldMatch, newMatch);
@@ -2561,6 +2726,249 @@ function channelMatchesSelection(channelName, selection) {
   return normalizedChannel.includes(normalizedSelection);
 }
 
+function canonicalLiveActivityChannelName(channelName) {
+  const normalizedChannel = normalizeTextToken(channelName).replace(/[^a-z0-9]+/g, "");
+  if (!normalizedChannel) return null;
+  if (
+    normalizedChannel.includes("amazonprime") ||
+    normalizedChannel.includes("primevideo") ||
+    normalizedChannel.includes("amazon")
+  ) {
+    return "Amazon";
+  }
+  if (
+    normalizedChannel.includes("tntsports") ||
+    normalizedChannel === "tnt" ||
+    normalizedChannel.includes("btsport")
+  ) {
+    return "TNT Sports";
+  }
+  if (normalizedChannel.includes("skysports") || normalizedChannel === "sky") {
+    return "Sky Sports";
+  }
+  if (
+    normalizedChannel.includes("mlsseasonpass") ||
+    normalizedChannel.includes("appletv") ||
+    normalizedChannel === "apple"
+  ) {
+    return "Apple TV";
+  }
+  if (normalizedChannel.includes("bbc")) {
+    return "BBC";
+  }
+  if (normalizedChannel.includes("itv")) {
+    return "ITV";
+  }
+  if (normalizedChannel.includes("channel4")) {
+    return "Channel 4";
+  }
+  return String(channelName || "").trim() || null;
+}
+
+function canonicalLiveActivityChannels(channels) {
+  const output = [];
+  const seen = new Set();
+
+  for (const channel of Array.isArray(channels) ? channels : []) {
+    const canonical = canonicalLiveActivityChannelName(channel);
+    if (!canonical) continue;
+    const key = canonical.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(canonical);
+  }
+
+  return output;
+}
+
+function liveActivityMatchIdentity(match) {
+  if (!match || typeof match !== "object") return null;
+  const explicitId = String(match.match_details_id || match.matchId || match.id || "").trim();
+  if (explicitId) return explicitId;
+
+  const date = String(match.date || "").trim();
+  const time = String(match.time || "").trim();
+  const league = String(match.league || "").trim();
+  const homeTeam = String(match.home_team || match.homeTeam || "").trim();
+  const awayTeam = String(match.away_team || match.awayTeam || "").trim();
+  if (!date || !time || !league || !homeTeam || !awayTeam) return null;
+
+  return [date, time, league, homeTeam, awayTeam].join("|");
+}
+
+function currentLondonDateKey(nowMs = Date.now()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(nowMs));
+}
+
+function canonicalLiveActivityChannelsForMatch(match) {
+  const channels = canonicalLiveActivityChannels(match && match.tv_channels);
+  return channels;
+}
+
+function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.now()) {
+  const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
+  const todayKey = currentLondonDateKey(nowMs);
+
+  return (Array.isArray(matches) ? matches : [])
+    .filter((match) => match && typeof match === "object")
+    .filter((match) => {
+      const dateKey = String(match.date || "").trim();
+      return Boolean(dateKey) && dateKey >= todayKey;
+    })
+    .filter((match) => {
+      if (
+        prefs.competitionFilterEnabled &&
+        Array.isArray(prefs.selectedLeagues) &&
+        prefs.selectedLeagues.length > 0
+      ) {
+        return prefs.selectedLeagues.includes(match.league);
+      }
+      return true;
+    })
+    .map((match) => {
+      const canonicalChannels = canonicalLiveActivityChannelsForMatch(match);
+      if (
+        prefs.channelFilterEnabled &&
+        Array.isArray(prefs.selectedChannels) &&
+        prefs.selectedChannels.length > 0
+      ) {
+        const relevantChannels = canonicalChannels.filter((channel) =>
+          prefs.selectedChannels.some((selection) => channelMatchesSelection(channel, selection))
+        );
+        if (relevantChannels.length === 0) {
+          return null;
+        }
+        return {
+          ...match,
+          tv_channels: relevantChannels,
+        };
+      }
+
+      return {
+        ...match,
+        tv_channels: canonicalChannels,
+      };
+    })
+    .filter(Boolean)
+    .filter((match) => {
+      if (!prefs.englishPremierLeagueTeamsOnly) return true;
+      return (
+        isEnglishPremierLeagueTeam(match && match.home_team) ||
+        isEnglishPremierLeagueTeam(match && match.away_team)
+      );
+    });
+}
+
+function compareCanonicalFixtureMatchesByKickoffAsc(lhs, rhs) {
+  const lhsDate = String(lhs && lhs.date ? lhs.date : "");
+  const rhsDate = String(rhs && rhs.date ? rhs.date : "");
+  if (lhsDate !== rhsDate) return lhsDate.localeCompare(rhsDate);
+
+  const lhsTime = String(lhs && lhs.time ? lhs.time : "");
+  const rhsTime = String(rhs && rhs.time ? rhs.time : "");
+  if (lhsTime !== rhsTime) return lhsTime.localeCompare(rhsTime);
+
+  const lhsLeague = String(lhs && lhs.league ? lhs.league : "");
+  const rhsLeague = String(rhs && rhs.league ? rhs.league : "");
+  if (lhsLeague !== rhsLeague) return lhsLeague.localeCompare(rhsLeague);
+
+  const lhsHome = String(lhs && lhs.home_team ? lhs.home_team : "");
+  const rhsHome = String(rhs && rhs.home_team ? rhs.home_team : "");
+  if (lhsHome !== rhsHome) return lhsHome.localeCompare(rhsHome);
+
+  const lhsAway = String(lhs && lhs.away_team ? lhs.away_team : "");
+  const rhsAway = String(rhs && rhs.away_team ? rhs.away_team : "");
+  return lhsAway.localeCompare(rhsAway);
+}
+
+function firstFixtureSectionMatches(matches) {
+  if (!Array.isArray(matches) || matches.length === 0) return [];
+  const firstDate = String(matches[0] && matches[0].date ? matches[0].date : "").trim();
+  if (!firstDate) return [];
+  return matches.filter((match) => String(match && match.date ? match.date : "").trim() === firstDate);
+}
+
+function mergeCanonicalLiveActivityMatch(canonicalMatch, liveStateMatch) {
+  const canonical = canonicalMatch && typeof canonicalMatch === "object" ? canonicalMatch : {};
+  const liveState = liveStateMatch && typeof liveStateMatch === "object" ? liveStateMatch : null;
+  if (!liveState) {
+    return {
+      ...canonical,
+      tv_channels: canonicalLiveActivityChannelsForMatch(canonical),
+    };
+  }
+
+  const merged = mergeSnapshotWithFallback(canonical, liveState);
+
+  if (
+    isFinishedMatchStatus(canonical.score_status) ||
+    isPenaltyShootoutStatus(canonical.score_status)
+  ) {
+    merged.score_status = canonical.score_status;
+    merged.home_score = canonical.home_score;
+    merged.away_score = canonical.away_score;
+    merged.aggregate_home_score = canonical.aggregate_home_score;
+    merged.aggregate_away_score = canonical.aggregate_away_score;
+  }
+
+  const canonicalChannels = canonicalLiveActivityChannelsForMatch(canonical);
+  const liveStateChannels = canonicalLiveActivityChannelsForMatch(liveState);
+  merged.tv_channels = canonicalChannels.length > 0 ? canonicalChannels : liveStateChannels;
+  merged.match_details_id =
+    String(canonical.match_details_id || liveState.match_details_id || "").trim() || null;
+
+  return merged;
+}
+
+function buildLiveActivityEntryLookup(entries) {
+  const lookup = new Map();
+
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const match = entry && entry.match ? entry.match : null;
+    const matchId = liveActivityMatchIdentity(match) || (entry && entry.matchId ? String(entry.matchId) : null);
+    if (!matchId || !match) continue;
+    if (!lookup.has(matchId)) {
+      lookup.set(matchId, {
+        matchId,
+        state: entry && entry.state ? entry.state : null,
+        match,
+      });
+    }
+  }
+
+  return lookup;
+}
+
+function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatches, nowMs = Date.now()) {
+  const monitoredById = buildLiveActivityEntryLookup(monitoredEntries);
+  const canonicalMatches = filterCanonicalLiveActivityMatchesForUser(operationalMatches, user, nowMs)
+    .slice()
+    .sort(compareCanonicalFixtureMatchesByKickoffAsc);
+  const fixtureSectionMatches = firstFixtureSectionMatches(canonicalMatches);
+
+  return fixtureSectionMatches
+    .map((canonicalMatch) => {
+      const matchId = liveActivityMatchIdentity(canonicalMatch);
+      if (!matchId) return null;
+
+      const monitoredEntry = monitoredById.get(matchId) || null;
+      return {
+        matchId,
+        state: monitoredEntry ? monitoredEntry.state : null,
+        match: mergeCanonicalLiveActivityMatch(
+          canonicalMatch,
+          monitoredEntry && monitoredEntry.match ? monitoredEntry.match : null
+        ),
+      };
+    })
+    .filter((entry) => entry && entry.matchId && entry.match);
+}
+
 function liveActivityStatusSortBucket(match) {
   const status = match && match.score_status;
   if (isLiveMatchStatus(status)) return 0;
@@ -2632,16 +3040,25 @@ function isEligibleForLiveActivityByPreferences(user, match) {
 
   if (prefs.channelFilterEnabled && Array.isArray(prefs.selectedChannels) && prefs.selectedChannels.length > 0) {
     const channels = Array.isArray(match.tv_channels) ? match.tv_channels : [];
-    if (channels.length > 0) {
-      const hasMatchingChannel = channels.some((channel) =>
-        prefs.selectedChannels.some((selection) => channelMatchesSelection(channel, selection))
-      );
-      if (!hasMatchingChannel) {
-        return {
-          eligible: false,
-          reason: "channel_filtered_out",
-        };
-      }
+    const hasMatchingChannel = channels.some((channel) =>
+      prefs.selectedChannels.some((selection) => channelMatchesSelection(channel, selection))
+    );
+    if (!hasMatchingChannel) {
+      return {
+        eligible: false,
+        reason: "channel_filtered_out",
+      };
+    }
+  }
+
+  if (prefs.englishPremierLeagueTeamsOnly) {
+    const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
+    const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
+    if (!homeInPremierLeague && !awayInPremierLeague) {
+      return {
+        eligible: false,
+        reason: "premier_league_team_filter",
+      };
     }
   }
 
@@ -2665,7 +3082,7 @@ function buildActivityMatchSnapshot(match) {
     aggregate_home_score: toNumericScore(match.aggregate_home_score),
     aggregate_away_score: toNumericScore(match.aggregate_away_score),
     score_status: match.score_status || null,
-    tv_channels: Array.isArray(match.tv_channels) ? match.tv_channels : [],
+    tv_channels: canonicalLiveActivityChannels(match.tv_channels),
   };
 }
 
@@ -2897,7 +3314,7 @@ function buildLiveActivityContentState(mode, matches, delayMinutes, nowMs = Date
     homeTeamScore: toNumericScore(match.home_team_score),
     awayTeamScore: toNumericScore(match.away_team_score),
     totalTeamScore: toNumericScore(match.total_team_score),
-    tvChannels: Array.isArray(match.tv_channels) ? match.tv_channels.slice(0, 3) : [],
+    tvChannels: canonicalLiveActivityChannels(match.tv_channels).slice(0, 3),
   }));
 
   return {
@@ -3361,7 +3778,10 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
 
   try {
     await ensureLiveActivityTeamRatingCache(nowMs);
-    const entries = monitoredMatchStatesSnapshot();
+    const monitoredEntries = monitoredMatchStatesSnapshot(nowMs);
+    const operationalDataset = await getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES);
+    const operationalMatches =
+      operationalDataset && Array.isArray(operationalDataset.payload) ? operationalDataset.payload : [];
     const users = await getAllUserPreferences();
     if (!Array.isArray(users) || users.length === 0) return;
 
@@ -3377,6 +3797,7 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
       );
       if (!hasStartToken && !hasActivityToken) continue;
 
+      const entries = buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatches, nowMs);
       const presentation = buildLiveActivityPresentationForUser(user, entries, nowMs);
       try {
         await dispatchLiveActivityForUser(user, presentation, nowMs, {
@@ -3780,9 +4201,11 @@ module.exports = {
     annotateMatchWithLiveActivityTeamRatings,
     buildMatchEvents,
     buildNotificationPayload,
+    buildScoreCorrectionEvent,
     buildScoreChangeEvent,
     buildNotificationId,
     buildVarDisallowedGoalEvent,
+    confirmScoreCorrection,
     confirmVarDisallowedGoal,
     countGoals,
     detectScoreReversion,
@@ -3794,11 +4217,16 @@ module.exports = {
     isFinishedMatchStatus,
     isPenaltyShootoutStatus,
     shouldStopMonitoringAsIrrelevant,
+    buildLiveActivityContentState,
     buildLiveActivityPresentationForUser,
     compareLiveActivityMatches,
+    buildLiveActivityEntriesForUser,
     evaluateUserNotificationDecision,
+    filterCanonicalLiveActivityMatchesForUser,
+    firstFixtureSectionMatches,
     isEnglishPremierLeagueTeam,
     isLikelyTerminalStaleLiveMatch,
+    mergeCanonicalLiveActivityMatch,
     shouldSkipLiveActivityUpdate,
     shouldPreserveExistingLiveActivityOnEmpty,
     updateScoreReversionState,
