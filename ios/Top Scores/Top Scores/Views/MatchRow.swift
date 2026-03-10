@@ -12,6 +12,7 @@ struct MatchRow: View {
     var showTeamEvents: Bool = false
     var showLeague: Bool = false
     var showBroadcastDetails: Bool = true
+    var showFantasyBadge: Bool = true
     var centerFooterText: String? = nil
     var centerFooterColor: Color = .secondary
     var isLargePresentation: Bool = false
@@ -138,7 +139,8 @@ struct MatchRow: View {
     }
 
     private var fantasyBadgeMode: FantasyMatchParticipationBadge.Mode? {
-        guard !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard showFantasyBadge,
+              !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               preferences.showFantasyMatchPills,
               isPremierLeagueMatch,
               let lookup = FantasySquadMembershipLookup(squad: fantasyViewModel.data)
@@ -330,6 +332,7 @@ struct MatchDetailView: View {
 
     let match: Match
     var highlightToday: Bool = false
+    var showFantasyBadge: Bool = true
 
     @State private var actionAlert: MatchActionAlert?
     @State private var showCalendarPicker = false
@@ -427,7 +430,12 @@ struct MatchDetailView: View {
                 }
                 .padding(.horizontal)
 
-                MatchRow(match: activeMatch, highlightToday: highlightToday, showTeamEvents: true)
+                MatchRow(
+                    match: activeMatch,
+                    highlightToday: highlightToday,
+                    showTeamEvents: true,
+                    showFantasyBadge: showFantasyBadge
+                )
                     .padding(.horizontal)
 
                 if let detailsErrorMessage {

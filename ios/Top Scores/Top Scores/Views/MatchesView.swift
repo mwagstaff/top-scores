@@ -224,7 +224,8 @@ struct MatchesView: View {
     }
 
     private func ensureFantasySquadLoadedIfNeeded() {
-        guard preferences.showFantasyMatchPills,
+        guard mode == .fixtures,
+              preferences.showFantasyMatchPills,
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               fantasyViewModel.data == nil,
               !fantasyViewModel.isLoading,
@@ -267,12 +268,17 @@ struct MatchesView: View {
 
                         ForEach(league.matches, id: \.self) { match in
                             NavigationLink {
-                                MatchDetailView(match: match, highlightToday: day.isToday)
+                                MatchDetailView(
+                                    match: match,
+                                    highlightToday: day.isToday,
+                                    showFantasyBadge: mode == .fixtures
+                                )
                             } label: {
                                 MatchRow(
                                     match: match,
                                     highlightToday: day.isToday,
                                     showLeague: false,
+                                    showFantasyBadge: mode == .fixtures,
                                     // Only enable this if needing to debug elo scores
                                     // centerFooterText: matchDebugFooterText(for: match)
                                 )

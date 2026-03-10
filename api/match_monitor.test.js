@@ -229,6 +229,25 @@ test("buildVarDisallowedGoalEvent uses goal notification semantics and reverted 
   assert.equal(event.varDecisionTime, "21'");
 });
 
+test("buildNotificationPayload preserves disallowed-goal metadata for APNS delivery", () => {
+  const payload = __testHooks.buildNotificationPayload("cr5lln18q4lt", {
+    type: "goal",
+    eventKey: "var_disallowed:home:19':Lukas Nmecha:cr5lln18q4lt",
+    goalTime: "19'",
+    disallowedByVar: true,
+    varDecisionTime: "21'",
+  });
+
+  assert.deepStrictEqual(payload, {
+    event_type: "goal",
+    match_id: "cr5lln18q4lt",
+    event_key: "var_disallowed:home:19':Lukas Nmecha:cr5lln18q4lt",
+    goal_time: "19'",
+    disallowed_by_var: true,
+    var_decision_time: "21'",
+  });
+});
+
 test("shouldSkipLiveActivityUpdate bypasses payload dedupe when forceDispatch is enabled", () => {
   const state = {
     lastPayloadHash: "abc123",
@@ -1705,4 +1724,34 @@ test("evaluateUserNotificationDecision allows Premier League matches when EPL-on
 
   assert.equal(decision.shouldNotify, true);
   assert.equal(decision.reason, "eligible");
+});
+
+test("evaluateUserNotificationDecision treats confirmed VAR reversals as delayed goal notifications", () => {
+  const decision = __testHooks.evaluateUserNotificationDecision(
+    {
+      apnsToken: "apns-token",
+      preferences: {
+        notificationsEnabled: true,
+        notificationDelayMinutes: 3,
+        notificationEventTypes: ["goal"],
+      },
+    },
+    {
+      home_team: "Leeds United",
+      away_team: "Norwich City",
+      league: "FA Cup",
+      tv_channels: [],
+    },
+    {
+      type: "goal",
+      disallowedByVar: true,
+      goalTime: "19'",
+    }
+  );
+
+  assert.deepStrictEqual(decision, {
+    shouldNotify: true,
+    reason: "eligible",
+    delayMinutes: 3,
+  });
 });

@@ -1499,6 +1499,18 @@ function buildNotificationId(user, matchId, event) {
   return parts.join(":");
 }
 
+function buildNotificationPayload(matchId, event) {
+  const payload = {
+    event_type: event && event.type ? event.type : null,
+    match_id: matchId,
+  };
+  if (event && event.eventKey) payload.event_key = event.eventKey;
+  if (event && event.goalTime) payload.goal_time = event.goalTime;
+  if (event && event.disallowedByVar) payload.disallowed_by_var = true;
+  if (event && event.varDecisionTime) payload.var_decision_time = event.varDecisionTime;
+  return payload;
+}
+
 function scoreSnapshot(match) {
   const homeScoreFromPayload = toNumericScore(match && match.home_score);
   const awayScoreFromPayload = toNumericScore(match && match.away_score);
@@ -3529,14 +3541,7 @@ async function sendNotificationToUser(user, matchId, match, event, notificationM
       return;
     }
 
-    const payload = {
-      event_type: event.type,
-      match_id: matchId,
-    };
-    if (event.eventKey) payload.event_key = event.eventKey;
-    if (event.goalTime) payload.goal_time = event.goalTime;
-    if (event.disallowedByVar) payload.disallowed_by_var = true;
-    if (event.varDecisionTime) payload.var_decision_time = event.varDecisionTime;
+    const payload = buildNotificationPayload(matchId, event);
 
     const result = await sendNotification(
       user.apnsToken,
@@ -3774,6 +3779,7 @@ module.exports = {
   __testHooks: {
     annotateMatchWithLiveActivityTeamRatings,
     buildMatchEvents,
+    buildNotificationPayload,
     buildScoreChangeEvent,
     buildNotificationId,
     buildVarDisallowedGoalEvent,
