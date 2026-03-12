@@ -53,6 +53,40 @@ export interface MatchRedCardEvent {
   redCardTimes: string[];
 }
 
+export interface MatchYellowCardEvent {
+  player: string;
+  yellowCardTimes: string[];
+}
+
+export interface MatchLineupPlayer {
+  number: number;
+  name: string;
+  positionCategory?: string | null;
+  formationRowIndex?: number | null;
+  formationSlotIndex?: number | null;
+  formationRowSize?: number | null;
+}
+
+export interface MatchLineupSubstitution {
+  minute: string;
+  playerOff: MatchLineupPlayer;
+  playerOn: MatchLineupPlayer;
+}
+
+export interface MatchTeamLineup {
+  team?: string | null;
+  manager?: string | null;
+  formation?: string | null;
+  startingLineup: MatchLineupPlayer[];
+  substitutes: MatchLineupPlayer[];
+  substitutions: MatchLineupSubstitution[];
+}
+
+export interface MatchTeamLineups {
+  home?: MatchTeamLineup | null;
+  away?: MatchTeamLineup | null;
+}
+
 export interface MatchDetails {
   id: string;
   detailsUrl?: string | null;
@@ -70,8 +104,11 @@ export interface MatchDetails {
   awayGoalScorers: MatchGoalScorer[];
   homeAssists: MatchAssistProvider[];
   awayAssists: MatchAssistProvider[];
+  homeYellowCards: MatchYellowCardEvent[];
+  awayYellowCards: MatchYellowCardEvent[];
   homeRedCards: MatchRedCardEvent[];
   awayRedCards: MatchRedCardEvent[];
+  teamLineups?: MatchTeamLineups | null;
   penaltyResult?: string | null;
   inProgress?: boolean | null;
   updatedAt?: string | null;

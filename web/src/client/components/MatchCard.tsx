@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { fetchMatchDetails } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchMatchDetails, shouldRetryMatchDetails } from "../api";
 import {
   aggregateSummary,
   displayStatus,
@@ -12,7 +12,12 @@ import type {
   MatchAssistProvider,
   MatchDetails,
   MatchGoalScorer,
+  MatchLineupPlayer,
+  MatchLineupSubstitution,
+  MatchTeamLineup,
+  MatchTeamLineups,
   MatchRedCardEvent,
+  MatchYellowCardEvent,
 } from "../types";
 
 interface MatchCardProps {
@@ -27,6 +32,7 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
   const [details, setDetails] = useState<MatchDetails | null>(match.matchDetails ?? null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
+  const retriedIncompleteDetailsIdRef = useRef<string | null>(null);
 
   const kickoffText = useMemo(() => {
     const kickoff = parseKickoff(match);
@@ -54,6 +60,7 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
     setDetails(match.matchDetails ?? null);
     setDetailsLoading(false);
     setDetailsError(null);
+    retriedIncompleteDetailsIdRef.current = null;
   }, [match.id]);
 
   useEffect(() => {
@@ -110,6 +117,45 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
       cancelled = true;
     };
   }, [details, detailsError, isExpanded, match.matchDetailsId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      !isExpanded ||
+      !match.matchDetailsId ||
+      !details ||
+      !shouldRetryMatchDetails(details) ||
+      retriedIncompleteDetailsIdRef.current === match.matchDetailsId
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    retriedIncompleteDetailsIdRef.current = match.matchDetailsId;
+    const retryTimer = window.setTimeout(() => {
+      void fetchMatchDetails(match.matchDetailsId)
+        .then((payload) => {
+          if (!cancelled) {
+            setDetails(payload);
+            setDetailsError(null);
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setDetailsError(
+              error instanceof Error ? error.message : "Match details unavailable."
+            );
+          }
+        });
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+    };
+  }, [details, isExpanded, match.matchDetailsId]);
 
   const summary = (
     <>
@@ -241,6 +287,11 @@ interface ExpandedMatchDetailsProps {
 
 function ExpandedMatchDetails({ details }: ExpandedMatchDetailsProps) {
   const timelineEntries = useMemo(() => buildTimelineEntries(details), [details]);
+  const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
+
+  if (timelineEntries.length === 0 && !hasCompleteLineups) {
+    return <div className="match-details-message">No additional match details available.</div>;
+  }
 
   return (
     <div className="match-details-body">
@@ -262,91 +313,393 @@ function ExpandedMatchDetails({ details }: ExpandedMatchDetailsProps) {
         </section>
       )}
 
-      <div className="details-grid">
-        <DetailsColumn
-          teamName={details.homeTeam || "Home"}
-          goals={details.homeGoalScorers}
-          assists={details.homeAssists}
-          redCards={details.homeRedCards}
-        />
-        <DetailsColumn
-          teamName={details.awayTeam || "Away"}
-          goals={details.awayGoalScorers}
-          assists={details.awayAssists}
-          redCards={details.awayRedCards}
-        />
+      {hasCompleteLineups && <LineupSection details={details} teamLineups={details.teamLineups} />}
+    </div>
+  );
+}
+
+interface LineupSectionProps {
+  details: MatchDetails;
+  teamLineups: MatchTeamLineups;
+}
+
+function LineupSection({ details, teamLineups }: LineupSectionProps) {
+  const homeLineup = teamLineups.home!;
+  const awayLineup = teamLineups.away!;
+  const homeLookup = buildLineupEventLookup({
+    goals: details.homeGoalScorers,
+    assists: details.homeAssists,
+    yellowCards: details.homeYellowCards,
+    redCards: details.homeRedCards,
+    substitutions: homeLineup.substitutions,
+  });
+  const awayLookup = buildLineupEventLookup({
+    goals: details.awayGoalScorers,
+    assists: details.awayAssists,
+    yellowCards: details.awayYellowCards,
+    redCards: details.awayRedCards,
+    substitutions: awayLineup.substitutions,
+  });
+
+  return (
+    <section className="details-section lineup-section">
+      <div className="details-section-title">Starting Line-ups</div>
+      <div className="lineup-formations">
+        <div className="lineup-formation-chip">
+          <span className="lineup-formation-team">{homeLineup.team || details.homeTeam || "Home"}</span>
+          <span className="lineup-formation-value">{homeLineup.formation || "Formation TBC"}</span>
+        </div>
+        <div className="lineup-formation-chip lineup-formation-chip-away">
+          <span className="lineup-formation-team">{awayLineup.team || details.awayTeam || "Away"}</span>
+          <span className="lineup-formation-value">{awayLineup.formation || "Formation TBC"}</span>
+        </div>
+      </div>
+
+      <div className="lineup-pitch">
+        <div className="lineup-pitch-markings" aria-hidden="true">
+          <div className="lineup-pitch-outline" />
+          <div className="lineup-pitch-halfway" />
+          <div className="lineup-pitch-centre-circle" />
+          <div className="lineup-pitch-centre-spot" />
+          <div className="lineup-pitch-penalty lineup-pitch-penalty-top" />
+          <div className="lineup-pitch-penalty lineup-pitch-penalty-bottom" />
+          <div className="lineup-pitch-six-yard lineup-pitch-six-yard-top" />
+          <div className="lineup-pitch-six-yard lineup-pitch-six-yard-bottom" />
+        </div>
+
+        <div className="lineup-pitch-content">
+          <LineupHalf
+            teamName={homeLineup.team || details.homeTeam || "Home"}
+            starters={homeLineup.startingLineup}
+            lookup={homeLookup}
+            side="home"
+          />
+          <LineupHalf
+            teamName={awayLineup.team || details.awayTeam || "Away"}
+            starters={awayLineup.startingLineup}
+            lookup={awayLookup}
+            side="away"
+          />
+        </div>
+      </div>
+
+      <div className="lineup-substitutes-grid">
+        <LineupSubstitutesTable lineup={homeLineup} />
+        <LineupSubstitutesTable lineup={awayLineup} />
+      </div>
+    </section>
+  );
+}
+
+interface LineupHalfProps {
+  teamName: string;
+  starters: MatchLineupPlayer[];
+  lookup: MatchLineupEventLookup;
+  side: "home" | "away";
+}
+
+function LineupHalf({ teamName, starters, lookup, side }: LineupHalfProps) {
+  const groupedRows = buildLineupRows(starters, side);
+
+  return (
+    <div className={`lineup-half lineup-half-${side}`}>
+      {side === "home" && <div className="lineup-team-label">{teamName.toUpperCase()}</div>}
+
+      <div className="lineup-rows">
+        {groupedRows.map((row, rowIndex) => (
+          <div
+            className="lineup-row"
+            key={`${side}-${rowIndex}`}
+            style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}
+          >
+            {row.map((player) => (
+              <LineupPlayerMarker
+                key={`${side}-${player.number}-${player.name}`}
+                player={player}
+                summary={lookup.summaryFor(player)}
+                replacementSummary={lookup.replacementSummaryFor(player)}
+                side={side}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+
+      {side === "away" && <div className="lineup-team-label lineup-team-label-away">{teamName.toUpperCase()}</div>}
+    </div>
+  );
+}
+
+interface LineupPlayerMarkerProps {
+  player: MatchLineupPlayer;
+  summary: MatchLineupPlayerEventSummary;
+  replacementSummary: MatchLineupPlayerEventSummary | null;
+  side: "home" | "away";
+}
+
+function LineupPlayerMarker({
+  player,
+  summary,
+  replacementSummary,
+  side,
+}: LineupPlayerMarkerProps) {
+  const replacementPlayer = summary.substitution?.playerOn ?? null;
+  const badgeItems = buildPlayerBadgeItems(summary);
+  const replacementBadgeItems = replacementSummary ? buildPlayerBadgeItems(replacementSummary) : [];
+
+  return (
+    <div className="lineup-player">
+      <div className={`lineup-player-number lineup-player-number-${side}`}>{player.number}</div>
+
+      {badgeItems.length > 0 && (
+        <div className="lineup-player-badges">
+          {badgeItems.map((badge) => (
+            <LineupEventBadge key={`${player.number}-${badge.kind}`} badge={badge} />
+          ))}
+        </div>
+      )}
+
+      <div className="lineup-player-text">
+        <div className="lineup-player-name-row">
+          {summary.substitution && <span className="lineup-sub-arrow lineup-sub-arrow-off">↓</span>}
+          <span className="lineup-player-name">{condensedLineupPlayerName(player.name)}</span>
+        </div>
+
+        {replacementPlayer && (
+          <>
+            <div className="lineup-player-name-row lineup-player-name-row-sub">
+              <span className="lineup-sub-arrow lineup-sub-arrow-on">↑</span>
+              <span className="lineup-player-name">
+                {condensedLineupPlayerName(replacementPlayer.name)} ({formattedMatchMinute(summary.substitution?.minute || "")})
+              </span>
+            </div>
+            {replacementBadgeItems.length > 0 && (
+              <div className="lineup-player-badges">
+                {replacementBadgeItems.map((badge) => (
+                  <LineupEventBadge key={`${replacementPlayer.number}-${badge.kind}`} badge={badge} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-interface DetailsColumnProps {
-  teamName: string;
-  goals: MatchGoalScorer[];
-  assists: MatchAssistProvider[];
-  redCards: MatchRedCardEvent[];
+interface LineupSubstitutesTableProps {
+  lineup: MatchTeamLineup;
 }
 
-function DetailsColumn({ teamName, goals, assists, redCards }: DetailsColumnProps) {
-  const goalRows = buildGoalRows(goals);
-  const assistRows = buildAssistRows(assists);
-  const redCardRows = buildRedCardRows(redCards);
-
+function LineupSubstitutesTable({ lineup }: LineupSubstitutesTableProps) {
   return (
-    <section className="details-column">
-      <div className="details-column-title">{teamName}</div>
-      <DetailList title="Goals" rows={goalRows} emptyLabel="No scorers listed" />
-      <DetailList title="Assists" rows={assistRows} emptyLabel="No assists listed" />
-      <DetailList title="Red cards" rows={redCardRows} emptyLabel="No red cards listed" />
+    <section className="lineup-substitutes-table">
+      <div className="lineup-substitutes-title">{(lineup.team || "Team").toUpperCase()} SUBSTITUTES</div>
+
+      <div className="lineup-substitutes-card">
+        {lineup.substitutes.map((substitute, index) => {
+          const substitution =
+            lineup.substitutions.find((item) => item.playerOn.number === substitute.number) || null;
+          return (
+            <div className="lineup-substitute-row" key={`${lineup.team}-${substitute.number}-${substitute.name}`}>
+              <div className="lineup-substitute-number">{substitute.number}</div>
+              <div className="lineup-substitute-copy">
+                <div className="lineup-substitute-name">{condensedLineupPlayerName(substitute.name)}</div>
+                {substitution && (
+                  <div className="lineup-substitute-meta">
+                    <span className="lineup-sub-arrow lineup-sub-arrow-on">↑</span>
+                    <span>
+                      {formattedMatchMinute(substitution.minute)} for {condensedLineupPlayerName(substitution.playerOff.name)}
+                    </span>
+                  </div>
+                )}
+              </div>
+              {index < lineup.substitutes.length - 1 && <div className="lineup-substitute-divider" />}
+            </div>
+          );
+        })}
+      </div>
     </section>
   );
 }
 
-interface DetailListProps {
-  title: string;
-  rows: string[];
-  emptyLabel: string;
+interface LineupEventBadgeDescriptor {
+  kind: "goal" | "assist" | "yellow-card" | "red-card";
+  count: number;
 }
 
-function DetailList({ title, rows, emptyLabel }: DetailListProps) {
+function LineupEventBadge({ badge }: { badge: LineupEventBadgeDescriptor }) {
+  const label = badge.kind === "goal" ? "⚽" : badge.kind === "assist" ? "A" : "";
+  const cardClass =
+    badge.kind === "yellow-card"
+      ? " lineup-event-badge-card-yellow"
+      : badge.kind === "red-card"
+        ? " lineup-event-badge-card-red"
+        : "";
+
   return (
-    <div className="details-subsection">
-      <div className="details-subsection-title">{title}</div>
-      {rows.length > 0 ? (
-        <ul className="details-list">
-          {rows.map((row) => (
-            <li key={`${title}-${row}`}>{row}</li>
-          ))}
-        </ul>
+    <span className="lineup-event-badge">
+      {badge.kind === "yellow-card" || badge.kind === "red-card" ? (
+        <span className={`lineup-event-badge-card${cardClass}`} aria-hidden="true" />
       ) : (
-        <div className="details-empty">{emptyLabel}</div>
+        <span className="lineup-event-badge-label">{label}</span>
       )}
-    </div>
+      {badge.count > 1 && <span className="lineup-event-badge-count">{badge.count}</span>}
+    </span>
   );
 }
 
-function buildGoalRows(goals: MatchGoalScorer[]): string[] {
-  return goals.flatMap((goal) => {
-    const player = abbreviatePlayerName(goal.player);
-    const rows: string[] = [];
-
-    if (goal.goalTimes.length > 0) {
-      rows.push(`${player} - ${goal.goalTimes.join(", ")}`);
-    }
-    if (goal.ownGoalTimes.length > 0) {
-      rows.push(`${player} (OG) - ${goal.ownGoalTimes.join(", ")}`);
-    }
-
-    return rows;
-  });
+function hasRenderableTeamLineups(
+  teamLineups: MatchTeamLineups | null | undefined
+): teamLineups is MatchTeamLineups & { home: MatchTeamLineup; away: MatchTeamLineup } {
+  return Boolean(
+    teamLineups?.home &&
+      teamLineups.away &&
+      teamLineups.home.startingLineup.length === 11 &&
+      teamLineups.away.startingLineup.length === 11
+  );
 }
 
-function buildAssistRows(assists: MatchAssistProvider[]): string[] {
-  return assists.map((assist) => `${abbreviatePlayerName(assist.player)} - ${assist.assistTimes.join(", ")}`);
+function buildLineupRows(starters: MatchLineupPlayer[], side: "home" | "away") {
+  const playersWithFormationRows = starters.filter(
+    (player) =>
+      typeof player.formationRowIndex === "number" && typeof player.formationSlotIndex === "number"
+  );
+
+  if (playersWithFormationRows.length === starters.length) {
+    const groupedByRow = new Map<number, MatchLineupPlayer[]>();
+    for (const player of starters) {
+      const rowIndex = player.formationRowIndex ?? 0;
+      const row = groupedByRow.get(rowIndex) ?? [];
+      row.push(player);
+      groupedByRow.set(rowIndex, row);
+    }
+
+    const grouped = Array.from(groupedByRow.entries())
+      .sort((left, right) => left[0] - right[0])
+      .map(([, row]) =>
+        [...row].sort((left, right) => {
+          const leftSlot = left.formationSlotIndex ?? 0;
+          const rightSlot = right.formationSlotIndex ?? 0;
+          if (leftSlot !== rightSlot) {
+            return leftSlot - rightSlot;
+          }
+          return left.number - right.number;
+        })
+      );
+
+    return side === "home" ? grouped : [...grouped].reverse();
+  }
+
+  const goalkeepers = starters.filter((player) => player.positionCategory === "goalkeeper");
+  const defenders = starters.filter((player) => player.positionCategory === "defender");
+  const midfielders = starters.filter((player) => player.positionCategory === "midfielder");
+  const attackers = starters.filter((player) => player.positionCategory === "attacker");
+  const grouped = [goalkeepers, defenders, midfielders, attackers].filter((row) => row.length > 0);
+  return side === "home" ? grouped : [...grouped].reverse();
 }
 
-function buildRedCardRows(redCards: MatchRedCardEvent[]): string[] {
-  return redCards.map((card) => `${abbreviatePlayerName(card.player)} - ${card.redCardTimes.join(", ")}`);
+interface MatchLineupPlayerEventSummary {
+  goals: number;
+  assists: number;
+  yellowCards: number;
+  redCards: number;
+  substitution: MatchLineupSubstitution | null;
+}
+
+interface MatchLineupEventLookup {
+  summaryFor(player: MatchLineupPlayer): MatchLineupPlayerEventSummary;
+  replacementSummaryFor(player: MatchLineupPlayer): MatchLineupPlayerEventSummary | null;
+}
+
+function buildLineupEventLookup({
+  goals,
+  assists,
+  yellowCards,
+  redCards,
+  substitutions,
+}: {
+  goals: MatchGoalScorer[];
+  assists: MatchAssistProvider[];
+  yellowCards: MatchYellowCardEvent[];
+  redCards: MatchRedCardEvent[];
+  substitutions: MatchLineupSubstitution[];
+}): MatchLineupEventLookup {
+  const goalEntries = goals.map((goal) => ({
+    count: goal.goalTimes.length,
+    lookup: buildPlayerNameLookup(goal.player),
+  }));
+  const assistEntries = assists.map((assist) => ({
+    count: assist.assistTimes.length,
+    lookup: buildPlayerNameLookup(assist.player),
+  }));
+  const yellowCardEntries = yellowCards.map((card) => ({
+    count: card.yellowCardTimes.length,
+    lookup: buildPlayerNameLookup(card.player),
+  }));
+  const redCardEntries = redCards.map((card) => ({
+    count: card.redCardTimes.length,
+    lookup: buildPlayerNameLookup(card.player),
+  }));
+
+  const bestCount = (playerName: string, entries: Array<{ count: number; lookup: MatchPlayerNameLookup }>) => {
+    const lookup = buildPlayerNameLookup(playerName);
+    const best = entries.reduce<{ count: number; score: number } | null>((current, entry) => {
+      const score = matchPlayerNameLookup(lookup, entry.lookup);
+      if (score <= 0) {
+        return current;
+      }
+      if (!current || score > current.score || (score === current.score && entry.count > current.count)) {
+        return { count: entry.count, score };
+      }
+      return current;
+    }, null);
+
+    return best?.count ?? 0;
+  };
+
+  return {
+    summaryFor(player) {
+      return {
+        goals: bestCount(player.name, goalEntries),
+        assists: bestCount(player.name, assistEntries),
+        yellowCards: bestCount(player.name, yellowCardEntries),
+        redCards: bestCount(player.name, redCardEntries),
+        substitution: substitutions.find((item) => item.playerOff.number === player.number) || null,
+      };
+    },
+    replacementSummaryFor(player) {
+      const substitution = substitutions.find((item) => item.playerOff.number === player.number);
+      if (!substitution) {
+        return null;
+      }
+
+      return {
+        goals: bestCount(substitution.playerOn.name, goalEntries),
+        assists: bestCount(substitution.playerOn.name, assistEntries),
+        yellowCards: bestCount(substitution.playerOn.name, yellowCardEntries),
+        redCards: bestCount(substitution.playerOn.name, redCardEntries),
+        substitution: null,
+      };
+    },
+  };
+}
+
+function buildPlayerBadgeItems(summary: MatchLineupPlayerEventSummary): LineupEventBadgeDescriptor[] {
+  const badges: LineupEventBadgeDescriptor[] = [];
+  if (summary.goals > 0) {
+    badges.push({ kind: "goal", count: summary.goals });
+  }
+  if (summary.assists > 0) {
+    badges.push({ kind: "assist", count: summary.assists });
+  }
+  if (summary.yellowCards > 0) {
+    badges.push({ kind: "yellow-card", count: summary.yellowCards });
+  }
+  if (summary.redCards > 0) {
+    badges.push({ kind: "red-card", count: summary.redCards });
+  }
+  return badges;
 }
 
 function buildTimelineEntries(details: MatchDetails) {
@@ -552,6 +905,103 @@ function abbreviatePlayerName(fullName: string) {
   }
 
   return `${parts.slice(0, -1).map((part) => `${part[0]}.`).join(" ")} ${parts.at(-1)}`;
+}
+
+function formattedMatchMinute(rawValue: string) {
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return "-";
+  }
+  return trimmed.includes("'") ? trimmed : `${trimmed}'`;
+}
+
+function condensedLineupPlayerName(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  const hasCaptainSuffix = /\(c\)/i.test(trimmed);
+  const baseName = trimmed.replace(/\(c\)/gi, "").trim();
+  const parts = baseName.split(/\s+/).filter(Boolean);
+  const last = parts.at(-1);
+  if (!last) {
+    return trimmed;
+  }
+
+  const particles = new Set([
+    "al",
+    "bin",
+    "bint",
+    "da",
+    "de",
+    "del",
+    "della",
+    "den",
+    "der",
+    "di",
+    "dos",
+    "du",
+    "el",
+    "la",
+    "le",
+    "st",
+    "ten",
+    "ter",
+    "van",
+    "von",
+  ]);
+
+  const surnameParts = [last];
+  for (let index = parts.length - 2; index >= 0; index -= 1) {
+    const candidate = parts[index].toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+    if (!particles.has(candidate)) {
+      break;
+    }
+    surnameParts.unshift(parts[index]);
+  }
+
+  const condensed = surnameParts.join(" ");
+  return hasCaptainSuffix ? `${condensed} (c)` : condensed;
+}
+
+interface MatchPlayerNameLookup {
+  full: string;
+  initialAndLast: string;
+  last: string;
+}
+
+function buildPlayerNameLookup(name: string): MatchPlayerNameLookup {
+  const cleaned = name.replace(/\(c\)/gi, "");
+  const normalized = cleaned
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const tokens = normalized.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const first = tokens[0] ?? "";
+  const last = tokens.at(-1) ?? "";
+
+  return {
+    full: tokens.join(" "),
+    initialAndLast: first && last ? `${first[0]} ${last}` : tokens.join(" "),
+    last,
+  };
+}
+
+function matchPlayerNameLookup(left: MatchPlayerNameLookup, right: MatchPlayerNameLookup) {
+  if (!left.full || !right.full) {
+    return 0;
+  }
+  if (left.full === right.full) {
+    return 3;
+  }
+  if (left.initialAndLast && left.initialAndLast === right.initialAndLast) {
+    return 2;
+  }
+  if (left.last && left.last === right.last) {
+    return 1;
+  }
+  return 0;
 }
 
 function parseMinute(rawValue: string) {

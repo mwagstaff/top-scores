@@ -7,12 +7,17 @@ import {
   type MatchAssistProvider,
   type MatchDetails,
   type MatchGoalScorer,
+  type MatchLineupPlayer,
+  type MatchLineupSubstitution,
   type MatchRedCardEvent,
+  type MatchTeamLineup,
+  type MatchTeamLineups,
   type Match,
   type MatchesMode,
   type MatchesPayload,
   type Preferences,
   type TeamRankingEntry,
+  type MatchYellowCardEvent,
 } from "./types";
 
 let competitionsPromise: Promise<string[]> | null = null;
@@ -120,36 +125,52 @@ export function fetchTeamRankings(): Promise<TeamRankingEntry[]> {
 }
 
 export function fetchMatchDetails(matchDetailsId: string): Promise<MatchDetails> {
+  return fetchMatchDetailsInternal(matchDetailsId, false);
+}
+
+function fetchMatchDetailsInternal(matchDetailsId: string, forceRefresh: boolean): Promise<MatchDetails> {
   const normalizedId = matchDetailsId.trim();
   if (!normalizedId) {
     return Promise.reject(new Error("Missing match details id"));
   }
 
-  const cached = matchDetailsCache.get(normalizedId);
+  const cached = forceRefresh ? null : matchDetailsCache.get(normalizedId);
   if (cached) {
     return Promise.resolve(cached);
   }
 
-  const inFlight = matchDetailsPromises.get(normalizedId);
+  const inFlight = forceRefresh ? null : matchDetailsPromises.get(normalizedId);
   if (inFlight) {
     return inFlight;
   }
 
   const request = requestJson<Record<string, unknown>>(
-    `/api/v1/matches/${encodeURIComponent(normalizedId)}`
+    `/api/v1/matches/${encodeURIComponent(normalizedId)}`,
+    undefined,
+    { cache: "no-store" }
   )
     .then(normalizeMatchDetails)
     .then((details) => {
-      matchDetailsCache.set(normalizedId, details);
-      matchDetailsPromises.delete(normalizedId);
+      if (shouldCacheMatchDetails(details)) {
+        matchDetailsCache.set(normalizedId, details);
+      } else {
+        matchDetailsCache.delete(normalizedId);
+      }
+      if (!forceRefresh) {
+        matchDetailsPromises.delete(normalizedId);
+      }
       return details;
     })
     .catch((error) => {
-      matchDetailsPromises.delete(normalizedId);
+      if (!forceRefresh) {
+        matchDetailsPromises.delete(normalizedId);
+      }
       throw error;
     });
 
-  matchDetailsPromises.set(normalizedId, request);
+  if (!forceRefresh) {
+    matchDetailsPromises.set(normalizedId, request);
+  }
   return request;
 }
 
@@ -297,8 +318,11 @@ function normalizeMatchDetails(raw: Record<string, unknown>): MatchDetails {
     awayGoalScorers: normalizeGoalScorers(raw.away_goal_scorers),
     homeAssists: normalizeAssistProviders(raw.home_assists),
     awayAssists: normalizeAssistProviders(raw.away_assists),
+    homeYellowCards: normalizeYellowCards(raw.home_yellow_cards),
+    awayYellowCards: normalizeYellowCards(raw.away_yellow_cards),
     homeRedCards: normalizeRedCards(raw.home_red_cards),
     awayRedCards: normalizeRedCards(raw.away_red_cards),
+    teamLineups: normalizeTeamLineups(raw.team_lineups),
     penaltyResult: optionalString(raw.penalty_result),
     inProgress: optionalBoolean(raw.in_progress),
     updatedAt: optionalString(raw.updated_at),
@@ -397,6 +421,154 @@ function normalizeRedCards(value: unknown): MatchRedCardEvent[] {
       redCardTimes: normalizeStringArray(source.red_card_times),
     };
   });
+}
+
+function normalizeYellowCards(value: unknown): MatchYellowCardEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    return {
+      player: asString(source.player ?? source.player_name),
+      yellowCardTimes: normalizeStringArray(source.yellow_card_times),
+    };
+  });
+}
+
+function normalizeTeamLineups(value: unknown): MatchTeamLineups | null {
+  if (typeof value !== "object" || !value) {
+    return null;
+  }
+
+  const source = value as Record<string, unknown>;
+  const home = normalizeTeamLineup(source.home);
+  const away = normalizeTeamLineup(source.away);
+  if (!home && !away) {
+    return null;
+  }
+
+  return { home, away };
+}
+
+function normalizeTeamLineup(value: unknown): MatchTeamLineup | null {
+  if (typeof value !== "object" || !value) {
+    return null;
+  }
+
+  const source = value as Record<string, unknown>;
+  const team = optionalString(source.team);
+  const manager = optionalString(source.manager);
+  const formation = optionalString(source.formation);
+  const startingLineup = normalizeLineupPlayers(source.starting_lineup);
+  const substitutes = normalizeLineupPlayers(source.substitutes);
+  const substitutions = normalizeLineupSubstitutions(source.substitutions);
+
+  if (!team && !manager && !formation && startingLineup.length === 0 && substitutes.length === 0) {
+    return null;
+  }
+
+  return {
+    team,
+    manager,
+    formation,
+    startingLineup,
+    substitutes,
+    substitutions,
+  };
+}
+
+function normalizeLineupPlayers(value: unknown): MatchLineupPlayer[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    return {
+      number: optionalNumber(source.number) ?? 0,
+      name: asString(source.name),
+      positionCategory: optionalString(source.position_category),
+      formationRowIndex: optionalNumber(source.formation_row_index),
+      formationSlotIndex: optionalNumber(source.formation_slot_index),
+      formationRowSize: optionalNumber(source.formation_row_size),
+    };
+  });
+}
+
+function normalizeLineupSubstitutions(value: unknown): MatchLineupSubstitution[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+      const playerOff = normalizeLineupPlayer(source.player_off);
+      const playerOn = normalizeLineupPlayer(source.player_on);
+      if (!playerOff || !playerOn) {
+        return null;
+      }
+
+      return {
+        minute: asString(source.minute),
+        playerOff,
+        playerOn,
+      };
+    })
+    .filter((item): item is MatchLineupSubstitution => item !== null);
+}
+
+function normalizeLineupPlayer(value: unknown): MatchLineupPlayer | null {
+  if (typeof value !== "object" || !value) {
+    return null;
+  }
+
+  const source = value as Record<string, unknown>;
+  return {
+    number: optionalNumber(source.number) ?? 0,
+    name: asString(source.name),
+    positionCategory: optionalString(source.position_category),
+    formationRowIndex: optionalNumber(source.formation_row_index),
+    formationSlotIndex: optionalNumber(source.formation_slot_index),
+    formationRowSize: optionalNumber(source.formation_row_size),
+  };
+}
+
+function shouldCacheMatchDetails(details: MatchDetails): boolean {
+  return !isIncompleteFinishedMatchDetails(details);
+}
+
+export function shouldRetryMatchDetails(details: MatchDetails): boolean {
+  return isIncompleteFinishedMatchDetails(details);
+}
+
+function isIncompleteFinishedMatchDetails(details: MatchDetails): boolean {
+  if (!isFinishedStatus(details.scoreStatus)) {
+    return false;
+  }
+
+  const homeScore = details.homeScore ?? 0;
+  const awayScore = details.awayScore ?? 0;
+  const totalScore = homeScore + awayScore;
+  if (totalScore <= 0) {
+    return false;
+  }
+
+  return countGoalsFromScorers(details.homeGoalScorers) + countGoalsFromScorers(details.awayGoalScorers) < totalScore;
+}
+
+function countGoalsFromScorers(goalScorers: MatchGoalScorer[]): number {
+  return goalScorers.reduce(
+    (total, scorer) => total + scorer.goalTimes.length + scorer.ownGoalTimes.length,
+    0
+  );
+}
+
+function isFinishedStatus(status: string | null | undefined): boolean {
+  const normalized = String(status || "").trim().toUpperCase();
+  return normalized === "FT" || normalized === "AET" || normalized === "PEN" || normalized === "PENS" || normalized === "PEN.";
 }
 
 function asString(value: unknown): string {
