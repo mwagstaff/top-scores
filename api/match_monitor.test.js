@@ -719,6 +719,58 @@ test("mergeCanonicalLiveActivityMatch keeps fresher live state for active matche
   assert.equal(merged.away_score, 0);
 });
 
+test("mergeCanonicalLiveActivityMatch prefers more advanced canonical state when monitor regresses", () => {
+  const merged = __testHooks.mergeCanonicalLiveActivityMatch(
+    {
+      match_details_id: "c5yvwz1d5l2t",
+      date: "2026-03-11",
+      time: "19:45",
+      league: "UEFA Champions League",
+      home_team: "Bayer Leverkusen",
+      away_team: "Arsenal",
+      home_score: 1,
+      away_score: 0,
+      score_status: "85",
+      home_goal_scorers: [
+        {
+          player: "Victor Boniface",
+          goal_times: ["60'"],
+          own_goal_times: [],
+        },
+      ],
+      away_goal_scorers: [],
+      updated_at: "2026-03-11T19:27:00.000Z",
+      tv_channels: ["TNT Sports 3"],
+    },
+    {
+      match_details_id: "c5yvwz1d5l2t",
+      date: "2026-03-11",
+      time: "19:45",
+      league: "UEFA Champions League",
+      home_team: "Bayer Leverkusen",
+      away_team: "Arsenal",
+      home_score: 0,
+      away_score: 0,
+      score_status: "47",
+      home_goal_scorers: [],
+      away_goal_scorers: [],
+      updated_at: "2026-03-11T18:49:00.000Z",
+      tv_channels: ["TNT Sports 3"],
+    }
+  );
+
+  assert.equal(merged.score_status, "85");
+  assert.equal(merged.home_score, 1);
+  assert.equal(merged.away_score, 0);
+  assert.deepStrictEqual(merged.home_goal_scorers, [
+    {
+      player: "Victor Boniface",
+      goal_times: ["60'"],
+      own_goal_times: [],
+    },
+  ]);
+});
+
 test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly payloads", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "single_finished",
@@ -1165,6 +1217,158 @@ test("buildLiveActivityPresentationForUser uses notification delay when no dedic
   assert.equal(presentation.matches[0].score_status, "81");
   assert.equal(presentation.matches[0].home_score, 3);
   assert.equal(presentation.matches[0].away_score, 0);
+});
+
+test("buildLiveActivityPresentationForUser ignores stale delayed snapshots and reconstructs from current timeline", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 85 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(2),
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "c5yvwz1d5l2t",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "UEFA Champions League",
+            home_team: "Bayer Leverkusen",
+            away_team: "Arsenal",
+            home_score: 0,
+            away_score: 0,
+            score_status: "47",
+            updated_at: new Date(nowMs - 38 * 60 * 1000).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 38 * 60 * 1000,
+              match: {
+                match_details_id: "c5yvwz1d5l2t",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "UEFA Champions League",
+                home_team: "Bayer Leverkusen",
+                away_team: "Arsenal",
+                home_score: 0,
+                away_score: 0,
+                score_status: "47",
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "c5yvwz1d5l2t",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "UEFA Champions League",
+          home_team: "Bayer Leverkusen",
+          away_team: "Arsenal",
+          home_score: 1,
+          away_score: 0,
+          score_status: "85",
+          home_goal_scorers: [
+            {
+              player: "Victor Boniface",
+              goal_times: ["60'"],
+              own_goal_times: [],
+            },
+          ],
+          away_goal_scorers: [],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "83");
+  assert.equal(presentation.matches[0].home_score, 1);
+  assert.equal(presentation.matches[0].away_score, 0);
+});
+
+test("buildLiveActivityPresentationForUser uses delayed snapshot goal timeline when current scorer arrays are missing", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 92 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(2),
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "c5yvwz1d5l2t",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "UEFA Champions League",
+            home_team: "Bayer Leverkusen",
+            away_team: "Arsenal",
+            home_score: 1,
+            away_score: 1,
+            score_status: "92",
+            home_goal_scorers: [],
+            away_goal_scorers: [],
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 3 * 60 * 1000,
+              match: {
+                match_details_id: "c5yvwz1d5l2t",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "UEFA Champions League",
+                home_team: "Bayer Leverkusen",
+                away_team: "Arsenal",
+                home_score: 1,
+                away_score: 1,
+                score_status: "90",
+                home_goal_scorers: [
+                  {
+                    player: "Victor Boniface",
+                    goal_times: ["60'"],
+                    own_goal_times: [],
+                  },
+                ],
+                away_goal_scorers: [
+                  {
+                    player: "Bukayo Saka",
+                    goal_times: ["88'"],
+                    own_goal_times: [],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "c5yvwz1d5l2t",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "UEFA Champions League",
+          home_team: "Bayer Leverkusen",
+          away_team: "Arsenal",
+          home_score: 1,
+          away_score: 1,
+          score_status: "92",
+          home_goal_scorers: [],
+          away_goal_scorers: [],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "90");
+  assert.equal(presentation.matches[0].home_score, 1);
+  assert.equal(presentation.matches[0].away_score, 1);
 });
 
 test("buildLiveActivityPresentationForUser preserves delayed scores when current scorer arrays lag behind history", () => {

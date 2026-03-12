@@ -144,11 +144,11 @@ export const defaultPreferences: Preferences = {
     "UEFA Europa League",
   ],
   selectedChannels: ["Amazon (all)", "BBC (all)", "ITV (all)", "Sky (all)", "TNT (all)"],
-  competitionFilterEnabled: true,
-  channelFilterEnabled: true,
-  englishPremierLeagueTeamsOnly: false,
+  competitionFilterEnabled: false,
+  channelFilterEnabled: false,
+  englishPremierLeagueTeamsOnly: true,
   refreshIntervalMinutes: 10,
-  matchGroupSortOrder: "alphabetical",
+  matchGroupSortOrder: "kickoffThenTeamScore",
 };
 
 export const channelGroupOptions = ["Amazon (all)", "BBC (all)", "ITV (all)", "Sky (all)", "TNT (all)"];

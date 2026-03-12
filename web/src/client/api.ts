@@ -36,7 +36,10 @@ export async function fetchMatches(
 
   while (true) {
     const params = buildMatchQuery(mode, preferences, page);
-    const response = await fetch(`/api/v1/matches?${params.toString()}`, { signal });
+    const response = await fetch(`/api/v1/matches?${params.toString()}`, {
+      signal,
+      cache: "no-store",
+    });
     if (!response.ok) {
       throw new Error(`Failed to load ${mode}: ${response.status}`);
     }

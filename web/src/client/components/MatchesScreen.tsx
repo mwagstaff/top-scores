@@ -44,9 +44,15 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
 
   useEffect(() => {
     const controller = new AbortController();
-    let intervalId = 0;
+    let refreshTimeoutId = 0;
+    let loadInFlight = false;
 
     const load = async (manual = false) => {
+      if (loadInFlight) {
+        return;
+      }
+
+      loadInFlight = true;
       setState((current) => ({
         ...current,
         loading: current.groups.length === 0,
@@ -95,17 +101,41 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           refreshing: false,
           error: error instanceof Error ? error.message : "Unable to load matches.",
         }));
+      } finally {
+        loadInFlight = false;
+        if (!controller.signal.aborted) {
+          scheduleRefresh();
+        }
+      }
+    };
+
+    const scheduleRefresh = () => {
+      window.clearTimeout(refreshTimeoutId);
+      refreshTimeoutId = window.setTimeout(() => {
+        if (document.visibilityState === "visible") {
+          void load(true);
+          return;
+        }
+
+        scheduleRefresh();
+      }, preferences.refreshIntervalMinutes * 60_000);
+    };
+
+    const handleWindowActive = () => {
+      if (document.visibilityState === "visible") {
+        void load(true);
       }
     };
 
     void load();
-    intervalId = window.setInterval(() => {
-      void load(true);
-    }, preferences.refreshIntervalMinutes * 60_000);
+    window.addEventListener("focus", handleWindowActive);
+    document.addEventListener("visibilitychange", handleWindowActive);
 
     return () => {
       controller.abort();
-      window.clearInterval(intervalId);
+      window.clearTimeout(refreshTimeoutId);
+      window.removeEventListener("focus", handleWindowActive);
+      document.removeEventListener("visibilitychange", handleWindowActive);
     };
   }, [requestKey]);
 

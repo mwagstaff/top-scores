@@ -14330,12 +14330,72 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
       });
       return;
     }
+
+    let serverPresentation = null;
+    try {
+      const nowMs = Date.now();
+      const monitorStatus = matchMonitor.getStatus();
+      const operationalDataset = await getOperationalDataset("merged_matches");
+      const operationalMatches =
+        operationalDataset && Array.isArray(operationalDataset.payload)
+          ? operationalDataset.payload
+          : [];
+      const monitoredEntries = Array.isArray(monitorStatus && monitorStatus.monitoredMatches)
+        ? monitorStatus.monitoredMatches
+        : [];
+      const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
+      if (
+        hooks &&
+        typeof hooks.buildLiveActivityEntriesForUser === "function" &&
+        typeof hooks.buildLiveActivityPresentationForUser === "function"
+      ) {
+        const entries = hooks.buildLiveActivityEntriesForUser(
+          record,
+          monitoredEntries,
+          operationalMatches,
+          nowMs
+        );
+        const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs);
+        serverPresentation = {
+          mode: presentation && presentation.mode ? presentation.mode : null,
+          delayMinutes:
+            presentation && Number.isFinite(Number(presentation.delayMinutes))
+              ? Number(presentation.delayMinutes)
+              : 0,
+          matches: Array.isArray(presentation && presentation.matches)
+            ? presentation.matches.map((match) => ({
+              matchId: match && match.match_details_id ? String(match.match_details_id) : "",
+              homeTeam: match && match.home_team ? String(match.home_team) : "",
+              awayTeam: match && match.away_team ? String(match.away_team) : "",
+              homeScore:
+                match && match.home_score !== undefined && match.home_score !== null
+                  ? Number(match.home_score)
+                  : null,
+              awayScore:
+                match && match.away_score !== undefined && match.away_score !== null
+                  ? Number(match.away_score)
+                  : null,
+              matchTime: match && match.score_status ? String(match.score_status) : null,
+            }))
+            : [],
+        };
+      }
+    } catch (presentationError) {
+      serverPresentation = {
+        error:
+          presentationError && presentationError.message
+            ? presentationError.message
+            : String(presentationError || "unknown error"),
+      };
+    }
+
     res.status(200).json({
       success: true,
       userDeviceToken: resolvedDeviceToken,
       apnsTokenPresent: Boolean(record.apnsToken),
       isDevelopmentBuild: Boolean(record.isDevelopmentBuild),
       liveActivity: record.liveActivity || null,
+      serverPresentation,
     });
   } catch (error) {
     res.status(500).json({
