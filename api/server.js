@@ -421,6 +421,9 @@ const FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH =
 const FANTASY_LOADING_MESSAGES_PATH =
   process.env.FANTASY_LOADING_MESSAGES_PATH ||
   path.join(__dirname, "fantasy_loading_messages.json");
+const TEAM_COLORS_CONFIG_PATH =
+  process.env.TEAM_COLORS_CONFIG_PATH ||
+  path.join(__dirname, "team_colors.json");
 const DEFAULT_FPL_FIXTURES_SOURCE_URL = "https://fantasy.premierleague.com/api/fixtures/";
 const FPL_FIXTURES_SOURCE_URL =
   process.env.FPL_FIXTURES_SOURCE_URL || DEFAULT_FPL_FIXTURES_SOURCE_URL;
@@ -773,6 +776,17 @@ let fantasyTeamShortNameMappingsMtimeMs = null;
 let fantasyLoadingMessages = Object.freeze([]);
 let fantasyLoadingMessagesLoadedAt = null;
 let fantasyLoadingMessagesMtimeMs = null;
+let teamColorsConfig = Object.freeze({
+  updatedAt: null,
+  default: Object.freeze({
+    primary: "#111111",
+    secondary: "#FFFFFF",
+    scheme: "default-dark",
+  }),
+  teams: Object.freeze([]),
+});
+let teamColorsLoadedAt = null;
+let teamColorsMtimeMs = null;
 
 const STAGE_PATTERNS = [
   /\s*[-:–]\s*Round\s+\w+$/i,
@@ -3604,6 +3618,94 @@ function loadFantasyLoadingMessages() {
   }
 
   return fantasyLoadingMessages;
+}
+
+function loadTeamColorsConfig() {
+  let stat = null;
+  try {
+    stat = fs.statSync(TEAM_COLORS_CONFIG_PATH);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      teamColorsLoadedAt = new Date().toISOString();
+      teamColorsMtimeMs = null;
+      console.warn(
+        `[TeamColors] Config file not found at ${TEAM_COLORS_CONFIG_PATH}; using default-only payload.`
+      );
+      return teamColorsConfig;
+    }
+    console.warn(`[TeamColors] Failed to stat config file: ${error.message || error}`);
+    return teamColorsConfig;
+  }
+
+  const mtimeMs = Number(stat && stat.mtimeMs);
+  if (Number.isFinite(mtimeMs) && teamColorsMtimeMs === mtimeMs) {
+    return teamColorsConfig;
+  }
+
+  try {
+    const raw = fs.readFileSync(TEAM_COLORS_CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Team colors config must be a JSON object.");
+    }
+
+    const fallbackDefault = {
+      primary: "#111111",
+      secondary: "#FFFFFF",
+      scheme: "default-dark",
+    };
+    const parsedDefault =
+      parsed.default && typeof parsed.default === "object" && !Array.isArray(parsed.default)
+        ? parsed.default
+        : fallbackDefault;
+
+    const normalizedDefault = Object.freeze({
+      primary: String(parsedDefault.primary || fallbackDefault.primary).trim() || fallbackDefault.primary,
+      secondary: String(parsedDefault.secondary || fallbackDefault.secondary).trim() || fallbackDefault.secondary,
+      scheme: String(parsedDefault.scheme || fallbackDefault.scheme).trim() || fallbackDefault.scheme,
+    });
+
+    const normalizedTeams = Object.freeze(
+      (Array.isArray(parsed.teams) ? parsed.teams : [])
+        .map((entry) => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+            return null;
+          }
+          const name = String(entry.name || "").trim();
+          if (!name) {
+            return null;
+          }
+          return Object.freeze({
+            name,
+            aliases: Array.isArray(entry.aliases)
+              ? entry.aliases.map((alias) => String(alias || "").trim()).filter(Boolean)
+              : [],
+            primary: String(entry.primary || "").trim() || normalizedDefault.primary,
+            secondary: String(entry.secondary || "").trim() || normalizedDefault.secondary,
+            scheme: String(entry.scheme || "").trim() || null,
+          });
+        })
+        .filter(Boolean)
+    );
+
+    teamColorsLoadedAt =
+      String(parsed.updatedAt || "").trim() ||
+      (Number.isFinite(mtimeMs) ? new Date(mtimeMs).toISOString() : new Date().toISOString());
+    teamColorsConfig = Object.freeze({
+      updatedAt: teamColorsLoadedAt,
+      default: normalizedDefault,
+      teams: normalizedTeams,
+    });
+    teamColorsMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+    console.log(
+      `[TeamColors] Loaded ${normalizedTeams.length} team color mappings from ${TEAM_COLORS_CONFIG_PATH}`
+    );
+  } catch (error) {
+    console.warn(`[TeamColors] Failed to load config file: ${error.message || error}`);
+    teamColorsMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+  }
+
+  return teamColorsConfig;
 }
 
 function resolveManualMappingCandidates(normalizedName, manualMappings) {
@@ -11717,6 +11819,16 @@ app.get(`${API_PREFIX}/fantasy/loading-messages`, (_req, res) => {
     updated_at: fantasyLoadingMessagesLoadedAt,
     messages,
   });
+});
+
+app.get(`${API_PREFIX}/team-colors`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+  const payload = loadTeamColorsConfig();
+  if (teamColorsLoadedAt) {
+    res.set("X-Last-Updated", teamColorsLoadedAt);
+  }
+  res.set("X-Operational-Source", "filesystem_config");
+  res.json(payload);
 });
 
 app.get(`${API_PREFIX}/fantasy/gameweek/current`, (_req, res) => {

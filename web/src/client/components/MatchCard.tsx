@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { fetchMatchDetails, shouldRetryMatchDetails } from "../api";
 import {
   aggregateSummary,
@@ -7,6 +7,7 @@ import {
   isMatchLive,
   parseKickoff,
 } from "../matchGrouping";
+import { type ResolvedTeamColors, useTeamColorCatalog } from "../teamColors";
 import type {
   Match,
   MatchAssistProvider,
@@ -324,6 +325,7 @@ interface LineupSectionProps {
 }
 
 function LineupSection({ details, teamLineups }: LineupSectionProps) {
+  const teamColorCatalog = useTeamColorCatalog();
   const homeLineup = teamLineups.home!;
   const awayLineup = teamLineups.away!;
   const homeLookup = buildLineupEventLookup({
@@ -340,17 +342,21 @@ function LineupSection({ details, teamLineups }: LineupSectionProps) {
     redCards: details.awayRedCards,
     substitutions: awayLineup.substitutions,
   });
+  const homeTeamName = homeLineup.team || details.homeTeam || "Home";
+  const awayTeamName = awayLineup.team || details.awayTeam || "Away";
+  const homeNumberColors = teamColorCatalog.lineupColors(homeTeamName, awayTeamName, "home");
+  const awayNumberColors = teamColorCatalog.lineupColors(awayTeamName, homeTeamName, "away");
 
   return (
     <section className="details-section lineup-section">
       <div className="details-section-title">Starting Line-ups</div>
       <div className="lineup-formations">
         <div className="lineup-formation-chip">
-          <span className="lineup-formation-team">{homeLineup.team || details.homeTeam || "Home"}</span>
+          <span className="lineup-formation-team">{homeTeamName}</span>
           <span className="lineup-formation-value">{homeLineup.formation || "Formation TBC"}</span>
         </div>
         <div className="lineup-formation-chip lineup-formation-chip-away">
-          <span className="lineup-formation-team">{awayLineup.team || details.awayTeam || "Away"}</span>
+          <span className="lineup-formation-team">{awayTeamName}</span>
           <span className="lineup-formation-value">{awayLineup.formation || "Formation TBC"}</span>
         </div>
       </div>
@@ -369,15 +375,17 @@ function LineupSection({ details, teamLineups }: LineupSectionProps) {
 
         <div className="lineup-pitch-content">
           <LineupHalf
-            teamName={homeLineup.team || details.homeTeam || "Home"}
+            teamName={homeTeamName}
             starters={homeLineup.startingLineup}
             lookup={homeLookup}
+            numberColors={homeNumberColors}
             side="home"
           />
           <LineupHalf
-            teamName={awayLineup.team || details.awayTeam || "Away"}
+            teamName={awayTeamName}
             starters={awayLineup.startingLineup}
             lookup={awayLookup}
+            numberColors={awayNumberColors}
             side="away"
           />
         </div>
@@ -395,10 +403,11 @@ interface LineupHalfProps {
   teamName: string;
   starters: MatchLineupPlayer[];
   lookup: MatchLineupEventLookup;
+  numberColors: ResolvedTeamColors;
   side: "home" | "away";
 }
 
-function LineupHalf({ teamName, starters, lookup, side }: LineupHalfProps) {
+function LineupHalf({ teamName, starters, lookup, numberColors, side }: LineupHalfProps) {
   const groupedRows = buildDisplayLineupRows(starters, side);
 
   return (
@@ -420,7 +429,7 @@ function LineupHalf({ teamName, starters, lookup, side }: LineupHalfProps) {
                 player={player}
                 summary={lookup.summaryFor(player)}
                 replacementSummary={lookup.replacementSummaryFor(player)}
-                side={side}
+                numberColors={numberColors}
               />
             ))}
           </div>
@@ -440,22 +449,24 @@ interface LineupPlayerMarkerProps {
   player: MatchLineupPlayer;
   summary: MatchLineupPlayerEventSummary;
   replacementSummary: MatchLineupPlayerEventSummary | null;
-  side: "home" | "away";
+  numberColors: ResolvedTeamColors;
 }
 
-function LineupPlayerMarker({
-  player,
-  summary,
-  replacementSummary,
-  side,
-}: LineupPlayerMarkerProps) {
+function LineupPlayerMarker({ player, summary, replacementSummary, numberColors }: LineupPlayerMarkerProps) {
   const replacementPlayer = summary.substitution?.playerOn ?? null;
   const badgeItems = buildPlayerBadgeItems(summary);
   const replacementBadgeItems = replacementSummary ? buildPlayerBadgeItems(replacementSummary) : [];
+  const numberStyle = {
+    "--lineup-player-number-bg": numberColors.background,
+    "--lineup-player-number-fg": numberColors.foreground,
+    "--lineup-player-number-stroke": numberColors.outlineColor ?? "transparent",
+  } as CSSProperties;
 
   return (
     <div className="lineup-player">
-      <div className={`lineup-player-number lineup-player-number-${side}`}>{player.number}</div>
+      <div className="lineup-player-number" style={numberStyle}>
+        {player.number}
+      </div>
 
       {badgeItems.length > 0 && (
         <div className="lineup-player-badges">

@@ -1,0 +1,502 @@
+{
+  "updatedAt": "2026-03-13",
+  "default": {
+    "primary": "#111111",
+    "secondary": "#FFFFFF",
+    "scheme": "default-dark"
+  },
+  "teams": [
+    {
+      "name": "Arsenal",
+      "aliases": [
+        "Arsenal FC"
+      ],
+      "primary": "#EF0107",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Aston Villa",
+      "aliases": [
+        "Aston Villa FC"
+      ],
+      "primary": "#670E36",
+      "secondary": "#95BFE5",
+      "scheme": "claret-blue"
+    },
+    {
+      "name": "Bournemouth",
+      "aliases": [
+        "AFC Bournemouth"
+      ],
+      "primary": "#DA291C",
+      "secondary": "#000000",
+      "scheme": "red-black"
+    },
+    {
+      "name": "Brentford",
+      "aliases": [
+        "Brentford FC"
+      ],
+      "primary": "#E30613",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Brighton & Hove Albion",
+      "aliases": [
+        "Brighton and Hove Albion",
+        "Brighton"
+      ],
+      "primary": "#0057B8",
+      "secondary": "#FFFFFF",
+      "scheme": "blue-white"
+    },
+    {
+      "name": "Burnley",
+      "aliases": [
+        "Burnley FC"
+      ],
+      "primary": "#6C1D45",
+      "secondary": "#99D6EA",
+      "scheme": "claret-blue"
+    },
+    {
+      "name": "Chelsea",
+      "aliases": [
+        "Chelsea FC"
+      ],
+      "primary": "#034694",
+      "secondary": "#FFFFFF",
+      "scheme": "blue-white"
+    },
+    {
+      "name": "Crystal Palace",
+      "aliases": [
+        "Crystal Palace FC"
+      ],
+      "primary": "#C4122E",
+      "secondary": "#1B458F",
+      "scheme": "red-blue"
+    },
+    {
+      "name": "Everton",
+      "aliases": [
+        "Everton FC"
+      ],
+      "primary": "#003399",
+      "secondary": "#FFFFFF",
+      "scheme": "blue-white"
+    },
+    {
+      "name": "Fulham",
+      "aliases": [
+        "Fulham FC"
+      ],
+      "primary": "#FFFFFF",
+      "secondary": "#000000",
+      "scheme": "white-black"
+    },
+    {
+      "name": "Ipswich Town",
+      "aliases": [
+        "Ipswich"
+      ],
+      "primary": "#0057B8",
+      "secondary": "#FFFFFF",
+      "scheme": "blue-white"
+    },
+    {
+      "name": "Leeds United",
+      "aliases": [
+        "Leeds"
+      ],
+      "primary": "#FFFFFF",
+      "secondary": "#1D428A",
+      "scheme": "white-blue"
+    },
+    {
+      "name": "Leicester City",
+      "aliases": [
+        "Leicester"
+      ],
+      "primary": "#0053A0",
+      "secondary": "#FFFFFF",
+      "scheme": "blue-white"
+    },
+    {
+      "name": "Liverpool",
+      "aliases": [
+        "Liverpool FC"
+      ],
+      "primary": "#C8102E",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Manchester City",
+      "aliases": [
+        "Man City"
+      ],
+      "primary": "#6CABDD",
+      "secondary": "#FFFFFF",
+      "scheme": "sky-white"
+    },
+    {
+      "name": "Manchester United",
+      "aliases": [
+        "Man United",
+        "Man Utd",
+        "Man U"
+      ],
+      "primary": "#DA291C",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Newcastle United",
+      "aliases": [
+        "Newcastle",
+        "Newcastle United FC"
+      ],
+      "primary": "#241F20",
+      "secondary": "#FFFFFF",
+      "scheme": "black-white"
+    },
+    {
+      "name": "Nottingham Forest",
+      "aliases": [
+        "Nottm Forest"
+      ],
+      "primary": "#DD0000",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Southampton",
+      "aliases": [
+        "Southampton FC"
+      ],
+      "primary": "#D71920",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Sunderland",
+      "aliases": [
+        "Sunderland AFC"
+      ],
+      "primary": "#EB172B",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Tottenham Hotspur",
+      "aliases": [
+        "Tottenham",
+        "Spurs"
+      ],
+      "primary": "#FFFFFF",
+      "secondary": "#132257",
+      "scheme": "white-navy"
+    },
+    {
+      "name": "West Ham United",
+      "aliases": [
+        "West Ham"
+      ],
+      "primary": "#7A263A",
+      "secondary": "#1BB1E7",
+      "scheme": "claret-blue"
+    },
+    {
+      "name": "Wolverhampton Wanderers",
+      "aliases": [
+        "Wolves"
+      ],
+      "primary": "#FDB913",
+      "secondary": "#231F20",
+      "scheme": "gold-black"
+    },
+    {
+      "name": "AC Milan",
+      "aliases": [
+        "Milan"
+      ],
+      "primary": "#FB090B",
+      "secondary": "#000000",
+      "scheme": "red-black"
+    },
+    {
+      "name": "Ajax",
+      "aliases": [
+        "Ajax Amsterdam"
+      ],
+      "primary": "#D2122E",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Atalanta",
+      "aliases": [
+        "Atalanta BC"
+      ],
+      "primary": "#1E71B8",
+      "secondary": "#000000",
+      "scheme": "blue-black"
+    },
+    {
+      "name": "Athletic Bilbao",
+      "aliases": [
+        "Athletic Club",
+        "Athletic"
+      ],
+      "primary": "#EE2523",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Atletico Madrid",
+      "aliases": [
+        "Atlético Madrid",
+        "Atletico",
+        "Atlético"
+      ],
+      "primary": "#CB3524",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Barcelona",
+      "aliases": [
+        "FC Barcelona",
+        "Barca",
+        "Barça"
+      ],
+      "primary": "#A50044",
+      "secondary": "#004D98",
+      "scheme": "garnet-blue"
+    },
+    {
+      "name": "Bayer Leverkusen",
+      "aliases": [
+        "Leverkusen",
+        "Bayer 04 Leverkusen"
+      ],
+      "primary": "#E32221",
+      "secondary": "#000000",
+      "scheme": "red-black"
+    },
+    {
+      "name": "Bayern Munich",
+      "aliases": [
+        "Bayern"
+      ],
+      "primary": "#DC052D",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Benfica",
+      "aliases": [
+        "SL Benfica"
+      ],
+      "primary": "#E83030",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Borussia Dortmund",
+      "aliases": [
+        "Dortmund"
+      ],
+      "primary": "#FDE100",
+      "secondary": "#000000",
+      "scheme": "yellow-black"
+    },
+    {
+      "name": "Celtic",
+      "aliases": [
+        "Celtic FC"
+      ],
+      "primary": "#018749",
+      "secondary": "#FFFFFF",
+      "scheme": "green-white"
+    },
+    {
+      "name": "Feyenoord",
+      "aliases": [
+        "Feyenoord Rotterdam"
+      ],
+      "primary": "#FF0000",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Inter Milan",
+      "aliases": [
+        "Inter"
+      ],
+      "primary": "#010E80",
+      "secondary": "#000000",
+      "scheme": "blue-black"
+    },
+    {
+      "name": "Juventus",
+      "aliases": [
+        "Juventus FC",
+        "Juve"
+      ],
+      "primary": "#FFFFFF",
+      "secondary": "#000000",
+      "scheme": "white-black"
+    },
+    {
+      "name": "Lazio",
+      "aliases": [
+        "SS Lazio"
+      ],
+      "primary": "#87D8F7",
+      "secondary": "#FFFFFF",
+      "scheme": "sky-white"
+    },
+    {
+      "name": "Lyon",
+      "aliases": [
+        "Olympique Lyonnais"
+      ],
+      "primary": "#14387F",
+      "secondary": "#FFFFFF",
+      "scheme": "blue-white"
+    },
+    {
+      "name": "Marseille",
+      "aliases": [
+        "Olympique de Marseille"
+      ],
+      "primary": "#2FAEE0",
+      "secondary": "#FFFFFF",
+      "scheme": "sky-white"
+    },
+    {
+      "name": "Monaco",
+      "aliases": [
+        "AS Monaco"
+      ],
+      "primary": "#C20E1A",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Napoli",
+      "aliases": [
+        "SSC Napoli"
+      ],
+      "primary": "#12A0D7",
+      "secondary": "#FFFFFF",
+      "scheme": "sky-white"
+    },
+    {
+      "name": "Paris Saint-Germain",
+      "aliases": [
+        "PSG",
+        "Paris Saint Germain"
+      ],
+      "primary": "#004170",
+      "secondary": "#FFFFFF",
+      "scheme": "blue-white"
+    },
+    {
+      "name": "Porto",
+      "aliases": [
+        "FC Porto"
+      ],
+      "primary": "#00428C",
+      "secondary": "#FFFFFF",
+      "scheme": "blue-white"
+    },
+    {
+      "name": "PSV",
+      "aliases": [
+        "PSV Eindhoven"
+      ],
+      "primary": "#F00000",
+      "secondary": "#FFFFFF",
+      "scheme": "red-white"
+    },
+    {
+      "name": "Rangers",
+      "aliases": [
+        "Rangers FC"
+      ],
+      "primary": "#0038A8",
+      "secondary": "#FFFFFF",
+      "scheme": "blue-white"
+    },
+    {
+      "name": "RB Leipzig",
+      "aliases": [
+        "Leipzig"
+      ],
+      "primary": "#FFFFFF",
+      "secondary": "#E31C3D",
+      "scheme": "white-red"
+    },
+    {
+      "name": "Real Madrid",
+      "aliases": [
+        "Real Madrid CF"
+      ],
+      "primary": "#FFFFFF",
+      "secondary": "#00529F",
+      "scheme": "white-blue"
+    },
+    {
+      "name": "Roma",
+      "aliases": [
+        "AS Roma",
+        "A.S. Roma"
+      ],
+      "primary": "#8E1F2F",
+      "secondary": "#F0BC42",
+      "scheme": "maroon-gold"
+    },
+    {
+      "name": "Sevilla",
+      "aliases": [
+        "Sevilla FC"
+      ],
+      "primary": "#FFFFFF",
+      "secondary": "#F43333",
+      "scheme": "white-red"
+    },
+    {
+      "name": "Sporting CP",
+      "aliases": [
+        "Sporting",
+        "Sporting Lisbon"
+      ],
+      "primary": "#008057",
+      "secondary": "#FFFFFF",
+      "scheme": "green-white"
+    },
+    {
+      "name": "Valencia",
+      "aliases": [
+        "Valencia CF"
+      ],
+      "primary": "#FFFFFF",
+      "secondary": "#000000",
+      "scheme": "white-black"
+    },
+    {
+      "name": "Villarreal",
+      "aliases": [
+        "Villarreal CF"
+      ],
+      "primary": "#FFE667",
+      "secondary": "#005187",
+      "scheme": "yellow-blue"
+    }
+  ]
+}

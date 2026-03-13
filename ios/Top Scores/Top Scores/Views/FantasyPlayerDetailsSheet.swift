@@ -1368,6 +1368,27 @@ struct FantasyPlayerDetailsSheet: View {
         return "Could not load transfer recommendations right now."
     }
 
+    private var userSquadElementIDs: Set<Int> {
+        Set(fantasyViewModel.data?.allPlayers.map(\.elementID) ?? [])
+    }
+
+    private func filteredTransferRecommendations(
+        _ response: FantasyTransferRecommendationsResponse
+    ) -> FantasyTransferRecommendationsResponse {
+        let excludedElementIDs = userSquadElementIDs
+        guard !excludedElementIDs.isEmpty else { return response }
+
+        return FantasyTransferRecommendationsResponse(
+            source: response.source,
+            updatedAt: response.updatedAt,
+            ageSeconds: response.ageSeconds,
+            stale: response.stale,
+            criteria: response.criteria,
+            similarValue: response.similarValue.filter { !excludedElementIDs.contains($0.elementID) },
+            budget: response.budget.filter { !excludedElementIDs.contains($0.elementID) }
+        )
+    }
+
     private func loadTransferRecommendations(elementID: Int) async {
         isLoadingTransferRecommendations = true
         transferRecommendationsErrorMessage = nil
@@ -1378,7 +1399,7 @@ struct FantasyPlayerDetailsSheet: View {
                 gameweekID: selection.gameweekID,
                 apiBaseURL: apiBaseURL
             )
-            transferRecommendations = recommendations
+            transferRecommendations = filteredTransferRecommendations(recommendations)
         } catch {
             transferRecommendations = nil
             transferRecommendationsErrorMessage = userFriendlyTransferRecommendationError(error)

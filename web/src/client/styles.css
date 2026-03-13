@@ -963,17 +963,18 @@ img {
   border-radius: 999px;
   font-size: 0.74rem;
   font-weight: 900;
+  background: var(--lineup-player-number-bg, rgba(8, 10, 8, 0.92));
+  color: var(--lineup-player-number-fg, #fff);
+  text-shadow:
+    -0.65px 0 var(--lineup-player-number-stroke, transparent),
+    0.65px 0 var(--lineup-player-number-stroke, transparent),
+    0 -0.65px var(--lineup-player-number-stroke, transparent),
+    0 0.65px var(--lineup-player-number-stroke, transparent),
+    -0.65px -0.65px var(--lineup-player-number-stroke, transparent),
+    0.65px -0.65px var(--lineup-player-number-stroke, transparent),
+    -0.65px 0.65px var(--lineup-player-number-stroke, transparent),
+    0.65px 0.65px var(--lineup-player-number-stroke, transparent);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-}
-
-.lineup-player-number-home {
-  background: rgba(8, 10, 8, 0.92);
-  color: #fff;
-}
-
-.lineup-player-number-away {
-  background: rgba(255, 255, 255, 0.94);
-  color: #000;
 }
 
 .lineup-player-badges {
@@ -1044,7 +1045,7 @@ img {
 }
 
 .lineup-player-name {
-  font-size: 0.56rem;
+  font-size: 0.82rem;
   font-weight: 900;
   line-height: 1.02;
   overflow-wrap: normal;
@@ -1305,7 +1306,7 @@ img {
   }
 
   .lineup-player-name {
-    font-size: 0.54rem;
+    font-size: 0.7rem;
   }
 
   .lineup-event-badge {

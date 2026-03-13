@@ -198,6 +198,13 @@ struct APIClient {
         return try JSONDecoder().decode(FantasyLoadingMessagesResponse.self, from: data)
     }
 
+    func fetchTeamColors() async throws -> TeamColorsCatalogResponse {
+        let request = try buildRequest(path: "team-colors", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "team_colors")
+        try validateSuccess(http, data: data, operation: "team_colors")
+        return try JSONDecoder().decode(TeamColorsCatalogResponse.self, from: data)
+    }
+
     func fetchFantasyTransferRecommendations(
         elementID: Int,
         valueWindowMillions: Double = 1.5,
@@ -823,6 +830,32 @@ struct TeamRankingSettingsResponse: Codable, Hashable {
             updatedAt = nil
         }
     }
+}
+
+struct TeamColorsCatalogResponse: Codable, Hashable {
+    let updatedAt: String?
+    let defaultStyle: TeamColorStyleResponse
+    let teams: [TeamColorRecordResponse]
+
+    enum CodingKeys: String, CodingKey {
+        case updatedAt
+        case defaultStyle = "default"
+        case teams
+    }
+}
+
+struct TeamColorStyleResponse: Codable, Hashable {
+    let primary: String
+    let secondary: String
+    let scheme: String?
+}
+
+struct TeamColorRecordResponse: Codable, Hashable {
+    let name: String
+    let aliases: [String]
+    let primary: String
+    let secondary: String
+    let scheme: String?
 }
 
 private extension MatchesViewMode {

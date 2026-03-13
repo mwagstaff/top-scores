@@ -396,6 +396,26 @@ struct MatchDetailView: View {
         return FantasySquadMembershipLookup(squad: fantasyViewModel.data)
     }
 
+    private var shouldLoadFantasySquad: Bool {
+        isPremierLeagueMatch &&
+        !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var fantasySquadSections: [FantasyMatchTeamSquadSection] {
+        guard let squad = fantasyViewModel.data else { return [] }
+
+        return [
+            squad.matchSquadSection(forTeamName: activeMatch.homeTeam),
+            squad.matchSquadSection(forTeamName: activeMatch.awayTeam)
+        ]
+        .compactMap { $0 }
+        .filter(\.hasPlayers)
+    }
+
+    private var shouldShowFantasySquadFallback: Bool {
+        !shouldShowLineupPitch && !fantasySquadSections.isEmpty
+    }
+
     private var tvChannelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if sortedChannels.isEmpty {
@@ -453,6 +473,11 @@ struct MatchDetailView: View {
                         .padding(.horizontal)
                 }
 
+                if shouldShowFantasySquadFallback {
+                    FantasyMatchSquadSectionsView(sections: fantasySquadSections)
+                        .padding(.horizontal)
+                }
+
                 if !isMatchFinished {
                     tvChannelSection
                         .padding(.horizontal)
@@ -480,7 +505,7 @@ struct MatchDetailView: View {
             startDetailsRefresh()
             ensureFantasySquadLoadedIfNeeded()
         }
-        .onChange(of: shouldShowLineupPitch) { _, _ in
+        .onChange(of: fantasyManagerEntryID) { _, _ in
             ensureFantasySquadLoadedIfNeeded()
         }
         .alert(item: $actionAlert) { alert in
@@ -677,9 +702,7 @@ struct MatchDetailView: View {
     }
 
     private func ensureFantasySquadLoadedIfNeeded() {
-        guard shouldShowLineupPitch,
-              isPremierLeagueMatch,
-              !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard shouldLoadFantasySquad,
               fantasyViewModel.data == nil,
               !fantasyViewModel.isLoading,
               !fantasyViewModel.isRefreshing
@@ -758,6 +781,85 @@ struct MatchDetailView: View {
         if let urlError = error as? URLError, urlError.code == .cancelled { return true }
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+}
+
+private struct FantasyMatchSquadSectionsView: View {
+    let sections: [FantasyMatchTeamSquadSection]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Your Fantasy Squad")
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            ForEach(sections) { section in
+                FantasyMatchSquadTeamSectionView(section: section)
+            }
+        }
+    }
+}
+
+private struct FantasyMatchSquadTeamSectionView: View {
+    let section: FantasyMatchTeamSquadSection
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(section.teamName)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+
+            if !section.starters.isEmpty {
+                FantasyMatchSquadBucketView(
+                    title: "Starting XI",
+                    tint: Color(red: 0.95, green: 0.20, blue: 0.66),
+                    players: section.starters
+                )
+            }
+
+            if !section.bench.isEmpty {
+                FantasyMatchSquadBucketView(
+                    title: "Bench",
+                    tint: .secondary,
+                    players: section.bench
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+    }
+}
+
+private struct FantasyMatchSquadBucketView: View {
+    let title: String
+    let tint: Color
+    let players: [FantasyDisplayPlayer]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(tint)
+
+            Text(players.map(playerDisplayName).joined(separator: " • "))
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func playerDisplayName(_ player: FantasyDisplayPlayer) -> String {
+        let preferred = player.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !preferred.isEmpty {
+            return preferred
+        }
+        return player.displayName
     }
 }
 
@@ -1254,13 +1356,22 @@ private struct MatchLineupPitchView: View {
         )
     }
 
+    private var homeTeamName: String {
+        homeLineup.team ?? "Home"
+    }
+
+    private var awayTeamName: String {
+        awayLineup.team ?? "Away"
+    }
+
     var body: some View {
         ZStack {
             MatchLineupPitchBackground()
 
             VStack(spacing: 0) {
                 MatchLineupHalfView(
-                    teamName: homeLineup.team ?? "Home",
+                    teamName: homeTeamName,
+                    opponentTeamName: awayTeamName,
                     formation: homeLineup.formation,
                     starters: homeLineup.startingLineup,
                     lookup: homeLookup,
@@ -1269,7 +1380,8 @@ private struct MatchLineupPitchView: View {
                 )
 
                 MatchLineupHalfView(
-                    teamName: awayLineup.team ?? "Away",
+                    teamName: awayTeamName,
+                    opponentTeamName: homeTeamName,
                     formation: awayLineup.formation,
                     starters: awayLineup.startingLineup,
                     lookup: awayLookup,
@@ -1290,7 +1402,9 @@ private struct MatchLineupPitchView: View {
 }
 
 private struct MatchLineupHalfView: View {
+    @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
     let teamName: String
+    let opponentTeamName: String
     let formation: String?
     let starters: [MatchLineupPlayer]
     let lookup: MatchLineupEventLookup
@@ -1332,6 +1446,14 @@ private struct MatchLineupHalfView: View {
         return teamName.uppercased()
     }
 
+    private var numberColors: TeamLineupNumberColors {
+        teamColorCatalog.lineupColors(
+            for: teamName,
+            opponentTeamName: opponentTeamName,
+            isAway: side == .away
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if side == .away {
@@ -1354,7 +1476,7 @@ private struct MatchLineupHalfView: View {
                             replacementFantasyPoints: lookup.summary(for: player).substitution.flatMap { substitution in
                                 fantasyHighlightLookup?.points(for: substitution.playerOn, teamName: teamName)
                             },
-                            side: side
+                            numberColors: numberColors
                         )
                     }
                 }
@@ -1387,7 +1509,7 @@ private struct MatchLineupPlayerMarkerView: View {
     let isFantasyHighlighted: Bool
     let fantasyPoints: Int?
     let replacementFantasyPoints: Int?
-    let side: MatchLineupDisplaySide
+    let numberColors: TeamLineupNumberColors
 
     private var circleFill: AnyShapeStyle {
         if isFantasyHighlighted {
@@ -1400,14 +1522,14 @@ private struct MatchLineupPlayerMarkerView: View {
                 endPoint: .trailing
             ))
         }
-        return AnyShapeStyle(side == .home ? Color.black.opacity(0.92) : Color.white.opacity(0.94))
+        return AnyShapeStyle(numberColors.background)
     }
 
     private var circleText: Color {
         if isFantasyHighlighted {
             return Color.white
         }
-        return side == .home ? Color.white : Color.black
+        return numberColors.foreground
     }
 
     private var replacementPlayer: MatchLineupPlayer? {
@@ -1426,9 +1548,11 @@ private struct MatchLineupPlayerMarkerView: View {
                     .frame(width: 44, height: 44)
                     .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
 
-                Text("\(player.number)")
-                    .font(.system(size: 14, weight: .black, design: .rounded))
-                    .foregroundStyle(circleText)
+                LineupPlayerNumberText(
+                    number: player.number,
+                    textColor: circleText,
+                    outlineColor: numberColors.outline
+                )
             }
 
             if summary.hasStatBadges || fantasyPoints != nil {
@@ -1473,6 +1597,42 @@ private struct MatchLineupPlayerMarkerView: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, alignment: .top)
+    }
+}
+
+private struct LineupPlayerNumberText: View {
+    let number: Int
+    let textColor: Color
+    let outlineColor: Color?
+
+    private var numberLabel: String {
+        "\(number)"
+    }
+
+    var body: some View {
+        ZStack {
+            if let outlineColor {
+                outlinedText(offsetX: -0.7, offsetY: 0, color: outlineColor)
+                outlinedText(offsetX: 0.7, offsetY: 0, color: outlineColor)
+                outlinedText(offsetX: 0, offsetY: -0.7, color: outlineColor)
+                outlinedText(offsetX: 0, offsetY: 0.7, color: outlineColor)
+                outlinedText(offsetX: -0.6, offsetY: -0.6, color: outlineColor)
+                outlinedText(offsetX: 0.6, offsetY: -0.6, color: outlineColor)
+                outlinedText(offsetX: -0.6, offsetY: 0.6, color: outlineColor)
+                outlinedText(offsetX: 0.6, offsetY: 0.6, color: outlineColor)
+            }
+
+            Text(numberLabel)
+                .font(.system(size: 14, weight: .black, design: .rounded))
+                .foregroundStyle(textColor)
+        }
+    }
+
+    private func outlinedText(offsetX: CGFloat, offsetY: CGFloat, color: Color) -> some View {
+        Text(numberLabel)
+            .font(.system(size: 14, weight: .black, design: .rounded))
+            .foregroundStyle(color)
+            .offset(x: offsetX, y: offsetY)
     }
 }
 

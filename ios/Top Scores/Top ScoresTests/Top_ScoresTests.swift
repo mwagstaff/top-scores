@@ -186,6 +186,80 @@ struct Top_ScoresTests {
         #expect(merged[0].scoreStatus == "FT")
     }
 
+    @Test func fantasySquadDisplayData_matchSquadSection_splitsStartersAndBenchByTeam() async throws {
+        let squad = FantasySquadDisplayData(
+            gameweekID: 29,
+            gameweekTitle: "GW29",
+            deadlineGameweekID: nil,
+            deadlineTime: nil,
+            totalPoints: 0,
+            hasActiveFixtures: false,
+            hasStartedFixturesInGameweek: false,
+            hasFixturesPlayedToday: false,
+            isEstimatedScore: false,
+            estimatedCurrentScore: 0,
+            scoreCalculationRulesApplied: [],
+            rank: nil,
+            overallRank: nil,
+            transfersCost: nil,
+            pointsOnBench: nil,
+            goalkeepers: [
+                makeFantasyPlayer(
+                    elementID: 1,
+                    pickPosition: 1,
+                    positionType: .goalkeeper,
+                    displayName: "Trafford",
+                    fullName: "James Trafford",
+                    teamName: "Burnley"
+                )
+            ],
+            defenders: [],
+            midfielders: [
+                makeFantasyPlayer(
+                    elementID: 2,
+                    pickPosition: 6,
+                    positionType: .midfielder,
+                    displayName: "Brownhill",
+                    fullName: "Josh Brownhill",
+                    teamName: "Burnley"
+                ),
+                makeFantasyPlayer(
+                    elementID: 3,
+                    pickPosition: 7,
+                    positionType: .midfielder,
+                    displayName: "Saka",
+                    fullName: "Bukayo Saka",
+                    teamName: "Arsenal"
+                )
+            ],
+            forwards: [],
+            bench: [
+                makeFantasyPlayer(
+                    elementID: 4,
+                    pickPosition: 12,
+                    positionType: .goalkeeper,
+                    displayName: "Foster",
+                    fullName: "Mark Flekken Foster",
+                    teamName: "Burnley"
+                ),
+                makeFantasyPlayer(
+                    elementID: 5,
+                    pickPosition: 13,
+                    positionType: .defender,
+                    displayName: "Mykolenko",
+                    fullName: "Vitalii Mykolenko",
+                    teamName: "Everton"
+                )
+            ]
+        )
+
+        let section = squad.matchSquadSection(forTeamName: "Burnley")
+
+        #expect(section?.teamName == "Burnley")
+        #expect(section?.starters.map(\.displayName) == ["Trafford", "Brownhill"])
+        #expect(section?.bench.map(\.displayName) == ["Foster"])
+    }
+
     private func makeMatch(
         date: String = "2026-02-24",
         time: String = "17:45",
@@ -246,6 +320,44 @@ struct Top_ScoresTests {
 
         let data = try! JSONSerialization.data(withJSONObject: payload.compactMapValues { $0 })
         return try! JSONDecoder().decode(MatchDetailsPayload.self, from: data)
+    }
+
+    private func makeFantasyPlayer(
+        elementID: Int,
+        pickPosition: Int,
+        positionType: FantasyPositionType,
+        displayName: String,
+        fullName: String,
+        teamName: String
+    ) -> FantasyDisplayPlayer {
+        FantasyDisplayPlayer(
+            elementID: elementID,
+            pickPosition: pickPosition,
+            positionType: positionType,
+            displayName: displayName,
+            fullName: fullName,
+            teamName: teamName,
+            rawPoints: 0,
+            appliedPoints: 0,
+            displayPoints: 0,
+            multiplier: 1,
+            isCaptain: false,
+            isViceCaptain: false,
+            isPlayingNow: false,
+            isUnavailable: false,
+            isDefinitelyUnavailable: false,
+            hasAnyFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: true,
+            hasActiveFixtureThisGameweek: false,
+            hasFutureAvailabilityIssue: false,
+            futureAvailabilityIssueGameweek: nil,
+            minutesPlayed: 0,
+            upcomingOpponentDisplay: nil,
+            goalsScored: 0,
+            assists: 0,
+            yellowCards: 0,
+            redCards: 0
+        )
     }
 
 }

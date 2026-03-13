@@ -835,6 +835,20 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
     }
 }
 
+struct FantasyMatchTeamSquadSection: Identifiable, Hashable {
+    let teamName: String
+    let starters: [FantasyDisplayPlayer]
+    let bench: [FantasyDisplayPlayer]
+
+    var id: String {
+        teamName
+    }
+
+    var hasPlayers: Bool {
+        !starters.isEmpty || !bench.isEmpty
+    }
+}
+
 struct FantasyEffectivePlayerContribution: Hashable {
     let elementID: Int
     let displayName: String
@@ -959,6 +973,42 @@ struct FantasySquadDisplayData: Hashable {
                 points: points
             )
         }
+    }
+
+    func matchSquadSection(forTeamName teamName: String) -> FantasyMatchTeamSquadSection? {
+        let normalizedTeamName = Self.normalizedMatchSquadTeamName(teamName)
+        let matchedPlayers = allPlayers
+            .filter { Self.normalizedMatchSquadTeamName($0.teamName) == normalizedTeamName }
+            .sorted(by: Self.matchSquadPlayerSortOrder)
+
+        guard !matchedPlayers.isEmpty else { return nil }
+
+        return FantasyMatchTeamSquadSection(
+            teamName: teamName,
+            starters: matchedPlayers.filter(\.isStarter),
+            bench: matchedPlayers.filter { !$0.isStarter }
+        )
+    }
+
+    private static func normalizedMatchSquadTeamName(_ value: String) -> String {
+        let resolved = FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: value)
+        return resolved
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    private static func matchSquadPlayerSortOrder(
+        _ lhs: FantasyDisplayPlayer,
+        _ rhs: FantasyDisplayPlayer
+    ) -> Bool {
+        if lhs.isStarter != rhs.isStarter {
+            return lhs.isStarter && !rhs.isStarter
+        }
+        if lhs.pickPosition != rhs.pickPosition {
+            return lhs.pickPosition < rhs.pickPosition
+        }
+        return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
     }
 }
 
