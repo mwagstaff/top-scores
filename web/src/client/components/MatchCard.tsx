@@ -399,20 +399,22 @@ interface LineupHalfProps {
 }
 
 function LineupHalf({ teamName, starters, lookup, side }: LineupHalfProps) {
-  const groupedRows = buildLineupRows(starters, side);
+  const groupedRows = buildDisplayLineupRows(starters, side);
 
   return (
     <div className={`lineup-half lineup-half-${side}`}>
+      {side === "away" && <div className="lineup-half-spacer" aria-hidden="true" />}
+
       {side === "home" && <div className="lineup-team-label">{teamName.toUpperCase()}</div>}
 
-      <div className="lineup-rows">
+      <div className="lineup-half-rows">
         {groupedRows.map((row, rowIndex) => (
           <div
             className="lineup-row"
             key={`${side}-${rowIndex}`}
-            style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}
+            style={{ gridTemplateColumns: `repeat(${row.players.length}, minmax(0, 1fr))` }}
           >
-            {row.map((player) => (
+            {row.players.map((player) => (
               <LineupPlayerMarker
                 key={`${side}-${player.number}-${player.name}`}
                 player={player}
@@ -425,7 +427,11 @@ function LineupHalf({ teamName, starters, lookup, side }: LineupHalfProps) {
         ))}
       </div>
 
-      {side === "away" && <div className="lineup-team-label lineup-team-label-away">{teamName.toUpperCase()}</div>}
+      {side === "home" ? (
+        <div className="lineup-half-spacer" aria-hidden="true" />
+      ) : (
+        <div className="lineup-team-label lineup-team-label-away">{teamName.toUpperCase()}</div>
+      )}
     </div>
   );
 }
@@ -560,7 +566,17 @@ function hasRenderableTeamLineups(
   );
 }
 
-function buildLineupRows(starters: MatchLineupPlayer[], side: "home" | "away") {
+interface LineupRow {
+  players: MatchLineupPlayer[];
+  slotCount: number;
+}
+
+function buildDisplayLineupRows(starters: MatchLineupPlayer[], side: "home" | "away") {
+  const rows = buildLineupRows(starters);
+  return side === "home" ? rows : [...rows].reverse();
+}
+
+function buildLineupRows(starters: MatchLineupPlayer[]): LineupRow[] {
   const playersWithFormationRows = starters.filter(
     (player) =>
       typeof player.formationRowIndex === "number" && typeof player.formationSlotIndex === "number"
@@ -575,28 +591,31 @@ function buildLineupRows(starters: MatchLineupPlayer[], side: "home" | "away") {
       groupedByRow.set(rowIndex, row);
     }
 
-    const grouped = Array.from(groupedByRow.entries())
+    return Array.from(groupedByRow.entries())
       .sort((left, right) => left[0] - right[0])
-      .map(([, row]) =>
-        [...row].sort((left, right) => {
+      .map(([, row]) => {
+        const players = [...row].sort((left, right) => {
           const leftSlot = left.formationSlotIndex ?? 0;
           const rightSlot = right.formationSlotIndex ?? 0;
           if (leftSlot !== rightSlot) {
             return leftSlot - rightSlot;
           }
           return left.number - right.number;
-        })
-      );
-
-    return side === "home" ? grouped : [...grouped].reverse();
+        });
+        return {
+          players,
+          slotCount: Math.max(...players.map((player) => player.formationRowSize ?? players.length), players.length),
+        };
+      });
   }
 
   const goalkeepers = starters.filter((player) => player.positionCategory === "goalkeeper");
   const defenders = starters.filter((player) => player.positionCategory === "defender");
   const midfielders = starters.filter((player) => player.positionCategory === "midfielder");
   const attackers = starters.filter((player) => player.positionCategory === "attacker");
-  const grouped = [goalkeepers, defenders, midfielders, attackers].filter((row) => row.length > 0);
-  return side === "home" ? grouped : [...grouped].reverse();
+  return [goalkeepers, defenders, midfielders, attackers]
+    .filter((row) => row.length > 0)
+    .map((players) => ({ players, slotCount: players.length }));
 }
 
 interface MatchLineupPlayerEventSummary {

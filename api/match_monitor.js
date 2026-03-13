@@ -31,6 +31,7 @@ const VAR_DECISION_REVIEW_WINDOW_MINUTES = 5;
 const MONITOR_DIAGNOSTICS_RECENT_LIMIT = 300; // Keep a rolling in-memory diagnostics window
 const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG !== "0";
 const LIVE_ACTIVITY_EVAL_INTERVAL_MS = 15 * 1000;
+const LIVE_ACTIVITY_NON_SCORE_UPDATE_MIN_INTERVAL_MS = 60 * 1000;
 const LIVE_ACTIVITY_STARTUP_KICK_DELAYS_MS = [0, 3000, 9000];
 // Keep server payloads aligned with the widget's 8 visible live-activity slots.
 const LIVE_ACTIVITY_MAX_MATCHES = 8;
@@ -3516,6 +3517,41 @@ function stableHash(value) {
   return crypto.createHash("sha1").update(normalized).digest("hex");
 }
 
+function buildLiveActivityPayloadHash(contentState) {
+  if (!contentState || typeof contentState !== "object") {
+    return stableHash(null);
+  }
+
+  const { generatedAtEpochSeconds, ...stableContentState } = contentState;
+  return stableHash(stableContentState);
+}
+
+function buildLiveActivityScoreHash(contentState) {
+  const matches = Array.isArray(contentState && contentState.matches) ? contentState.matches : [];
+  return stableHash({
+    mode:
+      contentState && Object.prototype.hasOwnProperty.call(contentState, "mode")
+        ? contentState.mode
+        : null,
+    matches: matches.map((match) => ({
+      matchId: String(match && match.matchId ? match.matchId : ""),
+      homeScore: toNumericScore(match && match.homeScore),
+      awayScore: toNumericScore(match && match.awayScore),
+      aggregateHomeScore: toNumericScore(match && match.aggregateHomeScore),
+      aggregateAwayScore: toNumericScore(match && match.aggregateAwayScore),
+    })),
+  });
+}
+
+function isLiveActivityLiveMode(mode) {
+  return typeof mode === "string" && mode.includes("live");
+}
+
+function parseLiveActivityDispatchTimeMs(state) {
+  const dispatchAtMs = Date.parse(String(state && state.lastDispatchAt ? state.lastDispatchAt : ""));
+  return Number.isFinite(dispatchAtMs) ? dispatchAtMs : null;
+}
+
 function isTerminalLiveActivityError(result) {
   const message = String(result && result.error ? result.error : "").toLowerCase();
   if (!message) return false;
@@ -3541,9 +3577,32 @@ async function persistLiveActivityPatch(user, patch = {}) {
   }
 }
 
-function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = false) {
+function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = false, options = {}) {
   if (forceDispatch) return false;
-  return state.lastPayloadHash === payloadHash && state.lastMode === mode;
+  if (state.lastPayloadHash === payloadHash && state.lastMode === mode) {
+    return true;
+  }
+  if (state.lastMode !== mode) {
+    return false;
+  }
+  if (!isLiveActivityLiveMode(mode)) {
+    return false;
+  }
+
+  const scoreHash =
+    options && Object.prototype.hasOwnProperty.call(options, "scoreHash") ? options.scoreHash : null;
+  if (scoreHash && state.lastScoreHash !== scoreHash) {
+    return false;
+  }
+
+  const nowMs =
+    options && Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const lastDispatchAtMs = parseLiveActivityDispatchTimeMs(state);
+  if (lastDispatchAtMs === null) {
+    return false;
+  }
+
+  return nowMs - lastDispatchAtMs < LIVE_ACTIVITY_NON_SCORE_UPDATE_MIN_INTERVAL_MS;
 }
 
 function shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, options = {}) {
@@ -3579,6 +3638,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       await persistLiveActivityPatch(user, {
         pendingStartAt: null,
         lastPayloadHash: null,
+        lastScoreHash: null,
         lastMode: null,
       });
     }
@@ -3606,6 +3666,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       currentActivityId: null,
       pendingStartAt: null,
       lastPayloadHash: null,
+      lastScoreHash: null,
       lastMode: null,
       lastDispatchAt: new Date(nowMs).toISOString(),
       lastEndedAt: new Date(nowMs).toISOString(),
@@ -3631,10 +3692,16 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     presentation.delayMinutes,
     nowMs
   );
-  const payloadHash = stableHash(contentState);
+  const payloadHash = buildLiveActivityPayloadHash(contentState);
+  const scoreHash = buildLiveActivityScoreHash(contentState);
 
   if (activityPushToken) {
-    if (shouldSkipLiveActivityUpdate(state, payloadHash, presentation.mode, forceDispatch)) {
+    if (
+      shouldSkipLiveActivityUpdate(state, payloadHash, presentation.mode, forceDispatch, {
+        scoreHash,
+        nowMs,
+      })
+    ) {
       return;
     }
     logLiveActivityPayloadDiagnostics(user, "update", presentation, contentState, nowMs, payloadHash);
@@ -3653,6 +3720,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     if (updateResult.success) {
       await persistLiveActivityPatch(user, {
         lastPayloadHash: payloadHash,
+        lastScoreHash: scoreHash,
         lastMode: presentation.mode,
         lastDispatchAt: new Date(nowMs).toISOString(),
       });
@@ -3669,6 +3737,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
         currentActivityPushToken: null,
         currentActivityId: null,
         lastPayloadHash: null,
+        lastScoreHash: null,
         lastMode: null,
       });
     }
@@ -3685,6 +3754,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     await persistLiveActivityPatch(user, {
       pendingStartAt: null,
       lastPayloadHash: null,
+      lastScoreHash: null,
       lastMode: null,
     });
   }
@@ -3725,6 +3795,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       pendingStartAt: new Date(nowMs).toISOString(),
       lastStartAt: new Date(nowMs).toISOString(),
       lastPayloadHash: payloadHash,
+      lastScoreHash: scoreHash,
       lastMode: presentation.mode,
       lastDispatchAt: new Date(nowMs).toISOString(),
     });
@@ -3737,6 +3808,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       pushToStartTokenUpdatedAt: null,
       pendingStartAt: null,
       lastPayloadHash: null,
+      lastScoreHash: null,
       lastMode: null,
       lastDispatchAt: new Date(nowMs).toISOString(),
       testHoldUntil: null,
@@ -4345,6 +4417,8 @@ module.exports = {
     isPenaltyShootoutStatus,
     shouldStopMonitoringAsIrrelevant,
     buildLiveActivityContentState,
+    buildLiveActivityPayloadHash,
+    buildLiveActivityScoreHash,
     buildLiveActivityPresentationForUser,
     compareLiveActivityMatches,
     buildLiveActivityEntriesForUser,

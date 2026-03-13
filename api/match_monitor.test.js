@@ -409,7 +409,9 @@ test("buildNotificationPayload preserves score-correction metadata for APNS deli
 test("shouldSkipLiveActivityUpdate bypasses payload dedupe when forceDispatch is enabled", () => {
   const state = {
     lastPayloadHash: "abc123",
+    lastScoreHash: "score123",
     lastMode: "multi_live",
+    lastDispatchAt: "2026-03-13T12:00:00.000Z",
   };
 
   assert.equal(
@@ -418,6 +420,93 @@ test("shouldSkipLiveActivityUpdate bypasses payload dedupe when forceDispatch is
   );
   assert.equal(
     __testHooks.shouldSkipLiveActivityUpdate(state, "abc123", "multi_live", true),
+    false
+  );
+});
+
+test("buildLiveActivityPayloadHash ignores generatedAtEpochSeconds", () => {
+  const baseline = {
+    mode: "multi_live",
+    generatedAtEpochSeconds: 100,
+    delayMinutes: 0,
+    delayLabel: null,
+    matches: [
+      {
+        matchId: "abc",
+        homeTeam: "Arsenal",
+        awayTeam: "Chelsea",
+        homeScore: 1,
+        awayScore: 0,
+        matchTime: "55",
+      },
+    ],
+  };
+
+  const updatedTimestamp = {
+    ...baseline,
+    generatedAtEpochSeconds: 145,
+  };
+
+  assert.equal(
+    __testHooks.buildLiveActivityPayloadHash(baseline),
+    __testHooks.buildLiveActivityPayloadHash(updatedTimestamp)
+  );
+});
+
+test("shouldSkipLiveActivityUpdate throttles live non-score changes to once per minute", () => {
+  const state = {
+    lastPayloadHash: "old-payload",
+    lastScoreHash: "score123",
+    lastMode: "multi_live",
+    lastDispatchAt: "2026-03-13T12:00:00.000Z",
+  };
+
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_live", false, {
+      scoreHash: "score123",
+      nowMs: Date.parse("2026-03-13T12:00:45.000Z"),
+    }),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_live", false, {
+      scoreHash: "score123",
+      nowMs: Date.parse("2026-03-13T12:01:01.000Z"),
+    }),
+    false
+  );
+});
+
+test("shouldSkipLiveActivityUpdate dispatches live score changes immediately", () => {
+  const state = {
+    lastPayloadHash: "old-payload",
+    lastScoreHash: "score123",
+    lastMode: "multi_live",
+    lastDispatchAt: "2026-03-13T12:00:00.000Z",
+  };
+
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_live", false, {
+      scoreHash: "score456",
+      nowMs: Date.parse("2026-03-13T12:00:15.000Z"),
+    }),
+    false
+  );
+});
+
+test("shouldSkipLiveActivityUpdate dispatches non-live changes immediately", () => {
+  const state = {
+    lastPayloadHash: "old-payload",
+    lastScoreHash: "score123",
+    lastMode: "multi_upcoming",
+    lastDispatchAt: "2026-03-13T12:00:00.000Z",
+  };
+
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_upcoming", false, {
+      scoreHash: "score123",
+      nowMs: Date.parse("2026-03-13T12:00:15.000Z"),
+    }),
     false
   );
 });

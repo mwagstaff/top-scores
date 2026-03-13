@@ -297,6 +297,9 @@ function normalizeLiveActivityStatePatch(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "lastPayloadHash")) {
     normalized.lastPayloadHash = normalizeOptionalToken(patch.lastPayloadHash);
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "lastScoreHash")) {
+    normalized.lastScoreHash = normalizeOptionalToken(patch.lastScoreHash);
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "lastMode")) {
     normalized.lastMode = normalizeOptionalToken(patch.lastMode);
   }

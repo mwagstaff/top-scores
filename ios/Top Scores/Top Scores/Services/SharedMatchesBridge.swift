@@ -22,12 +22,19 @@ enum AppGroupConfig {
     static let showFantasyMatchPillsKey = "preferences.showFantasyMatchPills"
 }
 
-struct SharedMatchesPayload: Codable {
+struct SharedMatchesPayload: Codable, Equatable {
     let snapshot: PreferencesSnapshot
     let matches: [Match]
     let unfilteredMatches: [Match]
     let lastUpdated: Date?
     let generatedAt: Date
+
+    static func == (lhs: SharedMatchesPayload, rhs: SharedMatchesPayload) -> Bool {
+        lhs.snapshot == rhs.snapshot &&
+        lhs.matches == rhs.matches &&
+        lhs.unfilteredMatches == rhs.unfilteredMatches &&
+        lhs.lastUpdated == rhs.lastUpdated
+    }
 }
 
 enum SharedMatchesBridge {
@@ -42,6 +49,7 @@ enum SharedMatchesBridge {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(payload) else { return }
+        guard shouldSync(payload) else { return }
 
         saveRawData(data)
         saveSnapshotToSharedDefaults(snapshot)
@@ -58,6 +66,18 @@ enum SharedMatchesBridge {
     static func saveRawData(_ data: Data) {
         guard let url = sharedFileURL else { return }
         try? data.write(to: url, options: [.atomic])
+    }
+
+    private static func shouldSync(_ payload: SharedMatchesPayload) -> Bool {
+        guard let existing = loadPayload() else { return true }
+        return existing != payload
+    }
+
+    private static func loadPayload() -> SharedMatchesPayload? {
+        guard let data = loadRawData() else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(SharedMatchesPayload.self, from: data)
     }
 
     static func saveSnapshotToSharedDefaults(_ snapshot: PreferencesSnapshot) {
