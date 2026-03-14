@@ -13,9 +13,11 @@ struct MatchRow: View {
     var showLeague: Bool = false
     var showBroadcastDetails: Bool = true
     var showFantasyBadge: Bool = true
+    var showFantasyPlayerContributions: Bool = false
     var centerFooterText: String? = nil
     var centerFooterColor: Color = .secondary
     var isLargePresentation: Bool = false
+    var teamLogoScale: CGFloat = 1.0
 
     var body: some View {
         matchCard
@@ -158,6 +160,20 @@ struct MatchRow: View {
         return .score(lookup.effectiveScore(in: match))
     }
 
+    private var fantasyPlayerContributions: [FantasyMatchContributionDisplay] {
+        guard showFantasyPlayerContributions,
+              fantasyBadgeMode != nil,
+              !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              preferences.showFantasyMatchPills,
+              isPremierLeagueMatch,
+              let lookup = FantasySquadMembershipLookup(squad: fantasyViewModel.data)
+        else {
+            return []
+        }
+
+        return lookup.involvedPlayers(in: match)
+    }
+
     private var shouldShowFooterRow: Bool {
         (showBroadcastDetails && !isMatchFinished) || fantasyBadgeMode != nil
     }
@@ -165,21 +181,9 @@ struct MatchRow: View {
     @ViewBuilder
     private var footerRow: some View {
         HStack(alignment: .center, spacing: 8) {
-            if showBroadcastDetails && !isMatchFinished {
-                Text(match.tvChannels.isEmpty ? "TV TBA" : match.tvChannels.joined(separator: " • "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(1)
-            } else {
-                Spacer(minLength: 0)
-            }
+            footerLeadingContent
 
             if showBroadcastDetails && !isMatchFinished {
-                Spacer(minLength: 8)
-
                 TvLogoRow(channels: match.tvChannels)
                     .fixedSize(horizontal: true, vertical: false)
             }
@@ -188,6 +192,25 @@ struct MatchRow: View {
                 FantasyMatchParticipationBadge(mode: fantasyBadgeMode)
                     .padding(.leading, showBroadcastDetails && !isMatchFinished ? 4 : 0)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var footerLeadingContent: some View {
+        if !fantasyPlayerContributions.isEmpty {
+            FantasyMatchContributionStrip(contributions: fantasyPlayerContributions)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+        } else if showBroadcastDetails && !isMatchFinished {
+            Text(match.tvChannels.isEmpty ? "TV TBA" : match.tvChannels.joined(separator: " • "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+        } else {
+            Spacer(minLength: 0)
         }
     }
 
@@ -231,7 +254,8 @@ struct MatchRow: View {
     }
 
     private var logoSize: CGFloat {
-        isLargePresentation ? 34 : 22
+        let baseSize: CGFloat = isLargePresentation ? 34 : 22
+        return baseSize * teamLogoScale
     }
 
     private var cardPadding: CGFloat {
@@ -322,6 +346,83 @@ private struct FantasyMatchParticipationBadge: View {
         case .score(let score):
             return "\(score) fantasy points involved"
         }
+    }
+}
+
+private struct FantasyMatchContributionDisplay: Identifiable, Hashable {
+    let elementID: Int
+    let displayName: String
+    let points: Int
+    let teamOrder: Int
+    let pickPosition: Int
+
+    var isStarter: Bool {
+        pickPosition <= 11
+    }
+
+    var id: Int {
+        elementID
+    }
+}
+
+private struct FantasyMatchContributionStrip: View {
+    let contributions: [FantasyMatchContributionDisplay]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(contributions) { contribution in
+                    FantasyMatchContributionChip(contribution: contribution)
+                }
+            }
+            .padding(.vertical, 1)
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct FantasyMatchContributionChip: View {
+    let contribution: FantasyMatchContributionDisplay
+
+    private var textOpacity: Double {
+        contribution.isStarter ? 1.0 : 0.6
+    }
+
+    private var pillOpacity: Double {
+        contribution.isStarter ? 0.92 : 0.55
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(contribution.displayName)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .opacity(textOpacity)
+                .lineLimit(1)
+
+            if !contribution.isStarter {
+                Text("(sub)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .opacity(0.5)
+            }
+
+            Text("\(contribution.points)")
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(fantasyPointsHeatmapColor(contribution.points).opacity(pillOpacity))
+                )
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityLabel(
+            contribution.isStarter
+                ? "\(contribution.displayName), starter, \(contribution.points) points"
+                : "\(contribution.displayName), bench, \(contribution.points) points"
+        )
     }
 }
 
@@ -2082,10 +2183,18 @@ private struct MatchPlayerNameLookup {
 }
 
 private struct FantasySquadMembershipLookup {
+    private struct SquadPlayerSummary {
+        let elementID: Int
+        let displayName: String
+        let pickPosition: Int
+    }
+
     private let memberKeys: Set<String>
     private let teamCounts: [String: Int]
     private let effectiveScoresByTeam: [String: Int]
     private let contributionPointsByKey: [String: Int]
+    private let contributionPointsByElementID: [Int: Int]
+    private let playersByTeam: [String: [SquadPlayerSummary]]
 
     init?(squad: FantasySquadDisplayData?) {
         guard let squad else { return nil }
@@ -2094,9 +2203,18 @@ private struct FantasySquadMembershipLookup {
         var counts: [String: Int] = [:]
         var effectiveScores: [String: Int] = [:]
         var contributionPoints: [String: Int] = [:]
+        var contributionPointsByElementID: [Int: Int] = [:]
+        var playersByTeam: [String: [SquadPlayerSummary]] = [:]
         for player in squad.allPlayers {
             let teamKey = Self.normalizeTeamName(player.teamName)
             counts[teamKey, default: 0] += 1
+            playersByTeam[teamKey, default: []].append(
+                SquadPlayerSummary(
+                    elementID: player.elementID,
+                    displayName: player.displayName,
+                    pickPosition: player.pickPosition
+                )
+            )
             for nameVariant in Self.nameVariants(
                 fullName: player.fullName,
                 displayName: player.displayName
@@ -2109,6 +2227,7 @@ private struct FantasySquadMembershipLookup {
         for contribution in squad.effectivePlayerContributions {
             let teamKey = Self.normalizeTeamName(contribution.teamName)
             effectiveScores[teamKey, default: 0] += contribution.points
+            contributionPointsByElementID[contribution.elementID] = contribution.points
             for nameVariant in Self.nameVariants(
                 fullName: contribution.fullName,
                 displayName: contribution.displayName
@@ -2120,6 +2239,8 @@ private struct FantasySquadMembershipLookup {
         teamCounts = counts
         effectiveScoresByTeam = effectiveScores
         contributionPointsByKey = contributionPoints
+        self.contributionPointsByElementID = contributionPointsByElementID
+        self.playersByTeam = playersByTeam
     }
 
     func contains(player: MatchLineupPlayer, teamName: String) -> Bool {
@@ -2162,6 +2283,59 @@ private struct FantasySquadMembershipLookup {
         }
 
         return memberKeys.compactMap { contributionPointsByKey[$0] }.max() ?? 0
+    }
+
+    func involvedPlayers(in match: Match) -> [FantasyMatchContributionDisplay] {
+        var output: [FantasyMatchContributionDisplay] = []
+        var seenElementIDs = Set<Int>()
+
+        appendPlayers(
+            for: match.homeTeam,
+            teamOrder: 0,
+            output: &output,
+            seenElementIDs: &seenElementIDs
+        )
+        appendPlayers(
+            for: match.awayTeam,
+            teamOrder: 1,
+            output: &output,
+            seenElementIDs: &seenElementIDs
+        )
+
+        return output.sorted { lhs, rhs in
+            if lhs.points != rhs.points {
+                return lhs.points > rhs.points
+            }
+            if lhs.teamOrder != rhs.teamOrder {
+                return lhs.teamOrder < rhs.teamOrder
+            }
+            if lhs.pickPosition != rhs.pickPosition {
+                return lhs.pickPosition < rhs.pickPosition
+            }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    private func appendPlayers(
+        for teamName: String,
+        teamOrder: Int,
+        output: inout [FantasyMatchContributionDisplay],
+        seenElementIDs: inout Set<Int>
+    ) {
+        for teamKey in fantasyTeamLookupKeys(teamName) {
+            for player in playersByTeam[teamKey] ?? [] {
+                guard seenElementIDs.insert(player.elementID).inserted else { continue }
+                output.append(
+                    FantasyMatchContributionDisplay(
+                        elementID: player.elementID,
+                        displayName: player.displayName,
+                        points: contributionPointsByElementID[player.elementID] ?? 0,
+                        teamOrder: teamOrder,
+                        pickPosition: player.pickPosition
+                    )
+                )
+            }
+        }
     }
 
     private func effectiveScore(for teamName: String) -> Int {
@@ -2210,8 +2384,24 @@ private struct FantasySquadMembershipLookup {
     }
 }
 
+private func fantasyPointsHeatmapColor(_ points: Int) -> Color {
+    switch points {
+    case ..<1:
+        return Color(red: 0.78, green: 0.16, blue: 0.14)
+    case 1...2:
+        return Color(red: 0.91, green: 0.37, blue: 0.15)
+    case 3...4:
+        return Color(red: 0.95, green: 0.68, blue: 0.16)
+    case 5...7:
+        return Color(red: 0.29, green: 0.71, blue: 0.27)
+    default:
+        return Color.green
+    }
+}
+
 func fantasyTeamLookupKeys(_ value: String) -> Set<String> {
-    Set(TeamIdentityStore.shared.names(for: value).compactMap { candidate in
+    let candidates = TeamIdentityStore.shared.names(for: value) + BundledTeamIdentityCatalog.shared.names(for: value)
+    return Set(candidates.compactMap { candidate in
         let normalized = normalizeFantasyLookupName(candidate)
         return normalized.isEmpty ? nil : normalized
     })

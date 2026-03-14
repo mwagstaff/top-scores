@@ -333,7 +333,7 @@ final class LogoResolver {
 
 }
 
-private final class BundledTeamIdentityCatalog {
+final class BundledTeamIdentityCatalog {
     static let shared = BundledTeamIdentityCatalog()
 
     private var canonicalNameByKey: [String: String] = [:]

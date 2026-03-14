@@ -294,6 +294,8 @@ struct MatchesView: View {
                                     highlightToday: day.isToday,
                                     showLeague: false,
                                     showFantasyBadge: mode == .fixtures,
+                                    showFantasyPlayerContributions: mode == .fixtures,
+                                    teamLogoScale: 1.1,
                                     // Only enable this if needing to debug elo scores
                                     // centerFooterText: matchDebugFooterText(for: match)
                                 )
