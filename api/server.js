@@ -1741,6 +1741,14 @@ function normalizedPlayerName(element) {
   return String((element && element.web_name) || "").trim() || "Unknown";
 }
 
+function assistantPlayerName(source) {
+  const webName = String((source && source.web_name) || "").trim();
+  if (webName) return webName;
+  const playerName = String((source && source.player_name) || "").trim();
+  if (playerName) return playerName;
+  return normalizedPlayerName(source);
+}
+
 function elementAvailabilityPenalty(element) {
   const status = String((element && element.status) || "")
     .trim()
@@ -2013,7 +2021,7 @@ function buildTransferRecommendation(
   return {
     element_id: parseFiniteNumber(element && element.id, 0),
     web_name: String((element && element.web_name) || "").trim(),
-    player_name: normalizedPlayerName(element),
+    player_name: assistantPlayerName(element),
     team_id: teamID,
     team_name: team && team.name ? team.name : "Unknown",
     team_short_name: team && team.shortName ? team.shortName : "",
@@ -2350,14 +2358,14 @@ function buildAssistantTransferMove(outgoingProfile, incomingProfile) {
     outProfile: outgoingProfile,
     inProfile: incomingProfile,
     out_element_id: parseFiniteNumber(outgoingProfile && outgoingProfile.element_id, 0),
-    out_player_name: String((outgoingProfile && outgoingProfile.player_name) || "").trim(),
+    out_player_name: assistantPlayerName(outgoingProfile),
     out_team_id: parseFiniteNumber(outgoingProfile && outgoingProfile.team_id, 0),
     out_team_name: String((outgoingProfile && outgoingProfile.team_name) || "").trim(),
     out_team_short_name: String((outgoingProfile && outgoingProfile.team_short_name) || "").trim(),
     out_price_millions: parseFiniteNumber(outgoingProfile && outgoingProfile.now_cost_millions, 0),
     out_cost_units: parseFiniteNumber(outgoingProfile && outgoingProfile.assistant_cost_units, 0),
     in_element_id: parseFiniteNumber(incomingProfile && incomingProfile.element_id, 0),
-    in_player_name: String((incomingProfile && incomingProfile.player_name) || "").trim(),
+    in_player_name: assistantPlayerName(incomingProfile),
     in_team_id: parseFiniteNumber(incomingProfile && incomingProfile.team_id, 0),
     in_team_name: String((incomingProfile && incomingProfile.team_name) || "").trim(),
     in_team_short_name: String((incomingProfile && incomingProfile.team_short_name) || "").trim(),
@@ -2575,7 +2583,7 @@ function buildAssistantCaptainCandidate(profile) {
 
   return {
     element_id: parseFiniteNumber(profile && profile.element_id, 0),
-    player_name: String((profile && profile.player_name) || "").trim(),
+    player_name: assistantPlayerName(profile),
     team_short_name: String((profile && profile.team_short_name) || "").trim(),
     opponent_label:
       profile && profile.next_fixture && profile.next_fixture.label
@@ -2960,7 +2968,7 @@ function buildAssistantIdealSquadPlayer(profile, displayContext, options = {}) {
   return {
     element_id: parseFiniteNumber(profile && profile.element_id, 0),
     pick_position: pickPosition,
-    player_name: String((profile && profile.player_name) || "").trim(),
+    player_name: assistantPlayerName(profile),
     team_id: parseFiniteNumber(profile && profile.team_id, 0),
     team_name: String((profile && profile.team_name) || "").trim(),
     team_short_name: String((profile && profile.team_short_name) || "").trim(),

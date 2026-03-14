@@ -1960,7 +1960,7 @@ struct FantasyView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(height: 90)
+        .frame(height: 104)
     }
 
     private func benchSection(_ data: FantasySquadDisplayData, playerSelectionEnabled: Bool) -> some View {
@@ -1986,7 +1986,7 @@ struct FantasyView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(height: 104)
+            .frame(height: 118)
             .padding(8)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -3053,6 +3053,11 @@ private struct FantasyPlayerCard: View {
         player.goalsScored > 0 || player.assists > 0 || player.yellowCards > 0 || player.redCards > 0
     }
 
+    private var opponentDisplayText: String {
+        let trimmed = player.upcomingOpponentDisplay?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "No game" : trimmed
+    }
+
     var body: some View {
         let crestContainerSize = max(22, min(width * 0.48, 32))
         let crestImageSize = crestContainerSize * 0.78
@@ -3135,24 +3140,26 @@ private struct FantasyPlayerCard: View {
             }
             .frame(width: width, height: 46)
 
-            VStack(spacing: 2) {
+            VStack(spacing: 1) {
                 Text(player.displayName)
                     .font(.system(size: 9, weight: .semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .foregroundStyle(primaryTextColor)
+
+                Text(opponentDisplayText)
+                    .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .foregroundStyle(primaryTextColor)
             }
             .padding(.horizontal, 4)
-            .padding(.vertical, 3)
+            .padding(.vertical, 4)
             .frame(width: width)
             .background(nameBackgroundColor)
 
-            Text(player.upcomingOpponentDisplay ?? "\(player.displayPoints)")
-                .font(
-                    player.upcomingOpponentDisplay == nil
-                    ? .system(size: 10, weight: .bold, design: .rounded)
-                    : .system(size: 8, weight: .semibold, design: .rounded)
-                )
+            Text("\(player.displayPoints)")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.78)
@@ -4122,7 +4129,7 @@ private struct FantasyAssistantManagerSheet: View {
             }
 
             HStack(spacing: 8) {
-                assistantPill(title: "Delta", value: priceText(move.priceChangeMillions, signed: true))
+                assistantPill(title: "Price", value: priceText(move.priceChangeMillions, signed: true))
                 assistantPill(title: "Next GW", value: signedPointsText(move.projectedGainNextGameweek))
                 assistantPill(title: "Next 3", value: signedPointsText(move.projectedGainNext3Gameweeks))
             }
@@ -4362,7 +4369,7 @@ private struct FantasyAssistantManagerSheet: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(height: 90)
+        .frame(height: 104)
     }
 
     private func assistantIdealBenchSection(_ data: FantasySquadDisplayData) -> some View {
@@ -4383,7 +4390,7 @@ private struct FantasyAssistantManagerSheet: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(height: 104)
+            .frame(height: 118)
             .padding(8)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)

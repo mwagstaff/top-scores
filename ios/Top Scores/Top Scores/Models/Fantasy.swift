@@ -1912,9 +1912,35 @@ enum FantasySquadBuilder {
             return lettersOnly.isEmpty ? "TBD" : lettersOnly
         }
 
+        let mergedSeasonFixtures: [FantasyFixture] = {
+            var fixturesByID = Dictionary(
+                uniqueKeysWithValues: seasonFixtures.map { ($0.id, $0) }
+            )
+            for fixture in fixtures {
+                fixturesByID[fixture.id] = fixture
+            }
+            return Array(fixturesByID.values)
+        }()
+
         var upcomingOpponentByTeamID: [Int: String] = [:]
-        fixtures
-            .sorted { $0.id < $1.id }
+        mergedSeasonFixtures
+            .sorted { lhs, rhs in
+                let lhsEvent = lhs.event ?? Int.max
+                let rhsEvent = rhs.event ?? Int.max
+                if lhsEvent != rhsEvent {
+                    return lhsEvent < rhsEvent
+                }
+
+                let lhsKickoff = lhs.kickoffTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let rhsKickoff = rhs.kickoffTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if lhsKickoff != rhsKickoff {
+                    if lhsKickoff.isEmpty { return false }
+                    if rhsKickoff.isEmpty { return true }
+                    return lhsKickoff < rhsKickoff
+                }
+
+                return lhs.id < rhs.id
+            }
             .forEach { fixture in
                 let hasStarted = fixture.started == true
                 let isFinished = fixture.finished == true || fixture.finishedProvisional == true
@@ -2010,7 +2036,6 @@ enum FantasySquadBuilder {
                 return futureCandidateEvents.first(where: { !teamEvents.contains($0) })
             }()
             let upcomingOpponentDisplay: String? = {
-                guard rawPoints == 0 else { return nil }
                 guard let teamID = element?.team else { return nil }
                 return upcomingOpponentByTeamID[teamID]
             }()
