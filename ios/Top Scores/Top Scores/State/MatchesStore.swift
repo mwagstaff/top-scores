@@ -172,14 +172,8 @@ enum MatchScoreResolver {
     }
 
     private static func variants(for name: String) -> [NameVariant] {
-        let lowered = name.lowercased()
-        var candidates: [String] = [lowered]
-        if let alias = aliasMap[lowered] {
-            candidates.append(alias)
-        }
-
         var variants: [NameVariant] = []
-        for candidate in candidates {
+        for candidate in TeamIdentityStore.shared.names(for: name) {
             let tokens = normalizedTokens(candidate)
             let key = tokens.joined()
             guard !key.isEmpty else { continue }
@@ -265,27 +259,6 @@ enum MatchScoreResolver {
         "club", "de", "the", "and"
     ]
 
-    private static let aliasMap: [String: String] = [
-        "manchester united": "man united",
-        "manchester city": "man city",
-        "tottenham hotspur": "tottenham",
-        "wolverhampton wanderers": "wolves",
-        "sheffield united": "sheff utd",
-        "sheffield wednesday": "sheff wed",
-        "nottingham forest": "nottm forest",
-        "brighton & hove albion": "brighton",
-        "brighton and hove albion": "brighton",
-        "borussia dortmund": "dortmund",
-        "borussia m'gladbach": "m'gladbach",
-        "athletic club": "athletic",
-        "real betis": "betis",
-        "fc copenhagen": "copenhagen",
-        "fc porto": "porto",
-        "paok thessaloniki": "paok",
-        "paok thessaloniki fc": "paok",
-        "inter milan": "inter",
-        "ac milan": "ac milan"
-    ]
 }
 
 struct MatchLeague: Identifiable, Hashable {

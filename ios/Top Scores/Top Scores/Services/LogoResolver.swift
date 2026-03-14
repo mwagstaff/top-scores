@@ -265,11 +265,11 @@ final class LogoResolver {
     }
 
     private static func aliases(for name: String) -> [String] {
-        let lowered = name.lowercased()
-        if let alias = aliasMap[lowered] {
-            return [alias, lowered]
+        let aliases = TeamIdentityStore.shared.names(for: name)
+        if aliases.isEmpty {
+            return [name.lowercased()]
         }
-        return [lowered]
+        return aliases.map { $0.lowercased() }
     }
 
     private static func similarity(_ lhs: String, _ rhs: String) -> Double {
@@ -312,27 +312,4 @@ final class LogoResolver {
         "hotspur", "saint", "st", "calcio"
     ]
 
-    private static let aliasMap: [String: String] = [
-        "manchester united": "man united",
-        "man utd": "man united",
-        "manchester utd": "man united",
-        "man u": "man united",
-        "manchester city": "man city",
-        "tottenham hotspur": "tottenham",
-        "wolverhampton wanderers": "wolves",
-        "sheffield united": "sheff utd",
-        "sheffield wednesday": "sheff wed",
-        "nottingham forest": "nottm forest",
-        "borussia dortmund": "dortmund",
-        "borussia m'gladbach": "m'gladbach",
-        "athletic club": "athletic",
-        "real betis": "betis",
-        "real sociedad": "real sociedad",
-        "fc copenhagen": "copenhagen",
-        "fc porto": "porto",
-        "paok thessaloniki": "paok",
-        "paok thessaloniki fc": "paok",
-        "inter milan": "inter",
-        "ac milan": "ac milan"
-    ]
 }

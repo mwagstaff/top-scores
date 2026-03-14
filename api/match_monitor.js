@@ -11,6 +11,7 @@ const { fetchBbcLiveTextEntriesByDetailsUrl } = require("./fetch_bbc_scores");
 const liveActivityMetrics = require("./live_activity_metrics");
 const crypto = require("crypto");
 const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.json");
+const { teamIdentityNames } = require("./team_identity");
 
 // Configuration
 const POLL_INTERVAL_MS = 10 * 1000; // Poll every 10 seconds for monitored matches
@@ -69,25 +70,6 @@ const LIVE_ACTIVITY_TEAM_RATING_STOP_WORDS = new Set([
   "the",
   "and",
 ]);
-const LIVE_ACTIVITY_TEAM_RATING_ALIAS_MAP = Object.freeze({
-  celtavigo: "celta",
-  manchesterunited: "manunited",
-  manchestercity: "mancity",
-  tottenhamhotspur: "tottenham",
-  wolverhamptonwanderers: "wolves",
-  sheffieldunited: "sheffutd",
-  sheffieldwednesday: "sheffwed",
-  nottinghamforest: "nottmforest",
-  brightonhovealbion: "brighton",
-  brightonandhovealbion: "brighton",
-  bayernmunich: "bayern",
-  borussiadortmund: "dortmund",
-  borussiamonchengladbach: "gladbach",
-  intermilan: "inter",
-  oxfordunited: "oxford",
-  prestonnorthend: "preston",
-});
-
 // State tracking
 const monitoredMatches = new Map(); // matchId -> matchState
 const scheduledNotifications = new Map(); // notificationId -> timeout handle
@@ -510,6 +492,7 @@ function buildLiveActivityTeamRatingLookup(rows, defaultElo = 1000) {
     Array.from(
       new Set(
         names
+          .flatMap((name) => teamIdentityNames(name))
           .map((name) => String(name || "").trim())
           .filter(Boolean)
       )
@@ -536,36 +519,37 @@ function buildLiveActivityTeamRatingLookup(rows, defaultElo = 1000) {
 
 function lookupLiveActivityTeamRating(teamName) {
   const lookup = liveActivityTeamRatingLookup;
-  const key = normalizeLiveActivityTeamKey(teamName);
-  if (!lookup || !key) {
+  if (!lookup) {
     return null;
   }
 
-  if (lookup.exactByKey.has(key)) {
-    return lookup.exactByKey.get(key);
-  }
-
-  const aliasedKey = LIVE_ACTIVITY_TEAM_RATING_ALIAS_MAP[key];
-  if (aliasedKey && lookup.exactByKey.has(aliasedKey)) {
-    return lookup.exactByKey.get(aliasedKey);
-  }
-
-  const sourceTokens = normalizeLiveActivityTeamTokens(teamName);
   let bestRating = null;
   let bestConfidence = 0;
 
-  lookup.candidates.forEach((candidate) => {
-    const confidence = liveActivityTeamSimilarity(
-      key,
-      candidate.key,
-      sourceTokens,
-      candidate.tokens
-    );
-    if (confidence > bestConfidence) {
-      bestConfidence = confidence;
-      bestRating = candidate.rating;
+  for (const variant of teamIdentityNames(teamName)) {
+    const key = normalizeLiveActivityTeamKey(variant);
+    if (!key) {
+      continue;
     }
-  });
+
+    if (lookup.exactByKey.has(key)) {
+      return lookup.exactByKey.get(key);
+    }
+
+    const sourceTokens = normalizeLiveActivityTeamTokens(variant);
+    lookup.candidates.forEach((candidate) => {
+      const confidence = liveActivityTeamSimilarity(
+        key,
+        candidate.key,
+        sourceTokens,
+        candidate.tokens
+      );
+      if (confidence > bestConfidence) {
+        bestConfidence = confidence;
+        bestRating = candidate.rating;
+      }
+    });
+  }
 
   return bestConfidence >= 0.86 ? bestRating : null;
 }
@@ -611,14 +595,14 @@ function buildLiveActivityPremierLeagueTeamLookup(teams) {
   const candidates = [];
 
   (Array.isArray(teams) ? teams : []).forEach((team) => {
-    const name = String(team || "").trim();
-    if (!name) return;
-    const key = normalizeLiveActivityTeamKey(name);
-    if (!key) return;
-    exactByKey.add(key);
-    candidates.push({
-      key,
-      tokens: normalizeLiveActivityTeamTokens(name),
+    Array.from(new Set(teamIdentityNames(team))).forEach((name) => {
+      const key = normalizeLiveActivityTeamKey(name);
+      if (!key) return;
+      exactByKey.add(key);
+      candidates.push({
+        key,
+        tokens: normalizeLiveActivityTeamTokens(name),
+      });
     });
   });
 
@@ -638,31 +622,27 @@ function getLiveActivityPremierLeagueTeamLookup() {
 }
 
 function isEnglishPremierLeagueTeam(teamName) {
-  const key = normalizeLiveActivityTeamKey(teamName);
-  if (!key) return false;
-
   const lookup = getLiveActivityPremierLeagueTeamLookup();
-  if (lookup.exactByKey.has(key)) return true;
-
-  const aliasedKey = LIVE_ACTIVITY_TEAM_RATING_ALIAS_MAP[key];
-  if (aliasedKey && lookup.exactByKey.has(aliasedKey)) {
-    return true;
-  }
-
-  const sourceTokens = normalizeLiveActivityTeamTokens(teamName);
   let bestConfidence = 0;
 
-  lookup.candidates.forEach((candidate) => {
-    const confidence = liveActivityTeamSimilarity(
-      key,
-      candidate.key,
-      sourceTokens,
-      candidate.tokens
-    );
-    if (confidence > bestConfidence) {
-      bestConfidence = confidence;
-    }
-  });
+  for (const variant of teamIdentityNames(teamName)) {
+    const key = normalizeLiveActivityTeamKey(variant);
+    if (!key) continue;
+    if (lookup.exactByKey.has(key)) return true;
+
+    const sourceTokens = normalizeLiveActivityTeamTokens(variant);
+    lookup.candidates.forEach((candidate) => {
+      const confidence = liveActivityTeamSimilarity(
+        key,
+        candidate.key,
+        sourceTokens,
+        candidate.tokens
+      );
+      if (confidence > bestConfidence) {
+        bestConfidence = confidence;
+      }
+    });
+  }
 
   return bestConfidence >= 0.86;
 }
@@ -3167,38 +3147,14 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
   return entries.filter((entry) => entry && entry.matchId && entry.match);
 }
 
-function liveActivityStatusSortBucket(match) {
-  const status = match && match.score_status;
-  if (isLiveMatchStatus(status)) return 0;
-  if (isFinishedMatchStatus(status) || isPenaltyShootoutStatus(status)) return 1;
-  return 2;
-}
-
-function liveActivityPremierLeagueSortBucket(match) {
-  const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
-  const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
-  if (homeInPremierLeague && awayInPremierLeague) return 0;
-  if (homeInPremierLeague || awayInPremierLeague) return 1;
-  return 2;
-}
-
 function compareLiveActivityMatches(lhs, rhs) {
-  const lhsStatusBucket = liveActivityStatusSortBucket(lhs);
-  const rhsStatusBucket = liveActivityStatusSortBucket(rhs);
-  if (lhsStatusBucket !== rhsStatusBucket) return lhsStatusBucket - rhsStatusBucket;
-
-  const lhsPremierLeagueBucket = liveActivityPremierLeagueSortBucket(lhs);
-  const rhsPremierLeagueBucket = liveActivityPremierLeagueSortBucket(rhs);
-  if (lhsPremierLeagueBucket !== rhsPremierLeagueBucket) {
-    return lhsPremierLeagueBucket - rhsPremierLeagueBucket;
-  }
+  const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
+  const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
+  if (leftKickoff !== rightKickoff) return rightKickoff - leftKickoff;
 
   const lhsTeamScore = liveActivityTeamScoreTotal(lhs);
   const rhsTeamScore = liveActivityTeamScoreTotal(rhs);
   if (lhsTeamScore !== rhsTeamScore) return rhsTeamScore - lhsTeamScore;
-  const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
-  const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
-  if (leftKickoff !== rightKickoff) return leftKickoff - rightKickoff;
   const homeCompare = String(lhs && lhs.home_team ? lhs.home_team : "").localeCompare(
     String(rhs && rhs.home_team ? rhs.home_team : ""),
     undefined,
@@ -4133,7 +4089,9 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
   const sortedFinished = finishedMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
     .sort(compareLiveActivityMatches);
-  const sortedLiveAndFinished = [...sortedLive, ...sortedFinished].slice(0, LIVE_ACTIVITY_MAX_MATCHES);
+  const sortedLiveAndFinished = [...sortedLive, ...sortedFinished]
+    .sort(compareLiveActivityMatches)
+    .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const sortedRecentKickoff = recentKickoffMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
     .sort(compareLiveActivityMatches)

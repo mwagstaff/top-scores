@@ -880,11 +880,33 @@ struct TeamColorsCatalogResponse: Codable, Hashable {
     let updatedAt: String?
     let defaultStyle: TeamColorStyleResponse
     let teams: [TeamColorRecordResponse]
+    let identityGroups: [TeamIdentityGroupResponse]
 
     enum CodingKeys: String, CodingKey {
         case updatedAt
         case defaultStyle = "default"
         case teams
+        case identityGroups = "identity_groups"
+    }
+
+    init(
+        updatedAt: String?,
+        defaultStyle: TeamColorStyleResponse,
+        teams: [TeamColorRecordResponse],
+        identityGroups: [TeamIdentityGroupResponse]
+    ) {
+        self.updatedAt = updatedAt
+        self.defaultStyle = defaultStyle
+        self.teams = teams
+        self.identityGroups = identityGroups
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        defaultStyle = try container.decode(TeamColorStyleResponse.self, forKey: .defaultStyle)
+        teams = try container.decodeIfPresent([TeamColorRecordResponse].self, forKey: .teams) ?? []
+        identityGroups = try container.decodeIfPresent([TeamIdentityGroupResponse].self, forKey: .identityGroups) ?? []
     }
 }
 
@@ -900,6 +922,11 @@ struct TeamColorRecordResponse: Codable, Hashable {
     let primary: String
     let secondary: String
     let scheme: String?
+}
+
+struct TeamIdentityGroupResponse: Codable, Hashable {
+    let name: String
+    let aliases: [String]
 }
 
 private extension MatchesViewMode {

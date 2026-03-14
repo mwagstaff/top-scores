@@ -18,25 +18,6 @@ struct TeamRatingLookup {
     private static let stopWords: Set<String> = [
         "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk", "club", "de", "the", "and"
     ]
-    private static let aliasMap: [String: String] = [
-        "celtavigo": "celta",
-        "manchesterunited": "manunited",
-        "manchestercity": "mancity",
-        "tottenhamhotspur": "tottenham",
-        "wolverhamptonwanderers": "wolves",
-        "sheffieldunited": "sheffutd",
-        "sheffieldwednesday": "sheffwed",
-        "nottinghamforest": "nottmforest",
-        "brightonhovealbion": "brighton",
-        "brightonandhovealbion": "brighton",
-        "bayernmunich": "bayern",
-        "borussiadortmund": "dortmund",
-        "borussiamonchengladbach": "gladbach",
-        "intermilan": "inter",
-        "oxfordunited": "oxford",
-        "prestonnorthend": "preston",
-    ]
-
     init(entries: [TeamRankingEntry], defaultPoints: Double = TeamRankingSettings.defaultDefaultElo) {
         var exact: [String: Double] = [:]
         var candidateList: [Candidate] = []
@@ -46,7 +27,9 @@ struct TeamRatingLookup {
             guard let points = entry.points, points.isFinite else { continue }
             var names = [entry.name]
             names.append(contentsOf: entry.aliases)
-            let dedupedNames = Array(Set(names)).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            let dedupedNames = Array(
+                Set(names.flatMap { TeamIdentityStore.shared.names(for: $0) })
+            ).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
             for name in dedupedNames {
                 let key = Self.normalizedKey(name)
@@ -64,30 +47,29 @@ struct TeamRatingLookup {
     }
 
     func rating(for teamName: String) -> Double? {
-        let key = Self.normalizedKey(teamName)
-        guard !key.isEmpty else { return nil }
-
-        if let direct = exactByKey[key] {
-            return direct
-        }
-        if let alias = Self.aliasMap[key], let mapped = exactByKey[alias] {
-            return mapped
-        }
-
-        let sourceTokens = Self.normalizedTokens(teamName)
         var bestRating: Double?
         var bestConfidence = 0.0
 
-        for candidate in candidates {
-            let confidence = Self.similarity(
-                lhsKey: key,
-                rhsKey: candidate.key,
-                lhsTokens: sourceTokens,
-                rhsTokens: candidate.tokens
-            )
-            if confidence > bestConfidence {
-                bestConfidence = confidence
-                bestRating = candidate.rating
+        for variant in TeamIdentityStore.shared.names(for: teamName) {
+            let key = Self.normalizedKey(variant)
+            guard !key.isEmpty else { continue }
+
+            if let direct = exactByKey[key] {
+                return direct
+            }
+
+            let sourceTokens = Self.normalizedTokens(variant)
+            for candidate in candidates {
+                let confidence = Self.similarity(
+                    lhsKey: key,
+                    rhsKey: candidate.key,
+                    lhsTokens: sourceTokens,
+                    rhsTokens: candidate.tokens
+                )
+                if confidence > bestConfidence {
+                    bestConfidence = confidence
+                    bestRating = candidate.rating
+                }
             }
         }
 
@@ -492,6 +474,11 @@ final class FantasyTeamShortNameMappingsStore {
     func resolveTeamName(for rawValue: String) -> String {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
+
+        let canonical = TeamIdentityStore.shared.canonicalName(for: trimmed)
+        if canonical.caseInsensitiveCompare(trimmed) != .orderedSame {
+            return canonical
+        }
 
         let key = trimmed.uppercased()
         lock.lock()

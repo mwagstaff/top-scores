@@ -1468,11 +1468,7 @@ struct FantasySquadDisplayData: Hashable {
     }
 
     private static func normalizedMatchSquadTeamName(_ value: String) -> String {
-        let resolved = FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: value)
-        return resolved
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
+        TeamIdentityStore.normalizedKey(TeamIdentityStore.shared.canonicalName(for: value))
     }
 
     private static func matchSquadPlayerSortOrder(

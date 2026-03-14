@@ -17,6 +17,12 @@ interface TeamColorCatalogPayload {
     scheme?: string | null;
   };
   teams: TeamColorEntry[];
+  identity_groups?: TeamIdentityGroup[];
+}
+
+interface TeamIdentityGroup {
+  name: string;
+  aliases?: string[];
 }
 
 export interface ResolvedTeamColors {
@@ -37,6 +43,9 @@ class TeamColorCatalogStore {
     isFallback: true,
   };
   private readonly exactByKey = new Map<string, TeamColorEntry>();
+  private readonly canonicalNameByKey = new Map<string, string>();
+  private readonly namesByCanonicalKey = new Map<string, string[]>();
+  private readonly exactIdentityToCanonicalKey = new Map<string, string>();
   private version = 0;
   private loadPromise: Promise<void> | null = null;
 
@@ -98,6 +107,9 @@ class TeamColorCatalogStore {
 
   private apply(payload: TeamColorCatalogPayload): void {
     this.exactByKey.clear();
+    this.canonicalNameByKey.clear();
+    this.namesByCanonicalKey.clear();
+    this.exactIdentityToCanonicalKey.clear();
 
     const normalizedDefault = {
       ...this.fallbackEntry,
@@ -126,6 +138,12 @@ class TeamColorCatalogStore {
           this.exactByKey.set(key, entry);
         }
       }
+
+      this.registerIdentity(entry.name, entry.aliases ?? []);
+    }
+
+    for (const group of payload.identity_groups ?? []) {
+      this.registerIdentity(group.name, group.aliases ?? []);
     }
 
     this.version += 1;
@@ -137,7 +155,76 @@ class TeamColorCatalogStore {
     if (!key) {
       return null;
     }
-    return this.exactByKey.get(key) ?? null;
+    const direct = this.exactByKey.get(key);
+    if (direct) {
+      return direct;
+    }
+
+    const canonical = this.canonicalTeamName(teamName);
+    if (!canonical) {
+      return null;
+    }
+    return this.exactByKey.get(normalizedTeamKey(canonical)) ?? null;
+  }
+
+  canonicalTeamName(teamName: string): string | null {
+    const key = normalizedTeamKey(teamName);
+    if (!key) {
+      return null;
+    }
+    const canonicalKey = this.exactIdentityToCanonicalKey.get(key);
+    if (!canonicalKey) {
+      return null;
+    }
+    return this.canonicalNameByKey.get(canonicalKey) ?? null;
+  }
+
+  identityNames(teamName: string): string[] {
+    const trimmed = teamName.trim();
+    if (!trimmed) {
+      return [];
+    }
+
+    const key = normalizedTeamKey(trimmed);
+    const canonicalKey = this.exactIdentityToCanonicalKey.get(key);
+    if (!canonicalKey) {
+      return [trimmed];
+    }
+
+    return Array.from(
+      new Set([
+        this.canonicalNameByKey.get(canonicalKey) ?? trimmed,
+        ...(this.namesByCanonicalKey.get(canonicalKey) ?? []),
+        trimmed,
+      ].filter(Boolean))
+    );
+  }
+
+  private registerIdentity(name: string, aliases: string[]): void {
+    const canonicalKey = normalizedTeamKey(name);
+    if (!canonicalKey) {
+      return;
+    }
+
+    if (!this.canonicalNameByKey.has(canonicalKey)) {
+      this.canonicalNameByKey.set(canonicalKey, name);
+    }
+
+    const names = this.namesByCanonicalKey.get(canonicalKey) ?? [];
+    for (const candidate of [name, ...aliases]) {
+      const trimmed = candidate.trim();
+      if (!trimmed) {
+        continue;
+      }
+      if (!names.includes(trimmed)) {
+        names.push(trimmed);
+      }
+      const key = normalizedTeamKey(trimmed);
+      if (key && !this.exactIdentityToCanonicalKey.has(key)) {
+        this.exactIdentityToCanonicalKey.set(key, canonicalKey);
+      }
+    }
+    this.namesByCanonicalKey.set(canonicalKey, names);
   }
 }
 
@@ -269,6 +356,7 @@ function relativeLuminance({ r, g, b }: { r: number; g: number; b: number }): nu
 }
 
 const teamColorCatalog = new TeamColorCatalogStore();
+void teamColorCatalog.ensureLoaded();
 
 export function useTeamColorCatalog(): TeamColorCatalogStore {
   useSyncExternalStore(teamColorCatalog.subscribe, teamColorCatalog.snapshot);
@@ -279,3 +367,20 @@ export function useTeamColorCatalog(): TeamColorCatalogStore {
 
   return teamColorCatalog;
 }
+
+export function teamIdentityNames(teamName: string): string[] {
+  return teamColorCatalog.identityNames(teamName);
+}
+
+export function teamIdentityKeys(teamName: string): string[] {
+  return Array.from(
+    new Set(
+      teamColorCatalog
+        .identityNames(teamName)
+        .map((name) => normalizedTeamKey(name))
+        .filter(Boolean)
+    )
+  );
+}
+
+export { normalizedTeamKey };

@@ -122,6 +122,7 @@ final class TeamColorCatalog: ObservableObject {
         }
 
         exactByKey = lookup
+        TeamIdentityStore.shared.update(from: catalog)
 
         if notify {
             refreshVersion &+= 1
@@ -131,7 +132,13 @@ final class TeamColorCatalog: ObservableObject {
     private func resolve(_ teamName: String) -> TeamColorEntry? {
         let key = Self.normalizedKey(teamName)
         guard !key.isEmpty else { return nil }
-        return exactByKey[key]
+        if let direct = exactByKey[key] {
+            return direct
+        }
+        let canonical = TeamIdentityStore.shared.canonicalName(for: teamName)
+        let canonicalKey = Self.normalizedKey(canonical)
+        guard !canonicalKey.isEmpty else { return nil }
+        return exactByKey[canonicalKey]
     }
 
     private func shouldInvert(_ entry: TeamColorEntry, against opponent: TeamColorEntry?) -> Bool {
@@ -298,6 +305,101 @@ private struct TeamColorEntry {
     let secondary: String
     let scheme: String?
     let isFallback: Bool
+}
+
+final class TeamIdentityStore {
+    static let shared = TeamIdentityStore()
+
+    private let lock = NSLock()
+    private var canonicalNameByKey: [String: String] = [:]
+    private var namesByCanonicalKey: [String: [String]] = [:]
+    private var exactToCanonicalKey: [String: String] = [:]
+
+    private init() {}
+
+    func update(from catalog: TeamColorsCatalogResponse) {
+        var nextCanonicalNameByKey: [String: String] = [:]
+        var nextNamesByCanonicalKey: [String: [String]] = [:]
+        var nextExactToCanonicalKey: [String: String] = [:]
+
+        for entry in catalog.teams.map({ ($0.name, $0.aliases) }) +
+            catalog.identityGroups.map({ ($0.name, $0.aliases) }) {
+            let canonicalKey = Self.normalizedKey(entry.0)
+            guard !canonicalKey.isEmpty else { continue }
+
+            if nextCanonicalNameByKey[canonicalKey] == nil {
+                nextCanonicalNameByKey[canonicalKey] = entry.0
+            }
+
+            var names = nextNamesByCanonicalKey[canonicalKey] ?? []
+            for candidate in [entry.0] + entry.1 {
+                let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                if !names.contains(trimmed) {
+                    names.append(trimmed)
+                }
+                let key = Self.normalizedKey(trimmed)
+                if !key.isEmpty, nextExactToCanonicalKey[key] == nil {
+                    nextExactToCanonicalKey[key] = canonicalKey
+                }
+            }
+            nextNamesByCanonicalKey[canonicalKey] = names
+        }
+
+        lock.lock()
+        canonicalNameByKey = nextCanonicalNameByKey
+        namesByCanonicalKey = nextNamesByCanonicalKey
+        exactToCanonicalKey = nextExactToCanonicalKey
+        lock.unlock()
+    }
+
+    func canonicalName(for rawValue: String) -> String {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        let key = Self.normalizedKey(trimmed)
+        lock.lock()
+        let canonicalKey = exactToCanonicalKey[key]
+        let canonicalName = canonicalKey.flatMap { canonicalNameByKey[$0] }
+        lock.unlock()
+        return canonicalName ?? trimmed
+    }
+
+    func names(for rawValue: String) -> [String] {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let key = Self.normalizedKey(trimmed)
+
+        lock.lock()
+        let canonicalKey = exactToCanonicalKey[key]
+        let canonicalName = canonicalKey.flatMap { canonicalNameByKey[$0] }
+        let knownNames = canonicalKey.flatMap { namesByCanonicalKey[$0] } ?? []
+        lock.unlock()
+
+        return Array(Set(([canonicalName, trimmed] + knownNames).compactMap { $0 }))
+    }
+
+    func normalizedKeys(for rawValue: String) -> Set<String> {
+        Set(names(for: rawValue).map(Self.normalizedKey).filter { !$0.isEmpty })
+    }
+
+    func matches(_ lhs: String, _ rhs: String) -> Bool {
+        let leftKeys = normalizedKeys(for: lhs)
+        let rightKeys = normalizedKeys(for: rhs)
+        return !leftKeys.isDisjoint(with: rightKeys)
+    }
+
+    static func normalizedKey(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .replacingOccurrences(of: "&", with: " and ")
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .split { !$0.isLetter && !$0.isNumber }
+            .map { String($0) }
+            .joined()
+    }
 }
 
 private extension Color {

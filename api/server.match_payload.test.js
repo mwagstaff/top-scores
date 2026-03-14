@@ -22,6 +22,7 @@ const {
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
     bumpCacheStateSnapshot,
+    normalizeTeamName,
   },
 } = require("./server");
 
@@ -158,6 +159,12 @@ test("toMatchListPayload upgrades status from match details by match id despite 
 
   assert.equal(payload.match_details_id, DETAILS_ID);
   assert.equal(payload.score_status, "FT");
+});
+
+test("normalizeTeamName canonicalizes team aliases from shared identity config", () => {
+  assert.equal(normalizeTeamName("Man City"), "manchester city");
+  assert.equal(normalizeTeamName("MCI"), "manchester city");
+  assert.equal(normalizeTeamName("AFC Bournemouth"), "bournemouth");
 });
 
 test("toMatchListPayload includes score fields from resolved match state", () => {

@@ -2187,8 +2187,7 @@ private struct FantasySquadMembershipLookup {
     }
 
     private static func normalizeTeamName(_ value: String) -> String {
-        let resolved = FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: value)
-        return normalizeName(resolved)
+        normalizeName(TeamIdentityStore.shared.canonicalName(for: value))
     }
 
     private func matchingMemberKeys(teamKeys: Set<String>, nameKeys: Set<String>) -> [String] {
@@ -2212,31 +2211,10 @@ private struct FantasySquadMembershipLookup {
 }
 
 func fantasyTeamLookupKeys(_ value: String) -> Set<String> {
-    let resolved = FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: value)
-    let trimmed = resolved.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return [] }
-
-    let adornments = Set(["afc", "cf", "fc"])
-    let tokens = trimmed
-        .split(whereSeparator: { $0.isWhitespace })
-        .map(String.init)
-
-    var candidates = Set([trimmed])
-    if let first = tokens.first, adornments.contains(first.lowercased()), tokens.count > 1 {
-        candidates.insert(tokens.dropFirst().joined(separator: " "))
-    }
-    if let last = tokens.last, adornments.contains(last.lowercased()), tokens.count > 1 {
-        candidates.insert(tokens.dropLast().joined(separator: " "))
-    }
-
-    let normalizedCandidates = Set(candidates.compactMap { candidate in
+    Set(TeamIdentityStore.shared.names(for: value).compactMap { candidate in
         let normalized = normalizeFantasyLookupName(candidate)
         return normalized.isEmpty ? nil : normalized
     })
-
-    return normalizedCandidates.union(
-        normalizedCandidates.flatMap { fantasyTeamAliasKeys(for: $0) }
-    )
 }
 
 private func normalizeFantasyLookupName(_ value: String) -> String {
@@ -2249,26 +2227,6 @@ private func normalizeFantasyLookupName(_ value: String) -> String {
         .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
         .map(String.init)
         .joined(separator: " ")
-}
-
-private func fantasyTeamAliasKeys(for normalizedName: String) -> Set<String> {
-    let aliasGroups: [Set<String>] = [
-        ["brighton", "brighton hove albion"],
-        ["ipswich", "ipswich town"],
-        ["leicester", "leicester city"],
-        ["man city", "manchester city"],
-        ["man utd", "manchester united"],
-        ["newcastle", "newcastle united"],
-        ["nottm forest", "nottingham forest"],
-        ["spurs", "tottenham", "tottenham hotspur"],
-        ["west ham", "west ham united"],
-        ["wolves", "wolverhampton wanderers"]
-    ]
-
-    guard let group = aliasGroups.first(where: { $0.contains(normalizedName) }) else {
-        return []
-    }
-    return group
 }
 
 private func condensedLineupPlayerName(_ value: String) -> String {

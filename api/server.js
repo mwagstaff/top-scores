@@ -93,6 +93,12 @@ const {
   writeNationalEloRankings,
 } = require("./fetch_national_elo_rankings");
 const testMatchState = require("./test_match_state");
+const {
+  loadTeamIdentityConfig,
+  normalizeTeamIdentityName,
+  canonicalTeamName,
+  buildFantasyShortNameMappings,
+} = require("./team_identity");
 
 function parseEnvBoolean(value, fallback = false) {
   if (value === undefined || value === null) return fallback;
@@ -809,6 +815,7 @@ let teamColorsConfig = Object.freeze({
     scheme: "default-dark",
   }),
   teams: Object.freeze([]),
+  identity_groups: Object.freeze([]),
 });
 let teamColorsLoadedAt = null;
 let teamColorsMtimeMs = null;
@@ -5080,16 +5087,7 @@ function isLikelyNationalTeamName(teamName) {
 }
 
 function normalizeTeamName(value) {
-  if (!value) return "";
-  return String(value)
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/&/g, " and ")
-    .replace(/'/g, "")
-    .replace(/\./g, " ")
-    .replace(/[-_]/g, " ")
-    .trim();
+  return normalizeTeamIdentityName(canonicalTeamName(value));
 }
 
 function loadClubEloManualMappings() {
@@ -5143,54 +5141,10 @@ function loadClubEloManualMappings() {
 }
 
 function loadFantasyTeamShortNameMappings() {
-  let stat = null;
-  try {
-    stat = fs.statSync(FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH);
-  } catch (error) {
-    if (error && error.code === "ENOENT") {
-      fantasyTeamShortNameMappings = Object.freeze({});
-      fantasyTeamShortNameMappingsLoadedAt = new Date().toISOString();
-      fantasyTeamShortNameMappingsMtimeMs = null;
-      console.warn(
-        `[FantasyMappings] Mapping file not found at ${FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH}; using empty mapping.`
-      );
-      return fantasyTeamShortNameMappings;
-    }
-    console.warn(`[FantasyMappings] Failed to stat mapping file: ${error.message || error}`);
-    return fantasyTeamShortNameMappings;
-  }
-
-  const mtimeMs = Number(stat && stat.mtimeMs);
-  if (Number.isFinite(mtimeMs) && fantasyTeamShortNameMappingsMtimeMs === mtimeMs) {
-    return fantasyTeamShortNameMappings;
-  }
-
-  try {
-    const raw = fs.readFileSync(FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Mapping file must be a JSON object.");
-    }
-
-    const next = {};
-    Object.entries(parsed).forEach(([shortName, fullName]) => {
-      const normalizedKey = String(shortName || "").trim().toUpperCase();
-      const normalizedValue = String(fullName || "").trim();
-      if (!normalizedKey || !normalizedValue) return;
-      next[normalizedKey] = normalizedValue;
-    });
-
-    fantasyTeamShortNameMappings = Object.freeze(next);
-    fantasyTeamShortNameMappingsLoadedAt = new Date().toISOString();
-    fantasyTeamShortNameMappingsMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
-    console.log(
-      `[FantasyMappings] Loaded ${Object.keys(next).length} mappings from ${FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH}`
-    );
-  } catch (error) {
-    console.warn(`[FantasyMappings] Failed to load mapping file: ${error.message || error}`);
-    fantasyTeamShortNameMappingsMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
-  }
-
+  const config = loadTeamIdentityConfig();
+  fantasyTeamShortNameMappings = buildFantasyShortNameMappings();
+  fantasyTeamShortNameMappingsLoadedAt = config.updatedAt || new Date().toISOString();
+  fantasyTeamShortNameMappingsMtimeMs = Date.parse(fantasyTeamShortNameMappingsLoadedAt) || Date.now();
   return fantasyTeamShortNameMappings;
 }
 
@@ -5299,90 +5253,35 @@ function loadFantasyAssistantManagerPhrases() {
 }
 
 function loadTeamColorsConfig() {
-  let stat = null;
-  try {
-    stat = fs.statSync(TEAM_COLORS_CONFIG_PATH);
-  } catch (error) {
-    if (error && error.code === "ENOENT") {
-      teamColorsLoadedAt = new Date().toISOString();
-      teamColorsMtimeMs = null;
-      console.warn(
-        `[TeamColors] Config file not found at ${TEAM_COLORS_CONFIG_PATH}; using default-only payload.`
-      );
-      return teamColorsConfig;
-    }
-    console.warn(`[TeamColors] Failed to stat config file: ${error.message || error}`);
-    return teamColorsConfig;
-  }
-
-  const mtimeMs = Number(stat && stat.mtimeMs);
-  if (Number.isFinite(mtimeMs) && teamColorsMtimeMs === mtimeMs) {
-    return teamColorsConfig;
-  }
-
-  try {
-    const raw = fs.readFileSync(TEAM_COLORS_CONFIG_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Team colors config must be a JSON object.");
-    }
-
-    const fallbackDefault = {
-      primary: "#111111",
-      secondary: "#FFFFFF",
-      scheme: "default-dark",
-    };
-    const parsedDefault =
-      parsed.default && typeof parsed.default === "object" && !Array.isArray(parsed.default)
-        ? parsed.default
-        : fallbackDefault;
-
-    const normalizedDefault = Object.freeze({
-      primary: String(parsedDefault.primary || fallbackDefault.primary).trim() || fallbackDefault.primary,
-      secondary: String(parsedDefault.secondary || fallbackDefault.secondary).trim() || fallbackDefault.secondary,
-      scheme: String(parsedDefault.scheme || fallbackDefault.scheme).trim() || fallbackDefault.scheme,
-    });
-
-    const normalizedTeams = Object.freeze(
-      (Array.isArray(parsed.teams) ? parsed.teams : [])
-        .map((entry) => {
-          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-            return null;
-          }
-          const name = String(entry.name || "").trim();
-          if (!name) {
-            return null;
-          }
-          return Object.freeze({
-            name,
-            aliases: Array.isArray(entry.aliases)
-              ? entry.aliases.map((alias) => String(alias || "").trim()).filter(Boolean)
-              : [],
-            primary: String(entry.primary || "").trim() || normalizedDefault.primary,
-            secondary: String(entry.secondary || "").trim() || normalizedDefault.secondary,
-            scheme: String(entry.scheme || "").trim() || null,
-          });
+  const payload = loadTeamIdentityConfig();
+  teamColorsLoadedAt = payload.updatedAt || new Date().toISOString();
+  teamColorsConfig = Object.freeze({
+    updatedAt: teamColorsLoadedAt,
+    default: Object.freeze({
+      primary: payload.default?.primary || "#111111",
+      secondary: payload.default?.secondary || "#FFFFFF",
+      scheme: payload.default?.scheme || "default-dark",
+    }),
+    teams: Object.freeze(
+      (Array.isArray(payload.teams) ? payload.teams : []).map((entry) =>
+        Object.freeze({
+          name: entry.name,
+          aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
+          primary: entry.primary || payload.default?.primary || "#111111",
+          secondary: entry.secondary || payload.default?.secondary || "#FFFFFF",
+          scheme: entry.scheme ?? payload.default?.scheme ?? "default-dark",
         })
-        .filter(Boolean)
-    );
-
-    teamColorsLoadedAt =
-      String(parsed.updatedAt || "").trim() ||
-      (Number.isFinite(mtimeMs) ? new Date(mtimeMs).toISOString() : new Date().toISOString());
-    teamColorsConfig = Object.freeze({
-      updatedAt: teamColorsLoadedAt,
-      default: normalizedDefault,
-      teams: normalizedTeams,
-    });
-    teamColorsMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
-    console.log(
-      `[TeamColors] Loaded ${normalizedTeams.length} team color mappings from ${TEAM_COLORS_CONFIG_PATH}`
-    );
-  } catch (error) {
-    console.warn(`[TeamColors] Failed to load config file: ${error.message || error}`);
-    teamColorsMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
-  }
-
+      )
+    ),
+    identity_groups: Object.freeze(
+      (Array.isArray(payload.identityGroups) ? payload.identityGroups : []).map((entry) =>
+        Object.freeze({
+          name: entry.name,
+          aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
+        })
+      )
+    ),
+  });
   return teamColorsConfig;
 }
 

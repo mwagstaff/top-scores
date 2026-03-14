@@ -1568,6 +1568,7 @@ private struct PredictedMatchCard: View {
             highlightToday: false,
             showLeague: false,
             showBroadcastDetails: false,
+            showFantasyBadge: false,
             centerFooterText: fixture.isPredicted ? nil : fixture.statusLabelText,
             centerFooterColor: fixture.isPredicted ? .accentColor : .secondary
         )
@@ -1679,6 +1680,7 @@ private struct PredictionShareSnapshotView: View {
                                 highlightToday: false,
                                 showLeague: false,
                                 showBroadcastDetails: false,
+                                showFantasyBadge: false,
                                 centerFooterText: fixture.isPredicted ? nil : fixture.statusLabelText,
                                 centerFooterColor: fixture.isPredicted ? .accentColor : .secondary,
                                 isLargePresentation: true

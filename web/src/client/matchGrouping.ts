@@ -5,27 +5,9 @@ import {
   type MatchLeagueGroup,
   type TeamRankingEntry,
 } from "./types";
+import { normalizedTeamKey, teamIdentityNames } from "./teamColors";
 
 const stopWords = new Set(["fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk", "club", "the", "and"]);
-
-const aliasMap: Record<string, string> = {
-  celtavigo: "celta",
-  manchesterunited: "manunited",
-  manchestercity: "mancity",
-  tottenhamhotspur: "tottenham",
-  wolverhamptonwanderers: "wolves",
-  sheffieldunited: "sheffutd",
-  sheffieldwednesday: "sheffwed",
-  nottinghamforest: "nottmforest",
-  brightonhovealbion: "brighton",
-  brightonandhovealbion: "brighton",
-  bayernmunich: "bayern",
-  borussiadortmund: "dortmund",
-  borussiamonchengladbach: "gladbach",
-  intermilan: "inter",
-  oxfordunited: "oxford",
-  prestonnorthend: "preston",
-};
 
 export class TeamRatingLookup {
   private readonly exactByKey = new Map<string, number>();
@@ -37,7 +19,13 @@ export class TeamRatingLookup {
         continue;
       }
 
-      const names = Array.from(new Set([entry.name, ...entry.aliases])).filter(Boolean);
+      const names = Array.from(
+        new Set(
+          [entry.name, ...entry.aliases]
+            .flatMap((name) => teamIdentityNames(name))
+            .filter(Boolean)
+        )
+      );
       for (const name of names) {
         const key = normalizedKey(name);
         if (!key) {
@@ -61,29 +49,26 @@ export class TeamRatingLookup {
   }
 
   private rating(teamName: string): number | null {
-    const key = normalizedKey(teamName);
-    if (!key) {
-      return null;
-    }
-
-    if (this.exactByKey.has(key)) {
-      return this.exactByKey.get(key) ?? null;
-    }
-
-    const alias = aliasMap[key];
-    if (alias && this.exactByKey.has(alias)) {
-      return this.exactByKey.get(alias) ?? null;
-    }
-
-    const sourceTokens = normalizedTokens(teamName);
     let bestScore = 0;
     let bestRating: number | null = null;
 
-    for (const candidate of this.candidates) {
-      const score = similarity(key, candidate.key, sourceTokens, candidate.tokens);
-      if (score > bestScore) {
-        bestScore = score;
-        bestRating = candidate.rating;
+    for (const variant of teamIdentityNames(teamName)) {
+      const key = normalizedKey(variant);
+      if (!key) {
+        continue;
+      }
+
+      if (this.exactByKey.has(key)) {
+        return this.exactByKey.get(key) ?? null;
+      }
+
+      const sourceTokens = normalizedTokens(variant);
+      for (const candidate of this.candidates) {
+        const score = similarity(key, candidate.key, sourceTokens, candidate.tokens);
+        if (score > bestScore) {
+          bestScore = score;
+          bestRating = candidate.rating;
+        }
       }
     }
 
@@ -377,12 +362,7 @@ function normalizedKey(value: string): string {
   if (tokens.length > 0) {
     return tokens.join("");
   }
-
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
+  return normalizedTeamKey(value);
 }
 
 function similarity(

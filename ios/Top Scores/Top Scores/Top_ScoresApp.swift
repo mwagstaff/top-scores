@@ -41,10 +41,6 @@ struct Top_ScoresApp: App {
                         TeamRankingSettingsCatalog.shared.ensureFresh(
                             apiBaseURL: preferences.snapshot.apiBaseURL
                         )
-                    async let fantasyMappingsWarmTask: Void =
-                        FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(
-                            apiBaseURL: preferences.snapshot.apiBaseURL
-                        )
                     async let fantasyLoadingMessagesWarmTask: Void =
                         FantasyLoadingMessagesCatalog.shared.ensureFresh(
                             apiBaseURL: preferences.snapshot.apiBaseURL
@@ -57,7 +53,6 @@ struct Top_ScoresApp: App {
                         leagueTablesWarmTask,
                         teamRankingsWarmTask,
                         teamRankingSettingsWarmTask,
-                        fantasyMappingsWarmTask,
                         fantasyLoadingMessagesWarmTask,
                         teamColorsWarmTask
                     )
@@ -92,10 +87,6 @@ struct Top_ScoresApp: App {
                         TeamRankingSettingsCatalog.shared.ensureFresh(
                             apiBaseURL: syncSnapshot.apiBaseURL
                         )
-                    async let fantasyMappingsWarmTask: Void =
-                        FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(
-                            apiBaseURL: syncSnapshot.apiBaseURL
-                        )
                     async let fantasyLoadingMessagesWarmTask: Void =
                         FantasyLoadingMessagesCatalog.shared.ensureFresh(
                             apiBaseURL: syncSnapshot.apiBaseURL
@@ -111,7 +102,6 @@ struct Top_ScoresApp: App {
                         leagueTablesWarmTask,
                         teamRankingWarmTask,
                         teamRankingSettingsWarmTask,
-                        fantasyMappingsWarmTask,
                         fantasyLoadingMessagesWarmTask,
                         teamColorsWarmTask
                     )

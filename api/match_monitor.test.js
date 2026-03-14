@@ -1861,7 +1861,35 @@ test("buildLiveActivityPresentationForUser keeps delayed minute and score aligne
   assert.equal(presentation.matches[0].away_score, 3);
 });
 
-test("compareLiveActivityMatches sorts higher total team score first", () => {
+test("compareLiveActivityMatches sorts later kickoffs first", () => {
+  const laterKickoffMatch = {
+    match_details_id: "later",
+    league: "Premier League",
+    home_team: "West Ham United",
+    away_team: "Manchester City",
+    home_team_score: 1600,
+    away_team_score: 1940,
+    total_team_score: 3540,
+    date: "2026-03-14",
+    time: "20:00",
+  };
+  const earlierKickoffMatch = {
+    match_details_id: "earlier",
+    league: "Premier League",
+    home_team: "Arsenal",
+    away_team: "Everton",
+    home_team_score: 1900,
+    away_team_score: 1650,
+    total_team_score: 3550,
+    date: "2026-03-14",
+    time: "17:30",
+  };
+
+  const sorted = [earlierKickoffMatch, laterKickoffMatch].sort(__testHooks.compareLiveActivityMatches);
+  assert.equal(sorted[0].match_details_id, "later");
+});
+
+test("compareLiveActivityMatches sorts higher total team score first for identical kickoffs", () => {
   const highScoreMatch = {
     match_details_id: "high",
     league: "Championship",
@@ -1875,24 +1903,24 @@ test("compareLiveActivityMatches sorts higher total team score first", () => {
   };
   const lowScoreMatch = {
     match_details_id: "low",
-    league: "Premier League",
+    league: "Championship",
     home_team: "Norwich City",
     away_team: "Sheffield Wednesday",
     home_team_score: 1442,
     away_team_score: 1413,
     total_team_score: 2855,
     date: "2026-03-06",
-    time: "19:45",
+    time: "20:00",
   };
 
   const sorted = [lowScoreMatch, highScoreMatch].sort(__testHooks.compareLiveActivityMatches);
   assert.equal(sorted[0].match_details_id, "high");
 });
 
-test("buildLiveActivityPresentationForUser keeps live matches ahead of full-time matches", () => {
+test("buildLiveActivityPresentationForUser orders mixed live and full-time matches by latest kickoff first", () => {
   const nowMs = Date.now();
-  const liveKickoff = formatLocalDateTimeParts(nowMs - 55 * 60 * 1000);
-  const finishedKickoff = formatLocalDateTimeParts(nowMs - 3 * 60 * 60 * 1000);
+  const liveKickoff = formatLocalDateTimeParts(nowMs - 3 * 60 * 60 * 1000);
+  const finishedKickoff = formatLocalDateTimeParts(nowMs - 55 * 60 * 1000);
 
   const presentation = __testHooks.buildLiveActivityPresentationForUser(
     liveActivityUser(0),
@@ -1947,7 +1975,7 @@ test("buildLiveActivityPresentationForUser keeps live matches ahead of full-time
   assert.equal(presentation.mode, "multi_live");
   assert.deepEqual(
     presentation.matches.map((match) => match.match_details_id),
-    ["live-now", "finished-first"]
+    ["finished-first", "live-now"]
   );
 });
 
@@ -2138,54 +2166,6 @@ test("buildLiveActivityPresentationForUser caps live activity payloads to 8 matc
 
   assert.equal(presentation.mode, "multi_live");
   assert.equal(presentation.matches.length, 8);
-});
-
-test("compareLiveActivityMatches prioritizes premier league involvement buckets", () => {
-  const bothPremierLeague = {
-    match_details_id: "both-epl",
-    league: "UEFA Champions League",
-    home_team: "Liverpool",
-    away_team: "Chelsea",
-    home_team_score: 1500,
-    away_team_score: 1500,
-    total_team_score: 3000,
-    score_status: "45",
-    date: "2026-03-06",
-    time: "20:00",
-  };
-  const onePremierLeague = {
-    match_details_id: "one-epl",
-    league: "UEFA Champions League",
-    home_team: "Liverpool",
-    away_team: "Real Madrid",
-    home_team_score: 1900,
-    away_team_score: 1900,
-    total_team_score: 3800,
-    score_status: "45",
-    date: "2026-03-06",
-    time: "20:00",
-  };
-  const noPremierLeague = {
-    match_details_id: "no-epl",
-    league: "UEFA Champions League",
-    home_team: "Real Madrid",
-    away_team: "Barcelona",
-    home_team_score: 2000,
-    away_team_score: 2000,
-    total_team_score: 4000,
-    score_status: "45",
-    date: "2026-03-06",
-    time: "20:00",
-  };
-
-  const sorted = [noPremierLeague, onePremierLeague, bothPremierLeague].sort(
-    __testHooks.compareLiveActivityMatches
-  );
-
-  assert.deepEqual(
-    sorted.map((match) => match.match_details_id),
-    ["both-epl", "one-epl", "no-epl"]
-  );
 });
 
 test("does not emit delayed kickoff when first live status seen is HT", () => {

@@ -533,11 +533,13 @@ struct Top_ScoresTests {
     }
 
     @Test func fantasyTeamLookupKeys_handleClubPrefixesAndSuffixes() async throws {
+        seedTeamIdentityStore()
         #expect(fantasyTeamLookupKeys("AFC Bournemouth").contains("bournemouth"))
         #expect(fantasyTeamLookupKeys("Bournemouth FC").contains("bournemouth"))
     }
 
     @Test func fantasyTeamLookupKeys_handleFantasyShortTeamAliases() async throws {
+        seedTeamIdentityStore()
         #expect(fantasyTeamLookupKeys("Man City").contains("manchester city"))
         #expect(fantasyTeamLookupKeys("Manchester City").contains("man city"))
     }
@@ -721,6 +723,39 @@ struct Top_ScoresTests {
                 assists: 0,
                 yellowCards: 0,
                 redCards: 0
+            )
+        )
+    }
+
+    private func seedTeamIdentityStore() {
+        TeamIdentityStore.shared.update(
+            from: TeamColorsCatalogResponse(
+                updatedAt: "2026-03-14T00:00:00Z",
+                defaultStyle: TeamColorStyleResponse(
+                    primary: "#111111",
+                    secondary: "#FFFFFF",
+                    scheme: "default-dark"
+                ),
+                teams: [
+                    TeamColorRecordResponse(
+                        name: "Bournemouth",
+                        aliases: ["AFC Bournemouth", "BOU"],
+                        primary: "#DA291C",
+                        secondary: "#000000",
+                        scheme: "red-black"
+                    ),
+                    TeamColorRecordResponse(
+                        name: "Manchester City",
+                        aliases: ["Man City", "MCI"],
+                        primary: "#6CABDD",
+                        secondary: "#FFFFFF",
+                        scheme: "sky-white"
+                    )
+                ],
+                identityGroups: [
+                    TeamIdentityGroupResponse(name: "Bournemouth", aliases: ["AFC Bournemouth", "BOU"]),
+                    TeamIdentityGroupResponse(name: "Manchester City", aliases: ["Man City", "MCI"])
+                ]
             )
         )
     }
