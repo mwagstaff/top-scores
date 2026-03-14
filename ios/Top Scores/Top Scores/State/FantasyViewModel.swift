@@ -35,6 +35,13 @@ final class FantasyViewModel: ObservableObject {
     private var rivalRefreshToken = UUID()
     private var leagueRefreshToken = UUID()
 
+    private struct FantasySquadSnapshot {
+        let gameweek: FantasyGameweek
+        let picksResponse: FantasyPicksResponse
+        let liveResponse: FantasyEventLiveResponse
+        let fixtures: [FantasyFixture]
+    }
+
     func reset() {
         isLoading = false
         isRefreshing = false
@@ -101,35 +108,43 @@ final class FantasyViewModel: ObservableObject {
                 baseURLKey: bootstrapBaseURLKey
             )
             async let myProfileTask = fetchMyProfile(entryID: entryID)
-            async let picksTask = timed("my_picks") {
-                try await fantasyPublicClient.fetchPicks(
-                    entryID: entryID,
-                    eventID: currentGameweek.id
-                )
-            }
-            async let liveTask = timed("event_live") {
-                try await fantasyPublicClient.fetchEventLive(eventID: currentGameweek.id)
-            }
-            async let fixturesTask = timed("event_fixtures") {
-                try await fantasyPublicClient.fetchEventFixtures(eventID: currentGameweek.id)
-            }
+            async let nextGameweekTask = fetchNextGameweekIfNeeded(
+                currentGameweek: currentGameweek,
+                serverClient: serverClient
+            )
             async let seasonFixturesTask = fetchSeasonFixtures()
 
-            let (bootstrapLookup, myProfile, picksResponse, liveResponse, fixtures, seasonFixtures) = try await (
+            let (bootstrapLookup, myProfile, nextGameweek, seasonFixtures) = try await (
                 bootstrapLookupTask,
                 myProfileTask,
-                picksTask,
-                liveTask,
-                fixturesTask,
+                nextGameweekTask,
                 seasonFixturesTask
             )
             self.myProfile = myProfile
 
+            let preferredSquadGameweek = FantasySquadGameweekResolver.resolve(
+                currentGameweek: currentGameweek,
+                nextGameweek: nextGameweek,
+                events: bootstrapLookup.events
+            )
+            if preferredSquadGameweek.id != currentGameweek.id {
+                logPerf(
+                    "squad_gameweek_switched current=\(currentGameweek.id) squad=\(preferredSquadGameweek.id)"
+                )
+            }
+
+            let squadSnapshot = try await fetchSquadSnapshotWithFallback(
+                entryID: entryID,
+                preferredGameweek: preferredSquadGameweek,
+                fallbackGameweek: preferredSquadGameweek.id == currentGameweek.id ? nil : currentGameweek,
+                labelPrefix: "my"
+            )
+
             data = FantasySquadBuilder.build(
-                gameweek: currentGameweek,
-                picksResponse: picksResponse,
-                liveResponse: liveResponse,
-                fixtures: fixtures,
+                gameweek: squadSnapshot.gameweek,
+                picksResponse: squadSnapshot.picksResponse,
+                liveResponse: squadSnapshot.liveResponse,
+                fixtures: squadSnapshot.fixtures,
                 seasonFixtures: seasonFixtures,
                 bootstrap: bootstrapLookup
             )
@@ -146,9 +161,9 @@ final class FantasyViewModel: ObservableObject {
                 Task {
                     let refreshedRivals = await self.fetchRivalSquads(
                         rivals: normalizedRivals,
-                        gameweek: currentGameweek,
-                        liveResponse: liveResponse,
-                        fixtures: fixtures,
+                        gameweek: squadSnapshot.gameweek,
+                        liveResponse: squadSnapshot.liveResponse,
+                        fixtures: squadSnapshot.fixtures,
                         seasonFixtures: seasonFixtures,
                         bootstrapLookup: bootstrapLookup
                     )
@@ -394,6 +409,107 @@ final class FantasyViewModel: ObservableObject {
         }
 
         return result
+    }
+
+    private func fetchNextGameweekIfNeeded(
+        currentGameweek: FantasyGameweek,
+        serverClient: APIClient
+    ) async -> FantasyGameweek? {
+        guard currentGameweek.finished == true else {
+            return nil
+        }
+
+        do {
+            return try await timed("next_gameweek") {
+                try await serverClient.fetchFantasyNextGameweek()
+            }
+        } catch {
+            return nil
+        }
+    }
+
+    private func fetchSquadSnapshot(
+        entryID: Int,
+        gameweek: FantasyGameweek,
+        labelPrefix: String
+    ) async throws -> FantasySquadSnapshot {
+        async let picksTask = timed("\(labelPrefix)_picks entry_id=\(entryID) event_id=\(gameweek.id)") {
+            try await fantasyPublicClient.fetchPicks(
+                entryID: entryID,
+                eventID: gameweek.id
+            )
+        }
+        async let liveTask = timed("\(labelPrefix)_live event_id=\(gameweek.id)") {
+            try await fantasyPublicClient.fetchEventLive(eventID: gameweek.id)
+        }
+        async let fixturesTask = timed("\(labelPrefix)_fixtures event_id=\(gameweek.id)") {
+            try await fantasyPublicClient.fetchEventFixtures(eventID: gameweek.id)
+        }
+
+        let (picksResponse, liveResponse, fixtures) = try await (
+            picksTask,
+            liveTask,
+            fixturesTask
+        )
+        return FantasySquadSnapshot(
+            gameweek: gameweek,
+            picksResponse: picksResponse,
+            liveResponse: liveResponse,
+            fixtures: fixtures
+        )
+    }
+
+    private func fetchSquadSnapshotWithFallback(
+        entryID: Int,
+        preferredGameweek: FantasyGameweek,
+        fallbackGameweek: FantasyGameweek?,
+        labelPrefix: String
+    ) async throws -> FantasySquadSnapshot {
+        do {
+            return try await fetchSquadSnapshot(
+                entryID: entryID,
+                gameweek: preferredGameweek,
+                labelPrefix: labelPrefix
+            )
+        } catch {
+            guard shouldFallbackToCurrentGameweek(
+                after: error,
+                preferredGameweek: preferredGameweek,
+                fallbackGameweek: fallbackGameweek
+            ), let fallbackGameweek else {
+                throw error
+            }
+
+            logPerf(
+                "squad_gameweek_fallback entry_id=\(entryID) preferred=\(preferredGameweek.id) fallback=\(fallbackGameweek.id)"
+            )
+            return try await fetchSquadSnapshot(
+                entryID: entryID,
+                gameweek: fallbackGameweek,
+                labelPrefix: labelPrefix
+            )
+        }
+    }
+
+    private func shouldFallbackToCurrentGameweek(
+        after error: Error,
+        preferredGameweek: FantasyGameweek,
+        fallbackGameweek: FantasyGameweek?
+    ) -> Bool {
+        guard let fallbackGameweek, fallbackGameweek.id != preferredGameweek.id else {
+            return false
+        }
+        guard let fantasyError = error as? FantasyPublicAPIError else {
+            return false
+        }
+
+        if case let .badStatus(statusCode, operation, _) = fantasyError,
+           statusCode == 404,
+           operation == "fpl_picks" {
+            return true
+        }
+
+        return false
     }
 
     private func fetchRivalSquads(

@@ -787,10 +787,10 @@ const FANTASY_ASSISTANT_MANAGER_IMMINENT_BLANK_PENALTY = 2.0;
 const FANTASY_ASSISTANT_MANAGER_EXTENDED_BLANK_PENALTY = 1.0;
 const FANTASY_ASSISTANT_MANAGER_IDEAL_SQUAD_BUDGET_UNITS = 1000;
 const FANTASY_ASSISTANT_MANAGER_IDEAL_POOL_LIMITS = Object.freeze({
-  1: 10,
-  2: 18,
-  3: 18,
-  4: 12,
+  1: 16,
+  2: 28,
+  3: 28,
+  4: 18,
 });
 let fantasyTeamShortNameMappings = Object.freeze({});
 let fantasyTeamShortNameMappingsLoadedAt = null;
@@ -2584,6 +2584,7 @@ function buildAssistantCaptainCandidate(profile) {
   return {
     element_id: parseFiniteNumber(profile && profile.element_id, 0),
     player_name: assistantPlayerName(profile),
+    team_name: String((profile && profile.team_name) || "").trim(),
     team_short_name: String((profile && profile.team_short_name) || "").trim(),
     opponent_label:
       profile && profile.next_fixture && profile.next_fixture.label
@@ -2602,21 +2603,43 @@ function buildAssistantCaptainCandidate(profile) {
   };
 }
 
+function buildAssistantExpectedPointsPlayer(profile, pick) {
+  const nextFixture = profile && profile.next_fixture ? profile.next_fixture : null;
+  return {
+    element_id: parseFiniteNumber(profile && profile.element_id, 0),
+    pick_position: parseFiniteNumber(pick && pick.position, 0),
+    is_starter: parseFiniteNumber(pick && pick.position, 0) > 0 && parseFiniteNumber(pick && pick.position, 0) <= 11,
+    player_name: assistantPlayerName(profile),
+    team_name: String((profile && profile.team_name) || "").trim(),
+    team_short_name: String((profile && profile.team_short_name) || "").trim(),
+    opponent_team_name: nextFixture && !nextFixture.is_blank
+      ? String((nextFixture && nextFixture.opponent_short_name) || "").trim()
+      : "No game",
+    opponent_label: nextFixture && nextFixture.label
+      ? String(nextFixture.label).trim()
+      : "No game",
+    difficulty: nextFixture && !nextFixture.is_blank
+      ? parseFiniteNumber(nextFixture && nextFixture.difficulty, 0)
+      : null,
+    expected_points_next_gameweek: roundTo(
+      parseFiniteNumber(profile && profile.assistant_expected_points_next_gameweek, 0),
+      2
+    ),
+    is_blank: !(nextFixture && !nextFixture.is_blank),
+  };
+}
+
 function idealSquadPoolForPosition(playerProfiles, positionID) {
   const limit = FANTASY_ASSISTANT_MANAGER_IDEAL_POOL_LIMITS[positionID] || 12;
   return playerProfiles
     .filter((profile) => parseFiniteNumber(profile && profile.position_id, 0) === positionID)
     .sort((left, right) => {
-      const rightScore =
-        parseFiniteNumber(right && right.assistant_rank_score, 0) * 0.7 +
-        parseFiniteNumber(right && right.assistant_expected_points_next_gameweek, 0) * 0.3;
-      const leftScore =
-        parseFiniteNumber(left && left.assistant_rank_score, 0) * 0.7 +
-        parseFiniteNumber(left && left.assistant_expected_points_next_gameweek, 0) * 0.3;
+      const rightScore = assistantIdealProfileScore(right);
+      const leftScore = assistantIdealProfileScore(left);
       if (rightScore !== leftScore) return rightScore - leftScore;
       return (
-        parseFiniteNumber(left && left.assistant_cost_units, 0) -
-        parseFiniteNumber(right && right.assistant_cost_units, 0)
+        parseFiniteNumber(right && right.assistant_cost_units, 0) -
+        parseFiniteNumber(left && left.assistant_cost_units, 0)
       );
     })
     .slice(0, limit);
@@ -2624,9 +2647,32 @@ function idealSquadPoolForPosition(playerProfiles, positionID) {
 
 function assistantIdealProfileScore(profile) {
   return (
-    parseFiniteNumber(profile && profile.assistant_rank_score, 0) * 0.7 +
-    parseFiniteNumber(profile && profile.assistant_expected_points_next_gameweek, 0) * 0.3
+    parseFiniteNumber(profile && profile.assistant_expected_points_next3_gameweeks, 0) * 0.58 +
+    parseFiniteNumber(profile && profile.assistant_expected_points_next_gameweek, 0) * 0.28 +
+    parseFiniteNumber(profile && profile.assistant_rank_score, 0) * 0.14
   );
+}
+
+function idealBenchPoolForPosition(playerProfiles, positionID) {
+  const limitByPosition = Object.freeze({
+    1: 6,
+    2: 8,
+    3: 8,
+    4: 6,
+  });
+  const limit = limitByPosition[positionID] || 6;
+  return playerProfiles
+    .filter((profile) => parseFiniteNumber(profile && profile.position_id, 0) === positionID)
+    .sort((left, right) => {
+      const leftCost = parseFiniteNumber(left && left.assistant_cost_units, 0);
+      const rightCost = parseFiniteNumber(right && right.assistant_cost_units, 0);
+      if (leftCost !== rightCost) return leftCost - rightCost;
+      const leftScore = assistantIdealProfileScore(left);
+      const rightScore = assistantIdealProfileScore(right);
+      if (leftScore !== rightScore) return leftScore - rightScore;
+      return String((left && left.player_name) || "").localeCompare(String((right && right.player_name) || ""));
+    })
+    .slice(0, limit);
 }
 
 function buildAssistantIdealDisplayContext(teams, currentEventID) {
@@ -2747,58 +2793,66 @@ function assistantIdealCanSelect(teamCounts, candidate, replacing = null) {
   return true;
 }
 
-function chooseAssistantIdealBench(playerProfiles) {
-  const benchSlots = [
-    { positionID: 1, count: 1 },
-    { positionID: 2, count: 1 },
-    { positionID: 3, count: 1 },
-    { positionID: 4, count: 1 },
-  ];
-  const selectedProfiles = [];
-  const selectedIDs = new Set();
-  const teamCounts = new Map();
+function buildAssistantIdealBenchOptions(playerProfiles) {
+  const goalkeepers = idealBenchPoolForPosition(playerProfiles, 1);
+  const defenders = idealBenchPoolForPosition(playerProfiles, 2);
+  const midfielders = idealBenchPoolForPosition(playerProfiles, 3);
+  const forwards = idealBenchPoolForPosition(playerProfiles, 4);
+  const options = [];
+  const seen = new Set();
 
-  const applySelection = (candidate) => {
-    selectedProfiles.push(candidate);
-    selectedIDs.add(candidate.element_id);
-    const teamID = parseFiniteNumber(candidate && candidate.team_id, 0);
-    if (teamID > 0) {
-      teamCounts.set(teamID, (teamCounts.get(teamID) || 0) + 1);
+  for (const goalkeeper of goalkeepers) {
+    for (const defender of defenders) {
+      for (const midfielder of midfielders) {
+        for (const forward of forwards) {
+          const profiles = [goalkeeper, defender, midfielder, forward];
+          const ids = profiles.map((profile) => parseFiniteNumber(profile && profile.element_id, 0));
+          if (new Set(ids).size !== profiles.length) continue;
+
+          const teamCounts = new Map();
+          let valid = true;
+          for (const profile of profiles) {
+            const teamID = parseFiniteNumber(profile && profile.team_id, 0);
+            if (teamID <= 0) continue;
+            teamCounts.set(teamID, (teamCounts.get(teamID) || 0) + 1);
+            if ((teamCounts.get(teamID) || 0) > 3) {
+              valid = false;
+              break;
+            }
+          }
+          if (!valid) continue;
+
+          const key = [...ids].sort((left, right) => left - right).join("-");
+          if (seen.has(key)) continue;
+          seen.add(key);
+
+          options.push({
+            profiles,
+            totalCostUnits: profiles.reduce(
+              (sum, profile) => sum + parseFiniteNumber(profile && profile.assistant_cost_units, 0),
+              0
+            ),
+            totalBenchScore: roundTo(
+              profiles.reduce((sum, profile) => sum + assistantIdealProfileScore(profile), 0),
+              2
+            ),
+          });
+        }
+      }
     }
-  };
-
-  for (const slot of benchSlots) {
-    const candidate = playerProfiles
-      .filter((profile) => parseFiniteNumber(profile && profile.position_id, 0) === slot.positionID)
-      .sort((left, right) => {
-        const leftCost = parseFiniteNumber(left && left.assistant_cost_units, 0);
-        const rightCost = parseFiniteNumber(right && right.assistant_cost_units, 0);
-        if (leftCost !== rightCost) return leftCost - rightCost;
-        const leftScore = assistantIdealProfileScore(left);
-        const rightScore = assistantIdealProfileScore(right);
-        if (leftScore !== rightScore) return leftScore - rightScore;
-        return String((left && left.player_name) || "").localeCompare(String((right && right.player_name) || ""));
-      })
-      .find((profile) => {
-        if (selectedIDs.has(profile.element_id)) return false;
-        return assistantIdealCanSelect(teamCounts, profile);
-      });
-
-    if (!candidate) {
-      return null;
-    }
-    applySelection(candidate);
   }
 
-  return {
-    profiles: selectedProfiles,
-    selectedIDs,
-    teamCounts,
-    totalCostUnits: selectedProfiles.reduce(
-      (sum, profile) => sum + parseFiniteNumber(profile && profile.assistant_cost_units, 0),
-      0
-    ),
-  };
+  return options
+    .sort((left, right) => {
+      if (left.totalCostUnits !== right.totalCostUnits) {
+        return left.totalCostUnits - right.totalCostUnits;
+      }
+      if (left.totalBenchScore !== right.totalBenchScore) {
+        return left.totalBenchScore - right.totalBenchScore;
+      }
+      return 0;
+    })
+    .slice(0, 40);
 }
 
 function chooseAssistantStartingXI(playerProfiles, formation, lockedProfiles, budgetUnits) {
@@ -3032,36 +3086,43 @@ function buildAssistantIdealSquadPlayer(profile, displayContext, options = {}) {
 }
 
 function buildAssistantIdealSquad(playerProfiles, teams, currentEventID) {
-  const benchSelection = chooseAssistantIdealBench(playerProfiles);
-  if (!benchSelection) return null;
+  const benchOptions = buildAssistantIdealBenchOptions(playerProfiles);
+  if (benchOptions.length === 0) return null;
 
   let best = null;
-  for (let defendersCount = 3; defendersCount <= 5; defendersCount += 1) {
-    for (let midfieldersCount = 2; midfieldersCount <= 5; midfieldersCount += 1) {
-      for (let forwardsCount = 1; forwardsCount <= 3; forwardsCount += 1) {
-        if (defendersCount + midfieldersCount + forwardsCount !== 10) continue;
-        const formation = {
-          defendersCount,
-          midfieldersCount,
-          forwardsCount,
-        };
-        const candidate = chooseAssistantStartingXI(
-          playerProfiles,
-          formation,
-          benchSelection.profiles,
-          FANTASY_ASSISTANT_MANAGER_IDEAL_SQUAD_BUDGET_UNITS
-        );
-        if (!candidate) continue;
-        if (
-          !best ||
-          candidate.starterScore > best.starterScore ||
-          (candidate.starterScore === best.starterScore &&
-            candidate.starterExpectedPoints > best.starterExpectedPoints)
-        ) {
-          best = {
-            ...candidate,
-            benchProfiles: [...benchSelection.profiles],
+  for (const benchSelection of benchOptions) {
+    for (let defendersCount = 3; defendersCount <= 5; defendersCount += 1) {
+      for (let midfieldersCount = 2; midfieldersCount <= 5; midfieldersCount += 1) {
+        for (let forwardsCount = 1; forwardsCount <= 3; forwardsCount += 1) {
+          if (defendersCount + midfieldersCount + forwardsCount !== 10) continue;
+          const formation = {
+            defendersCount,
+            midfieldersCount,
+            forwardsCount,
           };
+          const candidate = chooseAssistantStartingXI(
+            playerProfiles,
+            formation,
+            benchSelection.profiles,
+            FANTASY_ASSISTANT_MANAGER_IDEAL_SQUAD_BUDGET_UNITS
+          );
+          if (!candidate) continue;
+          if (
+            !best ||
+            candidate.starterScore > best.starterScore ||
+            (candidate.starterScore === best.starterScore &&
+              candidate.starterExpectedPoints > best.starterExpectedPoints) ||
+            (candidate.starterScore === best.starterScore &&
+              candidate.starterExpectedPoints === best.starterExpectedPoints &&
+              candidate.totalCostUnits > best.totalCostUnits)
+          ) {
+            best = {
+              ...candidate,
+              benchProfiles: [...benchSelection.profiles],
+              benchCostUnits: benchSelection.totalCostUnits,
+              benchScore: benchSelection.totalBenchScore,
+            };
+          }
         }
       }
     }
@@ -3136,11 +3197,20 @@ function buildAssistantIdealSquad(playerProfiles, teams, currentEventID) {
     (sum, player) => sum + parseFiniteNumber(player && player.raw_points, 0),
     0
   );
+  const unusedBudgetUnits = Math.max(0, FANTASY_ASSISTANT_MANAGER_IDEAL_SQUAD_BUDGET_UNITS - best.totalCostUnits);
+  const idealReasons = [
+    `Commits ${formatAssistantPrice((best.totalCostUnits - (best.benchCostUnits || 0)) / 10)} to the starting XI and keeps the bench to ${formatAssistantPrice((best.benchCostUnits || 0) / 10)}.`,
+    `Formation ${best.formation} gives the strongest projected starting XI at ${roundTo(best.starterExpectedPoints, 1).toFixed(1)} points next gameweek.`,
+    unusedBudgetUnits > 0
+      ? `Leaves ${formatAssistantPrice(unusedBudgetUnits / 10)} unused because no legal upgrade improved the XI within budget and club-limit constraints.`
+      : "Uses the full budget while keeping the squad legal under club and formation rules.",
+  ];
 
   return {
     title: "If I had my way...",
     summary:
       "A full 15-man squad picked under standard Fantasy rules, with a cost-cutting bench to leave as much value as possible in the starting XI.",
+    reasons: idealReasons,
     formation: best.formation,
     total_value_millions: roundTo(best.totalCostUnits / 10, 1),
     expected_points_next_gameweek: roundTo(best.starterExpectedPoints, 2),
@@ -3289,7 +3359,19 @@ function buildFantasyAssistantManagerPayload(entryID, picksPayload) {
     );
   const profilesByElementID = new Map(playerProfiles.map((item) => [item.element_id, item]));
   const squadProfiles = picks
-    .map((pick) => profilesByElementID.get(parseFiniteNumber(pick && pick.element, 0)) || null)
+    .map((pick) => {
+      const elementID = parseFiniteNumber(pick && pick.element, 0);
+      const profile = profilesByElementID.get(elementID) || null;
+      if (!profile) return null;
+      const sellingPriceUnits = parseFiniteNumber(pick && pick.selling_price, 0);
+      if (sellingPriceUnits > 0) {
+        return {
+          ...profile,
+          assistant_cost_units: sellingPriceUnits,
+        };
+      }
+      return profile;
+    })
     .filter(Boolean);
 
   if (squadProfiles.length === 0) {
@@ -3302,13 +3384,13 @@ function buildFantasyAssistantManagerPayload(entryID, picksPayload) {
     0
   );
   const currentTeamValueUnits = Math.max(
+    0,
     parseFiniteNumber(
       picksPayload &&
         picksPayload.entry_history &&
         picksPayload.entry_history.value,
       currentSquadCostUnits
-    ),
-    currentSquadCostUnits
+    )
   );
   const bankUnits = Math.max(
     0,
@@ -3319,10 +3401,7 @@ function buildFantasyAssistantManagerPayload(entryID, picksPayload) {
       0
     )
   );
-  const availableBudgetUnits = Math.max(
-    currentSquadCostUnits,
-    Math.min(1000, currentTeamValueUnits + bankUnits)
-  );
+  const availableBudgetUnits = Math.max(currentSquadCostUnits, currentTeamValueUnits);
   const baseClubCounts = squadProfiles.reduce((counts, profile) => {
     const teamID = parseFiniteNumber(profile && profile.team_id, 0);
     if (teamID > 0) {
@@ -3367,6 +3446,22 @@ function buildFantasyAssistantManagerPayload(entryID, picksPayload) {
     availableBudgetUnits
   );
   const idealSquad = buildAssistantIdealSquad(playerProfiles, teams, currentEventID);
+  const expectedPointsPlayers = picks
+    .map((pick) => {
+      const profile = profilesByElementID.get(parseFiniteNumber(pick && pick.element, 0)) || null;
+      if (!profile) return null;
+      return buildAssistantExpectedPointsPlayer(profile, pick);
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftPosition = parseFiniteNumber(left && left.pick_position, 0);
+      const rightPosition = parseFiniteNumber(right && right.pick_position, 0);
+      return leftPosition - rightPosition;
+    });
+  const expectedPointsSection = {
+    starters: expectedPointsPlayers.filter((player) => Boolean(player && player.is_starter)),
+    bench: expectedPointsPlayers.filter((player) => player && !player.is_starter),
+  };
 
   const captainCandidates = [...squadProfiles]
     .sort((left, right) => {
@@ -3379,15 +3474,6 @@ function buildFantasyAssistantManagerPayload(entryID, picksPayload) {
           parseFiniteNumber(left && left.assistant_expected_points_next_gameweek, 0)
         );
       }
-      if (
-        parseFiniteNumber(right && right.assistant_expected_points_next3_gameweeks, 0) !==
-        parseFiniteNumber(left && left.assistant_expected_points_next3_gameweeks, 0)
-      ) {
-        return (
-          parseFiniteNumber(right && right.assistant_expected_points_next3_gameweeks, 0) -
-          parseFiniteNumber(left && left.assistant_expected_points_next3_gameweeks, 0)
-        );
-      }
       return (
         parseFiniteNumber(right && right.assistant_rank_score, 0) -
         parseFiniteNumber(left && left.assistant_rank_score, 0)
@@ -3396,9 +3482,6 @@ function buildFantasyAssistantManagerPayload(entryID, picksPayload) {
     .map(buildAssistantCaptainCandidate);
   const primaryCaptainElementID =
     captainCandidates.length > 0 ? parseFiniteNumber(captainCandidates[0].element_id, 0) : 0;
-  const viceCaptainCandidates = [...captainCandidates].filter(
-    (candidate) => parseFiniteNumber(candidate && candidate.element_id, 0) !== primaryCaptainElementID
-  );
 
   return {
     entry_id: entryID,
@@ -3412,7 +3495,7 @@ function buildFantasyAssistantManagerPayload(entryID, picksPayload) {
     squad_summary: {
       players_count: squadProfiles.length,
       current_squad_value_millions: roundTo(currentSquadCostUnits / 10, 1),
-      reported_team_value_millions: roundTo(currentTeamValueUnits / 10, 1),
+      reported_team_value_millions: roundTo(currentSquadCostUnits / 10, 1),
       bank_millions: roundTo(bankUnits / 10, 1),
       effective_budget_millions: roundTo(availableBudgetUnits / 10, 1),
       team_value_cap_millions: 100.0,
@@ -3432,10 +3515,10 @@ function buildFantasyAssistantManagerPayload(entryID, picksPayload) {
     ideal_squad: idealSquad,
     captain_recommendations: {
       summary:
-        "Captaincy leans on next-gameweek expected points first, with three-gameweek planning and availability used as tie-breakers.",
+        "Captaincy is ranked on next-game expected points first, with availability and overall assistant score only used to split ties.",
       captain: captainCandidates.slice(0, 3),
-      vice_captain: viceCaptainCandidates.slice(0, 3),
     },
+    expected_points: expectedPointsSection,
   };
 }
 

@@ -5,6 +5,7 @@ struct FantasyGameweek: Codable, Hashable {
     let name: String?
     let isCurrent: Bool?
     let isNext: Bool?
+    let finished: Bool?
     let deadlineTime: String?
 
     enum CodingKeys: String, CodingKey {
@@ -12,7 +13,38 @@ struct FantasyGameweek: Codable, Hashable {
         case name
         case isCurrent = "is_current"
         case isNext = "is_next"
+        case finished
         case deadlineTime = "deadline_time"
+    }
+}
+
+enum FantasySquadGameweekResolver {
+    static func resolve(
+        currentGameweek: FantasyGameweek,
+        nextGameweek: FantasyGameweek?,
+        events: [FantasyGameweek] = []
+    ) -> FantasyGameweek {
+        guard currentGameweek.finished == true else {
+            return currentGameweek
+        }
+
+        if let nextGameweek, nextGameweek.id > currentGameweek.id {
+            return nextGameweek
+        }
+
+        if let nextFromEvents = events.first(where: { event in
+            event.isNext == true && event.id > currentGameweek.id
+        }) {
+            return nextFromEvents
+        }
+
+        if let nextByID = events
+            .filter({ $0.id > currentGameweek.id })
+            .min(by: { $0.id < $1.id }) {
+            return nextByID
+        }
+
+        return currentGameweek
     }
 }
 
@@ -601,6 +633,7 @@ struct FantasyAssistantManagerResponse: Codable, Hashable {
     struct CaptainRecommendation: Codable, Hashable, Identifiable {
         let elementID: Int
         let playerName: String
+        let teamName: String?
         let teamShortName: String?
         let opponentLabel: String
         let availability: String
@@ -611,6 +644,7 @@ struct FantasyAssistantManagerResponse: Codable, Hashable {
         enum CodingKeys: String, CodingKey {
             case elementID = "element_id"
             case playerName = "player_name"
+            case teamName = "team_name"
             case teamShortName = "team_short_name"
             case opponentLabel = "opponent_label"
             case availability
@@ -627,13 +661,48 @@ struct FantasyAssistantManagerResponse: Codable, Hashable {
     struct CaptainRecommendations: Codable, Hashable {
         let summary: String?
         let captain: [CaptainRecommendation]
-        let viceCaptain: [CaptainRecommendation]
 
         enum CodingKeys: String, CodingKey {
             case summary
             case captain
-            case viceCaptain = "vice_captain"
         }
+    }
+
+    struct ExpectedPointsPlayer: Codable, Hashable, Identifiable {
+        let elementID: Int
+        let pickPosition: Int
+        let isStarter: Bool
+        let playerName: String
+        let teamName: String
+        let teamShortName: String?
+        let opponentTeamName: String
+        let opponentLabel: String
+        let difficulty: Int?
+        let expectedPointsNextGameweek: Double
+        let isBlank: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case elementID = "element_id"
+            case pickPosition = "pick_position"
+            case isStarter = "is_starter"
+            case playerName = "player_name"
+            case teamName = "team_name"
+            case teamShortName = "team_short_name"
+            case opponentTeamName = "opponent_team_name"
+            case opponentLabel = "opponent_label"
+            case difficulty
+            case expectedPointsNextGameweek = "expected_points_next_gameweek"
+            case isBlank = "is_blank"
+        }
+
+        var id: String {
+            "\(elementID)-\(pickPosition)"
+        }
+    }
+
+    struct ExpectedPointsSection: Codable, Hashable {
+        let starters: [ExpectedPointsPlayer]
+        let bench: [ExpectedPointsPlayer]
     }
 
     struct IdealSquadPlayer: Codable, Hashable, Identifiable {
@@ -716,6 +785,7 @@ struct FantasyAssistantManagerResponse: Codable, Hashable {
     struct IdealSquad: Codable, Hashable {
         let title: String?
         let summary: String?
+        let reasons: [String]?
         let formation: String?
         let totalValueMillions: Double
         let expectedPointsNextGameweek: Double
@@ -730,6 +800,7 @@ struct FantasyAssistantManagerResponse: Codable, Hashable {
         enum CodingKeys: String, CodingKey {
             case title
             case summary
+            case reasons
             case formation
             case totalValueMillions = "total_value_millions"
             case expectedPointsNextGameweek = "expected_points_next_gameweek"
@@ -758,6 +829,7 @@ struct FantasyAssistantManagerResponse: Codable, Hashable {
     let moneyNoObjectTransfers: TransferPlan?
     let idealSquad: IdealSquad?
     let captainRecommendations: CaptainRecommendations?
+    let expectedPoints: ExpectedPointsSection?
     let syncStatus: SyncStatus?
 
     enum CodingKeys: String, CodingKey {
@@ -776,6 +848,7 @@ struct FantasyAssistantManagerResponse: Codable, Hashable {
         case moneyNoObjectTransfers = "money_no_object_transfers"
         case idealSquad = "ideal_squad"
         case captainRecommendations = "captain_recommendations"
+        case expectedPoints = "expected_points"
         case syncStatus = "sync_status"
     }
 }

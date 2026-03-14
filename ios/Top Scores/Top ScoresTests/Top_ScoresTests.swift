@@ -260,6 +260,58 @@ struct Top_ScoresTests {
         #expect(section?.bench.map(\.displayName) == ["Foster"])
     }
 
+    @Test func fantasySquadGameweekResolver_usesNextGameweekWhenCurrentIsFinished() async throws {
+        let current = FantasyGameweek(
+            id: 29,
+            name: "Gameweek 29",
+            isCurrent: true,
+            isNext: false,
+            finished: true,
+            deadlineTime: "2026-03-01T11:00:00Z"
+        )
+        let next = FantasyGameweek(
+            id: 30,
+            name: "Gameweek 30",
+            isCurrent: false,
+            isNext: true,
+            finished: false,
+            deadlineTime: "2026-03-08T11:00:00Z"
+        )
+
+        let resolved = FantasySquadGameweekResolver.resolve(
+            currentGameweek: current,
+            nextGameweek: next
+        )
+
+        #expect(resolved.id == 30)
+    }
+
+    @Test func fantasySquadGameweekResolver_keepsCurrentGameweekWhenCurrentIsStillLive() async throws {
+        let current = FantasyGameweek(
+            id: 29,
+            name: "Gameweek 29",
+            isCurrent: true,
+            isNext: false,
+            finished: false,
+            deadlineTime: "2026-03-01T11:00:00Z"
+        )
+        let next = FantasyGameweek(
+            id: 30,
+            name: "Gameweek 30",
+            isCurrent: false,
+            isNext: true,
+            finished: false,
+            deadlineTime: "2026-03-08T11:00:00Z"
+        )
+
+        let resolved = FantasySquadGameweekResolver.resolve(
+            currentGameweek: current,
+            nextGameweek: next
+        )
+
+        #expect(resolved.id == 29)
+    }
+
     private func makeMatch(
         date: String = "2026-02-24",
         time: String = "17:45",
