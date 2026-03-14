@@ -6,6 +6,7 @@ enum AppGroupConfig {
     static let sharedMatchesFileName = "shared-matches.json"
     static let matchesPayloadContextKey = "matches_payload"
     static let requestMatchesSyncMessageKey = "request_matches_sync"
+    static let fantasySharedImportQueueKey = "fantasy.sharedImportQueue"
     static let fantasySharedEntryURLKey = "fantasy.sharedEntryURL"
     static let fantasySharedEntryUpdatedAtKey = "fantasy.sharedEntryUpdatedAt"
     static let fantasyManagerEntryIDKey = "fantasy.managerEntryID"
@@ -34,6 +35,58 @@ struct SharedMatchesPayload: Codable, Equatable {
         lhs.matches == rhs.matches &&
         lhs.unfilteredMatches == rhs.unfilteredMatches &&
         lhs.lastUpdated == rhs.lastUpdated
+    }
+}
+
+struct FantasySharedImportPayload: Codable, Equatable {
+    let rawURL: String
+    let updatedAt: TimeInterval
+
+    var trimmedRawURL: String {
+        rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+enum FantasySharedImportStore {
+    static func loadQueue(from defaults: UserDefaults) -> [FantasySharedImportPayload] {
+        guard let data = defaults.data(forKey: AppGroupConfig.fantasySharedImportQueueKey),
+              let decoded = try? JSONDecoder().decode([FantasySharedImportPayload].self, from: data) else {
+            return []
+        }
+        return decoded.filter { !$0.trimmedRawURL.isEmpty }
+    }
+
+    static func saveQueue(_ queue: [FantasySharedImportPayload], to defaults: UserDefaults) {
+        let sanitizedQueue = queue.filter { !$0.trimmedRawURL.isEmpty }
+        if sanitizedQueue.isEmpty {
+            defaults.removeObject(forKey: AppGroupConfig.fantasySharedImportQueueKey)
+        } else if let data = try? JSONEncoder().encode(sanitizedQueue) {
+            defaults.set(data, forKey: AppGroupConfig.fantasySharedImportQueueKey)
+        }
+        saveLegacyPayload(sanitizedQueue.last, to: defaults)
+    }
+
+    static func loadLegacyPayload(from defaults: UserDefaults) -> FantasySharedImportPayload? {
+        guard let rawURL = defaults.string(forKey: AppGroupConfig.fantasySharedEntryURLKey) else {
+            return nil
+        }
+
+        let payload = FantasySharedImportPayload(
+            rawURL: rawURL,
+            updatedAt: defaults.double(forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
+        )
+        return payload.trimmedRawURL.isEmpty ? nil : payload
+    }
+
+    static func saveLegacyPayload(_ payload: FantasySharedImportPayload?, to defaults: UserDefaults) {
+        guard let payload else {
+            defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryURLKey)
+            defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
+            return
+        }
+
+        defaults.set(payload.trimmedRawURL, forKey: AppGroupConfig.fantasySharedEntryURLKey)
+        defaults.set(payload.updatedAt, forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
     }
 }
 

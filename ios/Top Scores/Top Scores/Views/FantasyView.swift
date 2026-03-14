@@ -10,6 +10,16 @@ struct FantasyView: View {
         let trackedLeagues: [FantasyTrackedLeague]
     }
 
+    private struct PendingSharedFantasyImport {
+        enum Source {
+            case queue
+            case legacy
+        }
+
+        let payload: FantasySharedImportPayload
+        let source: Source
+    }
+
     let isSelected: Bool
 
     @EnvironmentObject private var preferences: PreferencesStore
@@ -2792,19 +2802,23 @@ struct FantasyView: View {
         guard !isProcessingSharedEntryImport else { return }
         guard Date() >= nextSharedEntryRetryAt else { return }
         guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
-        guard let sharedURL = defaults.string(forKey: AppGroupConfig.fantasySharedEntryURLKey) else { return }
-        let sharedUpdatedAt = defaults.double(forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
+        guard let pendingImport = nextPendingSharedFantasyImport(from: defaults) else { return }
 
-        let trimmed = sharedURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = pendingImport.payload.trimmedRawURL
         guard !trimmed.isEmpty else {
-            clearSharedEntryImportPayload()
+            discardSharedFantasyImport(pendingImport, from: defaults)
             return
         }
 
-        if sharedUpdatedAt > 0, sharedUpdatedAt <= lastProcessedSharedEntryUpdatedAt {
+        let sharedUpdatedAt = pendingImport.payload.updatedAt
+        if pendingImport.source == .legacy,
+           sharedUpdatedAt > 0,
+           sharedUpdatedAt <= lastProcessedSharedEntryUpdatedAt {
             return
         }
-        if sharedUpdatedAt <= 0, trimmed == lastProcessedSharedEntryURL {
+        if pendingImport.source == .legacy,
+           sharedUpdatedAt <= 0,
+           trimmed == lastProcessedSharedEntryURL {
             return
         }
 
@@ -2815,7 +2829,8 @@ struct FantasyView: View {
                 isError: true
             )
             markSharedEntryAsProcessed(updatedAt: sharedUpdatedAt, rawURL: trimmed)
-            clearSharedEntryImportPayload()
+            discardSharedFantasyImport(pendingImport, from: defaults)
+            consumeSharedFantasyEntryURLIfNeeded()
             return
         }
 
@@ -2832,7 +2847,8 @@ struct FantasyView: View {
                 )
             }
             markSharedEntryAsProcessed(updatedAt: sharedUpdatedAt, rawURL: trimmed)
-            clearSharedEntryImportPayload()
+            discardSharedFantasyImport(pendingImport, from: defaults)
+            consumeSharedFantasyEntryURLIfNeeded()
             return
         }
 
@@ -2852,11 +2868,14 @@ struct FantasyView: View {
             await MainActor.run {
                 if handled {
                     markSharedEntryAsProcessed(updatedAt: sharedUpdatedAt, rawURL: trimmed)
-                    clearSharedEntryImportPayload()
+                    discardSharedFantasyImport(pendingImport, from: defaults)
                 } else {
                     nextSharedEntryRetryAt = Date().addingTimeInterval(3)
                 }
                 isProcessingSharedEntryImport = false
+                if handled {
+                    consumeSharedFantasyEntryURLIfNeeded()
+                }
             }
         }
     }
@@ -2998,10 +3017,31 @@ struct FantasyView: View {
         }
     }
 
-    private func clearSharedEntryImportPayload() {
-        guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
-        defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryURLKey)
-        defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
+    private func nextPendingSharedFantasyImport(from defaults: UserDefaults) -> PendingSharedFantasyImport? {
+        let queuedPayloads = FantasySharedImportStore.loadQueue(from: defaults)
+        if let firstQueuedPayload = queuedPayloads.first {
+            return PendingSharedFantasyImport(payload: firstQueuedPayload, source: .queue)
+        }
+
+        guard let legacyPayload = FantasySharedImportStore.loadLegacyPayload(from: defaults) else {
+            return nil
+        }
+        return PendingSharedFantasyImport(payload: legacyPayload, source: .legacy)
+    }
+
+    private func discardSharedFantasyImport(_ pendingImport: PendingSharedFantasyImport, from defaults: UserDefaults) {
+        switch pendingImport.source {
+        case .queue:
+            var queuedPayloads = FantasySharedImportStore.loadQueue(from: defaults)
+            if let matchingIndex = queuedPayloads.firstIndex(of: pendingImport.payload) {
+                queuedPayloads.remove(at: matchingIndex)
+            } else if !queuedPayloads.isEmpty {
+                queuedPayloads.removeFirst()
+            }
+            FantasySharedImportStore.saveQueue(queuedPayloads, to: defaults)
+        case .legacy:
+            FantasySharedImportStore.saveLegacyPayload(nil, to: defaults)
+        }
     }
 
     private func markSharedEntryAsProcessed(updatedAt: TimeInterval, rawURL: String) {

@@ -2018,7 +2018,7 @@ test("includes aggregate score in goal notification body when available", () => 
   assert.equal(goals[0].body, "Atletico Madrid 1 - 0 Club Brugge (agg: 4-3) (A. Griezmann)");
 });
 
-test("suppresses aggregate 0-0 in notifications when live score is non-zero", () => {
+test("suppresses aggregate 0-0 in score update notifications", () => {
   const oldMatch = {
     home_team: "Wolves",
     away_team: "Aston Villa",
@@ -2039,6 +2039,32 @@ test("suppresses aggregate 0-0 in notifications when live score is non-zero", ()
   const event = __testHooks.buildScoreChangeEvent(oldMatch, newMatch);
   assert.ok(event);
   assert.equal(event.body, "Wolves 2 - 0 Aston Villa (87')");
+});
+
+test("suppresses aggregate 0-0 in full-time notifications", () => {
+  const monitorState = newMonitorState();
+
+  const oldMatch = {
+    home_team: "Burnley",
+    away_team: "AFC Bournemouth",
+    score_status: "90'",
+    home_score: 0,
+    away_score: 0,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    aggregate_home_score: 0,
+    aggregate_away_score: 0,
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    score_status: "FT",
+  };
+
+  const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "fulltime");
+  assert.equal(events[0].body, "Burnley 0 - 0 AFC Bournemouth");
 });
 
 test("counts own goals for event detection", () => {

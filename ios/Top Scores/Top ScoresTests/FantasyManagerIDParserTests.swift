@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Top_Scores
 
@@ -45,5 +46,45 @@ struct FantasyManagerIDParserTests {
         let parsed = FantasySharedURLParser.parse(from: url)
 
         #expect(parsed == .league("844129"))
+    }
+
+    @Test func sharedImportStore_roundTripsQueueAndMirrorsLatestLegacyPayload() async throws {
+        let suiteName = #function
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let queuedPayloads = [
+            FantasySharedImportPayload(
+                rawURL: "https://fantasy.premierleague.com/entry/111111/event/29",
+                updatedAt: 101
+            ),
+            FantasySharedImportPayload(
+                rawURL: "https://fantasy.premierleague.com/entry/222222/event/29",
+                updatedAt: 202
+            )
+        ]
+
+        FantasySharedImportStore.saveQueue(queuedPayloads, to: defaults)
+
+        #expect(FantasySharedImportStore.loadQueue(from: defaults) == queuedPayloads)
+        #expect(FantasySharedImportStore.loadLegacyPayload(from: defaults) == queuedPayloads.last)
+    }
+
+    @Test func sharedImportStore_clearsLegacyMirrorWhenQueueIsEmpty() async throws {
+        let suiteName = #function
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let payload = FantasySharedImportPayload(
+            rawURL: "https://fantasy.premierleague.com/leagues/844129/standings/c",
+            updatedAt: 303
+        )
+        FantasySharedImportStore.saveLegacyPayload(payload, to: defaults)
+        #expect(FantasySharedImportStore.loadLegacyPayload(from: defaults) == payload)
+
+        FantasySharedImportStore.saveQueue([], to: defaults)
+
+        #expect(FantasySharedImportStore.loadQueue(from: defaults).isEmpty)
+        #expect(FantasySharedImportStore.loadLegacyPayload(from: defaults) == nil)
     }
 }

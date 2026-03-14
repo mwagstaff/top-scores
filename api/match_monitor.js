@@ -1727,13 +1727,7 @@ function aggregateScoreSuffix(match, homeScore, awayScore) {
   if (!Number.isFinite(aggregateHomeScore) || !Number.isFinite(aggregateAwayScore)) {
     return "";
   }
-  const liveHomeScore = toNumericScore(homeScore);
-  const liveAwayScore = toNumericScore(awayScore);
-  const hasLiveScoreline =
-    Number.isFinite(liveHomeScore) &&
-    Number.isFinite(liveAwayScore) &&
-    (liveHomeScore > 0 || liveAwayScore > 0);
-  if (aggregateHomeScore === 0 && aggregateAwayScore === 0 && hasLiveScoreline) {
+  if (aggregateHomeScore === 0 && aggregateAwayScore === 0) {
     return "";
   }
   return ` (agg: ${aggregateHomeScore}-${aggregateAwayScore})`;

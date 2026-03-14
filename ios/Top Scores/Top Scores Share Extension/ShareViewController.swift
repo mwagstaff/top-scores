@@ -4,9 +4,19 @@ import UniformTypeIdentifiers
 final class ShareViewController: UIViewController {
     private enum Config {
         static let appGroupID = "group.dev.skynolimit.topscores"
+        static let sharedImportQueueKey = "fantasy.sharedImportQueue"
         static let sharedURLKey = "fantasy.sharedEntryURL"
         static let sharedUpdatedAtKey = "fantasy.sharedEntryUpdatedAt"
         static let managerEntryIDKey = "fantasy.managerEntryID"
+    }
+
+    private struct SharedImportPayload: Codable, Equatable {
+        let rawURL: String
+        let updatedAt: TimeInterval
+
+        var trimmedRawURL: String {
+            rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     private let logoButton = UIButton(type: .custom)
@@ -107,8 +117,13 @@ final class ShareViewController: UIViewController {
             return
         }
 
-        defaults.set(sharedText, forKey: Config.sharedURLKey)
-        defaults.set(Date().timeIntervalSince1970, forKey: Config.sharedUpdatedAtKey)
+        let payload = SharedImportPayload(
+            rawURL: sharedText,
+            updatedAt: Date().timeIntervalSince1970
+        )
+        var queuedPayloads = loadSharedImportQueue(from: defaults)
+        queuedPayloads.append(payload)
+        saveSharedImportQueue(queuedPayloads, to: defaults)
         defaults.synchronize()
 
         showSuccessUI(target: parsedTarget, isLinkingPrimaryManager: isLinkingPrimaryManager)
@@ -130,10 +145,10 @@ final class ShareViewController: UIViewController {
         switch target {
         case .manager:
             statusLabel.text = isLinkingPrimaryManager
-                ? "Please return to Top Scores to complete setup"
-                : "Please return to Top Scores to view your updated Rivals table"
+                ? "Share more rivals now, or return to Top Scores to finish setup"
+                : "Share another rival now, or return to Top Scores to view your updated Rivals table"
         case .league:
-            statusLabel.text = "Please return to Top Scores to view your updated Leagues section"
+            statusLabel.text = "Share another league now, or return to Top Scores to view your updated Leagues section"
         }
     }
 
@@ -195,6 +210,32 @@ final class ShareViewController: UIViewController {
 
     private func appIconImage() -> UIImage? {
         UIImage(named: "top-scores-logo")
+    }
+
+    private func loadSharedImportQueue(from defaults: UserDefaults) -> [SharedImportPayload] {
+        guard let data = defaults.data(forKey: Config.sharedImportQueueKey),
+              let decoded = try? JSONDecoder().decode([SharedImportPayload].self, from: data) else {
+            return []
+        }
+        return decoded.filter { !$0.trimmedRawURL.isEmpty }
+    }
+
+    private func saveSharedImportQueue(_ queue: [SharedImportPayload], to defaults: UserDefaults) {
+        let sanitizedQueue = queue.filter { !$0.trimmedRawURL.isEmpty }
+        if sanitizedQueue.isEmpty {
+            defaults.removeObject(forKey: Config.sharedImportQueueKey)
+            defaults.removeObject(forKey: Config.sharedURLKey)
+            defaults.removeObject(forKey: Config.sharedUpdatedAtKey)
+            return
+        }
+
+        if let data = try? JSONEncoder().encode(sanitizedQueue) {
+            defaults.set(data, forKey: Config.sharedImportQueueKey)
+        }
+        if let latestPayload = sanitizedQueue.last {
+            defaults.set(latestPayload.trimmedRawURL, forKey: Config.sharedURLKey)
+            defaults.set(latestPayload.updatedAt, forKey: Config.sharedUpdatedAtKey)
+        }
     }
 }
 
