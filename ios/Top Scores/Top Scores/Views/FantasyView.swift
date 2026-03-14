@@ -461,6 +461,7 @@ struct FantasyView: View {
                         }
                         scoreSummaryCard(
                             data,
+                            showsActiveChipMessage: data.hasActiveChip,
                             moreRivalsTapAction: {
                                 withAnimation(.easeInOut(duration: 0.25)) {
                                     proxy.scrollTo(rivalsSectionScrollID, anchor: .top)
@@ -625,98 +626,112 @@ struct FantasyView: View {
     private func scoreSummaryCard(
         _ data: FantasySquadDisplayData,
         showRivalPills: Bool = true,
+        showsActiveChipMessage: Bool = false,
         scoreTapEnabled: Bool = true,
         scoreTapAction: (() -> Void)? = nil,
         moreRivalsTapAction: (() -> Void)? = nil
     ) -> some View {
-        let currentScore = data.resolvedCurrentScore
-        let displayedScore = data.isEstimatedScore ? "\(currentScore)*" : "\(currentScore)"
+        let displayedScore = data.resolvedCurrentScoreDisplay
         let rivalPills = data.hasStartedFixturesInGameweek ? rivalScorePills() : []
         let visibleRivalPills = Array(rivalPills.prefix(3))
         let hiddenRivalCount = max(0, rivalPills.count - visibleRivalPills.count)
 
-        return HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(data.gameweekTitle)
-                    .font(.headline)
-                if showRivalPills {
-                    FantasyTransferDeadlineLabel(
-                        gameweekID: data.deadlineGameweekID,
-                        deadlineTime: data.deadlineTime
-                    )
-                        .padding(.bottom, visibleRivalPills.isEmpty ? 1 : 3)
-                }
-                if showRivalPills && !visibleRivalPills.isEmpty {
-                    HStack(spacing: 5) {
-                        ForEach(visibleRivalPills) { pill in
-                            Button {
-                                openRivalFromScorePill(entryID: pill.entryID)
-                            } label: {
-                                HStack(spacing: 0) {
-                                    Text(pill.initials)
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundStyle(.white)
-                                        .padding(.horizontal, 7)
-                                        .padding(.vertical, 4)
-                                        .background(rivalInitialsColor(for: pill.initials))
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(data.gameweekTitle)
+                        .font(.headline)
+                    if showRivalPills {
+                        FantasyTransferDeadlineLabel(
+                            gameweekID: data.deadlineGameweekID,
+                            deadlineTime: data.deadlineTime
+                        )
+                            .padding(.bottom, visibleRivalPills.isEmpty ? 1 : 3)
+                    }
+                    if showRivalPills && !visibleRivalPills.isEmpty {
+                        HStack(spacing: 5) {
+                            ForEach(visibleRivalPills) { pill in
+                                Button {
+                                    openRivalFromScorePill(entryID: pill.entryID)
+                                } label: {
+                                    HStack(spacing: 0) {
+                                        Text(pill.initials)
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 4)
+                                            .background(rivalInitialsColor(for: pill.initials))
 
-                                    Text("\(pill.score)")
-                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                        .monospacedDigit()
-                                        .foregroundStyle(.primary)
-                                        .padding(.horizontal, 7)
-                                        .padding(.vertical, 4)
-                                        .background(Color(.tertiarySystemGroupedBackground))
+                                        Text(pill.displayedScore)
+                                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                            .monospacedDigit()
+                                            .foregroundStyle(.primary)
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 4)
+                                            .background(Color(.tertiarySystemGroupedBackground))
+                                    }
+                                    .clipShape(Capsule(style: .continuous))
+                                    .overlay(
+                                        Capsule(style: .continuous)
+                                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    )
                                 }
-                                .clipShape(Capsule(style: .continuous))
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                                )
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
-                        }
 
-                        if hiddenRivalCount > 0, let moreRivalsTapAction {
-                            Button {
-                                moreRivalsTapAction()
-                            } label: {
-                                Text("+\(hiddenRivalCount)")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(Color.accentColor)
-                                    .underline()
-                                    .padding(.horizontal, 4)
+                            if hiddenRivalCount > 0, let moreRivalsTapAction {
+                                Button {
+                                    moreRivalsTapAction()
+                                } label: {
+                                    Text("+\(hiddenRivalCount)")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(Color.accentColor)
+                                        .underline()
+                                        .padding(.horizontal, 4)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Show \(hiddenRivalCount) more rivals")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Show \(hiddenRivalCount) more rivals")
                         }
+                        .padding(.vertical, 1)
                     }
-                    .padding(.vertical, 1)
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            if scoreTapEnabled {
-                Button {
-                    if let scoreTapAction {
-                        scoreTapAction()
-                    } else {
-                        openScoreBreakdown(for: data)
+                if scoreTapEnabled {
+                    Button {
+                        if let scoreTapAction {
+                            scoreTapAction()
+                        } else {
+                            openScoreBreakdown(for: data)
+                        }
+                    } label: {
+                        FantasyScoreLozenge(
+                            displayedScore: displayedScore,
+                            isLive: data.hasActiveFixtures
+                        )
                     }
-                } label: {
+                    .buttonStyle(.plain)
+                } else {
                     FantasyScoreLozenge(
                         displayedScore: displayedScore,
                         isLive: data.hasActiveFixtures
                     )
                 }
-                .buttonStyle(.plain)
-            } else {
-                FantasyScoreLozenge(
-                    displayedScore: displayedScore,
-                    isLive: data.hasActiveFixtures
-                )
+            }
+
+            if showsActiveChipMessage, let chipSummary = data.activeChipSummaryText {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 1)
+                    Text(chipSummary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(12)
@@ -732,7 +747,8 @@ struct FantasyView: View {
                 FantasyRivalScorePill(
                     entryID: rival.entryID,
                     initials: initials(for: rival.managerName),
-                    score: rival.currentScore
+                    score: rival.currentScore,
+                    showsAsterisk: rival.squad.hasActiveChip
                 )
             }
             .sorted { lhs, rhs in
@@ -1112,6 +1128,7 @@ struct FantasyView: View {
                 managerName: myManagerName,
                 currentGameweekScore: mySquad.resolvedCurrentScore,
                 allGameweeksScore: profile?.summaryOverallPoints,
+                hasActiveChipInCurrentGameweek: mySquad.hasActiveChip,
                 squad: mySquad,
                 clubBadgeSrc: profile?.clubBadgeSrc,
                 isUser: true
@@ -1129,6 +1146,7 @@ struct FantasyView: View {
                 managerName: rival.managerDisplayName,
                 currentGameweekScore: rivalSquad?.currentScore,
                 allGameweeksScore: rivalSquad?.allGameweeksPoints ?? rival.overallPoints,
+                hasActiveChipInCurrentGameweek: rivalSquad?.squad.hasActiveChip ?? false,
                 squad: rivalSquad?.squad,
                 clubBadgeSrc: rivalSquad?.clubBadgeSrc ?? rival.clubBadgeSrc,
                 isUser: false
@@ -1970,6 +1988,7 @@ struct FantasyView: View {
                     scoreSummaryCard(
                         rival.squad,
                         showRivalPills: false,
+                        showsActiveChipMessage: rival.squad.hasActiveChip,
                         scoreTapEnabled: true,
                         scoreTapAction: {
                             openScoreBreakdown(for: rival.squad, teamNameOverride: rival.teamName)
@@ -3607,6 +3626,7 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     let managerName: String
     let currentGameweekScore: Int?
     let allGameweeksScore: Int?
+    let hasActiveChipInCurrentGameweek: Bool
     let squad: FantasySquadDisplayData?
     let clubBadgeSrc: String?
     let isUser: Bool
@@ -3634,6 +3654,9 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
 
     func scoreDisplay(for mode: RivalsScoreMode) -> String {
         guard let score = scoreValue(for: mode) else { return "-" }
+        if mode == .currentGameweek, hasActiveChipInCurrentGameweek {
+            return "\(score)*"
+        }
         return "\(score)"
     }
 
@@ -3646,9 +3669,14 @@ private struct FantasyRivalScorePill: Identifiable, Hashable {
     let entryID: Int
     let initials: String
     let score: Int
+    let showsAsterisk: Bool
 
     var id: Int {
         entryID
+    }
+
+    var displayedScore: String {
+        "\(score)\(showsAsterisk ? "*" : "")"
     }
 }
 
@@ -4844,6 +4872,7 @@ private struct FantasyAssistantManagerSheet: View {
             overallRank: nil,
             transfersCost: nil,
             pointsOnBench: squad.displayedBenchPoints,
+            activeChips: [],
             goalkeepers: goalkeepers,
             defenders: defenders,
             midfielders: midfielders,

@@ -132,13 +132,97 @@ struct FantasyBootstrapElementType: Codable, Hashable {
     }
 }
 
+struct FantasyChip: Hashable {
+    let code: String
+
+    init(code: String) {
+        self.code = code
+    }
+
+    private var normalizedCode: String {
+        code
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    var displayName: String {
+        switch normalizedCode {
+        case "bboost":
+            return "Bench Boost"
+        case "3xc":
+            return "Triple Captain"
+        case "freehit":
+            return "Free Hit"
+        case "manager", "assistant_manager", "assistantmanager", "am":
+            return "Assistant Manager"
+        default:
+            if normalizedCode.hasPrefix("wildcard") {
+                return "Wildcard"
+            }
+
+            let cleaned = normalizedCode
+                .replacingOccurrences(of: "_", with: " ")
+                .replacingOccurrences(of: "-", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return "Unknown chip" }
+
+            return cleaned
+                .split(whereSeparator: \.isWhitespace)
+                .map { fragment in
+                    let raw = String(fragment)
+                    let prefix = raw.prefix(1).uppercased()
+                    let suffix = raw.dropFirst()
+                    return prefix + suffix
+                }
+                .joined(separator: " ")
+        }
+    }
+
+    var isBenchBoost: Bool {
+        normalizedCode == "bboost"
+    }
+}
+
 struct FantasyPicksResponse: Codable, Hashable {
     let picks: [FantasyPick]
     let entryHistory: FantasyEntryHistory
+    let activeChipCodes: [String]
 
     enum CodingKeys: String, CodingKey {
         case picks
         case entryHistory = "entry_history"
+        case activeChipCodes = "active_chip"
+    }
+
+    init(
+        picks: [FantasyPick],
+        entryHistory: FantasyEntryHistory,
+        activeChipCodes: [String] = []
+    ) {
+        self.picks = picks
+        self.entryHistory = entryHistory
+        self.activeChipCodes = activeChipCodes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        picks = try container.decode([FantasyPick].self, forKey: .picks)
+        entryHistory = try container.decode(FantasyEntryHistory.self, forKey: .entryHistory)
+
+        if let code = try? container.decodeIfPresent(String.self, forKey: .activeChipCodes) {
+            let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+            activeChipCodes = trimmed.isEmpty ? [] : [trimmed]
+        } else if let codes = try? container.decodeIfPresent([String].self, forKey: .activeChipCodes) {
+            activeChipCodes = codes
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        } else {
+            activeChipCodes = []
+        }
+    }
+
+    var activeChips: [FantasyChip] {
+        activeChipCodes.map(FantasyChip.init(code:))
     }
 }
 
@@ -1238,6 +1322,7 @@ struct FantasySquadDisplayData: Hashable {
     let overallRank: Int?
     let transfersCost: Int?
     let pointsOnBench: Int?
+    let activeChips: [FantasyChip]
     let goalkeepers: [FantasyDisplayPlayer]
     let defenders: [FantasyDisplayPlayer]
     let midfielders: [FantasyDisplayPlayer]
@@ -1263,63 +1348,90 @@ struct FantasySquadDisplayData: Hashable {
             : totalPoints
     }
 
+    var hasActiveChip: Bool {
+        !activeChips.isEmpty
+    }
+
+    var hasBenchBoostActive: Bool {
+        activeChips.contains(where: \.isBenchBoost)
+    }
+
+    var activeChipDisplayNames: [String] {
+        activeChips.map(\.displayName)
+    }
+
+    var activeChipSummaryText: String? {
+        guard !activeChipDisplayNames.isEmpty else { return nil }
+        let label = activeChipDisplayNames.count == 1 ? "Active chip" : "Active chips"
+        return "\(label): \(activeChipDisplayNames.joined(separator: ", "))"
+    }
+
+    var shouldShowCurrentScoreAsterisk: Bool {
+        isEstimatedScore || hasActiveChip
+    }
+
+    var resolvedCurrentScoreDisplay: String {
+        "\(resolvedCurrentScore)\(shouldShowCurrentScoreAsterisk ? "*" : "")"
+    }
+
     var effectivePlayerContributions: [FantasyEffectivePlayerContribution] {
         var contributionsByElementID: [Int: Int] = [:]
-        let playersByElementID = Dictionary(uniqueKeysWithValues: allPlayers.map { ($0.elementID, $0) })
 
         for starter in starters {
             contributionsByElementID[starter.elementID] = starter.appliedPoints
         }
         for benchPlayer in bench {
-            contributionsByElementID[benchPlayer.elementID] = 0
+            contributionsByElementID[benchPlayer.elementID] = hasBenchBoostActive ? benchPlayer.rawPoints : 0
         }
 
-        if let unavailableStartingGoalkeeper = starters.first(where: { player in
-            player.positionType == .goalkeeper && player.shouldAutoSubAsNonParticipant
-        }),
-           let benchGoalkeeper = bench.first(where: { $0.positionType == .goalkeeper && $0.isEligibleAutoSubReplacement }) {
-            contributionsByElementID[unavailableStartingGoalkeeper.elementID] = 0
-            contributionsByElementID[benchGoalkeeper.elementID] = benchGoalkeeper.rawPoints
-        }
-
-        let minimumFormation: [FantasyPositionType: Int] = [
-            .defender: 3,
-            .midfielder: 2,
-            .forward: 1
-        ]
-        var activeOutfieldCounts: [FantasyPositionType: Int] = [.defender: 0, .midfielder: 0, .forward: 0]
-        for player in starters where player.positionType != .goalkeeper {
-            activeOutfieldCounts[player.positionType, default: 0] += 1
-        }
-
-        var nonPlayingOutfieldStarters = starters
-            .filter { $0.positionType != .goalkeeper && $0.shouldAutoSubAsNonParticipant }
-            .sorted { $0.pickPosition < $1.pickPosition }
-        let playedOutfieldBench = bench
-            .filter { $0.positionType != .goalkeeper && $0.isEligibleAutoSubReplacement }
-            .sorted { $0.pickPosition < $1.pickPosition }
-
-        for benchPlayer in playedOutfieldBench {
-            guard !nonPlayingOutfieldStarters.isEmpty else { break }
-
-            let replacementIndex = nonPlayingOutfieldStarters.firstIndex { starter in
-                var simulatedCounts = activeOutfieldCounts
-                simulatedCounts[starter.positionType, default: 0] -= 1
-                simulatedCounts[benchPlayer.positionType, default: 0] += 1
-                let defendersOK = (simulatedCounts[.defender] ?? 0) >= (minimumFormation[.defender] ?? 0)
-                let midfieldersOK = (simulatedCounts[.midfielder] ?? 0) >= (minimumFormation[.midfielder] ?? 0)
-                let forwardsOK = (simulatedCounts[.forward] ?? 0) >= (minimumFormation[.forward] ?? 0)
-                return defendersOK && midfieldersOK && forwardsOK
+        if !hasBenchBoostActive {
+            if let unavailableStartingGoalkeeper = starters.first(where: { player in
+                player.positionType == .goalkeeper && player.shouldAutoSubAsNonParticipant
+            }),
+               let benchGoalkeeper = bench.first(where: { $0.positionType == .goalkeeper && $0.isEligibleAutoSubReplacement }) {
+                contributionsByElementID[unavailableStartingGoalkeeper.elementID] = 0
+                contributionsByElementID[benchGoalkeeper.elementID] = benchGoalkeeper.rawPoints
             }
 
-            guard let replacementIndex else { continue }
-            let replacedStarter = nonPlayingOutfieldStarters.remove(at: replacementIndex)
+            let minimumFormation: [FantasyPositionType: Int] = [
+                .defender: 3,
+                .midfielder: 2,
+                .forward: 1
+            ]
+            var activeOutfieldCounts: [FantasyPositionType: Int] = [.defender: 0, .midfielder: 0, .forward: 0]
+            for player in starters where player.positionType != .goalkeeper {
+                activeOutfieldCounts[player.positionType, default: 0] += 1
+            }
 
-            activeOutfieldCounts[replacedStarter.positionType, default: 0] -= 1
-            activeOutfieldCounts[benchPlayer.positionType, default: 0] += 1
+            var nonPlayingOutfieldStarters = starters
+                .filter { $0.positionType != .goalkeeper && $0.shouldAutoSubAsNonParticipant }
+                .sorted { $0.pickPosition < $1.pickPosition }
+            let playedOutfieldBench = bench
+                .filter { $0.positionType != .goalkeeper && $0.isEligibleAutoSubReplacement }
+                .sorted { $0.pickPosition < $1.pickPosition }
 
-            contributionsByElementID[replacedStarter.elementID] = 0
-            contributionsByElementID[benchPlayer.elementID] = benchPlayer.rawPoints
+            for benchPlayer in playedOutfieldBench {
+                guard !nonPlayingOutfieldStarters.isEmpty else { break }
+
+                let replacementIndex = nonPlayingOutfieldStarters.firstIndex { starter in
+                    var simulatedCounts = activeOutfieldCounts
+                    simulatedCounts[starter.positionType, default: 0] -= 1
+                    simulatedCounts[benchPlayer.positionType, default: 0] += 1
+                    let defendersOK = (simulatedCounts[.defender] ?? 0) >= (minimumFormation[.defender] ?? 0)
+                    let midfieldersOK = (simulatedCounts[.midfielder] ?? 0) >= (minimumFormation[.midfielder] ?? 0)
+                    let forwardsOK = (simulatedCounts[.forward] ?? 0) >= (minimumFormation[.forward] ?? 0)
+                    return defendersOK && midfieldersOK && forwardsOK
+                }
+
+                guard let replacementIndex else { continue }
+                let replacedStarter = nonPlayingOutfieldStarters.remove(at: replacementIndex)
+
+                activeOutfieldCounts[replacedStarter.positionType, default: 0] -= 1
+                activeOutfieldCounts[benchPlayer.positionType, default: 0] += 1
+
+                contributionsByElementID[replacedStarter.elementID] = 0
+                contributionsByElementID[benchPlayer.elementID] = benchPlayer.rawPoints
+            }
         }
 
         if let captain = starters.first(where: { $0.isCaptain && $0.shouldAutoSubAsNonParticipant }),
@@ -2156,6 +2268,8 @@ enum FantasySquadBuilder {
         let bench = players
             .filter { !$0.isStarter }
             .sorted { $0.pickPosition < $1.pickPosition }
+        let activeChips = picksResponse.activeChips
+        let hasBenchBoostActive = activeChips.contains(where: \.isBenchBoost)
 
         let isEstimatedScore = hasActiveFixtures || hasFixturesPlayedToday
         let computedAppliedPointsTotal = starters.reduce(0) { $0 + $1.appliedPoints }
@@ -2165,65 +2279,75 @@ enum FantasySquadBuilder {
         if isEstimatedScore {
             var runningEstimatedTotal = computedAppliedPointsTotal
 
-            if let unavailableStartingGoalkeeper = starters.first(where: { player in
-                player.positionType == .goalkeeper && player.shouldAutoSubAsNonParticipant
-            }),
-               let benchGoalkeeper = bench.first(where: { $0.positionType == .goalkeeper && $0.isEligibleAutoSubReplacement }) {
-                runningEstimatedTotal -= unavailableStartingGoalkeeper.appliedPoints
-                runningEstimatedTotal += benchGoalkeeper.rawPoints
+            if hasBenchBoostActive {
+                let benchBoostPoints = bench.reduce(0) { sum, player in
+                    sum + player.rawPoints
+                }
+                runningEstimatedTotal += benchBoostPoints
                 scoreCalculationRulesApplied.append(
-                    "Goalkeeper auto-sub applied: \(unavailableStartingGoalkeeper.displayName) did not play, so \(benchGoalkeeper.displayName) contributed \(benchGoalkeeper.rawPoints) pts."
+                    "Bench Boost active: all bench points count (+\(benchBoostPoints) pts)."
                 )
-            }
-
-            let minimumFormation: [FantasyPositionType: Int] = [
-                .defender: 3,
-                .midfielder: 2,
-                .forward: 1
-            ]
-            var activeOutfieldCounts: [FantasyPositionType: Int] = [.defender: 0, .midfielder: 0, .forward: 0]
-            for player in starters where player.positionType != .goalkeeper {
-                activeOutfieldCounts[player.positionType, default: 0] += 1
-            }
-
-            var nonPlayingOutfieldStarters = starters
-                .filter { $0.positionType != .goalkeeper && $0.shouldAutoSubAsNonParticipant }
-                .sorted { $0.pickPosition < $1.pickPosition }
-            let playedOutfieldBench = bench
-                .filter { $0.positionType != .goalkeeper && $0.isEligibleAutoSubReplacement }
-                .sorted { $0.pickPosition < $1.pickPosition }
-            var outfieldReplacementNotes: [String] = []
-
-            for benchPlayer in playedOutfieldBench {
-                guard !nonPlayingOutfieldStarters.isEmpty else { break }
-
-                let replacementIndex = nonPlayingOutfieldStarters.firstIndex { starter in
-                    var simulatedCounts = activeOutfieldCounts
-                    simulatedCounts[starter.positionType, default: 0] -= 1
-                    simulatedCounts[benchPlayer.positionType, default: 0] += 1
-                    let defendersOK = (simulatedCounts[.defender] ?? 0) >= (minimumFormation[.defender] ?? 0)
-                    let midfieldersOK = (simulatedCounts[.midfielder] ?? 0) >= (minimumFormation[.midfielder] ?? 0)
-                    let forwardsOK = (simulatedCounts[.forward] ?? 0) >= (minimumFormation[.forward] ?? 0)
-                    return defendersOK && midfieldersOK && forwardsOK
+            } else {
+                if let unavailableStartingGoalkeeper = starters.first(where: { player in
+                    player.positionType == .goalkeeper && player.shouldAutoSubAsNonParticipant
+                }),
+                   let benchGoalkeeper = bench.first(where: { $0.positionType == .goalkeeper && $0.isEligibleAutoSubReplacement }) {
+                    runningEstimatedTotal -= unavailableStartingGoalkeeper.appliedPoints
+                    runningEstimatedTotal += benchGoalkeeper.rawPoints
+                    scoreCalculationRulesApplied.append(
+                        "Goalkeeper auto-sub applied: \(unavailableStartingGoalkeeper.displayName) did not play, so \(benchGoalkeeper.displayName) contributed \(benchGoalkeeper.rawPoints) pts."
+                    )
                 }
 
-                guard let replacementIndex else { continue }
-                let replacedStarter = nonPlayingOutfieldStarters.remove(at: replacementIndex)
+                let minimumFormation: [FantasyPositionType: Int] = [
+                    .defender: 3,
+                    .midfielder: 2,
+                    .forward: 1
+                ]
+                var activeOutfieldCounts: [FantasyPositionType: Int] = [.defender: 0, .midfielder: 0, .forward: 0]
+                for player in starters where player.positionType != .goalkeeper {
+                    activeOutfieldCounts[player.positionType, default: 0] += 1
+                }
 
-                activeOutfieldCounts[replacedStarter.positionType, default: 0] -= 1
-                activeOutfieldCounts[benchPlayer.positionType, default: 0] += 1
+                var nonPlayingOutfieldStarters = starters
+                    .filter { $0.positionType != .goalkeeper && $0.shouldAutoSubAsNonParticipant }
+                    .sorted { $0.pickPosition < $1.pickPosition }
+                let playedOutfieldBench = bench
+                    .filter { $0.positionType != .goalkeeper && $0.isEligibleAutoSubReplacement }
+                    .sorted { $0.pickPosition < $1.pickPosition }
+                var outfieldReplacementNotes: [String] = []
 
-                runningEstimatedTotal -= replacedStarter.appliedPoints
-                runningEstimatedTotal += benchPlayer.rawPoints
-                outfieldReplacementNotes.append(
-                    "\(benchPlayer.displayName) (\(benchPlayer.rawPoints)) for \(replacedStarter.displayName)"
-                )
-            }
+                for benchPlayer in playedOutfieldBench {
+                    guard !nonPlayingOutfieldStarters.isEmpty else { break }
 
-            if !outfieldReplacementNotes.isEmpty {
-                scoreCalculationRulesApplied.append(
-                    "Outfield auto-subs applied: \(outfieldReplacementNotes.joined(separator: ", "))."
-                )
+                    let replacementIndex = nonPlayingOutfieldStarters.firstIndex { starter in
+                        var simulatedCounts = activeOutfieldCounts
+                        simulatedCounts[starter.positionType, default: 0] -= 1
+                        simulatedCounts[benchPlayer.positionType, default: 0] += 1
+                        let defendersOK = (simulatedCounts[.defender] ?? 0) >= (minimumFormation[.defender] ?? 0)
+                        let midfieldersOK = (simulatedCounts[.midfielder] ?? 0) >= (minimumFormation[.midfielder] ?? 0)
+                        let forwardsOK = (simulatedCounts[.forward] ?? 0) >= (minimumFormation[.forward] ?? 0)
+                        return defendersOK && midfieldersOK && forwardsOK
+                    }
+
+                    guard let replacementIndex else { continue }
+                    let replacedStarter = nonPlayingOutfieldStarters.remove(at: replacementIndex)
+
+                    activeOutfieldCounts[replacedStarter.positionType, default: 0] -= 1
+                    activeOutfieldCounts[benchPlayer.positionType, default: 0] += 1
+
+                    runningEstimatedTotal -= replacedStarter.appliedPoints
+                    runningEstimatedTotal += benchPlayer.rawPoints
+                    outfieldReplacementNotes.append(
+                        "\(benchPlayer.displayName) (\(benchPlayer.rawPoints)) for \(replacedStarter.displayName)"
+                    )
+                }
+
+                if !outfieldReplacementNotes.isEmpty {
+                    scoreCalculationRulesApplied.append(
+                        "Outfield auto-subs applied: \(outfieldReplacementNotes.joined(separator: ", "))."
+                    )
+                }
             }
 
             if let captain = starters.first(where: { $0.isCaptain && $0.shouldAutoSubAsNonParticipant }),
@@ -2283,6 +2407,7 @@ enum FantasySquadBuilder {
             overallRank: picksResponse.entryHistory.overallRank,
             transfersCost: picksResponse.entryHistory.eventTransfersCost,
             pointsOnBench: picksResponse.entryHistory.pointsOnBench,
+            activeChips: activeChips,
             goalkeepers: goalkeepers,
             defenders: defenders,
             midfielders: midfielders,

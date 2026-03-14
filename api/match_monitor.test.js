@@ -794,6 +794,232 @@ test("buildLiveActivityEntriesForUser uses the first filtered fixture section an
   assert.equal(entries[1].match.away_score, 1);
 });
 
+test("buildLiveActivityEntriesForUser keeps monitored live matches when the operational feed drops them", () => {
+  const nowMs = Date.parse("2026-03-14T20:35:16Z");
+  const user = liveActivityUser(2, {
+    englishPremierLeagueTeamsOnly: true,
+  });
+
+  const monitoredEntries = [
+    {
+      matchId: "cpqw34l8xrnt",
+      state: {
+        lastState: {
+          match_details_id: "cpqw34l8xrnt",
+          date: "2026-03-14",
+          time: "20:00",
+          league: "Premier League",
+          home_team: "West Ham United",
+          away_team: "Manchester City",
+          home_score: 0,
+          away_score: 1,
+          score_status: "36",
+          updated_at: "2026-03-14T20:35:03Z",
+        },
+        history: [
+          {
+            timestampMs: nowMs - 5 * 60 * 1000,
+            match: {
+              match_details_id: "cpqw34l8xrnt",
+              date: "2026-03-14",
+              time: "20:00",
+              league: "Premier League",
+              home_team: "West Ham United",
+              away_team: "Manchester City",
+              home_score: 0,
+              away_score: 0,
+              score_status: "31",
+            },
+          },
+        ],
+      },
+      match: {
+        match_details_id: "cpqw34l8xrnt",
+        date: "2026-03-14",
+        time: "20:00",
+        league: "Premier League",
+        home_team: "West Ham United",
+        away_team: "Manchester City",
+        home_score: 0,
+        away_score: 1,
+        score_status: "36",
+        updated_at: "2026-03-14T20:35:03Z",
+      },
+    },
+  ];
+
+  const operationalMatches = [
+    {
+      match_details_id: "cz0gjnl5ev8t",
+      date: "2026-03-14",
+      time: "17:30",
+      league: "Premier League",
+      home_team: "Arsenal",
+      away_team: "Everton",
+      home_score: 2,
+      away_score: 0,
+      score_status: "FT",
+      tv_channels: ["TNT Sports 1"],
+    },
+    {
+      match_details_id: "cjengzxj4e0t",
+      date: "2026-03-14",
+      time: "17:30",
+      league: "Premier League",
+      home_team: "Chelsea",
+      away_team: "Newcastle United",
+      home_score: 0,
+      away_score: 1,
+      score_status: "FT",
+      tv_channels: ["TNT Sports 1"],
+    },
+  ];
+
+  const entries = __testHooks.buildLiveActivityEntriesForUser(
+    user,
+    monitoredEntries,
+    operationalMatches,
+    nowMs
+  );
+
+  assert.deepStrictEqual(
+    entries.map((entry) => entry.match.match_details_id),
+    ["cz0gjnl5ev8t", "cjengzxj4e0t", "cpqw34l8xrnt"]
+  );
+  assert.equal(entries[2].match.score_status, "36");
+  assert.equal(entries[2].match.home_score, 0);
+  assert.equal(entries[2].match.away_score, 1);
+});
+
+test("buildLiveActivityEntriesForUser dedupes canonical and monitored copies of the same fixture", () => {
+  const nowMs = Date.parse("2026-03-14T20:44:07Z");
+  const user = liveActivityUser(2, {
+    englishPremierLeagueTeamsOnly: true,
+  });
+
+  const monitoredEntries = [
+    {
+      matchId: "cpqw34l8xrnt",
+      state: {
+        lastState: {
+          match_details_id: "cpqw34l8xrnt",
+          date: "2026-03-14",
+          time: "20:00",
+          league: "Premier League",
+          home_team: "West Ham United",
+          away_team: "Manchester City",
+          home_score: 1,
+          away_score: 1,
+          score_status: "43",
+          updated_at: "2026-03-14T20:43:50Z",
+        },
+        history: [
+          {
+            timestampMs: nowMs - 3 * 60 * 1000,
+            match: {
+              match_details_id: "cpqw34l8xrnt",
+              date: "2026-03-14",
+              time: "20:00",
+              league: "Premier League",
+              home_team: "West Ham United",
+              away_team: "Manchester City",
+              home_score: 0,
+              away_score: 0,
+              score_status: "41",
+            },
+          },
+        ],
+      },
+      match: {
+        match_details_id: "cpqw34l8xrnt",
+        date: "2026-03-14",
+        time: "20:00",
+        league: "Premier League",
+        home_team: "West Ham United",
+        away_team: "Manchester City",
+        home_score: 1,
+        away_score: 1,
+        score_status: "43",
+        updated_at: "2026-03-14T20:43:50Z",
+      },
+    },
+    {
+      matchId: "cz0gjnl5ev8t",
+      state: {
+        lastState: {
+          match_details_id: "cz0gjnl5ev8t",
+          date: "2026-03-14",
+          time: "17:30",
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Everton",
+          home_score: 2,
+          away_score: 0,
+          score_status: "FT",
+          updated_at: "2026-03-14T19:33:00Z",
+        },
+        finishedAtMs: nowMs - 70 * 60 * 1000,
+      },
+      match: {
+        match_details_id: "cz0gjnl5ev8t",
+        date: "2026-03-14",
+        time: "17:30",
+        league: "Premier League",
+        home_team: "Arsenal",
+        away_team: "Everton",
+        home_score: 2,
+        away_score: 0,
+        score_status: "FT",
+        updated_at: "2026-03-14T19:33:00Z",
+      },
+    },
+  ];
+
+  const operationalMatches = [
+    {
+      date: "2026-03-14",
+      time: "17:30",
+      league: "Premier League",
+      home_team: "Arsenal",
+      away_team: "Everton",
+      home_score: 2,
+      away_score: 0,
+      score_status: "FT",
+      tv_channels: ["TNT Sports 1"],
+    },
+    {
+      date: "2026-03-14",
+      time: "20:00",
+      league: "Premier League",
+      home_team: "West Ham United",
+      away_team: "Manchester City",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+      tv_channels: ["TNT Sports 1"],
+    },
+  ];
+
+  const entries = __testHooks.buildLiveActivityEntriesForUser(
+    user,
+    monitoredEntries,
+    operationalMatches,
+    nowMs
+  );
+
+  assert.deepStrictEqual(
+    entries.map((entry) => entry.match.home_team),
+    ["Arsenal", "West Ham United"]
+  );
+  assert.deepStrictEqual(
+    entries.map((entry) => entry.match.match_details_id),
+    ["cz0gjnl5ev8t", "cpqw34l8xrnt"]
+  );
+  assert.equal(entries[1].match.score_status, "43");
+  assert.equal(entries[1].match.home_score, 1);
+  assert.equal(entries[1].match.away_score, 1);
+});
+
 test("mergeCanonicalLiveActivityMatch keeps fresher live state for active matches", () => {
   const merged = __testHooks.mergeCanonicalLiveActivityMatch(
     {

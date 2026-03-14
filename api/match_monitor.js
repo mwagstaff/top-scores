@@ -2837,6 +2837,29 @@ function liveActivityMatchIdentity(match) {
   return [date, time, league, homeTeam, awayTeam].join("|");
 }
 
+function liveActivityMatchDedupKeys(match, extraIdentity = null) {
+  const keys = new Set();
+
+  const explicitId = String(
+    (match && (match.match_details_id || match.matchId || match.id)) || extraIdentity || ""
+  ).trim();
+  if (explicitId) {
+    keys.add(explicitId);
+  }
+
+  const date = String(match && match.date ? match.date : "").trim();
+  const time = String(match && match.time ? match.time : "").trim();
+  const league = String(match && match.league ? match.league : "").trim();
+  const homeTeam = String(match && (match.home_team || match.homeTeam) ? match.home_team || match.homeTeam : "").trim();
+  const awayTeam = String(match && (match.away_team || match.awayTeam) ? match.away_team || match.awayTeam : "").trim();
+
+  if (date && time && league && homeTeam && awayTeam) {
+    keys.add([date, time, league, homeTeam, awayTeam].join("|"));
+  }
+
+  return Array.from(keys);
+}
+
 function currentLondonDateKey(nowMs = Date.now()) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/London",
@@ -3041,16 +3064,59 @@ function buildLiveActivityEntryLookup(entries) {
     const match = entry && entry.match ? entry.match : null;
     const matchId = liveActivityMatchIdentity(match) || (entry && entry.matchId ? String(entry.matchId) : null);
     if (!matchId || !match) continue;
-    if (!lookup.has(matchId)) {
-      lookup.set(matchId, {
-        matchId,
-        state: entry && entry.state ? entry.state : null,
-        match,
-      });
+    const normalizedEntry = {
+      matchId,
+      state: entry && entry.state ? entry.state : null,
+      match,
+    };
+    for (const key of liveActivityMatchDedupKeys(match, matchId)) {
+      if (lookup.has(key)) continue;
+      lookup.set(key, normalizedEntry);
     }
   }
 
   return lookup;
+}
+
+function shouldIncludeMonitoredEntryForLiveActivity(entry, user, nowMs = Date.now()) {
+  const match = entry && entry.match ? entry.match : null;
+  if (!match) return false;
+
+  const eligibility = isEligibleForLiveActivityByPreferences(user, match);
+  if (!eligibility.eligible) return false;
+
+  const kickoffMs = parseMatchDateTimeMs(match);
+  const status = match.score_status;
+
+  if (isLikelyTerminalStaleLiveMatch(match, kickoffMs, nowMs)) {
+    return false;
+  }
+
+  if (isLiveMatchStatus(status)) {
+    return true;
+  }
+
+  if (isFinishedMatchStatus(status) || isPenaltyShootoutStatus(status)) {
+    const hasTrackedState = Boolean(entry && entry.state && typeof entry.state === "object");
+    if (!hasTrackedState && parseUpdatedAtMs(match) === null) {
+      return false;
+    }
+    return shouldRetainFinishedMatchForLiveActivity(entry, nowMs);
+  }
+
+  if (!Number.isFinite(kickoffMs)) {
+    return false;
+  }
+
+  const diff = kickoffMs - nowMs;
+  if (diff > 0 && diff <= UPCOMING_MONITOR_WINDOW_MS) {
+    return true;
+  }
+  if (diff <= 0 && Math.abs(diff) <= RECENT_KICKOFF_PENDING_GRACE_MS) {
+    return true;
+  }
+
+  return false;
 }
 
 function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatches, nowMs = Date.now()) {
@@ -3059,23 +3125,46 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
     .slice()
     .sort(compareCanonicalFixtureMatchesByKickoffAsc);
   const fixtureSectionMatches = firstFixtureSectionMatches(canonicalMatches);
+  const entries = [];
+  const seenKeys = new Set();
 
-  return fixtureSectionMatches
-    .map((canonicalMatch) => {
-      const matchId = liveActivityMatchIdentity(canonicalMatch);
-      if (!matchId) return null;
+  fixtureSectionMatches.forEach((canonicalMatch) => {
+    const matchId = liveActivityMatchIdentity(canonicalMatch);
+    const dedupeKeys = liveActivityMatchDedupKeys(canonicalMatch, matchId);
+    if (!matchId || dedupeKeys.some((key) => seenKeys.has(key))) return;
 
-      const monitoredEntry = monitoredById.get(matchId) || null;
-      return {
-        matchId,
-        state: monitoredEntry ? monitoredEntry.state : null,
-        match: mergeCanonicalLiveActivityMatch(
-          canonicalMatch,
-          monitoredEntry && monitoredEntry.match ? monitoredEntry.match : null
-        ),
-      };
-    })
-    .filter((entry) => entry && entry.matchId && entry.match);
+    const monitoredEntry = monitoredById.get(matchId) || null;
+    const mergedMatch = mergeCanonicalLiveActivityMatch(
+      canonicalMatch,
+      monitoredEntry && monitoredEntry.match ? monitoredEntry.match : null
+    );
+    entries.push({
+      matchId,
+      state: monitoredEntry ? monitoredEntry.state : null,
+      match: mergedMatch,
+    });
+    liveActivityMatchDedupKeys(mergedMatch, matchId).forEach((key) => seenKeys.add(key));
+  });
+
+  for (const monitoredEntry of Array.isArray(monitoredEntries) ? monitoredEntries : []) {
+    const monitoredMatch = monitoredEntry && monitoredEntry.match ? monitoredEntry.match : null;
+    const matchId =
+      liveActivityMatchIdentity(monitoredMatch) ||
+      (monitoredEntry && monitoredEntry.matchId ? String(monitoredEntry.matchId) : null);
+    const dedupeKeys = liveActivityMatchDedupKeys(monitoredMatch, matchId);
+    if (!matchId || dedupeKeys.some((key) => seenKeys.has(key))) continue;
+    if (!shouldIncludeMonitoredEntryForLiveActivity(monitoredEntry, user, nowMs)) continue;
+
+    const mergedMatch = mergeCanonicalLiveActivityMatch(monitoredMatch, monitoredMatch);
+    entries.push({
+      matchId,
+      state: monitoredEntry && monitoredEntry.state ? monitoredEntry.state : null,
+      match: mergedMatch,
+    });
+    liveActivityMatchDedupKeys(mergedMatch, matchId).forEach((key) => seenKeys.add(key));
+  }
+
+  return entries.filter((entry) => entry && entry.matchId && entry.match);
 }
 
 function liveActivityStatusSortBucket(match) {

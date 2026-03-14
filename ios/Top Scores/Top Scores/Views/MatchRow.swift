@@ -1577,10 +1577,6 @@ private struct MatchLineupPlayerMarkerView: View {
                         .foregroundStyle(Color.white.opacity(0.96))
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    if let fantasyPoints {
-                        MatchLineupFantasyPointsBadge(points: fantasyPoints, compact: true)
-                    }
                 }
                 .multilineTextAlignment(.center)
 
@@ -2127,17 +2123,21 @@ private struct FantasySquadMembershipLookup {
     }
 
     func contains(player: MatchLineupPlayer, teamName: String) -> Bool {
-        let teamKey = Self.normalizeTeamName(teamName)
+        let teamKeys = fantasyTeamLookupKeys(teamName)
         let candidateKeys = Self.nameVariants(
             fullName: player.name,
             displayName: condensedLineupPlayerName(player.name)
         )
-        return candidateKeys.contains { memberKeys.contains("\(teamKey)|\($0)") }
+        return matchingMemberKeys(teamKeys: teamKeys, nameKeys: candidateKeys).isEmpty == false
     }
 
     func participationCount(in match: Match) -> Int {
-        let homeCount = teamCounts[Self.normalizeTeamName(match.homeTeam), default: 0]
-        let awayCount = teamCounts[Self.normalizeTeamName(match.awayTeam), default: 0]
+        let homeCount = fantasyTeamLookupKeys(match.homeTeam).reduce(0) { partialResult, teamKey in
+            partialResult + teamCounts[teamKey, default: 0]
+        }
+        let awayCount = fantasyTeamLookupKeys(match.awayTeam).reduce(0) { partialResult, teamKey in
+            partialResult + teamCounts[teamKey, default: 0]
+        }
         return homeCount + awayCount
     }
 
@@ -2148,22 +2148,26 @@ private struct FantasySquadMembershipLookup {
     }
 
     func points(for player: MatchLineupPlayer, teamName: String) -> Int? {
-        let teamKey = Self.normalizeTeamName(teamName)
         let candidateKeys = Self.nameVariants(
             fullName: player.name,
             displayName: condensedLineupPlayerName(player.name)
-        ).map { "\(teamKey)|\($0)" }
+        )
+        let memberKeys = matchingMemberKeys(
+            teamKeys: fantasyTeamLookupKeys(teamName),
+            nameKeys: candidateKeys
+        )
 
-        guard candidateKeys.contains(where: { memberKeys.contains($0) }) else {
+        guard !memberKeys.isEmpty else {
             return nil
         }
 
-        return candidateKeys.compactMap { contributionPointsByKey[$0] }.max() ?? 0
+        return memberKeys.compactMap { contributionPointsByKey[$0] }.max() ?? 0
     }
 
     private func effectiveScore(for teamName: String) -> Int {
-        let teamKey = Self.normalizeTeamName(teamName)
-        return effectiveScoresByTeam[teamKey, default: 0]
+        fantasyTeamLookupKeys(teamName).reduce(0) { partialResult, teamKey in
+            partialResult + effectiveScoresByTeam[teamKey, default: 0]
+        }
     }
 
     private static func nameVariants(fullName: String, displayName: String) -> Set<String> {
@@ -2187,6 +2191,13 @@ private struct FantasySquadMembershipLookup {
         return normalizeName(resolved)
     }
 
+    private func matchingMemberKeys(teamKeys: Set<String>, nameKeys: Set<String>) -> [String] {
+        teamKeys.flatMap { teamKey in
+            nameKeys.map { "\(teamKey)|\($0)" }
+        }
+        .filter { memberKeys.contains($0) }
+    }
+
     private static func normalizeName(_ value: String) -> String {
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2198,6 +2209,66 @@ private struct FantasySquadMembershipLookup {
             .map(String.init)
             .joined(separator: " ")
     }
+}
+
+func fantasyTeamLookupKeys(_ value: String) -> Set<String> {
+    let resolved = FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: value)
+    let trimmed = resolved.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return [] }
+
+    let adornments = Set(["afc", "cf", "fc"])
+    let tokens = trimmed
+        .split(whereSeparator: { $0.isWhitespace })
+        .map(String.init)
+
+    var candidates = Set([trimmed])
+    if let first = tokens.first, adornments.contains(first.lowercased()), tokens.count > 1 {
+        candidates.insert(tokens.dropFirst().joined(separator: " "))
+    }
+    if let last = tokens.last, adornments.contains(last.lowercased()), tokens.count > 1 {
+        candidates.insert(tokens.dropLast().joined(separator: " "))
+    }
+
+    let normalizedCandidates = Set(candidates.compactMap { candidate in
+        let normalized = normalizeFantasyLookupName(candidate)
+        return normalized.isEmpty ? nil : normalized
+    })
+
+    return normalizedCandidates.union(
+        normalizedCandidates.flatMap { fantasyTeamAliasKeys(for: $0) }
+    )
+}
+
+private func normalizeFantasyLookupName(_ value: String) -> String {
+    value
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "(c)", with: "", options: .caseInsensitive)
+        .replacingOccurrences(of: ".", with: "")
+        .replacingOccurrences(of: "-", with: " ")
+        .lowercased()
+        .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        .map(String.init)
+        .joined(separator: " ")
+}
+
+private func fantasyTeamAliasKeys(for normalizedName: String) -> Set<String> {
+    let aliasGroups: [Set<String>] = [
+        ["brighton", "brighton hove albion"],
+        ["ipswich", "ipswich town"],
+        ["leicester", "leicester city"],
+        ["man city", "manchester city"],
+        ["man utd", "manchester united"],
+        ["newcastle", "newcastle united"],
+        ["nottm forest", "nottingham forest"],
+        ["spurs", "tottenham", "tottenham hotspur"],
+        ["west ham", "west ham united"],
+        ["wolves", "wolverhampton wanderers"]
+    ]
+
+    guard let group = aliasGroups.first(where: { $0.contains(normalizedName) }) else {
+        return []
+    }
+    return group
 }
 
 private func condensedLineupPlayerName(_ value: String) -> String {

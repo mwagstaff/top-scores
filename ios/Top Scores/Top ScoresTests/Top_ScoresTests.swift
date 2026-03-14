@@ -253,6 +253,7 @@ struct Top_ScoresTests {
             overallRank: nil,
             transfersCost: nil,
             pointsOnBench: nil,
+            activeChips: [],
             goalkeepers: [
                 makeFantasyPlayer(
                     elementID: 1,
@@ -308,6 +309,163 @@ struct Top_ScoresTests {
         #expect(section?.teamName == "Burnley")
         #expect(section?.starters.map(\.displayName) == ["Trafford", "Brownhill"])
         #expect(section?.bench.map(\.displayName) == ["Foster"])
+    }
+
+    @Test func fantasySquadBuilder_countsBenchBoostBenchPointsInCurrentScore() async throws {
+        let gameweek = FantasyGameweek(
+            id: 30,
+            name: "Gameweek 30",
+            isCurrent: true,
+            isNext: false,
+            finished: false,
+            deadlineTime: "2026-03-14T11:00:00Z"
+        )
+        let bootstrap = FantasyBootstrapLookup(
+            updatedAt: nil,
+            elements: [
+                makeFantasyBootstrapElement(id: 1, team: 1, elementType: 1, webName: "Keeper A"),
+                makeFantasyBootstrapElement(id: 2, team: 1, elementType: 2, webName: "Def A"),
+                makeFantasyBootstrapElement(id: 3, team: 1, elementType: 2, webName: "Def B"),
+                makeFantasyBootstrapElement(id: 4, team: 1, elementType: 2, webName: "Def C"),
+                makeFantasyBootstrapElement(id: 5, team: 1, elementType: 3, webName: "Mid A"),
+                makeFantasyBootstrapElement(id: 6, team: 1, elementType: 3, webName: "Mid B"),
+                makeFantasyBootstrapElement(id: 7, team: 1, elementType: 3, webName: "Mid C"),
+                makeFantasyBootstrapElement(id: 8, team: 1, elementType: 4, webName: "Fwd A"),
+                makeFantasyBootstrapElement(id: 9, team: 1, elementType: 4, webName: "Fwd B"),
+                makeFantasyBootstrapElement(id: 10, team: 1, elementType: 3, webName: "Mid D"),
+                makeFantasyBootstrapElement(id: 11, team: 1, elementType: 2, webName: "Def D"),
+                makeFantasyBootstrapElement(id: 12, team: 2, elementType: 1, webName: "Keeper B"),
+                makeFantasyBootstrapElement(id: 13, team: 2, elementType: 2, webName: "Bench Def"),
+                makeFantasyBootstrapElement(id: 14, team: 2, elementType: 3, webName: "Bench Mid"),
+                makeFantasyBootstrapElement(id: 15, team: 2, elementType: 4, webName: "Bench Fwd")
+            ],
+            teams: [
+                FantasyBootstrapTeam(id: 1, name: "Arsenal", shortName: "ARS"),
+                FantasyBootstrapTeam(id: 2, name: "Everton", shortName: "EVE")
+            ],
+            elementTypes: [
+                FantasyBootstrapElementType(id: 1, singularName: "Goalkeeper", singularNameShort: "GKP"),
+                FantasyBootstrapElementType(id: 2, singularName: "Defender", singularNameShort: "DEF"),
+                FantasyBootstrapElementType(id: 3, singularName: "Midfielder", singularNameShort: "MID"),
+                FantasyBootstrapElementType(id: 4, singularName: "Forward", singularNameShort: "FWD")
+            ],
+            events: [gameweek]
+        )
+        let picks = FantasyPicksResponse(
+            picks: [
+                makeFantasyPick(element: 1, position: 1, elementType: 1),
+                makeFantasyPick(element: 2, position: 2, elementType: 2),
+                makeFantasyPick(element: 3, position: 3, elementType: 2),
+                makeFantasyPick(element: 4, position: 4, elementType: 2),
+                makeFantasyPick(element: 5, position: 5, elementType: 3),
+                makeFantasyPick(element: 6, position: 6, elementType: 3),
+                makeFantasyPick(element: 7, position: 7, elementType: 3),
+                makeFantasyPick(element: 8, position: 8, elementType: 4),
+                makeFantasyPick(element: 9, position: 9, elementType: 4),
+                makeFantasyPick(element: 10, position: 10, elementType: 3),
+                makeFantasyPick(element: 11, position: 11, elementType: 2),
+                makeFantasyPick(element: 12, position: 12, elementType: 1),
+                makeFantasyPick(element: 13, position: 13, elementType: 2),
+                makeFantasyPick(element: 14, position: 14, elementType: 3),
+                makeFantasyPick(element: 15, position: 15, elementType: 4)
+            ],
+            entryHistory: FantasyEntryHistory(
+                event: 30,
+                points: 7,
+                rank: nil,
+                overallRank: nil,
+                eventTransfersCost: nil,
+                pointsOnBench: 11
+            ),
+            activeChipCodes: ["bboost"]
+        )
+        let liveResponse = FantasyEventLiveResponse(
+            elements: [
+                makeLiveElement(id: 1, points: 0),
+                makeLiveElement(id: 2, points: 0),
+                makeLiveElement(id: 3, points: 0),
+                makeLiveElement(id: 4, points: 0),
+                makeLiveElement(id: 5, points: 2),
+                makeLiveElement(id: 6, points: 3),
+                makeLiveElement(id: 7, points: 2),
+                makeLiveElement(id: 8, points: 0),
+                makeLiveElement(id: 9, points: 0),
+                makeLiveElement(id: 10, points: 0),
+                makeLiveElement(id: 11, points: 0),
+                makeLiveElement(id: 12, points: 0),
+                makeLiveElement(id: 13, points: 8),
+                makeLiveElement(id: 14, points: 3),
+                makeLiveElement(id: 15, points: 0)
+            ]
+        )
+        let fixtures = [
+            FantasyFixture(
+                id: 101,
+                event: 30,
+                teamH: 1,
+                teamA: 2,
+                kickoffTime: "2026-03-14T15:00:00Z",
+                started: true,
+                finished: false,
+                finishedProvisional: false
+            )
+        ]
+
+        let squad = FantasySquadBuilder.build(
+            gameweek: gameweek,
+            picksResponse: picks,
+            liveResponse: liveResponse,
+            fixtures: fixtures,
+            seasonFixtures: fixtures,
+            bootstrap: bootstrap,
+            now: Date(timeIntervalSince1970: 1_773_571_200)
+        )
+
+        #expect(squad.hasBenchBoostActive)
+        #expect(squad.resolvedCurrentScore == 18)
+        #expect(squad.resolvedCurrentScoreDisplay == "18*")
+        #expect(squad.activeChipSummaryText == "Active chip: Bench Boost")
+        #expect(
+            squad.effectivePlayerContributions.contains {
+                $0.elementID == 13 && $0.points == 8
+            }
+        )
+        #expect(
+            squad.effectivePlayerContributions.contains {
+                $0.elementID == 14 && $0.points == 3
+            }
+        )
+    }
+
+    @Test func fantasySquadDisplayData_marksNonScoringChipsWithAsterisk() async throws {
+        let squad = FantasySquadDisplayData(
+            gameweekID: 30,
+            gameweekTitle: "GW30",
+            deadlineGameweekID: nil,
+            deadlineTime: nil,
+            totalPoints: 52,
+            hasActiveFixtures: false,
+            hasStartedFixturesInGameweek: true,
+            hasFixturesPlayedToday: false,
+            isEstimatedScore: false,
+            estimatedCurrentScore: 52,
+            scoreCalculationRulesApplied: [],
+            rank: nil,
+            overallRank: nil,
+            transfersCost: nil,
+            pointsOnBench: nil,
+            activeChips: [FantasyChip(code: "freehit")],
+            goalkeepers: [],
+            defenders: [],
+            midfielders: [],
+            forwards: [],
+            bench: []
+        )
+
+        #expect(squad.hasActiveChip)
+        #expect(squad.resolvedCurrentScore == 52)
+        #expect(squad.resolvedCurrentScoreDisplay == "52*")
+        #expect(squad.activeChipSummaryText == "Active chip: Free Hit")
     }
 
     @Test func fantasySquadGameweekResolver_usesNextGameweekWhenCurrentIsFinished() async throws {
@@ -372,6 +530,16 @@ struct Top_ScoresTests {
     @Test func lineupPlayerMarkerLabel_prefersFantasyPointsWhenAvailable() async throws {
         #expect(lineupPlayerMarkerLabel(name: "Virgil van Dijk", fantasyPoints: 12) == "12")
         #expect(lineupPlayerMarkerLabel(name: "Virgil van Dijk", fantasyPoints: nil) == "VvD")
+    }
+
+    @Test func fantasyTeamLookupKeys_handleClubPrefixesAndSuffixes() async throws {
+        #expect(fantasyTeamLookupKeys("AFC Bournemouth").contains("bournemouth"))
+        #expect(fantasyTeamLookupKeys("Bournemouth FC").contains("bournemouth"))
+    }
+
+    @Test func fantasyTeamLookupKeys_handleFantasyShortTeamAliases() async throws {
+        #expect(fantasyTeamLookupKeys("Man City").contains("manchester city"))
+        #expect(fantasyTeamLookupKeys("Manchester City").contains("man city"))
     }
 
     private func makeMatch(
@@ -479,6 +647,7 @@ struct Top_ScoresTests {
             displayName: displayName,
             fullName: fullName,
             teamName: teamName,
+            nowCostMillions: 5.0,
             rawPoints: 0,
             appliedPoints: 0,
             displayPoints: 0,
@@ -499,6 +668,60 @@ struct Top_ScoresTests {
             assists: 0,
             yellowCards: 0,
             redCards: 0
+        )
+    }
+
+    private func makeFantasyBootstrapElement(
+        id: Int,
+        team: Int,
+        elementType: Int,
+        webName: String
+    ) -> FantasyBootstrapElement {
+        FantasyBootstrapElement(
+            id: id,
+            webName: webName,
+            firstName: webName,
+            secondName: "Test",
+            team: team,
+            elementType: elementType,
+            photo: nil,
+            status: "a",
+            news: nil,
+            nowCost: 50,
+            form: "0.0",
+            pointsPerGame: "0.0",
+            eventPoints: 0,
+            totalPoints: 0,
+            bonus: 0,
+            ictIndex: "0.0",
+            selectedByPercent: "0.0",
+            chanceOfPlayingThisRound: 100,
+            chanceOfPlayingNextRound: 100
+        )
+    }
+
+    private func makeFantasyPick(element: Int, position: Int, elementType: Int) -> FantasyPick {
+        FantasyPick(
+            element: element,
+            position: position,
+            multiplier: 1,
+            isCaptain: false,
+            isViceCaptain: false,
+            elementType: elementType
+        )
+    }
+
+    private func makeLiveElement(id: Int, points: Int) -> FantasyLiveElement {
+        FantasyLiveElement(
+            id: id,
+            stats: FantasyLiveStats(
+                totalPoints: points,
+                minutes: points > 0 ? 90 : 0,
+                goalsScored: 0,
+                assists: 0,
+                yellowCards: 0,
+                redCards: 0
+            )
         )
     }
 
