@@ -59,6 +59,7 @@ struct FantasyView: View {
     @State private var showUnlinkAccountConfirmation = false
     @State private var showAssistantManager = false
     @State private var assistantManagerPortraitAssetName = AssistantManagerPortraitCatalog.randomAssetName()
+    @State private var fantasyPitchDetailMode: FantasyPitchPlayerDetailMode = .opponent
     @FocusState private var isRivalEntryInputFocused: Bool
     @State private var lastObservedClipboardChangeCount = UIPasteboard.general.changeCount
     @State private var isFantasyLoadingInterstitialActive = false
@@ -412,8 +413,16 @@ struct FantasyView: View {
                                 }
                             }
                         )
-                        pitchSection(data, playerSelectionEnabled: true)
-                        benchSection(data, playerSelectionEnabled: true)
+                        pitchSection(
+                            data,
+                            playerSelectionEnabled: true,
+                            detailMode: $fantasyPitchDetailMode
+                        )
+                        benchSection(
+                            data,
+                            playerSelectionEnabled: true,
+                            detailMode: fantasyPitchDetailMode
+                        )
                         eventLegendSection(data)
                         if data.isEstimatedScore {
                             scoreCalculationSection(data)
@@ -1878,8 +1887,16 @@ struct FantasyView: View {
                             openScoreBreakdown(for: rival.squad, teamNameOverride: rival.teamName)
                         }
                     )
-                    pitchSection(rival.squad, playerSelectionEnabled: true)
-                    benchSection(rival.squad, playerSelectionEnabled: true)
+                    pitchSection(
+                        rival.squad,
+                        playerSelectionEnabled: true,
+                        detailMode: $fantasyPitchDetailMode
+                    )
+                    benchSection(
+                        rival.squad,
+                        playerSelectionEnabled: true,
+                        detailMode: fantasyPitchDetailMode
+                    )
                     eventLegendSection(rival.squad)
                     if rival.squad.isEstimatedScore {
                         scoreCalculationSection(rival.squad)
@@ -1917,20 +1934,48 @@ struct FantasyView: View {
         }
     }
 
-    private func pitchSection(_ data: FantasySquadDisplayData, playerSelectionEnabled: Bool) -> some View {
+    private func pitchSection(
+        _ data: FantasySquadDisplayData,
+        playerSelectionEnabled: Bool,
+        detailMode: Binding<FantasyPitchPlayerDetailMode>
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
 
-            ZStack {
+            ZStack(alignment: .topTrailing) {
                 FantasyPitchBackground()
 
                 VStack(spacing: 8) {
-                    positionRow(data.goalkeepers, gameweekID: data.gameweekID, playerSelectionEnabled: playerSelectionEnabled)
-                    positionRow(data.defenders, gameweekID: data.gameweekID, playerSelectionEnabled: playerSelectionEnabled)
-                    positionRow(data.midfielders, gameweekID: data.gameweekID, playerSelectionEnabled: playerSelectionEnabled)
-                    positionRow(data.forwards, gameweekID: data.gameweekID, playerSelectionEnabled: playerSelectionEnabled)
+                    positionRow(
+                        data.goalkeepers,
+                        gameweekID: data.gameweekID,
+                        playerSelectionEnabled: playerSelectionEnabled,
+                        detailMode: detailMode.wrappedValue
+                    )
+                    positionRow(
+                        data.defenders,
+                        gameweekID: data.gameweekID,
+                        playerSelectionEnabled: playerSelectionEnabled,
+                        detailMode: detailMode.wrappedValue
+                    )
+                    positionRow(
+                        data.midfielders,
+                        gameweekID: data.gameweekID,
+                        playerSelectionEnabled: playerSelectionEnabled,
+                        detailMode: detailMode.wrappedValue
+                    )
+                    positionRow(
+                        data.forwards,
+                        gameweekID: data.gameweekID,
+                        playerSelectionEnabled: playerSelectionEnabled,
+                        detailMode: detailMode.wrappedValue
+                    )
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 10)
+
+                FantasyPitchDetailToggleButton(mode: detailMode)
+                    .padding(.top, 10)
+                    .padding(.trailing, 10)
             }
             .frame(height: 470)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -1940,7 +1985,8 @@ struct FantasyView: View {
     private func positionRow(
         _ players: [FantasyDisplayPlayer],
         gameweekID: Int,
-        playerSelectionEnabled: Bool
+        playerSelectionEnabled: Bool,
+        detailMode: FantasyPitchPlayerDetailMode
     ) -> some View {
         GeometryReader { proxy in
             let count = max(players.count, 1)
@@ -1954,7 +2000,8 @@ struct FantasyView: View {
                         player: player,
                         width: cardWidth,
                         gameweekID: gameweekID,
-                        playerSelectionEnabled: playerSelectionEnabled
+                        playerSelectionEnabled: playerSelectionEnabled,
+                        detailMode: detailMode
                     )
                 }
             }
@@ -1963,7 +2010,11 @@ struct FantasyView: View {
         .frame(height: 104)
     }
 
-    private func benchSection(_ data: FantasySquadDisplayData, playerSelectionEnabled: Bool) -> some View {
+    private func benchSection(
+        _ data: FantasySquadDisplayData,
+        playerSelectionEnabled: Bool,
+        detailMode: FantasyPitchPlayerDetailMode
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Bench")
                 .font(.headline)
@@ -1980,7 +2031,8 @@ struct FantasyView: View {
                             player: player,
                             width: cardWidth,
                             gameweekID: data.gameweekID,
-                            playerSelectionEnabled: playerSelectionEnabled
+                            playerSelectionEnabled: playerSelectionEnabled,
+                            detailMode: detailMode
                         )
                     }
                 }
@@ -2000,17 +2052,18 @@ struct FantasyView: View {
         player: FantasyDisplayPlayer,
         width: CGFloat,
         gameweekID: Int,
-        playerSelectionEnabled: Bool
+        playerSelectionEnabled: Bool,
+        detailMode: FantasyPitchPlayerDetailMode
     ) -> some View {
         if playerSelectionEnabled {
             Button {
                 openPlayerDetails(player: player, gameweekID: gameweekID)
             } label: {
-                FantasyPlayerCard(player: player, width: width)
+                FantasyPlayerCard(player: player, width: width, detailMode: detailMode)
             }
             .buttonStyle(.plain)
         } else {
-            FantasyPlayerCard(player: player, width: width)
+            FantasyPlayerCard(player: player, width: width, detailMode: detailMode)
         }
     }
 
@@ -3004,9 +3057,56 @@ private struct FantasyPitchBackground: View {
     }
 }
 
+private enum FantasyPitchPlayerDetailMode {
+    case opponent
+    case value
+
+    var buttonLabel: String {
+        switch self {
+        case .opponent: return "OPP"
+        case .value: return "VAL"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .opponent: return "Showing next opponents. Tap to show player values."
+        case .value: return "Showing player values. Tap to show next opponents."
+        }
+    }
+
+    mutating func toggle() {
+        self = self == .opponent ? .value : .opponent
+    }
+}
+
+private struct FantasyPitchDetailToggleButton: View {
+    @Binding var mode: FantasyPitchPlayerDetailMode
+
+    var body: some View {
+        Button {
+            mode.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: mode == .opponent ? "sterlingsign.circle.fill" : "figure.soccer")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(mode.buttonLabel)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .foregroundStyle(.white)
+            .background(Color.black.opacity(0.35), in: Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(mode.accessibilityLabel)
+    }
+}
+
 private struct FantasyPlayerCard: View {
     let player: FantasyDisplayPlayer
     let width: CGFloat
+    let detailMode: FantasyPitchPlayerDetailMode
     @State private var isPulsing = false
 
     private var logoImage: UIImage? {
@@ -3056,6 +3156,15 @@ private struct FantasyPlayerCard: View {
     private var opponentDisplayText: String {
         let trimmed = player.upcomingOpponentDisplay?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? "No game" : trimmed
+    }
+
+    private var secondaryDisplayText: String {
+        switch detailMode {
+        case .opponent:
+            return opponentDisplayText
+        case .value:
+            return String(format: "£%.1fm", player.nowCostMillions)
+        }
     }
 
     var body: some View {
@@ -3147,7 +3256,7 @@ private struct FantasyPlayerCard: View {
                     .minimumScaleFactor(0.8)
                     .foregroundStyle(primaryTextColor)
 
-                Text(opponentDisplayText)
+                Text(secondaryDisplayText)
                     .font(.system(size: 9, weight: .semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
@@ -3931,6 +4040,9 @@ private struct FantasyAssistantManagerSheet: View {
     @State private var incomingDetailsByElementID: [Int: FantasyPlayerDetailsData] = [:]
     @State private var incomingDetailsErrorByElementID: [Int: String] = [:]
     @State private var assistantPhrase = "Keep up the good work, boss."
+    @State private var pitchDetailMode: FantasyPitchPlayerDetailMode = .opponent
+    @AppStorage("fantasy.assistantManagerInterstitialShown")
+    private var hasShownAssistantManagerInterstitial = false
 
     private let minimumInterstitialNanoseconds: UInt64 = 3_000_000_000
 
@@ -4326,8 +4438,8 @@ private struct FantasyAssistantManagerSheet: View {
                     .fill(Color(.systemBackground).opacity(0.75))
             )
 
-            assistantIdealPitchSection(displayData)
-            assistantIdealBenchSection(displayData)
+                assistantIdealPitchSection(displayData)
+                assistantIdealBenchSection(displayData)
         }
         .padding(12)
         .background(
@@ -4337,7 +4449,7 @@ private struct FantasyAssistantManagerSheet: View {
     }
 
     private func assistantIdealPitchSection(_ data: FantasySquadDisplayData) -> some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             FantasyPitchBackground()
 
             VStack(spacing: 8) {
@@ -4348,6 +4460,10 @@ private struct FantasyAssistantManagerSheet: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 10)
+
+            FantasyPitchDetailToggleButton(mode: $pitchDetailMode)
+                .padding(.top, 10)
+                .padding(.trailing, 10)
         }
         .frame(height: 470)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -4360,15 +4476,15 @@ private struct FantasyAssistantManagerSheet: View {
             let count = max(players.count, 1)
             let spacing: CGFloat = 4
             let availableWidth = proxy.size.width - (CGFloat(count - 1) * spacing)
-            let cardWidth = min(68, max(42, floor(availableWidth / CGFloat(count))))
+                let cardWidth = min(68, max(42, floor(availableWidth / CGFloat(count))))
 
-            HStack(spacing: spacing) {
-                ForEach(players) { player in
-                    FantasyPlayerCard(player: player, width: cardWidth)
+                HStack(spacing: spacing) {
+                    ForEach(players) { player in
+                        FantasyPlayerCard(player: player, width: cardWidth, detailMode: pitchDetailMode)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
         .frame(height: 104)
     }
 
@@ -4385,7 +4501,7 @@ private struct FantasyAssistantManagerSheet: View {
 
                 HStack(spacing: spacing) {
                     ForEach(data.bench) { player in
-                        FantasyPlayerCard(player: player, width: cardWidth)
+                        FantasyPlayerCard(player: player, width: cardWidth, detailMode: pitchDetailMode)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -4454,6 +4570,7 @@ private struct FantasyAssistantManagerSheet: View {
             displayName: player.playerName,
             fullName: player.playerName,
             teamName: player.teamName,
+            nowCostMillions: player.nowCostMillions,
             rawPoints: player.rawPoints,
             appliedPoints: player.appliedPoints,
             displayPoints: player.pickPosition <= 11 ? player.appliedPoints : player.rawPoints,
@@ -4968,8 +5085,10 @@ private struct FantasyAssistantManagerSheet: View {
         showInterstitial = true
         isLoading = true
         errorMessage = nil
+        let shouldApplyMinimumDelay = !hasShownAssistantManagerInterstitial
 
         let minimumDelayTask = Task<Void, Never> {
+            guard shouldApplyMinimumDelay else { return }
             try? await Task.sleep(nanoseconds: minimumInterstitialNanoseconds)
         }
         let phraseTask = Task {
@@ -4986,6 +5105,9 @@ private struct FantasyAssistantManagerSheet: View {
             let loaded = try await pollForAssistantManager(forceFetch: forceFetch)
             await phraseTask.value
             await minimumDelayTask.value
+            if shouldApplyMinimumDelay {
+                hasShownAssistantManagerInterstitial = true
+            }
             guard interstitialSessionID == sessionID else { return }
             response = loaded
             errorMessage = nil
@@ -4993,6 +5115,9 @@ private struct FantasyAssistantManagerSheet: View {
         } catch {
             await phraseTask.value
             await minimumDelayTask.value
+            if shouldApplyMinimumDelay {
+                hasShownAssistantManagerInterstitial = true
+            }
             guard interstitialSessionID == sessionID else { return }
             response = nil
             incomingDetailsByElementID = [:]

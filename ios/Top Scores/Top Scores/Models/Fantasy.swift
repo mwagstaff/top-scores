@@ -1081,6 +1081,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
     let displayName: String
     let fullName: String
     let teamName: String
+    let nowCostMillions: Double
     let rawPoints: Int
     let appliedPoints: Int
     let displayPoints: Int
@@ -2053,6 +2054,7 @@ enum FantasySquadBuilder {
                     return displayName
                 }(),
                 teamName: teamName,
+                nowCostMillions: Double(element?.nowCost ?? 0) / 10.0,
                 rawPoints: rawPoints,
                 appliedPoints: appliedPoints,
                 displayPoints: displayPoints,

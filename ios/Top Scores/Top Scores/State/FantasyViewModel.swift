@@ -558,18 +558,38 @@ final class FantasyViewModel: ObservableObject {
            let cachedBootstrapLookup,
            let cachedBootstrapFetchedAt,
            now.timeIntervalSince(cachedBootstrapFetchedAt) < bootstrapCacheTTL {
-            let age = Int(now.timeIntervalSince(cachedBootstrapFetchedAt))
-            logPerf("bootstrap_lookup_cache_hit age_s=\(age)")
-            return cachedBootstrapLookup
+            if Self.bootstrapLookupHasUsablePlayerCosts(cachedBootstrapLookup) {
+                let age = Int(now.timeIntervalSince(cachedBootstrapFetchedAt))
+                logPerf("bootstrap_lookup_cache_hit age_s=\(age)")
+                return cachedBootstrapLookup
+            }
+            logPerf("bootstrap_lookup_cache_invalidated reason=missing_player_costs")
+            self.cachedBootstrapLookup = nil
+            self.cachedBootstrapFetchedAt = nil
         }
 
-        let lookup = try await timed("bootstrap_lookup_fetch") {
+        var lookup = try await timed("bootstrap_lookup_fetch") {
             try await serverClient.fetchFantasyBootstrapLookup()
+        }
+        if !Self.bootstrapLookupHasUsablePlayerCosts(lookup) {
+            logPerf("bootstrap_lookup_missing_costs fallback=bootstrap_static")
+            lookup = try await timed("bootstrap_static_fallback_fetch") {
+                try await fantasyPublicClient.fetchBootstrapStatic()
+            }
         }
         cachedBootstrapLookup = lookup
         cachedBootstrapFetchedAt = now
         cachedBootstrapBaseURL = baseURLKey
         return lookup
+    }
+
+    private static func bootstrapLookupHasUsablePlayerCosts(_ lookup: FantasyBootstrapLookup) -> Bool {
+        lookup.elements.contains { element in
+            if let nowCost = element.nowCost {
+                return nowCost > 0
+            }
+            return false
+        }
     }
 
     private func fetchMyProfile(entryID: Int) async -> FantasyEntryProfile? {

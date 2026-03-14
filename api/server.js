@@ -2635,6 +2635,7 @@ function buildAssistantIdealDisplayContext(teams, currentEventID) {
       .map((team) => [parseFiniteNumber(team && team.id, 0), team])
       .filter(([teamID]) => teamID > 0)
   );
+  const allFixtures = Array.isArray(cachedFantasyFixtures) ? cachedFantasyFixtures : [];
   const currentFixtures = (Array.isArray(cachedFantasyFixtures) ? cachedFantasyFixtures : [])
     .filter((fixture) => parseFiniteNumber(fixture && fixture.event, 0) === currentEventID);
   const activeTeamIDs = new Set();
@@ -2648,6 +2649,40 @@ function buildAssistantIdealDisplayContext(teams, currentEventID) {
   const startOfTomorrow = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
   const upcomingOpponentByTeamID = new Map();
+  allFixtures
+    .filter((fixture) => {
+      const eventID = parseFiniteNumber(fixture && fixture.event, 0);
+      return currentEventID > 0 ? eventID >= currentEventID : true;
+    })
+    .sort((left, right) =>
+      parseFiniteNumber(left && left.event, Number.MAX_SAFE_INTEGER) -
+        parseFiniteNumber(right && right.event, Number.MAX_SAFE_INTEGER) ||
+      fixtureKickoffSortValue(left && left.kickoff_time) - fixtureKickoffSortValue(right && right.kickoff_time) ||
+      parseFiniteNumber(left && left.id, 0) - parseFiniteNumber(right && right.id, 0)
+    )
+    .forEach((fixture) => {
+      const teamH = parseFiniteNumber(fixture && fixture.team_h, 0);
+      const teamA = parseFiniteNumber(fixture && fixture.team_a, 0);
+      if (teamH <= 0 || teamA <= 0) return;
+
+      const started = fixture && fixture.started === true;
+      const finished = fixture && (fixture.finished === true || fixture.finished_provisional === true);
+      if (!started && !finished) {
+        if (!upcomingOpponentByTeamID.has(teamH)) {
+          upcomingOpponentByTeamID.set(
+            teamH,
+            `${teamShortLabel(teamsByID.get(teamA) || null)} (H)`
+          );
+        }
+        if (!upcomingOpponentByTeamID.has(teamA)) {
+          upcomingOpponentByTeamID.set(
+            teamA,
+            `${teamShortLabel(teamsByID.get(teamH) || null)} (A)`
+          );
+        }
+      }
+    });
+
   [...currentFixtures]
     .sort((left, right) =>
       fixtureKickoffSortValue(left && left.kickoff_time) - fixtureKickoffSortValue(right && right.kickoff_time)
@@ -2669,18 +2704,6 @@ function buildAssistantIdealDisplayContext(teams, currentEventID) {
       if (!started && !finished) {
         upcomingTeamIDs.add(teamH);
         upcomingTeamIDs.add(teamA);
-        if (!upcomingOpponentByTeamID.has(teamH)) {
-          upcomingOpponentByTeamID.set(
-            teamH,
-            `${teamShortLabel(teamsByID.get(teamA) || null)} (H)`
-          );
-        }
-        if (!upcomingOpponentByTeamID.has(teamA)) {
-          upcomingOpponentByTeamID.set(
-            teamA,
-            `${teamShortLabel(teamsByID.get(teamH) || null)} (A)`
-          );
-        }
       }
       if (started || finished) {
         hasStartedFixturesInGameweek = true;
@@ -3000,8 +3023,7 @@ function buildAssistantIdealSquadPlayer(profile, displayContext, options = {}) {
       ? parseFiniteNumber(futureBlankFixture && futureBlankFixture.gameweek, 0)
       : null,
     minutes_played: rawPoints > 0 ? 1 : 0,
-    upcoming_opponent_display:
-      rawPoints > 0 ? null : (displayContext.upcomingOpponentByTeamID.get(teamID) || null),
+    upcoming_opponent_display: displayContext.upcomingOpponentByTeamID.get(teamID) || null,
     goals_scored: 0,
     assists: 0,
     yellow_cards: 0,
@@ -13490,6 +13512,7 @@ function fantasyBootstrapLookupPayload() {
         photo: String((item && item.photo) || "").trim(),
         status: String((item && item.status) || "").trim(),
         news: String((item && item.news) || "").trim(),
+        now_cost: Number(item && item.now_cost) || 0,
       }))
       .filter((item) => Number.isFinite(item.id) && item.id > 0)
     : [];
