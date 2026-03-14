@@ -198,6 +198,16 @@ struct APIClient {
         return try JSONDecoder().decode(FantasyLoadingMessagesResponse.self, from: data)
     }
 
+    func fetchFantasyAssistantManagerPhrases() async throws -> FantasyAssistantManagerPhrasesResponse {
+        let request = try buildRequest(path: "fantasy/assistant-manager/phrases", queryItems: [])
+        let (data, http) = try await performRequest(
+            request,
+            operation: "fantasy_assistant_manager_phrases"
+        )
+        try validateSuccess(http, data: data, operation: "fantasy_assistant_manager_phrases")
+        return try JSONDecoder().decode(FantasyAssistantManagerPhrasesResponse.self, from: data)
+    }
+
     func fetchTeamColors() async throws -> TeamColorsCatalogResponse {
         let request = try buildRequest(path: "team-colors", queryItems: [])
         let (data, http) = try await performRequest(request, operation: "team_colors")
@@ -226,6 +236,33 @@ struct APIClient {
         )
         try validateSuccess(http, data: data, operation: "fantasy_transfer_recommendations")
         return try JSONDecoder().decode(FantasyTransferRecommendationsResponse.self, from: data)
+    }
+
+    func syncFantasyAssistantManager(entryID: Int) async throws -> FantasyAssistantManagerResponse {
+        var request = try buildRequest(
+            path: "fantasy/assistant-manager/\(entryID)/sync",
+            queryItems: []
+        )
+        request.httpMethod = "POST"
+        let (data, http) = try await performRequest(
+            request,
+            operation: "fantasy_assistant_manager_sync"
+        )
+        try validateSuccess(http, data: data, operation: "fantasy_assistant_manager_sync")
+        return try JSONDecoder().decode(FantasyAssistantManagerResponse.self, from: data)
+    }
+
+    func fetchFantasyAssistantManager(entryID: Int) async throws -> FantasyAssistantManagerResponse {
+        let request = try buildRequest(
+            path: "fantasy/assistant-manager/\(entryID)",
+            queryItems: []
+        )
+        let (data, http) = try await performRequest(
+            request,
+            operation: "fantasy_assistant_manager"
+        )
+        try validateSuccess(http, data: data, operation: "fantasy_assistant_manager")
+        return try JSONDecoder().decode(FantasyAssistantManagerResponse.self, from: data)
     }
 
     func fetchMatchDetails(matchId: String) async throws -> MatchDetailsPayload {

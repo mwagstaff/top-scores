@@ -421,6 +421,9 @@ const FANTASY_TEAM_SHORT_NAME_MAPPINGS_PATH =
 const FANTASY_LOADING_MESSAGES_PATH =
   process.env.FANTASY_LOADING_MESSAGES_PATH ||
   path.join(__dirname, "fantasy_loading_messages.json");
+const FANTASY_ASSISTANT_MANAGER_PHRASES_PATH =
+  process.env.FANTASY_ASSISTANT_MANAGER_PHRASES_PATH ||
+  path.join(__dirname, "fantasy_assistant_manager_phrases.json");
 const TEAM_COLORS_CONFIG_PATH =
   process.env.TEAM_COLORS_CONFIG_PATH ||
   path.join(__dirname, "team_colors.json");
@@ -770,12 +773,34 @@ let fantasyBootstrapNextDailyRefreshAt = null;
 let fantasyBootstrapDailyRefreshTimer = null;
 let fantasyTransferRecommendationRequestsTotal = 0;
 let fantasyTransferRecommendationFailuresTotal = 0;
+const fantasyAssistantManagerEntries = new Map();
+const fantasyAssistantManagerRefreshTasks = new Map();
+const FANTASY_ASSISTANT_MANAGER_POLL_INTERVAL_MS = 90 * 1000;
+const FANTASY_ASSISTANT_MANAGER_ACTIVE_WATCH_WINDOW_MS = 6 * 60 * 60 * 1000;
+const FANTASY_ASSISTANT_MANAGER_STALE_AFTER_MS = 5 * 60 * 1000;
+const FANTASY_ASSISTANT_MANAGER_FETCH_TIMEOUT_MS = 15 * 1000;
+const FANTASY_ASSISTANT_MANAGER_MAX_BYTES = 2 * 1024 * 1024;
+const FANTASY_ASSISTANT_MANAGER_CANDIDATE_LIMIT = 6;
+const FANTASY_ASSISTANT_MANAGER_MONEY_NO_OBJECT_LIMIT = 6;
+const FANTASY_ASSISTANT_MANAGER_NEAR_TERM_BLANK_PENALTY = 4.5;
+const FANTASY_ASSISTANT_MANAGER_IMMINENT_BLANK_PENALTY = 2.0;
+const FANTASY_ASSISTANT_MANAGER_EXTENDED_BLANK_PENALTY = 1.0;
+const FANTASY_ASSISTANT_MANAGER_IDEAL_SQUAD_BUDGET_UNITS = 1000;
+const FANTASY_ASSISTANT_MANAGER_IDEAL_POOL_LIMITS = Object.freeze({
+  1: 10,
+  2: 18,
+  3: 18,
+  4: 12,
+});
 let fantasyTeamShortNameMappings = Object.freeze({});
 let fantasyTeamShortNameMappingsLoadedAt = null;
 let fantasyTeamShortNameMappingsMtimeMs = null;
 let fantasyLoadingMessages = Object.freeze([]);
 let fantasyLoadingMessagesLoadedAt = null;
 let fantasyLoadingMessagesMtimeMs = null;
+let fantasyAssistantManagerPhrases = Object.freeze([]);
+let fantasyAssistantManagerPhrasesLoadedAt = null;
+let fantasyAssistantManagerPhrasesMtimeMs = null;
 let teamColorsConfig = Object.freeze({
   updatedAt: null,
   default: Object.freeze({
@@ -2048,6 +2073,1494 @@ function buildTransferRecommendation(
       blank_penalty_points: blankPenaltyPoints,
     },
   };
+}
+
+function fantasyAssistantNowIso() {
+  return new Date().toISOString();
+}
+
+function fantasyAssistantDataSignature() {
+  return [
+    fantasyBootstrapLastUpdated || "bootstrap:none",
+    fantasyFixturesLastUpdated || "fixtures:none",
+    parseFiniteNumber(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id, 0),
+    parseFiniteNumber(fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id, 0),
+  ].join("|");
+}
+
+function ensureFantasyAssistantEntryState(entryID) {
+  let state = fantasyAssistantManagerEntries.get(entryID);
+  if (!state) {
+    state = {
+      entryID,
+      lastSeenAt: null,
+      lastRefreshStartedAt: null,
+      lastRefreshCompletedAt: null,
+      lastRefreshTrigger: null,
+      lastError: null,
+      picksSignature: null,
+      dataSignature: null,
+      payload: null,
+    };
+    fantasyAssistantManagerEntries.set(entryID, state);
+  }
+  return state;
+}
+
+function touchFantasyAssistantEntry(entryID) {
+  const state = ensureFantasyAssistantEntryState(entryID);
+  state.lastSeenAt = fantasyAssistantNowIso();
+  return state;
+}
+
+async function fetchFantasyRemoteJSON(targetUrl, operation) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new Error(`${operation} timed out after ${FANTASY_ASSISTANT_MANAGER_FETCH_TIMEOUT_MS}ms`));
+  }, FANTASY_ASSISTANT_MANAGER_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(targetUrl, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "top-scores-assistant-manager",
+      },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > FANTASY_ASSISTANT_MANAGER_MAX_BYTES) {
+      throw new Error(
+        `${operation} exceeded max payload size (${FANTASY_ASSISTANT_MANAGER_MAX_BYTES} bytes)`
+      );
+    }
+
+    const text = buffer.toString("utf8");
+    let payload = null;
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`${operation} returned invalid JSON: ${error.message || error}`);
+    }
+
+    const gameUpdatingMessage = extractFplGameUpdatingMessage(payload);
+    if (gameUpdatingMessage) {
+      const updatingError = new Error(`${operation} upstream update in progress: ${gameUpdatingMessage}`);
+      updatingError.code = "FPL_GAME_UPDATING";
+      updatingError.upstreamMessage = gameUpdatingMessage;
+      throw updatingError;
+    }
+
+    if (!response.ok) {
+      const snippet = text.replace(/\s+/g, " ").trim().slice(0, 240);
+      throw new Error(`${operation} failed with status ${response.status}: ${snippet}`);
+    }
+
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchFantasyEntryPicksPayload(entryID, eventID) {
+  const targetUrl = `https://fantasy.premierleague.com/api/entry/${entryID}/event/${eventID}/picks/`;
+  const payload = await fetchFantasyRemoteJSON(
+    targetUrl,
+    `fpl_entry_picks entry_id=${entryID} event_id=${eventID}`
+  );
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("FPL picks payload was not a JSON object");
+  }
+  return payload;
+}
+
+function assistantFixtureEase(fixture) {
+  if (!fixture || fixture.is_blank) return 0;
+  const difficulty = clamp(parseFiniteNumber(fixture && fixture.difficulty, 3), 1, 5);
+  return clamp((6 - difficulty) / 5, 0, 1);
+}
+
+function projectAssistantFixturePoints(baseExpectedPoints, fixture, availabilityMultiplier, index) {
+  if (!fixture || fixture.is_blank) return 0;
+  const decay = clamp(1 - index * 0.08, 0.72, 1);
+  const ease = assistantFixtureEase(fixture);
+  return baseExpectedPoints * (0.64 + ease * 0.72) * availabilityMultiplier * decay;
+}
+
+function assistantBlankPenaltyScore(fixtures) {
+  const normalizedFixtures = Array.isArray(fixtures) ? fixtures : [];
+  const blankCountNext3 = normalizedFixtures
+    .slice(0, 3)
+    .reduce((count, fixture) => count + (fixture && fixture.is_blank ? 1 : 0), 0);
+  const blankCountNext2 = normalizedFixtures
+    .slice(0, 2)
+    .reduce((count, fixture) => count + (fixture && fixture.is_blank ? 1 : 0), 0);
+  const blankCountNext5 = normalizedFixtures
+    .slice(0, 5)
+    .reduce((count, fixture) => count + (fixture && fixture.is_blank ? 1 : 0), 0);
+
+  return {
+    blankCountNext3,
+    blankCountNext5,
+    penaltyScore: roundTo(
+      blankCountNext3 * FANTASY_ASSISTANT_MANAGER_NEAR_TERM_BLANK_PENALTY +
+        blankCountNext2 * FANTASY_ASSISTANT_MANAGER_IMMINENT_BLANK_PENALTY +
+        Math.max(0, blankCountNext5 - blankCountNext3) * FANTASY_ASSISTANT_MANAGER_EXTENDED_BLANK_PENALTY,
+      2
+    ),
+  };
+}
+
+function buildAssistantManagerPlayerProfile(
+  element,
+  teamContext,
+  positionNameByID,
+  upcomingFixturesByTeam,
+  baselineEvent
+) {
+  const recommendation = buildTransferRecommendation(
+    element,
+    element,
+    teamContext,
+    positionNameByID,
+    upcomingFixturesByTeam,
+    baselineEvent
+  );
+  const availabilityPenalty = parseFiniteNumber(
+    recommendation &&
+      recommendation.score_breakdown &&
+      recommendation.score_breakdown.availability_penalty,
+    0
+  );
+  const availabilityMultiplier = clamp(1 - availabilityPenalty * 0.55, 0.12, 1);
+  const baseExpectedPoints = Math.max(
+    0,
+    parseFiniteNumber(recommendation && recommendation.ep_next, 0) * 0.68 +
+      parseFiniteNumber(recommendation && recommendation.points_per_game, 0) * 0.32
+  );
+  const nextFixtures = Array.isArray(recommendation && recommendation.next_five_fixtures)
+    ? recommendation.next_five_fixtures
+    : [];
+  const nextGameweekPoints = roundTo(
+    projectAssistantFixturePoints(baseExpectedPoints, nextFixtures[0], availabilityMultiplier, 0),
+    2
+  );
+  const nextThreeGameweeksPoints = roundTo(
+    nextFixtures
+      .slice(0, 3)
+      .reduce(
+        (sum, fixture, index) =>
+          sum + projectAssistantFixturePoints(baseExpectedPoints, fixture, availabilityMultiplier, index),
+        0
+      ),
+    2
+  );
+  const blankPenalty = assistantBlankPenaltyScore(nextFixtures);
+  const assistantRankScore = roundTo(
+    nextGameweekPoints * 0.24 +
+      nextThreeGameweeksPoints * 0.5 +
+      parseFiniteNumber(recommendation && recommendation.recommendation_score, 0) * 0.26 -
+      blankPenalty.penaltyScore,
+    2
+  );
+
+  return {
+    ...recommendation,
+    assistant_expected_points_next_gameweek: nextGameweekPoints,
+    assistant_expected_points_next3_gameweeks: nextThreeGameweeksPoints,
+    assistant_rank_score: assistantRankScore,
+    assistant_blank_count_next3: blankPenalty.blankCountNext3,
+    assistant_blank_count_next5: blankPenalty.blankCountNext5,
+    assistant_blank_penalty_score: blankPenalty.penaltyScore,
+    assistant_cost_units: parseFiniteNumber(element && element.now_cost, 0),
+  };
+}
+
+function formatAssistantPrice(millions) {
+  return `£${roundTo(parseFiniteNumber(millions, 0), 1).toFixed(1)}m`;
+}
+
+function formatAssistantSignedPoints(value) {
+  const rounded = roundTo(parseFiniteNumber(value, 0), 1);
+  const prefix = rounded > 0 ? "+" : "";
+  return `${prefix}${rounded.toFixed(1)} pts`;
+}
+
+function formatAssistantPlayerList(values, limit = 3) {
+  const unique = Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  );
+  if (unique.length === 0) return "";
+  if (unique.length === 1) return unique[0];
+  if (unique.length === 2) return `${unique[0]} and ${unique[1]}`;
+  const trimmed = unique.slice(0, limit);
+  return `${trimmed.slice(0, -1).join(", ")}, and ${trimmed[trimmed.length - 1]}`;
+}
+
+function buildAssistantTransferMove(outgoingProfile, incomingProfile) {
+  const priceChangeMillions = roundTo(
+    parseFiniteNumber(incomingProfile && incomingProfile.now_cost_millions, 0) -
+      parseFiniteNumber(outgoingProfile && outgoingProfile.now_cost_millions, 0),
+    1
+  );
+  const nextGameweekGain = roundTo(
+    parseFiniteNumber(incomingProfile && incomingProfile.assistant_expected_points_next_gameweek, 0) -
+      parseFiniteNumber(outgoingProfile && outgoingProfile.assistant_expected_points_next_gameweek, 0),
+    2
+  );
+  const next3Gain = roundTo(
+    parseFiniteNumber(incomingProfile && incomingProfile.assistant_expected_points_next3_gameweeks, 0) -
+      parseFiniteNumber(outgoingProfile && outgoingProfile.assistant_expected_points_next3_gameweeks, 0),
+    2
+  );
+  const projectedScoreDelta = roundTo(
+    parseFiniteNumber(incomingProfile && incomingProfile.assistant_rank_score, 0) -
+      parseFiniteNumber(outgoingProfile && outgoingProfile.assistant_rank_score, 0),
+    2
+  );
+
+  const reasons = [];
+  if (
+    outgoingProfile &&
+    outgoingProfile.availability !== "available" &&
+    incomingProfile &&
+    incomingProfile.availability === "available"
+  ) {
+    reasons.push(`Moves on from ${outgoingProfile.player_name}'s availability risk.`);
+  }
+  reasons.push(
+    `Projects ${formatAssistantSignedPoints(nextGameweekGain)} next gameweek and ${formatAssistantSignedPoints(next3Gain)} across the next 3.`
+  );
+  if (incomingProfile && incomingProfile.next_fixture && incomingProfile.next_fixture.label) {
+    reasons.push(
+      `${incomingProfile.player_name} has ${incomingProfile.next_fixture.label} next and is ${incomingProfile.availability}.`
+    );
+  }
+  if (priceChangeMillions < -0.05) {
+    reasons.push(`Saves ${formatAssistantPrice(Math.abs(priceChangeMillions))} for future flexibility.`);
+  } else if (priceChangeMillions > 0.05) {
+    reasons.push(`Costs ${formatAssistantPrice(priceChangeMillions)} more for a stronger upside bet.`);
+  }
+
+  return {
+    outProfile: outgoingProfile,
+    inProfile: incomingProfile,
+    out_element_id: parseFiniteNumber(outgoingProfile && outgoingProfile.element_id, 0),
+    out_player_name: String((outgoingProfile && outgoingProfile.player_name) || "").trim(),
+    out_team_id: parseFiniteNumber(outgoingProfile && outgoingProfile.team_id, 0),
+    out_team_name: String((outgoingProfile && outgoingProfile.team_name) || "").trim(),
+    out_team_short_name: String((outgoingProfile && outgoingProfile.team_short_name) || "").trim(),
+    out_price_millions: parseFiniteNumber(outgoingProfile && outgoingProfile.now_cost_millions, 0),
+    out_cost_units: parseFiniteNumber(outgoingProfile && outgoingProfile.assistant_cost_units, 0),
+    in_element_id: parseFiniteNumber(incomingProfile && incomingProfile.element_id, 0),
+    in_player_name: String((incomingProfile && incomingProfile.player_name) || "").trim(),
+    in_team_id: parseFiniteNumber(incomingProfile && incomingProfile.team_id, 0),
+    in_team_name: String((incomingProfile && incomingProfile.team_name) || "").trim(),
+    in_team_short_name: String((incomingProfile && incomingProfile.team_short_name) || "").trim(),
+    in_price_millions: parseFiniteNumber(incomingProfile && incomingProfile.now_cost_millions, 0),
+    in_cost_units: parseFiniteNumber(incomingProfile && incomingProfile.assistant_cost_units, 0),
+    price_change_millions: priceChangeMillions,
+    projected_gain_next_gameweek: nextGameweekGain,
+    projected_gain_next3_gameweeks: next3Gain,
+    projected_score_delta: projectedScoreDelta,
+    reasons: reasons.slice(0, 3),
+  };
+}
+
+function assistantMoveSortScore(move) {
+  return (
+    parseFiniteNumber(move && move.projected_gain_next_gameweek, 0) * 0.2 +
+    parseFiniteNumber(move && move.projected_gain_next3_gameweeks, 0) * 0.5 +
+    parseFiniteNumber(move && move.projected_score_delta, 0) * 0.3
+  );
+}
+
+function compareAssistantMoves(left, right) {
+  const rightScore = assistantMoveSortScore(right);
+  const leftScore = assistantMoveSortScore(left);
+  if (rightScore !== leftScore) return rightScore - leftScore;
+  if (right.projected_gain_next3_gameweeks !== left.projected_gain_next3_gameweeks) {
+    return right.projected_gain_next3_gameweeks - left.projected_gain_next3_gameweeks;
+  }
+  if (right.projected_gain_next_gameweek !== left.projected_gain_next_gameweek) {
+    return right.projected_gain_next_gameweek - left.projected_gain_next_gameweek;
+  }
+  return left.price_change_millions - right.price_change_millions;
+}
+
+function isAssistantTransferPackageValid(
+  moves,
+  baseClubCounts,
+  currentSquadCostUnits,
+  availableBudgetUnits,
+  budgetLimited
+) {
+  const outgoingSeen = new Set();
+  const incomingSeen = new Set();
+  const counts = new Map(baseClubCounts instanceof Map ? baseClubCounts.entries() : []);
+  let squadCostUnits = currentSquadCostUnits;
+
+  for (const move of moves) {
+    if (!move) return false;
+    if (outgoingSeen.has(move.out_element_id) || incomingSeen.has(move.in_element_id)) {
+      return false;
+    }
+    outgoingSeen.add(move.out_element_id);
+    incomingSeen.add(move.in_element_id);
+
+    const outTeamID = parseFiniteNumber(move.out_team_id, 0);
+    const inTeamID = parseFiniteNumber(move.in_team_id, 0);
+    if (outTeamID > 0) {
+      counts.set(outTeamID, Math.max(0, (counts.get(outTeamID) || 0) - 1));
+    }
+    if (inTeamID > 0) {
+      counts.set(inTeamID, (counts.get(inTeamID) || 0) + 1);
+      if ((counts.get(inTeamID) || 0) > 3) {
+        return false;
+      }
+    }
+
+    squadCostUnits =
+      squadCostUnits -
+      parseFiniteNumber(move.out_cost_units, 0) +
+      parseFiniteNumber(move.in_cost_units, 0);
+  }
+
+  if (budgetLimited && squadCostUnits > availableBudgetUnits) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildAssistantPlanReasons(
+  moves,
+  budgetLimited,
+  currentSquadCostUnits,
+  availableBudgetUnits
+) {
+  const reasons = [];
+  const gainNextGameweek = roundTo(
+    moves.reduce((sum, move) => sum + parseFiniteNumber(move && move.projected_gain_next_gameweek, 0), 0),
+    2
+  );
+  const gainNext3 = roundTo(
+    moves.reduce((sum, move) => sum + parseFiniteNumber(move && move.projected_gain_next3_gameweeks, 0), 0),
+    2
+  );
+  reasons.push(
+    `Projects ${formatAssistantSignedPoints(gainNextGameweek)} next gameweek and ${formatAssistantSignedPoints(gainNext3)} across the next 3 gameweeks.`
+  );
+
+  const netSpendUnits = moves.reduce(
+    (sum, move) =>
+      sum +
+      parseFiniteNumber(move && move.in_cost_units, 0) -
+      parseFiniteNumber(move && move.out_cost_units, 0),
+    0
+  );
+  if (budgetLimited) {
+    const remainingBudgetUnits = roundTo(
+      availableBudgetUnits - (currentSquadCostUnits + netSpendUnits),
+      1
+    );
+    if (netSpendUnits > 0) {
+      reasons.push(
+        `Uses ${formatAssistantPrice(netSpendUnits / 10)} of headroom and still fits the current team value limit.`
+      );
+    } else if (netSpendUnits < 0) {
+      reasons.push(
+        `Saves ${formatAssistantPrice(Math.abs(netSpendUnits) / 10)} while improving the squad.`
+      );
+    } else {
+      reasons.push("Stays flat on spend while upgrading projected output.");
+    }
+    if (remainingBudgetUnits > 0.05) {
+      reasons.push(`Leaves ${formatAssistantPrice(remainingBudgetUnits / 10)} of budget flexibility unused.`);
+    }
+  } else {
+    reasons.push("Ignores budget and focuses purely on short-term upside.");
+  }
+
+  const flaggedOutgoing = moves
+    .filter((move) => move.outProfile && move.outProfile.availability !== "available")
+    .map((move) => move.out_player_name);
+  if (flaggedOutgoing.length > 0) {
+    reasons.push(`Moves on from flagged players such as ${formatAssistantPlayerList(flaggedOutgoing)}.`);
+  } else {
+    const incomingFixtures = moves
+      .map((move) => move.inProfile && move.inProfile.next_fixture && move.inProfile.next_fixture.label)
+      .filter(Boolean);
+    if (incomingFixtures.length > 0) {
+      reasons.push(`Targets immediate fixtures like ${formatAssistantPlayerList(incomingFixtures)}.`);
+    }
+  }
+
+  reasons.push("Keeps squad structure intact and respects the three-per-club rule.");
+  return reasons.slice(0, 4);
+}
+
+function buildAssistantTransferPlan(
+  title,
+  summary,
+  moves,
+  budgetLimited,
+  currentSquadCostUnits,
+  availableBudgetUnits
+) {
+  if (!Array.isArray(moves) || moves.length === 0) return null;
+
+  const projectedGainNextGameweek = roundTo(
+    moves.reduce((sum, move) => sum + parseFiniteNumber(move && move.projected_gain_next_gameweek, 0), 0),
+    2
+  );
+  const projectedGainNext3Gameweeks = roundTo(
+    moves.reduce((sum, move) => sum + parseFiniteNumber(move && move.projected_gain_next3_gameweeks, 0), 0),
+    2
+  );
+  const projectedScoreDelta = roundTo(
+    moves.reduce((sum, move) => sum + parseFiniteNumber(move && move.projected_score_delta, 0), 0),
+    2
+  );
+
+  return {
+    title,
+    summary,
+    projected_gain_next_gameweek: projectedGainNextGameweek,
+    projected_gain_next3_gameweeks: projectedGainNext3Gameweeks,
+    projected_score_delta: projectedScoreDelta,
+    reasons: buildAssistantPlanReasons(
+      moves,
+      budgetLimited,
+      currentSquadCostUnits,
+      availableBudgetUnits
+    ),
+    transfers: moves.map((move) => ({
+      out_element_id: move.out_element_id,
+      out_player_name: move.out_player_name,
+      out_team_name: move.out_team_name,
+      out_team_short_name: move.out_team_short_name,
+      out_price_millions: move.out_price_millions,
+      in_element_id: move.in_element_id,
+      in_player_name: move.in_player_name,
+      in_team_name: move.in_team_name,
+      in_team_short_name: move.in_team_short_name,
+      in_price_millions: move.in_price_millions,
+      price_change_millions: move.price_change_millions,
+      projected_gain_next_gameweek: move.projected_gain_next_gameweek,
+      projected_gain_next3_gameweeks: move.projected_gain_next3_gameweeks,
+      projected_score_delta: move.projected_score_delta,
+      reasons: move.reasons,
+    })),
+  };
+}
+
+function buildAssistantCaptainCandidate(profile) {
+  const reasons = [
+    `Projects ${roundTo(parseFiniteNumber(profile && profile.assistant_expected_points_next_gameweek, 0), 1).toFixed(1)} points next gameweek.`,
+  ];
+  if (profile && profile.next_fixture && profile.next_fixture.label) {
+    reasons.push(`${profile.player_name} faces ${profile.next_fixture.label} next.`);
+  }
+  reasons.push(
+    `Form/fixture blend score: ${roundTo(parseFiniteNumber(profile && profile.assistant_rank_score, 0), 1).toFixed(1)}.`
+  );
+  if (profile && profile.availability !== "available") {
+    reasons.unshift(`${profile.player_name} carries an availability flag, so risk is slightly elevated.`);
+  }
+
+  return {
+    element_id: parseFiniteNumber(profile && profile.element_id, 0),
+    player_name: String((profile && profile.player_name) || "").trim(),
+    team_short_name: String((profile && profile.team_short_name) || "").trim(),
+    opponent_label:
+      profile && profile.next_fixture && profile.next_fixture.label
+        ? profile.next_fixture.label
+        : "Fixture unavailable",
+    availability: String((profile && profile.availability) || "unknown").trim(),
+    expected_points_next_gameweek: roundTo(
+      parseFiniteNumber(profile && profile.assistant_expected_points_next_gameweek, 0),
+      2
+    ),
+    expected_points_next3_gameweeks: roundTo(
+      parseFiniteNumber(profile && profile.assistant_expected_points_next3_gameweeks, 0),
+      2
+    ),
+    reasons: reasons.slice(0, 3),
+  };
+}
+
+function idealSquadPoolForPosition(playerProfiles, positionID) {
+  const limit = FANTASY_ASSISTANT_MANAGER_IDEAL_POOL_LIMITS[positionID] || 12;
+  return playerProfiles
+    .filter((profile) => parseFiniteNumber(profile && profile.position_id, 0) === positionID)
+    .sort((left, right) => {
+      const rightScore =
+        parseFiniteNumber(right && right.assistant_rank_score, 0) * 0.7 +
+        parseFiniteNumber(right && right.assistant_expected_points_next_gameweek, 0) * 0.3;
+      const leftScore =
+        parseFiniteNumber(left && left.assistant_rank_score, 0) * 0.7 +
+        parseFiniteNumber(left && left.assistant_expected_points_next_gameweek, 0) * 0.3;
+      if (rightScore !== leftScore) return rightScore - leftScore;
+      return (
+        parseFiniteNumber(left && left.assistant_cost_units, 0) -
+        parseFiniteNumber(right && right.assistant_cost_units, 0)
+      );
+    })
+    .slice(0, limit);
+}
+
+function assistantIdealProfileScore(profile) {
+  return (
+    parseFiniteNumber(profile && profile.assistant_rank_score, 0) * 0.7 +
+    parseFiniteNumber(profile && profile.assistant_expected_points_next_gameweek, 0) * 0.3
+  );
+}
+
+function buildAssistantIdealDisplayContext(teams, currentEventID) {
+  const teamsByID = new Map(
+    (Array.isArray(teams) ? teams : [])
+      .map((team) => [parseFiniteNumber(team && team.id, 0), team])
+      .filter(([teamID]) => teamID > 0)
+  );
+  const currentFixtures = (Array.isArray(cachedFantasyFixtures) ? cachedFantasyFixtures : [])
+    .filter((fixture) => parseFiniteNumber(fixture && fixture.event, 0) === currentEventID);
+  const activeTeamIDs = new Set();
+  const upcomingTeamIDs = new Set();
+  const teamsWithAnyFixture = new Set();
+  let hasStartedFixturesInGameweek = false;
+  let hasFixturesPlayedToday = false;
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfTomorrow = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
+
+  const upcomingOpponentByTeamID = new Map();
+  [...currentFixtures]
+    .sort((left, right) =>
+      fixtureKickoffSortValue(left && left.kickoff_time) - fixtureKickoffSortValue(right && right.kickoff_time)
+    )
+    .forEach((fixture) => {
+      const teamH = parseFiniteNumber(fixture && fixture.team_h, 0);
+      const teamA = parseFiniteNumber(fixture && fixture.team_a, 0);
+      if (teamH <= 0 || teamA <= 0) return;
+
+      const started = fixture && fixture.started === true;
+      const finished = fixture && (fixture.finished === true || fixture.finished_provisional === true);
+      teamsWithAnyFixture.add(teamH);
+      teamsWithAnyFixture.add(teamA);
+
+      if (started && !finished) {
+        activeTeamIDs.add(teamH);
+        activeTeamIDs.add(teamA);
+      }
+      if (!started && !finished) {
+        upcomingTeamIDs.add(teamH);
+        upcomingTeamIDs.add(teamA);
+        if (!upcomingOpponentByTeamID.has(teamH)) {
+          upcomingOpponentByTeamID.set(
+            teamH,
+            `${teamShortLabel(teamsByID.get(teamA) || null)} (H)`
+          );
+        }
+        if (!upcomingOpponentByTeamID.has(teamA)) {
+          upcomingOpponentByTeamID.set(
+            teamA,
+            `${teamShortLabel(teamsByID.get(teamH) || null)} (A)`
+          );
+        }
+      }
+      if (started || finished) {
+        hasStartedFixturesInGameweek = true;
+      }
+      if (started) {
+        const kickoffRaw = String((fixture && fixture.kickoff_time) || "").trim();
+        const kickoffAtMs = Date.parse(kickoffRaw);
+        if (Number.isFinite(kickoffAtMs)) {
+          const kickoffAt = new Date(kickoffAtMs);
+          if (kickoffAt >= startOfToday && kickoffAt < startOfTomorrow) {
+            hasFixturesPlayedToday = true;
+          }
+        }
+      }
+    });
+
+  return {
+    activeTeamIDs,
+    upcomingTeamIDs,
+    teamsWithAnyFixture,
+    hasActiveFixtures: activeTeamIDs.size > 0,
+    hasStartedFixturesInGameweek,
+    hasFixturesPlayedToday,
+    upcomingOpponentByTeamID,
+  };
+}
+
+function assistantIdealCanSelect(teamCounts, candidate, replacing = null) {
+  const candidateTeamID = parseFiniteNumber(candidate && candidate.team_id, 0);
+  const replacingTeamID = parseFiniteNumber(replacing && replacing.team_id, 0);
+  const nextTeamCounts = new Map(teamCounts);
+  if (replacing && replacingTeamID > 0) {
+    nextTeamCounts.set(replacingTeamID, Math.max(0, (nextTeamCounts.get(replacingTeamID) || 0) - 1));
+  }
+  if (candidateTeamID > 0) {
+    nextTeamCounts.set(candidateTeamID, (nextTeamCounts.get(candidateTeamID) || 0) + 1);
+    if ((nextTeamCounts.get(candidateTeamID) || 0) > 3) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function chooseAssistantIdealBench(playerProfiles) {
+  const benchSlots = [
+    { positionID: 1, count: 1 },
+    { positionID: 2, count: 1 },
+    { positionID: 3, count: 1 },
+    { positionID: 4, count: 1 },
+  ];
+  const selectedProfiles = [];
+  const selectedIDs = new Set();
+  const teamCounts = new Map();
+
+  const applySelection = (candidate) => {
+    selectedProfiles.push(candidate);
+    selectedIDs.add(candidate.element_id);
+    const teamID = parseFiniteNumber(candidate && candidate.team_id, 0);
+    if (teamID > 0) {
+      teamCounts.set(teamID, (teamCounts.get(teamID) || 0) + 1);
+    }
+  };
+
+  for (const slot of benchSlots) {
+    const candidate = playerProfiles
+      .filter((profile) => parseFiniteNumber(profile && profile.position_id, 0) === slot.positionID)
+      .sort((left, right) => {
+        const leftCost = parseFiniteNumber(left && left.assistant_cost_units, 0);
+        const rightCost = parseFiniteNumber(right && right.assistant_cost_units, 0);
+        if (leftCost !== rightCost) return leftCost - rightCost;
+        const leftScore = assistantIdealProfileScore(left);
+        const rightScore = assistantIdealProfileScore(right);
+        if (leftScore !== rightScore) return leftScore - rightScore;
+        return String((left && left.player_name) || "").localeCompare(String((right && right.player_name) || ""));
+      })
+      .find((profile) => {
+        if (selectedIDs.has(profile.element_id)) return false;
+        return assistantIdealCanSelect(teamCounts, profile);
+      });
+
+    if (!candidate) {
+      return null;
+    }
+    applySelection(candidate);
+  }
+
+  return {
+    profiles: selectedProfiles,
+    selectedIDs,
+    teamCounts,
+    totalCostUnits: selectedProfiles.reduce(
+      (sum, profile) => sum + parseFiniteNumber(profile && profile.assistant_cost_units, 0),
+      0
+    ),
+  };
+}
+
+function chooseAssistantStartingXI(playerProfiles, formation, lockedProfiles, budgetUnits) {
+  const quotas = [
+    { positionID: 1, count: 1 },
+    { positionID: 2, count: formation.defendersCount },
+    { positionID: 3, count: formation.midfieldersCount },
+    { positionID: 4, count: formation.forwardsCount },
+  ];
+  const pools = new Map(
+    quotas.map(({ positionID }) => [positionID, idealSquadPoolForPosition(playerProfiles, positionID)])
+  );
+  const selectedProfiles = [...lockedProfiles];
+  const lockedIDs = new Set(lockedProfiles.map((profile) => parseFiniteNumber(profile && profile.element_id, 0)));
+  const selectedIDs = new Set(lockedIDs);
+  const replaceableIDs = new Set();
+  const teamCounts = lockedProfiles.reduce((counts, profile) => {
+    const teamID = parseFiniteNumber(profile && profile.team_id, 0);
+    if (teamID > 0) {
+      counts.set(teamID, (counts.get(teamID) || 0) + 1);
+    }
+    return counts;
+  }, new Map());
+  const addedCounts = new Map();
+
+  const applySelection = (candidate) => {
+    selectedProfiles.push(candidate);
+    selectedIDs.add(candidate.element_id);
+    replaceableIDs.add(candidate.element_id);
+    const positionID = parseFiniteNumber(candidate && candidate.position_id, 0);
+    addedCounts.set(positionID, (addedCounts.get(positionID) || 0) + 1);
+    const teamID = parseFiniteNumber(candidate && candidate.team_id, 0);
+    if (teamID > 0) {
+      teamCounts.set(teamID, (teamCounts.get(teamID) || 0) + 1);
+    }
+  };
+
+  for (const { positionID, count } of quotas) {
+    const candidates = pools.get(positionID) || [];
+    for (const candidate of candidates) {
+      if ((addedCounts.get(positionID) || 0) >= count) break;
+      if (selectedIDs.has(candidate.element_id)) continue;
+      if (!assistantIdealCanSelect(teamCounts, candidate)) continue;
+      applySelection(candidate);
+    }
+    if ((addedCounts.get(positionID) || 0) < count) {
+      return null;
+    }
+  }
+
+  let totalCostUnits = selectedProfiles.reduce(
+    (sum, profile) => sum + parseFiniteNumber(profile && profile.assistant_cost_units, 0),
+    0
+  );
+
+  const replacePlayer = (currentProfile, candidateProfile) => {
+    const currentIndex = selectedProfiles.findIndex((profile) => profile.element_id === currentProfile.element_id);
+    if (currentIndex < 0) return;
+    selectedProfiles[currentIndex] = candidateProfile;
+    selectedIDs.delete(currentProfile.element_id);
+    selectedIDs.add(candidateProfile.element_id);
+    replaceableIDs.delete(currentProfile.element_id);
+    replaceableIDs.add(candidateProfile.element_id);
+
+    const currentTeamID = parseFiniteNumber(currentProfile && currentProfile.team_id, 0);
+    const candidateTeamID = parseFiniteNumber(candidateProfile && candidateProfile.team_id, 0);
+    if (currentTeamID > 0) {
+      teamCounts.set(currentTeamID, Math.max(0, (teamCounts.get(currentTeamID) || 0) - 1));
+    }
+    if (candidateTeamID > 0) {
+      teamCounts.set(candidateTeamID, (teamCounts.get(candidateTeamID) || 0) + 1);
+    }
+    totalCostUnits +=
+      parseFiniteNumber(candidateProfile && candidateProfile.assistant_cost_units, 0) -
+      parseFiniteNumber(currentProfile && currentProfile.assistant_cost_units, 0);
+  };
+
+  while (totalCostUnits > budgetUnits) {
+    let bestDowngrade = null;
+
+    for (const currentProfile of selectedProfiles) {
+      if (!replaceableIDs.has(currentProfile.element_id)) continue;
+      const positionID = parseFiniteNumber(currentProfile && currentProfile.position_id, 0);
+      const pool = pools.get(positionID) || [];
+      for (const candidate of pool) {
+        if (selectedIDs.has(candidate.element_id)) continue;
+        const currentCost = parseFiniteNumber(currentProfile && currentProfile.assistant_cost_units, 0);
+        const candidateCost = parseFiniteNumber(candidate && candidate.assistant_cost_units, 0);
+        if (candidateCost >= currentCost) continue;
+        if (!assistantIdealCanSelect(teamCounts, candidate, currentProfile)) continue;
+
+        const save = currentCost - candidateCost;
+        const loss = assistantIdealProfileScore(currentProfile) - assistantIdealProfileScore(candidate);
+        const ratio = loss / Math.max(save, 1);
+        if (
+          !bestDowngrade ||
+          ratio < bestDowngrade.ratio ||
+          (ratio === bestDowngrade.ratio && loss < bestDowngrade.loss)
+        ) {
+          bestDowngrade = {
+            currentProfile,
+            candidate,
+            loss,
+            ratio,
+          };
+        }
+      }
+    }
+
+    if (!bestDowngrade) {
+      return null;
+    }
+    replacePlayer(bestDowngrade.currentProfile, bestDowngrade.candidate);
+  }
+
+  let improved = true;
+  while (improved) {
+    improved = false;
+    let bestUpgrade = null;
+
+    for (const currentProfile of selectedProfiles) {
+      if (!replaceableIDs.has(currentProfile.element_id)) continue;
+      const positionID = parseFiniteNumber(currentProfile && currentProfile.position_id, 0);
+      const pool = pools.get(positionID) || [];
+      for (const candidate of pool) {
+        if (selectedIDs.has(candidate.element_id)) continue;
+        if (!assistantIdealCanSelect(teamCounts, candidate, currentProfile)) continue;
+        const deltaCost =
+          parseFiniteNumber(candidate && candidate.assistant_cost_units, 0) -
+          parseFiniteNumber(currentProfile && currentProfile.assistant_cost_units, 0);
+        if (totalCostUnits + deltaCost > budgetUnits) continue;
+
+        const gain = assistantIdealProfileScore(candidate) - assistantIdealProfileScore(currentProfile);
+        if (gain <= 0) continue;
+        if (!bestUpgrade || gain > bestUpgrade.gain) {
+          bestUpgrade = {
+            currentProfile,
+            candidate,
+            gain,
+          };
+        }
+      }
+    }
+
+    if (bestUpgrade) {
+      replacePlayer(bestUpgrade.currentProfile, bestUpgrade.candidate);
+      improved = true;
+    }
+  }
+
+  const starterProfiles = selectedProfiles.filter((profile) => replaceableIDs.has(profile.element_id));
+  return {
+    formation: `${formation.defendersCount}-${formation.midfieldersCount}-${formation.forwardsCount}`,
+    allProfiles: [...selectedProfiles],
+    starterProfiles,
+    totalCostUnits,
+    starterScore: roundTo(
+      starterProfiles.reduce((sum, profile) => sum + assistantIdealProfileScore(profile), 0),
+      2
+    ),
+    starterExpectedPoints: roundTo(
+      starterProfiles.reduce(
+        (sum, profile) => sum + parseFiniteNumber(profile && profile.assistant_expected_points_next_gameweek, 0),
+        0
+      ),
+      2
+    ),
+  };
+}
+
+function buildAssistantIdealSquadPlayer(profile, displayContext, options = {}) {
+  const pickPosition = parseFiniteNumber(options && options.pickPosition, 0);
+  const multiplier = Math.max(1, parseFiniteNumber(options && options.multiplier, 1));
+  const rawPoints = parseFiniteNumber(profile && profile.event_points, 0);
+  const teamID = parseFiniteNumber(profile && profile.team_id, 0);
+  const rawStatus = String((profile && profile.status) || "").trim().toLowerCase();
+  const chanceOfPlaying = parseFiniteNumber(profile && profile.chance_of_playing_next_round, 100);
+  const isUnavailable =
+    rawStatus === "i" || rawStatus === "d" || rawStatus === "s" || rawStatus === "u";
+  const isDefinitelyUnavailable =
+    rawStatus === "i" ||
+    rawStatus === "s" ||
+    rawStatus === "u" ||
+    (rawStatus === "d" && chanceOfPlaying <= 0);
+  const futureBlankFixture = (Array.isArray(profile && profile.next_five_fixtures)
+    ? profile.next_five_fixtures
+    : []
+  ).find((fixture) => fixture && fixture.is_blank);
+
+  return {
+    element_id: parseFiniteNumber(profile && profile.element_id, 0),
+    pick_position: pickPosition,
+    player_name: String((profile && profile.player_name) || "").trim(),
+    team_id: parseFiniteNumber(profile && profile.team_id, 0),
+    team_name: String((profile && profile.team_name) || "").trim(),
+    team_short_name: String((profile && profile.team_short_name) || "").trim(),
+    position_id: parseFiniteNumber(profile && profile.position_id, 0),
+    position: String((profile && profile.position) || "").trim(),
+    now_cost_millions: roundTo(parseFiniteNumber(profile && profile.now_cost_millions, 0), 1),
+    expected_points_next_gameweek: roundTo(
+      parseFiniteNumber(profile && profile.assistant_expected_points_next_gameweek, 0),
+      2
+    ),
+    expected_points_next3_gameweeks: roundTo(
+      parseFiniteNumber(profile && profile.assistant_expected_points_next3_gameweeks, 0),
+      2
+    ),
+    assistant_rank_score: roundTo(parseFiniteNumber(profile && profile.assistant_rank_score, 0), 2),
+    raw_points: rawPoints,
+    applied_points: rawPoints * multiplier,
+    multiplier,
+    is_captain: Boolean(options && options.isCaptain),
+    is_vice_captain: Boolean(options && options.isViceCaptain),
+    is_playing_now: displayContext.activeTeamIDs.has(teamID),
+    is_unavailable: isUnavailable,
+    is_definitely_unavailable: isDefinitelyUnavailable,
+    has_any_fixture_this_gameweek: displayContext.teamsWithAnyFixture.has(teamID),
+    has_upcoming_fixture_this_gameweek: displayContext.upcomingTeamIDs.has(teamID),
+    has_active_fixture_this_gameweek: displayContext.activeTeamIDs.has(teamID),
+    has_future_availability_issue: Boolean(futureBlankFixture),
+    future_availability_issue_gameweek: futureBlankFixture
+      ? parseFiniteNumber(futureBlankFixture && futureBlankFixture.gameweek, 0)
+      : null,
+    minutes_played: rawPoints > 0 ? 1 : 0,
+    upcoming_opponent_display:
+      rawPoints > 0 ? null : (displayContext.upcomingOpponentByTeamID.get(teamID) || null),
+    goals_scored: 0,
+    assists: 0,
+    yellow_cards: 0,
+    red_cards: 0,
+  };
+}
+
+function buildAssistantIdealSquad(playerProfiles, teams, currentEventID) {
+  const benchSelection = chooseAssistantIdealBench(playerProfiles);
+  if (!benchSelection) return null;
+
+  let best = null;
+  for (let defendersCount = 3; defendersCount <= 5; defendersCount += 1) {
+    for (let midfieldersCount = 2; midfieldersCount <= 5; midfieldersCount += 1) {
+      for (let forwardsCount = 1; forwardsCount <= 3; forwardsCount += 1) {
+        if (defendersCount + midfieldersCount + forwardsCount !== 10) continue;
+        const formation = {
+          defendersCount,
+          midfieldersCount,
+          forwardsCount,
+        };
+        const candidate = chooseAssistantStartingXI(
+          playerProfiles,
+          formation,
+          benchSelection.profiles,
+          FANTASY_ASSISTANT_MANAGER_IDEAL_SQUAD_BUDGET_UNITS
+        );
+        if (!candidate) continue;
+        if (
+          !best ||
+          candidate.starterScore > best.starterScore ||
+          (candidate.starterScore === best.starterScore &&
+            candidate.starterExpectedPoints > best.starterExpectedPoints)
+        ) {
+          best = {
+            ...candidate,
+            benchProfiles: [...benchSelection.profiles],
+          };
+        }
+      }
+    }
+  }
+
+  if (!best) return null;
+
+  const starters = [...best.starterProfiles].sort((left, right) => {
+    const leftPosition = parseFiniteNumber(left && left.position_id, 0);
+    const rightPosition = parseFiniteNumber(right && right.position_id, 0);
+    if (leftPosition !== rightPosition) return leftPosition - rightPosition;
+    return (
+      parseFiniteNumber(right && right.assistant_expected_points_next_gameweek, 0) -
+      parseFiniteNumber(left && left.assistant_expected_points_next_gameweek, 0)
+    );
+  });
+  const bench = [...best.benchProfiles].sort((left, right) => {
+    const leftPosition = parseFiniteNumber(left && left.position_id, 0);
+    const rightPosition = parseFiniteNumber(right && right.position_id, 0);
+    if (leftPosition !== rightPosition) return leftPosition - rightPosition;
+    return (
+      parseFiniteNumber(left && left.assistant_cost_units, 0) -
+      parseFiniteNumber(right && right.assistant_cost_units, 0)
+    );
+  });
+  const captainCandidates = [...starters].sort((left, right) => {
+    const rightExpected = parseFiniteNumber(right && right.assistant_expected_points_next_gameweek, 0);
+    const leftExpected = parseFiniteNumber(left && left.assistant_expected_points_next_gameweek, 0);
+    if (rightExpected !== leftExpected) return rightExpected - leftExpected;
+    return assistantIdealProfileScore(right) - assistantIdealProfileScore(left);
+  });
+  const captainElementID = parseFiniteNumber(captainCandidates[0] && captainCandidates[0].element_id, 0);
+  const viceCaptainElementID = parseFiniteNumber(captainCandidates[1] && captainCandidates[1].element_id, 0);
+  const displayContext = buildAssistantIdealDisplayContext(teams, currentEventID);
+
+  let nextPickPosition = 1;
+  const startersByPosition = {
+    1: [],
+    2: [],
+    3: [],
+    4: [],
+  };
+  for (const starter of starters) {
+    const built = buildAssistantIdealSquadPlayer(starter, displayContext, {
+      pickPosition: nextPickPosition,
+      multiplier:
+        parseFiniteNumber(starter && starter.element_id, 0) === captainElementID ? 2 : 1,
+      isCaptain: parseFiniteNumber(starter && starter.element_id, 0) === captainElementID,
+      isViceCaptain: parseFiniteNumber(starter && starter.element_id, 0) === viceCaptainElementID,
+    });
+    startersByPosition[parseFiniteNumber(starter && starter.position_id, 0)] = [
+      ...(startersByPosition[parseFiniteNumber(starter && starter.position_id, 0)] || []),
+      built,
+    ];
+    nextPickPosition += 1;
+  }
+
+  const builtBench = bench.map((profile) => {
+    const built = buildAssistantIdealSquadPlayer(profile, displayContext, {
+      pickPosition: nextPickPosition,
+      multiplier: 1,
+      isCaptain: false,
+      isViceCaptain: false,
+    });
+    nextPickPosition += 1;
+    return built;
+  });
+  const displayedTotalPoints = Object.values(startersByPosition)
+    .flat()
+    .reduce((sum, player) => sum + parseFiniteNumber(player && player.applied_points, 0), 0);
+  const displayedBenchPoints = builtBench.reduce(
+    (sum, player) => sum + parseFiniteNumber(player && player.raw_points, 0),
+    0
+  );
+
+  return {
+    title: "If I had my way...",
+    summary:
+      "A full 15-man squad picked under standard Fantasy rules, with a cost-cutting bench to leave as much value as possible in the starting XI.",
+    formation: best.formation,
+    total_value_millions: roundTo(best.totalCostUnits / 10, 1),
+    expected_points_next_gameweek: roundTo(best.starterExpectedPoints, 2),
+    displayed_total_points: displayedTotalPoints,
+    displayed_bench_points: displayedBenchPoints,
+    has_active_fixtures: displayContext.hasActiveFixtures,
+    has_started_fixtures_in_gameweek: displayContext.hasStartedFixturesInGameweek,
+    has_fixtures_played_today: displayContext.hasFixturesPlayedToday,
+    starters: {
+      goalkeepers: startersByPosition[1] || [],
+      defenders: startersByPosition[2] || [],
+      midfielders: startersByPosition[3] || [],
+      forwards: startersByPosition[4] || [],
+    },
+    bench: builtBench,
+  };
+}
+
+function buildBestAssistantTransferPackage(
+  packageSize,
+  squadProfiles,
+  candidateMovesByOutgoingID,
+  baseClubCounts,
+  currentSquadCostUnits,
+  availableBudgetUnits
+) {
+  let bestMoves = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  function search(startIndex, selectedMoves) {
+    if (selectedMoves.length === packageSize) {
+      const score = selectedMoves.reduce((sum, move) => sum + assistantMoveSortScore(move), 0);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMoves = [...selectedMoves];
+      }
+      return;
+    }
+
+    for (let index = startIndex; index < squadProfiles.length; index += 1) {
+      const outgoing = squadProfiles[index];
+      const moveCandidates = candidateMovesByOutgoingID.get(outgoing.element_id) || [];
+      if (moveCandidates.length === 0) continue;
+
+      for (const move of moveCandidates) {
+        if (selectedMoves.some((candidate) => candidate.in_element_id === move.in_element_id)) {
+          continue;
+        }
+        const nextMoves = [...selectedMoves, move];
+        if (
+          !isAssistantTransferPackageValid(
+            nextMoves,
+            baseClubCounts,
+            currentSquadCostUnits,
+            availableBudgetUnits,
+            true
+          )
+        ) {
+          continue;
+        }
+        search(index + 1, nextMoves);
+      }
+    }
+  }
+
+  search(0, []);
+  return bestMoves;
+}
+
+function buildMoneyNoObjectAssistantMoves(
+  squadProfiles,
+  candidateMovesByOutgoingID,
+  baseClubCounts,
+  currentSquadCostUnits
+) {
+  const rankedMoves = squadProfiles
+    .flatMap((profile) => candidateMovesByOutgoingID.get(profile.element_id) || [])
+    .sort(compareAssistantMoves);
+  const selectedMoves = [];
+
+  for (const move of rankedMoves) {
+    if (assistantMoveSortScore(move) <= 0) continue;
+    if (selectedMoves.some((candidate) => candidate.out_element_id === move.out_element_id)) continue;
+    if (selectedMoves.some((candidate) => candidate.in_element_id === move.in_element_id)) continue;
+    const nextMoves = [...selectedMoves, move];
+    if (
+      !isAssistantTransferPackageValid(
+        nextMoves,
+        baseClubCounts,
+        currentSquadCostUnits,
+        Number.POSITIVE_INFINITY,
+        false
+      )
+    ) {
+      continue;
+    }
+    selectedMoves.push(move);
+    if (selectedMoves.length >= FANTASY_ASSISTANT_MANAGER_MONEY_NO_OBJECT_LIMIT) {
+      break;
+    }
+  }
+
+  return selectedMoves;
+}
+
+function buildFantasyAssistantManagerPayload(entryID, picksPayload) {
+  if (!cachedFantasyBootstrap) {
+    throw new Error("Fantasy bootstrap-static dataset not loaded yet.");
+  }
+
+  const payload = cachedFantasyBootstrap && typeof cachedFantasyBootstrap === "object"
+    ? cachedFantasyBootstrap
+    : {};
+  const elements = Array.isArray(payload.elements) ? payload.elements : [];
+  const teams = Array.isArray(payload.teams) ? payload.teams : [];
+  const elementTypes = Array.isArray(payload.element_types) ? payload.element_types : [];
+  const picks = Array.isArray(picksPayload && picksPayload.picks) ? picksPayload.picks : [];
+
+  const positionNameByID = new Map(
+    elementTypes
+      .map((item) => [
+        parseFiniteNumber(item && item.id, 0),
+        String((item && item.singular_name) || "").trim() || "Player",
+      ])
+      .filter(([id]) => id > 0)
+  );
+  const teamContext = teamStrengthContext(teams);
+  const currentEventID = parseFiniteNumber(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id, 0);
+  const nextEventID = parseFiniteNumber(fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id, 0);
+  const baselineEvent = nextEventID > 0 ? nextEventID : Math.max(1, currentEventID);
+  const upcomingFixturesByTeam = buildUpcomingFixturesByTeam(
+    cachedFantasyFixtures,
+    teamContext,
+    baselineEvent
+  );
+  const playerProfiles = elements
+    .filter((item) => parseFiniteNumber(item && item.id, 0) > 0)
+    .map((item) =>
+      buildAssistantManagerPlayerProfile(
+        item,
+        teamContext,
+        positionNameByID,
+        upcomingFixturesByTeam,
+        baselineEvent
+      )
+    );
+  const profilesByElementID = new Map(playerProfiles.map((item) => [item.element_id, item]));
+  const squadProfiles = picks
+    .map((pick) => profilesByElementID.get(parseFiniteNumber(pick && pick.element, 0)) || null)
+    .filter(Boolean);
+
+  if (squadProfiles.length === 0) {
+    throw new Error("Could not map any squad players to the fantasy bootstrap cache.");
+  }
+
+  const squadElementIDs = new Set(squadProfiles.map((profile) => profile.element_id));
+  const currentSquadCostUnits = squadProfiles.reduce(
+    (sum, profile) => sum + parseFiniteNumber(profile && profile.assistant_cost_units, 0),
+    0
+  );
+  const currentTeamValueUnits = Math.max(
+    parseFiniteNumber(
+      picksPayload &&
+        picksPayload.entry_history &&
+        picksPayload.entry_history.value,
+      currentSquadCostUnits
+    ),
+    currentSquadCostUnits
+  );
+  const bankUnits = Math.max(
+    0,
+    parseFiniteNumber(
+      picksPayload &&
+        picksPayload.entry_history &&
+        picksPayload.entry_history.bank,
+      0
+    )
+  );
+  const availableBudgetUnits = Math.max(
+    currentSquadCostUnits,
+    Math.min(1000, currentTeamValueUnits + bankUnits)
+  );
+  const baseClubCounts = squadProfiles.reduce((counts, profile) => {
+    const teamID = parseFiniteNumber(profile && profile.team_id, 0);
+    if (teamID > 0) {
+      counts.set(teamID, (counts.get(teamID) || 0) + 1);
+    }
+    return counts;
+  }, new Map());
+  const profilesByPositionID = playerProfiles.reduce((map, profile) => {
+    const positionID = parseFiniteNumber(profile && profile.position_id, 0);
+    if (positionID <= 0) return map;
+    map.set(positionID, [...(map.get(positionID) || []), profile]);
+    return map;
+  }, new Map());
+  const candidateMovesByOutgoingID = new Map();
+
+  squadProfiles.forEach((outgoingProfile) => {
+    const positionID = parseFiniteNumber(outgoingProfile && outgoingProfile.position_id, 0);
+    const allCandidates = (profilesByPositionID.get(positionID) || [])
+      .filter((incomingProfile) => !squadElementIDs.has(incomingProfile.element_id))
+      .map((incomingProfile) => buildAssistantTransferMove(outgoingProfile, incomingProfile))
+      .sort(compareAssistantMoves);
+    const candidates = allCandidates
+      .filter((move) =>
+        isAssistantTransferPackageValid(
+          [move],
+          baseClubCounts,
+          currentSquadCostUnits,
+          availableBudgetUnits,
+          true
+        )
+      )
+      .slice(0, FANTASY_ASSISTANT_MANAGER_CANDIDATE_LIMIT);
+    candidateMovesByOutgoingID.set(outgoingProfile.element_id, candidates);
+  });
+
+  const bestTripleMoves = buildBestAssistantTransferPackage(
+    3,
+    squadProfiles,
+    candidateMovesByOutgoingID,
+    baseClubCounts,
+    currentSquadCostUnits,
+    availableBudgetUnits
+  );
+  const idealSquad = buildAssistantIdealSquad(playerProfiles, teams, currentEventID);
+
+  const captainCandidates = [...squadProfiles]
+    .sort((left, right) => {
+      if (
+        parseFiniteNumber(right && right.assistant_expected_points_next_gameweek, 0) !==
+        parseFiniteNumber(left && left.assistant_expected_points_next_gameweek, 0)
+      ) {
+        return (
+          parseFiniteNumber(right && right.assistant_expected_points_next_gameweek, 0) -
+          parseFiniteNumber(left && left.assistant_expected_points_next_gameweek, 0)
+        );
+      }
+      if (
+        parseFiniteNumber(right && right.assistant_expected_points_next3_gameweeks, 0) !==
+        parseFiniteNumber(left && left.assistant_expected_points_next3_gameweeks, 0)
+      ) {
+        return (
+          parseFiniteNumber(right && right.assistant_expected_points_next3_gameweeks, 0) -
+          parseFiniteNumber(left && left.assistant_expected_points_next3_gameweeks, 0)
+        );
+      }
+      return (
+        parseFiniteNumber(right && right.assistant_rank_score, 0) -
+        parseFiniteNumber(left && left.assistant_rank_score, 0)
+      );
+    })
+    .map(buildAssistantCaptainCandidate);
+  const primaryCaptainElementID =
+    captainCandidates.length > 0 ? parseFiniteNumber(captainCandidates[0].element_id, 0) : 0;
+  const viceCaptainCandidates = [...captainCandidates].filter(
+    (candidate) => parseFiniteNumber(candidate && candidate.element_id, 0) !== primaryCaptainElementID
+  );
+
+  return {
+    entry_id: entryID,
+    current_event_id: currentEventID,
+    current_event_name:
+      String((fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.name) || "").trim() ||
+      `Gameweek ${currentEventID}`,
+    generated_at: fantasyAssistantNowIso(),
+    algorithm_summary:
+      "Transfer plans balance next-gameweek upside, three-gameweek planning, blank gameweeks, availability, affordability, and the three-per-club rule.",
+    squad_summary: {
+      players_count: squadProfiles.length,
+      current_squad_value_millions: roundTo(currentSquadCostUnits / 10, 1),
+      reported_team_value_millions: roundTo(currentTeamValueUnits / 10, 1),
+      bank_millions: roundTo(bankUnits / 10, 1),
+      effective_budget_millions: roundTo(availableBudgetUnits / 10, 1),
+      team_value_cap_millions: 100.0,
+      transfer_options_considered: Array.from(candidateMovesByOutgoingID.values()).reduce(
+        (sum, moves) => sum + moves.length,
+        0
+      ),
+    },
+    top_triple_transfers: buildAssistantTransferPlan(
+      "Top triple transfers",
+      "Best three-player reshuffle while still respecting the team value cap and club limits.",
+      bestTripleMoves,
+      true,
+      currentSquadCostUnits,
+      availableBudgetUnits
+    ),
+    ideal_squad: idealSquad,
+    captain_recommendations: {
+      summary:
+        "Captaincy leans on next-gameweek expected points first, with three-gameweek planning and availability used as tie-breakers.",
+      captain: captainCandidates.slice(0, 3),
+      vice_captain: viceCaptainCandidates.slice(0, 3),
+    },
+  };
+}
+
+function buildFantasyAssistantManagerResponse(entryID) {
+  const state = ensureFantasyAssistantEntryState(entryID);
+  const dataSignature = fantasyAssistantDataSignature();
+  const stale =
+    !state.payload ||
+    state.dataSignature !== dataSignature ||
+    !state.lastRefreshCompletedAt ||
+    Date.now() - Date.parse(state.lastRefreshCompletedAt) > FANTASY_ASSISTANT_MANAGER_STALE_AFTER_MS;
+  const refreshInFlight = fantasyAssistantManagerRefreshTasks.has(entryID);
+
+  if (!state.payload) {
+    return {
+      entry_id: entryID,
+      ready: false,
+      stale: true,
+      source: refreshInFlight ? "warming" : "missing",
+      generated_at: null,
+      algorithm_summary:
+        "Transfer plans balance next-gameweek upside, three-gameweek planning, blank gameweeks, availability, affordability, and the three-per-club rule.",
+      squad_summary: null,
+      top_single_transfer: null,
+      top_double_transfers: null,
+      top_triple_transfers: null,
+      money_no_object_transfers: null,
+      ideal_squad: null,
+      captain_recommendations: null,
+      sync_status: {
+        state: refreshInFlight ? "refreshing" : (state.lastError ? "error" : "warming"),
+        last_seen_at: state.lastSeenAt,
+        last_refresh_started_at: state.lastRefreshStartedAt,
+        last_refresh_completed_at: state.lastRefreshCompletedAt,
+        last_refresh_trigger: state.lastRefreshTrigger,
+        last_error: state.lastError,
+      },
+    };
+  }
+
+  return {
+    ...state.payload,
+    ready: true,
+    stale,
+    source: "memory_cache",
+    sync_status: {
+      state: refreshInFlight ? "refreshing" : "ready",
+      last_seen_at: state.lastSeenAt,
+      last_refresh_started_at: state.lastRefreshStartedAt,
+      last_refresh_completed_at: state.lastRefreshCompletedAt,
+      last_refresh_trigger: state.lastRefreshTrigger,
+      last_error: state.lastError,
+    },
+  };
+}
+
+async function refreshFantasyAssistantManagerEntry(entryID, options = {}) {
+  if (fantasyAssistantManagerRefreshTasks.has(entryID)) {
+    return fantasyAssistantManagerRefreshTasks.get(entryID);
+  }
+
+  const task = (async () => {
+    const state = touchFantasyAssistantEntry(entryID);
+    const trigger = options && options.trigger ? String(options.trigger) : "manual";
+    state.lastRefreshTrigger = trigger;
+    state.lastRefreshStartedAt = fantasyAssistantNowIso();
+
+    if (!cachedFantasyBootstrap) {
+      throw new Error("Fantasy bootstrap-static dataset not loaded yet.");
+    }
+    if (!fantasyBootstrapCurrentEvent) {
+      throw new Error("No current gameweek found in the fantasy bootstrap cache.");
+    }
+
+    try {
+      const eventID = parseFiniteNumber(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id, 0);
+      const picksPayload = await fetchFantasyEntryPicksPayload(entryID, eventID);
+      const picks = Array.isArray(picksPayload && picksPayload.picks) ? picksPayload.picks : [];
+      const picksSignature = [
+        eventID,
+        parseFiniteNumber(
+          picksPayload && picksPayload.entry_history && picksPayload.entry_history.value,
+          0
+        ),
+        parseFiniteNumber(
+          picksPayload && picksPayload.entry_history && picksPayload.entry_history.bank,
+          0
+        ),
+        picks.map((pick) => parseFiniteNumber(pick && pick.element, 0)).join(","),
+      ].join("|");
+      const dataSignature = fantasyAssistantDataSignature();
+      const cacheFresh =
+        state.payload &&
+        state.picksSignature === picksSignature &&
+        state.dataSignature === dataSignature &&
+        state.lastRefreshCompletedAt &&
+        Date.now() - Date.parse(state.lastRefreshCompletedAt) <= FANTASY_ASSISTANT_MANAGER_STALE_AFTER_MS;
+
+      if (cacheFresh && !(options && options.force === true)) {
+        state.lastRefreshCompletedAt = fantasyAssistantNowIso();
+        state.lastError = null;
+        return state.payload;
+      }
+
+      state.payload = buildFantasyAssistantManagerPayload(entryID, picksPayload);
+      state.picksSignature = picksSignature;
+      state.dataSignature = dataSignature;
+      state.lastRefreshCompletedAt = fantasyAssistantNowIso();
+      state.lastError = null;
+      return state.payload;
+    } catch (error) {
+      state.lastRefreshCompletedAt = fantasyAssistantNowIso();
+      state.lastError = error && error.message ? error.message : String(error);
+      throw error;
+    }
+  })();
+
+  fantasyAssistantManagerRefreshTasks.set(entryID, task);
+  try {
+    return await task;
+  } finally {
+    fantasyAssistantManagerRefreshTasks.delete(entryID);
+  }
+}
+
+function pollFantasyAssistantManagerEntries() {
+  const nowMs = Date.now();
+
+  fantasyAssistantManagerEntries.forEach((state, entryID) => {
+    const lastSeenAtMs = Date.parse(state && state.lastSeenAt);
+    if (
+      !Number.isFinite(lastSeenAtMs) ||
+      nowMs - lastSeenAtMs > FANTASY_ASSISTANT_MANAGER_ACTIVE_WATCH_WINDOW_MS
+    ) {
+      fantasyAssistantManagerEntries.delete(entryID);
+      fantasyAssistantManagerRefreshTasks.delete(entryID);
+      return;
+    }
+    if (fantasyAssistantManagerRefreshTasks.has(entryID)) return;
+
+    const lastRefreshCompletedAtMs = Date.parse(state && state.lastRefreshCompletedAt);
+    if (
+      Number.isFinite(lastRefreshCompletedAtMs) &&
+      nowMs - lastRefreshCompletedAtMs < FANTASY_ASSISTANT_MANAGER_POLL_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    void refreshFantasyAssistantManagerEntry(entryID, { trigger: "interval" }).catch((error) => {
+      console.warn(
+        `[FantasyAssistantManager] refresh failed entry_id=${entryID}:`,
+        error && error.message ? error.message : error
+      );
+    });
+  });
 }
 
 function buildPrometheusMetricsText() {
@@ -3618,6 +5131,58 @@ function loadFantasyLoadingMessages() {
   }
 
   return fantasyLoadingMessages;
+}
+
+function loadFantasyAssistantManagerPhrases() {
+  let stat = null;
+  try {
+    stat = fs.statSync(FANTASY_ASSISTANT_MANAGER_PHRASES_PATH);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      fantasyAssistantManagerPhrases = Object.freeze([]);
+      fantasyAssistantManagerPhrasesLoadedAt = new Date().toISOString();
+      fantasyAssistantManagerPhrasesMtimeMs = null;
+      console.warn(
+        `[FantasyAssistantPhrases] Phrase file not found at ${FANTASY_ASSISTANT_MANAGER_PHRASES_PATH}; using empty list.`
+      );
+      return fantasyAssistantManagerPhrases;
+    }
+    console.warn(
+      `[FantasyAssistantPhrases] Failed to stat phrase file: ${error.message || error}`
+    );
+    return fantasyAssistantManagerPhrases;
+  }
+
+  const mtimeMs = Number(stat && stat.mtimeMs);
+  if (Number.isFinite(mtimeMs) && fantasyAssistantManagerPhrasesMtimeMs === mtimeMs) {
+    return fantasyAssistantManagerPhrases;
+  }
+
+  try {
+    const raw = fs.readFileSync(FANTASY_ASSISTANT_MANAGER_PHRASES_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      throw new Error("Phrase file must be a JSON array.");
+    }
+
+    const next = parsed
+      .map((phrase) => String(phrase || "").trim())
+      .filter(Boolean);
+
+    fantasyAssistantManagerPhrases = Object.freeze(next);
+    fantasyAssistantManagerPhrasesLoadedAt = new Date().toISOString();
+    fantasyAssistantManagerPhrasesMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+    console.log(
+      `[FantasyAssistantPhrases] Loaded ${next.length} phrases from ${FANTASY_ASSISTANT_MANAGER_PHRASES_PATH}`
+    );
+  } catch (error) {
+    console.warn(
+      `[FantasyAssistantPhrases] Failed to load phrase file: ${error.message || error}`
+    );
+    fantasyAssistantManagerPhrasesMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+  }
+
+  return fantasyAssistantManagerPhrases;
 }
 
 function loadTeamColorsConfig() {
@@ -11821,6 +13386,19 @@ app.get(`${API_PREFIX}/fantasy/loading-messages`, (_req, res) => {
   });
 });
 
+app.get(`${API_PREFIX}/fantasy/assistant-manager/phrases`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+  const phrases = loadFantasyAssistantManagerPhrases();
+  if (fantasyAssistantManagerPhrasesLoadedAt) {
+    res.set("X-Last-Updated", fantasyAssistantManagerPhrasesLoadedAt);
+  }
+  res.set("X-Operational-Source", "filesystem_config");
+  res.json({
+    updated_at: fantasyAssistantManagerPhrasesLoadedAt,
+    phrases,
+  });
+});
+
 app.get(`${API_PREFIX}/team-colors`, (_req, res) => {
   setCacheOnlyHeaders(res);
   const payload = loadTeamColorsConfig();
@@ -12243,6 +13821,57 @@ app.get(`${API_PREFIX}/fantasy/transfers/recommendations/:elementId`, (req, res)
       FPL_TRANSFER_RECOMMENDATION_DURATION_BUCKETS
     );
   }
+});
+
+app.post(`${API_PREFIX}/fantasy/assistant-manager/:entryId/sync`, (req, res) => {
+  setFantasyBootstrapHeaders(res);
+
+  const entryID = parseFiniteNumber(req.params.entryId, 0);
+  if (!Number.isFinite(entryID) || entryID <= 0) {
+    res.status(400).json({
+      error: "Invalid entry ID. Use a positive integer manager entry ID.",
+    });
+    return;
+  }
+
+  touchFantasyAssistantEntry(entryID);
+  void refreshFantasyAssistantManagerEntry(entryID, { trigger: "sync" }).catch((error) => {
+    console.warn(
+      `[FantasyAssistantManager] sync failed entry_id=${entryID}:`,
+      error && error.message ? error.message : error
+    );
+  });
+
+  const response = buildFantasyAssistantManagerResponse(entryID);
+  res.status(response.ready ? 200 : 202).json(response);
+});
+
+app.get(`${API_PREFIX}/fantasy/assistant-manager/:entryId`, (req, res) => {
+  setFantasyBootstrapHeaders(res);
+
+  const entryID = parseFiniteNumber(req.params.entryId, 0);
+  if (!Number.isFinite(entryID) || entryID <= 0) {
+    res.status(400).json({
+      error: "Invalid entry ID. Use a positive integer manager entry ID.",
+    });
+    return;
+  }
+
+  touchFantasyAssistantEntry(entryID);
+  const response = buildFantasyAssistantManagerResponse(entryID);
+  if (!response.ready || response.stale) {
+    void refreshFantasyAssistantManagerEntry(entryID, {
+      trigger: response.ready ? "read_stale" : "read_warm",
+      force: !response.ready,
+    }).catch((error) => {
+      console.warn(
+        `[FantasyAssistantManager] read refresh failed entry_id=${entryID}:`,
+        error && error.message ? error.message : error
+      );
+    });
+  }
+
+  res.status(response.ready ? 200 : 202).json(response);
 });
 
 app.post(`${API_PREFIX}/audit/missing-team-logos`, (req, res) => {
@@ -15267,6 +16896,9 @@ if (shouldRunRuntime) {
   setInterval(() => {
     void updateFantasyFixtures({ trigger: "interval" });
   }, fantasyFixturesInterval);
+  setInterval(() => {
+    pollFantasyAssistantManagerEntries();
+  }, FANTASY_ASSISTANT_MANAGER_POLL_INTERVAL_MS);
   const matchDetailsPollInterval =
     Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
       ? MATCH_DETAILS_POLL_INTERVAL_MS

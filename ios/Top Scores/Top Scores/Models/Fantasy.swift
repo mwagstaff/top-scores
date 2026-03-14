@@ -489,6 +489,297 @@ struct FantasyLoadingMessagesResponse: Codable, Hashable {
     }
 }
 
+struct FantasyAssistantManagerPhrasesResponse: Codable, Hashable {
+    let updatedAt: String?
+    let phrases: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case updatedAt = "updated_at"
+        case phrases
+    }
+}
+
+struct FantasyAssistantManagerResponse: Codable, Hashable {
+    struct SyncStatus: Codable, Hashable {
+        let state: String?
+        let lastSeenAt: String?
+        let lastRefreshStartedAt: String?
+        let lastRefreshCompletedAt: String?
+        let lastRefreshTrigger: String?
+        let lastError: String?
+
+        enum CodingKeys: String, CodingKey {
+            case state
+            case lastSeenAt = "last_seen_at"
+            case lastRefreshStartedAt = "last_refresh_started_at"
+            case lastRefreshCompletedAt = "last_refresh_completed_at"
+            case lastRefreshTrigger = "last_refresh_trigger"
+            case lastError = "last_error"
+        }
+    }
+
+    struct SquadSummary: Codable, Hashable {
+        let playersCount: Int
+        let currentSquadValueMillions: Double
+        let reportedTeamValueMillions: Double
+        let bankMillions: Double
+        let effectiveBudgetMillions: Double
+        let teamValueCapMillions: Double
+        let transferOptionsConsidered: Int
+
+        enum CodingKeys: String, CodingKey {
+            case playersCount = "players_count"
+            case currentSquadValueMillions = "current_squad_value_millions"
+            case reportedTeamValueMillions = "reported_team_value_millions"
+            case bankMillions = "bank_millions"
+            case effectiveBudgetMillions = "effective_budget_millions"
+            case teamValueCapMillions = "team_value_cap_millions"
+            case transferOptionsConsidered = "transfer_options_considered"
+        }
+    }
+
+    struct TransferMove: Codable, Hashable, Identifiable {
+        let outElementID: Int
+        let outPlayerName: String
+        let outTeamName: String?
+        let outTeamShortName: String?
+        let outPriceMillions: Double
+        let inElementID: Int
+        let inPlayerName: String
+        let inTeamName: String?
+        let inTeamShortName: String?
+        let inPriceMillions: Double
+        let priceChangeMillions: Double
+        let projectedGainNextGameweek: Double
+        let projectedGainNext3Gameweeks: Double
+        let projectedScoreDelta: Double
+        let reasons: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case outElementID = "out_element_id"
+            case outPlayerName = "out_player_name"
+            case outTeamName = "out_team_name"
+            case outTeamShortName = "out_team_short_name"
+            case outPriceMillions = "out_price_millions"
+            case inElementID = "in_element_id"
+            case inPlayerName = "in_player_name"
+            case inTeamName = "in_team_name"
+            case inTeamShortName = "in_team_short_name"
+            case inPriceMillions = "in_price_millions"
+            case priceChangeMillions = "price_change_millions"
+            case projectedGainNextGameweek = "projected_gain_next_gameweek"
+            case projectedGainNext3Gameweeks = "projected_gain_next3_gameweeks"
+            case projectedScoreDelta = "projected_score_delta"
+            case reasons
+        }
+
+        var id: String {
+            "\(outElementID)-\(inElementID)"
+        }
+    }
+
+    struct TransferPlan: Codable, Hashable {
+        let title: String?
+        let summary: String?
+        let projectedGainNextGameweek: Double
+        let projectedGainNext3Gameweeks: Double
+        let projectedScoreDelta: Double
+        let reasons: [String]
+        let transfers: [TransferMove]
+
+        enum CodingKeys: String, CodingKey {
+            case title
+            case summary
+            case projectedGainNextGameweek = "projected_gain_next_gameweek"
+            case projectedGainNext3Gameweeks = "projected_gain_next3_gameweeks"
+            case projectedScoreDelta = "projected_score_delta"
+            case reasons
+            case transfers
+        }
+    }
+
+    struct CaptainRecommendation: Codable, Hashable, Identifiable {
+        let elementID: Int
+        let playerName: String
+        let teamShortName: String?
+        let opponentLabel: String
+        let availability: String
+        let expectedPointsNextGameweek: Double
+        let expectedPointsNext3Gameweeks: Double
+        let reasons: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case elementID = "element_id"
+            case playerName = "player_name"
+            case teamShortName = "team_short_name"
+            case opponentLabel = "opponent_label"
+            case availability
+            case expectedPointsNextGameweek = "expected_points_next_gameweek"
+            case expectedPointsNext3Gameweeks = "expected_points_next3_gameweeks"
+            case reasons
+        }
+
+        var id: Int {
+            elementID
+        }
+    }
+
+    struct CaptainRecommendations: Codable, Hashable {
+        let summary: String?
+        let captain: [CaptainRecommendation]
+        let viceCaptain: [CaptainRecommendation]
+
+        enum CodingKeys: String, CodingKey {
+            case summary
+            case captain
+            case viceCaptain = "vice_captain"
+        }
+    }
+
+    struct IdealSquadPlayer: Codable, Hashable, Identifiable {
+        let elementID: Int
+        let pickPosition: Int
+        let playerName: String
+        let teamID: Int
+        let teamName: String
+        let teamShortName: String?
+        let positionID: Int
+        let position: String
+        let nowCostMillions: Double
+        let expectedPointsNextGameweek: Double
+        let expectedPointsNext3Gameweeks: Double
+        let assistantRankScore: Double
+        let rawPoints: Int
+        let appliedPoints: Int
+        let multiplier: Int
+        let isCaptain: Bool
+        let isViceCaptain: Bool
+        let isPlayingNow: Bool
+        let isUnavailable: Bool
+        let isDefinitelyUnavailable: Bool
+        let hasAnyFixtureThisGameweek: Bool
+        let hasUpcomingFixtureThisGameweek: Bool
+        let hasActiveFixtureThisGameweek: Bool
+        let hasFutureAvailabilityIssue: Bool
+        let futureAvailabilityIssueGameweek: Int?
+        let minutesPlayed: Int
+        let upcomingOpponentDisplay: String?
+        let goalsScored: Int
+        let assists: Int
+        let yellowCards: Int
+        let redCards: Int
+
+        enum CodingKeys: String, CodingKey {
+            case elementID = "element_id"
+            case pickPosition = "pick_position"
+            case playerName = "player_name"
+            case teamID = "team_id"
+            case teamName = "team_name"
+            case teamShortName = "team_short_name"
+            case positionID = "position_id"
+            case position
+            case nowCostMillions = "now_cost_millions"
+            case expectedPointsNextGameweek = "expected_points_next_gameweek"
+            case expectedPointsNext3Gameweeks = "expected_points_next3_gameweeks"
+            case assistantRankScore = "assistant_rank_score"
+            case rawPoints = "raw_points"
+            case appliedPoints = "applied_points"
+            case multiplier
+            case isCaptain = "is_captain"
+            case isViceCaptain = "is_vice_captain"
+            case isPlayingNow = "is_playing_now"
+            case isUnavailable = "is_unavailable"
+            case isDefinitelyUnavailable = "is_definitely_unavailable"
+            case hasAnyFixtureThisGameweek = "has_any_fixture_this_gameweek"
+            case hasUpcomingFixtureThisGameweek = "has_upcoming_fixture_this_gameweek"
+            case hasActiveFixtureThisGameweek = "has_active_fixture_this_gameweek"
+            case hasFutureAvailabilityIssue = "has_future_availability_issue"
+            case futureAvailabilityIssueGameweek = "future_availability_issue_gameweek"
+            case minutesPlayed = "minutes_played"
+            case upcomingOpponentDisplay = "upcoming_opponent_display"
+            case goalsScored = "goals_scored"
+            case assists
+            case yellowCards = "yellow_cards"
+            case redCards = "red_cards"
+        }
+
+        var id: Int { elementID }
+    }
+
+    struct IdealSquadStarters: Codable, Hashable {
+        let goalkeepers: [IdealSquadPlayer]
+        let defenders: [IdealSquadPlayer]
+        let midfielders: [IdealSquadPlayer]
+        let forwards: [IdealSquadPlayer]
+    }
+
+    struct IdealSquad: Codable, Hashable {
+        let title: String?
+        let summary: String?
+        let formation: String?
+        let totalValueMillions: Double
+        let expectedPointsNextGameweek: Double
+        let displayedTotalPoints: Int
+        let displayedBenchPoints: Int
+        let hasActiveFixtures: Bool
+        let hasStartedFixturesInGameweek: Bool
+        let hasFixturesPlayedToday: Bool
+        let starters: IdealSquadStarters
+        let bench: [IdealSquadPlayer]
+
+        enum CodingKeys: String, CodingKey {
+            case title
+            case summary
+            case formation
+            case totalValueMillions = "total_value_millions"
+            case expectedPointsNextGameweek = "expected_points_next_gameweek"
+            case displayedTotalPoints = "displayed_total_points"
+            case displayedBenchPoints = "displayed_bench_points"
+            case hasActiveFixtures = "has_active_fixtures"
+            case hasStartedFixturesInGameweek = "has_started_fixtures_in_gameweek"
+            case hasFixturesPlayedToday = "has_fixtures_played_today"
+            case starters
+            case bench
+        }
+    }
+
+    let entryID: Int
+    let currentEventID: Int?
+    let currentEventName: String?
+    let ready: Bool
+    let stale: Bool?
+    let source: String?
+    let generatedAt: String?
+    let algorithmSummary: String?
+    let squadSummary: SquadSummary?
+    let topSingleTransfer: TransferPlan?
+    let topDoubleTransfers: TransferPlan?
+    let topTripleTransfers: TransferPlan?
+    let moneyNoObjectTransfers: TransferPlan?
+    let idealSquad: IdealSquad?
+    let captainRecommendations: CaptainRecommendations?
+    let syncStatus: SyncStatus?
+
+    enum CodingKeys: String, CodingKey {
+        case entryID = "entry_id"
+        case currentEventID = "current_event_id"
+        case currentEventName = "current_event_name"
+        case ready
+        case stale
+        case source
+        case generatedAt = "generated_at"
+        case algorithmSummary = "algorithm_summary"
+        case squadSummary = "squad_summary"
+        case topSingleTransfer = "top_single_transfer"
+        case topDoubleTransfers = "top_double_transfers"
+        case topTripleTransfers = "top_triple_transfers"
+        case moneyNoObjectTransfers = "money_no_object_transfers"
+        case idealSquad = "ideal_squad"
+        case captainRecommendations = "captain_recommendations"
+        case syncStatus = "sync_status"
+    }
+}
+
 struct FantasyTransferRecommendationsResponse: Codable, Hashable {
     struct Criteria: Codable, Hashable {
         let elementID: Int

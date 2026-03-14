@@ -12,6 +12,7 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var trackedLeagueStandings: [FantasyTrackedLeagueStanding] = []
     @Published private(set) var myProfile: FantasyEntryProfile?
     @Published private(set) var lastUpdated: Date?
+    @Published private(set) var assistantManagerPreview: FantasyAssistantManagerResponse?
     @Published var errorMessage: String?
 
     private let fantasyPublicClient = FantasyPublicAPIClient()
@@ -21,6 +22,10 @@ final class FantasyViewModel: ObservableObject {
     private let bootstrapCacheTTL: TimeInterval = 12 * 60 * 60
     private var cachedTransferRecommendations: [String: (payload: FantasyTransferRecommendationsResponse, fetchedAt: Date)] = [:]
     private let transferRecommendationsCacheTTL: TimeInterval = 10 * 60
+    private var cachedAssistantManagerResponses: [String: (payload: FantasyAssistantManagerResponse, fetchedAt: Date)] = [:]
+    private let assistantManagerCacheTTL: TimeInterval = 60
+    private var assistantManagerSyncStartedAtByKey: [String: Date] = [:]
+    private let assistantManagerSyncCooldown: TimeInterval = 20
     private var cachedPlayerDetailsBootstrap: FantasyBootstrapLookup?
     private var cachedPlayerDetailsBootstrapFetchedAt: Date?
     private let playerDetailsBootstrapCacheTTL: TimeInterval = 6 * 60 * 60
@@ -38,11 +43,14 @@ final class FantasyViewModel: ObservableObject {
         trackedLeagueStandings = []
         myProfile = nil
         lastUpdated = nil
+        assistantManagerPreview = nil
         errorMessage = nil
         cachedBootstrapLookup = nil
         cachedBootstrapFetchedAt = nil
         cachedBootstrapBaseURL = nil
         cachedTransferRecommendations = [:]
+        cachedAssistantManagerResponses = [:]
+        assistantManagerSyncStartedAtByKey = [:]
         cachedPlayerDetailsBootstrap = nil
         cachedPlayerDetailsBootstrapFetchedAt = nil
         cachedSeasonFixtures = []
@@ -168,6 +176,12 @@ final class FantasyViewModel: ObservableObject {
             }
             lastUpdated = Date()
             errorMessage = nil
+            Task {
+                await self.prewarmAssistantManagerCache(
+                    entryID: entryID,
+                    apiBaseURL: apiBaseURL
+                )
+            }
             let totalDurationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
             logPerf("refresh_complete entry_id=\(entryID) rivals_loaded=\(rivalSquads.count) duration_ms=\(Int(totalDurationMs))")
         } catch {
@@ -254,6 +268,69 @@ final class FantasyViewModel: ObservableObject {
         }
         cachedTransferRecommendations[cacheKey] = (payload: response, fetchedAt: now)
         return response
+    }
+
+    func fetchAssistantManager(
+        entryID: Int,
+        apiBaseURL: String,
+        forceRefresh: Bool = false
+    ) async throws -> FantasyAssistantManagerResponse {
+        guard let baseURL = URL(string: apiBaseURL) else {
+            throw FantasyPublicAPIError.invalidURL
+        }
+
+        let cacheKey = "\(baseURL.absoluteString)|assistant|\(entryID)"
+        let now = Date()
+        if !forceRefresh,
+           let cached = cachedAssistantManagerResponses[cacheKey],
+           now.timeIntervalSince(cached.fetchedAt) < assistantManagerCacheTTL {
+            let age = Int(now.timeIntervalSince(cached.fetchedAt))
+            logPerf("assistant_manager_cache_hit entry_id=\(entryID) age_s=\(age)")
+            return cached.payload
+        }
+
+        let serverClient = APIClient(baseURL: baseURL)
+        let response = try await timed("assistant_manager entry_id=\(entryID)") {
+            try await serverClient.fetchFantasyAssistantManager(entryID: entryID)
+        }
+        if response.ready {
+            cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: now)
+            assistantManagerPreview = response
+        } else {
+            cachedAssistantManagerResponses.removeValue(forKey: cacheKey)
+        }
+        return response
+    }
+
+    func prewarmAssistantManagerCache(
+        entryID: Int,
+        apiBaseURL: String,
+        force: Bool = false
+    ) async {
+        guard let baseURL = URL(string: apiBaseURL) else { return }
+
+        let cacheKey = "\(baseURL.absoluteString)|assistant|\(entryID)"
+        let now = Date()
+        if !force,
+           let startedAt = assistantManagerSyncStartedAtByKey[cacheKey],
+           now.timeIntervalSince(startedAt) < assistantManagerSyncCooldown {
+            return
+        }
+
+        assistantManagerSyncStartedAtByKey[cacheKey] = now
+        let serverClient = APIClient(baseURL: baseURL)
+
+        do {
+            let response = try await timed("assistant_manager_sync entry_id=\(entryID)") {
+                try await serverClient.syncFantasyAssistantManager(entryID: entryID)
+            }
+            if response.ready {
+                cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: Date())
+                assistantManagerPreview = response
+            }
+        } catch {
+            logPerf("assistant_manager_sync_failed entry_id=\(entryID) error=\"\(error.localizedDescription)\"")
+        }
     }
 
     private func fetchPlayerDetailsBootstrapLookup(apiBaseURL: String) async throws -> FantasyBootstrapLookup {
