@@ -46,6 +46,7 @@ final class LiveActivitySyncService {
     private var activityUpdatesTask: Task<Void, Never>?
     private var observedActivityIDs = Set<String>()
     private var activityPushTokenTasks: [String: Task<Void, Never>] = [:]
+    private var activityContentTasks: [String: Task<Void, Never>] = [:]
     private var activityStateTasks: [String: Task<Void, Never>] = [:]
 
     private init() {}
@@ -71,6 +72,10 @@ final class LiveActivitySyncService {
         }
 
         if #available(iOS 16.1, *) {
+            NSLog(
+                "[LiveActivitySync] Existing ActivityKit activities on start: %d",
+                Activity<TopScoresLiveActivityAttributes>.activities.count
+            )
             for activity in Activity<TopScoresLiveActivityAttributes>.activities {
                 beginObserving(activity)
             }
@@ -115,15 +120,56 @@ final class LiveActivitySyncService {
         observedActivityIDs.insert(activityID)
         lock.unlock()
 
+        NSLog(
+            "[LiveActivitySync] Begin observing activity %@ state=%@ %@",
+            activityID,
+            String(describing: activity.activityState),
+            Self.contentStateSummary(activity.contentState)
+        )
+
+        if let tokenData = activity.pushToken {
+            NSLog(
+                "[LiveActivitySync] Existing activity push token %@ token=%@",
+                activityID,
+                Self.shortHex(tokenData)
+            )
+        }
+
         let pushTokenTask = Task(priority: .background) {
             for await tokenData in activity.pushTokenUpdates {
+                NSLog(
+                    "[LiveActivitySync] Activity push token update %@ token=%@",
+                    activityID,
+                    Self.shortHex(tokenData)
+                )
                 await self.uploadActivityPushToken(activityID: activityID, tokenData: tokenData)
             }
+        }
+
+        let contentTask: Task<Void, Never>?
+        if #available(iOS 16.2, *) {
+            contentTask = Task(priority: .background) {
+                for await content in activity.contentUpdates {
+                    NSLog(
+                        "[LiveActivitySync] Activity content update %@ staleDate=%@ %@",
+                        activityID,
+                        content.staleDate?.description ?? "nil",
+                        Self.contentStateSummary(content.state)
+                    )
+                }
+            }
+        } else {
+            contentTask = nil
         }
 
         let stateTask = Task(priority: .background) {
             var ended = false
             for await state in activity.activityStateUpdates {
+                NSLog(
+                    "[LiveActivitySync] Activity state update %@ state=%@",
+                    activityID,
+                    String(describing: state)
+                )
                 if state == .ended {
                     ended = true
                     await self.uploadActivityEnded(activityID: activityID)
@@ -138,6 +184,9 @@ final class LiveActivitySyncService {
 
         lock.lock()
         activityPushTokenTasks[activityID] = pushTokenTask
+        if let contentTask {
+            activityContentTasks[activityID] = contentTask
+        }
         activityStateTasks[activityID] = stateTask
         lock.unlock()
     }
@@ -145,11 +194,13 @@ final class LiveActivitySyncService {
     private func stopObserving(activityID: String, cancelStateTask: Bool) {
         lock.lock()
         let pushTask = activityPushTokenTasks.removeValue(forKey: activityID)
+        let contentTask = activityContentTasks.removeValue(forKey: activityID)
         let stateTask = activityStateTasks.removeValue(forKey: activityID)
         observedActivityIDs.remove(activityID)
         lock.unlock()
 
         pushTask?.cancel()
+        contentTask?.cancel()
         if cancelStateTask {
             stateTask?.cancel()
         }
@@ -168,11 +219,11 @@ final class LiveActivitySyncService {
         } else {
             for activity in activeActivities {
                 NSLog(
-                    "[LiveActivitySync] Foreground reconcile active activity %@ mode=%@ matches=%d generatedAt=%d",
+                    "[LiveActivitySync] Foreground reconcile active activity %@ state=%@ tokenPresent=%d %@",
                     activity.id,
-                    activity.contentState.mode,
-                    activity.contentState.matches.count,
-                    activity.contentState.generatedAtEpochSeconds
+                    String(describing: activity.activityState),
+                    activity.pushToken == nil ? 0 : 1,
+                    Self.contentStateSummary(activity.contentState)
                 )
                 if let tokenData = activity.pushToken {
                     await uploadActivityPushToken(activityID: activity.id, tokenData: tokenData)
@@ -180,6 +231,7 @@ final class LiveActivitySyncService {
             }
         }
         await requestLiveActivityReconcile()
+        await fetchServerDebugState()
     }
 
     @available(iOS 16.1, *)
@@ -253,6 +305,45 @@ final class LiveActivitySyncService {
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "live-activity-reconcile")
     }
 
+    private func fetchServerDebugState() async {
+        guard var endpoint = endpointURL(path: "live-activity/test/state") else { return }
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "userDeviceToken", value: DeviceIdentity.currentToken)]
+        if let url = components?.url {
+            endpoint = url
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        DeviceIdentity.applyHeader(to: &request)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                NSLog("[LiveActivitySync] live-activity-test-state failed: invalid response type")
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                let body = String(data: data, encoding: .utf8) ?? "No response body"
+                NSLog("[LiveActivitySync] live-activity-test-state failed: HTTP %d - %@", httpResponse.statusCode, body)
+                return
+            }
+            guard
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                NSLog("[LiveActivitySync] live-activity-test-state failed: invalid JSON")
+                return
+            }
+            NSLog(
+                "[LiveActivitySync] Server debug state %@",
+                Self.serverDebugSummary(json)
+            )
+        } catch {
+            NSLog("[LiveActivitySync] live-activity-test-state failed: %@", error.localizedDescription)
+        }
+    }
+
     private func endpointURL(path: String) -> URL? {
         let snapshot = PreferencesStore.loadSnapshot()
         guard let baseURL = URL(string: snapshot.apiBaseURL) else {
@@ -282,6 +373,7 @@ final class LiveActivitySyncService {
                 NSLog("[LiveActivitySync] %@ failed: HTTP %d - %@", logContext, httpResponse.statusCode, body)
                 return
             }
+            NSLog("[LiveActivitySync] %@ succeeded: HTTP %d", logContext, httpResponse.statusCode)
         } catch {
             NSLog("[LiveActivitySync] %@ failed: %@", logContext, error.localizedDescription)
         }
@@ -289,6 +381,42 @@ final class LiveActivitySyncService {
 
     private static func hexString(from data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func shortHex(_ data: Data) -> String {
+        String(hexString(from: data).prefix(16))
+    }
+
+    private static func contentStateSummary(_ state: TopScoresLiveActivityAttributes.ContentState) -> String {
+        let matches = state.matches.prefix(4).map { match in
+            let score: String
+            if let home = match.homeScore, let away = match.awayScore {
+                score = "\(home)-\(away)"
+            } else {
+                score = "nil"
+            }
+            return "\(match.homeTeam) v \(match.awayTeam) \(score) \(match.matchTime ?? "nil")"
+        }.joined(separator: " | ")
+        return "mode=\(state.mode) generatedAt=\(state.generatedAtEpochSeconds) delay=\(state.delayMinutes) matches=\(state.matches.count) [\(matches)]"
+    }
+
+    private static func serverDebugSummary(_ json: [String: Any]) -> String {
+        let liveActivity = json["liveActivity"] as? [String: Any]
+        let serverPresentation = json["serverPresentation"] as? [String: Any]
+        let currentActivityId = String(describing: liveActivity?["currentActivityId"] ?? "nil")
+        let lastDispatchAt = String(describing: liveActivity?["lastDispatchAt"] ?? "nil")
+        let currentActivityTokenUpdatedAt = String(describing: liveActivity?["currentActivityTokenUpdatedAt"] ?? "nil")
+        let mode = String(describing: serverPresentation?["mode"] ?? "nil")
+        let delayMinutes = String(describing: serverPresentation?["delayMinutes"] ?? "nil")
+        let matches = (serverPresentation?["matches"] as? [[String: Any]] ?? []).prefix(4).map { match in
+            let homeTeam = String(describing: match["homeTeam"] ?? "")
+            let awayTeam = String(describing: match["awayTeam"] ?? "")
+            let homeScore = String(describing: match["homeScore"] ?? "nil")
+            let awayScore = String(describing: match["awayScore"] ?? "nil")
+            let matchTime = String(describing: match["matchTime"] ?? "nil")
+            return "\(homeTeam) v \(awayTeam) \(homeScore)-\(awayScore) \(matchTime)"
+        }.joined(separator: " | ")
+        return "activityId=\(currentActivityId) tokenUpdatedAt=\(currentActivityTokenUpdatedAt) lastDispatchAt=\(lastDispatchAt) serverMode=\(mode) delay=\(delayMinutes) matches=[\(matches)]"
     }
 }
 #else

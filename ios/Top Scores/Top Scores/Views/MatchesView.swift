@@ -62,6 +62,7 @@ enum MatchesViewMode: String {
 
 struct MatchesView: View {
     let mode: MatchesViewMode
+    var isSelected: Bool = true
 
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var matchesStore: MatchesStore
@@ -160,6 +161,18 @@ struct MatchesView: View {
             }
         }
         .onAppear {
+            guard isSelected else { return }
+            let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+            matchesStore.configure(with: snapshot, mode: mode)
+            let days = matchesStore.groupedMatches
+            rebuildSearchIndex(from: days)
+            ensureFantasySquadLoadedIfNeeded()
+            reportMissingTeamLogosIfNeeded(days: days)
+            predictionDateKeys = FixturePredictionStore.storedDateKeys()
+            refreshPredictorAvailability(days: days)
+        }
+        .onChange(of: isSelected) { _, selected in
+            guard selected else { return }
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             matchesStore.configure(with: snapshot, mode: mode)
             let days = matchesStore.groupedMatches
@@ -170,12 +183,14 @@ struct MatchesView: View {
             refreshPredictorAvailability(days: days)
         }
         .onChange(of: preferences.snapshot) { _, _ in
+            guard isSelected else { return }
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             matchesStore.configure(with: snapshot, mode: mode)
             ensureFantasySquadLoadedIfNeeded()
             refreshPredictorAvailability(days: matchesStore.groupedMatches)
         }
         .onChange(of: preferences.showAllMatches) { _, newValue in
+            guard isSelected else { return }
             let snapshot = newValue ? preferences.unfilteredSnapshot : preferences.snapshot
             matchesStore.configure(with: snapshot, mode: mode)
             toastMessage = newValue ? "Viewing all matches (unfiltered)" : "Viewing preferred matches only"

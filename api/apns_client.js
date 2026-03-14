@@ -8,6 +8,7 @@ const APNS_TEAM_ID = "SJ8X4DLAN9";
 const APNS_KEY_PATH = path.join(__dirname, "certs", "APNS_AuthKey_SkyNoLimit_SandboxAndProd.p8");
 const APNS_TOPIC = "topscores.dev.skynolimit";
 const APNS_LIVE_ACTIVITY_TOPIC = `${APNS_TOPIC}.push-type.liveactivity`;
+const APNS_SEND_TIMEOUT_MS = 15 * 1000;
 
 // Validate that the APNS key file exists
 if (!fs.existsSync(APNS_KEY_PATH)) {
@@ -81,6 +82,25 @@ function lowerText(value) {
   return String(value || "").toLowerCase();
 }
 
+function withTimeout(promise, timeoutMs, label) {
+  const durationMs = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Number(timeoutMs)) : APNS_SEND_TIMEOUT_MS;
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    }),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        timer = null;
+        reject(new Error(`${label || "operation"} timed out after ${durationMs}ms`));
+      }, durationMs);
+    }),
+  ]);
+}
+
 function isRetriableTransportError(errorLike) {
   const aggregate = [
     errorLike && errorLike.code ? String(errorLike.code) : "",
@@ -139,7 +159,11 @@ async function sendWithSingleRetry({ isDevelopmentBuild, sendOperation, contextL
     const provider = getProvider(isDevelopmentBuild);
 
     try {
-      const result = await sendOperation(provider);
+      const result = await withTimeout(
+        sendOperation(provider),
+        APNS_SEND_TIMEOUT_MS,
+        `${contextLabel} (${environment})`
+      );
       const failure = extractFailure(result);
       if (!failure) {
         return { success: true, result };

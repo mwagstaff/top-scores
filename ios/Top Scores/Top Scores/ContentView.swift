@@ -14,12 +14,12 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { proxy in
             TabView(selection: $selectedTab) {
-                MatchesView(mode: .fixtures)
+                MatchesView(mode: .fixtures, isSelected: selectedTab == 0)
                     .tabItem {
                         Label("Fixtures", systemImage: "calendar")
                     }
                     .tag(0)
-                MatchesView(mode: .results)
+                MatchesView(mode: .results, isSelected: selectedTab == 1)
                     .tabItem {
                         Label("Results", systemImage: "clock.arrow.circlepath")
                     }

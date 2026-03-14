@@ -829,14 +829,38 @@ enum MatchStatusFormatter {
         if let currentMinute, let incomingMinute {
             return incomingMinute >= currentMinute ? incomingStatus : currentStatus
         }
-        if currentMinute != nil && incomingMinute == nil {
-            return currentStatus
-        }
-        if incomingMinute != nil && currentMinute == nil {
+        if currentMinute != nil || incomingMinute != nil {
+            if let incomingMinute {
+                if currentStatus == "LIVE" {
+                    return incomingStatus
+                }
+                if currentStatus == "HT", isFirstHalfMinuteStatus(incomingStatus) {
+                    return currentStatus
+                }
+                if currentStatus == "ET", incomingMinute <= 90 {
+                    return currentStatus
+                }
+                return incomingStatus
+            }
+
+            if incomingStatus == "LIVE" {
+                return currentStatus
+            }
+            if incomingStatus == "HT", !isFirstHalfMinuteStatus(currentStatus) {
+                return currentStatus
+            }
+            if incomingStatus == "ET" || isPenaltyShootoutStatus(incomingStatus) {
+                return incomingStatus
+            }
             return incomingStatus
         }
 
         return incomingStatus
+    }
+
+    static func prefersIncomingStatus(current: String?, incoming: String?) -> Bool {
+        guard let incomingStatus = normalizedStatus(incoming) else { return false }
+        return preferredStatus(current: current, incoming: incoming) == incomingStatus
     }
 
     static func stabilizedStatus(
@@ -886,11 +910,22 @@ enum MatchStatusFormatter {
         status.range(of: minutePattern, options: .regularExpression) != nil
     }
 
-    private static func normalizedStatus(_ value: String?) -> String? {
+    static func normalizedStatus(_ value: String?) -> String? {
         guard let value = trimmedStatus(value) else {
             return nil
         }
         return value.uppercased()
+    }
+
+    private static func isFirstHalfMinuteStatus(_ status: String) -> Bool {
+        guard let minute = parseMatchTimeMinutes(status) else { return false }
+        let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isMinuteStatus(trimmed) else { return false }
+        return minute <= 45
+    }
+
+    private static func isPenaltyShootoutStatus(_ status: String) -> Bool {
+        status == "PENS" || status == "PEN" || status == "PEN."
     }
 
     private static func trimmedStatus(_ value: String?) -> String? {

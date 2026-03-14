@@ -17,6 +17,7 @@ const POLL_INTERVAL_MS = 10 * 1000; // Poll every 10 seconds for monitored match
 const DAILY_MATCHES_CHECK_INTERVAL_MS = 15 * 1000; // Check for today's matches every 15 seconds
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Clean up every 5 minutes
 const UPCOMING_MONITOR_WINDOW_MS = 15 * 60 * 1000;
+const RECENT_KICKOFF_PENDING_GRACE_MS = 20 * 60 * 1000;
 const MAX_MONITOR_DURATION_MS = 6 * 60 * 60 * 1000; // Keep monitoring up to 6h after kickoff
 const NOTIFICATION_DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000; // Keep event dedupe for a full match window
 const KICKOFF_STATUS_MINUTE_THRESHOLD = 15; // Ignore kickoff if first seen too late in the match
@@ -32,6 +33,7 @@ const MONITOR_DIAGNOSTICS_RECENT_LIMIT = 300; // Keep a rolling in-memory diagno
 const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG !== "0";
 const LIVE_ACTIVITY_EVAL_INTERVAL_MS = 15 * 1000;
 const LIVE_ACTIVITY_NON_SCORE_UPDATE_MIN_INTERVAL_MS = 60 * 1000;
+const LIVE_ACTIVITY_EVAL_STALL_TIMEOUT_MS = 30 * 1000;
 const LIVE_ACTIVITY_STARTUP_KICK_DELAYS_MS = [0, 3000, 9000];
 // Keep server payloads aligned with the widget's 8 visible live-activity slots.
 const LIVE_ACTIVITY_MAX_MATCHES = 8;
@@ -757,6 +759,14 @@ function evaluateMatchRelevance(match, nowMs = Date.now()) {
     return {
       relevant: true,
       reason: "upcoming_window",
+      kickoff_delta_ms: diffMs,
+    };
+  }
+
+  if (diffMs <= 0 && Math.abs(diffMs) <= RECENT_KICKOFF_PENDING_GRACE_MS) {
+    return {
+      relevant: true,
+      reason: "recent_kickoff_grace",
       kickoff_delta_ms: diffMs,
     };
   }
@@ -1875,6 +1885,7 @@ let dailyMatchesCheckTimer = null;
 let cleanupTimer = null;
 let liveActivityEvalTimer = null;
 let liveActivityEvalInFlight = false;
+let liveActivityEvalStartedAtMs = 0;
 let dailyMatchesCheckInFlight = false;
 let liveActivityStartupKickTimers = [];
 let apiBaseURL = "http://localhost:3000/api/v1";
@@ -1974,6 +1985,8 @@ function stopMonitoring() {
   isMonitoring = false;
   console.log("[MatchMonitor] Stopping match monitoring");
   clearStartupLiveActivityKickTimers();
+  liveActivityEvalInFlight = false;
+  liveActivityEvalStartedAtMs = 0;
 
   if (dailyMatchesCheckTimer) {
     clearInterval(dailyMatchesCheckTimer);
@@ -3374,10 +3387,20 @@ function liveActivityDelayMinutesFromPreferences(prefs) {
   return Math.max(0, Number(prefs.notificationDelayMinutes || 0));
 }
 
-function liveActivityModeForMatches(liveMatches, finishedMatches, upcomingMatches) {
-  const liveAndFinishedCount = liveMatches.length + finishedMatches.length;
-  if (liveAndFinishedCount > 1) return liveMatches.length > 0 ? "multi_live" : "multi_finished";
-  if (liveAndFinishedCount === 1) return liveMatches.length > 0 ? "single_live" : "single_finished";
+function liveActivityModeForMatches(
+  liveMatches,
+  finishedMatches,
+  recentKickoffMatches,
+  upcomingMatches
+) {
+  if (liveMatches.length > 0) {
+    const liveAndFinishedCount = liveMatches.length + finishedMatches.length;
+    return liveAndFinishedCount > 1 ? "multi_live" : "single_live";
+  }
+  if (recentKickoffMatches.length > 1) return "multi_upcoming";
+  if (recentKickoffMatches.length === 1) return "single_upcoming";
+  if (finishedMatches.length > 1) return "multi_finished";
+  if (finishedMatches.length === 1) return "single_finished";
   if (upcomingMatches.length > 1) return "multi_upcoming";
   if (upcomingMatches.length === 1) return "single_upcoming";
   return null;
@@ -3571,32 +3594,75 @@ async function persistLiveActivityPatch(user, patch = {}) {
   }
 }
 
-function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = false, options = {}) {
-  if (forceDispatch) return false;
+function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false, options = {}) {
+  if (forceDispatch) return null;
   if (state.lastPayloadHash === payloadHash && state.lastMode === mode) {
-    return true;
+    return "identical_payload";
   }
   if (state.lastMode !== mode) {
-    return false;
+    return null;
   }
   if (!isLiveActivityLiveMode(mode)) {
-    return false;
+    return null;
   }
 
   const scoreHash =
     options && Object.prototype.hasOwnProperty.call(options, "scoreHash") ? options.scoreHash : null;
   if (scoreHash && state.lastScoreHash !== scoreHash) {
-    return false;
+    return null;
   }
 
   const nowMs =
     options && Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const lastDispatchAtMs = parseLiveActivityDispatchTimeMs(state);
   if (lastDispatchAtMs === null) {
-    return false;
+    return null;
   }
 
-  return nowMs - lastDispatchAtMs < LIVE_ACTIVITY_NON_SCORE_UPDATE_MIN_INTERVAL_MS;
+  if (nowMs - lastDispatchAtMs < LIVE_ACTIVITY_NON_SCORE_UPDATE_MIN_INTERVAL_MS) {
+    return "non_score_throttle";
+  }
+
+  return null;
+}
+
+function logLiveActivitySkipDiagnostics(user, presentation, contentState, state, reason, options = {}) {
+  if (!reason) return;
+  const payloadHash = options && options.payloadHash ? String(options.payloadHash) : null;
+  const scoreHash = options && options.scoreHash ? String(options.scoreHash) : null;
+  const nowMs =
+    options && Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const lastDispatchAtMs = parseLiveActivityDispatchTimeMs(state);
+  const diagnostics = {
+    user_device_short: shortDeviceToken(user && user.deviceToken),
+    reason,
+    mode: presentation && presentation.mode ? presentation.mode : null,
+    payload_hash_prefix: payloadHash ? payloadHash.slice(0, 12) : null,
+    score_hash_prefix: scoreHash ? scoreHash.slice(0, 12) : null,
+    previous_payload_hash_prefix:
+      state && state.lastPayloadHash ? String(state.lastPayloadHash).slice(0, 12) : null,
+    previous_score_hash_prefix:
+      state && state.lastScoreHash ? String(state.lastScoreHash).slice(0, 12) : null,
+    last_mode: state && state.lastMode ? String(state.lastMode) : null,
+    last_dispatch_at: state && state.lastDispatchAt ? String(state.lastDispatchAt) : null,
+    seconds_since_last_dispatch:
+      lastDispatchAtMs === null ? null : Math.max(0, Math.round((nowMs - lastDispatchAtMs) / 1000)),
+    matches: Array.isArray(contentState && contentState.matches)
+      ? contentState.matches.map((match) => ({
+        match_id: String(match && match.matchId ? match.matchId : ""),
+        score:
+          Number.isFinite(match && match.homeScore) && Number.isFinite(match && match.awayScore)
+            ? `${match.homeScore}-${match.awayScore}`
+            : null,
+        status: match && match.matchTime ? String(match.matchTime) : null,
+      }))
+      : [],
+  };
+  console.log(`[MatchMonitor] Live Activity skip ${JSON.stringify(diagnostics)}`);
+}
+
+function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = false, options = {}) {
+  return liveActivitySkipReason(state, payloadHash, mode, forceDispatch, options) !== null;
 }
 
 function shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, options = {}) {
@@ -3623,9 +3689,25 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
 
   if (!shouldDisplay) {
     if (shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, { preserveExistingOnEmpty })) {
+      console.log(
+        `[MatchMonitor] Live Activity preserve existing on empty ${JSON.stringify({
+          user_device_short: shortDeviceToken(user && user.deviceToken),
+          reason: "preserve_existing_on_empty",
+          activity_token_present: Boolean(activityPushToken),
+          pending_start: hasPendingStart,
+          mode: presentation && presentation.mode ? presentation.mode : null,
+        })}`
+      );
       return;
     }
     if (isTestHoldActive) {
+      console.log(
+        `[MatchMonitor] Live Activity hold active ${JSON.stringify({
+          user_device_short: shortDeviceToken(user && user.deviceToken),
+          reason: "test_hold_active",
+          hold_until: state && state.testHoldUntil ? String(state.testHoldUntil) : null,
+        })}`
+      );
       return;
     }
     if (hasPendingStart) {
@@ -3690,12 +3772,16 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const scoreHash = buildLiveActivityScoreHash(contentState);
 
   if (activityPushToken) {
-    if (
-      shouldSkipLiveActivityUpdate(state, payloadHash, presentation.mode, forceDispatch, {
+    const skipReason = liveActivitySkipReason(state, payloadHash, presentation.mode, forceDispatch, {
+      scoreHash,
+      nowMs,
+    });
+    if (skipReason) {
+      logLiveActivitySkipDiagnostics(user, presentation, contentState, state, skipReason, {
+        payloadHash,
         scoreHash,
         nowMs,
-      })
-    ) {
+      });
       return;
     }
     logLiveActivityPayloadDiagnostics(user, "update", presentation, contentState, nowMs, payloadHash);
@@ -3741,6 +3827,14 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   if (!pushToStartToken) return;
   if (hasPendingStart && pendingAgeMs < LIVE_ACTIVITY_PENDING_MAX_MS) {
     // A start push already succeeded; wait for activity push token from app and avoid duplicate starts.
+    console.log(
+      `[MatchMonitor] Live Activity pending start wait ${JSON.stringify({
+        user_device_short: shortDeviceToken(user && user.deviceToken),
+        reason: "pending_start_wait",
+        pending_age_seconds: Math.max(0, Math.round(pendingAgeMs / 1000)),
+        pending_max_seconds: Math.round(LIVE_ACTIVITY_PENDING_MAX_MS / 1000),
+      })}`
+    );
     return;
   }
   if (hasPendingStart && pendingAgeMs >= LIVE_ACTIVITY_PENDING_MAX_MS) {
@@ -3833,6 +3927,7 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
 
   const liveMatches = [];
   const finishedMatches = [];
+  const recentKickoffMatches = [];
   const upcomingMatches = [];
 
   for (const entry of eligible) {
@@ -3930,6 +4025,15 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
       const diff = kickoffMs - nowMs;
       if (diff > 0 && diff <= UPCOMING_MONITOR_WINDOW_MS) {
         upcomingMatches.push(sanitizeAggregateForLiveActivity(currentMatch));
+      } else if (diff <= 0 && Math.abs(diff) <= RECENT_KICKOFF_PENDING_GRACE_MS) {
+        recentKickoffMatches.push(sanitizeAggregateForLiveActivity({
+          ...currentMatch,
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          aggregate_home_score: null,
+          aggregate_away_score: null,
+        }));
       }
     }
   }
@@ -3941,11 +4045,20 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
     .map(annotateMatchWithLiveActivityTeamRatings)
     .sort(compareLiveActivityMatches);
   const sortedLiveAndFinished = [...sortedLive, ...sortedFinished].slice(0, LIVE_ACTIVITY_MAX_MATCHES);
+  const sortedRecentKickoff = recentKickoffMatches
+    .map(annotateMatchWithLiveActivityTeamRatings)
+    .sort(compareLiveActivityMatches)
+    .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const sortedUpcoming = upcomingMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
     .sort(compareLiveActivityMatches)
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
-  const mode = liveActivityModeForMatches(sortedLive, sortedFinished, sortedUpcoming);
+  const mode = liveActivityModeForMatches(
+    sortedLive,
+    sortedFinished,
+    sortedRecentKickoff,
+    sortedUpcoming
+  );
   if (!mode) {
     return {
       mode: null,
@@ -3956,16 +4069,36 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
 
   return {
     mode,
-    matches: mode.includes("upcoming") ? sortedUpcoming : sortedLiveAndFinished,
+    matches: mode.includes("upcoming")
+      ? (sortedRecentKickoff.length > 0 ? sortedRecentKickoff : sortedUpcoming)
+      : sortedLiveAndFinished,
     delayMinutes,
   };
 }
 
 async function evaluateAndDispatchLiveActivities(options = {}) {
   if (!isMonitoring) return;
-  if (liveActivityEvalInFlight) return;
+  const evalStartMs = Date.now();
+  if (liveActivityEvalInFlight) {
+    if (
+      Number.isFinite(liveActivityEvalStartedAtMs) &&
+      liveActivityEvalStartedAtMs > 0 &&
+      evalStartMs - liveActivityEvalStartedAtMs > LIVE_ACTIVITY_EVAL_STALL_TIMEOUT_MS
+    ) {
+      console.warn(
+        `[MatchMonitor] Resetting stalled Live Activity evaluation after ${
+          evalStartMs - liveActivityEvalStartedAtMs
+        }ms`
+      );
+      liveActivityEvalInFlight = false;
+      liveActivityEvalStartedAtMs = 0;
+    } else {
+      return;
+    }
+  }
   liveActivityEvalInFlight = true;
-  const nowMs = Date.now();
+  liveActivityEvalStartedAtMs = evalStartMs;
+  const nowMs = evalStartMs;
   const forceDispatch = Boolean(options && options.forceDispatch);
   const preserveExistingOnEmpty = Boolean(options && options.preserveExistingOnEmpty);
 
@@ -4010,6 +4143,7 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
     console.warn("[MatchMonitor] evaluateAndDispatchLiveActivities error:", error.message || error);
   } finally {
     liveActivityEvalInFlight = false;
+    liveActivityEvalStartedAtMs = 0;
   }
 }
 
@@ -4416,6 +4550,7 @@ module.exports = {
     buildLiveActivityPresentationForUser,
     compareLiveActivityMatches,
     buildLiveActivityEntriesForUser,
+    monitoredMatchStatesSnapshot,
     evaluateUserNotificationDecision,
     filterCanonicalLiveActivityMatchesForUser,
     firstFixtureSectionMatches,

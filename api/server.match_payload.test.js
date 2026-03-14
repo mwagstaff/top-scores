@@ -239,6 +239,12 @@ test("pickPreferredMatchStatus keeps AET over FT for finished matches", () => {
   assert.equal(pickPreferredMatchStatus("FT", "AET"), "AET");
 });
 
+test("pickPreferredMatchStatus prefers HT over first-half stoppage-time minutes", () => {
+  assert.equal(pickPreferredMatchStatus("45+5", "HT"), "HT");
+  assert.equal(pickPreferredMatchStatus("45+4", "HT"), "HT");
+  assert.equal(pickPreferredMatchStatus("HT", "45+5"), "HT");
+});
+
 test("mergeMatchDetailsPayload preserves AET when refreshed data downgrades to FT", () => {
   const existing = normalizeMatchDetailsPayload({
     details_url: DETAILS_URL,
@@ -282,6 +288,47 @@ test("mergeMatchDetailsPayload preserves AET when refreshed data downgrades to F
 
   const merged = mergeMatchDetailsPayload(existing, incoming, "2026-03-10T09:53:35.974Z");
   assert.equal(merged.score_status, "AET");
+});
+
+test("mergeMatchDetailsPayload upgrades first-half stoppage time to HT", () => {
+  const existing = normalizeMatchDetailsPayload({
+    details_url: DETAILS_URL,
+    date: "2026-03-14",
+    time: "17:30",
+    league: "Premier League",
+    home_team: "Chelsea",
+    away_team: "Newcastle United",
+    home_score: 0,
+    away_score: 1,
+    score_status: "45+5",
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+  });
+
+  const incoming = normalizeMatchDetailsPayload({
+    details_url: DETAILS_URL,
+    date: "2026-03-14",
+    time: "17:30",
+    league: "Premier League",
+    home_team: "Chelsea",
+    away_team: "Newcastle United",
+    home_score: 0,
+    away_score: 1,
+    score_status: "HT",
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+  });
+
+  const merged = mergeMatchDetailsPayload(existing, incoming, "2026-03-14T18:20:00.000Z");
+  assert.equal(merged.score_status, "HT");
 });
 
 test("mergeConfirmedVarDisallowedGoalsIntoPayload appends confirmed disallowed goals to scorer timelines", async () => {

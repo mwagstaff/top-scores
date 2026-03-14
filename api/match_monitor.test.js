@@ -39,6 +39,25 @@ function liveActivityUser(delayMinutes = 5, extraPreferences = {}) {
   };
 }
 
+test("isMatchRelevant keeps recently kicked off fixtures eligible until live status arrives", () => {
+  const nowMs = Date.now();
+  const kickoff = formatLocalDateTimeParts(nowMs - 5 * 60 * 1000);
+
+  assert.equal(
+    __testHooks.isMatchRelevant(
+      {
+        date: kickoff.date,
+        time: kickoff.time,
+        home_team: "Burnley",
+        away_team: "Bournemouth",
+        score_status: null,
+      },
+      nowMs
+    ),
+    true
+  );
+});
+
 test("mergeSnapshotWithFallback preserves existing league when new payload omits it", () => {
   const merged = __testHooks.mergeSnapshotWithFallback(
     {
@@ -1704,6 +1723,69 @@ test("buildLiveActivityPresentationForUser keeps live matches ahead of full-time
     presentation.matches.map((match) => match.match_details_id),
     ["live-now", "finished-first"]
   );
+});
+
+test("buildLiveActivityPresentationForUser prefers recently kicked off fixtures over retained full-time matches", () => {
+  const nowMs = Date.now();
+  const recentKickoff = formatLocalDateTimeParts(nowMs - 3 * 60 * 1000);
+  const finishedKickoff = formatLocalDateTimeParts(nowMs - 2 * 60 * 60 * 1000);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0),
+    [
+      {
+        state: {
+          finishedAtMs: nowMs - 30 * 60 * 1000,
+          lastState: {
+            match_details_id: "finished-first",
+            date: finishedKickoff.date,
+            time: finishedKickoff.time,
+            league: "Premier League",
+            home_team: "Sunderland",
+            away_team: "Brighton & Hove Albion",
+            home_score: 0,
+            away_score: 1,
+            score_status: "FT",
+          },
+        },
+        match: {
+          match_details_id: "finished-first",
+          date: finishedKickoff.date,
+          time: finishedKickoff.time,
+          league: "Premier League",
+          home_team: "Sunderland",
+          away_team: "Brighton & Hove Albion",
+          home_score: 0,
+          away_score: 1,
+          score_status: "FT",
+        },
+      },
+      {
+        state: null,
+        match: {
+          match_details_id: "recent-kickoff",
+          date: recentKickoff.date,
+          time: recentKickoff.time,
+          league: "Premier League",
+          home_team: "Chelsea",
+          away_team: "Newcastle United",
+          home_score: 0,
+          away_score: 0,
+          score_status: null,
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_upcoming");
+  assert.deepEqual(
+    presentation.matches.map((match) => match.match_details_id),
+    ["recent-kickoff"]
+  );
+  assert.equal(presentation.matches[0].home_score, null);
+  assert.equal(presentation.matches[0].away_score, null);
+  assert.equal(presentation.matches[0].score_status, null);
 });
 
 test("buildLiveActivityPresentationForUser keeps recent full-time matches visible for 8 hours", () => {

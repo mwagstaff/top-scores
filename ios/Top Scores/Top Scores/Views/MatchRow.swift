@@ -1316,7 +1316,8 @@ private struct MatchLineupPitchSection: View {
 
                 MatchLineupSubstitutesSection(
                     homeLineup: home,
-                    awayLineup: away
+                    awayLineup: away,
+                    fantasyHighlightLookup: fantasyHighlightLookup
                 )
             }
         }
@@ -1540,6 +1541,10 @@ private struct MatchLineupPlayerMarkerView: View {
         condensedLineupPlayerName(player.name)
     }
 
+    private var markerLabel: String {
+        lineupPlayerMarkerLabel(name: player.name, fantasyPoints: fantasyPoints)
+    }
+
     var body: some View {
         VStack(spacing: 4) {
             ZStack {
@@ -1548,15 +1553,15 @@ private struct MatchLineupPlayerMarkerView: View {
                     .frame(width: 44, height: 44)
                     .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
 
-                LineupPlayerNumberText(
-                    number: player.number,
+                LineupPlayerMarkerText(
+                    label: markerLabel,
                     textColor: circleText,
                     outlineColor: numberColors.outline
                 )
             }
 
-            if summary.hasStatBadges || fantasyPoints != nil {
-                MatchLineupEventBadgeRow(summary: summary, fantasyPoints: fantasyPoints)
+            if summary.hasStatBadges {
+                MatchLineupEventBadgeRow(summary: summary)
             }
 
             VStack(spacing: 2) {
@@ -1572,6 +1577,10 @@ private struct MatchLineupPlayerMarkerView: View {
                         .foregroundStyle(Color.white.opacity(0.96))
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    if let fantasyPoints {
+                        MatchLineupFantasyPointsBadge(points: fantasyPoints, compact: true)
+                    }
                 }
                 .multilineTextAlignment(.center)
 
@@ -1586,11 +1595,15 @@ private struct MatchLineupPlayerMarkerView: View {
                             .foregroundStyle(Color.white.opacity(0.92))
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
+
+                        if let replacementFantasyPoints {
+                            MatchLineupFantasyPointsBadge(points: replacementFantasyPoints, compact: true)
+                        }
                     }
                     .multilineTextAlignment(.center)
 
-                    if let replacementSummary, replacementSummary.hasStatBadges || replacementFantasyPoints != nil {
-                        MatchLineupEventBadgeRow(summary: replacementSummary, fantasyPoints: replacementFantasyPoints)
+                    if let replacementSummary, replacementSummary.hasStatBadges {
+                        MatchLineupEventBadgeRow(summary: replacementSummary)
                     }
                 }
             }
@@ -1600,13 +1613,20 @@ private struct MatchLineupPlayerMarkerView: View {
     }
 }
 
-private struct LineupPlayerNumberText: View {
-    let number: Int
+private struct LineupPlayerMarkerText: View {
+    let label: String
     let textColor: Color
     let outlineColor: Color?
 
-    private var numberLabel: String {
-        "\(number)"
+    private var fontSize: CGFloat {
+        switch label.count {
+        case ...2:
+            return 14
+        case 3:
+            return 12
+        default:
+            return 10
+        }
     }
 
     var body: some View {
@@ -1622,15 +1642,15 @@ private struct LineupPlayerNumberText: View {
                 outlinedText(offsetX: 0.6, offsetY: 0.6, color: outlineColor)
             }
 
-            Text(numberLabel)
-                .font(.system(size: 14, weight: .black, design: .rounded))
+            Text(label)
+                .font(.system(size: fontSize, weight: .black, design: .rounded))
                 .foregroundStyle(textColor)
         }
     }
 
     private func outlinedText(offsetX: CGFloat, offsetY: CGFloat, color: Color) -> some View {
-        Text(numberLabel)
-            .font(.system(size: 14, weight: .black, design: .rounded))
+        Text(label)
+            .font(.system(size: fontSize, weight: .black, design: .rounded))
             .foregroundStyle(color)
             .offset(x: offsetX, y: offsetY)
     }
@@ -1638,13 +1658,9 @@ private struct LineupPlayerNumberText: View {
 
 private struct MatchLineupEventBadgeRow: View {
     let summary: MatchLineupPlayerEventSummary
-    let fantasyPoints: Int?
 
     var body: some View {
         HStack(spacing: 4) {
-            if let fantasyPoints {
-                MatchLineupFantasyPointsBadge(points: fantasyPoints)
-            }
             if summary.goals > 0 {
                 MatchLineupEventBadge(icon: .system("soccerball"), tint: .white, count: summary.goals)
             }
@@ -1663,13 +1679,14 @@ private struct MatchLineupEventBadgeRow: View {
 
 private struct MatchLineupFantasyPointsBadge: View {
     let points: Int
+    var compact = false
 
     var body: some View {
         Text("\(points)")
-            .font(.system(size: 9, weight: .black, design: .rounded))
+            .font(.system(size: compact ? 8 : 9, weight: .black, design: .rounded))
             .foregroundStyle(Color.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .padding(.horizontal, compact ? 5 : 6)
+            .padding(.vertical, compact ? 2 : 3)
             .background(
                 Capsule(style: .continuous)
                     .fill(
@@ -1689,31 +1706,37 @@ private struct MatchLineupFantasyPointsBadge: View {
 private struct MatchLineupSubstitutesSection: View {
     let homeLineup: MatchTeamLineup
     let awayLineup: MatchTeamLineup
+    let fantasyHighlightLookup: FantasySquadMembershipLookup?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            MatchLineupSubstitutesTable(lineup: homeLineup)
-            MatchLineupSubstitutesTable(lineup: awayLineup)
+            MatchLineupSubstitutesTable(lineup: homeLineup, fantasyHighlightLookup: fantasyHighlightLookup)
+            MatchLineupSubstitutesTable(lineup: awayLineup, fantasyHighlightLookup: fantasyHighlightLookup)
         }
     }
 }
 
 private struct MatchLineupSubstitutesTable: View {
     let lineup: MatchTeamLineup
+    let fantasyHighlightLookup: FantasySquadMembershipLookup?
 
     private var rows: [MatchLineupSubstituteRow] {
         lineup.substitutes.map { substitute in
             let substitution = lineup.substitutions.first { $0.playerOn.number == substitute.number }
             return MatchLineupSubstituteRow(
                 player: substitute,
-                substitution: substitution
+                substitution: substitution,
+                fantasyPoints: fantasyHighlightLookup?.points(
+                    for: substitute,
+                    teamName: lineup.team ?? "Team"
+                )
             )
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\((lineup.team ?? "Team").uppercased()) SUBSTITUTES")
+            Text("\(lineup.team ?? "Team") subs")
                 .font(.system(size: 12, weight: .black, design: .rounded))
                 .tracking(0.3)
                 .foregroundStyle(.white.opacity(0.92))
@@ -1727,9 +1750,15 @@ private struct MatchLineupSubstitutesTable: View {
                             .frame(width: 18, alignment: .leading)
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(condensedLineupPlayerName(row.player.name))
-                                .font(.system(size: 11, weight: .bold, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.96))
+                            HStack(spacing: 4) {
+                                Text(condensedLineupPlayerName(row.player.name))
+                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.white.opacity(0.96))
+
+                                if let fantasyPoints = row.fantasyPoints {
+                                    MatchLineupFantasyPointsBadge(points: fantasyPoints, compact: true)
+                                }
+                            }
 
                             if let substitution = row.substitution {
                                 HStack(spacing: 4) {
@@ -1767,6 +1796,7 @@ private struct MatchLineupSubstitutesTable: View {
 private struct MatchLineupSubstituteRow: Identifiable {
     let player: MatchLineupPlayer
     let substitution: MatchLineupSubstitution?
+    let fantasyPoints: Int?
 
     var id: String {
         player.id
@@ -2200,6 +2230,70 @@ private func condensedLineupPlayerName(_ value: String) -> String {
 
     let condensed = surnameParts.joined(separator: " ")
     return hasCaptainSuffix ? "\(condensed) (c)" : condensed
+}
+
+func lineupPlayerMarkerLabel(name: String, fantasyPoints: Int?) -> String {
+    if let fantasyPoints {
+        return "\(fantasyPoints)"
+    }
+    return lineupPlayerInitials(name)
+}
+
+func lineupPlayerInitials(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "?" }
+
+    let baseName = trimmed
+        .replacingOccurrences(of: "(c)", with: "", options: .caseInsensitive)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let parts = baseName
+        .split(whereSeparator: { $0.isWhitespace })
+        .map(String.init)
+
+    guard let firstPart = parts.first else { return "?" }
+
+    let surname = condensedLineupPlayerName(baseName)
+        .replacingOccurrences(of: "(c)", with: "", options: .caseInsensitive)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let particles = Set([
+        "al", "bin", "bint", "da", "de", "del", "della", "den", "der", "di", "dos", "du",
+        "el", "la", "le", "st", "ten", "ter", "van", "von"
+    ])
+
+    let firstInitial = lineupInitialFragment(from: firstPart, lowercaseParticles: false, particles: particles)
+    guard parts.count > 1 else {
+        return firstInitial.isEmpty ? "?" : firstInitial
+    }
+    let surnameInitials = surname
+        .split(whereSeparator: { $0.isWhitespace })
+        .map(String.init)
+        .map { lineupInitialFragment(from: $0, lowercaseParticles: true, particles: particles) }
+        .joined()
+
+    let initials = firstInitial + surnameInitials
+    if initials.isEmpty {
+        return "?"
+    }
+    return initials
+}
+
+private func lineupInitialFragment(from value: String, lowercaseParticles: Bool, particles: Set<String>) -> String {
+    let cleaned = value.trimmingCharacters(in: .punctuationCharacters)
+    guard !cleaned.isEmpty else { return "" }
+
+    let segments = cleaned
+        .split(whereSeparator: { $0 == "-" || $0 == "‑" || $0 == "–" || $0 == "—" })
+        .map(String.init)
+
+    return segments.map { segment in
+        let normalized = segment.trimmingCharacters(in: .punctuationCharacters)
+        guard let first = normalized.first else { return "" }
+        if lowercaseParticles && particles.contains(normalized.lowercased()) {
+            return String(first).lowercased()
+        }
+        return String(first).uppercased()
+    }
+    .joined()
 }
 
 private enum MatchLineupDisplaySide {

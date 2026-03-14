@@ -91,6 +91,28 @@ struct Top_ScoresTests {
         #expect(updated.scoreStatus == "FT")
     }
 
+    @Test func withDetails_upgradesFirstHalfStoppageTimeToHalfTime() async throws {
+        let match = makeMatch(
+            homeScore: 0,
+            awayScore: 1,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "45+5"
+        )
+
+        let updated = match.withDetails(
+            makeDetailsPayload(scoreStatus: "HT")
+        )
+
+        #expect(updated.scoreStatus == "HT")
+    }
+
+    @Test func matchStatusFormatter_prefersHalfTimeOverFirstHalfStoppageTime() async throws {
+        #expect(MatchStatusFormatter.preferredStatus(current: "45+5", incoming: "HT") == "HT")
+        #expect(MatchStatusFormatter.preferredStatus(current: "HT", incoming: "45+5") == "HT")
+        #expect(MatchStatusFormatter.preferredStatus(current: "47", incoming: "HT") == "47")
+    }
+
     @Test func stabilizedScoreStatus_clampsOverdueLiveMatchesToFullTime() async throws {
         let kickoff = Date(timeIntervalSince1970: 1_772_626_800) // 2026-03-07 15:00 UTC
         let now = kickoff.addingTimeInterval((3.5 * 60 * 60) + 60)
@@ -184,6 +206,34 @@ struct Top_ScoresTests {
 
         #expect(merged.count == 1)
         #expect(merged[0].scoreStatus == "FT")
+    }
+
+    @Test func matchScoreResolver_applyScores_acceptsHalfTimeAfterFirstHalfStoppageTime() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "17:30",
+            homeTeam: "Chelsea",
+            awayTeam: "Newcastle United",
+            league: "Premier League",
+            tvChannels: [],
+            homeScore: 0,
+            awayScore: 1,
+            scoreStatus: "45+5"
+        )
+
+        let updated = MatchScoreResolver.applyScores(
+            to: [match],
+            using: [makeBbcMatch(
+                homeTeam: "Chelsea",
+                awayTeam: "Newcastle United",
+                homeScore: 0,
+                awayScore: 1,
+                matchTime: "HT"
+            )]
+        )
+
+        #expect(updated.count == 1)
+        #expect(updated[0].scoreStatus == "HT")
     }
 
     @Test func fantasySquadDisplayData_matchSquadSection_splitsStartersAndBenchByTeam() async throws {
@@ -312,6 +362,18 @@ struct Top_ScoresTests {
         #expect(resolved.id == 29)
     }
 
+    @Test func lineupPlayerInitials_handlesParticlesAndHyphenatedSurnames() async throws {
+        #expect(lineupPlayerInitials("Virgil van Dijk") == "VvD")
+        #expect(lineupPlayerInitials("Declan Rice") == "DR")
+        #expect(lineupPlayerInitials("Micky van de Ven") == "MvdV")
+        #expect(lineupPlayerInitials("Trent Alexander-Arnold") == "TAA")
+    }
+
+    @Test func lineupPlayerMarkerLabel_prefersFantasyPointsWhenAvailable() async throws {
+        #expect(lineupPlayerMarkerLabel(name: "Virgil van Dijk", fantasyPoints: 12) == "12")
+        #expect(lineupPlayerMarkerLabel(name: "Virgil van Dijk", fantasyPoints: nil) == "VvD")
+    }
+
     private func makeMatch(
         date: String = "2026-02-24",
         time: String = "17:45",
@@ -372,6 +434,34 @@ struct Top_ScoresTests {
 
         let data = try! JSONSerialization.data(withJSONObject: payload.compactMapValues { $0 })
         return try! JSONDecoder().decode(MatchDetailsPayload.self, from: data)
+    }
+
+    private func makeBbcMatch(
+        homeTeam: String,
+        awayTeam: String,
+        homeScore: Int,
+        awayScore: Int,
+        matchTime: String
+    ) -> BbcMatch {
+        let payload: [String: Any?] = [
+            "home_team": homeTeam,
+            "away_team": awayTeam,
+            "home_score": homeScore,
+            "away_score": awayScore,
+            "aggregate_home_score": nil,
+            "aggregate_away_score": nil,
+            "match_time": matchTime,
+            "details_url": nil,
+            "home_goal_scorers": [],
+            "away_goal_scorers": [],
+            "home_assists": [],
+            "away_assists": [],
+            "home_red_cards": [],
+            "away_red_cards": [],
+        ]
+
+        let data = try! JSONSerialization.data(withJSONObject: payload.compactMapValues { $0 })
+        return try! JSONDecoder().decode(BbcMatch.self, from: data)
     }
 
     private func makeFantasyPlayer(

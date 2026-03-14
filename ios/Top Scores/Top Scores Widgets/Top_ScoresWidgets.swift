@@ -199,6 +199,33 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
     let appScope: String
 }
 
+private enum LiveActivityRenderDiagnostics {
+    private static let lock = NSLock()
+    private static var loggedKeys = Set<String>()
+
+    static func logIfNeeded(state: TopScoresLiveActivityAttributes.ContentState, surface: String) {
+        let key = "\(surface)|\(state.mode)|\(state.generatedAtEpochSeconds)|\(summary(for: state))"
+        lock.lock()
+        let inserted = loggedKeys.insert(key).inserted
+        lock.unlock()
+        guard inserted else { return }
+        NSLog("[LiveActivityWidget] render surface=%@ %@", surface, summary(for: state))
+    }
+
+    static func summary(for state: TopScoresLiveActivityAttributes.ContentState) -> String {
+        let matches = state.matches.prefix(4).map { match -> String in
+            let score: String
+            if let home = match.homeScore, let away = match.awayScore {
+                score = "\(home)-\(away)"
+            } else {
+                score = "nil"
+            }
+            return "\(match.homeTeam) v \(match.awayTeam) \(score) \(match.matchTime ?? "nil")"
+        }.joined(separator: " | ")
+        return "mode=\(state.mode) generatedAt=\(state.generatedAtEpochSeconds) delay=\(state.delayMinutes) matches=\(state.matches.count) [\(matches)]"
+    }
+}
+
 private struct WidgetMatchDay: Identifiable, Hashable {
     let id: String
     let dateKey: String
@@ -1886,6 +1913,9 @@ private struct TopScoresLiveActivityLockScreenView: View {
                 .background(topScoresBlue)
             }
         }
+        .task(id: renderDiagnosticsKey) {
+            LiveActivityRenderDiagnostics.logIfNeeded(state: state, surface: "lock_screen")
+        }
     }
 
     private var delayBannerText: String? {
@@ -1898,6 +1928,10 @@ private struct TopScoresLiveActivityLockScreenView: View {
 
     private var topScoresBlue: Color {
         Color(red: 0.00, green: 0.48, blue: 1.00)
+    }
+
+    private var renderDiagnosticsKey: String {
+        "\(state.mode)|\(state.generatedAtEpochSeconds)|\(state.matches.count)"
     }
 }
 

@@ -1062,7 +1062,7 @@ struct FantasyView: View {
                     showAssistantManager = true
                 }
 
-                Text("Your assistant manager, Matt (Maestro of Transfers and Tactics), is at your command. Tap his lovely face or the button below to get his advice on how to improve your team for the upcoming gameweek.")
+                Text("Your assistant manager, Matt (Mastermind of Analysis, Tactics and Transfers), is at your command. Tap his lovely face or the button below to get his advice on how to improve your team for the upcoming gameweek.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -1407,6 +1407,7 @@ struct FantasyView: View {
         scoreMode: RivalsScoreMode
     ) -> some View {
         let isLoadingDetails = entry.isLoadingDetails
+        let showsChevron = entry.canOpenDetails
 
         return HStack(spacing: 8) {
             Text("\(rank)")
@@ -1444,10 +1445,16 @@ struct FantasyView: View {
             }
             .frame(width: 44, alignment: .trailing)
 
-            Image(systemName: "chevron.right")
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: 16, alignment: .center)
-                .foregroundStyle(.secondary.opacity(isLoadingDetails ? 0.35 : 0.8))
+            Group {
+                if showsChevron {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(isLoadingDetails ? 0.35 : 0.8))
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: 16, alignment: .center)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
@@ -3609,7 +3616,7 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     }
 
     var canOpenDetails: Bool {
-        squad != nil
+        !isUser && squad != nil
     }
 
     var isLoadingDetails: Bool {

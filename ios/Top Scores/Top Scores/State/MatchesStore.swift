@@ -48,7 +48,12 @@ enum MatchScoreResolver {
                   match.scoreStatus ?? "nil", matchTime.map(String.init) ?? "nil",
                   candidate.match.matchTime, bbcTime.map(String.init) ?? "nil")
 
-            if let matchTime = matchTime, let bbcTime = bbcTime, bbcTime < matchTime {
+            let prefersIncomingStatus = MatchStatusFormatter.prefersIncomingStatus(
+                current: match.scoreStatus,
+                incoming: candidate.match.matchTime
+            )
+
+            if let matchTime = matchTime, let bbcTime = bbcTime, bbcTime < matchTime, !prefersIncomingStatus {
                 NSLog("[STALE DATA] Rejecting stale BBC Live data for %@ vs %@ - time regressed from %d' to %d'",
                       match.homeTeam, match.awayTeam, matchTime, bbcTime)
                 return match // Keep existing data

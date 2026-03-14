@@ -6020,6 +6020,15 @@ function parseMatchStatusMinute(status) {
   return base + added;
 }
 
+function isFirstHalfMinuteStatus(status) {
+  const normalized = normalizeMatchStatusValue(status);
+  if (!normalized) return false;
+  const match = normalized.match(/^(\d{1,3})(?:\+(\d{1,2}))?$/);
+  if (!match) return false;
+  const base = Number(match[1]);
+  return Number.isFinite(base) && base <= 45;
+}
+
 function isPenaltyShootoutStatusToken(status) {
   const normalized = normalizeMatchStatusValue(status);
   if (!normalized) return false;
@@ -6077,14 +6086,14 @@ function pickPreferredMatchStatus(existingStatus, incomingStatus, options = {}) 
   if (existingMinute !== null || incomingMinute !== null) {
     if (incomingMinute !== null) {
       if (existingToken === "LIVE") return incoming;
-      if (existingToken === "HT" && incomingMinute <= 45) return existing;
+      if (existingToken === "HT" && isFirstHalfMinuteStatus(incoming)) return existing;
       if (existingToken === "ET" && incomingMinute <= 90) return existing;
       return incoming;
     }
 
     // Existing has a minute; keep it unless incoming represents a strictly later phase.
     if (incomingToken === "LIVE") return existing;
-    if (incomingToken === "HT" && existingMinute >= 46) return existing;
+    if (incomingToken === "HT" && !isFirstHalfMinuteStatus(existing)) return existing;
     if (incomingToken === "ET" || isPenaltyShootoutStatusToken(incoming)) return incoming;
     return preferIncomingOnTie ? incoming : existing;
   }
@@ -16191,21 +16200,19 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
     let serverPresentation = null;
     try {
       const nowMs = Date.now();
-      const monitorStatus = matchMonitor.getStatus();
       const operationalDataset = await getOperationalDataset("merged_matches");
       const operationalMatches =
         operationalDataset && Array.isArray(operationalDataset.payload)
           ? operationalDataset.payload
           : [];
-      const monitoredEntries = Array.isArray(monitorStatus && monitorStatus.monitoredMatches)
-        ? monitorStatus.monitoredMatches
-        : [];
       const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
       if (
         hooks &&
+        typeof hooks.monitoredMatchStatesSnapshot === "function" &&
         typeof hooks.buildLiveActivityEntriesForUser === "function" &&
         typeof hooks.buildLiveActivityPresentationForUser === "function"
       ) {
+        const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
         const entries = hooks.buildLiveActivityEntriesForUser(
           record,
           monitoredEntries,
