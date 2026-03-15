@@ -532,6 +532,71 @@ struct Top_ScoresTests {
         #expect(lineupPlayerMarkerLabel(name: "Virgil van Dijk", fantasyPoints: nil) == "VvD")
     }
 
+    @Test func fantasyDisplayPlayerGameweekScoreState_prefersRemainingFixtureOverMinutesPlayed() async throws {
+        let player = makeFantasyPlayer(
+            elementID: 1,
+            pickPosition: 5,
+            positionType: .midfielder,
+            displayName: "Mid A",
+            fullName: "Midfielder A",
+            teamName: "Arsenal",
+            hasAnyFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: true,
+            hasActiveFixtureThisGameweek: false,
+            minutesPlayed: 90
+        )
+
+        #expect(player.gameweekScoreState == .upcoming)
+        #expect(player.hasRemainingFixtureThisGameweek)
+        #expect(!player.hasFinishedScoringForGameweek)
+    }
+
+    @Test func fantasyDisplayPlayerGameweekScoreState_distinguishesCompletedAndBlankGameweeks() async throws {
+        let completed = makeFantasyPlayer(
+            elementID: 2,
+            pickPosition: 6,
+            positionType: .midfielder,
+            displayName: "Mid B",
+            fullName: "Midfielder B",
+            teamName: "Chelsea",
+            hasAnyFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: false,
+            hasActiveFixtureThisGameweek: false,
+            minutesPlayed: 12
+        )
+        let blank = makeFantasyPlayer(
+            elementID: 3,
+            pickPosition: 7,
+            positionType: .forward,
+            displayName: "Fwd A",
+            fullName: "Forward A",
+            teamName: "Liverpool",
+            hasAnyFixtureThisGameweek: false,
+            hasUpcomingFixtureThisGameweek: false,
+            hasActiveFixtureThisGameweek: false,
+            minutesPlayed: 0
+        )
+
+        #expect(completed.gameweekScoreState == .completed)
+        #expect(blank.gameweekScoreState == .noFixture)
+        #expect(completed.hasFinishedScoringForGameweek)
+        #expect(blank.hasFinishedScoringForGameweek)
+    }
+
+    @Test func fantasyExpectedPointsSection_sumsStartersForSelectedTeamXP() async throws {
+        let section = FantasyAssistantManagerResponse.ExpectedPointsSection(
+            starters: [
+                makeExpectedPointsPlayer(elementID: 1, pickPosition: 1, expectedPointsNextGameweek: 5.4),
+                makeExpectedPointsPlayer(elementID: 2, pickPosition: 2, expectedPointsNextGameweek: 6.1)
+            ],
+            bench: [
+                makeExpectedPointsPlayer(elementID: 12, pickPosition: 12, expectedPointsNextGameweek: 3.8)
+            ]
+        )
+
+        #expect(abs(section.selectedTeamExpectedPointsNextGameweek - 11.5) < 0.001)
+    }
+
     @Test func fantasyTeamLookupKeys_handleClubPrefixesAndSuffixes() async throws {
         seedTeamIdentityStore()
         #expect(fantasyTeamLookupKeys("AFC Bournemouth").contains("bournemouth"))
@@ -640,7 +705,11 @@ struct Top_ScoresTests {
         positionType: FantasyPositionType,
         displayName: String,
         fullName: String,
-        teamName: String
+        teamName: String,
+        hasAnyFixtureThisGameweek: Bool = true,
+        hasUpcomingFixtureThisGameweek: Bool = true,
+        hasActiveFixtureThisGameweek: Bool = false,
+        minutesPlayed: Int = 0
     ) -> FantasyDisplayPlayer {
         FantasyDisplayPlayer(
             elementID: elementID,
@@ -659,17 +728,37 @@ struct Top_ScoresTests {
             isPlayingNow: false,
             isUnavailable: false,
             isDefinitelyUnavailable: false,
-            hasAnyFixtureThisGameweek: true,
-            hasUpcomingFixtureThisGameweek: true,
-            hasActiveFixtureThisGameweek: false,
+            hasAnyFixtureThisGameweek: hasAnyFixtureThisGameweek,
+            hasUpcomingFixtureThisGameweek: hasUpcomingFixtureThisGameweek,
+            hasActiveFixtureThisGameweek: hasActiveFixtureThisGameweek,
             hasFutureAvailabilityIssue: false,
             futureAvailabilityIssueGameweek: nil,
-            minutesPlayed: 0,
+            minutesPlayed: minutesPlayed,
             upcomingOpponentDisplay: nil,
             goalsScored: 0,
             assists: 0,
             yellowCards: 0,
             redCards: 0
+        )
+    }
+
+    private func makeExpectedPointsPlayer(
+        elementID: Int,
+        pickPosition: Int,
+        expectedPointsNextGameweek: Double
+    ) -> FantasyAssistantManagerResponse.ExpectedPointsPlayer {
+        FantasyAssistantManagerResponse.ExpectedPointsPlayer(
+            elementID: elementID,
+            pickPosition: pickPosition,
+            isStarter: pickPosition <= 11,
+            playerName: "Player \(elementID)",
+            teamName: "Arsenal",
+            teamShortName: "ARS",
+            opponentTeamName: "Chelsea",
+            opponentLabel: "CHE (H)",
+            difficulty: 3,
+            expectedPointsNextGameweek: expectedPointsNextGameweek,
+            isBlank: false
         )
     }
 

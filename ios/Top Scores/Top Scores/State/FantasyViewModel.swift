@@ -165,7 +165,8 @@ final class FantasyViewModel: ObservableObject {
                         liveResponse: squadSnapshot.liveResponse,
                         fixtures: squadSnapshot.fixtures,
                         seasonFixtures: seasonFixtures,
-                        bootstrapLookup: bootstrapLookup
+                        bootstrapLookup: bootstrapLookup,
+                        apiBaseURL: apiBaseURL
                     )
                     guard self.rivalRefreshToken == refreshToken else { return }
                     self.rivalSquads = refreshedRivals
@@ -290,6 +291,22 @@ final class FantasyViewModel: ObservableObject {
         apiBaseURL: String,
         forceRefresh: Bool = false
     ) async throws -> FantasyAssistantManagerResponse {
+        let response = try await loadAssistantManagerResponse(
+            entryID: entryID,
+            apiBaseURL: apiBaseURL,
+            forceRefresh: forceRefresh
+        )
+        if response.ready {
+            assistantManagerPreview = response
+        }
+        return response
+    }
+
+    private func loadAssistantManagerResponse(
+        entryID: Int,
+        apiBaseURL: String,
+        forceRefresh: Bool = false
+    ) async throws -> FantasyAssistantManagerResponse {
         guard let baseURL = URL(string: apiBaseURL) else {
             throw FantasyPublicAPIError.invalidURL
         }
@@ -310,7 +327,6 @@ final class FantasyViewModel: ObservableObject {
         }
         if response.ready {
             cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: now)
-            assistantManagerPreview = response
         } else {
             cachedAssistantManagerResponses.removeValue(forKey: cacheKey)
         }
@@ -518,20 +534,20 @@ final class FantasyViewModel: ObservableObject {
         liveResponse: FantasyEventLiveResponse,
         fixtures: [FantasyFixture],
         seasonFixtures: [FantasyFixture],
-        bootstrapLookup: FantasyBootstrapLookup
+        bootstrapLookup: FantasyBootstrapLookup,
+        apiBaseURL: String
     ) async -> [FantasyRivalSquad] {
         var refreshedRivals: [FantasyRivalSquad] = []
 
         for rival in rivals {
             do {
-                async let rivalProfileTask = fetchMyProfile(entryID: rival.entryID)
+                let rivalProfile = await fetchMyProfile(entryID: rival.entryID)
                 let rivalPicks = try await timed("rival_picks entry_id=\(rival.entryID)") {
                     try await fantasyPublicClient.fetchPicks(
                         entryID: rival.entryID,
                         eventID: gameweek.id
                     )
                 }
-                let rivalProfile = await rivalProfileTask
                 let rivalSquad = FantasySquadBuilder.build(
                     gameweek: gameweek,
                     picksResponse: rivalPicks,
@@ -540,6 +556,11 @@ final class FantasyViewModel: ObservableObject {
                     seasonFixtures: seasonFixtures,
                     bootstrap: bootstrapLookup
                 )
+                let assistantManagerResponse = try? await loadAssistantManagerResponse(
+                    entryID: rival.entryID,
+                    apiBaseURL: apiBaseURL,
+                    forceRefresh: false
+                )
                 refreshedRivals.append(
                     FantasyRivalSquad(
                         entryID: rival.entryID,
@@ -547,7 +568,8 @@ final class FantasyViewModel: ObservableObject {
                         managerName: rival.managerDisplayName,
                         clubBadgeSrc: rivalProfile?.clubBadgeSrc ?? rival.clubBadgeSrc,
                         squad: rivalSquad,
-                        allGameweeksPoints: rivalProfile?.summaryOverallPoints ?? rival.overallPoints
+                        allGameweeksPoints: rivalProfile?.summaryOverallPoints ?? rival.overallPoints,
+                        expectedPointsNextGameweek: assistantManagerResponse?.expectedPoints?.selectedTeamExpectedPointsNextGameweek
                     )
                 )
             } catch {

@@ -1128,6 +1128,7 @@ struct FantasyView: View {
                 managerName: myManagerName,
                 currentGameweekScore: mySquad.resolvedCurrentScore,
                 allGameweeksScore: profile?.summaryOverallPoints,
+                expectedPointsNextGameweek: fantasyViewModel.assistantManagerPreview?.expectedPoints?.selectedTeamExpectedPointsNextGameweek,
                 hasActiveChipInCurrentGameweek: mySquad.hasActiveChip,
                 squad: mySquad,
                 clubBadgeSrc: profile?.clubBadgeSrc,
@@ -1146,6 +1147,7 @@ struct FantasyView: View {
                 managerName: rival.managerDisplayName,
                 currentGameweekScore: rivalSquad?.currentScore,
                 allGameweeksScore: rivalSquad?.allGameweeksPoints ?? rival.overallPoints,
+                expectedPointsNextGameweek: rivalSquad?.expectedPointsNextGameweek,
                 hasActiveChipInCurrentGameweek: rivalSquad?.squad.hasActiveChip ?? false,
                 squad: rivalSquad?.squad,
                 clubBadgeSrc: rivalSquad?.clubBadgeSrc ?? rival.clubBadgeSrc,
@@ -1211,6 +1213,9 @@ struct FantasyView: View {
                     Text("Team")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("xP")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 48, alignment: .trailing)
                     Text(rivalsScoreMode == .currentGameweek ? "GW" : "Total")
                         .font(.subheadline.weight(.semibold))
                         .frame(width: 44, alignment: .trailing)
@@ -1449,7 +1454,22 @@ struct FantasyView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Group {
-                if entry.showsLoadingIndicator(for: scoreMode) {
+                if entry.showsExpectedPointsLoadingIndicator {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                } else {
+                    Text(entry.expectedPointsDisplay)
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+            .frame(width: 48, alignment: .trailing)
+
+            Group {
+                if entry.showsScoreLoadingIndicator(for: scoreMode) {
                     ProgressView()
                         .controlSize(.small)
                         .tint(.secondary)
@@ -2176,6 +2196,7 @@ struct FantasyView: View {
 
     @ViewBuilder
     private func eventLegendSection(_ data: FantasySquadDisplayData) -> some View {
+        let scoreLine = "Score strip: purple means still to play, faded means no fixture left this gameweek, gradient means live now."
         let goalLine = legendLine(
             emoji: "⚽️",
             title: "Goals scored",
@@ -2197,11 +2218,11 @@ struct FantasyView: View {
             players: legendPlayers(data.allPlayers, value: \.redCards)
         )
 
-        let lines = [goalLine, assistLine, yellowLine, redLine].compactMap { $0 }
+        let lines = [scoreLine, goalLine, assistLine, yellowLine, redLine].compactMap { $0 }
 
         if !lines.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Icon legend")
+                Text("Legend")
                     .font(.headline)
 
                 ForEach(lines, id: \.self) { line in
@@ -2708,7 +2729,8 @@ struct FantasyView: View {
             managerName: entry.managerName,
             clubBadgeSrc: entry.clubBadgeSrc,
             squad: squad,
-            allGameweeksPoints: entry.allGameweeksScore
+            allGameweeksPoints: entry.allGameweeksScore,
+            expectedPointsNextGameweek: entry.expectedPointsNextGameweek
         )
     }
 
@@ -3303,22 +3325,25 @@ private struct FantasyPlayerCard: View {
         LogoResolver.shared.image(for: player.teamName)
     }
 
+    private var scoreState: FantasyDisplayPlayer.GameweekScoreState {
+        player.gameweekScoreState
+    }
+
     private var pointsBackground: AnyShapeStyle {
-        if player.isUnavailable {
-            return AnyShapeStyle(LinearGradient(
-                colors: [Color(red: 0.62, green: 0.62, blue: 0.66), Color(red: 0.46, green: 0.46, blue: 0.50)],
-                startPoint: .leading,
-                endPoint: .trailing
-            ))
-        }
-        if player.isPlayingNow {
+        switch scoreState {
+        case .live:
             return AnyShapeStyle(LinearGradient(
                 colors: [Color(red: 0.95, green: 0.20, blue: 0.66), Color(red: 1.0, green: 0.29, blue: 0.29)],
                 startPoint: .leading,
                 endPoint: .trailing
             ))
+        case .upcoming:
+            return AnyShapeStyle(Color(red: 0.20, green: 0.03, blue: 0.28))
+        case .completed:
+            return AnyShapeStyle(Color(red: 0.16, green: 0.04, blue: 0.24))
+        case .noFixture:
+            return AnyShapeStyle(Color(red: 0.12, green: 0.04, blue: 0.18))
         }
-        return AnyShapeStyle(Color(red: 0.20, green: 0.03, blue: 0.28))
     }
 
     private var nameBackgroundColor: Color {
@@ -3333,10 +3358,25 @@ private struct FantasyPlayerCard: View {
     }
 
     private var pointsForegroundColor: Color {
-        if player.isUnavailable {
-            return Color.white.opacity(0.82)
+        switch scoreState {
+        case .live, .upcoming, .completed, .noFixture:
+            return .white
         }
-        return .white
+    }
+
+    private var scoreStateSymbolName: String? {
+        switch scoreState {
+        case .completed:
+            return "checkmark"
+        case .noFixture:
+            return "minus"
+        case .live, .upcoming:
+            return nil
+        }
+    }
+
+    private var accessibilityLabelText: String {
+        "\(player.displayName), \(secondaryDisplayText), \(player.displayPoints) points, \(scoreState.accessibilityDescription)"
     }
 
     private var hasEventStats: Bool {
@@ -3457,15 +3497,24 @@ private struct FantasyPlayerCard: View {
             .frame(width: width)
             .background(nameBackgroundColor)
 
-            Text("\(player.displayPoints)")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-                .foregroundStyle(pointsForegroundColor)
-                .frame(width: width)
-                .padding(.vertical, 3)
-                .background(pointsBackground)
+            ZStack(alignment: .trailing) {
+                Text("\(player.displayPoints)")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                    .foregroundStyle(pointsForegroundColor)
+                    .frame(width: width)
+                    .padding(.vertical, 3)
+
+                if let scoreStateSymbolName {
+                    Image(systemName: scoreStateSymbolName)
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(pointsForegroundColor.opacity(0.62))
+                        .padding(.trailing, 4)
+                }
+            }
+            .background(pointsBackground)
         }
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay {
@@ -3486,6 +3535,8 @@ private struct FantasyPlayerCard: View {
         .onChange(of: player.isPlayingNow) { _, newValue in
             isPulsing = newValue
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabelText)
     }
 
     private func badge(text: String, color: Color) -> some View {
@@ -3626,6 +3677,7 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     let managerName: String
     let currentGameweekScore: Int?
     let allGameweeksScore: Int?
+    let expectedPointsNextGameweek: Double?
     let hasActiveChipInCurrentGameweek: Bool
     let squad: FantasySquadDisplayData?
     let clubBadgeSrc: String?
@@ -3660,8 +3712,17 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
         return "\(score)"
     }
 
-    func showsLoadingIndicator(for mode: RivalsScoreMode) -> Bool {
+    var expectedPointsDisplay: String {
+        guard let expectedPointsNextGameweek else { return "-" }
+        return String(format: "%.1f", expectedPointsNextGameweek)
+    }
+
+    func showsScoreLoadingIndicator(for mode: RivalsScoreMode) -> Bool {
         isLoadingDetails && scoreValue(for: mode) == nil
+    }
+
+    var showsExpectedPointsLoadingIndicator: Bool {
+        isLoadingDetails && expectedPointsNextGameweek == nil
     }
 }
 

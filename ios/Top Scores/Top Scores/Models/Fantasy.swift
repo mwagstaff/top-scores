@@ -787,6 +787,12 @@ struct FantasyAssistantManagerResponse: Codable, Hashable {
     struct ExpectedPointsSection: Codable, Hashable {
         let starters: [ExpectedPointsPlayer]
         let bench: [ExpectedPointsPlayer]
+
+        var selectedTeamExpectedPointsNextGameweek: Double {
+            starters.reduce(0) { sum, player in
+                sum + player.expectedPointsNextGameweek
+            }
+        }
     }
 
     struct IdealSquadPlayer: Codable, Hashable, Identifiable {
@@ -1201,6 +1207,7 @@ struct FantasyRivalSquad: Identifiable, Hashable {
     let clubBadgeSrc: String?
     let squad: FantasySquadDisplayData
     let allGameweeksPoints: Int?
+    let expectedPointsNextGameweek: Double?
 
     var id: Int {
         entryID
@@ -1232,6 +1239,26 @@ enum FantasyPositionType: Int, CaseIterable, Hashable {
 }
 
 struct FantasyDisplayPlayer: Identifiable, Hashable {
+    enum GameweekScoreState: Hashable {
+        case live
+        case upcoming
+        case completed
+        case noFixture
+
+        var accessibilityDescription: String {
+            switch self {
+            case .live:
+                return "currently playing"
+            case .upcoming:
+                return "still to play"
+            case .completed:
+                return "gameweek fixtures completed"
+            case .noFixture:
+                return "no fixture this gameweek"
+            }
+        }
+    }
+
     let elementID: Int
     let pickPosition: Int
     let positionType: FantasyPositionType
@@ -1266,6 +1293,27 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
 
     var isStarter: Bool {
         pickPosition <= 11
+    }
+
+    var hasRemainingFixtureThisGameweek: Bool {
+        hasUpcomingFixtureThisGameweek || hasActiveFixtureThisGameweek
+    }
+
+    var hasFinishedScoringForGameweek: Bool {
+        !hasRemainingFixtureThisGameweek
+    }
+
+    var gameweekScoreState: GameweekScoreState {
+        if hasActiveFixtureThisGameweek {
+            return .live
+        }
+        if hasUpcomingFixtureThisGameweek {
+            return .upcoming
+        }
+        if hasAnyFixtureThisGameweek {
+            return .completed
+        }
+        return .noFixture
     }
 
     var didNotPlay: Bool {
