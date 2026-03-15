@@ -1128,7 +1128,10 @@ struct FantasyView: View {
                 managerName: myManagerName,
                 currentGameweekScore: mySquad.resolvedCurrentScore,
                 allGameweeksScore: profile?.summaryOverallPoints,
-                expectedPointsNextGameweek: fantasyViewModel.assistantManagerPreview?.expectedPoints?.selectedTeamExpectedPointsNextGameweek,
+                projectedGameweekPoints: fantasyViewModel.assistantManagerPreview?.expectedPoints.map {
+                    mySquad.projectedGameweekPoints(using: $0)
+                },
+                isExpectedPointsLoading: fantasyViewModel.assistantManagerPreview?.ready != true,
                 hasActiveChipInCurrentGameweek: mySquad.hasActiveChip,
                 squad: mySquad,
                 clubBadgeSrc: profile?.clubBadgeSrc,
@@ -1147,7 +1150,8 @@ struct FantasyView: View {
                 managerName: rival.managerDisplayName,
                 currentGameweekScore: rivalSquad?.currentScore,
                 allGameweeksScore: rivalSquad?.allGameweeksPoints ?? rival.overallPoints,
-                expectedPointsNextGameweek: rivalSquad?.expectedPointsNextGameweek,
+                projectedGameweekPoints: rivalSquad?.projectedGameweekPoints,
+                isExpectedPointsLoading: rivalSquad?.isExpectedPointsLoading ?? false,
                 hasActiveChipInCurrentGameweek: rivalSquad?.squad.hasActiveChip ?? false,
                 squad: rivalSquad?.squad,
                 clubBadgeSrc: rivalSquad?.clubBadgeSrc ?? rival.clubBadgeSrc,
@@ -1460,7 +1464,7 @@ struct FantasyView: View {
                         .tint(.secondary)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 } else {
-                    Text(entry.expectedPointsDisplay)
+                    Text(entry.projectedGameweekPointsDisplay)
                         .font(.caption.monospacedDigit().weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -1998,10 +2002,6 @@ struct FantasyView: View {
                         Text(rival.managerName)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
-                        Text("Entry ID: \(rival.entryID)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -2730,7 +2730,8 @@ struct FantasyView: View {
             clubBadgeSrc: entry.clubBadgeSrc,
             squad: squad,
             allGameweeksPoints: entry.allGameweeksScore,
-            expectedPointsNextGameweek: entry.expectedPointsNextGameweek
+            projectedGameweekPoints: entry.projectedGameweekPoints,
+            isExpectedPointsLoading: entry.isExpectedPointsLoading
         )
     }
 
@@ -3677,7 +3678,8 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     let managerName: String
     let currentGameweekScore: Int?
     let allGameweeksScore: Int?
-    let expectedPointsNextGameweek: Double?
+    let projectedGameweekPoints: Double?
+    let isExpectedPointsLoading: Bool
     let hasActiveChipInCurrentGameweek: Bool
     let squad: FantasySquadDisplayData?
     let clubBadgeSrc: String?
@@ -3712,9 +3714,9 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
         return "\(score)"
     }
 
-    var expectedPointsDisplay: String {
-        guard let expectedPointsNextGameweek else { return "-" }
-        return String(format: "%.1f", expectedPointsNextGameweek)
+    var projectedGameweekPointsDisplay: String {
+        guard let projectedGameweekPoints else { return "-" }
+        return String(format: "%.1f", projectedGameweekPoints)
     }
 
     func showsScoreLoadingIndicator(for mode: RivalsScoreMode) -> Bool {
@@ -3722,7 +3724,7 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     }
 
     var showsExpectedPointsLoadingIndicator: Bool {
-        isLoadingDetails && expectedPointsNextGameweek == nil
+        isExpectedPointsLoading || (isLoadingDetails && projectedGameweekPoints == nil)
     }
 }
 
@@ -4589,18 +4591,19 @@ private struct FantasyAssistantManagerSheet: View {
             Text("Expected points")
                 .font(.headline)
 
-            if let section {
-                let startersTotal = section.starters.reduce(0) { sum, player in
-                    sum + player.expectedPointsNextGameweek
-                }
-                let benchTotal = section.bench.reduce(0) { sum, player in
-                    sum + player.expectedPointsNextGameweek
-                }
-                let total = startersTotal + benchTotal
+            if let section, let squad = fantasyViewModel.data {
+                let startersTotal = section.startersExpectedPointsNextGameweek
+                let benchTotal = section.benchExpectedPointsNextGameweek
+                let remainingTotal = squad.remainingExpectedPoints(using: section)
+                let projectedTotal = Double(currentUserScore) + remainingTotal
 
                 HStack(spacing: 8) {
-                    assistantPill(title: "Total xP", value: pointsText(total))
-                    assistantPill(title: "Starting XI", value: pointsText(startersTotal))
+                    assistantPill(title: "Projected total", value: pointsText(projectedTotal))
+                    assistantPill(title: "Remaining xP", value: pointsText(remainingTotal))
+                    assistantPill(title: "Starting XI xP", value: pointsText(startersTotal))
+                }
+
+                HStack(spacing: 8) {
                     assistantPill(title: "Bench", value: pointsText(benchTotal))
                 }
 

@@ -788,10 +788,20 @@ struct FantasyAssistantManagerResponse: Codable, Hashable {
         let starters: [ExpectedPointsPlayer]
         let bench: [ExpectedPointsPlayer]
 
-        var selectedTeamExpectedPointsNextGameweek: Double {
+        var startersExpectedPointsNextGameweek: Double {
             starters.reduce(0) { sum, player in
                 sum + player.expectedPointsNextGameweek
             }
+        }
+
+        var benchExpectedPointsNextGameweek: Double {
+            bench.reduce(0) { sum, player in
+                sum + player.expectedPointsNextGameweek
+            }
+        }
+
+        var selectedTeamExpectedPointsNextGameweek: Double {
+            startersExpectedPointsNextGameweek + benchExpectedPointsNextGameweek
         }
     }
 
@@ -1207,7 +1217,8 @@ struct FantasyRivalSquad: Identifiable, Hashable {
     let clubBadgeSrc: String?
     let squad: FantasySquadDisplayData
     let allGameweeksPoints: Int?
-    let expectedPointsNextGameweek: Double?
+    let projectedGameweekPoints: Double?
+    let isExpectedPointsLoading: Bool
 
     var id: Int {
         entryID
@@ -1420,6 +1431,42 @@ struct FantasySquadDisplayData: Hashable {
 
     var resolvedCurrentScoreDisplay: String {
         "\(resolvedCurrentScore)\(shouldShowCurrentScoreAsterisk ? "*" : "")"
+    }
+
+    func projectedGameweekPoints(
+        using section: FantasyAssistantManagerResponse.ExpectedPointsSection
+    ) -> Double {
+        Double(resolvedCurrentScore) + remainingExpectedPoints(using: section)
+    }
+
+    func remainingExpectedPoints(
+        using section: FantasyAssistantManagerResponse.ExpectedPointsSection
+    ) -> Double {
+        let startersByElementID = Dictionary(uniqueKeysWithValues: starters.map { ($0.elementID, $0) })
+        let benchByElementID = Dictionary(uniqueKeysWithValues: bench.map { ($0.elementID, $0) })
+
+        let startersRemaining = section.starters.reduce(0.0) { sum, expectedPlayer in
+            guard let player = startersByElementID[expectedPlayer.elementID],
+                  player.hasRemainingFixtureThisGameweek else {
+                return sum
+            }
+            return sum + (expectedPlayer.expectedPointsNextGameweek * Double(max(player.multiplier, 1)))
+        }
+
+        let benchRemaining: Double
+        if hasBenchBoostActive {
+            benchRemaining = section.bench.reduce(0.0) { sum, expectedPlayer in
+                guard let player = benchByElementID[expectedPlayer.elementID],
+                      player.hasRemainingFixtureThisGameweek else {
+                    return sum
+                }
+                return sum + (expectedPlayer.expectedPointsNextGameweek * Double(max(player.multiplier, 1)))
+            }
+        } else {
+            benchRemaining = 0
+        }
+
+        return startersRemaining + benchRemaining
     }
 
     var effectivePlayerContributions: [FantasyEffectivePlayerContribution] {

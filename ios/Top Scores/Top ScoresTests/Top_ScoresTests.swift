@@ -597,6 +597,71 @@ struct Top_ScoresTests {
         #expect(abs(section.selectedTeamExpectedPointsNextGameweek - 11.5) < 0.001)
     }
 
+    @Test func fantasySquadProjectedGameweekPoints_addsCurrentScoreToRemainingExpectedPoints() async throws {
+        let playedStarter = makeFantasyPlayer(
+            elementID: 1,
+            pickPosition: 1,
+            positionType: .goalkeeper,
+            displayName: "Keeper",
+            fullName: "Keeper",
+            teamName: "Everton",
+            hasAnyFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: false,
+            hasActiveFixtureThisGameweek: false,
+            minutesPlayed: 90,
+            rawPoints: 6,
+            appliedPoints: 6,
+            displayPoints: 6
+        )
+        let upcomingCaptain = makeFantasyPlayer(
+            elementID: 2,
+            pickPosition: 2,
+            positionType: .forward,
+            displayName: "Captain",
+            fullName: "Captain",
+            teamName: "Liverpool",
+            hasAnyFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: true,
+            hasActiveFixtureThisGameweek: false,
+            minutesPlayed: 0,
+            multiplier: 2,
+            isCaptain: true
+        )
+        let squad = FantasySquadDisplayData(
+            gameweekID: 30,
+            gameweekTitle: "GW30",
+            deadlineGameweekID: nil,
+            deadlineTime: nil,
+            totalPoints: 26,
+            hasActiveFixtures: false,
+            hasStartedFixturesInGameweek: true,
+            hasFixturesPlayedToday: true,
+            isEstimatedScore: false,
+            estimatedCurrentScore: 26,
+            scoreCalculationRulesApplied: [],
+            rank: nil,
+            overallRank: nil,
+            transfersCost: nil,
+            pointsOnBench: nil,
+            activeChips: [],
+            goalkeepers: [playedStarter],
+            defenders: [],
+            midfielders: [],
+            forwards: [upcomingCaptain],
+            bench: []
+        )
+        let section = FantasyAssistantManagerResponse.ExpectedPointsSection(
+            starters: [
+                makeExpectedPointsPlayer(elementID: 1, pickPosition: 1, expectedPointsNextGameweek: 2.5),
+                makeExpectedPointsPlayer(elementID: 2, pickPosition: 2, expectedPointsNextGameweek: 5.0)
+            ],
+            bench: []
+        )
+
+        #expect(abs(squad.remainingExpectedPoints(using: section) - 10.0) < 0.001)
+        #expect(abs(squad.projectedGameweekPoints(using: section) - 36.0) < 0.001)
+    }
+
     @Test func fantasyTeamLookupKeys_handleClubPrefixesAndSuffixes() async throws {
         seedTeamIdentityStore()
         #expect(fantasyTeamLookupKeys("AFC Bournemouth").contains("bournemouth"))
@@ -709,7 +774,12 @@ struct Top_ScoresTests {
         hasAnyFixtureThisGameweek: Bool = true,
         hasUpcomingFixtureThisGameweek: Bool = true,
         hasActiveFixtureThisGameweek: Bool = false,
-        minutesPlayed: Int = 0
+        minutesPlayed: Int = 0,
+        rawPoints: Int = 0,
+        appliedPoints: Int = 0,
+        displayPoints: Int = 0,
+        multiplier: Int = 1,
+        isCaptain: Bool = false
     ) -> FantasyDisplayPlayer {
         FantasyDisplayPlayer(
             elementID: elementID,
@@ -719,11 +789,11 @@ struct Top_ScoresTests {
             fullName: fullName,
             teamName: teamName,
             nowCostMillions: 5.0,
-            rawPoints: 0,
-            appliedPoints: 0,
-            displayPoints: 0,
-            multiplier: 1,
-            isCaptain: false,
+            rawPoints: rawPoints,
+            appliedPoints: appliedPoints,
+            displayPoints: displayPoints,
+            multiplier: multiplier,
+            isCaptain: isCaptain,
             isViceCaptain: false,
             isPlayingNow: false,
             isUnavailable: false,

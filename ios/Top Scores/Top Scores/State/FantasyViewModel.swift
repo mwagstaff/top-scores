@@ -165,12 +165,15 @@ final class FantasyViewModel: ObservableObject {
                         liveResponse: squadSnapshot.liveResponse,
                         fixtures: squadSnapshot.fixtures,
                         seasonFixtures: seasonFixtures,
-                        bootstrapLookup: bootstrapLookup,
-                        apiBaseURL: apiBaseURL
+                        bootstrapLookup: bootstrapLookup
                     )
                     guard self.rivalRefreshToken == refreshToken else { return }
                     self.rivalSquads = refreshedRivals
                     self.logPerf("rivals_complete count=\(refreshedRivals.count)")
+                    await self.populateRivalExpectedPoints(
+                        apiBaseURL: apiBaseURL,
+                        refreshToken: refreshToken
+                    )
                 }
             }
 
@@ -327,6 +330,27 @@ final class FantasyViewModel: ObservableObject {
         }
         if response.ready {
             cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: now)
+        } else {
+            cachedAssistantManagerResponses.removeValue(forKey: cacheKey)
+        }
+        return response
+    }
+
+    private func syncAssistantManagerResponse(
+        entryID: Int,
+        apiBaseURL: String
+    ) async throws -> FantasyAssistantManagerResponse {
+        guard let baseURL = URL(string: apiBaseURL) else {
+            throw FantasyPublicAPIError.invalidURL
+        }
+
+        let cacheKey = "\(baseURL.absoluteString)|assistant|\(entryID)"
+        let serverClient = APIClient(baseURL: baseURL)
+        let response = try await timed("assistant_manager_sync entry_id=\(entryID)") {
+            try await serverClient.syncFantasyAssistantManager(entryID: entryID)
+        }
+        if response.ready {
+            cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: Date())
         } else {
             cachedAssistantManagerResponses.removeValue(forKey: cacheKey)
         }
@@ -534,8 +558,7 @@ final class FantasyViewModel: ObservableObject {
         liveResponse: FantasyEventLiveResponse,
         fixtures: [FantasyFixture],
         seasonFixtures: [FantasyFixture],
-        bootstrapLookup: FantasyBootstrapLookup,
-        apiBaseURL: String
+        bootstrapLookup: FantasyBootstrapLookup
     ) async -> [FantasyRivalSquad] {
         var refreshedRivals: [FantasyRivalSquad] = []
 
@@ -556,11 +579,6 @@ final class FantasyViewModel: ObservableObject {
                     seasonFixtures: seasonFixtures,
                     bootstrap: bootstrapLookup
                 )
-                let assistantManagerResponse = try? await loadAssistantManagerResponse(
-                    entryID: rival.entryID,
-                    apiBaseURL: apiBaseURL,
-                    forceRefresh: false
-                )
                 refreshedRivals.append(
                     FantasyRivalSquad(
                         entryID: rival.entryID,
@@ -569,7 +587,8 @@ final class FantasyViewModel: ObservableObject {
                         clubBadgeSrc: rivalProfile?.clubBadgeSrc ?? rival.clubBadgeSrc,
                         squad: rivalSquad,
                         allGameweeksPoints: rivalProfile?.summaryOverallPoints ?? rival.overallPoints,
-                        expectedPointsNextGameweek: assistantManagerResponse?.expectedPoints?.selectedTeamExpectedPointsNextGameweek
+                        projectedGameweekPoints: nil,
+                        isExpectedPointsLoading: true
                     )
                 )
             } catch {
@@ -584,6 +603,55 @@ final class FantasyViewModel: ObservableObject {
                 return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
             }
             return lhs.entryID < rhs.entryID
+        }
+    }
+
+    private func populateRivalExpectedPoints(
+        apiBaseURL: String,
+        refreshToken: UUID
+    ) async {
+        let rivalsSnapshot = rivalSquads
+
+        for rival in rivalsSnapshot {
+            guard rivalRefreshToken == refreshToken else { return }
+
+            let response: FantasyAssistantManagerResponse?
+            do {
+                let loaded = try await loadAssistantManagerResponse(
+                    entryID: rival.entryID,
+                    apiBaseURL: apiBaseURL,
+                    forceRefresh: false
+                )
+                if loaded.ready {
+                    response = loaded
+                } else {
+                    let synced = try? await syncAssistantManagerResponse(
+                        entryID: rival.entryID,
+                        apiBaseURL: apiBaseURL
+                    )
+                    response = synced?.ready == true ? synced : nil
+                }
+            } catch {
+                response = nil
+            }
+
+            guard rivalRefreshToken == refreshToken else { return }
+            guard let index = rivalSquads.firstIndex(where: { $0.entryID == rival.entryID }) else { continue }
+
+            let projectedGameweekPoints = response?.expectedPoints.map { section in
+                rivalSquads[index].squad.projectedGameweekPoints(using: section)
+            }
+            let updated = FantasyRivalSquad(
+                entryID: rivalSquads[index].entryID,
+                teamName: rivalSquads[index].teamName,
+                managerName: rivalSquads[index].managerName,
+                clubBadgeSrc: rivalSquads[index].clubBadgeSrc,
+                squad: rivalSquads[index].squad,
+                allGameweeksPoints: rivalSquads[index].allGameweeksPoints,
+                projectedGameweekPoints: projectedGameweekPoints,
+                isExpectedPointsLoading: projectedGameweekPoints == nil
+            )
+            rivalSquads[index] = updated
         }
     }
 
