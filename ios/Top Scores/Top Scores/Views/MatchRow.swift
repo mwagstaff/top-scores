@@ -135,16 +135,15 @@ struct MatchRow: View {
         match.isFinished
     }
 
-    private var isPremierLeagueMatch: Bool {
-        match.league.trimmingCharacters(in: .whitespacesAndNewlines)
-            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+    private var isEligibleFantasyFixture: Bool {
+        fantasyViewModel.isEligibleFantasyFixture(match)
     }
 
     private var fantasyBadgeMode: FantasyMatchParticipationBadge.Mode? {
         guard showFantasyBadge,
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               preferences.showFantasyMatchPills,
-              isPremierLeagueMatch,
+              isEligibleFantasyFixture,
               let lookup = FantasySquadMembershipLookup(
                 squad: fantasyViewModel.data,
                 expectedPointsByElementID: fantasyExpectedPointsByElementID
@@ -168,7 +167,7 @@ struct MatchRow: View {
               fantasyBadgeMode != nil,
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               preferences.showFantasyMatchPills,
-              isPremierLeagueMatch,
+              isEligibleFantasyFixture,
               let lookup = FantasySquadMembershipLookup(
                 squad: fantasyViewModel.data,
                 expectedPointsByElementID: fantasyExpectedPointsByElementID
@@ -370,9 +369,8 @@ private struct FantasyMatchParticipationBadge: View {
 
             switch mode {
             case .upcoming:
-                Image(systemName: "trophy.fill")
-                    .font(.system(size: 13, weight: .black))
-                    .foregroundStyle(Color.white)
+                FantasyLionIconView(size: 14, scale: 0.92)
+                    .foregroundStyle(.white)
             case .score(let score):
                 Text("\(score)")
                     .font(.system(size: score >= 10 ? 11 : 12, weight: .black, design: .rounded))
@@ -576,23 +574,26 @@ struct MatchDetailView: View {
         return home.startingLineup.count == 11 && away.startingLineup.count == 11
     }
 
-    private var isPremierLeagueMatch: Bool {
-        activeMatch.league.trimmingCharacters(in: .whitespacesAndNewlines)
-            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+    private var isEligibleFantasyFixture: Bool {
+        fantasyViewModel.isEligibleFantasyFixture(activeMatch)
     }
 
     private var fantasyHighlightLookup: FantasySquadMembershipLookup? {
-        guard isPremierLeagueMatch else { return nil }
+        guard isEligibleFantasyFixture else { return nil }
         return FantasySquadMembershipLookup(squad: fantasyViewModel.data)
     }
 
     private var shouldLoadFantasySquad: Bool {
-        isPremierLeagueMatch &&
+        isEligibleFantasyFixture &&
         !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var fantasySquadSections: [FantasyMatchTeamSquadSection] {
-        guard let squad = fantasyViewModel.data else { return [] }
+        guard isEligibleFantasyFixture,
+              let squad = fantasyViewModel.data
+        else {
+            return []
+        }
 
         return [
             squad.matchSquadSection(forTeamName: activeMatch.homeTeam),

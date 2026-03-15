@@ -105,6 +105,30 @@ final class FantasyViewModel: ObservableObject {
         cachedSeasonFixturesFetchedAt = nil
     }
 
+    func isEligibleFantasyFixture(_ match: Match) -> Bool {
+        guard match.league.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+        else {
+            return false
+        }
+
+        let premierLeagueTeamKeys = Set(
+            (cachedBootstrapLookup?.teams ?? []).flatMap { team in
+                TeamIdentityStore.shared.normalizedKeys(for: team.name)
+            }
+        )
+
+        guard !premierLeagueTeamKeys.isEmpty else {
+            return true
+        }
+
+        let homeTeamKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
+        let awayTeamKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
+
+        return !homeTeamKeys.isDisjoint(with: premierLeagueTeamKeys) &&
+            !awayTeamKeys.isDisjoint(with: premierLeagueTeamKeys)
+    }
+
     func refresh(
         managerEntryID: String,
         apiBaseURL: String,
