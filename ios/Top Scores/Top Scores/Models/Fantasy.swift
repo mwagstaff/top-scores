@@ -1294,7 +1294,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
     let futureAvailabilityIssueGameweek: Int?
     let minutesPlayed: Int
     let upcomingOpponentDisplay: String?
-    let expectedPointsThisGameweek: Int? = nil
+    let expectedPointsThisGameweek: Int?
     let goalsScored: Int
     let assists: Int
     let yellowCards: Int
@@ -2544,6 +2544,7 @@ enum FantasySquadBuilder {
                 futureAvailabilityIssueGameweek: futureAvailabilityIssueGameweek,
                 minutesPlayed: minutesPlayed,
                 upcomingOpponentDisplay: upcomingOpponentDisplay,
+                expectedPointsThisGameweek: nil,
                 goalsScored: goalsScored,
                 assists: assists,
                 yellowCards: yellowCards,

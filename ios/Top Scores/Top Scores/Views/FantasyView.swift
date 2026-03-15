@@ -2018,7 +2018,7 @@ struct FantasyView: View {
     private func rivalDetailSheet(_ rival: FantasyRivalSquad) -> some View {
         let displayData = rival.squad.applyingExpectedPoints(rival.expectedPointsSection)
 
-        NavigationStack {
+        return NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
