@@ -532,6 +532,12 @@ struct Top_ScoresTests {
         #expect(lineupPlayerMarkerLabel(name: "Virgil van Dijk", fantasyPoints: nil) == "VvD")
     }
 
+    @Test func shouldShowFantasySubstituteWarning_treatsZeroPointFantasyPlayersAsTracked() async throws {
+        #expect(shouldShowFantasySubstituteWarning(fantasyPoints: nil) == false)
+        #expect(shouldShowFantasySubstituteWarning(fantasyPoints: 0) == true)
+        #expect(shouldShowFantasySubstituteWarning(fantasyPoints: 7) == true)
+    }
+
     @Test func fantasyDisplayPlayerGameweekScoreState_prefersRemainingFixtureOverMinutesPlayed() async throws {
         let player = makeFantasyPlayer(
             elementID: 1,
@@ -672,6 +678,81 @@ struct Top_ScoresTests {
         seedTeamIdentityStore()
         #expect(fantasyTeamLookupKeys("Man City").contains("manchester city"))
         #expect(fantasyTeamLookupKeys("Manchester City").contains("man city"))
+    }
+
+    @Test func fantasySquadMembershipLookup_marksRealMatchSubstitutesInContributionStrip() async throws {
+        let squad = FantasySquadDisplayData(
+            gameweekID: 30,
+            gameweekTitle: "GW30",
+            deadlineGameweekID: nil,
+            deadlineTime: nil,
+            totalPoints: 0,
+            hasActiveFixtures: true,
+            hasStartedFixturesInGameweek: true,
+            hasFixturesPlayedToday: true,
+            isEstimatedScore: true,
+            estimatedCurrentScore: 0,
+            scoreCalculationRulesApplied: [],
+            rank: nil,
+            overallRank: nil,
+            transfersCost: nil,
+            pointsOnBench: nil,
+            activeChips: [],
+            goalkeepers: [],
+            defenders: [],
+            midfielders: [
+                makeFantasyPlayer(
+                    elementID: 9,
+                    pickPosition: 5,
+                    positionType: .midfielder,
+                    displayName: "Ekitike",
+                    fullName: "Hugo Ekitike",
+                    teamName: "Liverpool"
+                )
+            ],
+            forwards: [],
+            bench: []
+        )
+        let lookup = try #require(FantasySquadMembershipLookup(squad: squad))
+        let substitute = MatchLineupPlayer(
+            number: 22,
+            name: "Hugo Ekitike",
+            positionCategory: "attacker",
+            formationRowIndex: nil,
+            formationSlotIndex: nil,
+            formationRowSize: nil
+        )
+        let match = Match(
+            date: "2026-03-15",
+            time: "16:30",
+            homeTeam: "Liverpool",
+            awayTeam: "Tottenham Hotspur",
+            league: "Premier League",
+            tvChannels: [],
+            teamLineups: MatchTeamLineups(
+                home: MatchTeamLineup(
+                    team: "Liverpool",
+                    manager: nil,
+                    formation: "4-3-3",
+                    startingLineup: [],
+                    substitutes: [substitute],
+                    substitutions: []
+                ),
+                away: MatchTeamLineup(
+                    team: "Tottenham Hotspur",
+                    manager: nil,
+                    formation: "4-3-3",
+                    startingLineup: [],
+                    substitutes: [],
+                    substitutions: []
+                )
+            )
+        )
+
+        let contribution = try #require(lookup.involvedPlayers(in: match).first)
+
+        #expect(contribution.displayName == "Ekitike")
+        #expect(contribution.isRealMatchSubstitute)
     }
 
     private func makeMatch(

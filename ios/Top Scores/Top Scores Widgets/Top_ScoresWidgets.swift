@@ -198,6 +198,15 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         rawHasScore && !shouldSuppressScoreDisplay
     }
 
+    var isInProgress: Bool {
+        guard let matchTime else { return false }
+        let normalized = matchTime.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
+        if inProgressTokens.contains(normalized) { return true }
+        let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
+        return normalized.range(of: minutePattern, options: .regularExpression) != nil
+    }
+
     var isFinished: Bool {
         guard let matchTime else { return false }
         let normalized = matchTime
@@ -2506,22 +2515,31 @@ private struct MultiMatchEntryCell: View {
     var body: some View {
         Group {
             if live {
-                HStack(spacing: 6) {
-                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 20)
-                        .frame(width: 20, alignment: .center)
+                HStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        LiveActivityTeamLogo(teamName: match.homeTeam, size: 20)
+                            .frame(width: 20, alignment: .center)
 
-                    scoreView
-                        .frame(width: 88, alignment: .center)
+                        liveScoreView
+                            .frame(width: 38, alignment: .center)
 
-                    Text(timeText)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.65))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .frame(width: 32, alignment: .center)
+                        LiveActivityTeamLogo(teamName: match.awayTeam, size: 20)
+                            .frame(width: 20, alignment: .center)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 20)
-                        .frame(width: 20, alignment: .center)
+                    HStack(spacing: 6) {
+                        Text(timeText)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.65))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .frame(width: 32, alignment: .trailing)
+
+                        liveChannelLogoSlot
+                            .frame(width: 27, alignment: .leading)
+                    }
+                    .frame(width: 65, alignment: .trailing)
                 }
             } else {
                 HStack(spacing: 0) {
@@ -2550,6 +2568,15 @@ private struct MultiMatchEntryCell: View {
     }
 
     @ViewBuilder
+    private var liveScoreView: some View {
+        Text(match.hasScore ? scoreCoreText : "vs")
+            .font(.callout.monospacedDigit().weight(.bold))
+            .foregroundStyle(.white.opacity(scoreOpacity))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+    }
+
+    @ViewBuilder
     private var scoreView: some View {
         if match.hasScore {
             HStack(spacing: 2) {
@@ -2573,6 +2600,28 @@ private struct MultiMatchEntryCell: View {
 
     private var timeText: String {
         live ? (match.matchTime ?? match.time) : match.time
+    }
+
+    private var primaryChannelName: String {
+        let primary = match.tvChannels
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        return primary ?? ""
+    }
+
+    @ViewBuilder
+    private var liveChannelLogoSlot: some View {
+        if showsChannelLogo {
+            LiveActivityChannelLogo(channelName: primaryChannelName, size: 15)
+        } else {
+            Color.clear
+                .frame(width: 27, height: 15)
+        }
+    }
+
+    private var showsChannelLogo: Bool {
+        match.isInProgress && !primaryChannelName.isEmpty
     }
 
     private var scoreOpacity: Double {

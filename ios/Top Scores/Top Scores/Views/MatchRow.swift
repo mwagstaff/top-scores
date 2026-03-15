@@ -399,7 +399,7 @@ private struct FantasyMatchParticipationBadge: View {
     }
 }
 
-private struct FantasyMatchContributionDisplay: Identifiable, Hashable {
+struct FantasyMatchContributionDisplay: Identifiable, Hashable {
     enum PointsDisplay: Hashable {
         case actual(Int)
         case expected(Int)
@@ -435,6 +435,7 @@ private struct FantasyMatchContributionDisplay: Identifiable, Hashable {
     let pointsDisplay: PointsDisplay
     let teamOrder: Int
     let pickPosition: Int
+    let isRealMatchSubstitute: Bool
 
     var isStarter: Bool {
         pickPosition <= 11
@@ -480,8 +481,13 @@ private struct FantasyMatchContributionChip: View {
                 .opacity(textOpacity)
                 .lineLimit(1)
 
+            if contribution.isRealMatchSubstitute {
+                MatchLineupFantasySubstituteWarningIcon()
+                    .opacity(textOpacity)
+            }
+
             if !contribution.isStarter {
-                Text("(sub)")
+                Text("(bench)")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .opacity(0.5)
@@ -500,9 +506,16 @@ private struct FantasyMatchContributionChip: View {
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(
             contribution.isStarter
-                ? "\(contribution.displayName), starter, \(contribution.pointsDisplay.accessibilityText)"
-                : "\(contribution.displayName), bench, \(contribution.pointsDisplay.accessibilityText)"
+                ? contributionAccessibilityLabel(role: "starter")
+                : contributionAccessibilityLabel(role: "bench")
         )
+    }
+
+    private func contributionAccessibilityLabel(role: String) -> String {
+        if contribution.isRealMatchSubstitute {
+            return "\(contribution.displayName), listed as substitute in real match, \(role), \(contribution.pointsDisplay.accessibilityText)"
+        }
+        return "\(contribution.displayName), \(role), \(contribution.pointsDisplay.accessibilityText)"
     }
 }
 
@@ -1726,6 +1739,10 @@ private struct MatchLineupPlayerMarkerView: View {
         lineupPlayerMarkerLabel(name: player.name, fantasyPoints: fantasyPoints)
     }
 
+    private var showsReplacementFantasySubstituteWarning: Bool {
+        shouldShowFantasySubstituteWarning(fantasyPoints: replacementFantasyPoints)
+    }
+
     var body: some View {
         VStack(spacing: 4) {
             ZStack {
@@ -1772,6 +1789,10 @@ private struct MatchLineupPlayerMarkerView: View {
                             .foregroundStyle(Color.white.opacity(0.92))
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
+
+                        if showsReplacementFantasySubstituteWarning {
+                            MatchLineupFantasySubstituteWarningIcon()
+                        }
 
                         if let replacementFantasyPoints {
                             MatchLineupFantasyPointsBadge(points: replacementFantasyPoints, compact: true)
@@ -1932,6 +1953,10 @@ private struct MatchLineupSubstitutesTable: View {
                                     .font(.system(size: 11, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.white.opacity(0.96))
 
+                                if row.showsFantasySubstituteWarning {
+                                    MatchLineupFantasySubstituteWarningIcon()
+                                }
+
                                 if let fantasyPoints = row.fantasyPoints {
                                     MatchLineupFantasyPointsBadge(points: fantasyPoints, compact: true)
                                 }
@@ -1977,6 +2002,20 @@ private struct MatchLineupSubstituteRow: Identifiable {
 
     var id: String {
         player.id
+    }
+
+    var showsFantasySubstituteWarning: Bool {
+        shouldShowFantasySubstituteWarning(fantasyPoints: fantasyPoints)
+    }
+}
+
+private struct MatchLineupFantasySubstituteWarningIcon: View {
+    var body: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(Color(red: 1.0, green: 0.82, blue: 0.19))
+            .accessibilityLabel("Fantasy player listed as substitute")
+            .accessibilityHint("This player is on the bench in the real match lineup")
     }
 }
 
@@ -2262,10 +2301,11 @@ private struct MatchPlayerNameLookup {
     }
 }
 
-private struct FantasySquadMembershipLookup {
+struct FantasySquadMembershipLookup {
     private struct SquadPlayerSummary {
         let elementID: Int
         let displayName: String
+        let fullName: String
         let pickPosition: Int
     }
 
@@ -2293,6 +2333,7 @@ private struct FantasySquadMembershipLookup {
                 SquadPlayerSummary(
                     elementID: player.elementID,
                     displayName: player.displayName,
+                    fullName: player.fullName,
                     pickPosition: player.pickPosition
                 )
             )
@@ -2373,11 +2414,13 @@ private struct FantasySquadMembershipLookup {
     ) -> [FantasyMatchContributionDisplay] {
         var output: [FantasyMatchContributionDisplay] = []
         var seenElementIDs = Set<Int>()
+        let substituteMemberKeys = self.substituteMemberKeys(in: match)
 
         appendPlayers(
             for: match.homeTeam,
             teamOrder: 0,
             preferExpectedPoints: preferExpectedPoints,
+            substituteMemberKeys: substituteMemberKeys,
             output: &output,
             seenElementIDs: &seenElementIDs
         )
@@ -2385,6 +2428,7 @@ private struct FantasySquadMembershipLookup {
             for: match.awayTeam,
             teamOrder: 1,
             preferExpectedPoints: preferExpectedPoints,
+            substituteMemberKeys: substituteMemberKeys,
             output: &output,
             seenElementIDs: &seenElementIDs
         )
@@ -2407,12 +2451,20 @@ private struct FantasySquadMembershipLookup {
         for teamName: String,
         teamOrder: Int,
         preferExpectedPoints: Bool,
+        substituteMemberKeys: Set<String>,
         output: inout [FantasyMatchContributionDisplay],
         seenElementIDs: inout Set<Int>
     ) {
         for teamKey in fantasyTeamLookupKeys(teamName) {
             for player in playersByTeam[teamKey] ?? [] {
                 guard seenElementIDs.insert(player.elementID).inserted else { continue }
+                let playerMemberKeys = matchingMemberKeys(
+                    teamKeys: fantasyTeamLookupKeys(teamName),
+                    nameKeys: Self.nameVariants(
+                        fullName: player.fullName,
+                        displayName: player.displayName
+                    )
+                )
                 let pointsDisplay: FantasyMatchContributionDisplay.PointsDisplay = {
                     if preferExpectedPoints {
                         return .expected(expectedPointsByElementID[player.elementID] ?? 0)
@@ -2425,7 +2477,8 @@ private struct FantasySquadMembershipLookup {
                         displayName: player.displayName,
                         pointsDisplay: pointsDisplay,
                         teamOrder: teamOrder,
-                        pickPosition: player.pickPosition
+                        pickPosition: player.pickPosition,
+                        isRealMatchSubstitute: playerMemberKeys.contains(where: substituteMemberKeys.contains)
                     )
                 )
             }
@@ -2463,6 +2516,31 @@ private struct FantasySquadMembershipLookup {
             nameKeys.map { "\(teamKey)|\($0)" }
         }
         .filter { memberKeys.contains($0) }
+    }
+
+    private func substituteMemberKeys(in match: Match) -> Set<String> {
+        var keys = Set<String>()
+
+        func append(lineup: MatchTeamLineup?, fallbackTeamName: String) {
+            guard let lineup else { return }
+            let teamKeys = fantasyTeamLookupKeys(lineup.team ?? fallbackTeamName)
+            for player in lineup.substitutes {
+                let nameKeys = Self.nameVariants(
+                    fullName: player.name,
+                    displayName: condensedLineupPlayerName(player.name)
+                )
+                for teamKey in teamKeys {
+                    for nameKey in nameKeys {
+                        keys.insert("\(teamKey)|\(nameKey)")
+                    }
+                }
+            }
+        }
+
+        append(lineup: match.teamLineups?.home, fallbackTeamName: match.homeTeam)
+        append(lineup: match.teamLineups?.away, fallbackTeamName: match.awayTeam)
+
+        return keys
     }
 
     private static func normalizeName(_ value: String) -> String {
@@ -2550,6 +2628,10 @@ func lineupPlayerMarkerLabel(name: String, fantasyPoints: Int?) -> String {
         return "\(fantasyPoints)"
     }
     return lineupPlayerInitials(name)
+}
+
+func shouldShowFantasySubstituteWarning(fantasyPoints: Int?) -> Bool {
+    fantasyPoints != nil
 }
 
 func lineupPlayerInitials(_ value: String) -> String {
