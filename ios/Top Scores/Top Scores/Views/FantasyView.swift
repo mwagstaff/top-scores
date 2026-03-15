@@ -2216,7 +2216,7 @@ struct FantasyView: View {
 
     @ViewBuilder
     private func eventLegendSection(_ data: FantasySquadDisplayData) -> some View {
-        let scoreLine = "Score strip: purple means still to play, faded means no fixture left this gameweek, gradient means live now."
+        let scoreLine = "Score strip: purple means still to play, red-to-green shows completed score strength, muted purple means no fixture left this gameweek, gradient means live now."
         let goalLine = legendLine(
             emoji: "⚽️",
             title: "Goals scored",
@@ -3361,7 +3361,7 @@ private struct FantasyPlayerCard: View {
         case .upcoming:
             return AnyShapeStyle(Color(red: 0.20, green: 0.03, blue: 0.28))
         case .completed:
-            return AnyShapeStyle(Color(red: 0.16, green: 0.04, blue: 0.24))
+            return AnyShapeStyle(fantasyScoreHeatmapColor(player.displayPoints))
         case .noFixture:
             return AnyShapeStyle(Color(red: 0.12, green: 0.04, blue: 0.18))
         }
@@ -3380,7 +3380,9 @@ private struct FantasyPlayerCard: View {
 
     private var pointsForegroundColor: Color {
         switch scoreState {
-        case .live, .upcoming, .completed, .noFixture:
+        case .completed:
+            return player.displayPoints >= 3 ? Color.black.opacity(0.82) : .white
+        case .live, .upcoming, .noFixture:
             return .white
         }
     }
@@ -3765,6 +3767,21 @@ private struct FantasyRivalScorePill: Identifiable, Hashable {
 
 private func fantasyExpectedPointsText(_ value: Double) -> String {
     "\(Int(value.rounded()))"
+}
+
+private func fantasyScoreHeatmapColor(_ points: Int) -> Color {
+    switch points {
+    case ..<1:
+        return Color(red: 0.78, green: 0.16, blue: 0.14)
+    case 1...2:
+        return Color(red: 0.91, green: 0.37, blue: 0.15)
+    case 3...4:
+        return Color(red: 0.95, green: 0.68, blue: 0.16)
+    case 5...7:
+        return Color(red: 0.29, green: 0.71, blue: 0.27)
+    default:
+        return Color.green
+    }
 }
 
 private enum AssistantManagerPortraitCatalog {

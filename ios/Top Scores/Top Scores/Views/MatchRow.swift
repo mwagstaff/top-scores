@@ -145,7 +145,10 @@ struct MatchRow: View {
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               preferences.showFantasyMatchPills,
               isPremierLeagueMatch,
-              let lookup = FantasySquadMembershipLookup(squad: fantasyViewModel.data)
+              let lookup = FantasySquadMembershipLookup(
+                squad: fantasyViewModel.data,
+                expectedPointsByElementID: fantasyExpectedPointsByElementID
+              )
         else {
             return nil
         }
@@ -166,12 +169,59 @@ struct MatchRow: View {
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               preferences.showFantasyMatchPills,
               isPremierLeagueMatch,
-              let lookup = FantasySquadMembershipLookup(squad: fantasyViewModel.data)
+              let lookup = FantasySquadMembershipLookup(
+                squad: fantasyViewModel.data,
+                expectedPointsByElementID: fantasyExpectedPointsByElementID
+              )
         else {
             return []
         }
 
-        return lookup.involvedPlayers(in: match)
+        return lookup.involvedPlayers(
+            in: match,
+            preferExpectedPoints: match.isUpcomingScorelessFixture && !fantasyExpectedPointsByElementID.isEmpty
+        )
+    }
+
+    private var fantasyExpectedPointsByElementID: [Int: Int] {
+        guard let squad = fantasyViewModel.data,
+              let section = fantasyViewModel.assistantManagerPreview?.expectedPoints
+        else {
+            return [:]
+        }
+
+        let starterExpectedPoints = Dictionary(
+            uniqueKeysWithValues: section.starters.map { ($0.elementID, $0.expectedPointsNextGameweek) }
+        )
+        let benchExpectedPoints = Dictionary(
+            uniqueKeysWithValues: section.bench.map { ($0.elementID, $0.expectedPointsNextGameweek) }
+        )
+
+        var expectedPointsByElementID: [Int: Int] = [:]
+
+        for player in squad.starters {
+            guard player.hasRemainingFixtureThisGameweek,
+                  let expectedPoints = starterExpectedPoints[player.elementID]
+            else {
+                continue
+            }
+            let adjustedPoints = expectedPoints * Double(max(player.multiplier, 1))
+            expectedPointsByElementID[player.elementID] = Int(adjustedPoints.rounded())
+        }
+
+        if squad.hasBenchBoostActive {
+            for player in squad.bench {
+                guard player.hasRemainingFixtureThisGameweek,
+                      let expectedPoints = benchExpectedPoints[player.elementID]
+                else {
+                    continue
+                }
+                let adjustedPoints = expectedPoints * Double(max(player.multiplier, 1))
+                expectedPointsByElementID[player.elementID] = Int(adjustedPoints.rounded())
+            }
+        }
+
+        return expectedPointsByElementID
     }
 
     private var shouldShowFooterRow: Bool {
@@ -350,9 +400,39 @@ private struct FantasyMatchParticipationBadge: View {
 }
 
 private struct FantasyMatchContributionDisplay: Identifiable, Hashable {
+    enum PointsDisplay: Hashable {
+        case actual(Int)
+        case expected(Int)
+
+        var value: Int {
+            switch self {
+            case .actual(let value), .expected(let value):
+                return value
+            }
+        }
+
+        var text: String {
+            switch self {
+            case .actual(let value):
+                return "\(value)"
+            case .expected(let value):
+                return "xP: \(value)"
+            }
+        }
+
+        var accessibilityText: String {
+            switch self {
+            case .actual(let value):
+                return "\(value) points"
+            case .expected(let value):
+                return "expected \(value) points"
+            }
+        }
+    }
+
     let elementID: Int
     let displayName: String
-    let points: Int
+    let pointsDisplay: PointsDisplay
     let teamOrder: Int
     let pickPosition: Int
 
@@ -407,21 +487,21 @@ private struct FantasyMatchContributionChip: View {
                     .opacity(0.5)
             }
 
-            Text("\(contribution.points)")
+            Text(contribution.pointsDisplay.text)
                 .font(.caption2.monospacedDigit().weight(.semibold))
                 .foregroundStyle(Color.white)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(fantasyPointsHeatmapColor(contribution.points).opacity(pillOpacity))
+                        .fill(fantasyPointsHeatmapColor(contribution.pointsDisplay.value).opacity(pillOpacity))
                 )
         }
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(
             contribution.isStarter
-                ? "\(contribution.displayName), starter, \(contribution.points) points"
-                : "\(contribution.displayName), bench, \(contribution.points) points"
+                ? "\(contribution.displayName), starter, \(contribution.pointsDisplay.accessibilityText)"
+                : "\(contribution.displayName), bench, \(contribution.pointsDisplay.accessibilityText)"
         )
     }
 }
@@ -2194,9 +2274,10 @@ private struct FantasySquadMembershipLookup {
     private let effectiveScoresByTeam: [String: Int]
     private let contributionPointsByKey: [String: Int]
     private let contributionPointsByElementID: [Int: Int]
+    private let expectedPointsByElementID: [Int: Int]
     private let playersByTeam: [String: [SquadPlayerSummary]]
 
-    init?(squad: FantasySquadDisplayData?) {
+    init?(squad: FantasySquadDisplayData?, expectedPointsByElementID: [Int: Int] = [:]) {
         guard let squad else { return nil }
 
         var keys = Set<String>()
@@ -2240,6 +2321,7 @@ private struct FantasySquadMembershipLookup {
         effectiveScoresByTeam = effectiveScores
         contributionPointsByKey = contributionPoints
         self.contributionPointsByElementID = contributionPointsByElementID
+        self.expectedPointsByElementID = expectedPointsByElementID
         self.playersByTeam = playersByTeam
     }
 
@@ -2285,26 +2367,31 @@ private struct FantasySquadMembershipLookup {
         return memberKeys.compactMap { contributionPointsByKey[$0] }.max() ?? 0
     }
 
-    func involvedPlayers(in match: Match) -> [FantasyMatchContributionDisplay] {
+    func involvedPlayers(
+        in match: Match,
+        preferExpectedPoints: Bool = false
+    ) -> [FantasyMatchContributionDisplay] {
         var output: [FantasyMatchContributionDisplay] = []
         var seenElementIDs = Set<Int>()
 
         appendPlayers(
             for: match.homeTeam,
             teamOrder: 0,
+            preferExpectedPoints: preferExpectedPoints,
             output: &output,
             seenElementIDs: &seenElementIDs
         )
         appendPlayers(
             for: match.awayTeam,
             teamOrder: 1,
+            preferExpectedPoints: preferExpectedPoints,
             output: &output,
             seenElementIDs: &seenElementIDs
         )
 
         return output.sorted { lhs, rhs in
-            if lhs.points != rhs.points {
-                return lhs.points > rhs.points
+            if lhs.pointsDisplay.value != rhs.pointsDisplay.value {
+                return lhs.pointsDisplay.value > rhs.pointsDisplay.value
             }
             if lhs.teamOrder != rhs.teamOrder {
                 return lhs.teamOrder < rhs.teamOrder
@@ -2319,17 +2406,24 @@ private struct FantasySquadMembershipLookup {
     private func appendPlayers(
         for teamName: String,
         teamOrder: Int,
+        preferExpectedPoints: Bool,
         output: inout [FantasyMatchContributionDisplay],
         seenElementIDs: inout Set<Int>
     ) {
         for teamKey in fantasyTeamLookupKeys(teamName) {
             for player in playersByTeam[teamKey] ?? [] {
                 guard seenElementIDs.insert(player.elementID).inserted else { continue }
+                let pointsDisplay: FantasyMatchContributionDisplay.PointsDisplay = {
+                    if preferExpectedPoints {
+                        return .expected(expectedPointsByElementID[player.elementID] ?? 0)
+                    }
+                    return .actual(contributionPointsByElementID[player.elementID] ?? 0)
+                }()
                 output.append(
                     FantasyMatchContributionDisplay(
                         elementID: player.elementID,
                         displayName: player.displayName,
-                        points: contributionPointsByElementID[player.elementID] ?? 0,
+                        pointsDisplay: pointsDisplay,
                         teamOrder: teamOrder,
                         pickPosition: player.pickPosition
                     )
