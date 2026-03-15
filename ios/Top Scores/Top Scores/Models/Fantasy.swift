@@ -1335,6 +1335,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
 
     var shouldAutoSubAsNonParticipant: Bool {
         guard minutesPlayed == 0 else { return false }
+        if hasActiveFixtureThisGameweek { return true }
         if isDefinitelyUnavailable { return true }
         if !hasAnyFixtureThisGameweek { return true }
         return !hasUpcomingFixtureThisGameweek && !hasActiveFixtureThisGameweek

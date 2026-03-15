@@ -99,6 +99,7 @@ const {
   canonicalTeamName,
   buildFantasyShortNameMappings,
 } = require("./team_identity");
+const fantasyScore = require("./fantasy_score");
 
 function parseEnvBoolean(value, fallback = false) {
   if (value === undefined || value === null) return fallback;
@@ -455,6 +456,28 @@ const parsedFplFixturesMaxBytes = Number(
 const FPL_FIXTURES_MAX_BYTES = Number.isFinite(parsedFplFixturesMaxBytes)
   ? Math.max(10 * 1024 * 1024, Math.floor(parsedFplFixturesMaxBytes))
   : 200 * 1024 * 1024;
+const DEFAULT_FPL_EVENT_LIVE_SOURCE_URL_TEMPLATE =
+  "https://fantasy.premierleague.com/api/event/{event}/live/";
+const FPL_EVENT_LIVE_SOURCE_URL_TEMPLATE =
+  process.env.FPL_EVENT_LIVE_SOURCE_URL_TEMPLATE || DEFAULT_FPL_EVENT_LIVE_SOURCE_URL_TEMPLATE;
+const parsedFplEventLiveIntervalSeconds = Number(
+  process.env.FPL_EVENT_LIVE_UPDATE_INTERVAL_SECONDS || 15
+);
+const FPL_EVENT_LIVE_INTERVAL_MS = Number.isFinite(parsedFplEventLiveIntervalSeconds)
+  ? Math.max(10 * 1000, Math.floor(parsedFplEventLiveIntervalSeconds * 1000))
+  : 15 * 1000;
+const parsedFplEventLiveTimeoutMs = Number(
+  process.env.FPL_EVENT_LIVE_TIMEOUT_MS || 30 * 1000
+);
+const FPL_EVENT_LIVE_TIMEOUT_MS = Number.isFinite(parsedFplEventLiveTimeoutMs)
+  ? Math.max(5 * 1000, Math.floor(parsedFplEventLiveTimeoutMs))
+  : 30 * 1000;
+const parsedFplEventLiveMaxBytes = Number(
+  process.env.FPL_EVENT_LIVE_MAX_BYTES || 40 * 1024 * 1024
+);
+const FPL_EVENT_LIVE_MAX_BYTES = Number.isFinite(parsedFplEventLiveMaxBytes)
+  ? Math.max(1024 * 1024, Math.floor(parsedFplEventLiveMaxBytes))
+  : 40 * 1024 * 1024;
 const RECENT_OUTPUT_PATH =
   process.env.RECENT_OUTPUT_PATH || path.join(__dirname, "recent_matches.json");
 const MISSING_TEAM_LOGOS_OUTPUT_PATH =
@@ -601,6 +624,7 @@ const SOURCE_BBC_MATCH_DETAILS = "bbc_match_details";
 const SOURCE_RECENT_CACHE = "recent_matches_cache";
 const SOURCE_FPL_BOOTSTRAP = "fpl_bootstrap_static";
 const SOURCE_FPL_FIXTURES = "fpl_fixtures";
+const SOURCE_FPL_EVENT_LIVE = "fpl_event_live";
 const OP_DATASET_LIVE_MATCHES = "live_matches";
 const OP_DATASET_BBC_LIVE_MATCHES = "bbc_live_matches";
 const OP_DATASET_BBC_RANGE_MATCHES = "bbc_range_matches";
@@ -775,6 +799,14 @@ let fantasyFixturesLastSuccessAt = null;
 let fantasyFixturesLastFailureAt = null;
 let fantasyFixturesLastSuccessDurationSeconds = 0;
 let fantasyFixturesLastFailureDurationSeconds = 0;
+let cachedFantasyEventLive = null;
+let fantasyEventLiveLastUpdated = null;
+let fantasyEventLiveUpdating = false;
+let fantasyEventLivePayloadBytes = 0;
+let fantasyEventLiveLastSuccessAt = null;
+let fantasyEventLiveLastFailureAt = null;
+let fantasyEventLiveLastSuccessDurationSeconds = 0;
+let fantasyEventLiveLastFailureDurationSeconds = 0;
 let fantasyBootstrapNextDailyRefreshAt = null;
 let fantasyBootstrapDailyRefreshTimer = null;
 let fantasyTransferRecommendationRequestsTotal = 0;
@@ -1609,14 +1641,159 @@ function fetchFantasyFixturesPayload(url, options = {}, redirectDepth = 0) {
   });
 }
 
+function fetchFantasyEventLivePayload(url, options = {}, redirectDepth = 0) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : FPL_EVENT_LIVE_TIMEOUT_MS;
+  const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : FPL_EVENT_LIVE_MAX_BYTES;
+  const maxRedirects = Number.isFinite(options.maxRedirects) ? options.maxRedirects : 3;
+
+  return new Promise((resolve, reject) => {
+    let target;
+    try {
+      target = new URL(url);
+    } catch (_error) {
+      reject(new Error(`Invalid FPL event live URL: ${url}`));
+      return;
+    }
+
+    const lib = target.protocol === "https:" ? https : http;
+    const req = lib.get(
+      target,
+      {
+        headers: {
+          "User-Agent": "TopScoresAPI/1.0 (+https://fantasy.premierleague.com/)",
+          Accept: "application/json",
+          "Accept-Encoding": "gzip, deflate, br",
+        },
+      },
+      (res) => {
+        const statusCode = Number(res.statusCode || 0);
+        if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
+          if (redirectDepth >= maxRedirects) {
+            res.resume();
+            reject(new Error("FPL event live fetch failed: too many redirects"));
+            return;
+          }
+          const redirectUrl = new URL(res.headers.location, target).toString();
+          res.resume();
+          fetchFantasyEventLivePayload(redirectUrl, options, redirectDepth + 1)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+
+        if (statusCode !== 200) {
+          res.resume();
+          reject(new Error(`FPL event live fetch failed with status ${statusCode}`));
+          return;
+        }
+
+        const decodedStream = decodeHttpResponseStream(res);
+        const chunks = [];
+        let totalBytes = 0;
+
+        decodedStream.on("data", (chunk) => {
+          const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += bufferChunk.length;
+          if (totalBytes > maxBytes) {
+            decodedStream.destroy(
+              new Error(`FPL event live payload exceeded max size limit (${maxBytes} bytes)`)
+            );
+            return;
+          }
+          chunks.push(bufferChunk);
+        });
+
+        decodedStream.on("error", (error) => {
+          reject(error);
+        });
+
+        decodedStream.on("end", () => {
+          try {
+            const rawPayload = Buffer.concat(chunks, totalBytes).toString("utf8");
+            const payload = JSON.parse(rawPayload);
+            const gameUpdatingMessage = extractFplGameUpdatingMessage(payload);
+            if (gameUpdatingMessage) {
+              const updatingError = new Error(
+                `FPL upstream update in progress: ${gameUpdatingMessage}`
+              );
+              updatingError.code = "FPL_GAME_UPDATING";
+              updatingError.upstreamMessage = gameUpdatingMessage;
+              reject(updatingError);
+              return;
+            }
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+              reject(new Error("FPL event live parse failed: expected JSON object payload"));
+              return;
+            }
+            resolve({
+              payload,
+              payloadBytes: totalBytes,
+            });
+          } catch (error) {
+            reject(new Error(`FPL event live parse failed: ${error.message || error}`));
+          }
+        });
+      }
+    );
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`FPL event live request timed out after ${timeoutMs}ms`));
+    });
+    req.on("error", (error) => {
+      reject(error);
+    });
+  });
+}
+
+function refreshFantasyScoreContextCache() {
+  fantasyScore.setFantasyScoreContext({
+    bootstrap: cachedFantasyBootstrap,
+    fixtures: cachedFantasyFixtures,
+    live: cachedFantasyEventLive,
+    currentEventId: fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id,
+    bootstrapUpdatedAt: fantasyBootstrapLastUpdated,
+    fixturesUpdatedAt: fantasyFixturesLastUpdated,
+    liveUpdatedAt: fantasyEventLiveLastUpdated,
+  });
+}
+
 function refreshFantasyBootstrapDerivedState(payload) {
+  const previousCurrentEventID = Number(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id) || 0;
   const events = Array.isArray(payload && payload.events) ? payload.events : [];
   fantasyBootstrapEventsCount = events.length;
   fantasyBootstrapCurrentEvent =
     events.find((event) => event && event.is_current === true) || null;
   fantasyBootstrapNextEvent =
     events.find((event) => event && event.is_next === true) || null;
+  const nextCurrentEventID = Number(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id) || 0;
+  if (previousCurrentEventID > 0 && previousCurrentEventID !== nextCurrentEventID) {
+    cachedFantasyEventLive = null;
+    fantasyEventLiveLastUpdated = null;
+    fantasyEventLivePayloadBytes = 0;
+  }
   setSourceCacheSize(SOURCE_FPL_BOOTSTRAP, fantasyBootstrapEventsCount);
+  refreshFantasyScoreContextCache();
+}
+
+function currentEventHasMutableFantasyFixtures() {
+  const currentEventID = Number(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id) || 0;
+  if (!currentEventID) return false;
+
+  return cachedFantasyFixtures.some((fixture) => {
+    const fixtureEventID = Number(fixture && fixture.event) || 0;
+    if (fixtureEventID !== currentEventID) return false;
+    if (fixture && fixture.started !== true) return false;
+    const finished = fixture && fixture.finished === true;
+    const finishedProvisional =
+      fixture && (fixture.finished_provisional === true || fixture.finishedProvisional === true);
+    return !(finished && finishedProvisional);
+  });
+}
+
+function currentFantasyEventLiveSourceURL() {
+  const currentEventID = Number(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id) || 0;
+  if (!currentEventID) return null;
+  return FPL_EVENT_LIVE_SOURCE_URL_TEMPLATE.replace("{event}", String(currentEventID));
 }
 
 function fantasyBootstrapAgeSeconds(nowMs = Date.now()) {
@@ -11333,6 +11510,7 @@ async function updateFantasyFixtures(options = {}) {
       (Date.now() - startedAtMs) / 1000
     );
     setSourceCacheSize(SOURCE_FPL_FIXTURES, recordsFetched);
+    refreshFantasyScoreContextCache();
 
     success = true;
     console.info(
@@ -11368,6 +11546,81 @@ async function updateFantasyFixtures(options = {}) {
       recordsFetched,
     });
     fantasyFixturesUpdating = false;
+  }
+}
+
+async function updateFantasyEventLive(options = {}) {
+  if (fantasyEventLiveUpdating) return;
+  if (!currentEventHasMutableFantasyFixtures()) return;
+
+  const sourceURL = currentFantasyEventLiveSourceURL();
+  if (!sourceURL) return;
+
+  fantasyEventLiveUpdating = true;
+  const startedAtMs = Date.now();
+  let success = false;
+  let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+
+  console.info(
+    `[FPLEventLive] Download start source=${sourceURL} trigger=${trigger}`
+  );
+
+  try {
+    const { payload, payloadBytes } = await fetchFantasyEventLivePayload(
+      sourceURL,
+      {
+        timeoutMs: FPL_EVENT_LIVE_TIMEOUT_MS,
+        maxBytes: FPL_EVENT_LIVE_MAX_BYTES,
+      }
+    );
+    cachedFantasyEventLive = payload;
+    fantasyEventLivePayloadBytes = payloadBytes;
+    fantasyEventLiveLastUpdated = new Date().toISOString();
+    recordsFetched = Array.isArray(payload && payload.elements) ? payload.elements.length : 0;
+    fantasyEventLiveLastSuccessAt = fantasyEventLiveLastUpdated;
+    fantasyEventLiveLastSuccessDurationSeconds = Math.max(
+      0,
+      (Date.now() - startedAtMs) / 1000
+    );
+    setSourceCacheSize(SOURCE_FPL_EVENT_LIVE, recordsFetched);
+    refreshFantasyScoreContextCache();
+
+    success = true;
+    console.info(
+      `[FPLEventLive] Download complete source=${sourceURL} trigger=${trigger} bytes=${fantasyEventLivePayloadBytes} elements=${recordsFetched} duration_ms=${Date.now() - startedAtMs} updated_at=${fantasyEventLiveLastUpdated}`
+    );
+    logPollSuccess("fpl_event_live", {
+      source: SOURCE_FPL_EVENT_LIVE,
+      trigger,
+      bytes: fantasyEventLivePayloadBytes,
+      elements: recordsFetched,
+      current_event_id: fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id,
+      updated_at: fantasyEventLiveLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
+  } catch (err) {
+    fantasyEventLiveLastFailureAt = new Date().toISOString();
+    fantasyEventLiveLastFailureDurationSeconds = Math.max(
+      0,
+      (Date.now() - startedAtMs) / 1000
+    );
+    console.warn(
+      "Failed to update FPL event live dataset:",
+      err.message || err
+    );
+  } finally {
+    const durationMs = Date.now() - startedAtMs;
+    console.info(
+      `[FPLEventLive] Download end source=${sourceURL} trigger=${trigger} status=${success ? "success" : "failure"} duration_ms=${durationMs}`
+    );
+    trackSourceUpdateMetrics({
+      source: SOURCE_FPL_EVENT_LIVE,
+      startedAtMs,
+      success,
+      recordsFetched,
+    });
+    fantasyEventLiveUpdating = false;
   }
 }
 
@@ -13486,6 +13739,74 @@ app.get(`${API_PREFIX}/fantasy/gameweek/next`, (_req, res) => {
   res.json(fantasyBootstrapNextEvent);
 });
 
+app.get(`${API_PREFIX}/fantasy/score`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  if (fantasyBootstrapLastUpdated) {
+    res.set("X-Fantasy-Bootstrap-Last-Updated", fantasyBootstrapLastUpdated);
+  }
+  if (fantasyFixturesLastUpdated) {
+    res.set("X-Fantasy-Fixtures-Last-Updated", fantasyFixturesLastUpdated);
+  }
+  if (fantasyEventLiveLastUpdated) {
+    res.set("X-Fantasy-Event-Live-Last-Updated", fantasyEventLiveLastUpdated);
+  }
+
+  const explicitDeviceToken =
+    typeof req.query.deviceToken === "string"
+      ? req.query.deviceToken
+      : typeof req.query.userDeviceToken === "string"
+        ? req.query.userDeviceToken
+        : "";
+  const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(explicitDeviceToken);
+
+  if (!resolvedDeviceToken) {
+    res.status(400).json({
+      error: "Missing device token (X-Device-Token header or deviceToken query parameter).",
+    });
+    return;
+  }
+
+  try {
+    const record = await getUserPreferences(resolvedDeviceToken);
+    if (!record || !record.fantasy || !record.fantasy.squad) {
+      res.status(404).json({
+        error: "No synced fantasy squad found for this device.",
+        userDeviceToken: resolvedDeviceToken,
+      });
+      return;
+    }
+
+    const breakdown = fantasyScore.calculateFantasyScore(record.fantasy);
+    if (!breakdown) {
+      res.status(422).json({
+        error: "Fantasy score could not be calculated from the synced squad.",
+        userDeviceToken: resolvedDeviceToken,
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      userDeviceToken: resolvedDeviceToken,
+      managerEntryID: record.fantasy.managerEntryID || record.fantasy.squad.managerEntryID || null,
+      gameweekID: record.fantasy.squad.gameweekID || null,
+      gameweekTitle: record.fantasy.squad.gameweekTitle || null,
+      currentScore: breakdown.currentScore,
+      effectiveContributions: breakdown.effectiveContributions,
+      scoreCalculationRulesApplied: breakdown.scoreCalculationRulesApplied,
+      usedServerLiveData: breakdown.usedServerLiveData,
+      playerCount: breakdown.playerCount,
+      context: fantasyScore.fantasyScoreContextSummary(),
+    });
+  } catch (error) {
+    console.error("[API] Error calculating fantasy score:", error);
+    res.status(500).json({
+      error: "Failed to calculate fantasy score",
+      message: error.message,
+    });
+  }
+});
+
 function fantasyBootstrapLookupPayload() {
   const payload = cachedFantasyBootstrap && typeof cachedFantasyBootstrap === "object"
     ? cachedFantasyBootstrap
@@ -14451,6 +14772,14 @@ app.post(`${API_PREFIX}/preferences`, async (req, res) => {
           liveActivity && typeof liveActivity === "object" ? liveActivity : undefined,
       }
     );
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "fantasy")) {
+      void matchMonitor.runLiveActivityEvaluationNow({
+        userDeviceToken: resolvedDeviceToken,
+        trigger: "preferences_fantasy_sync",
+      }).catch((error) => {
+        console.warn("[API] Fantasy preference sync reconcile failed:", error.message || error);
+      });
+    }
     res.status(200).json({
       success: true,
       data: saved,
@@ -16948,6 +17277,7 @@ async function bootstrapOperationalState() {
   void updateNationalEloTeams({ trigger: "startup_bootstrap" });
   void updateFantasyBootstrapStatic({ trigger: "startup_bootstrap" });
   void updateFantasyFixtures({ trigger: "startup_bootstrap" });
+  void updateFantasyEventLive({ trigger: "startup_bootstrap" });
 }
 
 const shouldRunRuntime = require.main === module;
@@ -17028,6 +17358,13 @@ if (shouldRunRuntime) {
   setInterval(() => {
     void updateFantasyFixtures({ trigger: "interval" });
   }, fantasyFixturesInterval);
+  const fantasyEventLiveInterval =
+    Number.isFinite(FPL_EVENT_LIVE_INTERVAL_MS) && FPL_EVENT_LIVE_INTERVAL_MS > 0
+      ? FPL_EVENT_LIVE_INTERVAL_MS
+      : 15 * 1000;
+  setInterval(() => {
+    void updateFantasyEventLive({ trigger: "interval" });
+  }, fantasyEventLiveInterval);
   setInterval(() => {
     pollFantasyAssistantManagerEntries();
   }, FANTASY_ASSISTANT_MANAGER_POLL_INTERVAL_MS);

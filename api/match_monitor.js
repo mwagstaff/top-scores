@@ -9,6 +9,7 @@ const {
 const { sendNotification, sendLiveActivityPush } = require("./apns_client");
 const { fetchBbcLiveTextEntriesByDetailsUrl } = require("./fetch_bbc_scores");
 const liveActivityMetrics = require("./live_activity_metrics");
+const fantasyScore = require("./fantasy_score");
 const crypto = require("crypto");
 const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.json");
 const { teamIdentityNames } = require("./team_identity");
@@ -229,11 +230,22 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
     return null;
   }
 
-  const delayedStatusMinute = parseStatusMinute(delayedMatch && delayedMatch.score_status);
-  const delayedMinute = Number.isFinite(delayedStatusMinute)
-    ? delayedStatusMinute
-    : Math.max(0, currentMinute - delayMinutes);
-  if (delayedMinute <= 0) {
+  const delayedStatusToken = String(
+    delayedMatch && delayedMatch.score_status ? delayedMatch.score_status : ""
+  ).trim();
+  const computedDelayedMinute = Math.max(0, currentMinute - delayMinutes);
+  const delayedMinute = parseStatusMinute(delayedStatusToken);
+  const shouldNormalizeFirstHalfStoppageCarryover =
+    delayedStatusToken.startsWith("45+") && currentMinute >= 46;
+  const resolvedDelayedStatus =
+    shouldNormalizeFirstHalfStoppageCarryover || !Number.isFinite(delayedMinute)
+      ? String(computedDelayedMinute)
+      : delayedStatusToken;
+
+  const resolvedDelayedMinute = Number.isFinite(delayedMinute) && !shouldNormalizeFirstHalfStoppageCarryover
+    ? delayedMinute
+    : computedDelayedMinute;
+  if (resolvedDelayedMinute <= 0) {
     return null;
   }
   const homeGoalTimeline = selectBestGoalTimeline(
@@ -246,8 +258,8 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
   );
   const hasGoalTimeline =
     Array.isArray(homeGoalTimeline) || Array.isArray(awayGoalTimeline);
-  const timelineHomeGoals = countGoalsUpToMinute(homeGoalTimeline, delayedMinute);
-  const timelineAwayGoals = countGoalsUpToMinute(awayGoalTimeline, delayedMinute);
+  const timelineHomeGoals = countGoalsUpToMinute(homeGoalTimeline, resolvedDelayedMinute);
+  const timelineAwayGoals = countGoalsUpToMinute(awayGoalTimeline, resolvedDelayedMinute);
   const delayedHomeScore = toNumericScore(delayedMatch && delayedMatch.home_score);
   const delayedAwayScore = toNumericScore(delayedMatch && delayedMatch.away_score);
   const currentHomeScore = toNumericScore(currentMatch.home_score);
@@ -267,8 +279,7 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
       away_score: awayTimelineComplete
         ? timelineAwayGoals
         : Math.max(timelineAwayGoals, delayedAwayScore || 0),
-      score_status:
-        delayedMatch && delayedMatch.score_status ? String(delayedMatch.score_status) : String(delayedMinute),
+      score_status: resolvedDelayedStatus,
     };
   }
 
@@ -276,14 +287,14 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
     return {
       home_score: null,
       away_score: null,
-      score_status: String(delayedMinute),
+      score_status: resolvedDelayedStatus,
     };
   }
 
   return {
     home_score: delayedMatch.home_score,
     away_score: delayedMatch.away_score,
-    score_status: String(delayedMinute),
+    score_status: resolvedDelayedStatus,
   };
 }
 
@@ -2840,6 +2851,129 @@ function liveActivityMatchDedupKeys(match, extraIdentity = null) {
   return Array.from(keys);
 }
 
+function normalizeLiveActivityFixtureToken(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function liveActivityFixtureDedupKeys(match) {
+  const keys = new Set();
+  if (!match || typeof match !== "object") return [];
+
+  const date = String(match.date || "").trim();
+  const league = normalizeLiveActivityFixtureToken(match.league || "");
+  const homeTeam = normalizeLiveActivityFixtureToken(match.home_team || match.homeTeam || "");
+  const awayTeam = normalizeLiveActivityFixtureToken(match.away_team || match.awayTeam || "");
+
+  if (date && homeTeam && awayTeam) {
+    keys.add(`fixture|${date}|${homeTeam}|${awayTeam}`);
+    if (league) {
+      keys.add(`fixture|${date}|${league}|${homeTeam}|${awayTeam}`);
+    }
+  }
+
+  return Array.from(keys);
+}
+
+function liveActivityEntryDedupKeys(entry) {
+  const match = entry && entry.match ? entry.match : null;
+  const matchId = entry && entry.matchId ? String(entry.matchId) : null;
+  return Array.from(
+    new Set([
+      ...liveActivityMatchDedupKeys(match, matchId),
+      ...liveActivityFixtureDedupKeys(match),
+    ])
+  );
+}
+
+function liveActivityStateRichness(state) {
+  if (!state || typeof state !== "object") return -1;
+  let richness = 0;
+  if (Array.isArray(state.history)) richness += state.history.length * 10;
+  if (state.lastState && typeof state.lastState === "object") richness += 3;
+  if (Number.isFinite(Number(state.finishedAtMs))) richness += 2;
+  if (state.lifecycle && typeof state.lifecycle === "object") richness += 1;
+  return richness;
+}
+
+function mergeDuplicateLiveActivityEntries(existingEntry, incomingEntry) {
+  if (!existingEntry || !existingEntry.match) return incomingEntry;
+  if (!incomingEntry || !incomingEntry.match) return existingEntry;
+
+  const existingMatch = existingEntry.match;
+  const incomingMatch = incomingEntry.match;
+  const freshness = compareLiveActivitySnapshotFreshness(existingMatch, incomingMatch);
+  const preferredEntry = freshness > 0 ? existingEntry : incomingEntry;
+  const fallbackEntry = preferredEntry === existingEntry ? incomingEntry : existingEntry;
+  const preferredState =
+    liveActivityStateRichness(existingEntry.state) >= liveActivityStateRichness(incomingEntry.state)
+      ? existingEntry.state
+      : incomingEntry.state;
+  const mergedMatch = mergeSnapshotWithFallback(fallbackEntry.match, preferredEntry.match);
+
+  const channels = canonicalLiveActivityChannelsForMatch(preferredEntry.match);
+  const fallbackChannels = canonicalLiveActivityChannelsForMatch(fallbackEntry.match);
+  mergedMatch.tv_channels = channels.length > 0 ? channels : fallbackChannels;
+  mergedMatch.match_details_id = String(
+    preferredEntry.matchId ||
+      preferredEntry.match.match_details_id ||
+      fallbackEntry.matchId ||
+      fallbackEntry.match.match_details_id ||
+      ""
+  ).trim() || null;
+
+  return {
+    matchId:
+      liveActivityMatchIdentity(mergedMatch) ||
+      preferredEntry.matchId ||
+      fallbackEntry.matchId ||
+      null,
+    state: preferredState || null,
+    match: mergedMatch,
+  };
+}
+
+function dedupeLiveActivityEntries(entries) {
+  const deduped = [];
+  const keyToIndex = new Map();
+
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry || !entry.match) continue;
+    const dedupeKeys = liveActivityEntryDedupKeys(entry);
+    const existingIndex = dedupeKeys.find((key) => keyToIndex.has(key));
+
+    if (existingIndex === undefined) {
+      const nextIndex = deduped.length;
+      deduped.push(entry);
+      dedupeKeys.forEach((key) => keyToIndex.set(key, nextIndex));
+      continue;
+    }
+
+    const mergedEntry = mergeDuplicateLiveActivityEntries(
+      deduped[keyToIndex.get(existingIndex)],
+      entry
+    );
+    const targetIndex = keyToIndex.get(existingIndex);
+    deduped[targetIndex] = mergedEntry;
+    liveActivityEntryDedupKeys(mergedEntry).forEach((key) => keyToIndex.set(key, targetIndex));
+  }
+
+  return deduped
+    .filter((entry) => entry && entry.match)
+    .map((entry) => ({
+      ...entry,
+      matchId:
+        entry && entry.matchId
+          ? entry.matchId
+          : liveActivityMatchIdentity(entry && entry.match ? entry.match : null),
+    }));
+}
+
 function currentLondonDateKey(nowMs = Date.now()) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/London",
@@ -3144,7 +3278,7 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
     liveActivityMatchDedupKeys(mergedMatch, matchId).forEach((key) => seenKeys.add(key));
   }
 
-  return entries.filter((entry) => entry && entry.matchId && entry.match);
+  return dedupeLiveActivityEntries(entries);
 }
 
 function compareLiveActivityMatches(lhs, rhs) {
@@ -3463,40 +3597,7 @@ function liveActivityDelayMinutesFromPreferences(prefs) {
 }
 
 function calculateFantasyCurrentScore(fantasyState) {
-  const squad =
-    fantasyState && fantasyState.squad && typeof fantasyState.squad === "object"
-      ? fantasyState.squad
-      : null;
-  if (!squad) return null;
-
-  const contributions = Array.isArray(squad.effectiveContributions)
-    ? squad.effectiveContributions
-    : [];
-  if (contributions.length > 0) {
-    const total = contributions.reduce((sum, contribution) => {
-      const points = Number(contribution && contribution.points);
-      return Number.isFinite(points) ? sum + Math.floor(points) : sum;
-    }, 0);
-    return Number.isFinite(total) ? total : null;
-  }
-
-  const resolvedCurrentScore = Number(squad.resolvedCurrentScore);
-  if (Number.isFinite(resolvedCurrentScore)) {
-    return Math.floor(resolvedCurrentScore);
-  }
-
-  const isEstimatedScore = squad.isEstimatedScore === true;
-  const estimatedCurrentScore = Number(squad.estimatedCurrentScore);
-  if (isEstimatedScore && Number.isFinite(estimatedCurrentScore)) {
-    return Math.floor(estimatedCurrentScore);
-  }
-
-  const totalPoints = Number(squad.totalPoints);
-  if (Number.isFinite(totalPoints)) {
-    return Math.floor(totalPoints);
-  }
-
-  return null;
+  return fantasyScore.calculateFantasyCurrentScore(fantasyState);
 }
 
 function fantasyCurrentScoreForUser(user) {
@@ -4161,7 +4262,7 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
   const recentKickoffMatches = [];
   const upcomingMatches = [];
 
-  for (const entry of eligible) {
+  for (const entry of dedupeLiveActivityEntries(eligible)) {
     const state = entry.state || null;
     const currentMatch = entry.match;
     const kickoffMs = parseMatchDateTimeMs(currentMatch);
@@ -4821,6 +4922,8 @@ module.exports = {
     buildLiveActivityScoreHash,
     buildLiveActivityPresentationForUser,
     calculateFantasyCurrentScore,
+    setFantasyScoreContext: fantasyScore.setFantasyScoreContext,
+    resetFantasyScoreContext: fantasyScore.resetFantasyScoreContext,
     compareLiveActivityMatches,
     compareUpcomingLiveActivityMatches,
     buildLiveActivityEntriesForUser,

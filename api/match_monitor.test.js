@@ -1059,6 +1059,90 @@ test("buildLiveActivityEntriesForUser dedupes canonical and monitored copies of 
   assert.equal(entries[1].match.away_score, 1);
 });
 
+test("buildLiveActivityEntriesForUser collapses duplicate live activity fixtures when feed metadata drifts", () => {
+  const nowMs = Date.parse("2026-03-15T16:50:00Z");
+  const user = liveActivityUser(2, {
+    englishPremierLeagueTeamsOnly: true,
+  });
+
+  const monitoredEntries = [
+    {
+      matchId: "legacy-liv-tot",
+      state: {
+        lastState: {
+          match_details_id: "legacy-liv-tot",
+          date: "2026-03-15",
+          time: "16:30",
+          league: "Premier League",
+          home_team: "Liverpool",
+          away_team: "Tottenham Hotspur",
+          home_score: 1,
+          away_score: 0,
+          score_status: "26",
+          updated_at: "2026-03-15T16:26:30Z",
+        },
+        history: [
+          {
+            timestampMs: nowMs - 20 * 60 * 1000,
+            match: {
+              match_details_id: "legacy-liv-tot",
+              date: "2026-03-15",
+              time: "16:30",
+              league: "Premier League",
+              home_team: "Liverpool",
+              away_team: "Tottenham Hotspur",
+              home_score: 1,
+              away_score: 0,
+              score_status: "26",
+            },
+          },
+        ],
+      },
+      match: {
+        match_details_id: "legacy-liv-tot",
+        date: "2026-03-15",
+        time: "16:30",
+        league: "Premier League",
+        home_team: "Liverpool",
+        away_team: "Tottenham Hotspur",
+        home_score: 1,
+        away_score: 0,
+        score_status: "26",
+        updated_at: "2026-03-15T16:26:30Z",
+      },
+    },
+  ];
+
+  const operationalMatches = [
+    {
+      match_details_id: "canonical-liv-tot",
+      date: "2026-03-15",
+      time: "16:29",
+      league: "Premier League",
+      home_team: "Liverpool",
+      away_team: "Tottenham Hotspur",
+      home_score: 1,
+      away_score: 0,
+      score_status: "HT",
+      updated_at: "2026-03-15T16:46:00Z",
+      tv_channels: ["Sky Sports Premier League"],
+    },
+  ];
+
+  const entries = __testHooks.buildLiveActivityEntriesForUser(
+    user,
+    monitoredEntries,
+    operationalMatches,
+    nowMs
+  );
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].match.home_team, "Liverpool");
+  assert.equal(entries[0].match.away_team, "Tottenham Hotspur");
+  assert.equal(entries[0].match.score_status, "HT");
+  assert.equal(entries[0].state.history.length, 1);
+});
+
 test("mergeCanonicalLiveActivityMatch keeps fresher live state for active matches", () => {
   const merged = __testHooks.mergeCanonicalLiveActivityMatch(
     {
@@ -1515,6 +1599,93 @@ test("buildLiveActivityPresentationForUser derives delayed live minute from curr
   assert.equal(presentation.matches[0].away_score, 0);
 });
 
+test("buildLiveActivityPresentationForUser normalizes stale stoppage-time snapshots to the configured delayed minute", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 55 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(2),
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "c05vqzv88jnt",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Premier League",
+            home_team: "Liverpool",
+            away_team: "Tottenham Hotspur",
+            home_score: 1,
+            away_score: 0,
+            score_status: "50",
+            home_goal_scorers: [
+              {
+                player: "Dominik Szoboszlai",
+                goal_times: ["18'"],
+                own_goal_times: [],
+              },
+            ],
+            away_goal_scorers: [],
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 2 * 60 * 1000 - 5 * 1000,
+              match: {
+                match_details_id: "c05vqzv88jnt",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Premier League",
+                home_team: "Liverpool",
+                away_team: "Tottenham Hotspur",
+                home_score: 1,
+                away_score: 0,
+                score_status: "45+4",
+                home_goal_scorers: [
+                  {
+                    player: "Dominik Szoboszlai",
+                    goal_times: ["18'"],
+                    own_goal_times: [],
+                  },
+                ],
+                away_goal_scorers: [],
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "c05vqzv88jnt",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Liverpool",
+          away_team: "Tottenham Hotspur",
+          home_score: 1,
+          away_score: 0,
+          score_status: "50",
+          home_goal_scorers: [
+            {
+              player: "Dominik Szoboszlai",
+              goal_times: ["18'"],
+              own_goal_times: [],
+            },
+          ],
+          away_goal_scorers: [],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "48");
+  assert.equal(presentation.matches[0].home_score, 1);
+  assert.equal(presentation.matches[0].away_score, 0);
+});
+
 test("buildLiveActivityPresentationForUser keeps live match visible during restart before full delay buffer exists", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 23 * 60 * 1000;
@@ -1675,6 +1846,100 @@ test("calculateFantasyCurrentScore prefers synced effective contributions", () =
     }),
     29
   );
+});
+
+test("calculateFantasyCurrentScore recomputes from server live data for zero-minute live auto-subs", () => {
+  __testHooks.resetFantasyScoreContext();
+  try {
+    __testHooks.setFantasyScoreContext({
+      bootstrap: {
+        elements: [
+          { id: 1, team: 1, status: "a" },
+          { id: 2, team: 1, status: "a" },
+          { id: 3, team: 1, status: "a" },
+          { id: 4, team: 1, status: "a" },
+          { id: 5, team: 1, status: "a" },
+          { id: 6, team: 1, status: "a" },
+          { id: 7, team: 1, status: "a" },
+          { id: 8, team: 1, status: "a" },
+          { id: 9, team: 1, status: "a" },
+          { id: 10, team: 2, status: "a" },
+          { id: 11, team: 3, status: "a" },
+          { id: 12, team: 4, status: "a" },
+          { id: 13, team: 5, status: "a" },
+          { id: 14, team: 5, status: "a" },
+          { id: 15, team: 5, status: "a" },
+        ],
+        teams: [
+          { id: 1, name: "Arsenal" },
+          { id: 2, name: "Liverpool" },
+          { id: 3, name: "Manchester City" },
+          { id: 4, name: "Burnley" },
+          { id: 5, name: "Leeds United" },
+          { id: 6, name: "Tottenham Hotspur" },
+        ],
+        events: [{ id: 30, is_current: true }],
+      },
+      fixtures: [
+        { id: 101, event: 30, team_h: 1, team_a: 3, started: true, finished: true, finished_provisional: true },
+        { id: 102, event: 30, team_h: 4, team_a: 5, started: true, finished: true, finished_provisional: true },
+        { id: 103, event: 30, team_h: 2, team_a: 6, started: true, finished: false, finished_provisional: false },
+      ],
+      live: {
+        elements: [
+          { id: 1, stats: { total_points: 2, minutes: 90 } },
+          { id: 2, stats: { total_points: 9, minutes: 90 } },
+          { id: 3, stats: { total_points: 10, minutes: 90 } },
+          { id: 4, stats: { total_points: 2, minutes: 90 } },
+          { id: 5, stats: { total_points: 2, minutes: 90 } },
+          { id: 6, stats: { total_points: 1, minutes: 90 } },
+          { id: 7, stats: { total_points: 6, minutes: 90 } },
+          { id: 8, stats: { total_points: 3, minutes: 90 } },
+          { id: 9, stats: { total_points: 4, minutes: 90 } },
+          { id: 10, stats: { total_points: 0, minutes: 0 } },
+          { id: 11, stats: { total_points: 1, minutes: 90 } },
+          { id: 12, stats: { total_points: 0, minutes: 0 } },
+          { id: 13, stats: { total_points: 8, minutes: 90 } },
+          { id: 14, stats: { total_points: 0, minutes: 0 } },
+          { id: 15, stats: { total_points: 0, minutes: 0 } },
+        ],
+      },
+    });
+
+    const score = __testHooks.calculateFantasyCurrentScore({
+      managerEntryID: 6653695,
+      squad: {
+        managerEntryID: 6653695,
+        gameweekID: 30,
+        gameweekTitle: "GW30",
+        resolvedCurrentScore: 40,
+        effectiveContributions: [
+          { elementID: 1, displayName: "Keeper A", teamName: "Arsenal", points: 40 },
+        ],
+        players: [
+          { elementID: 1, pickPosition: 1, positionType: 1, displayName: "Keeper A", teamName: "Arsenal", multiplier: 1, isStarter: true },
+          { elementID: 2, pickPosition: 2, positionType: 2, displayName: "Def A", teamName: "Arsenal", multiplier: 1, isStarter: true },
+          { elementID: 3, pickPosition: 3, positionType: 2, displayName: "Def B", teamName: "Arsenal", multiplier: 1, isStarter: true },
+          { elementID: 4, pickPosition: 4, positionType: 2, displayName: "Def C", teamName: "Arsenal", multiplier: 1, isStarter: true },
+          { elementID: 5, pickPosition: 5, positionType: 3, displayName: "Mid A", teamName: "Arsenal", multiplier: 1, isStarter: true },
+          { elementID: 6, pickPosition: 6, positionType: 3, displayName: "Mid B", teamName: "Arsenal", multiplier: 1, isStarter: true },
+          { elementID: 7, pickPosition: 7, positionType: 3, displayName: "Mid C", teamName: "Arsenal", multiplier: 1, isStarter: true },
+          { elementID: 8, pickPosition: 8, positionType: 3, displayName: "Mid D", teamName: "Arsenal", multiplier: 1, isStarter: true },
+          { elementID: 9, pickPosition: 9, positionType: 3, displayName: "Mid E", teamName: "Arsenal", multiplier: 1, isStarter: true },
+          { elementID: 10, pickPosition: 10, positionType: 4, displayName: "Fwd A", teamName: "Liverpool", multiplier: 1, isStarter: true },
+          { elementID: 11, pickPosition: 11, positionType: 4, displayName: "Fwd B", teamName: "Manchester City", multiplier: 1, isStarter: true },
+          { elementID: 12, pickPosition: 12, positionType: 1, displayName: "Bench Gk", teamName: "Burnley", multiplier: 0, isStarter: false },
+          { elementID: 13, pickPosition: 13, positionType: 2, displayName: "Bench Def", teamName: "Leeds United", multiplier: 0, isStarter: false },
+          { elementID: 14, pickPosition: 14, positionType: 3, displayName: "Bench Mid", teamName: "Leeds United", multiplier: 0, isStarter: false },
+          { elementID: 15, pickPosition: 15, positionType: 4, displayName: "Bench Fwd", teamName: "Leeds United", multiplier: 0, isStarter: false },
+        ],
+      },
+    });
+
+    assert.equal(score, 48);
+  } finally {
+    __testHooks.resetFantasyScoreContext();
+  }
 });
 
 test("buildLiveActivityPresentationForUser includes synced fantasy score when available", () => {

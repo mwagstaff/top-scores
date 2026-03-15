@@ -437,6 +437,158 @@ struct Top_ScoresTests {
         )
     }
 
+    @Test func fantasySquadBuilder_appliesBenchPointsForLiveZeroMinuteStarter() async throws {
+        let gameweek = FantasyGameweek(
+            id: 30,
+            name: "Gameweek 30",
+            isCurrent: true,
+            isNext: false,
+            finished: false,
+            deadlineTime: "2026-03-14T11:00:00Z"
+        )
+        let bootstrap = FantasyBootstrapLookup(
+            updatedAt: nil,
+            elements: [
+                makeFantasyBootstrapElement(id: 1, team: 1, elementType: 1, webName: "Keeper A"),
+                makeFantasyBootstrapElement(id: 2, team: 1, elementType: 2, webName: "Def A"),
+                makeFantasyBootstrapElement(id: 3, team: 1, elementType: 2, webName: "Def B"),
+                makeFantasyBootstrapElement(id: 4, team: 1, elementType: 2, webName: "Def C"),
+                makeFantasyBootstrapElement(id: 5, team: 1, elementType: 3, webName: "Mid A"),
+                makeFantasyBootstrapElement(id: 6, team: 1, elementType: 3, webName: "Mid B"),
+                makeFantasyBootstrapElement(id: 7, team: 1, elementType: 3, webName: "Mid C"),
+                makeFantasyBootstrapElement(id: 8, team: 1, elementType: 3, webName: "Mid D"),
+                makeFantasyBootstrapElement(id: 9, team: 1, elementType: 3, webName: "Mid E"),
+                makeFantasyBootstrapElement(id: 10, team: 2, elementType: 4, webName: "Fwd A"),
+                makeFantasyBootstrapElement(id: 11, team: 3, elementType: 4, webName: "Fwd B"),
+                makeFantasyBootstrapElement(id: 12, team: 4, elementType: 1, webName: "Keeper B"),
+                makeFantasyBootstrapElement(id: 13, team: 5, elementType: 2, webName: "Bench Def"),
+                makeFantasyBootstrapElement(id: 14, team: 5, elementType: 3, webName: "Bench Mid"),
+                makeFantasyBootstrapElement(id: 15, team: 5, elementType: 4, webName: "Bench Fwd")
+            ],
+            teams: [
+                FantasyBootstrapTeam(id: 1, name: "Arsenal", shortName: "ARS"),
+                FantasyBootstrapTeam(id: 2, name: "Liverpool", shortName: "LIV"),
+                FantasyBootstrapTeam(id: 3, name: "Manchester City", shortName: "MCI"),
+                FantasyBootstrapTeam(id: 4, name: "Burnley", shortName: "BUR"),
+                FantasyBootstrapTeam(id: 5, name: "Leeds United", shortName: "LEE"),
+                FantasyBootstrapTeam(id: 6, name: "Tottenham Hotspur", shortName: "TOT")
+            ],
+            elementTypes: [
+                FantasyBootstrapElementType(id: 1, singularName: "Goalkeeper", singularNameShort: "GKP"),
+                FantasyBootstrapElementType(id: 2, singularName: "Defender", singularNameShort: "DEF"),
+                FantasyBootstrapElementType(id: 3, singularName: "Midfielder", singularNameShort: "MID"),
+                FantasyBootstrapElementType(id: 4, singularName: "Forward", singularNameShort: "FWD")
+            ],
+            events: [gameweek]
+        )
+        let picks = FantasyPicksResponse(
+            picks: [
+                makeFantasyPick(element: 1, position: 1, elementType: 1),
+                makeFantasyPick(element: 2, position: 2, elementType: 2),
+                makeFantasyPick(element: 3, position: 3, elementType: 2),
+                makeFantasyPick(element: 4, position: 4, elementType: 2),
+                makeFantasyPick(element: 5, position: 5, elementType: 3),
+                makeFantasyPick(element: 6, position: 6, elementType: 3),
+                makeFantasyPick(element: 7, position: 7, elementType: 3),
+                makeFantasyPick(element: 8, position: 8, elementType: 3),
+                makeFantasyPick(element: 9, position: 9, elementType: 3),
+                makeFantasyPick(element: 10, position: 10, elementType: 4),
+                makeFantasyPick(element: 11, position: 11, elementType: 4),
+                makeFantasyPick(element: 12, position: 12, elementType: 1),
+                makeFantasyPick(element: 13, position: 13, elementType: 2),
+                makeFantasyPick(element: 14, position: 14, elementType: 3),
+                makeFantasyPick(element: 15, position: 15, elementType: 4)
+            ],
+            entryHistory: FantasyEntryHistory(
+                event: 30,
+                points: 40,
+                rank: nil,
+                overallRank: nil,
+                eventTransfersCost: nil,
+                pointsOnBench: 8
+            ),
+            activeChipCodes: []
+        )
+        let liveResponse = FantasyEventLiveResponse(
+            elements: [
+                makeLiveElement(id: 1, points: 2),
+                makeLiveElement(id: 2, points: 9),
+                makeLiveElement(id: 3, points: 10),
+                makeLiveElement(id: 4, points: 2),
+                makeLiveElement(id: 5, points: 2),
+                makeLiveElement(id: 6, points: 1),
+                makeLiveElement(id: 7, points: 6),
+                makeLiveElement(id: 8, points: 3),
+                makeLiveElement(id: 9, points: 4),
+                makeLiveElement(id: 10, points: 0),
+                makeLiveElement(id: 11, points: 1),
+                makeLiveElement(id: 12, points: 0),
+                makeLiveElement(id: 13, points: 8),
+                makeLiveElement(id: 14, points: 0),
+                makeLiveElement(id: 15, points: 0)
+            ]
+        )
+        let fixtures = [
+            FantasyFixture(
+                id: 101,
+                event: 30,
+                teamH: 1,
+                teamA: 3,
+                kickoffTime: "2026-03-15T14:00:00Z",
+                started: true,
+                finished: true,
+                finishedProvisional: false
+            ),
+            FantasyFixture(
+                id: 102,
+                event: 30,
+                teamH: 4,
+                teamA: 5,
+                kickoffTime: "2026-03-15T14:00:00Z",
+                started: true,
+                finished: true,
+                finishedProvisional: false
+            ),
+            FantasyFixture(
+                id: 103,
+                event: 30,
+                teamH: 2,
+                teamA: 6,
+                kickoffTime: "2026-03-15T16:30:00Z",
+                started: true,
+                finished: false,
+                finishedProvisional: false
+            )
+        ]
+
+        let squad = FantasySquadBuilder.build(
+            gameweek: gameweek,
+            picksResponse: picks,
+            liveResponse: liveResponse,
+            fixtures: fixtures,
+            seasonFixtures: fixtures,
+            bootstrap: bootstrap,
+            now: Date(timeIntervalSince1970: 1_773_961_200)
+        )
+
+        #expect(squad.resolvedCurrentScore == 48)
+        #expect(
+            squad.scoreCalculationRulesApplied.contains {
+                $0.contains("Bench Def") && $0.contains("Fwd A")
+            }
+        )
+        #expect(
+            squad.effectivePlayerContributions.contains {
+                $0.elementID == 13 && $0.points == 8
+            }
+        )
+        #expect(
+            !squad.effectivePlayerContributions.contains {
+                $0.elementID == 10
+            }
+        )
+    }
+
     @Test func fantasySquadDisplayData_marksNonScoringChipsWithAsterisk() async throws {
         let squad = FantasySquadDisplayData(
             gameweekID: 30,
@@ -555,6 +707,36 @@ struct Top_ScoresTests {
         #expect(player.gameweekScoreState == .upcoming)
         #expect(player.hasRemainingFixtureThisGameweek)
         #expect(!player.hasFinishedScoringForGameweek)
+    }
+
+    @Test func fantasyDisplayPlayerShouldAutoSub_onlyForLiveOrClosedZeroMinuteCases() async throws {
+        let liveZeroMinutePlayer = makeFantasyPlayer(
+            elementID: 1,
+            pickPosition: 10,
+            positionType: .forward,
+            displayName: "Live Fwd",
+            fullName: "Live Forward",
+            teamName: "Liverpool",
+            hasAnyFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: false,
+            hasActiveFixtureThisGameweek: true,
+            minutesPlayed: 0
+        )
+        let upcomingZeroMinutePlayer = makeFantasyPlayer(
+            elementID: 2,
+            pickPosition: 11,
+            positionType: .forward,
+            displayName: "Upcoming Fwd",
+            fullName: "Upcoming Forward",
+            teamName: "Liverpool",
+            hasAnyFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: true,
+            hasActiveFixtureThisGameweek: false,
+            minutesPlayed: 0
+        )
+
+        #expect(liveZeroMinutePlayer.shouldAutoSubAsNonParticipant)
+        #expect(!upcomingZeroMinutePlayer.shouldAutoSubAsNonParticipant)
     }
 
     @Test func fantasyDisplayPlayerGameweekScoreState_distinguishesCompletedAndBlankGameweeks() async throws {
