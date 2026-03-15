@@ -8,8 +8,15 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var matchesStore: MatchesStore
+    @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @AppStorage("fantasy.managerEntryID") private var fantasyManagerEntryID = ""
     @State private var selectedTab = 0
+
+    private let fantasyLiveRefreshInterval: TimeInterval = 30
+    private let fantasyIdleRefreshInterval: TimeInterval = 5 * 60
 
     var body: some View {
         GeometryReader { proxy in
@@ -31,8 +38,14 @@ struct ContentView: View {
                     .tag(2)
                 FantasyView(isSelected: selectedTab == 3)
                     .tabItem {
-                        Label("Fantasy", systemImage: "trophy")
+                        Label {
+                            Text("Fantasy")
+                        } icon: {
+                            Image(systemName: "trophy")
+                                .symbolEffect(.pulse.byLayer, options: .repeating, isActive: fantasyTabShouldPulse)
+                        }
                     }
+                    .badge(fantasyTabBadge)
                     .tag(3)
                 PreferencesView()
                     .tabItem {
@@ -52,7 +65,73 @@ struct ContentView: View {
                     await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
                 }
             }
+            .task(id: fantasyManagerEntryID) {
+                await refreshFantasySummaryIfNeeded(force: true)
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .active else { return }
+                Task {
+                    await refreshFantasySummaryIfNeeded(force: false)
+                }
+            }
         }
+    }
+
+    private var trimmedFantasyManagerEntryID: String {
+        fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var fantasyTabBadge: String? {
+        guard !trimmedFantasyManagerEntryID.isEmpty,
+              let score = fantasyViewModel.data?.resolvedCurrentScore else {
+            return nil
+        }
+
+        return "\(score)"
+    }
+
+    private var fantasyTabShouldPulse: Bool {
+        guard !trimmedFantasyManagerEntryID.isEmpty,
+              let squad = fantasyViewModel.data else {
+            return false
+        }
+
+        return matchesStore.matches.contains { match in
+            guard isPremierLeagueMatch(match), match.isInProgress else { return false }
+            return squad.matchSquadSection(forTeamName: match.homeTeam)?.hasPlayers == true ||
+                squad.matchSquadSection(forTeamName: match.awayTeam)?.hasPlayers == true
+        }
+    }
+
+    private func isPremierLeagueMatch(_ match: Match) -> Bool {
+        match.league.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+    }
+
+    private var fantasySummaryRefreshInterval: TimeInterval {
+        fantasyViewModel.data?.hasActiveFixtures == true
+            ? fantasyLiveRefreshInterval
+            : fantasyIdleRefreshInterval
+    }
+
+    private func refreshFantasySummaryIfNeeded(force: Bool) async {
+        let managerEntryID = trimmedFantasyManagerEntryID
+        guard !managerEntryID.isEmpty else { return }
+        guard !fantasyViewModel.isLoading, !fantasyViewModel.isRefreshing else { return }
+
+        if !force,
+           let lastUpdated = fantasyViewModel.lastUpdated,
+           fantasyViewModel.data != nil,
+           Date().timeIntervalSince(lastUpdated) < fantasySummaryRefreshInterval {
+            return
+        }
+
+        await fantasyViewModel.refresh(
+            managerEntryID: managerEntryID,
+            apiBaseURL: preferences.apiBaseURL,
+            rivalManagers: [],
+            trackedLeagues: []
+        )
     }
 }
 

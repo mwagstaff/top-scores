@@ -2118,6 +2118,36 @@ test("compareLiveActivityMatches sorts later kickoffs first", () => {
   assert.equal(sorted[0].match_details_id, "later");
 });
 
+test("compareUpcomingLiveActivityMatches sorts earlier kickoffs first", () => {
+  const laterKickoffMatch = {
+    match_details_id: "later",
+    league: "Premier League",
+    home_team: "Liverpool",
+    away_team: "Tottenham Hotspur",
+    home_team_score: 1961,
+    away_team_score: 1835,
+    total_team_score: 3796,
+    date: "2026-03-15",
+    time: "16:30",
+  };
+  const earlierKickoffMatch = {
+    match_details_id: "earlier",
+    league: "Premier League",
+    home_team: "Crystal Palace",
+    away_team: "Leeds United",
+    home_team_score: 1682,
+    away_team_score: 1642,
+    total_team_score: 3324,
+    date: "2026-03-15",
+    time: "14:00",
+  };
+
+  const sorted = [laterKickoffMatch, earlierKickoffMatch].sort(
+    __testHooks.compareUpcomingLiveActivityMatches
+  );
+  assert.equal(sorted[0].match_details_id, "earlier");
+});
+
 test("compareLiveActivityMatches sorts higher total team score first for identical kickoffs", () => {
   const highScoreMatch = {
     match_details_id: "high",
@@ -2144,6 +2174,89 @@ test("compareLiveActivityMatches sorts higher total team score first for identic
 
   const sorted = [lowScoreMatch, highScoreMatch].sort(__testHooks.compareLiveActivityMatches);
   assert.equal(sorted[0].match_details_id, "high");
+});
+
+test("compareUpcomingLiveActivityMatches sorts higher total team score first for identical kickoffs", () => {
+  const highScoreMatch = {
+    match_details_id: "high",
+    league: "Premier League",
+    home_team: "Liverpool",
+    away_team: "Tottenham Hotspur",
+    home_team_score: 1961,
+    away_team_score: 1835,
+    total_team_score: 3796,
+    date: "2026-03-15",
+    time: "14:00",
+  };
+  const lowScoreMatch = {
+    match_details_id: "low",
+    league: "Premier League",
+    home_team: "Crystal Palace",
+    away_team: "Leeds United",
+    home_team_score: 1682,
+    away_team_score: 1642,
+    total_team_score: 3324,
+    date: "2026-03-15",
+    time: "14:00",
+  };
+
+  const sorted = [lowScoreMatch, highScoreMatch].sort(
+    __testHooks.compareUpcomingLiveActivityMatches
+  );
+  assert.equal(sorted[0].match_details_id, "high");
+});
+
+test("buildLiveActivityPresentationForUser sorts upcoming matches by kickoff then total team score", () => {
+  const nowMs = Date.now();
+  const firstKickoff = formatLocalDateTimeParts(nowMs + 10 * 60 * 1000);
+  const secondKickoff = formatLocalDateTimeParts(nowMs + 12 * 60 * 1000);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "c05vqzv88jnt",
+          date: secondKickoff.date,
+          time: secondKickoff.time,
+          league: "Premier League",
+          home_team: "Liverpool",
+          away_team: "Tottenham Hotspur",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          home_team_score: 1961,
+          away_team_score: 1835,
+          total_team_score: 3796,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+      {
+        state: null,
+        match: {
+          match_details_id: "cj6d3kd99ekt",
+          date: firstKickoff.date,
+          time: firstKickoff.time,
+          league: "Premier League",
+          home_team: "Crystal Palace",
+          away_team: "Leeds United",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          home_team_score: 1682,
+          away_team_score: 1642,
+          total_team_score: 3324,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "multi_upcoming");
+  assert.equal(presentation.matches[0].match_details_id, "cj6d3kd99ekt");
+  assert.equal(presentation.matches[1].match_details_id, "c05vqzv88jnt");
 });
 
 test("buildLiveActivityPresentationForUser orders mixed live and full-time matches by latest kickoff first", () => {

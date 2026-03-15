@@ -3174,6 +3174,36 @@ function compareLiveActivityMatches(lhs, rhs) {
   );
 }
 
+function compareUpcomingLiveActivityMatches(lhs, rhs) {
+  const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
+  const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
+  if (leftKickoff !== rightKickoff) return leftKickoff - rightKickoff;
+
+  const lhsTeamScore = liveActivityTeamScoreTotal(lhs);
+  const rhsTeamScore = liveActivityTeamScoreTotal(rhs);
+  if (lhsTeamScore !== rhsTeamScore) return rhsTeamScore - lhsTeamScore;
+
+  const homeCompare = String(lhs && lhs.home_team ? lhs.home_team : "").localeCompare(
+    String(rhs && rhs.home_team ? rhs.home_team : ""),
+    undefined,
+    { sensitivity: "base" }
+  );
+  if (homeCompare !== 0) return homeCompare;
+
+  const awayCompare = String(lhs && lhs.away_team ? lhs.away_team : "").localeCompare(
+    String(rhs && rhs.away_team ? rhs.away_team : ""),
+    undefined,
+    { sensitivity: "base" }
+  );
+  if (awayCompare !== 0) return awayCompare;
+
+  return String(lhs && lhs.match_details_id ? lhs.match_details_id : "").localeCompare(
+    String(rhs && rhs.match_details_id ? rhs.match_details_id : ""),
+    undefined,
+    { sensitivity: "base" }
+  );
+}
+
 function isEligibleForLiveActivityByPreferences(user, match) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
   if (!match || typeof match !== "object") {
@@ -4276,11 +4306,11 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const sortedRecentKickoff = recentKickoffMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
-    .sort(compareLiveActivityMatches)
+    .sort(compareUpcomingLiveActivityMatches)
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const sortedUpcoming = upcomingMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
-    .sort(compareLiveActivityMatches)
+    .sort(compareUpcomingLiveActivityMatches)
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const mode = liveActivityModeForMatches(
     sortedLive,
@@ -4792,6 +4822,7 @@ module.exports = {
     buildLiveActivityPresentationForUser,
     calculateFantasyCurrentScore,
     compareLiveActivityMatches,
+    compareUpcomingLiveActivityMatches,
     buildLiveActivityEntriesForUser,
     monitoredMatchStatesSnapshot,
     evaluateUserNotificationDecision,

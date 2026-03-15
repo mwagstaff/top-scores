@@ -2074,17 +2074,9 @@ private struct TopScoresLiveActivityExpandedView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         case "single_upcoming":
-            if let match = state.matches.first {
-                KickoffCountdownTitle(kickoffDate: WidgetMatchDateParser.shared.parse(date: match.date, time: match.time))
-            } else {
-                Text("Kick off soon")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
+            UpcomingMatchesTitle(matches: state.matches)
         case "multi_upcoming":
-            Text("Kick off soon")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            UpcomingMatchesTitle(matches: state.matches)
         default:
             Text("Top Scores")
                 .font(.caption.weight(.semibold))
@@ -2380,28 +2372,30 @@ private struct UpcomingCompetitionHeaderRow: View {
 }
 
 @available(iOSApplicationExtension 16.1, *)
-private struct KickoffCountdownTitle: View {
-    let kickoffDate: Date?
+private struct UpcomingMatchesTitle: View {
+    let matches: [TopScoresLiveActivityMatchState]
 
     var body: some View {
-        Group {
-            if let kickoffDate, kickoffDate > Date() {
-                (Text("Kick off in ")
-                    + Text(
-                        timerInterval: Date()...kickoffDate,
-                        pauseTime: nil,
-                        countsDown: true,
-                        showsHours: false
-                    )
-                    .monospacedDigit())
-            } else if kickoffDate != nil {
-                Text("Kick off now")
-            } else {
-                Text("Kick off soon")
-            }
-        }
+        Text(titleText)
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
+    }
+
+    private var titleText: String {
+        guard let nearestKickoffDate else { return "Kick off soon" }
+
+        let secondsUntilKickoff = nearestKickoffDate.timeIntervalSinceNow
+        if secondsUntilKickoff <= 15 * 60 {
+            return "Kick off soon"
+        }
+        return "Kick off today"
+    }
+
+    private var nearestKickoffDate: Date? {
+        matches
+            .compactMap { WidgetMatchDateParser.shared.parse(date: $0.date, time: $0.time) }
+            .sorted()
+            .first
     }
 }
 
