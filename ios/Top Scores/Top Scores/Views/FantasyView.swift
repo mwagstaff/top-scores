@@ -3450,10 +3450,7 @@ private struct FantasyPlayerCard: View {
         case .value:
             return String(format: "£%.1fm", player.nowCostMillions)
         case .expectedPoints:
-            if let expectedPointsThisGameweek = player.expectedPointsThisGameweek {
-                return "xP \(expectedPointsThisGameweek)"
-            }
-            return "xP -"
+            return "-"
         }
     }
 
@@ -3558,22 +3555,22 @@ private struct FantasyPlayerCard: View {
 
                 if let secondaryXPValue {
                     Text("xP \(secondaryXPValue)")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.78)
+                        .minimumScaleFactor(0.9)
                         .foregroundStyle(secondaryXPForegroundColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
                         .background(
                             Capsule(style: .continuous)
                                 .fill(fantasyScoreHeatmapColor(secondaryXPValue))
                         )
                 } else {
                     Text(secondaryDisplayText)
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: detailMode == .expectedPoints ? 12 : 9, weight: .semibold, design: detailMode == .expectedPoints ? .rounded : .default))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                        .foregroundStyle(primaryTextColor)
+                        .minimumScaleFactor(0.8)
+                        .foregroundStyle(detailMode == .expectedPoints ? Color.secondary : primaryTextColor)
                 }
             }
             .padding(.horizontal, 4)

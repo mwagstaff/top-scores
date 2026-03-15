@@ -1509,6 +1509,9 @@ struct FantasySquadDisplayData: Hashable {
     ) -> FantasySquadDisplayData {
         guard let section else { return self }
 
+        let shouldPreferCurrentGameweekExpectedPoints =
+            allPlayers.contains { $0.hasRemainingFixtureThisGameweek }
+
         let starterExpectedPointsByElementID = Dictionary(
             uniqueKeysWithValues: section.starters.map { ($0.elementID, $0.expectedPointsNextGameweek) }
         )
@@ -1520,6 +1523,15 @@ struct FantasySquadDisplayData: Hashable {
             for player: FantasyDisplayPlayer,
             expectedPointsByElementID: [Int: Double]
         ) -> Int? {
+            if shouldPreferCurrentGameweekExpectedPoints {
+                if player.hasRemainingFixtureThisGameweek,
+                   let baseExpectedPoints = expectedPointsByElementID[player.elementID] {
+                    let adjustedExpectedPoints = baseExpectedPoints * Double(max(player.multiplier, 1))
+                    return Int(adjustedExpectedPoints.rounded())
+                }
+                return nil
+            }
+
             guard let baseExpectedPoints = expectedPointsByElementID[player.elementID] else {
                 return nil
             }
