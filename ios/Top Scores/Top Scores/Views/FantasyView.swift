@@ -462,11 +462,19 @@ struct FantasyView: View {
                         scoreSummaryCard(
                             data,
                             showsActiveChipMessage: data.hasActiveChip,
+                            projectedGameweekPoints: fantasyViewModel.assistantManagerPreview?.expectedPoints.map {
+                                data.projectedGameweekPoints(using: $0)
+                            },
+                            isExpectedPointsLoading: fantasyViewModel.assistantManagerPreview?.ready != true,
                             moreRivalsTapAction: {
                                 withAnimation(.easeInOut(duration: 0.25)) {
                                     proxy.scrollTo(rivalsSectionScrollID, anchor: .top)
                                 }
                             }
+                        )
+                        FantasyTransferDeadlineLabel(
+                            gameweekID: data.deadlineGameweekID,
+                            deadlineTime: data.deadlineTime
                         )
                         pitchSection(
                             data,
@@ -627,6 +635,8 @@ struct FantasyView: View {
         _ data: FantasySquadDisplayData,
         showRivalPills: Bool = true,
         showsActiveChipMessage: Bool = false,
+        projectedGameweekPoints: Double? = nil,
+        isExpectedPointsLoading: Bool = false,
         scoreTapEnabled: Bool = true,
         scoreTapAction: (() -> Void)? = nil,
         moreRivalsTapAction: (() -> Void)? = nil
@@ -641,12 +651,20 @@ struct FantasyView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(data.gameweekTitle)
                         .font(.headline)
-                    if showRivalPills {
-                        FantasyTransferDeadlineLabel(
-                            gameweekID: data.deadlineGameweekID,
-                            deadlineTime: data.deadlineTime
+                    if isExpectedPointsLoading {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Calculating xP for this gameweek")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let projectedGameweekPoints {
+                        Text(
+                            "xP: \(fantasyExpectedPointsText(projectedGameweekPoints)) (expected total points for gameweek)"
                         )
-                            .padding(.bottom, visibleRivalPills.isEmpty ? 1 : 3)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     }
                     if showRivalPills && !visibleRivalPills.isEmpty {
                         HStack(spacing: 5) {
@@ -2009,6 +2027,8 @@ struct FantasyView: View {
                         rival.squad,
                         showRivalPills: false,
                         showsActiveChipMessage: rival.squad.hasActiveChip,
+                        projectedGameweekPoints: rival.projectedGameweekPoints,
+                        isExpectedPointsLoading: rival.isExpectedPointsLoading,
                         scoreTapEnabled: true,
                         scoreTapAction: {
                             openScoreBreakdown(for: rival.squad, teamNameOverride: rival.teamName)
@@ -3716,7 +3736,7 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
 
     var projectedGameweekPointsDisplay: String {
         guard let projectedGameweekPoints else { return "-" }
-        return String(format: "%.1f", projectedGameweekPoints)
+        return fantasyExpectedPointsText(projectedGameweekPoints)
     }
 
     func showsScoreLoadingIndicator(for mode: RivalsScoreMode) -> Bool {
@@ -3741,6 +3761,10 @@ private struct FantasyRivalScorePill: Identifiable, Hashable {
     var displayedScore: String {
         "\(score)\(showsAsterisk ? "*" : "")"
     }
+}
+
+private func fantasyExpectedPointsText(_ value: Double) -> String {
+    "\(Int(value.rounded()))"
 }
 
 private enum AssistantManagerPortraitCatalog {
@@ -3945,11 +3969,38 @@ private struct FantasyTransferDeadlineLabel: View {
     var body: some View {
         if let deadline = Self.parseDeadline(deadlineTime) {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(Self.displayText(deadline: deadline, gameweekID: gameweekID, now: context.date))
-                    .font(.caption2.monospacedDigit().weight(.medium))
-                    .foregroundStyle(Self.labelColor(deadline: deadline, now: context.date))
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
+                let text = Self.displayText(deadline: deadline, gameweekID: gameweekID, now: context.date)
+                let isUrgent = Self.isUrgent(deadline: deadline, now: context.date)
+
+                Group {
+                    if isUrgent {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(Color.orange)
+                            Text(text)
+                        }
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.orange.opacity(0.16))
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+                        )
+                    } else {
+                        Text(text)
+                            .font(.caption2.monospacedDigit().weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .lineLimit(3)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
             }
         }
     }
@@ -3991,12 +4042,9 @@ private struct FantasyTransferDeadlineLabel: View {
         return "Deadline: \(weekday) \(day)\(ordinalSuffix(for: day)), \(time)"
     }
 
-    private static func labelColor(deadline: Date, now: Date) -> Color {
+    private static func isUrgent(deadline: Date, now: Date) -> Bool {
         let remainingSeconds = deadline.timeIntervalSince(now)
-        if remainingSeconds > 5 * 24 * 60 * 60 {
-            return Color.white.opacity(0.58)
-        }
-        return Color.white.opacity(0.94)
+        return remainingSeconds > 0 && remainingSeconds < 24 * 60 * 60
     }
 
     private static func parseDeadline(_ rawValue: String?) -> Date? {
@@ -4598,13 +4646,13 @@ private struct FantasyAssistantManagerSheet: View {
                 let projectedTotal = Double(currentUserScore) + remainingTotal
 
                 HStack(spacing: 8) {
-                    assistantPill(title: "Projected total", value: pointsText(projectedTotal))
-                    assistantPill(title: "Remaining xP", value: pointsText(remainingTotal))
-                    assistantPill(title: "Starting XI xP", value: pointsText(startersTotal))
+                    assistantPill(title: "Projected total", value: fantasyExpectedPointsText(projectedTotal))
+                    assistantPill(title: "Remaining xP", value: fantasyExpectedPointsText(remainingTotal))
+                    assistantPill(title: "Starting XI xP", value: fantasyExpectedPointsText(startersTotal))
                 }
 
                 HStack(spacing: 8) {
-                    assistantPill(title: "Bench", value: pointsText(benchTotal))
+                    assistantPill(title: "Bench", value: fantasyExpectedPointsText(benchTotal))
                 }
 
                 expectedPointsGroup(
@@ -4722,7 +4770,7 @@ private struct FantasyAssistantManagerSheet: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
-                            Text(String(format: "%.1f pts", item.expectedPointsNextGameweek))
+                            Text("\(fantasyExpectedPointsText(item.expectedPointsNextGameweek)) pts")
                                 .font(.caption.monospacedDigit().weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
@@ -5089,9 +5137,8 @@ private struct FantasyAssistantManagerSheet: View {
 
                         Text(
                             fixture.isBlank
-                                ? "0.0"
-                                : String(
-                                    format: "%.1f",
+                                ? "0"
+                                : fantasyExpectedPointsText(
                                     assistantExpectedPointsForDetailsFixture(
                                         details: details,
                                         fixture: fixture,
@@ -5268,7 +5315,7 @@ private struct FantasyAssistantManagerSheet: View {
             color = Color.green
         }
 
-        return Text(String(format: "%.1f", value))
+        return Text(fantasyExpectedPointsText(value))
             .font(.caption.monospacedDigit().weight(.semibold))
             .foregroundStyle(value >= 4.0 ? Color.black.opacity(0.82) : Color.white)
             .padding(.horizontal, 8)
@@ -5592,10 +5639,6 @@ private struct FantasyAssistantManagerSheet: View {
     private func priceText(_ value: Double, signed: Bool = false) -> String {
         let prefix = signed && value > 0 ? "+" : ""
         return "\(prefix)£\(String(format: "%.1f", value))m"
-    }
-
-    private func pointsText(_ value: Double) -> String {
-        String(format: "%.1f", value)
     }
 
     private func preloadIncomingPlayerDetails(
