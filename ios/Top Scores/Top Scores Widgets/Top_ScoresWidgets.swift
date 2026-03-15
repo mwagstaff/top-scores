@@ -1900,17 +1900,26 @@ private struct TopScoresLiveActivityLockScreenView: View {
             .padding(.vertical, isMultiMode ? 6 : 8)
 
             if delayBannerText != nil || fantasyScoreText != nil {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     if let bannerText = delayBannerText {
-                        footerBadge(text: bannerText, background: topScoresBlue)
+                        Text(bannerText)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                            .padding(.leading, 5)
                     }
                     Spacer(minLength: 0)
                     if let fantasyScoreText {
-                        footerBadge(text: fantasyScoreText, background: fantasyRed)
+                        Text(fantasyScoreText)
+                            .lineLimit(1)
+                            .padding(.trailing, 5)
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 4)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(footerBannerBackground)
             }
         }
         .task(id: renderDiagnosticsKey) {
@@ -1939,14 +1948,24 @@ private struct TopScoresLiveActivityLockScreenView: View {
         Color(red: 0.85, green: 0.12, blue: 0.33)
     }
 
-    private func footerBadge(text: String, background: Color) -> some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.white)
-            .lineLimit(1)
-            .padding(.vertical, 4)
-            .padding(.horizontal, 8)
-            .background(background, in: Capsule())
+    private var footerBannerBackground: LinearGradient {
+        if fantasyScoreText == nil {
+            return LinearGradient(
+                colors: [topScoresBlue, topScoresBlue],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
+        return LinearGradient(
+            stops: [
+                .init(color: topScoresBlue, location: 0.0),
+                .init(color: topScoresBlue, location: 0.58),
+                .init(color: fantasyRed.opacity(0.9), location: 0.82),
+                .init(color: fantasyRed, location: 1.0),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
     }
 
     private var renderDiagnosticsKey: String {

@@ -17242,6 +17242,7 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
     const userDeviceToken = _req.deviceToken || normalizeDeviceToken(explicitDeviceToken);
     const result = await matchMonitor.runLiveActivityEvaluationNow({
       userDeviceToken,
+      trigger: typeof _req.body?.trigger === "string" ? _req.body.trigger : "",
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
     });

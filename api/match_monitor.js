@@ -3663,6 +3663,10 @@ function isLiveActivityLiveMode(mode) {
   return typeof mode === "string" && mode.includes("live");
 }
 
+function isLiveActivityUpcomingMode(mode) {
+  return typeof mode === "string" && mode.includes("upcoming");
+}
+
 function parseLiveActivityDispatchTimeMs(state) {
   const dispatchAtMs = Date.parse(String(state && state.lastDispatchAt ? state.lastDispatchAt : ""));
   return Number.isFinite(dispatchAtMs) ? dispatchAtMs : null;
@@ -3764,13 +3768,14 @@ function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = 
   return liveActivitySkipReason(state, payloadHash, mode, forceDispatch, options) !== null;
 }
 
-function shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, options = {}) {
-  return Boolean(
-    options &&
-      options.preserveExistingOnEmpty &&
-      activityPushToken &&
-      String(activityPushToken).trim()
-  );
+function shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, options = {}, state = {}) {
+  if (!activityPushToken || !String(activityPushToken).trim()) {
+    return false;
+  }
+  if (options && options.preserveExistingOnEmpty) {
+    return true;
+  }
+  return isLiveActivityUpcomingMode(state && state.lastMode);
 }
 
 async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(), options = {}) {
@@ -3787,7 +3792,13 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const shouldDisplay = Boolean(presentation && presentation.mode && presentation.matches.length > 0);
 
   if (!shouldDisplay) {
-    if (shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, { preserveExistingOnEmpty })) {
+    if (
+      shouldPreserveExistingLiveActivityOnEmpty(
+        activityPushToken,
+        { preserveExistingOnEmpty },
+        state
+      )
+    ) {
       console.log(
         `[MatchMonitor] Live Activity preserve existing on empty ${JSON.stringify({
           user_device_short: shortDeviceToken(user && user.deviceToken),
@@ -4004,10 +4015,11 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   }
 }
 
-function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now()) {
+function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(), options = {}) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
   const delayMinutes = liveActivityDelayMinutesFromPreferences(prefs);
   const fantasyCurrentScore = fantasyCurrentScoreForUser(user);
+  const allowAllUpcoming = Boolean(options && options.allowAllUpcoming);
   const eligible = [];
 
   for (const entry of entries) {
@@ -4136,6 +4148,8 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
           aggregate_home_score: null,
           aggregate_away_score: null,
         }));
+      } else if (allowAllUpcoming && diff > 0) {
+        upcomingMatches.push(sanitizeAggregateForLiveActivity(currentMatch));
       }
     }
   }
@@ -4235,7 +4249,11 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
       if (!hasStartToken && !hasActivityToken) continue;
 
       const entries = buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatches, nowMs);
-      const presentation = buildLiveActivityPresentationForUser(user, entries, nowMs);
+      const presentation = buildLiveActivityPresentationForUser(user, entries, nowMs, {
+        allowAllUpcoming:
+          Boolean(options && options.forceDispatch) &&
+          String(options && options.trigger ? options.trigger : "") === "app_foreground",
+      });
       try {
         await dispatchLiveActivityForUser(user, presentation, nowMs, {
           forceDispatch,

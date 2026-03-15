@@ -559,6 +559,30 @@ test("shouldPreserveExistingLiveActivityOnEmpty keeps active activity during for
     false
   );
   assert.equal(
+    __testHooks.shouldPreserveExistingLiveActivityOnEmpty(
+      "activity-token-123",
+      {
+        preserveExistingOnEmpty: false,
+      },
+      {
+        lastMode: "single_upcoming",
+      }
+    ),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldPreserveExistingLiveActivityOnEmpty(
+      "activity-token-123",
+      {
+        preserveExistingOnEmpty: false,
+      },
+      {
+        lastMode: "multi_live",
+      }
+    ),
+    false
+  );
+  assert.equal(
     __testHooks.shouldPreserveExistingLiveActivityOnEmpty("", {
       preserveExistingOnEmpty: true,
     }),
@@ -1633,6 +1657,63 @@ test("buildLiveActivityPresentationForUser includes synced fantasy score when av
       fantasyCurrentScore: 28,
     })
   );
+});
+
+test("buildLiveActivityPresentationForUser can include later upcoming fixtures for app foreground display", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 2 * 60 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const withoutForegroundOverride = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "future-upcoming",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Chelsea",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(withoutForegroundOverride.mode, null);
+
+  const withForegroundOverride = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "future-upcoming",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Chelsea",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs,
+    { allowAllUpcoming: true }
+  );
+
+  assert.equal(withForegroundOverride.mode, "single_upcoming");
+  assert.equal(withForegroundOverride.matches.length, 1);
+  assert.equal(withForegroundOverride.matches[0].match_details_id, "future-upcoming");
 });
 
 test("buildLiveActivityPresentationForUser ignores stale delayed snapshots and reconstructs from current timeline", () => {
