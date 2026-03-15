@@ -3512,6 +3512,88 @@ function sanitizeAggregateForLiveActivity(match) {
   };
 }
 
+function shouldSuppressPreKickoffScoresForLiveActivity(match, nowMs = Date.now()) {
+  if (!match || typeof match !== "object") return false;
+
+  const status = match.score_status;
+  if (
+    isLiveMatchStatus(status) ||
+    isFinishedMatchStatus(status) ||
+    isPenaltyShootoutStatus(status)
+  ) {
+    return false;
+  }
+
+  const homeScore = toNumericScore(match.home_score);
+  const awayScore = toNumericScore(match.away_score);
+  const aggregateHomeScore = toNumericScore(match.aggregate_home_score);
+  const aggregateAwayScore = toNumericScore(match.aggregate_away_score);
+  const hasKnownPrimaryScore = Number.isFinite(homeScore) || Number.isFinite(awayScore);
+  const hasKnownAggregateScore =
+    Number.isFinite(aggregateHomeScore) || Number.isFinite(aggregateAwayScore);
+  if (!hasKnownPrimaryScore && !hasKnownAggregateScore) {
+    return false;
+  }
+
+  const kickoffMs = parseMatchDateTimeMs(match);
+  if (!Number.isFinite(kickoffMs)) {
+    return false;
+  }
+
+  const diffMs = kickoffMs - nowMs;
+  if (diffMs > 0) {
+    return true;
+  }
+
+  return (
+    homeScore === 0 &&
+    awayScore === 0 &&
+    Math.abs(diffMs) <= RECENT_KICKOFF_PENDING_GRACE_MS
+  );
+}
+
+function sanitizePreKickoffScoresForLiveActivity(match, nowMs = Date.now(), context = "unknown") {
+  if (!shouldSuppressPreKickoffScoresForLiveActivity(match, nowMs)) {
+    return match;
+  }
+
+  const kickoffMs = parseMatchDateTimeMs(match);
+  logDecision("live_activity_pre_kickoff_score_suppressed", {
+    context,
+    match_id: String(match && match.match_details_id ? match.match_details_id : ""),
+    home_team: match && match.home_team ? String(match.home_team) : "",
+    away_team: match && match.away_team ? String(match.away_team) : "",
+    home_score:
+      match && match.home_score !== undefined && match.home_score !== null
+        ? Number(match.home_score)
+        : null,
+    away_score:
+      match && match.away_score !== undefined && match.away_score !== null
+        ? Number(match.away_score)
+        : null,
+    aggregate_home_score:
+      match && match.aggregate_home_score !== undefined && match.aggregate_home_score !== null
+        ? Number(match.aggregate_home_score)
+        : null,
+    aggregate_away_score:
+      match && match.aggregate_away_score !== undefined && match.aggregate_away_score !== null
+        ? Number(match.aggregate_away_score)
+        : null,
+    score_status: match && match.score_status ? String(match.score_status) : null,
+    seconds_to_kickoff:
+      Number.isFinite(kickoffMs) ? Math.floor((kickoffMs - nowMs) / 1000) : null,
+  });
+
+  return {
+    ...match,
+    home_score: null,
+    away_score: null,
+    aggregate_home_score: null,
+    aggregate_away_score: null,
+    score_status: null,
+  };
+}
+
 function buildLiveActivityContentState(
   mode,
   matches,
@@ -3522,7 +3604,11 @@ function buildLiveActivityContentState(
   const delayLabel = delayMinutes > 0 && (mode === "single_live" || mode === "multi_live")
     ? `Delayed ${delayMinutes} m`
     : null;
-  const normalizedMatches = matches.map((match) => ({
+  const normalizedMatches = matches.map((rawMatch) => {
+    const match = mode.includes("upcoming")
+      ? sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state")
+      : rawMatch;
+    return {
     matchId: String(match.match_details_id || ""),
     date: String(match.date || ""),
     time: String(match.time || ""),
@@ -3542,7 +3628,8 @@ function buildLiveActivityContentState(
     awayTeamScore: toNumericScore(match.away_team_score),
     totalTeamScore: toNumericScore(match.total_team_score),
     tvChannels: canonicalLiveActivityChannels(match.tv_channels).slice(0, 3),
-  }));
+    };
+  });
 
   return {
     mode,
@@ -4072,14 +4159,22 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
         }
 
         // Avoid spoilers when we cannot safely reconstruct the delayed live state yet.
-        upcomingMatches.push(sanitizeAggregateForLiveActivity({
-          ...currentMatch,
-          home_score: null,
-          away_score: null,
-          score_status: null,
-          aggregate_home_score: null,
-          aggregate_away_score: null,
-        }));
+        upcomingMatches.push(
+          sanitizeAggregateForLiveActivity(
+            sanitizePreKickoffScoresForLiveActivity(
+              {
+                ...currentMatch,
+                home_score: null,
+                away_score: null,
+                score_status: null,
+                aggregate_home_score: null,
+                aggregate_away_score: null,
+              },
+              nowMs,
+              "presentation_live_without_delay_buffer"
+            )
+          )
+        );
         continue;
       }
       const delayedHasAggregateHome =
@@ -4138,18 +4233,34 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     if (Number.isFinite(kickoffMs)) {
       const diff = kickoffMs - nowMs;
       if (diff > 0 && diff <= UPCOMING_MONITOR_WINDOW_MS) {
-        upcomingMatches.push(sanitizeAggregateForLiveActivity(currentMatch));
+        upcomingMatches.push(
+          sanitizeAggregateForLiveActivity(
+            sanitizePreKickoffScoresForLiveActivity(currentMatch, nowMs, "presentation_upcoming")
+          )
+        );
       } else if (diff <= 0 && Math.abs(diff) <= RECENT_KICKOFF_PENDING_GRACE_MS) {
-        recentKickoffMatches.push(sanitizeAggregateForLiveActivity({
-          ...currentMatch,
-          home_score: null,
-          away_score: null,
-          score_status: null,
-          aggregate_home_score: null,
-          aggregate_away_score: null,
-        }));
+        recentKickoffMatches.push(
+          sanitizeAggregateForLiveActivity(
+            sanitizePreKickoffScoresForLiveActivity(
+              {
+                ...currentMatch,
+                home_score: null,
+                away_score: null,
+                score_status: null,
+                aggregate_home_score: null,
+                aggregate_away_score: null,
+              },
+              nowMs,
+              "presentation_recent_kickoff"
+            )
+          )
+        );
       } else if (allowAllUpcoming && diff > 0) {
-        upcomingMatches.push(sanitizeAggregateForLiveActivity(currentMatch));
+        upcomingMatches.push(
+          sanitizeAggregateForLiveActivity(
+            sanitizePreKickoffScoresForLiveActivity(currentMatch, nowMs, "presentation_all_upcoming")
+          )
+        );
       }
     }
   }
@@ -4689,6 +4800,8 @@ module.exports = {
     isEnglishPremierLeagueTeam,
     isLikelyTerminalStaleLiveMatch,
     mergeCanonicalLiveActivityMatch,
+    sanitizePreKickoffScoresForLiveActivity,
+    shouldSuppressPreKickoffScoresForLiveActivity,
     shouldSkipLiveActivityUpdate,
     shouldPreserveExistingLiveActivityOnEmpty,
     updateScoreReversionState,

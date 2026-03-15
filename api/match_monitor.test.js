@@ -1291,6 +1291,72 @@ test("buildLiveActivityPresentationForUser suppresses zero aggregate for upcomin
   assert.equal(presentation.matches[1].aggregate_away_score, null);
 });
 
+test("buildLiveActivityPresentationForUser suppresses stale pre-kickoff zero scores", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 10 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "cj6d3kd99ekt",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Crystal Palace",
+          away_team: "Leeds United",
+          home_score: 0,
+          away_score: 0,
+          score_status: null,
+          aggregate_home_score: 0,
+          aggregate_away_score: 0,
+          tv_channels: ["Sky Sports Cricket"],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_upcoming");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].home_score, null);
+  assert.equal(presentation.matches[0].away_score, null);
+  assert.equal(presentation.matches[0].aggregate_home_score, null);
+  assert.equal(presentation.matches[0].aggregate_away_score, null);
+  assert.equal(presentation.matches[0].score_status, null);
+});
+
+test("sanitizePreKickoffScoresForLiveActivity preserves live 0-0 scores once status is live", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 8 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const sanitized = __testHooks.sanitizePreKickoffScoresForLiveActivity(
+    {
+      match_details_id: "live_zero_zero",
+      date: kickoff.date,
+      time: kickoff.time,
+      league: "Premier League",
+      home_team: "Arsenal",
+      away_team: "Chelsea",
+      home_score: 0,
+      away_score: 0,
+      score_status: "8",
+      updated_at: new Date(nowMs).toISOString(),
+    },
+    nowMs,
+    "test"
+  );
+
+  assert.equal(sanitized.home_score, 0);
+  assert.equal(sanitized.away_score, 0);
+  assert.equal(sanitized.score_status, "8");
+});
+
 test("buildLiveActivityPresentationForUser derives delayed live score from goal timeline up to delayed minute", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 23 * 60 * 1000;

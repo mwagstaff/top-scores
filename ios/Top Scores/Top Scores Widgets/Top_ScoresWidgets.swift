@@ -63,7 +63,7 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
     }
 
     var hasScore: Bool {
-        homeScore != nil && awayScore != nil
+        rawHasScore && !shouldSuppressScoreDisplay
     }
 
     var displayLeague: String {
@@ -101,6 +101,24 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
             return "\(minuteValue)'"
         }
         return normalized
+    }
+
+    private var rawHasScore: Bool {
+        homeScore != nil && awayScore != nil
+    }
+
+    private var shouldSuppressScoreDisplay: Bool {
+        guard rawHasScore else { return false }
+        guard !isInProgress, !isFinished else { return false }
+        guard let kickoff = dateTime else { return false }
+
+        let secondsSinceKickoff = Date().timeIntervalSince(kickoff)
+        if secondsSinceKickoff < 0 {
+            return true
+        }
+
+        guard homeScore == 0, awayScore == 0 else { return false }
+        return secondsSinceKickoff <= 15 * 60
     }
 
     func withTvChannels(_ channels: [String]) -> WidgetMatch {
@@ -176,6 +194,10 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let totalTeamScore: Double?
     let tvChannels: [String]
 
+    var hasScore: Bool {
+        rawHasScore && !shouldSuppressScoreDisplay
+    }
+
     var isFinished: Bool {
         guard let matchTime else { return false }
         let normalized = matchTime
@@ -183,6 +205,44 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
             .uppercased()
             .replacingOccurrences(of: ".", with: "")
         return normalized.hasPrefix("FT") || normalized.hasPrefix("AET")
+    }
+
+    var suppressedScoreSummary: String? {
+        guard rawHasScore, shouldSuppressScoreDisplay else { return nil }
+        return "\(homeScore ?? 0)-\(awayScore ?? 0)"
+    }
+
+    private var rawHasScore: Bool {
+        homeScore != nil && awayScore != nil
+    }
+
+    private var shouldSuppressScoreDisplay: Bool {
+        guard rawHasScore else { return false }
+        guard !isFinished else { return false }
+
+        let normalizedStatus = matchTime?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        if let normalizedStatus, !normalizedStatus.isEmpty {
+            let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
+            let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
+            if inProgressTokens.contains(normalizedStatus) ||
+                normalizedStatus.range(of: minutePattern, options: .regularExpression) != nil {
+                return false
+            }
+        }
+
+        guard let kickoff = WidgetMatchDateParser.shared.parse(date: date, time: time) else {
+            return false
+        }
+
+        let secondsSinceKickoff = Date().timeIntervalSince(kickoff)
+        if secondsSinceKickoff < 0 {
+            return true
+        }
+
+        guard homeScore == 0, awayScore == 0 else { return false }
+        return secondsSinceKickoff <= 15 * 60
     }
 }
 
@@ -216,8 +276,10 @@ private enum LiveActivityRenderDiagnostics {
     static func summary(for state: TopScoresLiveActivityAttributes.ContentState) -> String {
         let matches = state.matches.prefix(4).map { match -> String in
             let score: String
-            if let home = match.homeScore, let away = match.awayScore {
+            if match.hasScore, let home = match.homeScore, let away = match.awayScore {
                 score = "\(home)-\(away)"
+            } else if let suppressed = match.suppressedScoreSummary {
+                score = "suppressed:\(suppressed)"
             } else {
                 score = "nil"
             }
@@ -1641,21 +1703,26 @@ private final class WidgetTvLogoResolver {
         loadLogos()
     }
 
-    func image(for channelName: String) -> UIImage? {
+    func image(for channelName: String, allowsFallback: Bool = true) -> UIImage? {
+        let cacheKey = "\(allowsFallback ? "fallback" : "strict")|\(channelName)"
         lock.lock()
-        if let cached = cache[channelName] {
+        if let cached = cache[cacheKey] {
             lock.unlock()
             return cached
         }
         lock.unlock()
 
-        let url = resolveURL(for: channelName) ?? resolveURL(for: fallbackName)
+        let url = if allowsFallback {
+            resolveExplicitURL(for: channelName) ?? resolveURL(for: fallbackName)
+        } else {
+            resolveExplicitURL(for: channelName)
+        }
         guard let url else { return nil }
 
         let image = UIImage(contentsOfFile: url.path)
         if let image {
             lock.lock()
-            cache[channelName] = image
+            cache[cacheKey] = image
             lock.unlock()
         }
 
@@ -1719,6 +1786,17 @@ private final class WidgetTvLogoResolver {
         }
 
         return fuzzyMatch(normalizedChannel: normalized)
+    }
+
+    private func resolveExplicitURL(for channelName: String) -> URL? {
+        guard let url = resolveURL(for: channelName), !isFallbackURL(url) else {
+            return nil
+        }
+        return url
+    }
+
+    private func isFallbackURL(_ url: URL) -> Bool {
+        Self.normalizedKey(url.deletingPathExtension().lastPathComponent) == Self.normalizedKey(fallbackName)
     }
 
     private func fuzzyMatch(normalizedChannel: String) -> URL? {
@@ -2032,9 +2110,7 @@ private struct SingleUpcomingMatchView: View {
                 HStack(spacing: 10) {
                     LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
                     Spacer(minLength: 8)
-                    Text(match.time)
-                        .font(.subheadline.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(.white)
+                    LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: 18)
                     Spacer(minLength: 8)
                     LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
                 }
@@ -2140,16 +2216,20 @@ private struct LiveActivitySingleScoreRow: View {
     let match: TopScoresLiveActivityMatchState
 
     var body: some View {
-        HStack(spacing: 9) {
-            Text("\(match.homeScore ?? 0)")
-                .font(.title3.monospacedDigit().weight(.bold))
-                .foregroundStyle(.white.opacity(scoreOpacity))
-            Text(match.matchTime ?? fallbackStatus)
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.white.opacity(0.75))
-            Text("\(match.awayScore ?? 0)")
-                .font(.title3.monospacedDigit().weight(.bold))
-                .foregroundStyle(.white.opacity(scoreOpacity))
+        if let homeScore = match.homeScore, let awayScore = match.awayScore {
+            HStack(spacing: 9) {
+                Text("\(homeScore)")
+                    .font(.title3.monospacedDigit().weight(.bold))
+                    .foregroundStyle(.white.opacity(scoreOpacity))
+                Text(match.matchTime ?? fallbackStatus)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                Text("\(awayScore)")
+                    .font(.title3.monospacedDigit().weight(.bold))
+                    .foregroundStyle(.white.opacity(scoreOpacity))
+            }
+        } else {
+            LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: 18)
         }
     }
 
@@ -2159,6 +2239,39 @@ private struct LiveActivitySingleScoreRow: View {
 
     private var fallbackStatus: String {
         match.isFinished ? "FT" : "LIVE"
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct LiveActivityUpcomingIndicator: View {
+    let channels: [String]
+    let logoSize: CGFloat
+
+    var body: some View {
+        if let primaryChannel,
+           let image = WidgetTvLogoResolver.shared.image(for: primaryChannel, allowsFallback: false) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: logoSize * 1.8, height: logoSize)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: max(2, logoSize * 0.18),
+                        style: .continuous
+                    )
+                )
+        } else {
+            Text("vs")
+                .font(.title3.monospacedDigit().weight(.bold))
+                .foregroundStyle(.white.opacity(0.85))
+        }
+    }
+
+    private var primaryChannel: String? {
+        channels
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
     }
 }
 
@@ -2413,13 +2526,17 @@ private struct MultiMatchEntryCell: View {
 
     @ViewBuilder
     private var scoreView: some View {
-        HStack(spacing: 2) {
-            Text(scoreCoreText)
-                .font(.callout.monospacedDigit().weight(.bold))
-                .foregroundStyle(.white.opacity(scoreOpacity))
+        if match.hasScore {
+            HStack(spacing: 2) {
+                Text(scoreCoreText)
+                    .font(.callout.monospacedDigit().weight(.bold))
+                    .foregroundStyle(.white.opacity(scoreOpacity))
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+        } else {
+            LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: 15)
         }
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
     }
 
     private var scoreCoreText: String {
