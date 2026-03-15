@@ -3565,6 +3565,22 @@ private struct FantasyPlayerCard: View {
                             Capsule(style: .continuous)
                                 .fill(fantasyScoreHeatmapColor(secondaryXPValue))
                         )
+                } else if detailMode == .expectedPoints {
+                    Text("-")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(1.0)
+                        .foregroundStyle(Color(red: 0.36, green: 0.36, blue: 0.39))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color(red: 0.90, green: 0.90, blue: 0.92))
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                        )
                 } else {
                     Text(secondaryDisplayText)
                         .font(.system(size: detailMode == .expectedPoints ? 12 : 9, weight: .semibold, design: detailMode == .expectedPoints ? .rounded : .default))
