@@ -453,6 +453,9 @@ struct FantasyView: View {
                     }
 
                     if let data = fantasyViewModel.data {
+                        let displayData = data.applyingExpectedPoints(
+                            fantasyViewModel.assistantManagerPreview?.expectedPoints
+                        )
                         if let shareImportStatusMessage {
                             shareImportStatusCard(
                                 message: shareImportStatusMessage,
@@ -477,12 +480,12 @@ struct FantasyView: View {
                             deadlineTime: data.deadlineTime
                         )
                         pitchSection(
-                            data,
+                            displayData,
                             playerSelectionEnabled: true,
                             detailMode: $fantasyPitchDetailMode
                         )
                         benchSection(
-                            data,
+                            displayData,
                             playerSelectionEnabled: true,
                             detailMode: fantasyPitchDetailMode
                         )
@@ -1207,7 +1210,7 @@ struct FantasyView: View {
                 Spacer(minLength: 0)
             }
 
-            Text("Share a rival's Fantasy Points page to Top Scores from Safari/Chrome to add them automatically.")
+            Text("Share one or more rival's Fantasy Points page to Top Scores from Safari/Chrome to add them to your Rivals list.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2013,6 +2016,8 @@ struct FantasyView: View {
     }
 
     private func rivalDetailSheet(_ rival: FantasyRivalSquad) -> some View {
+        let displayData = rival.squad.applyingExpectedPoints(rival.expectedPointsSection)
+
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
@@ -2035,12 +2040,12 @@ struct FantasyView: View {
                         }
                     )
                     pitchSection(
-                        rival.squad,
+                        displayData,
                         playerSelectionEnabled: true,
                         detailMode: $fantasyPitchDetailMode
                     )
                     benchSection(
-                        rival.squad,
+                        displayData,
                         playerSelectionEnabled: true,
                         detailMode: fantasyPitchDetailMode
                     )
@@ -2216,7 +2221,6 @@ struct FantasyView: View {
 
     @ViewBuilder
     private func eventLegendSection(_ data: FantasySquadDisplayData) -> some View {
-        let scoreLine = "Score strip: purple means still to play, red-to-green shows completed score strength, muted purple means no fixture left this gameweek, gradient means live now."
         let goalLine = legendLine(
             emoji: "⚽️",
             title: "Goals scored",
@@ -2238,7 +2242,7 @@ struct FantasyView: View {
             players: legendPlayers(data.allPlayers, value: \.redCards)
         )
 
-        let lines = [scoreLine, goalLine, assistLine, yellowLine, redLine].compactMap { $0 }
+        let lines = [goalLine, assistLine, yellowLine, redLine].compactMap { $0 }
 
         if !lines.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
@@ -2743,6 +2747,9 @@ struct FantasyView: View {
 
     private func openLeagueTableEntry(_ entry: FantasyLeagueTableEntry) {
         guard let squad = entry.squad else { return }
+        let rivalExpectedPointsSection = fantasyViewModel.rivalSquads
+            .first(where: { $0.entryID == entry.entryID })?
+            .expectedPointsSection
         selectedRivalSquad = FantasyRivalSquad(
             entryID: entry.entryID,
             teamName: entry.teamName,
@@ -2751,6 +2758,7 @@ struct FantasyView: View {
             squad: squad,
             allGameweeksPoints: entry.allGameweeksScore,
             projectedGameweekPoints: entry.projectedGameweekPoints,
+            expectedPointsSection: rivalExpectedPointsSection,
             isExpectedPointsLoading: entry.isExpectedPointsLoading
         )
     }
@@ -3293,23 +3301,47 @@ private struct FantasyPitchBackground: View {
 private enum FantasyPitchPlayerDetailMode {
     case opponent
     case value
+    case expectedPoints
 
     var buttonLabel: String {
         switch self {
         case .opponent: return "OPP"
         case .value: return "VAL"
+        case .expectedPoints: return "xP"
+        }
+    }
+
+    var systemImageName: String {
+        switch self {
+        case .opponent:
+            return "figure.soccer"
+        case .value:
+            return "sterlingsign.circle.fill"
+        case .expectedPoints:
+            return "sparkles"
         }
     }
 
     var accessibilityLabel: String {
         switch self {
-        case .opponent: return "Showing next opponents. Tap to show player values."
-        case .value: return "Showing player values. Tap to show next opponents."
+        case .opponent:
+            return "Showing opponents. Tap to show player values."
+        case .value:
+            return "Showing player values. Tap to show expected points."
+        case .expectedPoints:
+            return "Showing expected points. Tap to show opponents."
         }
     }
 
     mutating func toggle() {
-        self = self == .opponent ? .value : .opponent
+        switch self {
+        case .opponent:
+            self = .value
+        case .value:
+            self = .expectedPoints
+        case .expectedPoints:
+            self = .opponent
+        }
     }
 }
 
@@ -3321,7 +3353,7 @@ private struct FantasyPitchDetailToggleButton: View {
             mode.toggle()
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: mode == .opponent ? "sterlingsign.circle.fill" : "figure.soccer")
+                Image(systemName: mode.systemImageName)
                     .font(.system(size: 10, weight: .semibold))
                 Text(mode.buttonLabel)
                     .font(.system(size: 10, weight: .bold, design: .rounded))
@@ -3390,7 +3422,7 @@ private struct FantasyPlayerCard: View {
     private var scoreStateSymbolName: String? {
         switch scoreState {
         case .completed:
-            return "checkmark"
+            return nil
         case .noFixture:
             return "minus"
         case .live, .upcoming:
@@ -3417,7 +3449,22 @@ private struct FantasyPlayerCard: View {
             return opponentDisplayText
         case .value:
             return String(format: "£%.1fm", player.nowCostMillions)
+        case .expectedPoints:
+            if let expectedPointsThisGameweek = player.expectedPointsThisGameweek {
+                return "xP \(expectedPointsThisGameweek)"
+            }
+            return "xP -"
         }
+    }
+
+    private var secondaryXPValue: Int? {
+        guard detailMode == .expectedPoints else { return nil }
+        return player.expectedPointsThisGameweek
+    }
+
+    private var secondaryXPForegroundColor: Color {
+        guard let secondaryXPValue else { return .secondary }
+        return secondaryXPValue >= 3 ? Color.black.opacity(0.82) : .white
     }
 
     var body: some View {
@@ -3509,11 +3556,25 @@ private struct FantasyPlayerCard: View {
                     .minimumScaleFactor(0.8)
                     .foregroundStyle(primaryTextColor)
 
-                Text(secondaryDisplayText)
-                    .font(.system(size: 9, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                    .foregroundStyle(primaryTextColor)
+                if let secondaryXPValue {
+                    Text("xP \(secondaryXPValue)")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .foregroundStyle(secondaryXPForegroundColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(fantasyScoreHeatmapColor(secondaryXPValue))
+                        )
+                } else {
+                    Text(secondaryDisplayText)
+                        .font(.system(size: 9, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .foregroundStyle(primaryTextColor)
+                }
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 4)
@@ -3651,9 +3712,9 @@ private enum FantasyIDAddMode {
     var sheetTitle: String {
         switch self {
         case .rival:
-            return "Add Rival"
+            return "Add Rivals"
         case .league:
-            return "Add League"
+            return "Add Leagues"
         }
     }
 
@@ -5037,6 +5098,7 @@ private struct FantasyAssistantManagerSheet: View {
             futureAvailabilityIssueGameweek: player.futureAvailabilityIssueGameweek,
             minutesPlayed: player.minutesPlayed,
             upcomingOpponentDisplay: player.upcomingOpponentDisplay,
+            expectedPointsThisGameweek: Int(player.expectedPointsNextGameweek.rounded()),
             goalsScored: player.goalsScored,
             assists: player.assists,
             yellowCards: player.yellowCards,

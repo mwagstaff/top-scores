@@ -588,6 +588,7 @@ final class FantasyViewModel: ObservableObject {
                         squad: rivalSquad,
                         allGameweeksPoints: rivalProfile?.summaryOverallPoints ?? rival.overallPoints,
                         projectedGameweekPoints: nil,
+                        expectedPointsSection: nil,
                         isExpectedPointsLoading: true
                     )
                 )
@@ -649,6 +650,7 @@ final class FantasyViewModel: ObservableObject {
                 squad: rivalSquads[index].squad,
                 allGameweeksPoints: rivalSquads[index].allGameweeksPoints,
                 projectedGameweekPoints: projectedGameweekPoints,
+                expectedPointsSection: response?.expectedPoints,
                 isExpectedPointsLoading: projectedGameweekPoints == nil
             )
             rivalSquads[index] = updated

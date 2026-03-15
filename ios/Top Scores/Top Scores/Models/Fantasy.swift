@@ -1218,6 +1218,7 @@ struct FantasyRivalSquad: Identifiable, Hashable {
     let squad: FantasySquadDisplayData
     let allGameweeksPoints: Int?
     let projectedGameweekPoints: Double?
+    let expectedPointsSection: FantasyAssistantManagerResponse.ExpectedPointsSection?
     let isExpectedPointsLoading: Bool
 
     var id: Int {
@@ -1293,6 +1294,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
     let futureAvailabilityIssueGameweek: Int?
     let minutesPlayed: Int
     let upcomingOpponentDisplay: String?
+    let expectedPointsThisGameweek: Int? = nil
     let goalsScored: Int
     let assists: Int
     let yellowCards: Int
@@ -1340,6 +1342,39 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
 
     var isEligibleAutoSubReplacement: Bool {
         minutesPlayed > 0
+    }
+
+    func applyingExpectedPoints(_ expectedPointsThisGameweek: Int?) -> FantasyDisplayPlayer {
+        FantasyDisplayPlayer(
+            elementID: elementID,
+            pickPosition: pickPosition,
+            positionType: positionType,
+            displayName: displayName,
+            fullName: fullName,
+            teamName: teamName,
+            nowCostMillions: nowCostMillions,
+            rawPoints: rawPoints,
+            appliedPoints: appliedPoints,
+            displayPoints: displayPoints,
+            multiplier: multiplier,
+            isCaptain: isCaptain,
+            isViceCaptain: isViceCaptain,
+            isPlayingNow: isPlayingNow,
+            isUnavailable: isUnavailable,
+            isDefinitelyUnavailable: isDefinitelyUnavailable,
+            hasAnyFixtureThisGameweek: hasAnyFixtureThisGameweek,
+            hasUpcomingFixtureThisGameweek: hasUpcomingFixtureThisGameweek,
+            hasActiveFixtureThisGameweek: hasActiveFixtureThisGameweek,
+            hasFutureAvailabilityIssue: hasFutureAvailabilityIssue,
+            futureAvailabilityIssueGameweek: futureAvailabilityIssueGameweek,
+            minutesPlayed: minutesPlayed,
+            upcomingOpponentDisplay: upcomingOpponentDisplay,
+            expectedPointsThisGameweek: expectedPointsThisGameweek,
+            goalsScored: goalsScored,
+            assists: assists,
+            yellowCards: yellowCards,
+            redCards: redCards
+        )
     }
 }
 
@@ -1467,6 +1502,80 @@ struct FantasySquadDisplayData: Hashable {
         }
 
         return startersRemaining + benchRemaining
+    }
+
+    func applyingExpectedPoints(
+        _ section: FantasyAssistantManagerResponse.ExpectedPointsSection?
+    ) -> FantasySquadDisplayData {
+        guard let section else { return self }
+
+        let starterExpectedPointsByElementID = Dictionary(
+            uniqueKeysWithValues: section.starters.map { ($0.elementID, $0.expectedPointsNextGameweek) }
+        )
+        let benchExpectedPointsByElementID = Dictionary(
+            uniqueKeysWithValues: section.bench.map { ($0.elementID, $0.expectedPointsNextGameweek) }
+        )
+
+        func expectedPointsValue(
+            for player: FantasyDisplayPlayer,
+            expectedPointsByElementID: [Int: Double]
+        ) -> Int? {
+            guard let baseExpectedPoints = expectedPointsByElementID[player.elementID] else {
+                return nil
+            }
+            let adjustedExpectedPoints = baseExpectedPoints * Double(max(player.multiplier, 1))
+            return Int(adjustedExpectedPoints.rounded())
+        }
+
+        let goalkeepers = goalkeepers.map { player in
+            player.applyingExpectedPoints(
+                expectedPointsValue(for: player, expectedPointsByElementID: starterExpectedPointsByElementID)
+            )
+        }
+        let defenders = defenders.map { player in
+            player.applyingExpectedPoints(
+                expectedPointsValue(for: player, expectedPointsByElementID: starterExpectedPointsByElementID)
+            )
+        }
+        let midfielders = midfielders.map { player in
+            player.applyingExpectedPoints(
+                expectedPointsValue(for: player, expectedPointsByElementID: starterExpectedPointsByElementID)
+            )
+        }
+        let forwards = forwards.map { player in
+            player.applyingExpectedPoints(
+                expectedPointsValue(for: player, expectedPointsByElementID: starterExpectedPointsByElementID)
+            )
+        }
+        let bench = bench.map { player in
+            player.applyingExpectedPoints(
+                expectedPointsValue(for: player, expectedPointsByElementID: benchExpectedPointsByElementID)
+            )
+        }
+
+        return FantasySquadDisplayData(
+            gameweekID: gameweekID,
+            gameweekTitle: gameweekTitle,
+            deadlineGameweekID: deadlineGameweekID,
+            deadlineTime: deadlineTime,
+            totalPoints: totalPoints,
+            hasActiveFixtures: hasActiveFixtures,
+            hasStartedFixturesInGameweek: hasStartedFixturesInGameweek,
+            hasFixturesPlayedToday: hasFixturesPlayedToday,
+            isEstimatedScore: isEstimatedScore,
+            estimatedCurrentScore: estimatedCurrentScore,
+            scoreCalculationRulesApplied: scoreCalculationRulesApplied,
+            rank: rank,
+            overallRank: overallRank,
+            transfersCost: transfersCost,
+            pointsOnBench: pointsOnBench,
+            activeChips: activeChips,
+            goalkeepers: goalkeepers,
+            defenders: defenders,
+            midfielders: midfielders,
+            forwards: forwards,
+            bench: bench
+        )
     }
 
     var effectivePlayerContributions: [FantasyEffectivePlayerContribution] {
@@ -2199,6 +2308,91 @@ enum FantasySquadBuilder {
             return Array(fixturesByID.values)
         }()
 
+        let squadTeamIDs = Set(
+            picksResponse.picks.compactMap { pick in
+                elementByID[pick.element]?.team
+            }
+        )
+        let shouldPreferCurrentGameweekOpponents =
+            squadTeamIDs.isDisjoint(with: activeTeamIDs.union(upcomingTeamIDs)) == false
+
+        struct TeamOpponentSelection {
+            let priority: Int
+            let kickoffTime: String
+            let fixtureID: Int
+            let label: String
+        }
+
+        func storeOpponentSelection(
+            for teamID: Int,
+            label: String,
+            priority: Int,
+            kickoffTime: String,
+            fixtureID: Int,
+            in selections: inout [Int: TeamOpponentSelection]
+        ) {
+            let candidate = TeamOpponentSelection(
+                priority: priority,
+                kickoffTime: kickoffTime,
+                fixtureID: fixtureID,
+                label: label
+            )
+
+            guard let existing = selections[teamID] else {
+                selections[teamID] = candidate
+                return
+            }
+
+            if candidate.priority < existing.priority {
+                selections[teamID] = candidate
+                return
+            }
+
+            if candidate.priority == existing.priority {
+                if existing.kickoffTime.isEmpty && !candidate.kickoffTime.isEmpty {
+                    selections[teamID] = candidate
+                    return
+                }
+                if !candidate.kickoffTime.isEmpty && candidate.kickoffTime < existing.kickoffTime {
+                    selections[teamID] = candidate
+                    return
+                }
+                if candidate.kickoffTime == existing.kickoffTime && candidate.fixtureID < existing.fixtureID {
+                    selections[teamID] = candidate
+                }
+            }
+        }
+
+        var currentGameweekOpponentSelectionsByTeamID: [Int: TeamOpponentSelection] = [:]
+        for fixture in fixtures {
+            let hasStarted = fixture.started == true
+            let isFinished = fixture.finished == true || fixture.finishedProvisional == true
+            let priority: Int = {
+                if hasStarted, !isFinished { return 0 }
+                if !hasStarted, !isFinished { return 1 }
+                return 2
+            }()
+            let kickoffTime = fixture.kickoffTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            storeOpponentSelection(
+                for: fixture.teamH,
+                label: "\(teamDisplayCode(teamID: fixture.teamA)) (H)",
+                priority: priority,
+                kickoffTime: kickoffTime,
+                fixtureID: fixture.id,
+                in: &currentGameweekOpponentSelectionsByTeamID
+            )
+            storeOpponentSelection(
+                for: fixture.teamA,
+                label: "\(teamDisplayCode(teamID: fixture.teamH)) (A)",
+                priority: priority,
+                kickoffTime: kickoffTime,
+                fixtureID: fixture.id,
+                in: &currentGameweekOpponentSelectionsByTeamID
+            )
+        }
+        let currentGameweekOpponentByTeamID = currentGameweekOpponentSelectionsByTeamID.mapValues(\.label)
+
         var upcomingOpponentByTeamID: [Int: String] = [:]
         mergedSeasonFixtures
             .sorted { lhs, rhs in
@@ -2314,6 +2508,9 @@ enum FantasySquadBuilder {
             }()
             let upcomingOpponentDisplay: String? = {
                 guard let teamID = element?.team else { return nil }
+                if shouldPreferCurrentGameweekOpponents {
+                    return currentGameweekOpponentByTeamID[teamID]
+                }
                 return upcomingOpponentByTeamID[teamID]
             }()
 
