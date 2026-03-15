@@ -2107,15 +2107,18 @@ private struct SingleUpcomingMatchView: View {
                     primaryChannel: primaryChannel
                 )
 
-                HStack(spacing: 10) {
-                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
-                    Spacer(minLength: 8)
-                    LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: 18)
-                    Spacer(minLength: 8)
-                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
+                HStack(spacing: 0) {
+                    HStack(spacing: 14) {
+                        LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
+                        LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: 18)
+                        LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                     Text(match.time)
                         .font(.subheadline.monospacedDigit().weight(.semibold))
                         .foregroundStyle(.white)
+                        .frame(minWidth: 44, alignment: .trailing)
                 }
 
                 TeamNamesWithAggregateRow(
@@ -2527,22 +2530,25 @@ private struct MultiMatchEntryCell: View {
                         .frame(width: 20, alignment: .center)
                 }
             } else {
-                HStack(spacing: 6) {
-                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 20)
-                        .frame(width: 20, alignment: .center)
+                HStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        LiveActivityTeamLogo(teamName: match.homeTeam, size: 20)
+                            .frame(width: 20, alignment: .center)
 
-                    scoreView
-                        .frame(width: 40, alignment: .center)
+                        scoreView
+                            .frame(width: 32, alignment: .center)
 
-                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 20)
-                        .frame(width: 20, alignment: .center)
+                        LiveActivityTeamLogo(teamName: match.awayTeam, size: 20)
+                            .frame(width: 20, alignment: .center)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     Text(match.time)
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.65))
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
-                        .frame(width: 32, alignment: .leading)
+                        .frame(width: 36, alignment: .trailing)
                 }
             }
         }
