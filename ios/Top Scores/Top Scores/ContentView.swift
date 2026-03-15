@@ -41,8 +41,15 @@ struct ContentView: View {
                         Label {
                             Text("Fantasy")
                         } icon: {
-                            Image(systemName: "trophy")
-                                .symbolEffect(.pulse.byLayer, options: .repeating, isActive: fantasyTabShouldPulse)
+                            Image("FantasyPremierLeagueLionTab")
+                                .renderingMode(.original)
+                                .scaleEffect(fantasyTabShouldPulse ? 1.08 : 1.0)
+                                .animation(
+                                    fantasyTabShouldPulse
+                                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                                        : .default,
+                                    value: fantasyTabShouldPulse
+                                )
                         }
                     }
                     .badge(fantasyTabBadge)
@@ -63,6 +70,16 @@ struct ContentView: View {
             .onChange(of: selectedTab) { _, _ in
                 Task {
                     await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
+                }
+            }
+            .onChange(of: fantasyManagerEntryID) { _, newValue in
+                Task {
+                    await syncFantasyState(managerEntryID: newValue, squad: nil)
+                }
+            }
+            .onChange(of: fantasyViewModel.data) { _, newValue in
+                Task {
+                    await syncFantasyState(managerEntryID: fantasyManagerEntryID, squad: newValue)
                 }
             }
             .task(id: fantasyManagerEntryID) {
@@ -132,6 +149,14 @@ struct ContentView: View {
             rivalManagers: [],
             trackedLeagues: []
         )
+    }
+
+    private func syncFantasyState(
+        managerEntryID: String,
+        squad: FantasySquadDisplayData?
+    ) async {
+        FantasySyncStore.persist(managerEntryID: managerEntryID, squad: squad)
+        await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
     }
 }
 

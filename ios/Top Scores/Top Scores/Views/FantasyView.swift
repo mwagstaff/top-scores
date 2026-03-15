@@ -300,10 +300,6 @@ struct FantasyView: View {
             }
             .onChange(of: managerEntryID) { _, newValue in
                 syncManagerEntryIDToSharedDefaults()
-                FantasySyncStore.persist(managerEntryID: newValue, squad: nil)
-                Task {
-                    await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
-                }
                 if newValue.isEmpty {
                     resetFantasyLoadingInterstitial()
                     pendingFantasyRefreshRequest = nil
@@ -323,12 +319,6 @@ struct FantasyView: View {
                     } else {
                         triggerFantasyRefresh(force: true)
                     }
-                }
-            }
-            .onChange(of: fantasyViewModel.data) { _, newValue in
-                FantasySyncStore.persist(managerEntryID: managerEntryID, squad: newValue)
-                Task {
-                    await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
                 }
             }
             .onChange(of: selectedRivalSquad) { _, newValue in
@@ -1523,7 +1513,7 @@ struct FantasyView: View {
                         Label("Add rival", systemImage: "plus.circle.fill")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                 }
             } else {
                 Button {
@@ -1532,7 +1522,7 @@ struct FantasyView: View {
                     Label("Add rival", systemImage: "plus.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
             }
         }
         .padding(12)
@@ -1546,7 +1536,8 @@ struct FantasyView: View {
         leagueSectionCard(
             title: "Player Leagues",
             leagues: fantasyViewModel.trackedLeagueStandings.filter { $0.leagueType == "x" },
-            emptyState: "No player-created leagues found."
+            emptyState: "No player-created leagues found.",
+            showsAddButton: true
         )
     }
 
@@ -1554,8 +1545,7 @@ struct FantasyView: View {
         leagueSectionCard(
             title: "Game Leagues",
             leagues: fantasyViewModel.trackedLeagueStandings.filter { $0.leagueType != "x" },
-            emptyState: "No game-managed leagues found.",
-            showsAddButton: true
+            emptyState: "No game-managed leagues found."
         )
     }
 
@@ -1617,7 +1607,7 @@ struct FantasyView: View {
                     Label("Add league", systemImage: "plus.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
             }
         }
         .padding(12)
@@ -1653,10 +1643,10 @@ struct FantasyView: View {
 
                 if let rank = league.myRank {
                     HStack(spacing: 4) {
-                        leagueTrendIcon(currentRank: rank, lastRank: league.myLastRank)
                         Text("\(rank)")
                             .font(.caption.monospacedDigit().weight(.semibold))
                             .foregroundStyle(.secondary)
+                        leagueTrendIcon(currentRank: rank, lastRank: league.myLastRank)
                     }
                 } else {
                     Text("-")
@@ -6334,8 +6324,7 @@ private struct FantasyLoadingInterstitialView: View {
                             )
                     }
 
-                    Image(systemName: "trophy")
-                        .font(.system(size: 56, weight: .regular))
+                    FantasyLionIconView(size: 54, scale: 0.90)
                         .foregroundStyle(.white)
                         .shadow(color: Color.black.opacity(0.18), radius: 12, x: 0, y: 8)
                 }
