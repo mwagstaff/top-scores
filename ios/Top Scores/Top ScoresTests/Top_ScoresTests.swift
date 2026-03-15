@@ -937,6 +937,105 @@ struct Top_ScoresTests {
         #expect(contribution.isRealMatchSubstitute)
     }
 
+    @Test func fantasySquadMembershipLookup_usesRawFixturePointsForMatchBadgesAndPlayers() async throws {
+        let squad = FantasySquadDisplayData(
+            gameweekID: 30,
+            gameweekTitle: "GW30",
+            deadlineGameweekID: nil,
+            deadlineTime: nil,
+            totalPoints: 0,
+            hasActiveFixtures: true,
+            hasStartedFixturesInGameweek: true,
+            hasFixturesPlayedToday: true,
+            isEstimatedScore: true,
+            estimatedCurrentScore: 0,
+            scoreCalculationRulesApplied: [],
+            rank: nil,
+            overallRank: nil,
+            transfersCost: nil,
+            pointsOnBench: nil,
+            activeChips: [],
+            goalkeepers: [],
+            defenders: [],
+            midfielders: [
+                makeFantasyPlayer(
+                    elementID: 1,
+                    pickPosition: 5,
+                    positionType: .midfielder,
+                    displayName: "Salah",
+                    fullName: "Mohamed Salah",
+                    teamName: "Liverpool",
+                    hasUpcomingFixtureThisGameweek: false,
+                    minutesPlayed: 90,
+                    rawPoints: 4,
+                    appliedPoints: 8,
+                    displayPoints: 8,
+                    multiplier: 2,
+                    isCaptain: true
+                )
+            ],
+            forwards: [],
+            bench: [
+                makeFantasyPlayer(
+                    elementID: 2,
+                    pickPosition: 13,
+                    positionType: .defender,
+                    displayName: "Rodon",
+                    fullName: "Joe Rodon",
+                    teamName: "Leeds United",
+                    hasUpcomingFixtureThisGameweek: false,
+                    minutesPlayed: 90,
+                    rawPoints: 8,
+                    appliedPoints: 8,
+                    displayPoints: 8
+                )
+            ]
+        )
+
+        let lookup = try #require(FantasySquadMembershipLookup(squad: squad))
+        let match = Match(
+            date: "2026-03-15",
+            time: "14:00",
+            homeTeam: "Leeds United",
+            awayTeam: "Liverpool",
+            league: "Premier League",
+            tvChannels: []
+        )
+
+        #expect(lookup.effectiveScore(in: match) == 12)
+        #expect(
+            lookup.points(
+                for: MatchLineupPlayer(
+                    number: 6,
+                    name: "Joe Rodon",
+                    positionCategory: "defender",
+                    formationRowIndex: nil,
+                    formationSlotIndex: nil,
+                    formationRowSize: nil
+                ),
+                teamName: "Leeds United"
+            ) == 8
+        )
+        #expect(
+            lookup.points(
+                for: MatchLineupPlayer(
+                    number: 11,
+                    name: "Mohamed Salah",
+                    positionCategory: "attacker",
+                    formationRowIndex: nil,
+                    formationSlotIndex: nil,
+                    formationRowSize: nil
+                ),
+                teamName: "Liverpool"
+            ) == 4
+        )
+
+        let involvedPlayers = lookup.involvedPlayers(in: match)
+        #expect(involvedPlayers.count == 2)
+        #expect(involvedPlayers.first(where: { $0.displayName == "Rodon" })?.pointsDisplay == .actual(8))
+        #expect(involvedPlayers.first(where: { $0.displayName == "Salah" })?.pointsDisplay == .actual(4))
+    }
+
     private func makeMatch(
         date: String = "2026-02-24",
         time: String = "17:45",

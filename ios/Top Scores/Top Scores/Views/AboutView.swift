@@ -15,144 +15,143 @@ struct AboutView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    VStack(spacing: 16) {
-                        Image(systemName: "sportscourt")
-                            .font(.system(size: 44))
-                            .foregroundColor(.accentColor)
-                        Text("Top Scores")
-                            .font(.title2)
-                            .fontWeight(.semibold)
+            VStack(spacing: 0) {
+                headerView
+                List {
+                    Section {
                         Text("Your personalized TV guide for football matches.")
-                            .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+                            .padding(.vertical, 4)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                }
 
-                #if DEBUG
-                Section {
-                    if isLoadingDiagnostics {
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text("Refreshing diagnostics...")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    diagnosticsRow(title: "Device token", value: diagnostics.deviceToken)
-                    diagnosticsRow(title: "Server device token", value: diagnostics.serverDeviceToken ?? "Unknown")
-                    diagnosticsRow(title: "Local APNS token", value: diagnostics.localAPNSToken ?? "None")
-                    diagnosticsRow(title: "Server APNS token", value: diagnostics.serverAPNSToken ?? "None")
-                    diagnosticsRow(title: "Token match", value: diagnostics.tokenMatch)
-                    diagnosticsRow(title: "Push auth status", value: diagnostics.pushAuthStatus)
-                    diagnosticsRow(title: "Build environment", value: diagnostics.localBuildEnvironment)
-                    diagnosticsRow(title: "Server build environment", value: diagnostics.serverBuildEnvironment)
-                    diagnosticsRow(title: "API base URL", value: preferences.apiBaseURL)
-                    diagnosticsRow(title: "Last sync attempt", value: diagnostics.lastSyncAttempt)
-                    diagnosticsRow(title: "Last sync success", value: diagnostics.lastSyncSuccess)
-                    diagnosticsRow(title: "Last sync failure", value: diagnostics.lastSyncFailure)
-                    diagnosticsRow(
-                        title: "Last sync HTTP status",
-                        value: diagnostics.lastSyncHTTPStatus.map(String.init) ?? "N/A"
-                    )
-                    diagnosticsRow(title: "Last sync failure reason", value: diagnostics.lastSyncFailureReason ?? "None")
-                    diagnosticsRow(title: "Server record updated at", value: diagnostics.serverRecordUpdatedAt ?? "Unknown")
-
-                    HStack {
-                        Button("Refresh diagnostics") {
-                            Task { await refreshDiagnostics() }
-                        }
-                        Spacer()
-                        Button("Sync preferences now") {
-                            Task {
-                                await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
-                                await refreshDiagnostics()
-                            }
-                        }
-                    }
-                } header: {
-                    HStack {
-                        Text("Debug Diagnostics")
-                        Spacer()
-                        Text("DEBUG")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                    }
-                }
-
-                Section {
-                    if fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("Link a Fantasy Football account first to generate harness matches with your current squad.")
-                            .foregroundStyle(.secondary)
-                    } else if isLoadingHarnessMatches {
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text("Generating fantasy harness matches...")
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if debugHarnessMatches.isEmpty {
-                        Text("Load your Fantasy squad to generate synthetic Premier League match-detail screens for lineup testing.")
-                            .foregroundStyle(.secondary)
-
-                        Button("Generate harness matches") {
-                            Task { await loadHarnessMatches() }
-                        }
-                    } else {
-                        Button("Refresh harness matches") {
-                            Task { await loadHarnessMatches() }
-                        }
-
-                        NavigationLink {
-                            DebugFantasyHarnessMatchesView(matches: debugHarnessMatches)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Open fixtures-style harness")
-                                    .font(.body.weight(.semibold))
-                                Text("Shows synthetic Premier League fixtures using the same match lozenges as the Fixtures screen.")
-                                    .font(.footnote)
+                    #if DEBUG
+                    Section {
+                        if isLoadingDiagnostics {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text("Refreshing diagnostics...")
                                     .foregroundStyle(.secondary)
                             }
-                            .padding(.vertical, 2)
                         }
+                        diagnosticsRow(title: "Device token", value: diagnostics.deviceToken)
+                        diagnosticsRow(title: "Server device token", value: diagnostics.serverDeviceToken ?? "Unknown")
+                        diagnosticsRow(title: "Local APNS token", value: diagnostics.localAPNSToken ?? "None")
+                        diagnosticsRow(title: "Server APNS token", value: diagnostics.serverAPNSToken ?? "None")
+                        diagnosticsRow(title: "Token match", value: diagnostics.tokenMatch)
+                        diagnosticsRow(title: "Push auth status", value: diagnostics.pushAuthStatus)
+                        diagnosticsRow(title: "Build environment", value: diagnostics.localBuildEnvironment)
+                        diagnosticsRow(title: "Server build environment", value: diagnostics.serverBuildEnvironment)
+                        diagnosticsRow(title: "API base URL", value: preferences.apiBaseURL)
+                        diagnosticsRow(title: "Last sync attempt", value: diagnostics.lastSyncAttempt)
+                        diagnosticsRow(title: "Last sync success", value: diagnostics.lastSyncSuccess)
+                        diagnosticsRow(title: "Last sync failure", value: diagnostics.lastSyncFailure)
+                        diagnosticsRow(
+                            title: "Last sync HTTP status",
+                            value: diagnostics.lastSyncHTTPStatus.map(String.init) ?? "N/A"
+                        )
+                        diagnosticsRow(title: "Last sync failure reason", value: diagnostics.lastSyncFailureReason ?? "None")
+                        diagnosticsRow(title: "Server record updated at", value: diagnostics.serverRecordUpdatedAt ?? "Unknown")
 
-                        ForEach(debugHarnessMatches) { harnessMatch in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(harnessMatch.title)
-                                    .font(.footnote.weight(.semibold))
-                                Text(harnessMatch.subtitle)
-                                    .font(.footnote)
+                        HStack {
+                            Button("Refresh diagnostics") {
+                                Task { await refreshDiagnostics() }
+                            }
+                            Spacer()
+                            Button("Sync preferences now") {
+                                Task {
+                                    await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
+                                    await refreshDiagnostics()
+                                }
+                            }
+                        }
+                    } header: {
+                        HStack {
+                            Text("Debug Diagnostics")
+                            Spacer()
+                            Text("DEBUG")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        }
+                    }
+
+                    Section {
+                        if fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("Link a Fantasy Football account first to generate harness matches with your current squad.")
+                                .foregroundStyle(.secondary)
+                        } else if isLoadingHarnessMatches {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text("Generating fantasy harness matches...")
                                     .foregroundStyle(.secondary)
                             }
-                            .padding(.vertical, 1)
+                        } else if debugHarnessMatches.isEmpty {
+                            Text("Load your Fantasy squad to generate synthetic Premier League match-detail screens for lineup testing.")
+                                .foregroundStyle(.secondary)
+
+                            Button("Generate harness matches") {
+                                Task { await loadHarnessMatches() }
+                            }
+                        } else {
+                            Button("Refresh harness matches") {
+                                Task { await loadHarnessMatches() }
+                            }
+
+                            NavigationLink {
+                                DebugFantasyHarnessMatchesView(matches: debugHarnessMatches)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Open fixtures-style harness")
+                                        .font(.body.weight(.semibold))
+                                    Text("Shows synthetic Premier League fixtures using the same match lozenges as the Fixtures screen.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 2)
+                            }
+
+                            ForEach(debugHarnessMatches) { harnessMatch in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(harnessMatch.title)
+                                        .font(.footnote.weight(.semibold))
+                                    Text(harnessMatch.subtitle)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 1)
+                            }
+                        }
+                    } header: {
+                        HStack {
+                            Text("Match Details Harness")
+                            Spacer()
+                            Text("DEBUG")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
                         }
                     }
-                } header: {
-                    HStack {
-                        Text("Match Details Harness")
-                        Spacer()
-                        Text("DEBUG")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                    }
+                    #endif
                 }
-                #endif
+                .scrollContentBackground(.hidden)
+                .background(Color(.systemGroupedBackground))
             }
-            .navigationTitle("About")
-            .toolbarTitleDisplayMode(.inline)
             #if DEBUG
             .task {
                 await refreshDiagnostics()
             }
             #endif
+        }
+    }
+
+    private var headerView: some View {
+        TopLevelScreenHeader(screenTitle: "About") {
+            Image(systemName: "info.circle")
+                .font(.system(size: 24, weight: .semibold))
         }
     }
 

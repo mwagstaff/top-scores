@@ -205,20 +205,16 @@ struct MatchRow: View {
             else {
                 continue
             }
-            let adjustedPoints = expectedPoints * Double(max(player.multiplier, 1))
-            expectedPointsByElementID[player.elementID] = Int(adjustedPoints.rounded())
+            expectedPointsByElementID[player.elementID] = Int(expectedPoints.rounded())
         }
 
-        if squad.hasBenchBoostActive {
-            for player in squad.bench {
-                guard player.hasRemainingFixtureThisGameweek,
-                      let expectedPoints = benchExpectedPoints[player.elementID]
-                else {
-                    continue
-                }
-                let adjustedPoints = expectedPoints * Double(max(player.multiplier, 1))
-                expectedPointsByElementID[player.elementID] = Int(adjustedPoints.rounded())
+        for player in squad.bench {
+            guard player.hasRemainingFixtureThisGameweek,
+                  let expectedPoints = benchExpectedPoints[player.elementID]
+            else {
+                continue
             }
+            expectedPointsByElementID[player.elementID] = Int(expectedPoints.rounded())
         }
 
         return expectedPointsByElementID
@@ -2311,9 +2307,9 @@ struct FantasySquadMembershipLookup {
 
     private let memberKeys: Set<String>
     private let teamCounts: [String: Int]
-    private let effectiveScoresByTeam: [String: Int]
-    private let contributionPointsByKey: [String: Int]
-    private let contributionPointsByElementID: [Int: Int]
+    private let fixtureScoresByTeam: [String: Int]
+    private let fixturePointsByKey: [String: Int]
+    private let fixturePointsByElementID: [Int: Int]
     private let expectedPointsByElementID: [Int: Int]
     private let playersByTeam: [String: [SquadPlayerSummary]]
 
@@ -2322,13 +2318,15 @@ struct FantasySquadMembershipLookup {
 
         var keys = Set<String>()
         var counts: [String: Int] = [:]
-        var effectiveScores: [String: Int] = [:]
-        var contributionPoints: [String: Int] = [:]
-        var contributionPointsByElementID: [Int: Int] = [:]
+        var fixtureScores: [String: Int] = [:]
+        var fixturePoints: [String: Int] = [:]
+        var fixturePointsByElementID: [Int: Int] = [:]
         var playersByTeam: [String: [SquadPlayerSummary]] = [:]
         for player in squad.allPlayers {
             let teamKey = Self.normalizeTeamName(player.teamName)
             counts[teamKey, default: 0] += 1
+            fixtureScores[teamKey, default: 0] += player.rawPoints
+            fixturePointsByElementID[player.elementID] = player.rawPoints
             playersByTeam[teamKey, default: []].append(
                 SquadPlayerSummary(
                     elementID: player.elementID,
@@ -2343,25 +2341,14 @@ struct FantasySquadMembershipLookup {
             ) {
                 let key = "\(teamKey)|\(nameVariant)"
                 keys.insert(key)
-                contributionPoints[key] = 0
-            }
-        }
-        for contribution in squad.effectivePlayerContributions {
-            let teamKey = Self.normalizeTeamName(contribution.teamName)
-            effectiveScores[teamKey, default: 0] += contribution.points
-            contributionPointsByElementID[contribution.elementID] = contribution.points
-            for nameVariant in Self.nameVariants(
-                fullName: contribution.fullName,
-                displayName: contribution.displayName
-            ) {
-                contributionPoints["\(teamKey)|\(nameVariant)"] = contribution.points
+                fixturePoints[key] = player.rawPoints
             }
         }
         memberKeys = keys
         teamCounts = counts
-        effectiveScoresByTeam = effectiveScores
-        contributionPointsByKey = contributionPoints
-        self.contributionPointsByElementID = contributionPointsByElementID
+        fixtureScoresByTeam = fixtureScores
+        fixturePointsByKey = fixturePoints
+        self.fixturePointsByElementID = fixturePointsByElementID
         self.expectedPointsByElementID = expectedPointsByElementID
         self.playersByTeam = playersByTeam
     }
@@ -2405,7 +2392,7 @@ struct FantasySquadMembershipLookup {
             return nil
         }
 
-        return memberKeys.compactMap { contributionPointsByKey[$0] }.max() ?? 0
+        return memberKeys.compactMap { fixturePointsByKey[$0] }.max() ?? 0
     }
 
     func involvedPlayers(
@@ -2469,7 +2456,7 @@ struct FantasySquadMembershipLookup {
                     if preferExpectedPoints {
                         return .expected(expectedPointsByElementID[player.elementID] ?? 0)
                     }
-                    return .actual(contributionPointsByElementID[player.elementID] ?? 0)
+                    return .actual(fixturePointsByElementID[player.elementID] ?? 0)
                 }()
                 output.append(
                     FantasyMatchContributionDisplay(
@@ -2487,7 +2474,7 @@ struct FantasySquadMembershipLookup {
 
     private func effectiveScore(for teamName: String) -> Int {
         fantasyTeamLookupKeys(teamName).reduce(0) { partialResult, teamKey in
-            partialResult + effectiveScoresByTeam[teamKey, default: 0]
+            partialResult + fixtureScoresByTeam[teamKey, default: 0]
         }
     }
 

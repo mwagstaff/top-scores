@@ -133,11 +133,10 @@ struct TablesView: View {
     }
 
     private var headerView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Top Scores")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-
+        TopLevelScreenHeader(screenTitle: "Tables") {
+            Image(systemName: "tablecells")
+                .font(.system(size: 24, weight: .semibold))
+        } detail: {
             if let errorMessage {
                 Text(errorMessage)
                     .font(.footnote)
@@ -156,11 +155,6 @@ struct TablesView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal)
-        .padding(.top, 8)
-        .padding(.bottom, 12)
-        .background(.ultraThinMaterial)
     }
 
     private func loadTables(force: Bool) async {

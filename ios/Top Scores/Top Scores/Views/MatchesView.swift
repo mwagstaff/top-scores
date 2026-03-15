@@ -14,6 +14,15 @@ enum MatchesViewMode: String {
         }
     }
 
+    var headingIconName: String {
+        switch self {
+        case .fixtures:
+            return "calendar"
+        case .results:
+            return "clock.arrow.circlepath"
+        }
+    }
+
     var loadingText: String {
         switch self {
         case .fixtures:
@@ -440,29 +449,26 @@ struct MatchesView: View {
     }
 
     private var headerView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center) {
-                Text("Top Scores")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                Spacer()
-                Button {
-                    if isSearchVisible {
-                        hideSearchAndClear()
-                    } else {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isSearchVisible = true
-                        }
+        TopLevelScreenHeader(screenTitle: mode.title) {
+            Image(systemName: mode.headingIconName)
+                .font(.system(size: 24, weight: .semibold))
+        } accessory: {
+            Button {
+                if isSearchVisible {
+                    hideSearchAndClear()
+                } else {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isSearchVisible = true
                     }
-                } label: {
-                    Image(systemName: isSearchVisible ? "magnifyingglass.circle.fill" : "magnifyingglass")
-                        .font(.title3)
-                        .padding(10)
-                        .background(Circle().fill(.ultraThinMaterial))
                 }
-                .accessibilityLabel(isSearchVisible ? "Hide search and clear text" : "Show match search")
+            } label: {
+                Image(systemName: isSearchVisible ? "magnifyingglass.circle.fill" : "magnifyingglass")
+                    .font(.title3)
+                    .padding(10)
+                    .background(Circle().fill(.ultraThinMaterial))
             }
-
+            .accessibilityLabel(isSearchVisible ? "Hide search and clear text" : "Show match search")
+        } detail: {
             if isSearchVisible {
                 MatchSearchBar(text: $searchText, placeholder: "Search teams, leagues or channels")
                     .frame(height: 44)
@@ -500,10 +506,6 @@ struct MatchesView: View {
                 }
             }
         }
-        .padding(.horizontal)
-        .padding(.top, 8)
-        .padding(.bottom, 12)
-        .background(.ultraThinMaterial)
     }
 
     private func hideSearchAndClear() {

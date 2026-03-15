@@ -97,6 +97,12 @@ struct FantasyView: View {
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
     private let sharedEntryPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     private let addSheetClipboardPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
+    private let refreshFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     var body: some View {
         lifecycleBoundView
@@ -104,17 +110,18 @@ struct FantasyView: View {
 
     private var baseNavigationView: some View {
         NavigationStack {
-            Group {
-                if managerEntryID.isEmpty {
-                    setupFlowView
-                } else if initialSetupVersion < Self.currentInitialSetupVersion {
-                    initialSetupFlowView
-                } else {
-                    linkedFantasyView
+            VStack(spacing: 0) {
+                headerView
+                Group {
+                    if managerEntryID.isEmpty {
+                        setupFlowView
+                    } else if initialSetupVersion < Self.currentInitialSetupVersion {
+                        initialSetupFlowView
+                    } else {
+                        linkedFantasyView
+                    }
                 }
             }
-            .navigationTitle("Fantasy Football")
-            .toolbarTitleDisplayMode(.inline)
         }
     }
 
@@ -589,6 +596,30 @@ struct FantasyView: View {
                     rivalManagers: rivalManagers,
                     trackedLeagues: trackedLeagues
                 )
+            }
+        }
+    }
+
+    private var headerView: some View {
+        TopLevelScreenHeader(screenTitle: "Fantasy Football") {
+            FantasyLionIconView(size: 30, scale: 0.92)
+        } detail: {
+            if let errorMessage = fantasyViewModel.errorMessage {
+                Text(errorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            } else if fantasyViewModel.isLoading || fantasyViewModel.isRefreshing {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(fantasyViewModel.isLoading ? "Loading Fantasy score" : "Refreshing Fantasy score")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let lastUpdated = fantasyViewModel.lastUpdated {
+                Text("Updated \(refreshFormatter.string(from: lastUpdated))")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
     }
