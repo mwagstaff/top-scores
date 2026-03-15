@@ -70,6 +70,28 @@ struct FantasyManagerIDParserTests {
         #expect(FantasySharedImportStore.loadLegacyPayload(from: defaults) == queuedPayloads.last)
     }
 
+    @Test func sharedImportStore_roundTripsMultipleLeagueShares() async throws {
+        let suiteName = #function
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let queuedPayloads = [
+            FantasySharedImportPayload(
+                rawURL: "https://fantasy.premierleague.com/leagues/111111/standings/c",
+                updatedAt: 101
+            ),
+            FantasySharedImportPayload(
+                rawURL: "https://fantasy.premierleague.com/leagues/classic/222222/standings/c",
+                updatedAt: 202
+            )
+        ]
+
+        FantasySharedImportStore.saveQueue(queuedPayloads, to: defaults)
+
+        #expect(FantasySharedImportStore.loadQueue(from: defaults) == queuedPayloads)
+        #expect(FantasySharedImportStore.loadLegacyPayload(from: defaults) == queuedPayloads.last)
+    }
+
     @Test func sharedImportStore_clearsLegacyMirrorWhenQueueIsEmpty() async throws {
         let suiteName = #function
         let defaults = UserDefaults(suiteName: suiteName)!
