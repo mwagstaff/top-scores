@@ -29,6 +29,7 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
         let generatedAtEpochSeconds: Int
         let delayMinutes: Int
         let delayLabel: String?
+        let fantasyCurrentScore: Int?
         let matches: [TopScoresLiveActivityMatchState]
     }
 
@@ -300,7 +301,9 @@ final class LiveActivitySyncService {
         guard let endpoint = endpointURL(path: "live-activity/reconcile") else { return }
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
-            "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
+            "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
+            "force": true,
+            "trigger": "app_foreground"
         ]
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "live-activity-reconcile")
     }
@@ -397,7 +400,8 @@ final class LiveActivitySyncService {
             }
             return "\(match.homeTeam) v \(match.awayTeam) \(score) \(match.matchTime ?? "nil")"
         }.joined(separator: " | ")
-        return "mode=\(state.mode) generatedAt=\(state.generatedAtEpochSeconds) delay=\(state.delayMinutes) matches=\(state.matches.count) [\(matches)]"
+        let fantasyScoreSummary = state.fantasyCurrentScore.map { " ff=\($0)" } ?? ""
+        return "mode=\(state.mode) generatedAt=\(state.generatedAtEpochSeconds) delay=\(state.delayMinutes)\(fantasyScoreSummary) matches=\(state.matches.count) [\(matches)]"
     }
 
     private static func serverDebugSummary(_ json: [String: Any]) -> String {
@@ -416,7 +420,8 @@ final class LiveActivitySyncService {
             let matchTime = String(describing: match["matchTime"] ?? "nil")
             return "\(homeTeam) v \(awayTeam) \(homeScore)-\(awayScore) \(matchTime)"
         }.joined(separator: " | ")
-        return "activityId=\(currentActivityId) tokenUpdatedAt=\(currentActivityTokenUpdatedAt) lastDispatchAt=\(lastDispatchAt) serverMode=\(mode) delay=\(delayMinutes) matches=[\(matches)]"
+        let fantasyScore = String(describing: serverPresentation?["fantasyCurrentScore"] ?? "nil")
+        return "activityId=\(currentActivityId) tokenUpdatedAt=\(currentActivityTokenUpdatedAt) lastDispatchAt=\(lastDispatchAt) serverMode=\(mode) delay=\(delayMinutes) ff=\(fantasyScore) matches=[\(matches)]"
     }
 }
 #else

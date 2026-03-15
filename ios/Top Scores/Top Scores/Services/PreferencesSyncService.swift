@@ -1,5 +1,127 @@
 import Foundation
 
+private struct FantasySyncPlayerPayload: Codable {
+    let elementID: Int
+    let pickPosition: Int
+    let positionType: Int
+    let displayName: String
+    let fullName: String
+    let teamName: String
+    let rawPoints: Int
+    let appliedPoints: Int
+    let displayPoints: Int
+    let multiplier: Int
+    let isCaptain: Bool
+    let isViceCaptain: Bool
+    let isStarter: Bool
+    let hasAnyFixtureThisGameweek: Bool
+    let hasUpcomingFixtureThisGameweek: Bool
+    let hasActiveFixtureThisGameweek: Bool
+    let minutesPlayed: Int
+
+    init(player: FantasyDisplayPlayer) {
+        elementID = player.elementID
+        pickPosition = player.pickPosition
+        positionType = player.positionType.rawValue
+        displayName = player.displayName
+        fullName = player.fullName
+        teamName = player.teamName
+        rawPoints = player.rawPoints
+        appliedPoints = player.appliedPoints
+        displayPoints = player.displayPoints
+        multiplier = player.multiplier
+        isCaptain = player.isCaptain
+        isViceCaptain = player.isViceCaptain
+        isStarter = player.isStarter
+        hasAnyFixtureThisGameweek = player.hasAnyFixtureThisGameweek
+        hasUpcomingFixtureThisGameweek = player.hasUpcomingFixtureThisGameweek
+        hasActiveFixtureThisGameweek = player.hasActiveFixtureThisGameweek
+        minutesPlayed = player.minutesPlayed
+    }
+}
+
+private struct FantasySyncContributionPayload: Codable {
+    let elementID: Int
+    let displayName: String
+    let fullName: String
+    let teamName: String
+    let points: Int
+
+    init(contribution: FantasyEffectivePlayerContribution) {
+        elementID = contribution.elementID
+        displayName = contribution.displayName
+        fullName = contribution.fullName
+        teamName = contribution.teamName
+        points = contribution.points
+    }
+}
+
+private struct FantasySyncSquadPayload: Codable {
+    let managerEntryID: Int
+    let syncedAt: String
+    let gameweekID: Int
+    let gameweekTitle: String
+    let totalPoints: Int
+    let estimatedCurrentScore: Int
+    let resolvedCurrentScore: Int
+    let isEstimatedScore: Bool
+    let hasActiveFixtures: Bool
+    let activeChipCodes: [String]
+    let players: [FantasySyncPlayerPayload]
+    let effectiveContributions: [FantasySyncContributionPayload]
+
+    init(managerEntryID: Int, squad: FantasySquadDisplayData, now: Date = Date()) {
+        self.managerEntryID = managerEntryID
+        syncedAt = ISO8601DateFormatter().string(from: now)
+        gameweekID = squad.gameweekID
+        gameweekTitle = squad.gameweekTitle
+        totalPoints = squad.totalPoints
+        estimatedCurrentScore = squad.estimatedCurrentScore
+        resolvedCurrentScore = squad.resolvedCurrentScore
+        isEstimatedScore = squad.isEstimatedScore
+        hasActiveFixtures = squad.hasActiveFixtures
+        activeChipCodes = squad.activeChips.map(\.code)
+        players = squad.allPlayers.map(FantasySyncPlayerPayload.init(player:))
+        effectiveContributions = squad.effectivePlayerContributions.map(
+            FantasySyncContributionPayload.init(contribution:)
+        )
+    }
+}
+
+private struct FantasySyncStatePayload: Codable {
+    let managerEntryID: Int?
+    let squad: FantasySyncSquadPayload?
+}
+
+enum FantasySyncStore {
+    private static let userDefaultsKey = "fantasy.syncedSquadState"
+
+    static func persist(managerEntryID: String, squad: FantasySquadDisplayData?) {
+        let defaults = UserDefaults.standard
+        let trimmedManagerID = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedManagerEntryID = Int(trimmedManagerID)
+
+        guard let parsedManagerEntryID, parsedManagerEntryID > 0 else {
+            defaults.removeObject(forKey: userDefaultsKey)
+            return
+        }
+
+        let payload = FantasySyncStatePayload(
+            managerEntryID: parsedManagerEntryID,
+            squad: squad.map { FantasySyncSquadPayload(managerEntryID: parsedManagerEntryID, squad: $0) }
+        )
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        defaults.set(data, forKey: userDefaultsKey)
+    }
+
+    static func jsonObject() -> Any? {
+        guard let data = UserDefaults.standard.data(forKey: userDefaultsKey) else {
+            return nil
+        }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+}
+
 struct PreferencesSyncDiagnostics: Sendable {
     let lastSyncAttempt: Date?
     let lastSyncSuccess: Date?
@@ -79,11 +201,13 @@ actor PreferencesSyncService {
         // Get APNS token and development build status
         let apnsToken = await MainActor.run { NotificationManager.shared.currentAPNSToken }
         let isDevelopmentBuild = await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
+        let fantasyState = FantasySyncStore.jsonObject() ?? NSNull()
 
         let payload: [String: Any] = [
             "deviceToken": deviceToken,
             "apnsToken": apnsToken as Any,
             "isDevelopmentBuild": isDevelopmentBuild,
+            "fantasy": fantasyState,
             "preferences": [
                 "selectedLeagues": snapshot.selectedLeagues,
                 "selectedChannels": snapshot.selectedChannels,

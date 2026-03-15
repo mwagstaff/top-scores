@@ -14429,7 +14429,7 @@ const {
 app.post(`${API_PREFIX}/preferences`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
-  const { deviceToken, preferences, apnsToken, isDevelopmentBuild, liveActivity } = req.body;
+  const { deviceToken, preferences, apnsToken, isDevelopmentBuild, liveActivity, fantasy } = req.body;
   const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
 
   if (!resolvedDeviceToken) {
@@ -14446,6 +14446,7 @@ app.post(`${API_PREFIX}/preferences`, async (req, res) => {
       apnsToken,
       typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : false,
       {
+        fantasy,
         liveActivity:
           liveActivity && typeof liveActivity === "object" ? liveActivity : undefined,
       }
@@ -14532,6 +14533,32 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
   }
 
   try {
+    const existingRecord = await getUserPreferences(resolvedDeviceToken);
+    const resolvedIsDevelopmentBuild =
+      typeof isDevelopmentBuild === "boolean"
+        ? isDevelopmentBuild
+        : Boolean(existingRecord && existingRecord.isDevelopmentBuild);
+    const duplicateResolution = await endSupersededLiveActivityIfNeeded({
+      existingRecord,
+      deviceToken: resolvedDeviceToken,
+      activityId: normalizedActivityId,
+      activityPushToken: normalizedActivityPushToken,
+      isDevelopmentBuild: resolvedIsDevelopmentBuild,
+    });
+    if (
+      duplicateResolution.reason === "end_failed" &&
+      duplicateResolution.result &&
+      duplicateResolution.result.success === false
+    ) {
+      res.status(502).json({
+        error: "Failed to end superseded live activity",
+        message:
+          duplicateResolution.result.error || "Server could not enforce a single live activity.",
+        previousActivityId: duplicateResolution.previousActivityId || null,
+      });
+      return;
+    }
+
     const nowIso = new Date().toISOString();
     const saved = await updateUserLiveActivityState(
       resolvedDeviceToken,
@@ -14542,23 +14569,25 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
         pendingStartAt: null,
       },
       {
-        isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
+        isDevelopmentBuild:
+          typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
       }
     );
     const activeResult = liveActivityMetrics.markActivityActive({
       deviceToken: resolvedDeviceToken,
       activityId: normalizedActivityId,
-      isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : false,
+      isDevelopmentBuild: resolvedIsDevelopmentBuild,
     });
     if (activeResult.changed) {
       liveActivityMetrics.recordPush({
         event: "arrival_confirmation",
         status: "success",
-        isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : false,
+        isDevelopmentBuild: resolvedIsDevelopmentBuild,
       });
     }
     res.status(200).json({
       success: true,
+      duplicateResolution,
       data: saved,
     });
   } catch (error) {
@@ -16053,6 +16082,9 @@ function buildLiveActivityTestContentState(payload = {}) {
     generatedAtEpochSeconds: Math.floor(now.getTime() / 1000),
     delayMinutes,
     delayLabel,
+    fantasyCurrentScore: Number.isFinite(Number(payload.fantasyCurrentScore))
+      ? Number(payload.fantasyCurrentScore)
+      : null,
     matches,
   };
 }
@@ -16063,6 +16095,82 @@ function resolveLiveActivityTestUserDeviceToken(req, body = {}) {
   const fromUserField = normalizeDeviceToken(body.userDeviceToken);
   if (fromUserField) return fromUserField;
   return normalizeDeviceToken(body.deviceToken);
+}
+
+async function endSupersededLiveActivityIfNeeded({
+  existingRecord,
+  deviceToken,
+  activityId,
+  activityPushToken,
+  isDevelopmentBuild,
+}) {
+  const liveActivityState =
+    existingRecord &&
+    existingRecord.liveActivity &&
+    typeof existingRecord.liveActivity === "object"
+      ? existingRecord.liveActivity
+      : {};
+  const existingActivityId = normalizeDeviceToken(liveActivityState.currentActivityId);
+  const existingActivityPushToken = normalizeLiveActivityToken(
+    liveActivityState.currentActivityPushToken
+  );
+
+  if (!existingActivityPushToken) {
+    return { endedExisting: false, reason: "no_existing_activity" };
+  }
+  if (
+    existingActivityPushToken === activityPushToken &&
+    (!existingActivityId || !activityId || existingActivityId === activityId)
+  ) {
+    return { endedExisting: false, reason: "same_activity" };
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const result = await sendLiveActivityPush({
+    token: existingActivityPushToken,
+    event: "end",
+    contentState: {
+      mode: "ended",
+      generatedAtEpochSeconds: timestamp,
+      delayMinutes: 0,
+      delayLabel: null,
+      fantasyCurrentScore: null,
+      matches: [],
+    },
+    dismissalDate: timestamp,
+    isDevelopmentBuild,
+  });
+
+  if (result.success) {
+    liveActivityMetrics.markActivityInactive({ deviceToken });
+    liveActivityMetrics.recordEnd({
+      isDevelopmentBuild,
+      reason: "superseded",
+    });
+    return {
+      endedExisting: true,
+      reason: "superseded",
+      previousActivityId: existingActivityId,
+      result,
+    };
+  }
+
+  if (isLiveActivityTerminalResult(result)) {
+    liveActivityMetrics.markActivityInactive({ deviceToken });
+    return {
+      endedExisting: false,
+      reason: "previous_activity_already_gone",
+      previousActivityId: existingActivityId,
+      result,
+    };
+  }
+
+  return {
+    endedExisting: false,
+    reason: "end_failed",
+    previousActivityId: existingActivityId,
+    result,
+  };
 }
 
 function isLiveActivityTerminalResult(result) {
@@ -16125,6 +16233,10 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
             presentation && Number.isFinite(Number(presentation.delayMinutes))
               ? Number(presentation.delayMinutes)
               : 0,
+          fantasyCurrentScore:
+            presentation && Number.isFinite(Number(presentation.fantasyCurrentScore))
+              ? Number(presentation.fantasyCurrentScore)
+              : null,
           matches: Array.isArray(presentation && presentation.matches)
             ? presentation.matches.map((match) => ({
               matchId: match && match.match_details_id ? String(match.match_details_id) : "",
@@ -17123,12 +17235,19 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
     const forceDispatch = force === "1" || force === "true" || force === "yes";
     const allowEndRaw = String(_req.query.allowEnd || _req.body?.allowEnd || "").trim().toLowerCase();
     const allowEnd = allowEndRaw === "1" || allowEndRaw === "true" || allowEndRaw === "yes";
+    const explicitDeviceToken =
+      typeof _req.body?.userDeviceToken === "string"
+        ? _req.body.userDeviceToken
+        : _req.body?.deviceToken;
+    const userDeviceToken = _req.deviceToken || normalizeDeviceToken(explicitDeviceToken);
     const result = await matchMonitor.runLiveActivityEvaluationNow({
+      userDeviceToken,
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
     });
     res.status(200).json({
       success: true,
+      userDeviceToken: userDeviceToken || null,
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
       ...result,

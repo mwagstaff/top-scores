@@ -280,6 +280,10 @@ struct FantasyView: View {
             }
             .onChange(of: managerEntryID) { _, newValue in
                 syncManagerEntryIDToSharedDefaults()
+                FantasySyncStore.persist(managerEntryID: newValue, squad: nil)
+                Task {
+                    await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
+                }
                 if newValue.isEmpty {
                     resetFantasyLoadingInterstitial()
                     pendingFantasyRefreshRequest = nil
@@ -289,6 +293,12 @@ struct FantasyView: View {
                 } else {
                     triggerFantasyRefresh(force: true)
                     managerValidationErrorMessage = nil
+                }
+            }
+            .onChange(of: fantasyViewModel.data) { _, newValue in
+                FantasySyncStore.persist(managerEntryID: managerEntryID, squad: newValue)
+                Task {
+                    await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
                 }
             }
             .onChange(of: selectedRivalSquad) { _, newValue in

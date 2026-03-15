@@ -3432,6 +3432,48 @@ function liveActivityDelayMinutesFromPreferences(prefs) {
   return Math.max(0, Number(prefs.notificationDelayMinutes || 0));
 }
 
+function calculateFantasyCurrentScore(fantasyState) {
+  const squad =
+    fantasyState && fantasyState.squad && typeof fantasyState.squad === "object"
+      ? fantasyState.squad
+      : null;
+  if (!squad) return null;
+
+  const contributions = Array.isArray(squad.effectiveContributions)
+    ? squad.effectiveContributions
+    : [];
+  if (contributions.length > 0) {
+    const total = contributions.reduce((sum, contribution) => {
+      const points = Number(contribution && contribution.points);
+      return Number.isFinite(points) ? sum + Math.floor(points) : sum;
+    }, 0);
+    return Number.isFinite(total) ? total : null;
+  }
+
+  const resolvedCurrentScore = Number(squad.resolvedCurrentScore);
+  if (Number.isFinite(resolvedCurrentScore)) {
+    return Math.floor(resolvedCurrentScore);
+  }
+
+  const isEstimatedScore = squad.isEstimatedScore === true;
+  const estimatedCurrentScore = Number(squad.estimatedCurrentScore);
+  if (isEstimatedScore && Number.isFinite(estimatedCurrentScore)) {
+    return Math.floor(estimatedCurrentScore);
+  }
+
+  const totalPoints = Number(squad.totalPoints);
+  if (Number.isFinite(totalPoints)) {
+    return Math.floor(totalPoints);
+  }
+
+  return null;
+}
+
+function fantasyCurrentScoreForUser(user) {
+  const fantasy = user && user.fantasy && typeof user.fantasy === "object" ? user.fantasy : null;
+  return calculateFantasyCurrentScore(fantasy);
+}
+
 function liveActivityModeForMatches(
   liveMatches,
   finishedMatches,
@@ -3470,7 +3512,13 @@ function sanitizeAggregateForLiveActivity(match) {
   };
 }
 
-function buildLiveActivityContentState(mode, matches, delayMinutes, nowMs = Date.now()) {
+function buildLiveActivityContentState(
+  mode,
+  matches,
+  delayMinutes,
+  nowMs = Date.now(),
+  fantasyCurrentScore = null
+) {
   const delayLabel = delayMinutes > 0 && (mode === "single_live" || mode === "multi_live")
     ? `Delayed ${delayMinutes} m`
     : null;
@@ -3501,6 +3549,8 @@ function buildLiveActivityContentState(mode, matches, delayMinutes, nowMs = Date
     generatedAtEpochSeconds: Math.floor(nowMs / 1000),
     delayMinutes: Number(delayMinutes || 0),
     delayLabel,
+    fantasyCurrentScore:
+      Number.isFinite(Number(fantasyCurrentScore)) ? Number(fantasyCurrentScore) : null,
     matches: normalizedMatches,
   };
 }
@@ -3594,6 +3644,10 @@ function buildLiveActivityScoreHash(contentState) {
     mode:
       contentState && Object.prototype.hasOwnProperty.call(contentState, "mode")
         ? contentState.mode
+        : null,
+    fantasyCurrentScore:
+      contentState && Number.isFinite(Number(contentState.fantasyCurrentScore))
+        ? Number(contentState.fantasyCurrentScore)
         : null,
     matches: matches.map((match) => ({
       matchId: String(match && match.matchId ? match.matchId : ""),
@@ -3811,7 +3865,8 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     presentation.mode,
     presentation.matches,
     presentation.delayMinutes,
-    nowMs
+    nowMs,
+    presentation.fantasyCurrentScore
   );
   const payloadHash = buildLiveActivityPayloadHash(contentState);
   const scoreHash = buildLiveActivityScoreHash(contentState);
@@ -3952,6 +4007,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
 function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now()) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
   const delayMinutes = liveActivityDelayMinutesFromPreferences(prefs);
+  const fantasyCurrentScore = fantasyCurrentScoreForUser(user);
   const eligible = [];
 
   for (const entry of entries) {
@@ -3967,6 +4023,7 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
       mode: null,
       matches: [],
       delayMinutes,
+      fantasyCurrentScore,
     };
   }
 
@@ -4111,6 +4168,7 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
       mode: null,
       matches: [],
       delayMinutes,
+      fantasyCurrentScore,
     };
   }
 
@@ -4120,6 +4178,7 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now())
       ? (sortedRecentKickoff.length > 0 ? sortedRecentKickoff : sortedUpcoming)
       : sortedLiveAndFinished,
     delayMinutes,
+    fantasyCurrentScore,
   };
 }
 
@@ -4148,6 +4207,7 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
   const nowMs = evalStartMs;
   const forceDispatch = Boolean(options && options.forceDispatch);
   const preserveExistingOnEmpty = Boolean(options && options.preserveExistingOnEmpty);
+  const userDeviceTokenFilter = String(options && options.userDeviceToken ? options.userDeviceToken : "").trim();
 
   try {
     await ensureLiveActivityTeamRatingCache(nowMs);
@@ -4158,7 +4218,11 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
     const users = await getAllUserPreferences();
     if (!Array.isArray(users) || users.length === 0) return;
 
-    for (const user of users) {
+    const filteredUsers = userDeviceTokenFilter
+      ? users.filter((user) => String(user && user.deviceToken ? user.deviceToken : "") === userDeviceTokenFilter)
+      : users;
+
+    for (const user of filteredUsers) {
       const liveActivityState =
         user && user.liveActivity && typeof user.liveActivity === "object" ? user.liveActivity : {};
       const hasStartToken = Boolean(
@@ -4200,6 +4264,8 @@ async function runLiveActivityEvaluationNow(options = {}) {
     success: true,
     isMonitoring,
     monitoredMatchCount: monitoredMatches.size,
+    targetedUserDeviceToken:
+      options && options.userDeviceToken ? String(options.userDeviceToken) : null,
   };
 }
 
@@ -4595,6 +4661,7 @@ module.exports = {
     buildLiveActivityPayloadHash,
     buildLiveActivityScoreHash,
     buildLiveActivityPresentationForUser,
+    calculateFantasyCurrentScore,
     compareLiveActivityMatches,
     buildLiveActivityEntriesForUser,
     monitoredMatchStatesSnapshot,

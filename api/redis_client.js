@@ -278,6 +278,135 @@ function normalizeOptionalToken(value) {
   return trimmed ? trimmed : null;
 }
 
+function normalizeFantasyPositiveInt(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const normalized = Math.floor(parsed);
+  return normalized > 0 ? normalized : null;
+}
+
+function normalizeFantasyBoolean(value, fallback = false) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeFantasyPlayer(player = {}) {
+  if (!player || typeof player !== "object") return null;
+
+  const elementID = normalizeFantasyPositiveInt(player.elementID);
+  const pickPosition = normalizeFantasyPositiveInt(player.pickPosition);
+  const positionType = normalizeFantasyPositiveInt(player.positionType);
+  const displayName = normalizeOptionalToken(player.displayName);
+  const fullName = normalizeOptionalToken(player.fullName);
+  const teamName = normalizeOptionalToken(player.teamName);
+
+  if (!elementID || !pickPosition || !positionType || !displayName || !teamName) {
+    return null;
+  }
+
+  return {
+    elementID,
+    pickPosition,
+    positionType,
+    displayName,
+    fullName,
+    teamName,
+    rawPoints: Number.isFinite(Number(player.rawPoints)) ? Number(player.rawPoints) : 0,
+    appliedPoints: Number.isFinite(Number(player.appliedPoints)) ? Number(player.appliedPoints) : 0,
+    displayPoints: Number.isFinite(Number(player.displayPoints)) ? Number(player.displayPoints) : 0,
+    multiplier: Number.isFinite(Number(player.multiplier)) ? Number(player.multiplier) : 1,
+    isCaptain: normalizeFantasyBoolean(player.isCaptain),
+    isViceCaptain: normalizeFantasyBoolean(player.isViceCaptain),
+    isStarter: normalizeFantasyBoolean(player.isStarter),
+    hasAnyFixtureThisGameweek: normalizeFantasyBoolean(player.hasAnyFixtureThisGameweek),
+    hasUpcomingFixtureThisGameweek: normalizeFantasyBoolean(player.hasUpcomingFixtureThisGameweek),
+    hasActiveFixtureThisGameweek: normalizeFantasyBoolean(player.hasActiveFixtureThisGameweek),
+    minutesPlayed: Number.isFinite(Number(player.minutesPlayed)) ? Number(player.minutesPlayed) : 0,
+  };
+}
+
+function normalizeFantasyContribution(contribution = {}) {
+  if (!contribution || typeof contribution !== "object") return null;
+
+  const elementID = normalizeFantasyPositiveInt(contribution.elementID);
+  const displayName = normalizeOptionalToken(contribution.displayName);
+  const fullName = normalizeOptionalToken(contribution.fullName);
+  const teamName = normalizeOptionalToken(contribution.teamName);
+  const points = Number(contribution.points);
+
+  if (!elementID || !displayName || !teamName || !Number.isFinite(points)) {
+    return null;
+  }
+
+  return {
+    elementID,
+    displayName,
+    fullName,
+    teamName,
+    points: Math.floor(points),
+  };
+}
+
+function normalizeFantasySquad(value = {}, managerEntryID = null) {
+  if (!value || typeof value !== "object") return null;
+
+  const resolvedManagerEntryID =
+    normalizeFantasyPositiveInt(value.managerEntryID) || normalizeFantasyPositiveInt(managerEntryID);
+  const gameweekID = normalizeFantasyPositiveInt(value.gameweekID);
+  const gameweekTitle = normalizeOptionalToken(value.gameweekTitle);
+  if (!resolvedManagerEntryID || !gameweekID || !gameweekTitle) {
+    return null;
+  }
+
+  const players = Array.isArray(value.players)
+    ? value.players.map(normalizeFantasyPlayer).filter(Boolean)
+    : [];
+  const effectiveContributions = Array.isArray(value.effectiveContributions)
+    ? value.effectiveContributions.map(normalizeFantasyContribution).filter(Boolean)
+    : [];
+
+  return {
+    managerEntryID: resolvedManagerEntryID,
+    syncedAt: normalizeOptionalToken(value.syncedAt) || new Date().toISOString(),
+    gameweekID,
+    gameweekTitle,
+    totalPoints: Number.isFinite(Number(value.totalPoints)) ? Number(value.totalPoints) : 0,
+    estimatedCurrentScore: Number.isFinite(Number(value.estimatedCurrentScore))
+      ? Number(value.estimatedCurrentScore)
+      : 0,
+    resolvedCurrentScore: Number.isFinite(Number(value.resolvedCurrentScore))
+      ? Number(value.resolvedCurrentScore)
+      : 0,
+    isEstimatedScore: normalizeFantasyBoolean(value.isEstimatedScore),
+    hasActiveFixtures: normalizeFantasyBoolean(value.hasActiveFixtures),
+    activeChipCodes: Array.isArray(value.activeChipCodes)
+      ? value.activeChipCodes
+        .map(normalizeOptionalToken)
+        .filter(Boolean)
+      : [],
+    players,
+    effectiveContributions,
+  };
+}
+
+function normalizeFantasyState(value) {
+  if (value === null) return null;
+  if (!value || typeof value !== "object") return undefined;
+
+  const managerEntryID = normalizeFantasyPositiveInt(value.managerEntryID);
+  const squad = normalizeFantasySquad(value.squad, managerEntryID);
+  const resolvedManagerEntryID =
+    managerEntryID || normalizeFantasyPositiveInt(squad && squad.managerEntryID);
+
+  if (!resolvedManagerEntryID && !squad) {
+    return null;
+  }
+
+  return {
+    managerEntryID: resolvedManagerEntryID || null,
+    squad: squad || null,
+  };
+}
+
 function normalizeLiveActivityStatePatch(patch = {}) {
   const normalized = {};
   if (!patch || typeof patch !== "object") return normalized;
@@ -368,6 +497,14 @@ async function saveUserPreferences(
         : existing && typeof existing.preferences === "object"
           ? existing.preferences
           : {};
+    const hasFantasyStatePatch =
+      options &&
+      Object.prototype.hasOwnProperty.call(options, "fantasy");
+    const resolvedFantasy = hasFantasyStatePatch
+      ? normalizeFantasyState(options.fantasy)
+      : existing && Object.prototype.hasOwnProperty.call(existing, "fantasy")
+        ? existing.fantasy
+        : null;
     const liveActivityPatch = options && options.liveActivity
       ? normalizeLiveActivityStatePatch(options.liveActivity)
       : {};
@@ -382,6 +519,7 @@ async function saveUserPreferences(
       apnsToken: resolvedAPNSToken,
       isDevelopmentBuild: resolvedIsDevelopmentBuild,
       preferences: resolvedPreferences,
+      fantasy: resolvedFantasy,
       liveActivity: {
         ...existingLiveActivity,
         ...liveActivityPatch,

@@ -39,6 +39,21 @@ function liveActivityUser(delayMinutes = 5, extraPreferences = {}) {
   };
 }
 
+function liveActivityUserWithFantasyScore(score, delayMinutes = 5, extraPreferences = {}) {
+  return {
+    ...liveActivityUser(delayMinutes, extraPreferences),
+    fantasy: {
+      managerEntryID: 123456,
+      squad: {
+        managerEntryID: 123456,
+        gameweekID: 29,
+        gameweekTitle: "GW29",
+        effectiveContributions: [{ elementID: 1, displayName: "Saka", teamName: "Arsenal", points: score }],
+      },
+    },
+  };
+}
+
 test("isMatchRelevant keeps recently kicked off fixtures eligible until live status arrives", () => {
   const nowMs = Date.now();
   const kickoff = formatLocalDateTimeParts(nowMs - 5 * 60 * 1000);
@@ -1551,6 +1566,73 @@ test("buildLiveActivityPresentationForUser uses notification delay when no dedic
   assert.equal(presentation.matches[0].score_status, "81");
   assert.equal(presentation.matches[0].home_score, 3);
   assert.equal(presentation.matches[0].away_score, 0);
+});
+
+test("calculateFantasyCurrentScore prefers synced effective contributions", () => {
+  assert.equal(
+    __testHooks.calculateFantasyCurrentScore({
+      managerEntryID: 6653695,
+      squad: {
+        managerEntryID: 6653695,
+        gameweekID: 29,
+        gameweekTitle: "GW29",
+        effectiveContributions: [
+          { elementID: 1, displayName: "Saka", teamName: "Arsenal", points: 14 },
+          { elementID: 2, displayName: "Palmer", teamName: "Chelsea", points: 15 },
+        ],
+        resolvedCurrentScore: 0,
+      },
+    }),
+    29
+  );
+});
+
+test("buildLiveActivityPresentationForUser includes synced fantasy score when available", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 10 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUserWithFantasyScore(29, 0),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "ff-upcoming",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Chelsea",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_upcoming");
+  assert.equal(presentation.fantasyCurrentScore, 29);
+
+  const contentState = __testHooks.buildLiveActivityContentState(
+    presentation.mode,
+    presentation.matches,
+    presentation.delayMinutes,
+    nowMs,
+    presentation.fantasyCurrentScore
+  );
+
+  assert.equal(contentState.fantasyCurrentScore, 29);
+  assert.notEqual(
+    __testHooks.buildLiveActivityScoreHash(contentState),
+    __testHooks.buildLiveActivityScoreHash({
+      ...contentState,
+      fantasyCurrentScore: 28,
+    })
+  );
 });
 
 test("buildLiveActivityPresentationForUser ignores stale delayed snapshots and reconstructs from current timeline", () => {

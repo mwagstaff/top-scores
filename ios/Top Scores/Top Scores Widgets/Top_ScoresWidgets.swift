@@ -193,6 +193,7 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
         let generatedAtEpochSeconds: Int
         let delayMinutes: Int
         let delayLabel: String?
+        let fantasyCurrentScore: Int?
         let matches: [TopScoresLiveActivityMatchState]
     }
 
@@ -1898,19 +1899,18 @@ private struct TopScoresLiveActivityLockScreenView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, isMultiMode ? 6 : 8)
 
-            if let bannerText = delayBannerText {
-                HStack {
+            if delayBannerText != nil || fantasyScoreText != nil {
+                HStack(spacing: 6) {
+                    if let bannerText = delayBannerText {
+                        footerBadge(text: bannerText, background: topScoresBlue)
+                    }
                     Spacer(minLength: 0)
-                    Text(bannerText)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
+                    if let fantasyScoreText {
+                        footerBadge(text: fantasyScoreText, background: fantasyRed)
+                    }
                 }
-                .padding(.vertical, 4)
                 .padding(.horizontal, 8)
-                .frame(maxWidth: .infinity)
-                .background(topScoresBlue)
+                .padding(.bottom, 4)
             }
         }
         .task(id: renderDiagnosticsKey) {
@@ -1926,12 +1926,31 @@ private struct TopScoresLiveActivityLockScreenView: View {
         return "\(delayLabel) | Tap to open"
     }
 
+    private var fantasyScoreText: String? {
+        guard let fantasyCurrentScore = state.fantasyCurrentScore else { return nil }
+        return "FF: \(fantasyCurrentScore)"
+    }
+
     private var topScoresBlue: Color {
         Color(red: 0.00, green: 0.48, blue: 1.00)
     }
 
+    private var fantasyRed: Color {
+        Color(red: 0.85, green: 0.12, blue: 0.33)
+    }
+
+    private func footerBadge(text: String, background: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .background(background, in: Capsule())
+    }
+
     private var renderDiagnosticsKey: String {
-        "\(state.mode)|\(state.generatedAtEpochSeconds)|\(state.matches.count)"
+        "\(state.mode)|\(state.generatedAtEpochSeconds)|\(state.matches.count)|\(state.fantasyCurrentScore ?? -1)"
     }
 }
 
