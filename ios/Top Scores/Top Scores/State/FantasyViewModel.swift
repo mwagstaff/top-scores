@@ -34,12 +34,53 @@ final class FantasyViewModel: ObservableObject {
     private let seasonFixturesCacheTTL: TimeInterval = 30 * 60
     private var rivalRefreshToken = UUID()
     private var leagueRefreshToken = UUID()
+    private let trackedLeaguePageWindowRadius = 1
+    private let setupRivalPageWindowRadius = 1
+    private let leagueStandingsPageSize = 50
+    private let setupRivalCandidateLimit = 200
 
     private struct FantasySquadSnapshot {
         let gameweek: FantasyGameweek
         let picksResponse: FantasyPicksResponse
         let liveResponse: FantasyEventLiveResponse
         let fixtures: [FantasyFixture]
+    }
+
+    private struct SetupRivalAccumulator {
+        let entryID: Int
+        let teamName: String
+        let managerName: String
+        let totalPoints: Int
+        let eventPoints: Int
+        let clubBadgeSrc: String?
+        let sharedLeagueCount: Int
+        let closestRankGap: Int
+
+        func merged(with entry: FantasyClassicLeagueStandingEntry, rankGap: Int) -> SetupRivalAccumulator {
+            SetupRivalAccumulator(
+                entryID: entryID,
+                teamName: teamName,
+                managerName: managerName,
+                totalPoints: max(totalPoints, entry.total),
+                eventPoints: max(eventPoints, entry.eventTotal),
+                clubBadgeSrc: clubBadgeSrc ?? entry.clubBadgeSrc,
+                sharedLeagueCount: sharedLeagueCount + 1,
+                closestRankGap: min(closestRankGap, rankGap)
+            )
+        }
+
+        var candidate: FantasySetupRivalCandidate {
+            FantasySetupRivalCandidate(
+                entryID: entryID,
+                teamName: teamName,
+                managerName: managerName,
+                totalPoints: totalPoints,
+                eventPoints: eventPoints,
+                clubBadgeSrc: clubBadgeSrc,
+                sharedLeagueCount: sharedLeagueCount,
+                closestRankGap: closestRankGap
+            )
+        }
     }
 
     func reset() {
@@ -186,7 +227,8 @@ final class FantasyViewModel: ObservableObject {
                 Task {
                     let refreshedLeagues = await self.fetchTrackedLeagueStandings(
                         trackedLeagues: normalizedTrackedLeagues,
-                        managerEntryID: entryID
+                        managerEntryID: entryID,
+                        managerProfile: myProfile
                     )
                     guard self.leagueRefreshToken == refreshToken else { return }
                     self.trackedLeagueStandings = refreshedLeagues
@@ -242,6 +284,39 @@ final class FantasyViewModel: ObservableObject {
         }
 
         return try await fetchLeagueStandingSnapshot(leagueID: leagueID, managerEntryID: myEntryID)
+    }
+
+    func prepareInitialSetup(managerEntryID: String) async throws -> FantasyInitialSetupPayload {
+        let trimmedManagerID = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let entryID = Int(trimmedManagerID), entryID > 0 else {
+            throw RivalValidationError.invalidNumber
+        }
+
+        let managerProfile = try await fantasyPublicClient.fetchEntryProfile(entryID: entryID)
+        let trackedLeagues = deduplicatedTrackedLeagues(
+            trackedLeagues: (managerProfile.leagues?.classic ?? []).map { FantasyTrackedLeague(leagueID: $0.id) }
+        )
+        let rivalCandidates = try await buildSetupRivalCandidates(
+            managerEntryID: entryID,
+            managerProfile: managerProfile
+        )
+
+        return FantasyInitialSetupPayload(
+            managerProfile: managerProfile,
+            trackedLeagues: trackedLeagues,
+            rivalCandidates: rivalCandidates
+        )
+    }
+
+    func loadLeagueStandingDetails(
+        leagueID: Int,
+        managerEntryID: String
+    ) async throws -> FantasyTrackedLeagueStanding {
+        let trimmedManagerID = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let entryID = Int(trimmedManagerID), entryID > 0 else {
+            throw LeagueValidationError.missingManager
+        }
+        return try await fetchLeagueStandingSnapshot(leagueID: leagueID, managerEntryID: entryID)
     }
 
     func loadPlayerDetails(
@@ -659,20 +734,39 @@ final class FantasyViewModel: ObservableObject {
 
     private func fetchTrackedLeagueStandings(
         trackedLeagues: [FantasyTrackedLeague],
-        managerEntryID: Int
+        managerEntryID: Int,
+        managerProfile: FantasyEntryProfile?
     ) async -> [FantasyTrackedLeagueStanding] {
         var snapshots: [FantasyTrackedLeagueStanding] = []
+        let leagueMetadataByID = Dictionary(
+            uniqueKeysWithValues: (managerProfile?.leagues?.classic ?? []).map { ($0.id, $0) }
+        )
 
         for trackedLeague in trackedLeagues {
-            do {
-                let snapshot = try await fetchLeagueStandingSnapshot(
-                    leagueID: trackedLeague.leagueID,
-                    managerEntryID: managerEntryID
-                )
-                snapshots.append(snapshot)
-            } catch {
+            guard let leagueMetadata = leagueMetadataByID[trackedLeague.leagueID] else {
                 continue
             }
+
+            var standings: [FantasyClassicLeagueStandingEntry] = []
+            if leagueMetadata.leagueType == "x" {
+                do {
+                    standings = try await fetchLeagueStandingWindow(
+                        leagueID: leagueMetadata.id,
+                        aroundRank: leagueMetadata.resolvedEntryRank,
+                        pageWindowRadius: trackedLeaguePageWindowRadius
+                    )
+                } catch {
+                    standings = []
+                }
+            }
+
+            snapshots.append(
+                trackedLeagueStanding(
+                    from: leagueMetadata,
+                    managerEntryID: managerEntryID,
+                    standings: standings
+                )
+            )
         }
 
         return snapshots.sorted { lhs, rhs in
@@ -698,8 +792,137 @@ final class FantasyViewModel: ObservableObject {
             myEventTotal: myEntry?.eventTotal,
             myOverallTotal: myEntry?.total,
             myEntryName: myEntry?.entryName,
-            standings: response.standings.results
+            standings: response.standings.results,
+            leagueType: nil,
+            rankCount: response.standings.results.count
         )
+    }
+
+    private func trackedLeagueStanding(
+        from league: FantasyEntryClassicLeague,
+        managerEntryID: Int,
+        standings: [FantasyClassicLeagueStandingEntry]
+    ) -> FantasyTrackedLeagueStanding {
+        let myStandingEntry = standings.first(where: { $0.entry == managerEntryID })
+        return FantasyTrackedLeagueStanding(
+            leagueID: league.id,
+            leagueName: league.name,
+            myEntryID: managerEntryID,
+            myRank: myStandingEntry?.rank ?? league.resolvedEntryRank,
+            myLastRank: myStandingEntry?.lastRank ?? league.resolvedEntryLastRank,
+            myEventTotal: myStandingEntry?.eventTotal,
+            myOverallTotal: myStandingEntry?.total ?? league.resolvedTotalPoints,
+            myEntryName: myStandingEntry?.entryName,
+            standings: standings,
+            leagueType: league.leagueType,
+            rankCount: league.rankCount
+        )
+    }
+
+    private func buildSetupRivalCandidates(
+        managerEntryID: Int,
+        managerProfile: FantasyEntryProfile
+    ) async throws -> [FantasySetupRivalCandidate] {
+        let playerCreatedLeagues = (managerProfile.leagues?.classic ?? [])
+            .filter { $0.leagueType == "x" }
+        guard !playerCreatedLeagues.isEmpty else { return [] }
+
+        var candidatesByEntryID: [Int: SetupRivalAccumulator] = [:]
+
+        for league in playerCreatedLeagues {
+            let standings: [FantasyClassicLeagueStandingEntry]
+            do {
+                standings = try await fetchLeagueStandingWindow(
+                    leagueID: league.id,
+                    aroundRank: league.resolvedEntryRank,
+                    pageWindowRadius: setupRivalPageWindowRadius
+                )
+            } catch {
+                continue
+            }
+            let managerRank = standings.first(where: { $0.entry == managerEntryID })?.rank
+                ?? league.resolvedEntryRank
+            for standing in standings {
+                guard standing.entry != managerEntryID else { continue }
+                let rankGap = {
+                    guard let managerRank else { return Int.max }
+                    return abs(standing.rank - managerRank)
+                }()
+                if let existing = candidatesByEntryID[standing.entry] {
+                    candidatesByEntryID[standing.entry] = existing.merged(with: standing, rankGap: rankGap)
+                } else {
+                    candidatesByEntryID[standing.entry] = SetupRivalAccumulator(
+                        entryID: standing.entry,
+                        teamName: standing.entryName,
+                        managerName: standing.playerName,
+                        totalPoints: standing.total,
+                        eventPoints: standing.eventTotal,
+                        clubBadgeSrc: standing.clubBadgeSrc,
+                        sharedLeagueCount: 1,
+                        closestRankGap: rankGap
+                    )
+                }
+            }
+        }
+
+        return candidatesByEntryID.values
+            .map(\.candidate)
+            .sorted { lhs, rhs in
+                if lhs.closestRankGap != rhs.closestRankGap {
+                    return lhs.closestRankGap < rhs.closestRankGap
+                }
+                if lhs.sharedLeagueCount != rhs.sharedLeagueCount {
+                    return lhs.sharedLeagueCount > rhs.sharedLeagueCount
+                }
+                if lhs.totalPoints != rhs.totalPoints {
+                    return lhs.totalPoints > rhs.totalPoints
+                }
+                let leftManager = lhs.managerName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let rightManager = rhs.managerName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if leftManager.localizedCaseInsensitiveCompare(rightManager) != .orderedSame {
+                    return leftManager.localizedCaseInsensitiveCompare(rightManager) == .orderedAscending
+                }
+                let leftTeam = lhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let rightTeam = rhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if leftTeam.localizedCaseInsensitiveCompare(rightTeam) != .orderedSame {
+                    return leftTeam.localizedCaseInsensitiveCompare(rightTeam) == .orderedAscending
+                }
+                return lhs.entryID < rhs.entryID
+            }
+            .prefix(setupRivalCandidateLimit)
+            .map { $0 }
+    }
+
+    private func fetchLeagueStandingWindow(
+        leagueID: Int,
+        aroundRank: Int?,
+        pageWindowRadius: Int
+    ) async throws -> [FantasyClassicLeagueStandingEntry] {
+        let targetPage = page(forRank: aroundRank)
+        let pageRange = max(1, targetPage - pageWindowRadius)...max(1, targetPage + pageWindowRadius)
+        var combinedResults: [FantasyClassicLeagueStandingEntry] = []
+
+        for page in pageRange {
+            let response = try await timed("league_standings league_id=\(leagueID) page=\(page)") {
+                try await fantasyPublicClient.fetchLeagueStandings(leagueID: leagueID, page: page)
+            }
+            combinedResults.append(contentsOf: response.standings.results)
+            if !response.standings.hasNext {
+                break
+            }
+        }
+
+        var seen = Set<Int>()
+        return combinedResults.filter { entry in
+            guard !seen.contains(entry.entry) else { return false }
+            seen.insert(entry.entry)
+            return true
+        }
+    }
+
+    private func page(forRank rank: Int?) -> Int {
+        guard let rank, rank > 0 else { return 1 }
+        return max(1, Int(ceil(Double(rank) / Double(leagueStandingsPageSize))))
     }
 
     private func fetchFullLeagueStandings(leagueID: Int) async throws -> FantasyLeagueStandingsResponse {

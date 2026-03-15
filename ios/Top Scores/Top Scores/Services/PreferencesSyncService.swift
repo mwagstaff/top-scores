@@ -228,6 +228,12 @@ actor PreferencesSyncService {
             ]
         ]
 
+        NSLog(
+            "[PreferencesSync] Sending sync device=%@ fantasy=%@",
+            shortDeviceToken(deviceToken),
+            summarizeFantasyPayload(fantasyState)
+        )
+
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
@@ -242,7 +248,12 @@ actor PreferencesSyncService {
             }
 
             if (200...299).contains(httpResponse.statusCode) {
-                NSLog("[PreferencesSync] Successfully synced preferences to Redis")
+                let responseFantasySummary = summarizeFantasyPayload(fromResponseData: data)
+                NSLog(
+                    "[PreferencesSync] Successfully synced preferences to Redis device=%@ fantasy=%@",
+                    shortDeviceToken(deviceToken),
+                    responseFantasySummary
+                )
                 lastSyncSuccess = Date()
                 lastSyncFailure = nil
                 lastSyncHTTPStatus = httpResponse.statusCode
@@ -264,6 +275,40 @@ actor PreferencesSyncService {
 
     private func getDeviceToken() -> String {
         DeviceIdentity.currentToken
+    }
+
+    private func shortDeviceToken(_ token: String) -> String {
+        String(token.prefix(12))
+    }
+
+    private func summarizeFantasyPayload(_ fantasyState: Any) -> String {
+        if fantasyState is NSNull {
+            return "null"
+        }
+
+        guard let fantasy = fantasyState as? [String: Any] else {
+            return "missing"
+        }
+
+        let managerEntryID = fantasy["managerEntryID"] as? Int
+        let squad = fantasy["squad"] as? [String: Any]
+        let squadManagerEntryID = squad?["managerEntryID"] as? Int
+        return "manager=\(managerEntryID.map(String.init) ?? "nil") squadManager=\(squadManagerEntryID.map(String.init) ?? "nil")"
+    }
+
+    private func summarizeFantasyPayload(fromResponseData data: Data) -> String {
+        guard
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let responseData = json["data"] as? [String: Any]
+        else {
+            return "unparsed"
+        }
+
+        if let fantasy = responseData["fantasy"] {
+            return summarizeFantasyPayload(fantasy)
+        }
+
+        return "missing"
     }
 
     /// Fetches user preferences from Redis (optional - for restore functionality)

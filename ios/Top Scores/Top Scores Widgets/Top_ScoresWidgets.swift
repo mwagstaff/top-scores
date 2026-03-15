@@ -1987,18 +1987,26 @@ private struct TopScoresLiveActivityLockScreenView: View {
             .padding(.vertical, isMultiMode ? 6 : 8)
 
             if delayBannerText != nil || fantasyScoreText != nil {
-                HStack(spacing: 8) {
-                    if let bannerText = delayBannerText {
+                Group {
+                    if let bannerText = delayBannerText, fantasyScoreText == nil {
                         Text(bannerText)
                             .lineLimit(1)
-                            .layoutPriority(1)
-                            .padding(.leading, 5)
-                    }
-                    Spacer(minLength: 0)
-                    if let fantasyScoreText {
-                        Text(fantasyScoreText)
-                            .lineLimit(1)
-                            .padding(.trailing, 5)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        HStack(spacing: 8) {
+                            if let bannerText = delayBannerText {
+                                Text(bannerText)
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
+                                    .padding(.leading, 5)
+                            }
+                            Spacer(minLength: 0)
+                            if let fantasyScoreText {
+                                Text(fantasyScoreText)
+                                    .lineLimit(1)
+                                    .padding(.trailing, 5)
+                            }
+                        }
                     }
                 }
                 .font(.caption2.weight(.semibold))

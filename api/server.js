@@ -14761,6 +14761,8 @@ app.post(`${API_PREFIX}/preferences`, async (req, res) => {
   }
 
   try {
+    const hasFantasyPatch = Object.prototype.hasOwnProperty.call(req.body || {}, "fantasy");
+    const clearsFantasyState = hasFantasyPatch && fantasy === null;
     const saved = await saveUserPreferences(
       resolvedDeviceToken,
       preferences,
@@ -14769,13 +14771,22 @@ app.post(`${API_PREFIX}/preferences`, async (req, res) => {
       {
         fantasy,
         liveActivity:
-          liveActivity && typeof liveActivity === "object" ? liveActivity : undefined,
+          {
+            ...(liveActivity && typeof liveActivity === "object" ? liveActivity : {}),
+            ...(clearsFantasyState
+              ? {
+                  lastPayloadHash: null,
+                  lastScoreHash: null,
+                }
+              : {}),
+          },
       }
     );
-    if (Object.prototype.hasOwnProperty.call(req.body || {}, "fantasy")) {
+    if (hasFantasyPatch) {
       void matchMonitor.runLiveActivityEvaluationNow({
         userDeviceToken: resolvedDeviceToken,
         trigger: "preferences_fantasy_sync",
+        forceDispatch: true,
       }).catch((error) => {
         console.warn("[API] Fantasy preference sync reconcile failed:", error.message || error);
       });

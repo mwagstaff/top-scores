@@ -4,6 +4,8 @@ import Combine
 import UniformTypeIdentifiers
 
 struct FantasyView: View {
+    private static let currentInitialSetupVersion = 1
+
     private struct PendingFantasyRefreshRequest {
         let force: Bool
         let rivalManagers: [FantasyRivalManager]
@@ -27,6 +29,7 @@ struct FantasyView: View {
     @AppStorage(StorageKeys.managerEntryID) private var managerEntryID = ""
     @AppStorage(StorageKeys.rivalManagersJSON) private var rivalManagersJSON = "[]"
     @AppStorage(StorageKeys.trackedLeaguesJSON) private var trackedLeaguesJSON = "[]"
+    @AppStorage(StorageKeys.initialSetupVersion) private var initialSetupVersion = 0
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
@@ -41,6 +44,12 @@ struct FantasyView: View {
     @State private var showSuccessInterstitial = false
     @State private var rivalManagers: [FantasyRivalManager] = []
     @State private var trackedLeagues: [FantasyTrackedLeague] = []
+    @State private var isRunningInitialSetup = false
+    @State private var initialSetupErrorMessage: String?
+    @State private var setupRivalCandidates: [FantasySetupRivalCandidate] = []
+    @State private var selectedSetupRivalEntryIDs: Set<Int> = []
+    @State private var setupRivalSearchText = ""
+    @State private var leagueIDLoadingDetails: Set<Int> = []
     @State private var showAddRivalSheet = false
     @State private var addSheetMode: FantasyIDAddMode = .rival
     @State private var rivalEntryInput = ""
@@ -98,6 +107,8 @@ struct FantasyView: View {
             Group {
                 if managerEntryID.isEmpty {
                     setupFlowView
+                } else if initialSetupVersion < Self.currentInitialSetupVersion {
+                    initialSetupFlowView
                 } else {
                     linkedFantasyView
                 }
@@ -234,35 +245,44 @@ struct FantasyView: View {
                 if managerEntryID.isEmpty {
                     managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
                 } else {
-                    triggerFantasyRefresh(
-                        force: fantasyViewModel.data == nil,
-                        rivalManagers: storedRivals,
-                        trackedLeagues: storedLeagues
-                    )
+                    migrateLegacyInitialSetupIfNeeded()
+                    if initialSetupVersion < Self.currentInitialSetupVersion {
+                        beginInitialSetup()
+                    } else {
+                        triggerFantasyRefresh(
+                            force: fantasyViewModel.data == nil,
+                            rivalManagers: storedRivals,
+                            trackedLeagues: storedLeagues
+                        )
+                    }
                 }
                 armSharedEntryPolling()
                 consumeSharedFantasyEntryURLIfNeeded()
             }
             .onChange(of: isSelected) { _, selected in
                 guard selected else { return }
-                if !managerEntryID.isEmpty {
+                if isFantasySetupReadyForRefresh {
                     triggerFantasyRefresh(
                         force: fantasyViewModel.data == nil,
                         rivalManagers: rivalManagers,
                         trackedLeagues: trackedLeagues
                     )
+                } else if !managerEntryID.isEmpty, initialSetupVersion < Self.currentInitialSetupVersion {
+                    beginInitialSetup()
                 }
                 armSharedEntryPolling()
                 consumeSharedFantasyEntryURLIfNeeded()
             }
             .onChange(of: scenePhase) { _, newValue in
                 guard newValue == .active else { return }
-                if isSelected, !managerEntryID.isEmpty {
+                if isSelected, isFantasySetupReadyForRefresh {
                     triggerFantasyRefresh(
                         force: false,
                         rivalManagers: rivalManagers,
                         trackedLeagues: trackedLeagues
                     )
+                } else if isSelected, !managerEntryID.isEmpty, initialSetupVersion < Self.currentInitialSetupVersion {
+                    beginInitialSetup()
                 }
                 if showAddRivalSheet {
                     autoPopulateAddSheetIDFromClipboard(forceRead: true)
@@ -290,9 +310,19 @@ struct FantasyView: View {
                     fantasyViewModel.reset()
                     managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
                     managerValidationErrorMessage = nil
+                    initialSetupVersion = 0
+                    initialSetupErrorMessage = nil
+                    setupRivalCandidates = []
+                    selectedSetupRivalEntryIDs = []
+                    setupRivalSearchText = ""
+                    isRunningInitialSetup = false
                 } else {
-                    triggerFantasyRefresh(force: true)
                     managerValidationErrorMessage = nil
+                    if initialSetupVersion < Self.currentInitialSetupVersion {
+                        beginInitialSetup()
+                    } else {
+                        triggerFantasyRefresh(force: true)
+                    }
                 }
             }
             .onChange(of: fantasyViewModel.data) { _, newValue in
@@ -318,7 +348,7 @@ struct FantasyView: View {
                 }
             }
             .onChange(of: preferences.apiBaseURL) { _, _ in
-                guard !managerEntryID.isEmpty else { return }
+                guard isFantasySetupReadyForRefresh else { return }
                 triggerFantasyRefresh(
                     force: true,
                     rivalManagers: rivalManagers,
@@ -338,7 +368,7 @@ struct FantasyView: View {
             }
             .onChange(of: rivalManagersJSON) { _, _ in
                 let storedRivals = loadRivalManagersFromStorage()
-                guard !managerEntryID.isEmpty else { return }
+                guard isFantasySetupReadyForRefresh else { return }
                 triggerFantasyRefresh(
                     force: true,
                     rivalManagers: storedRivals,
@@ -347,7 +377,7 @@ struct FantasyView: View {
             }
             .onChange(of: trackedLeaguesJSON) { _, _ in
                 let storedLeagues = loadTrackedLeaguesFromStorage()
-                guard !managerEntryID.isEmpty else { return }
+                guard isFantasySetupReadyForRefresh else { return }
                 triggerFantasyRefresh(
                     force: true,
                     rivalManagers: rivalManagers,
@@ -357,7 +387,7 @@ struct FantasyView: View {
             .onReceive(fantasyRefreshTimer) { _ in
                 guard isSelected,
                       scenePhase == .active,
-                      !managerEntryID.isEmpty else { return }
+                      isFantasySetupReadyForRefresh else { return }
                 if let currentData = fantasyViewModel.data, !currentData.hasActiveFixtures {
                     guard let lastUpdated = fantasyViewModel.lastUpdated else { return }
                     guard Date().timeIntervalSince(lastUpdated) >= 15 * 60 else { return }
@@ -391,6 +421,34 @@ struct FantasyView: View {
         Form {
             setupSection
             managerEntryInputSection
+        }
+    }
+
+    private var initialSetupFlowView: some View {
+        Group {
+            if isRunningInitialSetup {
+                initialSetupLoadingView
+            } else if !setupRivalCandidates.isEmpty {
+                chooseRivalsSetupView
+            } else {
+                initialSetupRecoveryView
+            }
+        }
+        .navigationTitle("Choose rivals")
+    }
+
+    private var isFantasySetupReadyForRefresh: Bool {
+        !managerEntryID.isEmpty && initialSetupVersion >= Self.currentInitialSetupVersion
+    }
+
+    private var filteredSetupRivalCandidates: [FantasySetupRivalCandidate] {
+        let trimmedQuery = setupRivalSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else { return setupRivalCandidates }
+
+        let normalizedQuery = normalizedSetupSearchValue(trimmedQuery)
+        return setupRivalCandidates.filter { candidate in
+            normalizedSetupSearchValue(candidate.managerName).contains(normalizedQuery)
+            || normalizedSetupSearchValue(candidate.teamName).contains(normalizedQuery)
         }
     }
 
@@ -503,9 +561,11 @@ struct FantasyView: View {
                         if data.isEstimatedScore {
                             scoreCalculationSection(data)
                         }
+                        assistantManagerSection
                         rivalsSection
                             .id(rivalsSectionScrollID)
-                        leaguesSection
+                        playerLeaguesSection
+                        gameLeaguesSection
                     } else if fantasyViewModel.isLoading {
                         VStack(spacing: 10) {
                             ProgressView()
@@ -523,7 +583,6 @@ struct FantasyView: View {
                     }
 
                     if let data = fantasyViewModel.data {
-                        assistantManagerSection
                         summaryStatsSection(data)
                     }
 
@@ -589,6 +648,148 @@ struct FantasyView: View {
             .buttonStyle(.borderedProminent)
             .disabled(!isManagerSubmitEnabled)
         }
+    }
+
+    private var initialSetupLoadingView: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            Text("Setting up your Fantasy account...")
+                .font(.headline)
+            Text("Importing your leagues and finding nearby rivals from your private leagues.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private var initialSetupRecoveryView: some View {
+        VStack(spacing: 14) {
+            Text("Choose rivals")
+                .font(.headline)
+            Text(initialSetupErrorMessage ?? "We couldn't finish setup yet.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Button("Try again") {
+                beginInitialSetup(force: true)
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button("Skip for now") {
+                completeInitialSetup(with: [])
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private var chooseRivalsSetupView: some View {
+        List {
+            Section {
+                Text("Please choose your closest rivals...")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Section {
+                ForEach(filteredSetupRivalCandidates) { candidate in
+                    Button {
+                        toggleSetupRivalSelection(candidate.entryID)
+                    } label: {
+                        setupRivalRow(candidate)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                HStack(spacing: 8) {
+                    Text("")
+                        .frame(width: 24, alignment: .leading)
+                    Text("Team")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Total")
+                        .frame(width: 52, alignment: .trailing)
+                    Text("GW")
+                        .frame(width: 40, alignment: .trailing)
+                }
+            } footer: {
+                if filteredSetupRivalCandidates.isEmpty {
+                    Text("No rivals match your search.")
+                } else {
+                    Text("Select any number of rivals, or skip this step.")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .searchable(
+            text: $setupRivalSearchText,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "Search player or team"
+        )
+        .safeAreaInset(edge: .bottom) {
+            Button {
+                completeInitialSetup(with: setupRivalCandidates.filter { selectedSetupRivalEntryIDs.contains($0.entryID) })
+            } label: {
+                Text(selectedSetupRivalEntryIDs.isEmpty ? "Continue" : "Add \(selectedSetupRivalEntryIDs.count) Rivals")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
+            .background(.ultraThinMaterial)
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Skip") {
+                    completeInitialSetup(with: [])
+                }
+            }
+        }
+    }
+
+    private func setupRivalRow(_ candidate: FantasySetupRivalCandidate) -> some View {
+        let isSelected = selectedSetupRivalEntryIDs.contains(candidate.entryID)
+
+        return HStack(spacing: 8) {
+            Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                .frame(width: 24, alignment: .leading)
+
+            HStack(spacing: 8) {
+                managerBadgeImage(urlString: candidate.clubBadgeSrc, fallbackTeamName: candidate.teamName)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(candidate.managerName)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                    Text(candidate.teamName)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("\(candidate.totalPoints)")
+                .font(.body.monospacedDigit().weight(.semibold))
+                .frame(width: 52, alignment: .trailing)
+                .foregroundStyle(.primary)
+
+            Text("\(candidate.eventPoints)")
+                .font(.body.monospacedDigit().weight(.semibold))
+                .frame(width: 40, alignment: .trailing)
+                .foregroundStyle(.primary)
+        }
+        .contentShape(Rectangle())
     }
 
     private func shareImportStatusCard(message: String, isError: Bool) -> some View {
@@ -1341,56 +1542,75 @@ struct FantasyView: View {
         )
     }
 
-    private var leaguesSection: some View {
-        let leagueSnapshots = fantasyViewModel.trackedLeagueStandings
+    private var playerLeaguesSection: some View {
+        leagueSectionCard(
+            title: "Player Leagues",
+            leagues: fantasyViewModel.trackedLeagueStandings.filter { $0.leagueType == "x" },
+            emptyState: "No player-created leagues found."
+        )
+    }
+
+    private var gameLeaguesSection: some View {
+        leagueSectionCard(
+            title: "Game Leagues",
+            leagues: fantasyViewModel.trackedLeagueStandings.filter { $0.leagueType != "x" },
+            emptyState: "No game-managed leagues found.",
+            showsAddButton: true
+        )
+    }
+
+    private func leagueSectionCard(
+        title: String,
+        leagues: [FantasyTrackedLeagueStanding],
+        emptyState: String,
+        showsAddButton: Bool = false
+    ) -> some View {
         let hasConfiguredLeagues = !trackedLeagues.isEmpty
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Leagues")
+                Text(title)
                     .font(.headline)
                 Spacer(minLength: 0)
             }
 
             if !hasConfiguredLeagues {
-                Button {
-                    prepareLeagueEntrySheet()
-                } label: {
-                    Label("Add league", systemImage: "plus.circle.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-            } else {
-                if leagueSnapshots.isEmpty {
-                    if fantasyViewModel.isLoading || fantasyViewModel.isRefreshing {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Loading league standings...")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.vertical, 4)
-                    } else {
-                        Text("League standings are unavailable right now. Pull to refresh and try again.")
+                Text(emptyState)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if leagues.isEmpty {
+                if fantasyViewModel.isLoading || fantasyViewModel.isRefreshing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Loading league standings...")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Spacer(minLength: 0)
                     }
+                    .padding(.vertical, 4)
                 } else {
-                    VStack(spacing: 8) {
-                        ForEach(leagueSnapshots) { league in
-                            Button {
-                                selectedLeagueStanding = league
-                            } label: {
-                                leagueSummaryRow(league)
-                            }
-                            .buttonStyle(.plain)
+                    Text(emptyState)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(leagues) { league in
+                        Button {
+                            openLeagueSummary(league)
+                        } label: {
+                            leagueSummaryRow(league)
                         }
+                        .buttonStyle(.plain)
+                        .disabled(leagueIDLoadingDetails.contains(league.leagueID))
                     }
                 }
+            }
 
+            if showsAddButton {
                 Button {
                     prepareLeagueEntrySheet()
                 } label: {
@@ -1409,6 +1629,8 @@ struct FantasyView: View {
 
     private func leagueSummaryRow(_ league: FantasyTrackedLeagueStanding) -> some View {
         let trend = leagueRankTrend(currentRank: league.myRank, lastRank: league.myLastRank)
+        let isLoadingDetails = leagueIDLoadingDetails.contains(league.leagueID)
+        let showsChevron = league.canOpenDetails || league.leagueType == "x"
 
         return HStack(spacing: 10) {
             HStack(spacing: 10) {
@@ -1453,9 +1675,17 @@ struct FantasyView: View {
                     .stroke(leagueTrendOutlineColor(for: trend), lineWidth: 1)
             )
 
-            Image(systemName: "chevron.right")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.secondary.opacity(0.8))
+            Group {
+                if isLoadingDetails {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if showsChevron {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.8))
+                }
+            }
+            .frame(width: 16, alignment: .center)
         }
     }
 
@@ -1556,43 +1786,55 @@ struct FantasyView: View {
                             .font(.subheadline.monospacedDigit().weight(.semibold))
                     }
 
-                    VStack(spacing: 0) {
-                        HStack(spacing: 8) {
-                            Text("#")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: 30, alignment: .trailing)
-                            Text("Team")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text("GW")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: 44, alignment: .trailing)
-                            Text("Total")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: 56, alignment: .trailing)
-                            Text("")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: 20, alignment: .trailing)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .foregroundStyle(.secondary)
+                    if league.standings.isEmpty {
+                        Text("Detailed standings are only loaded for smaller player-created leagues during setup.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color(.secondarySystemGroupedBackground))
+                            )
+                    } else {
+                        VStack(spacing: 0) {
+                            HStack(spacing: 8) {
+                                Text("#")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(width: 30, alignment: .trailing)
+                                Text("Team")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text("GW")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(width: 44, alignment: .trailing)
+                                Text("Total")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(width: 56, alignment: .trailing)
+                                Text("")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(width: 20, alignment: .trailing)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(.secondary)
 
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.22))
-                            .frame(height: 1)
+                            Rectangle()
+                                .fill(Color.secondary.opacity(0.22))
+                                .frame(height: 1)
 
-                        ForEach(Array(league.standings.enumerated()), id: \.element.id) { index, row in
-                            leagueStandingRow(row, isCurrentUser: row.entry == league.myEntryID)
-                            if index < league.standings.count - 1 {
-                                Rectangle()
-                                    .fill(Color.secondary.opacity(0.22))
-                                    .frame(height: 1)
+                            ForEach(Array(league.standings.enumerated()), id: \.element.id) { index, row in
+                                leagueStandingRow(row, isCurrentUser: row.entry == league.myEntryID)
+                                if index < league.standings.count - 1 {
+                                    Rectangle()
+                                        .fill(Color.secondary.opacity(0.22))
+                                        .frame(height: 1)
+                                }
                             }
                         }
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .padding(14)
             }
@@ -2420,7 +2662,7 @@ struct FantasyView: View {
         rivalManagers rivalManagersOverride: [FantasyRivalManager]? = nil,
         trackedLeagues trackedLeaguesOverride: [FantasyTrackedLeague]? = nil
     ) {
-        guard !managerEntryID.isEmpty else { return }
+        guard isFantasySetupReadyForRefresh else { return }
         guard isSelected else { return }
         guard scenePhase == .active else { return }
 
@@ -2455,6 +2697,111 @@ struct FantasyView: View {
                 trackedLeagues: trackedLeaguesSnapshot
             )
         }
+    }
+
+    private func migrateLegacyInitialSetupIfNeeded() {
+        guard !managerEntryID.isEmpty else { return }
+        guard initialSetupVersion < Self.currentInitialSetupVersion else { return }
+        initialSetupVersion = Self.currentInitialSetupVersion
+    }
+
+    private func beginInitialSetup(force: Bool = false) {
+        guard !managerEntryID.isEmpty else { return }
+        guard isSelected else { return }
+        guard scenePhase == .active else { return }
+        if isRunningInitialSetup && !force {
+            return
+        }
+        if initialSetupVersion >= Self.currentInitialSetupVersion && !force {
+            return
+        }
+
+        isRunningInitialSetup = true
+        initialSetupErrorMessage = nil
+        setupRivalCandidates = []
+        selectedSetupRivalEntryIDs = []
+        setupRivalSearchText = ""
+
+        Task {
+            do {
+                let payload = try await fantasyViewModel.prepareInitialSetup(managerEntryID: managerEntryID)
+                await MainActor.run {
+                    trackedLeagues = payload.trackedLeagues
+                    persistTrackedLeaguesToStorage(payload.trackedLeagues)
+                    managerCaptureStatusMessage = "Fantasy account linked successfully."
+
+                    if payload.rivalCandidates.isEmpty {
+                        completeInitialSetup(with: [])
+                    } else {
+                        setupRivalCandidates = payload.rivalCandidates
+                        isRunningInitialSetup = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isRunningInitialSetup = false
+                    initialSetupErrorMessage = error.localizedDescription
+                    setShareImportStatus("Could not finish Fantasy setup yet.", isError: true)
+                }
+            }
+        }
+    }
+
+    private func completeInitialSetup(with selectedCandidates: [FantasySetupRivalCandidate]) {
+        let selectedRivals = selectedCandidates.map { candidate in
+            let managerName = splitManagerName(candidate.managerName)
+            return FantasyRivalManager(
+                entryID: candidate.entryID,
+                teamName: candidate.teamName,
+                managerFirstName: managerName.firstName,
+                managerLastName: managerName.lastName,
+                overallPoints: candidate.totalPoints,
+                clubBadgeSrc: candidate.clubBadgeSrc
+            )
+        }
+        rivalManagers = selectedRivals
+        persistRivalManagersToStorage(selectedRivals)
+        initialSetupVersion = Self.currentInitialSetupVersion
+        setupRivalCandidates = []
+        selectedSetupRivalEntryIDs = []
+        setupRivalSearchText = ""
+        isRunningInitialSetup = false
+        initialSetupErrorMessage = nil
+
+        if selectedRivals.isEmpty {
+            setShareImportStatus("Fantasy setup complete. Leagues imported.", isError: false)
+        } else {
+            setShareImportStatus(
+                "Fantasy setup complete. Added \(selectedRivals.count) rivals and imported your leagues.",
+                isError: false
+            )
+        }
+        triggerFantasyRefresh(force: true, rivalManagers: selectedRivals, trackedLeagues: trackedLeagues)
+    }
+
+    private func splitManagerName(_ fullName: String) -> (firstName: String, lastName: String) {
+        let components = fullName
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard let first = components.first else {
+            return ("", "")
+        }
+        let last = components.dropFirst().joined(separator: " ")
+        return (first, last)
+    }
+
+    private func toggleSetupRivalSelection(_ entryID: Int) {
+        if selectedSetupRivalEntryIDs.contains(entryID) {
+            selectedSetupRivalEntryIDs.remove(entryID)
+        } else {
+            selectedSetupRivalEntryIDs.insert(entryID)
+        }
+    }
+
+    private func normalizedSetupSearchValue(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func drainPendingFantasyRefreshIfNeeded() {
@@ -2746,6 +3093,13 @@ struct FantasyView: View {
         shareImportStatusMessage = nil
         shareImportStatusIsError = false
         pendingFantasyRefreshRequest = nil
+        initialSetupVersion = 0
+        initialSetupErrorMessage = nil
+        setupRivalCandidates = []
+        selectedSetupRivalEntryIDs = []
+        setupRivalSearchText = ""
+        isRunningInitialSetup = false
+        leagueIDLoadingDetails = []
         managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
 
         guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
@@ -2753,6 +3107,39 @@ struct FantasyView: View {
         defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
         defaults.removeObject(forKey: AppGroupConfig.fantasyManagerEntryIDKey)
         defaults.synchronize()
+    }
+
+    private func openLeagueSummary(_ league: FantasyTrackedLeagueStanding) {
+        if league.canOpenDetails {
+            selectedLeagueStanding = league
+            return
+        }
+
+        guard league.leagueType == "x" else {
+            selectedLeagueStanding = league
+            return
+        }
+        guard let currentManagerEntryID else { return }
+        guard !leagueIDLoadingDetails.contains(league.leagueID) else { return }
+
+        leagueIDLoadingDetails.insert(league.leagueID)
+        Task {
+            do {
+                let detailedLeague = try await fantasyViewModel.loadLeagueStandingDetails(
+                    leagueID: league.leagueID,
+                    managerEntryID: String(currentManagerEntryID)
+                )
+                await MainActor.run {
+                    selectedLeagueStanding = detailedLeague
+                    leagueIDLoadingDetails.remove(league.leagueID)
+                }
+            } catch {
+                await MainActor.run {
+                    selectedLeagueStanding = league
+                    leagueIDLoadingDetails.remove(league.leagueID)
+                }
+            }
+        }
     }
 
     private func openLeagueTableEntry(_ entry: FantasyLeagueTableEntry) {
@@ -2874,7 +3261,7 @@ struct FantasyView: View {
         }
 
         managerEntryID = capturedID
-        managerCaptureStatusMessage = "Successfully connected your account! Add rivals and leagues below..."
+        managerCaptureStatusMessage = "Successfully connected your account. Finalising setup..."
         showSuccessInterstitial = true
 
         Task {
@@ -3217,6 +3604,7 @@ struct FantasyView: View {
         static let managerEntryID = "fantasy.managerEntryID"
         static let rivalManagersJSON = "fantasy.rivalManagersJSON"
         static let trackedLeaguesJSON = "fantasy.trackedLeaguesJSON"
+        static let initialSetupVersion = "fantasy.initialSetupVersion"
     }
 
     private static let integerFormatter: NumberFormatter = {

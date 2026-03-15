@@ -1990,6 +1990,80 @@ test("buildLiveActivityPresentationForUser includes synced fantasy score when av
   );
 });
 
+test("buildLiveActivityPresentationForUser omits fantasy score when no fantasy team is connected", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 10 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    {
+      preferences: { liveActivityDelayMinutes: 0 },
+      fantasy: {
+        squad: {
+          resolvedCurrentScore: 40,
+          effectiveContributions: [
+            { elementID: 1, displayName: "Saka", teamName: "Arsenal", points: 40 },
+          ],
+        },
+      },
+    },
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "ff-upcoming-no-team",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Chelsea",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_upcoming");
+  assert.equal(presentation.fantasyCurrentScore, null);
+});
+
+test("buildLiveActivityContentState preserves null fantasy score instead of coercing it to zero", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 10 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_upcoming",
+    [
+      {
+        match_details_id: "ff-null",
+        date: kickoff.date,
+        time: kickoff.time,
+        league: "Premier League",
+        home_team: "Arsenal",
+        away_team: "Chelsea",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+        tv_channels: [],
+      },
+    ],
+    2,
+    nowMs,
+    null
+  );
+
+  assert.equal(contentState.fantasyCurrentScore, null);
+  const parsedHash = JSON.parse(JSON.stringify({
+    fantasyCurrentScore: contentState.fantasyCurrentScore,
+  }));
+  assert.equal(parsedHash.fantasyCurrentScore, null);
+});
+
 test("buildLiveActivityPresentationForUser can include later upcoming fixtures for app foreground display", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs + 2 * 60 * 60 * 1000;

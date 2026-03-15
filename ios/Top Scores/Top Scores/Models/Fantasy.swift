@@ -507,6 +507,9 @@ struct FantasyEntryProfile: Codable, Hashable {
     let playerLastName: String
     let summaryOverallPoints: Int?
     let clubBadgeSrc: String?
+    let currentEvent: Int?
+    let summaryEventPoints: Int?
+    let leagues: FantasyEntryLeagues?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -515,6 +518,74 @@ struct FantasyEntryProfile: Codable, Hashable {
         case playerLastName = "player_last_name"
         case summaryOverallPoints = "summary_overall_points"
         case clubBadgeSrc = "club_badge_src"
+        case currentEvent = "current_event"
+        case summaryEventPoints = "summary_event_points"
+        case leagues
+    }
+}
+
+struct FantasyEntryLeagues: Codable, Hashable {
+    let classic: [FantasyEntryClassicLeague]
+}
+
+struct FantasyEntryClassicLeague: Codable, Hashable, Identifiable {
+    let id: Int
+    let name: String
+    let shortName: String?
+    let leagueType: String?
+    let rankCount: Int?
+    let entryRank: Int?
+    let entryLastRank: Int?
+    let activePhases: [FantasyEntryLeagueActivePhase]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case shortName = "short_name"
+        case leagueType = "league_type"
+        case rankCount = "rank_count"
+        case entryRank = "entry_rank"
+        case entryLastRank = "entry_last_rank"
+        case activePhases = "active_phases"
+    }
+
+    var summaryPhase: FantasyEntryLeagueActivePhase? {
+        if let overallPhase = activePhases.first(where: { $0.phase == 1 }) {
+            return overallPhase
+        }
+        return activePhases.first
+    }
+
+    var resolvedEntryRank: Int? {
+        entryRank ?? summaryPhase?.rank
+    }
+
+    var resolvedEntryLastRank: Int? {
+        entryLastRank ?? summaryPhase?.lastRank
+    }
+
+    var resolvedTotalPoints: Int? {
+        summaryPhase?.total
+    }
+}
+
+struct FantasyEntryLeagueActivePhase: Codable, Hashable, Identifiable {
+    let phase: Int
+    let rank: Int?
+    let lastRank: Int?
+    let total: Int?
+    let rankCount: Int?
+
+    var id: Int {
+        phase
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case phase
+        case rank
+        case lastRank = "last_rank"
+        case total
+        case rankCount = "rank_count"
     }
 }
 
@@ -1204,10 +1275,37 @@ struct FantasyTrackedLeagueStanding: Hashable, Identifiable {
     let myOverallTotal: Int?
     let myEntryName: String?
     let standings: [FantasyClassicLeagueStandingEntry]
+    let leagueType: String?
+    let rankCount: Int?
 
     var id: Int {
         leagueID
     }
+
+    var canOpenDetails: Bool {
+        !standings.isEmpty
+    }
+}
+
+struct FantasySetupRivalCandidate: Identifiable, Hashable {
+    let entryID: Int
+    let teamName: String
+    let managerName: String
+    let totalPoints: Int
+    let eventPoints: Int
+    let clubBadgeSrc: String?
+    let sharedLeagueCount: Int
+    let closestRankGap: Int
+
+    var id: Int {
+        entryID
+    }
+}
+
+struct FantasyInitialSetupPayload: Hashable {
+    let managerProfile: FantasyEntryProfile
+    let trackedLeagues: [FantasyTrackedLeague]
+    let rivalCandidates: [FantasySetupRivalCandidate]
 }
 
 struct FantasyRivalSquad: Identifiable, Hashable {

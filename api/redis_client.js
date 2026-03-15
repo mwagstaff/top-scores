@@ -463,6 +463,24 @@ function mergedLiveActivityState(existingState = {}, patch = {}) {
   };
 }
 
+function recordUpdatedAtMs(record) {
+  const parsed = Date.parse(String(record && record.updatedAt ? record.updatedAt : "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function freshestUserRecord(...records) {
+  return records
+    .filter((record) => record && typeof record === "object")
+    .sort((left, right) => {
+      const leftMs = recordUpdatedAtMs(left);
+      const rightMs = recordUpdatedAtMs(right);
+      if (leftMs === null && rightMs === null) return 0;
+      if (leftMs === null) return 1;
+      if (rightMs === null) return -1;
+      return rightMs - leftMs;
+    })[0] || null;
+}
+
 async function saveUserPreferences(
   deviceToken,
   preferences,
@@ -632,20 +650,25 @@ async function updateUserLiveActivityState(deviceToken, liveActivityPatch = {}, 
     const redisClient = await getClient();
     const raw = await redisClient.get(key);
     const existing = raw ? safeJsonParse(raw, `user preferences ${normalizedToken}`) : null;
+    // Live-activity callbacks can race with preference/fantasy sync writes.
+    // Re-read the latest record before persisting so we don't resurrect stale fantasy data.
+    const latestRaw = await redisClient.get(key);
+    const latest = latestRaw ? safeJsonParse(latestRaw, `user preferences latest ${normalizedToken}`) : null;
+    const freshest = freshestUserRecord(latest, existing);
     const existingPreferences =
-      existing && typeof existing.preferences === "object" ? existing.preferences : {};
+      freshest && typeof freshest.preferences === "object" ? freshest.preferences : {};
     const existingLiveActivity =
-      existing && existing.liveActivity && typeof existing.liveActivity === "object"
-        ? existing.liveActivity
+      freshest && freshest.liveActivity && typeof freshest.liveActivity === "object"
+        ? freshest.liveActivity
         : {};
     const data = {
-      ...(existing && typeof existing === "object" ? existing : {}),
+      ...(freshest && typeof freshest === "object" ? freshest : {}),
       deviceToken: normalizedToken,
-      apnsToken: normalizeOptionalToken(existing && existing.apnsToken),
+      apnsToken: normalizeOptionalToken(freshest && freshest.apnsToken),
       isDevelopmentBuild:
         typeof options.isDevelopmentBuild === "boolean"
           ? options.isDevelopmentBuild
-          : Boolean(existing && existing.isDevelopmentBuild),
+          : Boolean(freshest && freshest.isDevelopmentBuild),
       preferences: existingPreferences,
       liveActivity: mergedLiveActivityState(existingLiveActivity, liveActivityPatch),
       updatedAt: nowIso,

@@ -3600,8 +3600,20 @@ function calculateFantasyCurrentScore(fantasyState) {
   return fantasyScore.calculateFantasyCurrentScore(fantasyState);
 }
 
+function hasConnectedFantasyTeam(fantasyState) {
+  const candidateIDs = [
+    fantasyState && fantasyState.managerEntryID,
+    fantasyState && fantasyState.squad && fantasyState.squad.managerEntryID,
+  ];
+  return candidateIDs.some((candidateID) => {
+    const numericID = Number(candidateID);
+    return Number.isInteger(numericID) && numericID > 0;
+  });
+}
+
 function fantasyCurrentScoreForUser(user) {
   const fantasy = user && user.fantasy && typeof user.fantasy === "object" ? user.fantasy : null;
+  if (!hasConnectedFantasyTeam(fantasy)) return null;
   return calculateFantasyCurrentScore(fantasy);
 }
 
@@ -3768,7 +3780,11 @@ function buildLiveActivityContentState(
     delayMinutes: Number(delayMinutes || 0),
     delayLabel,
     fantasyCurrentScore:
-      Number.isFinite(Number(fantasyCurrentScore)) ? Number(fantasyCurrentScore) : null,
+      fantasyCurrentScore !== null &&
+      fantasyCurrentScore !== undefined &&
+      Number.isFinite(Number(fantasyCurrentScore))
+        ? Number(fantasyCurrentScore)
+        : null,
     matches: normalizedMatches,
   };
 }
@@ -3864,7 +3880,10 @@ function buildLiveActivityScoreHash(contentState) {
         ? contentState.mode
         : null,
     fantasyCurrentScore:
-      contentState && Number.isFinite(Number(contentState.fantasyCurrentScore))
+      contentState &&
+      contentState.fantasyCurrentScore !== null &&
+      contentState.fantasyCurrentScore !== undefined &&
+      Number.isFinite(Number(contentState.fantasyCurrentScore))
         ? Number(contentState.fantasyCurrentScore)
         : null,
     matches: matches.map((match) => ({

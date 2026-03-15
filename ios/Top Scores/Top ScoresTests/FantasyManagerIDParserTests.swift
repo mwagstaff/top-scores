@@ -109,4 +109,105 @@ struct FantasyManagerIDParserTests {
         #expect(FantasySharedImportStore.loadQueue(from: defaults).isEmpty)
         #expect(FantasySharedImportStore.loadLegacyPayload(from: defaults) == nil)
     }
+
+    @Test func entryProfile_decodesClassicLeagueMetadataForSetup() async throws {
+        let json = #"""
+        {
+          "id": 6653695,
+          "name": "Hornets FC",
+          "player_first_name": "Mike",
+          "player_last_name": "Wagstaff",
+          "summary_overall_points": 1649,
+          "summary_event_points": 44,
+          "current_event": 30,
+          "club_badge_src": "https://example.com/badge.png",
+          "leagues": {
+            "classic": [
+              {
+                "id": 247,
+                "name": "United Kingdom",
+                "short_name": "region-227",
+                "league_type": "s",
+                "rank_count": 7396,
+                "entry_rank": 1653,
+                "entry_last_rank": 1715,
+                "active_phases": [
+                  {
+                    "phase": 1,
+                    "rank": 1653,
+                    "last_rank": 1715,
+                    "total": 1634,
+                    "rank_count": 7396
+                  },
+                  {
+                    "phase": 9,
+                    "rank": 2790,
+                    "last_rank": 3428,
+                    "total": 87,
+                    "rank_count": 7396
+                  }
+                ]
+              },
+              {
+                "id": 844129,
+                "name": "Primark FPL 3.0",
+                "short_name": null,
+                "league_type": "x",
+                "rank_count": 29,
+                "entry_rank": 13,
+                "entry_last_rank": 16,
+                "active_phases": [
+                  {
+                    "phase": 1,
+                    "rank": 13,
+                    "last_rank": 16,
+                    "total": 1634,
+                    "rank_count": 29
+                  }
+                ]
+              }
+            ]
+          }
+        }
+        """#
+
+        let profile = try JSONDecoder().decode(FantasyEntryProfile.self, from: Data(json.utf8))
+
+        #expect(profile.currentEvent == 30)
+        #expect(profile.summaryEventPoints == 44)
+        #expect(profile.leagues?.classic.count == 2)
+        #expect(profile.leagues?.classic[0].resolvedEntryRank == 1653)
+        #expect(profile.leagues?.classic[0].resolvedEntryLastRank == 1715)
+        #expect(profile.leagues?.classic[0].resolvedTotalPoints == 1634)
+        #expect(profile.leagues?.classic[1].leagueType == "x")
+    }
+
+    @Test func entryLeague_usesFirstPhaseWhenOverallPhaseIsMissing() async throws {
+        let json = #"""
+        {
+          "id": 1,
+          "name": "Test League",
+          "short_name": null,
+          "league_type": "x",
+          "rank_count": 12,
+          "entry_rank": null,
+          "entry_last_rank": null,
+          "active_phases": [
+            {
+              "phase": 9,
+              "rank": 4,
+              "last_rank": 6,
+              "total": 88,
+              "rank_count": 12
+            }
+          ]
+        }
+        """#
+
+        let league = try JSONDecoder().decode(FantasyEntryClassicLeague.self, from: Data(json.utf8))
+
+        #expect(league.resolvedEntryRank == 4)
+        #expect(league.resolvedEntryLastRank == 6)
+        #expect(league.resolvedTotalPoints == 88)
+    }
 }
