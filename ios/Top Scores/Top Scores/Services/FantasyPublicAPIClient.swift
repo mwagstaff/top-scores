@@ -203,18 +203,18 @@ enum FantasyPublicAPIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL:
-            return "Invalid Fantasy Football API URL."
+            return "Invalid Fantasy Premier League API URL."
         case .invalidHTTPResponse:
-            return "Fantasy Football API returned an invalid HTTP response."
+            return "Fantasy Premier League API returned an invalid HTTP response."
         case let .badStatus(statusCode, operation, snippet):
             if snippet.isEmpty {
-                return "Fantasy Football API request failed (\(operation), HTTP \(statusCode))."
+                return "Fantasy Premier League API request failed (\(operation), HTTP \(statusCode))."
             }
-            return "Fantasy Football API request failed (\(operation), HTTP \(statusCode)): \(snippet)"
+            return "Fantasy Premier League API request failed (\(operation), HTTP \(statusCode)): \(snippet)"
         case let .decodeFailed(operation, underlying):
-            return "Failed to decode Fantasy Football API payload (\(operation)): \(underlying.localizedDescription)"
+            return "Failed to decode Fantasy Premier League API payload (\(operation)): \(underlying.localizedDescription)"
         case .gameUpdating:
-            return "Fantasy Football data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
+            return "Fantasy Premier League data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
         }
     }
 }

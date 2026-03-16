@@ -417,7 +417,7 @@ const FPL_BOOTSTRAP_MAX_BYTES = Number.isFinite(parsedFplBootstrapMaxBytes)
   : 1900 * 1024 * 1024;
 const FPL_GAME_UPDATING_NEEDLE = "the game is being updated";
 const FPL_GAME_UPDATING_USER_MESSAGE =
-  "Fantasy Football data is temporarily unavailable while the official game is being updated. Please try again in a few minutes.";
+  "Fantasy Premier League data is temporarily unavailable while the official game is being updated. Please try again in a few minutes.";
 const FPL_TRANSFER_DEFAULT_VALUE_WINDOW_MILLIONS = 1.5;
 const FPL_TRANSFER_DEFAULT_BUDGET_DISCOUNT_FRACTION = 0.30;
 const FPL_TRANSFER_DEFAULT_LIMIT = 10;

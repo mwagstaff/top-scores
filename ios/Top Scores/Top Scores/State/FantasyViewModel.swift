@@ -3,7 +3,7 @@ import Combine
 
 @MainActor
 final class FantasyViewModel: ObservableObject {
-    private static let gameUpdatingUserMessage = "Fantasy Football data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
+    private static let gameUpdatingUserMessage = "Fantasy Premier League data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
 
     @Published private(set) var isLoading = false
     @Published private(set) var isRefreshing = false

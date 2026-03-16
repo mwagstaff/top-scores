@@ -136,9 +136,9 @@ struct PreferencesView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Section("Fantasy Football") {
+                    Section("Fantasy Premier League") {
                         Toggle("Show scores with fixtures", isOn: showFantasyMatchPillsBinding)
-                        Text("Displays the Fantasy Football icon before kick-off once line-ups are available against matches involving your players, then shows total estimated points for the players involved while matches are in play.")
+                        Text("Displays the FPL icon before kick-off once line-ups are available against matches involving your players, then shows total estimated points for the players involved while matches are in play.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }

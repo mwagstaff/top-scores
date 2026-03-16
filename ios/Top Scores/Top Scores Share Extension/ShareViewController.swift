@@ -136,10 +136,10 @@ final class ShareViewController: UIViewController {
         switch target {
         case .manager:
             titleLabel.text = isLinkingPrimaryManager
-                ? "Fantasy Football account linked"
-                : "Fantasy Football rival added"
+                ? "FPL account linked"
+                : "FPL rival added"
         case .league:
-            titleLabel.text = "Fantasy Football league added"
+            titleLabel.text = "FPL league added"
         }
         statusLabel.textColor = .secondaryLabel
         switch target {

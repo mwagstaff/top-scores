@@ -77,7 +77,7 @@ actor FantasyLoadingMessagesCatalog {
     func randomMessage() -> String {
         loadCacheIfNeeded()
         let source = cachedMessages.isEmpty ? Self.fallbackMessages : cachedMessages
-        return source.randomElement() ?? "Loading Fantasy Football..."
+        return source.randomElement() ?? "Loading Fantasy Premier League..."
     }
 
     private func shouldRefresh(now: Date) -> Bool {

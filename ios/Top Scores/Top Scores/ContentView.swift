@@ -39,7 +39,7 @@ struct ContentView: View {
                 FantasyView(isSelected: selectedTab == 3)
                     .tabItem {
                         Label {
-                            Text("Fantasy")
+                            Text("FPL")
                         } icon: {
                             Image("FantasyPremierLeagueLionTab")
                                 .renderingMode(.original)

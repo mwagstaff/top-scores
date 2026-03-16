@@ -369,7 +369,7 @@ private struct FantasyMatchParticipationBadge: View {
 
             switch mode {
             case .upcoming:
-                FantasyLionIconView(size: 14, scale: 0.92)
+                FantasyLionIconView(size: 14, scale: 1.10)
                     .foregroundStyle(.white)
             case .score(let score):
                 Text("\(score)")
@@ -590,7 +590,9 @@ struct MatchDetailView: View {
 
     private var fantasySquadSections: [FantasyMatchTeamSquadSection] {
         guard isEligibleFantasyFixture,
-              let squad = fantasyViewModel.data
+              let squad = fantasyViewModel.data?.applyingExpectedPoints(
+                fantasyViewModel.assistantManagerPreview?.expectedPoints
+              )
         else {
             return []
         }
@@ -980,7 +982,7 @@ private struct FantasyMatchSquadSectionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Your Fantasy Squad")
+            Text("FPL involvement")
                 .font(.headline)
                 .foregroundStyle(.primary)
 
@@ -1032,16 +1034,20 @@ private struct FantasyMatchSquadBucketView: View {
     let players: [FantasyDisplayPlayer]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.caption)
                 .fontWeight(.semibold)
                 .foregroundStyle(tint)
 
-            Text(players.map(playerDisplayName).joined(separator: " • "))
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(players) { player in
+                    FantasyMatchSquadPlayerRow(
+                        name: playerDisplayName(player),
+                        expectedPoints: player.expectedPointsThisGameweek
+                    )
+                }
+            }
         }
     }
 
@@ -1051,6 +1057,78 @@ private struct FantasyMatchSquadBucketView: View {
             return preferred
         }
         return player.displayName
+    }
+}
+
+private struct FantasyMatchSquadPlayerRow: View {
+    let name: String
+    let expectedPoints: Int?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(name)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 8)
+
+            Text(expectedPointsLabel)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(expectedPointsForegroundColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(expectedPointsBackgroundColor)
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(expectedPoints == nil ? Color.black.opacity(0.08) : .clear, lineWidth: 1)
+                )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(name), \(expectedPointsAccessibilityLabel)")
+    }
+
+    private var expectedPointsLabel: String {
+        if let expectedPoints {
+            return "xP \(expectedPoints)"
+        }
+        return "xP -"
+    }
+
+    private var expectedPointsAccessibilityLabel: String {
+        if let expectedPoints {
+            return "expected \(expectedPoints) points"
+        }
+        return "expected points unavailable"
+    }
+
+    private var expectedPointsForegroundColor: Color {
+        guard let expectedPoints else {
+            return Color(red: 0.36, green: 0.36, blue: 0.39)
+        }
+        return expectedPoints >= 3 ? Color.black.opacity(0.82) : .white
+    }
+
+    private var expectedPointsBackgroundColor: Color {
+        guard let expectedPoints else {
+            return Color(red: 0.90, green: 0.90, blue: 0.92)
+        }
+
+        switch expectedPoints {
+        case ..<1:
+            return Color(red: 0.78, green: 0.16, blue: 0.14)
+        case 1...2:
+            return Color(red: 0.91, green: 0.37, blue: 0.15)
+        case 3...4:
+            return Color(red: 0.95, green: 0.68, blue: 0.16)
+        case 5...7:
+            return Color(red: 0.29, green: 0.71, blue: 0.27)
+        default:
+            return Color.green
+        }
     }
 }
 

@@ -79,7 +79,7 @@ struct AboutView: View {
 
                     Section {
                         if fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Text("Link a Fantasy Football account first to generate harness matches with your current squad.")
+                            Text("Link a Fantasy Premier League account first to generate harness matches with your current squad.")
                                 .foregroundStyle(.secondary)
                         } else if isLoadingHarnessMatches {
                             HStack(spacing: 10) {

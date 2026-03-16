@@ -198,7 +198,7 @@ struct FantasyView: View {
                     unlinkFantasyAccountData()
                 }
             } message: {
-                Text("This will remove your linked manager account, rivals, and Fantasy Football data from this device. You can always reconnect your account at any time.")
+                Text("This will remove your linked manager account, rivals, and Fantasy Premier League data from this device. You can always reconnect your account at any time.")
             }
             .sheet(item: $selectedPlayerSelection) { selection in
                 FantasyPlayerDetailsSheet(
@@ -601,7 +601,7 @@ struct FantasyView: View {
     }
 
     private var headerView: some View {
-        TopLevelScreenHeader(screenTitle: "Fantasy Football") {
+        TopLevelScreenHeader(screenTitle: "Fantasy Premier League") {
             FantasyLionIconView(size: 30, scale: 0.92)
         } detail: {
             if let errorMessage = fantasyViewModel.errorMessage {
@@ -612,7 +612,7 @@ struct FantasyView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(fantasyViewModel.isLoading ? "Loading Fantasy score" : "Refreshing Fantasy score")
+                    Text(fantasyViewModel.isLoading ? "Loading FPL score" : "Refreshing FPL score")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -625,7 +625,7 @@ struct FantasyView: View {
     }
 
     private var setupSection: some View {
-        Section("Connect your Fantasy Football account") {
+        Section("Connect your Fantasy Premier League account") {
             instructionStep(number: 1, text: "Open Fantasy Premier League (link below) and sign in.")
             instructionStep(number: 2, text: "Open your Points page, then tap Share and choose Top Scores.")
             instructionStep(number: 3, text: "Return to Top Scores to complete setup.")
@@ -1746,10 +1746,11 @@ struct FantasyView: View {
                         .tint(.secondary)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 } else {
-                    Text(entry.projectedGameweekPointsDisplay)
-                        .font(.caption.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    fantasyExpectedPointsPill(
+                        text: entry.projectedGameweekPointsDisplay,
+                        value: entry.projectedGameweekPoints
+                    )
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
             .frame(width: 48, alignment: .trailing)
@@ -1793,6 +1794,39 @@ struct FantasyView: View {
         )
         .contentShape(Rectangle())
         .animation(.easeInOut(duration: 0.2), value: isLoadingDetails)
+    }
+
+    private func fantasyExpectedPointsPill(text: String, value: Double?) -> some View {
+        let color = fantasyExpectedPointsPillColor(value)
+
+        return Text(text)
+            .font(.caption2.monospacedDigit().weight(.semibold))
+            .foregroundStyle(value == nil ? Color.secondary : fantasyExpectedPointsPillForegroundColor(value))
+            .frame(minWidth: 40, alignment: .center)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(color.opacity(value == nil ? 0.20 : 0.92))
+            )
+    }
+
+    private func fantasyExpectedPointsPillColor(_ value: Double?) -> Color {
+        guard let value else { return Color.gray }
+        switch value {
+        case ..<2.0:
+            return Color.red
+        case ..<4.0:
+            return Color.orange
+        case ..<6.0:
+            return Color.yellow
+        default:
+            return Color.green
+        }
+    }
+
+    private func fantasyExpectedPointsPillForegroundColor(_ value: Double?) -> Color {
+        guard let value else { return Color.secondary }
+        return value >= 4.0 ? Color.black.opacity(0.82) : Color.white
     }
 
     private func leagueDetailSheet(_ league: FantasyTrackedLeagueStanding) -> some View {
@@ -3333,7 +3367,7 @@ struct FantasyView: View {
             switch parsedTarget {
             case .manager(let parsedID):
                 applyCapturedManagerID(parsedID)
-                setShareImportStatus("Fantasy Football account linked successfully!", isError: false)
+                setShareImportStatus("Fantasy Premier League account linked successfully!", isError: false)
             case .league:
                 managerCaptureStatusMessage = "Link your own Fantasy manager account first by sharing your Points page URL."
                 setShareImportStatus(
@@ -3443,9 +3477,9 @@ struct FantasyView: View {
         } catch {
             if let fantasyError = error as? FantasyPublicAPIError,
                case .gameUpdating = fantasyError {
-                managerCaptureStatusMessage = "Fantasy Football is temporarily updating. We'll retry adding this rival shortly."
+                managerCaptureStatusMessage = "Fantasy Premier League is temporarily updating. We'll retry adding this rival shortly."
                 setShareImportStatus(
-                    "Fantasy Football is temporarily updating. We'll retry adding this rival shortly.",
+                    "Fantasy Premier League is temporarily updating. We'll retry adding this rival shortly.",
                     isError: true
                 )
                 return false
@@ -3495,7 +3529,7 @@ struct FantasyView: View {
             if let fantasyError = error as? FantasyPublicAPIError,
                case .gameUpdating = fantasyError {
                 setShareImportStatus(
-                    "Fantasy Football is temporarily updating. We'll retry adding this league shortly.",
+                    "Fantasy Premier League is temporarily updating. We'll retry adding this league shortly.",
                     isError: true
                 )
                 return false
@@ -4765,7 +4799,7 @@ private struct FantasyLeagueShareSnapshotView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Top Scores: Fantasy Football")
+                        Text("Top Scores: FPL")
                             .font(.title3.weight(.bold))
                             .foregroundStyle(.white)
                         Text(
@@ -5620,6 +5654,14 @@ private struct FantasyAssistantManagerSheet: View {
                 }
 
                 ForEach(Array(fixtures.enumerated()), id: \.element.id) { index, fixture in
+                    let expectedPoints = fixture.isBlank
+                        ? nil
+                        : assistantExpectedPointsForDetailsFixture(
+                            details: details,
+                            fixture: fixture,
+                            fixtureIndex: index
+                        )
+
                     HStack(spacing: 8) {
                         Text("GW\(fixture.gameweek)")
                             .font(.caption.monospacedDigit())
@@ -5646,19 +5688,10 @@ private struct FantasyAssistantManagerSheet: View {
                         assistantDifficultyPill(fixture.difficulty)
                             .frame(width: difficultyWidth, alignment: .leading)
 
-                        Text(
-                            fixture.isBlank
-                                ? "0"
-                                : fantasyExpectedPointsText(
-                                    assistantExpectedPointsForDetailsFixture(
-                                        details: details,
-                                        fixture: fixture,
-                                        fixtureIndex: index
-                                    )
-                                )
+                        assistantExpectedPointsPill(
+                            text: expectedPoints.map(fantasyExpectedPointsText) ?? "0",
+                            value: expectedPoints
                         )
-                        .font(.caption.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(.secondary)
                         .frame(width: xpWidth, alignment: .trailing)
                     }
                 }
@@ -5814,27 +5847,40 @@ private struct FantasyAssistantManagerSheet: View {
     }
 
     private func assistantExpectedPointsPill(_ value: Double) -> some View {
-        let color: Color
-        switch value {
-        case ..<2.0:
-            color = Color.red
-        case ..<4.0:
-            color = Color.orange
-        case ..<6.0:
-            color = Color.yellow
-        default:
-            color = Color.green
-        }
+        assistantExpectedPointsPill(text: fantasyExpectedPointsText(value), value: value)
+    }
 
-        return Text(fantasyExpectedPointsText(value))
-            .font(.caption.monospacedDigit().weight(.semibold))
-            .foregroundStyle(value >= 4.0 ? Color.black.opacity(0.82) : Color.white)
-            .padding(.horizontal, 8)
+    private func assistantExpectedPointsPill(text: String, value: Double?) -> some View {
+        let color = assistantExpectedPointsPillColor(value)
+
+        return Text(text)
+            .font(.caption2.monospacedDigit().weight(.semibold))
+            .foregroundStyle(value == nil ? Color.secondary : assistantExpectedPointsPillForegroundColor(value))
+            .frame(minWidth: 40, alignment: .center)
             .padding(.vertical, 4)
             .background(
-                Capsule(style: .continuous)
-                    .fill(color.opacity(0.92))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(color.opacity(value == nil ? 0.20 : 0.92))
             )
+    }
+
+    private func assistantExpectedPointsPillColor(_ value: Double?) -> Color {
+        guard let value else { return Color.gray }
+        switch value {
+        case ..<2.0:
+            return Color.red
+        case ..<4.0:
+            return Color.orange
+        case ..<6.0:
+            return Color.yellow
+        default:
+            return Color.green
+        }
+    }
+
+    private func assistantExpectedPointsPillForegroundColor(_ value: Double?) -> Color {
+        guard let value else { return Color.secondary }
+        return value >= 4.0 ? Color.black.opacity(0.82) : Color.white
     }
 
     private func assistantFixtureDifficultyColor(_ difficulty: Int?) -> Color {
@@ -5927,12 +5973,12 @@ private struct FantasyAssistantManagerSheet: View {
         }
 
         return Text("\(points)")
-            .font(.caption.monospacedDigit().weight(.semibold))
+            .font(.caption2.monospacedDigit().weight(.semibold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 8)
+            .frame(minWidth: 40, alignment: .center)
             .padding(.vertical, 4)
             .background(
-                Capsule(style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(color.opacity(0.94))
             )
     }
@@ -6188,7 +6234,7 @@ private struct FantasyAssistantManagerSheet: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if message.contains("game is being updated") || message.contains("temporarily unavailable") {
-            return "Assistant Manager is temporarily unavailable while Fantasy Football updates."
+            return "Assistant Manager is temporarily unavailable while Fantasy Premier League updates."
         }
         return "Could not load Assistant Manager advice right now."
     }
@@ -6292,7 +6338,7 @@ private struct FantasyAssistantManagerInterstitialView: View {
 
 private struct FantasyLoadingInterstitialView: View {
     @State private var animate = false
-    @State private var statusMessage = "Loading Fantasy Football..."
+    @State private var statusMessage = "Loading Fantasy Premier League..."
 
     var body: some View {
         ZStack {
@@ -6361,7 +6407,7 @@ private struct FantasyLoadingInterstitialView: View {
                 }
 
                 VStack(spacing: 8) {
-                    Text("Fantasy Football")
+                    Text("Fantasy Premier League")
                         .font(.title.weight(.bold))
                         .foregroundStyle(.white)
 

@@ -279,6 +279,14 @@ struct FantasyPlayerDetailsSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 ForEach(Array(details.upcomingFixtures.prefix(5).enumerated()), id: \.element.id) { index, fixture in
+                    let expectedPoints = fixture.isBlank
+                        ? nil
+                        : expectedPointsForDetailsFixture(
+                            details: details,
+                            fixture: fixture,
+                            fixtureIndex: index
+                        )
+
                     HStack(spacing: 8) {
                         Text("\(fixture.gameweek)")
                             .font(.caption.monospacedDigit())
@@ -306,24 +314,11 @@ struct FantasyPlayerDetailsSheet: View {
                         fixtureDifficultyBadge(fixture)
                             .frame(width: difficultyWidth, alignment: .leading)
 
-                        if fixture.isBlank {
-                            Text("-")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .frame(width: xpWidth, alignment: .trailing)
-                        } else {
-                            Text(
-                                expectedPointsForDetailsFixture(
-                                    details: details,
-                                    fixture: fixture,
-                                    fixtureIndex: index
-                                )
-                                .formatted(.number.precision(.fractionLength(1)))
-                            )
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: xpWidth, alignment: .trailing)
-                        }
+                        expectedPointsPill(
+                            expectedPoints?.formatted(.number.precision(.fractionLength(1))) ?? "-",
+                            value: expectedPoints
+                        )
+                        .frame(width: xpWidth, alignment: .trailing)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -427,7 +422,7 @@ struct FantasyPlayerDetailsSheet: View {
 
     private func pointsHeatmapCell(_ points: Int, width: CGFloat) -> some View {
         Text("\(points)")
-            .font(.caption.monospacedDigit().weight(.semibold))
+            .font(.caption2.monospacedDigit().weight(.semibold))
             .foregroundStyle(Color.white)
             .frame(width: width, alignment: .center)
             .padding(.vertical, 4)
@@ -923,6 +918,14 @@ struct FantasyPlayerDetailsSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 ForEach(Array(fixtures.prefix(5).enumerated()), id: \.element.id) { index, fixture in
+                    let expectedPoints = fixture.isBlank
+                        ? nil
+                        : expectedPointsForFixture(
+                            recommendation: item,
+                            fixture: fixture,
+                            fixtureIndex: index
+                        )
+
                     HStack(spacing: 8) {
                         Text("GW\(fixture.gameweek)")
                             .font(.caption.monospacedDigit())
@@ -949,24 +952,11 @@ struct FantasyPlayerDetailsSheet: View {
                         recommendationDifficultyPill(fixture.difficulty)
                             .frame(width: difficultyWidth, alignment: .leading)
 
-                        if fixture.isBlank {
-                            Text("0.0")
-                                .font(.caption.monospacedDigit().weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: xpWidth, alignment: .trailing)
-                        } else {
-                            Text(
-                                expectedPointsForFixture(
-                                    recommendation: item,
-                                    fixture: fixture,
-                                    fixtureIndex: index
-                                )
-                                .formatted(.number.precision(.fractionLength(1)))
-                            )
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: xpWidth, alignment: .trailing)
-                        }
+                        expectedPointsPill(
+                            expectedPoints?.formatted(.number.precision(.fractionLength(1))) ?? "0.0",
+                            value: expectedPoints
+                        )
+                        .frame(width: xpWidth, alignment: .trailing)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -1112,12 +1102,12 @@ struct FantasyPlayerDetailsSheet: View {
         let color = recommendationPreviousPointsColor(points: points, range: range)
 
         return Text("\(points)")
-            .font(.caption.monospacedDigit().weight(.semibold))
+            .font(.caption2.monospacedDigit().weight(.semibold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 8)
+            .frame(minWidth: 40, alignment: .center)
             .padding(.vertical, 4)
             .background(
-                Capsule(style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(color.opacity(0.94))
             )
     }
@@ -1132,6 +1122,39 @@ struct FantasyPlayerDetailsSheet: View {
         let normalized = Double(points - range.min) / Double(max(1, range.max - range.min))
         let hue = 0.02 + (0.34 * min(max(normalized, 0), 1))
         return Color(hue: hue, saturation: 0.78, brightness: 0.90)
+    }
+
+    private func expectedPointsPill(_ text: String, value: Double?) -> some View {
+        let color = expectedPointsPillColor(value)
+
+        return Text(text)
+            .font(.caption2.monospacedDigit().weight(.semibold))
+            .foregroundStyle(value == nil ? Color.secondary : expectedPointsPillForegroundColor(value))
+            .frame(minWidth: 40, alignment: .center)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(color.opacity(value == nil ? 0.20 : 0.92))
+            )
+    }
+
+    private func expectedPointsPillColor(_ value: Double?) -> Color {
+        guard let value else { return Color.gray }
+        switch value {
+        case ..<2.0:
+            return Color.red
+        case ..<4.0:
+            return Color.orange
+        case ..<6.0:
+            return Color.yellow
+        default:
+            return Color.green
+        }
+    }
+
+    private func expectedPointsPillForegroundColor(_ value: Double?) -> Color {
+        guard let value else { return Color.secondary }
+        return value >= 4.0 ? Color.black.opacity(0.82) : Color.white
     }
 
     private func recommendationDifficultyPill(_ difficulty: Int?) -> some View {
@@ -1363,7 +1386,7 @@ struct FantasyPlayerDetailsSheet: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if normalized.contains("game is being updated") || normalized.contains("temporarily unavailable") {
-            return "Transfer recommendations are temporarily unavailable while Fantasy Football updates."
+            return "Transfer recommendations are temporarily unavailable while Fantasy Premier League updates."
         }
         return "Could not load transfer recommendations right now."
     }
