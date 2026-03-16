@@ -1000,7 +1000,7 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static func groupMatches(
+    nonisolated private static func groupMatches(
         _ matches: [Match],
         descendingDates: Bool = false,
         sortOrder: MatchGroupSortOrder,
