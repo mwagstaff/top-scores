@@ -18,6 +18,11 @@ struct AboutView: View {
             VStack(spacing: 0) {
                 headerView
                 List {
+                    Section("Version") {
+                        Text("\(appVersion)")
+                            .foregroundStyle(.secondary)
+                    }
+
                     Section("Developer") {
                         Text("Developed by Mike Wagstaff")
                         Link(destination: URL(string: "https://skynolimit.dev")!) {
@@ -172,6 +177,10 @@ struct AboutView: View {
             Image(systemName: "info.circle")
                 .font(.system(size: 24, weight: .semibold))
         }
+    }
+
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
     }
 
     private var feedbackMailURL: URL {
