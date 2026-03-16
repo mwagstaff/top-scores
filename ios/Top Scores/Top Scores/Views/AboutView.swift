@@ -18,12 +18,6 @@ struct AboutView: View {
             VStack(spacing: 0) {
                 headerView
                 List {
-                    Section {
-                        Text("Your personalized TV guide for football matches.")
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 4)
-                    }
-
                     Section("Developer") {
                         Text("Developed by Mike Wagstaff")
                         Link(destination: URL(string: "https://skynolimit.dev")!) {
