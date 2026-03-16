@@ -24,6 +24,31 @@ struct AboutView: View {
                             .padding(.vertical, 4)
                     }
 
+                    Section("Developer") {
+                        Text("Developed by Mike Wagstaff")
+                        Link(destination: URL(string: "https://skynolimit.dev")!) {
+                            Label("Sky No Limit", systemImage: "globe")
+                        }
+                    }
+
+                    Section("Feedback") {
+                        Link(destination: feedbackMailURL) {
+                            Label("Email Feedback", systemImage: "envelope")
+                        }
+                    }
+
+                    Section("Data sources") {
+                        Link(destination: URL(string: "https://www.bbc.co.uk/sport/football")!) {
+                            Label("BBC Sport", systemImage: "tv")
+                        }
+                        Link(destination: URL(string: "http://clubelo.com")!) {
+                            Label("ClubElo", systemImage: "chart.bar.xaxis")
+                        }
+                        Link(destination: URL(string: "https://www.eloratings.net")!) {
+                            Label("World Football Elo Ratings", systemImage: "chart.bar.xaxis")
+                        }
+                    }
+
                     #if DEBUG
                     Section {
                         if isLoadingDiagnostics {
@@ -153,6 +178,12 @@ struct AboutView: View {
             Image(systemName: "info.circle")
                 .font(.system(size: 24, weight: .semibold))
         }
+    }
+
+    private var feedbackMailURL: URL {
+        let subject = "Top Scores feedback [\(DeviceIdentity.currentToken)]"
+        let encoded = subject.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? subject
+        return URL(string: "mailto:mike.wagstaff@gmail.com?subject=\(encoded)") ?? URL(string: "mailto:mike.wagstaff@gmail.com")!
     }
 
     #if DEBUG
