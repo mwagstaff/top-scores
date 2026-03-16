@@ -539,7 +539,17 @@ final class MatchesStore: ObservableObject {
         if invalidation.shouldClearMatchCaches {
             MatchCache.clear()
             SharedMatchesBridge.clear()
-            modeStates = [.fixtures: ModeState(), .results: ModeState()]
+            // Reset pagination state but keep in-memory matches visible until fresh data arrives.
+            // Clearing modeStates here would blank the UI and force a full-screen spinner even
+            // though the user has perfectly usable cached data. The incoming fetchPage (reset: true)
+            // will replace this data via mergeRefreshedMatches once the first page returns.
+            for key in modeStates.keys {
+                var state = modeStates[key] ?? ModeState()
+                state.page = 0
+                state.hasMore = true
+                state.isUsingCache = false
+                modeStates[key] = state
+            }
         }
 
         if invalidation.shouldClearBbcLiveCache {

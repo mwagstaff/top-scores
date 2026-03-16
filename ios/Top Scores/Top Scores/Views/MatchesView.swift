@@ -481,7 +481,7 @@ struct MatchesView: View {
                 }
             }
 
-            if matchesStore.errorMessage != nil || matchesStore.isLoading || matchesStore.lastUpdated != nil {
+            if matchesStore.errorMessage != nil || (matchesStore.isLoading && matchesStore.groupedMatches.isEmpty) || matchesStore.lastUpdated != nil {
                 VStack(alignment: .leading, spacing: 6) {
                     if let error = matchesStore.errorMessage {
                         Text(error)
@@ -489,11 +489,14 @@ struct MatchesView: View {
                             .foregroundStyle(.red)
                     }
 
-                    if matchesStore.isLoading {
+                    // Only show the loading indicator when there is no data yet (initial load).
+                    // When cached/fresh data is already visible a background refresh should not
+                    // disrupt the layout or replace the "Updated" timestamp with a spinner.
+                    if matchesStore.isLoading && matchesStore.groupedMatches.isEmpty {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text(mode.refreshProgressText)
+                            Text(mode.loadingText)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
