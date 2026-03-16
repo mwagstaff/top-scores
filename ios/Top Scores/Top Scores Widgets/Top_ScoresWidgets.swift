@@ -1948,35 +1948,52 @@ private struct TopScoresLiveActivityWidget: Widget {
 private struct TopScoresLiveActivityLockScreenView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
 
+    /// Deduplicates `state.matches` as a last-resort guard against duplicate entries that can
+    /// occur when a match's kickoff time or match ID drifts between data sources server-side.
+    /// Dedup is keyed first by non-empty `matchId`, then by date + lowercased team names
+    /// (time-insensitive) so the same fixture at slightly different scheduled times is collapsed.
+    private var deduplicatedMatches: [TopScoresLiveActivityMatchState] {
+        var seenMatchIds = Set<String>()
+        var seenTeamPairs = Set<String>()
+        return state.matches.filter { match in
+            if !match.matchId.isEmpty {
+                return seenMatchIds.insert(match.matchId).inserted
+            }
+            let key = "\(match.date)|\(match.homeTeam.lowercased())|\(match.awayTeam.lowercased())"
+            return seenTeamPairs.insert(key).inserted
+        }
+    }
+
     var body: some View {
         let isMultiMode = state.mode == "multi_live" || state.mode == "multi_upcoming" || state.mode == "multi_finished"
+        let matches = deduplicatedMatches
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 switch state.mode {
                 case "single_upcoming":
-                    if let match = state.matches.first {
+                    if let match = matches.first {
                         SingleUpcomingMatchView(match: match)
                     } else {
                         EmptyLiveActivityView()
                     }
                 case "single_live":
-                    if let match = state.matches.first {
+                    if let match = matches.first {
                         SingleLiveMatchView(match: match)
                     } else {
                         EmptyLiveActivityView()
                     }
                 case "single_finished":
-                    if let match = state.matches.first {
+                    if let match = matches.first {
                         SingleFinishedMatchView(match: match)
                     } else {
                         EmptyLiveActivityView()
                     }
                 case "multi_upcoming":
-                    MultiMatchListView(matches: state.matches, live: false)
+                    MultiMatchListView(matches: matches, live: false)
                 case "multi_live":
-                    MultiMatchListView(matches: state.matches, live: true)
+                    MultiMatchListView(matches: matches, live: true)
                 case "multi_finished":
-                    MultiMatchListView(matches: state.matches, live: true)
+                    MultiMatchListView(matches: matches, live: true)
                 case "ended":
                     EndedLiveActivityView()
                 default:

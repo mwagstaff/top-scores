@@ -3183,7 +3183,9 @@ function buildLiveActivityEntryLookup(entries) {
       state: entry && entry.state ? entry.state : null,
       match,
     };
-    for (const key of liveActivityMatchDedupKeys(match, matchId)) {
+    // Index by both exact (ID/time-based) and time-insensitive fixture keys so that canonical
+    // matches can find monitored entries even when kickoff times diverge between sources.
+    for (const key of liveActivityEntryDedupKeys({ matchId, match, state: null })) {
       if (lookup.has(key)) continue;
       lookup.set(key, normalizedEntry);
     }
@@ -3244,10 +3246,24 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
 
   fixtureSectionMatches.forEach((canonicalMatch) => {
     const matchId = liveActivityMatchIdentity(canonicalMatch);
-    const dedupeKeys = liveActivityMatchDedupKeys(canonicalMatch, matchId);
+    // Use fixture-level keys (time-insensitive) in addition to exact keys so that a canonical
+    // match already seen via a monitored entry with a drifted kickoff time is not re-added.
+    const dedupeKeys = liveActivityEntryDedupKeys({ matchId, match: canonicalMatch });
     if (!matchId || dedupeKeys.some((key) => seenKeys.has(key))) return;
 
-    const monitoredEntry = monitoredById.get(matchId) || null;
+    // Try exact-ID lookup first; fall back to time-insensitive fixture keys so that a monitored
+    // entry started under a slightly different kickoff time is still merged into the canonical.
+    let monitoredEntry = monitoredById.get(matchId) || null;
+    if (!monitoredEntry) {
+      for (const fixtureKey of liveActivityFixtureDedupKeys(canonicalMatch)) {
+        const found = monitoredById.get(fixtureKey);
+        if (found) {
+          monitoredEntry = found;
+          break;
+        }
+      }
+    }
+
     const mergedMatch = mergeCanonicalLiveActivityMatch(
       canonicalMatch,
       monitoredEntry && monitoredEntry.match ? monitoredEntry.match : null
@@ -3257,7 +3273,9 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
       state: monitoredEntry ? monitoredEntry.state : null,
       match: mergedMatch,
     });
-    liveActivityMatchDedupKeys(mergedMatch, matchId).forEach((key) => seenKeys.add(key));
+    // Register all keys (including fixture keys) so subsequent monitored entries for the same
+    // game with drifted metadata are recognised as duplicates and skipped.
+    liveActivityEntryDedupKeys({ matchId, match: mergedMatch }).forEach((key) => seenKeys.add(key));
   });
 
   for (const monitoredEntry of Array.isArray(monitoredEntries) ? monitoredEntries : []) {
@@ -3265,7 +3283,8 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
     const matchId =
       liveActivityMatchIdentity(monitoredMatch) ||
       (monitoredEntry && monitoredEntry.matchId ? String(monitoredEntry.matchId) : null);
-    const dedupeKeys = liveActivityMatchDedupKeys(monitoredMatch, matchId);
+    // Use fixture-level keys so an entry whose time differs from an already-seen canonical is skipped.
+    const dedupeKeys = liveActivityEntryDedupKeys({ matchId, match: monitoredMatch });
     if (!matchId || dedupeKeys.some((key) => seenKeys.has(key))) continue;
     if (!shouldIncludeMonitoredEntryForLiveActivity(monitoredEntry, user, nowMs)) continue;
 
@@ -3275,7 +3294,7 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
       state: monitoredEntry && monitoredEntry.state ? monitoredEntry.state : null,
       match: mergedMatch,
     });
-    liveActivityMatchDedupKeys(mergedMatch, matchId).forEach((key) => seenKeys.add(key));
+    liveActivityEntryDedupKeys({ matchId, match: mergedMatch }).forEach((key) => seenKeys.add(key));
   }
 
   return dedupeLiveActivityEntries(entries);

@@ -197,10 +197,10 @@ function resolveSquadPlayer(player = {}) {
   const teamID = toPositiveInt(bootstrapElement && bootstrapElement.team, 0);
   const availability = resolveBootstrapAvailability(bootstrapElement);
 
-  const rawPoints = Number.isFinite(Number(liveStats && liveStats.total_points))
+  const rawPoints = liveStats != null && Number.isFinite(Number(liveStats.total_points))
     ? toFiniteInt(liveStats.total_points, 0)
     : toFiniteInt(player.rawPoints, 0);
-  const minutesPlayed = Number.isFinite(Number(liveStats && liveStats.minutes))
+  const minutesPlayed = liveStats != null && Number.isFinite(Number(liveStats.minutes))
     ? toFiniteInt(liveStats.minutes, 0)
     : toFiniteInt(player.minutesPlayed, 0);
   const multiplier = toFiniteInt(player.multiplier, 1);
