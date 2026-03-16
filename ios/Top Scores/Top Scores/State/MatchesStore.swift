@@ -951,7 +951,7 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static func matchSortDate(for match: Match) -> Date {
+    nonisolated private static func matchSortDate(for match: Match) -> Date {
         match.dateTime ?? MatchDateParser.shared.parse(date: match.date, time: "00:00") ?? .distantFuture
     }
 
@@ -962,7 +962,7 @@ final class MatchesStore: ObservableObject {
         return CompetitionWeightConfig.weight(for: match.league) ?? 0
     }
 
-    private static func competitionWeight(forCompetitionName competitionName: String) -> Double {
+    nonisolated private static func competitionWeight(forCompetitionName competitionName: String) -> Double {
         CompetitionWeightConfig.weight(for: competitionName) ?? 0
     }
 
@@ -1107,7 +1107,7 @@ final class MatchesStore: ObservableObject {
         return dateDays
     }
 
-    private static func sortMatchesWithinLeague(
+    nonisolated private static func sortMatchesWithinLeague(
         _ matches: [Match],
         sortOrder: MatchGroupSortOrder,
         ratingLookup: TeamRatingLookup
@@ -1171,13 +1171,13 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static func totalTeamRating(for matches: [Match], ratingLookup: TeamRatingLookup) -> Double {
+    nonisolated private static func totalTeamRating(for matches: [Match], ratingLookup: TeamRatingLookup) -> Double {
         matches.reduce(0) { partialResult, match in
             partialResult + totalTeamRating(for: match, ratingLookup: ratingLookup)
         }
     }
 
-    private static func totalTeamRating(for match: Match, ratingLookup: TeamRatingLookup) -> Double {
+    nonisolated private static func totalTeamRating(for match: Match, ratingLookup: TeamRatingLookup) -> Double {
         ratingLookup.resolvedRating(for: match.homeTeam) + ratingLookup.resolvedRating(for: match.awayTeam)
     }
 }

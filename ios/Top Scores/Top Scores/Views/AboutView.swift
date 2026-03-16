@@ -601,6 +601,7 @@ struct AboutView: View {
     }
 
     private struct DebugFantasyHarnessMatchesView: View {
+        @EnvironmentObject private var fantasyViewModel: FantasyViewModel
         let matches: [DebugFantasyHarnessMatch]
 
         var body: some View {
