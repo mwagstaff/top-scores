@@ -14,6 +14,12 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var assistantManagerPreview: FantasyAssistantManagerResponse?
     @Published var errorMessage: String?
+    /// Pre-computed context for MatchRow. Updated whenever squad data, expected points, or the
+    /// bootstrap lookup changes. MatchRow observes this value rather than the whole FantasyViewModel,
+    /// so rows only re-render when fantasy data actually changes (not on isLoading / isRefreshing etc).
+    @Published private(set) var matchRowContext: FantasyMatchRowContext = .empty
+
+    private var matchRowContextVersion = 0
 
     private let fantasyPublicClient = FantasyPublicAPIClient()
     private var cachedBootstrapLookup: FantasyBootstrapLookup?
@@ -103,6 +109,54 @@ final class FantasyViewModel: ObservableObject {
         cachedPlayerDetailsBootstrapFetchedAt = nil
         cachedSeasonFixtures = []
         cachedSeasonFixturesFetchedAt = nil
+        rebuildMatchRowContext()
+    }
+
+    /// Rebuilds the pre-computed FantasyMatchRowContext published to MatchRow.
+    /// Must be called whenever data, assistantManagerPreview, or cachedBootstrapLookup changes.
+    private func rebuildMatchRowContext() {
+        matchRowContextVersion += 1
+        let expectedPoints = buildExpectedPointsDictionary()
+        let lookup = FantasySquadMembershipLookup(squad: data, expectedPointsByElementID: expectedPoints)
+        let eligibleKeys = Set(
+            (cachedBootstrapLookup?.teams ?? []).flatMap {
+                TeamIdentityStore.shared.normalizedKeys(for: $0.name)
+            }
+        )
+        matchRowContext = FantasyMatchRowContext(
+            lookup: lookup,
+            eligibleLeagueTeamKeys: eligibleKeys,
+            version: matchRowContextVersion
+        )
+    }
+
+    /// Builds the expected-points dictionary that was previously computed inline inside each MatchRow body.
+    private func buildExpectedPointsDictionary() -> [Int: Int] {
+        guard let squad = data,
+              let section = assistantManagerPreview?.expectedPoints
+        else { return [:] }
+
+        let starterExpectedPoints = Dictionary(
+            uniqueKeysWithValues: section.starters.map { ($0.elementID, $0.expectedPointsNextGameweek) }
+        )
+        let benchExpectedPoints = Dictionary(
+            uniqueKeysWithValues: section.bench.map { ($0.elementID, $0.expectedPointsNextGameweek) }
+        )
+
+        var result: [Int: Int] = [:]
+        for player in squad.starters {
+            guard player.hasRemainingFixtureThisGameweek,
+                  let pts = starterExpectedPoints[player.elementID]
+            else { continue }
+            result[player.elementID] = Int(pts.rounded())
+        }
+        for player in squad.bench {
+            guard player.hasRemainingFixtureThisGameweek,
+                  let pts = benchExpectedPoints[player.elementID]
+            else { continue }
+            result[player.elementID] = Int(pts.rounded())
+        }
+        return result
     }
 
     func isEligibleFantasyFixture(_ match: Match) -> Bool {
@@ -213,6 +267,7 @@ final class FantasyViewModel: ObservableObject {
                 seasonFixtures: seasonFixtures,
                 bootstrap: bootstrapLookup
             )
+            rebuildMatchRowContext()
 
             let normalizedRivals = deduplicatedRivals(
                 rivalManagers: rivalManagers,
@@ -400,6 +455,7 @@ final class FantasyViewModel: ObservableObject {
         )
         if response.ready {
             assistantManagerPreview = response
+            rebuildMatchRowContext()
         }
         return response
     }
@@ -481,6 +537,7 @@ final class FantasyViewModel: ObservableObject {
             if response.ready {
                 cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: Date())
                 assistantManagerPreview = response
+                rebuildMatchRowContext()
             }
         } catch {
             logPerf("assistant_manager_sync_failed entry_id=\(entryID) error=\"\(error.localizedDescription)\"")
@@ -1021,6 +1078,7 @@ final class FantasyViewModel: ObservableObject {
             logPerf("bootstrap_lookup_cache_invalidated reason=missing_player_costs")
             self.cachedBootstrapLookup = nil
             self.cachedBootstrapFetchedAt = nil
+            rebuildMatchRowContext()
         }
 
         var lookup = try await timed("bootstrap_lookup_fetch") {
@@ -1035,6 +1093,7 @@ final class FantasyViewModel: ObservableObject {
         cachedBootstrapLookup = lookup
         cachedBootstrapFetchedAt = now
         cachedBootstrapBaseURL = baseURLKey
+        rebuildMatchRowContext()
         return lookup
     }
 

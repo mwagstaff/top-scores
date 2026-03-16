@@ -630,7 +630,8 @@ struct AboutView: View {
                             MatchRow(
                                 match: harnessMatch.match,
                                 highlightToday: false,
-                                showLeague: false
+                                showLeague: false,
+                                fantasyContext: fantasyViewModel.matchRowContext
                             )
                         }
                         .buttonStyle(.plain)

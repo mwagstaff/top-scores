@@ -4,7 +4,6 @@ import EventKit
 
 struct MatchRow: View {
     @EnvironmentObject private var preferences: PreferencesStore
-    @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
 
     let match: Match
@@ -18,6 +17,7 @@ struct MatchRow: View {
     var centerFooterColor: Color = .secondary
     var isLargePresentation: Bool = false
     var teamLogoScale: CGFloat = 1.0
+    var fantasyContext: FantasyMatchRowContext = .empty
 
     var body: some View {
         matchCard
@@ -135,19 +135,12 @@ struct MatchRow: View {
         match.isFinished
     }
 
-    private var isEligibleFantasyFixture: Bool {
-        fantasyViewModel.isEligibleFantasyFixture(match)
-    }
-
     private var fantasyBadgeMode: FantasyMatchParticipationBadge.Mode? {
         guard showFantasyBadge,
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               preferences.showFantasyMatchPills,
-              isEligibleFantasyFixture,
-              let lookup = FantasySquadMembershipLookup(
-                squad: fantasyViewModel.data,
-                expectedPointsByElementID: fantasyExpectedPointsByElementID
-              )
+              fantasyContext.isEligibleFixture(match),
+              let lookup = fantasyContext.lookup
         else {
             return nil
         }
@@ -167,56 +160,16 @@ struct MatchRow: View {
               fantasyBadgeMode != nil,
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               preferences.showFantasyMatchPills,
-              isEligibleFantasyFixture,
-              let lookup = FantasySquadMembershipLookup(
-                squad: fantasyViewModel.data,
-                expectedPointsByElementID: fantasyExpectedPointsByElementID
-              )
+              fantasyContext.isEligibleFixture(match),
+              let lookup = fantasyContext.lookup
         else {
             return []
         }
 
         return lookup.involvedPlayers(
             in: match,
-            preferExpectedPoints: match.isUpcomingScorelessFixture && !fantasyExpectedPointsByElementID.isEmpty
+            preferExpectedPoints: match.isUpcomingScorelessFixture && lookup.hasExpectedPoints
         )
-    }
-
-    private var fantasyExpectedPointsByElementID: [Int: Int] {
-        guard let squad = fantasyViewModel.data,
-              let section = fantasyViewModel.assistantManagerPreview?.expectedPoints
-        else {
-            return [:]
-        }
-
-        let starterExpectedPoints = Dictionary(
-            uniqueKeysWithValues: section.starters.map { ($0.elementID, $0.expectedPointsNextGameweek) }
-        )
-        let benchExpectedPoints = Dictionary(
-            uniqueKeysWithValues: section.bench.map { ($0.elementID, $0.expectedPointsNextGameweek) }
-        )
-
-        var expectedPointsByElementID: [Int: Int] = [:]
-
-        for player in squad.starters {
-            guard player.hasRemainingFixtureThisGameweek,
-                  let expectedPoints = starterExpectedPoints[player.elementID]
-            else {
-                continue
-            }
-            expectedPointsByElementID[player.elementID] = Int(expectedPoints.rounded())
-        }
-
-        for player in squad.bench {
-            guard player.hasRemainingFixtureThisGameweek,
-                  let expectedPoints = benchExpectedPoints[player.elementID]
-            else {
-                continue
-            }
-            expectedPointsByElementID[player.elementID] = Int(expectedPoints.rounded())
-        }
-
-        return expectedPointsByElementID
     }
 
     private var shouldShowFooterRow: Bool {
@@ -647,7 +600,8 @@ struct MatchDetailView: View {
                     match: activeMatch,
                     highlightToday: highlightToday,
                     showTeamEvents: true,
-                    showFantasyBadge: showFantasyBadge
+                    showFantasyBadge: showFantasyBadge,
+                    fantasyContext: fantasyViewModel.matchRowContext
                 )
                     .padding(.horizontal)
 
@@ -2376,6 +2330,47 @@ private struct MatchPlayerNameLookup {
     }
 }
 
+// MARK: - FantasyMatchRowContext
+
+/// A stable, Equatable snapshot of the fantasy state needed to render a MatchRow.
+/// Built once in FantasyViewModel when its underlying data changes, then passed as a
+/// value parameter to MatchRow so rows only re-render when the fantasy data actually changes.
+struct FantasyMatchRowContext: Equatable {
+    let lookup: FantasySquadMembershipLookup?
+    /// Normalised team name keys for every EPL team from the bootstrap, used to
+    /// determine whether a match is an eligible fantasy fixture without accessing FantasyViewModel.
+    let eligibleLeagueTeamKeys: Set<String>
+    /// Monotonically-increasing version bumped whenever the underlying data changes.
+    /// Used as the Equatable key so SwiftUI can skip re-rendering rows whose context
+    /// is unchanged even if FantasyViewModel publishes unrelated state (isLoading, etc.).
+    private let version: Int
+
+    static func == (lhs: FantasyMatchRowContext, rhs: FantasyMatchRowContext) -> Bool {
+        lhs.version == rhs.version
+    }
+
+    static let empty = FantasyMatchRowContext(lookup: nil, eligibleLeagueTeamKeys: [], version: 0)
+
+    init(lookup: FantasySquadMembershipLookup?, eligibleLeagueTeamKeys: Set<String>, version: Int) {
+        self.lookup = lookup
+        self.eligibleLeagueTeamKeys = eligibleLeagueTeamKeys
+        self.version = version
+    }
+
+    func isEligibleFixture(_ match: Match) -> Bool {
+        guard match.league.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+        else { return false }
+        guard !eligibleLeagueTeamKeys.isEmpty else { return true }
+        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
+        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
+        return !homeKeys.isDisjoint(with: eligibleLeagueTeamKeys) &&
+               !awayKeys.isDisjoint(with: eligibleLeagueTeamKeys)
+    }
+}
+
+// MARK: - FantasySquadMembershipLookup
+
 struct FantasySquadMembershipLookup {
     private struct SquadPlayerSummary {
         let elementID: Int
@@ -2391,6 +2386,8 @@ struct FantasySquadMembershipLookup {
     private let fixturePointsByElementID: [Int: Int]
     private let expectedPointsByElementID: [Int: Int]
     private let playersByTeam: [String: [SquadPlayerSummary]]
+
+    var hasExpectedPoints: Bool { !expectedPointsByElementID.isEmpty }
 
     init?(squad: FantasySquadDisplayData?, expectedPointsByElementID: [Int: Int] = [:]) {
         guard let squad else { return nil }

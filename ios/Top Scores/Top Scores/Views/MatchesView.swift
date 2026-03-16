@@ -290,7 +290,7 @@ struct MatchesView: View {
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
 
-                        ForEach(league.matches, id: \.self) { match in
+                        ForEach(league.matches) { match in
                             NavigationLink {
                                 MatchDetailView(
                                     match: match,
@@ -307,6 +307,7 @@ struct MatchesView: View {
                                     teamLogoScale: 1.1,
                                     // Only enable this if needing to debug elo scores
                                     // centerFooterText: matchDebugFooterText(for: match)
+                                    fantasyContext: fantasyViewModel.matchRowContext
                                 )
                             }
                             .onAppear {

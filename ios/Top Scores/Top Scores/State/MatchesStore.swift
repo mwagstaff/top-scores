@@ -299,6 +299,7 @@ final class MatchesStore: ObservableObject {
     private var cacheStateLastFetchedAt: Date?
     private var bbcLiveRefreshTask: Task<Void, Never>?
     private var teamRankingsRefreshTask: Task<Void, Never>?
+    private var groupingTask: Task<Void, Never>?
     private var teamRatingLookup = TeamRatingLookup(
         entries: [],
         defaultPoints: TeamRankingSettings.defaultDefaultElo
@@ -757,16 +758,30 @@ final class MatchesStore: ObservableObject {
         activeMode = mode
         let current = state(for: mode)
         matches = current.matches
-        groupedMatches = Self.groupMatches(
-            current.matches,
-            descendingDates: mode == .results,
-            sortOrder: currentSnapshot?.matchGroupSortOrder ?? PreferencesStore.defaultMatchGroupSortOrder,
-            ratingLookup: teamRatingLookup
-        )
         isLoading = current.isLoading
         errorMessage = current.errorMessage
         lastUpdated = current.lastUpdated
         isUsingCache = current.isUsingCache
+
+        // Run the grouping work off the main thread so it doesn't block the UI.
+        // Cancel any previous task so stale results can't overwrite newer ones.
+        groupingTask?.cancel()
+        let matchesToGroup = current.matches
+        let descendingDates = (mode == .results)
+        let sortOrder = currentSnapshot?.matchGroupSortOrder ?? PreferencesStore.defaultMatchGroupSortOrder
+        let ratingLookup = teamRatingLookup
+        groupingTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let grouped = MatchesStore.groupMatches(
+                matchesToGroup,
+                descendingDates: descendingDates,
+                sortOrder: sortOrder,
+                ratingLookup: ratingLookup
+            )
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                self?.groupedMatches = grouped
+            }
+        }
 
         if let snapshot = currentSnapshot {
             let allMatches = combinedLoadedMatches()
