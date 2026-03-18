@@ -2069,6 +2069,12 @@ private struct TopScoresLiveActivityLockScreenView: View {
     var body: some View {
         let isMultiMode = state.mode == "multi_live" || state.mode == "multi_upcoming" || state.mode == "multi_finished"
         let matches = deduplicatedMatches
+        // In single live/finished mode the server appends today's upcoming matches after the
+        // primary match so the widget shows the full picture of today's action.
+        let trailingUpcoming: [TopScoresLiveActivityMatchState] = (state.mode == "single_live" || state.mode == "single_finished")
+            ? Array(matches.dropFirst())
+            : []
+        let hasTrailingUpcoming = !trailingUpcoming.isEmpty
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 switch state.mode {
@@ -2079,16 +2085,32 @@ private struct TopScoresLiveActivityLockScreenView: View {
                         EmptyLiveActivityView()
                     }
                 case "single_live":
-                    if let match = matches.first {
-                        SingleLiveMatchView(match: match)
-                    } else {
-                        EmptyLiveActivityView()
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let match = matches.first {
+                            SingleLiveMatchView(match: match)
+                        } else {
+                            EmptyLiveActivityView()
+                        }
+                        if hasTrailingUpcoming {
+                            Rectangle()
+                                .fill(.white.opacity(0.16))
+                                .frame(height: 1)
+                            MultiMatchListView(matches: trailingUpcoming, live: false)
+                        }
                     }
                 case "single_finished":
-                    if let match = matches.first {
-                        SingleFinishedMatchView(match: match)
-                    } else {
-                        EmptyLiveActivityView()
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let match = matches.first {
+                            SingleFinishedMatchView(match: match)
+                        } else {
+                            EmptyLiveActivityView()
+                        }
+                        if hasTrailingUpcoming {
+                            Rectangle()
+                                .fill(.white.opacity(0.16))
+                                .frame(height: 1)
+                            MultiMatchListView(matches: trailingUpcoming, live: false)
+                        }
                     }
                 case "multi_upcoming":
                     MultiMatchListView(matches: matches, live: false)
@@ -2103,7 +2125,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, isMultiMode ? 6 : 8)
+            .padding(.vertical, isMultiMode || hasTrailingUpcoming ? 6 : 8)
 
             if delayBannerText != nil || fantasyScoreText != nil {
                 Group {
