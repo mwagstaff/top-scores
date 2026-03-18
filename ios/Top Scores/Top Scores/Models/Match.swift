@@ -402,6 +402,8 @@ struct Match: Identifiable, Codable, Hashable {
 
     var aggregateSummaryText: String? {
         guard let aggregateHomeScore, let aggregateAwayScore else { return nil }
+        // BBC uses 0-0 as a "not yet populated" placeholder — suppress until real data arrives
+        guard aggregateHomeScore != 0 || aggregateAwayScore != 0 else { return nil }
         return "Agg: \(aggregateHomeScore)-\(aggregateAwayScore)"
     }
 

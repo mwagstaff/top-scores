@@ -84,6 +84,13 @@ final class LiveActivitySyncService {
             activityUpdatesTask = Task(priority: .background) {
                 for await activity in Activity<TopScoresLiveActivityAttributes>.activityUpdates {
                     self.beginObserving(activity)
+                    // Deduplicate immediately when a new activity appears (e.g. a second
+                    // push-to-start while one is already active) so the lock screen never
+                    // shows two widgets, even when the app never comes to the foreground.
+                    let current = Activity<TopScoresLiveActivityAttributes>.activities
+                    if current.count > 1 {
+                        await self.enforceSingleActiveActivity(among: current)
+                    }
                 }
             }
             NSLog("[LiveActivitySync] Monitoring activity push token updates")
@@ -234,7 +241,10 @@ final class LiveActivitySyncService {
         let reconcileResponse = await requestLiveActivityReconcile()
         // If no active activity and the server has live content, start one directly
         // so push-to-start (which requires background) is not the only path.
-        if activeActivities.isEmpty, let contentState = reconcileResponse {
+        // Re-check Activity.activities here rather than using the snapshot captured before
+        // the HTTP call, in case a push-to-start arrived during the round-trip.
+        let currentActivities = Activity<TopScoresLiveActivityAttributes>.activities
+        if currentActivities.isEmpty, let contentState = reconcileResponse {
             await startForegroundActivityIfNeeded(contentState: contentState)
         }
         await fetchServerDebugState()

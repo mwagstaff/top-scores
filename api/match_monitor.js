@@ -3006,7 +3006,7 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
     .filter((match) => match && typeof match === "object")
     .filter((match) => {
       const dateKey = String(match.date || "").trim();
-      return Boolean(dateKey) && dateKey >= todayKey;
+      return Boolean(dateKey) && dateKey === todayKey;
     })
     .filter((match) => {
       if (
@@ -3259,9 +3259,7 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
     // Use fixture-level keys (time-insensitive) in addition to exact keys so that a canonical
     // match already seen via a monitored entry with a drifted kickoff time is not re-added.
     const dedupeKeys = liveActivityEntryDedupKeys({ matchId, match: canonicalMatch });
-    // Skip matches with no match_details_id — they cannot be live-monitored and will
-    // always contribute stale pre-kickoff data to the content state.
-    if (!matchId || !canonicalMatch.match_details_id || dedupeKeys.some((key) => seenKeys.has(key))) return;
+    if (!matchId || dedupeKeys.some((key) => seenKeys.has(key))) return;
 
     // Try exact-ID lookup first; fall back to time-insensitive fixture keys so that a monitored
     // entry started under a slightly different kickoff time is still merged into the canonical.
@@ -4203,6 +4201,12 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     return;
   }
 
+  // When the app is in the foreground it calls the reconcile endpoint, which returns a
+  // foregroundStart content state so the app can call Activity.request() directly.
+  // Skip push-to-start here to avoid a race between the two creation paths that would
+  // produce duplicate activities (one of which enforceSingleActiveActivity would then end).
+  const trigger = String(options && options.trigger ? options.trigger : "");
+  if (trigger === "app_foreground") return;
   if (!pushToStartToken) return;
   if (hasPendingStart && pendingAgeMs < LIVE_ACTIVITY_PENDING_MAX_MS) {
     // A start push already succeeded; wait for activity push token from app and avoid duplicate starts.
@@ -4550,6 +4554,7 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
         await dispatchLiveActivityForUser(user, presentation, nowMs, {
           forceDispatch,
           preserveExistingOnEmpty,
+          trigger: String(options && options.trigger ? options.trigger : ""),
         });
       } catch (userError) {
         console.warn(

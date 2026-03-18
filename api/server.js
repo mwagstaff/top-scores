@@ -6611,6 +6611,21 @@ function matchDetailsHasStaleInProgressStatus(payload, nowMs = Date.now()) {
   return nowMs - updatedAtMs >= MATCH_DETAILS_STALE_IN_PROGRESS_MS;
 }
 
+function matchDetailsMissingKnockoutAggregate(payload, nowMs = Date.now()) {
+  if (!payload || typeof payload !== "object") return false;
+  // Only knockout rounds have a league_subcategory (e.g. "Last 16", "Quarter Final")
+  const subcategory = String(payload.league_subcategory || "").trim();
+  if (!subcategory) return false;
+  // Skip if aggregate is already populated
+  const aggHome = parseNumericScore(payload.aggregate_home_score);
+  const aggAway = parseNumericScore(payload.aggregate_away_score);
+  if (aggHome !== null && aggAway !== null) return false;
+  // Only apply within a window around kickoff (12h before to 2h after)
+  const kickoffMs = kickoffTimestampMs(payload);
+  if (!Number.isFinite(kickoffMs)) return false;
+  return nowMs >= kickoffMs - 12 * 60 * 60 * 1000 && nowMs <= kickoffMs + 2 * 60 * 60 * 1000;
+}
+
 function matchDetailsNeedsBackfill(payload, nowMs = Date.now()) {
   if (!payload || typeof payload !== "object") return false;
   if (!payload.details_url) return false;
@@ -6619,7 +6634,8 @@ function matchDetailsNeedsBackfill(payload, nowMs = Date.now()) {
     matchDetailsMissingTeamLineups(payload) ||
     matchDetailsHasMalformedCompetitionMetadata(payload) ||
     matchDetailsNeedsEnrichment(payload) ||
-    matchDetailsHasStaleInProgressStatus(payload, nowMs)
+    matchDetailsHasStaleInProgressStatus(payload, nowMs) ||
+    matchDetailsMissingKnockoutAggregate(payload, nowMs)
   );
 }
 
@@ -17625,7 +17641,9 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
               operationalMatches,
               nowMs
             );
-            const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs);
+            const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs, {
+              allowAllUpcoming: true,
+            });
             if (presentation && presentation.mode) {
               const contentState = hooks.buildLiveActivityContentState(
                 presentation.mode,
@@ -17634,39 +17652,6 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
                 nowMs,
                 presentation.fantasyCurrentScore
               );
-
-              // Before telling the client to start a new foreground activity, end any
-              // existing activity push token for this device. This prevents the device
-              // from briefly showing two live activity widgets simultaneously (the old
-              // one lingering while the new one is created).
-              const liveActivityState =
-                record.liveActivity && typeof record.liveActivity === "object"
-                  ? record.liveActivity
-                  : {};
-              const existingActivityPushToken = normalizeLiveActivityToken(
-                liveActivityState.currentActivityPushToken
-              );
-              if (existingActivityPushToken) {
-                const endTimestamp = Math.floor(nowMs / 1000);
-                try {
-                  await sendLiveActivityPush({
-                    token: existingActivityPushToken,
-                    event: "end",
-                    contentState: {
-                      mode: "ended",
-                      generatedAtEpochSeconds: endTimestamp,
-                      delayMinutes: 0,
-                      delayLabel: null,
-                      fantasyCurrentScore: null,
-                      matches: [],
-                    },
-                    dismissalDate: endTimestamp,
-                    isDevelopmentBuild: Boolean(record.isDevelopmentBuild),
-                  });
-                } catch (_endErr) {
-                  // Non-fatal — proceed with foreground start regardless
-                }
-              }
 
               foregroundStart = { contentState };
             }

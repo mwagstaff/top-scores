@@ -1552,7 +1552,7 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   }
 
   const aggregate = primaryMatchNode
-    ? extractAggregateFromBbcNode($primaryScope, $)
+    ? (extractAggregateFromBbcNode($primaryScope, $) || extractAggregateFromDocument($))
     : extractAggregateFromDocument($);
 
   if (
