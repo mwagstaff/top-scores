@@ -6528,6 +6528,31 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
   }
 
   merged.in_progress = isInProgressMatchStatus(merged.score_status);
+
+  // For knockout second legs, BBC shows only the first-leg aggregate (e.g. "(Agg 1-1)") before
+  // the match starts, then switches to the running total (e.g. "(Agg 3-2)") during play.
+  // Capture the first-leg result once when we first see an aggregate on a pre-kickoff match
+  // so the match monitor can compute a real-time aggregate (first_leg + current_score) in
+  // notifications rather than relying on the BBC-cached running total, which can lag goals.
+  const existingFirstLegHome =
+    existing && existing.first_leg_home_score != null ? existing.first_leg_home_score : null;
+  if (existingFirstLegHome !== null) {
+    // Already captured — preserve it regardless of later updates
+    merged.first_leg_home_score = existingFirstLegHome;
+    merged.first_leg_away_score = existing.first_leg_away_score;
+  } else if (
+    !merged.in_progress &&
+    !isFinishedMatchStatus(merged.score_status) &&
+    merged.home_score === null &&
+    merged.away_score === null &&
+    merged.aggregate_home_score !== null &&
+    merged.aggregate_away_score !== null
+  ) {
+    // Pre-kickoff: the aggregate IS the first-leg result — capture it now
+    merged.first_leg_home_score = merged.aggregate_home_score;
+    merged.first_leg_away_score = merged.aggregate_away_score;
+  }
+
   return merged;
 }
 
@@ -17641,9 +17666,7 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
               operationalMatches,
               nowMs
             );
-            const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs, {
-              allowAllUpcoming: true,
-            });
+            const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs);
             if (presentation && presentation.mode) {
               const contentState = hooks.buildLiveActivityContentState(
                 presentation.mode,

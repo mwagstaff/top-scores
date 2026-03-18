@@ -1731,6 +1731,23 @@ function aggregateScoreSuffix(match, homeScore, awayScore) {
   if (aggregateHomeScore === 0 && aggregateAwayScore === 0) {
     return "";
   }
+  // BBC updates its reported aggregate to the running total as goals are scored, but it
+  // lags behind the live score by at least one scrape cycle. If the server captured the
+  // first-leg result separately (before the match started), compute the real-time aggregate
+  // as first_leg + current_score so goal notifications always show the correct running total.
+  const firstLegHome = toNumericScore(match && match.first_leg_home_score);
+  const firstLegAway = toNumericScore(match && match.first_leg_away_score);
+  if (
+    Number.isFinite(firstLegHome) &&
+    Number.isFinite(firstLegAway) &&
+    Number.isFinite(homeScore) &&
+    Number.isFinite(awayScore)
+  ) {
+    const realTimeAggHome = firstLegHome + homeScore;
+    const realTimeAggAway = firstLegAway + awayScore;
+    if (realTimeAggHome === 0 && realTimeAggAway === 0) return "";
+    return ` (agg: ${realTimeAggHome}-${realTimeAggAway})`;
+  }
   return ` (agg: ${aggregateHomeScore}-${aggregateAwayScore})`;
 }
 
@@ -4291,7 +4308,6 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
   const delayMinutes = liveActivityDelayMinutesFromPreferences(prefs);
   const fantasyCurrentScore = fantasyCurrentScoreForUser(user);
-  const allowAllUpcoming = Boolean(options && options.allowAllUpcoming);
   const eligible = [];
 
   for (const entry of entries) {
@@ -4417,7 +4433,9 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
 
     if (Number.isFinite(kickoffMs)) {
       const diff = kickoffMs - nowMs;
-      if (diff > 0 && diff <= UPCOMING_MONITOR_WINDOW_MS) {
+      if (diff > 0) {
+        // Show all today's upcoming matches regardless of how far away they are.
+        // Entries are already filtered to today's date by filterCanonicalLiveActivityMatchesForUser.
         upcomingMatches.push(
           sanitizeAggregateForLiveActivity(
             sanitizePreKickoffScoresForLiveActivity(currentMatch, nowMs, "presentation_upcoming")
@@ -4438,12 +4456,6 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
               nowMs,
               "presentation_recent_kickoff"
             )
-          )
-        );
-      } else if (allowAllUpcoming && diff > 0) {
-        upcomingMatches.push(
-          sanitizeAggregateForLiveActivity(
-            sanitizePreKickoffScoresForLiveActivity(currentMatch, nowMs, "presentation_all_upcoming")
           )
         );
       }
@@ -4545,11 +4557,7 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
       if (!hasStartToken && !hasActivityToken) continue;
 
       const entries = buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatches, nowMs);
-      const presentation = buildLiveActivityPresentationForUser(user, entries, nowMs, {
-        allowAllUpcoming:
-          Boolean(options && options.forceDispatch) &&
-          String(options && options.trigger ? options.trigger : "") === "app_foreground",
-      });
+      const presentation = buildLiveActivityPresentationForUser(user, entries, nowMs);
       try {
         await dispatchLiveActivityForUser(user, presentation, nowMs, {
           forceDispatch,
