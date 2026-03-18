@@ -2258,7 +2258,7 @@ private struct SingleUpcomingMatchView: View {
                 TeamNamesWithAggregateRow(
                     homeTeam: match.homeTeam,
                     awayTeam: match.awayTeam,
-                    aggregateInfo: "Kick-off"
+                    aggregateInfo: aggregateText ?? "Kick-off"
                 )
             }
         }
@@ -2271,6 +2271,12 @@ private struct SingleUpcomingMatchView: View {
     private var primaryChannel: String? {
         let primary = match.tvChannels.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         return primary?.isEmpty == false ? primary : nil
+    }
+
+    private var aggregateText: String? {
+        guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
+        guard home != 0 || away != 0 else { return nil }
+        return "Agg: \(home)-\(away)"
     }
 }
 
@@ -2298,7 +2304,7 @@ private struct SingleLiveMatchView: View {
                 TeamNamesWithAggregateRow(
                     homeTeam: match.homeTeam,
                     awayTeam: match.awayTeam,
-                    aggregateInfo: " "
+                    aggregateInfo: aggregateText ?? " "
                 )
             }
         }
@@ -2307,6 +2313,12 @@ private struct SingleLiveMatchView: View {
     private var primaryChannel: String? {
         let primary = match.tvChannels.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         return primary?.isEmpty == false ? primary : nil
+    }
+
+    private var aggregateText: String? {
+        guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
+        guard home != 0 || away != 0 else { return nil }
+        return "Agg: \(home)-\(away)"
     }
 }
 
@@ -2334,7 +2346,7 @@ private struct SingleFinishedMatchView: View {
                 TeamNamesWithAggregateRow(
                     homeTeam: match.homeTeam,
                     awayTeam: match.awayTeam,
-                    aggregateInfo: " "
+                    aggregateInfo: aggregateText ?? " "
                 )
             }
         }
@@ -2343,6 +2355,12 @@ private struct SingleFinishedMatchView: View {
     private var primaryChannel: String? {
         let primary = match.tvChannels.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         return primary?.isEmpty == false ? primary : nil
+    }
+
+    private var aggregateText: String? {
+        guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
+        guard home != 0 || away != 0 else { return nil }
+        return "Agg: \(home)-\(away)"
     }
 }
 

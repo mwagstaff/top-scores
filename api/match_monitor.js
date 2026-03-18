@@ -4494,11 +4494,15 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     };
   }
 
+  // For live/finished modes, append today's upcoming matches after the live/finished entries
+  // so the widget always shows the full picture of today's action.
+  const matchesForMode = mode.includes("upcoming")
+    ? (sortedRecentKickoff.length > 0 ? sortedRecentKickoff : sortedUpcoming)
+    : [...sortedLiveAndFinished, ...sortedUpcoming].slice(0, LIVE_ACTIVITY_MAX_MATCHES);
+
   return {
     mode,
-    matches: mode.includes("upcoming")
-      ? (sortedRecentKickoff.length > 0 ? sortedRecentKickoff : sortedUpcoming)
-      : sortedLiveAndFinished,
+    matches: matchesForMode,
     delayMinutes,
     fantasyCurrentScore,
   };
