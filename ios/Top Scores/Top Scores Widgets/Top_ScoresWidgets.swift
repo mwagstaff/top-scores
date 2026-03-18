@@ -2694,7 +2694,7 @@ private struct MultiMatchEntryCell: View {
                             .frame(width: 20, alignment: .center)
 
                         liveScoreView
-                            .frame(width: 38, alignment: .center)
+                            .frame(width: scoreSlotWidth, alignment: .center)
 
                         LiveActivityTeamLogo(teamName: match.awayTeam, size: 20)
                             .frame(width: 20, alignment: .center)
@@ -2721,7 +2721,7 @@ private struct MultiMatchEntryCell: View {
                             .frame(width: 20, alignment: .center)
 
                         scoreView
-                            .frame(width: 32, alignment: .center)
+                            .frame(width: scoreSlotWidth, alignment: .center)
 
                         LiveActivityTeamLogo(teamName: match.awayTeam, size: 20)
                             .frame(width: 20, alignment: .center)
@@ -2742,26 +2742,46 @@ private struct MultiMatchEntryCell: View {
 
     @ViewBuilder
     private var liveScoreView: some View {
-        Text(match.hasScore ? scoreCoreText : "vs")
-            .font(.callout.monospacedDigit().weight(.bold))
-            .foregroundStyle(.white.opacity(scoreOpacity))
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
+        if match.hasScore {
+            scoreTextView
+        } else {
+            Text("vs")
+                .font(.callout.monospacedDigit().weight(.bold))
+                .foregroundStyle(.white.opacity(scoreOpacity))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
     }
 
     @ViewBuilder
     private var scoreView: some View {
         if match.hasScore {
-            HStack(spacing: 2) {
-                Text(scoreCoreText)
-                    .font(.callout.monospacedDigit().weight(.bold))
-                    .foregroundStyle(.white.opacity(scoreOpacity))
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
+            scoreTextView
         } else {
             LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: 15)
         }
+    }
+
+    private var scoreTextView: some View {
+        HStack(alignment: .firstTextBaseline, spacing: showsAggregateScore ? 2 : 0) {
+            if let aggregateHomeText {
+                Text(aggregateHomeText)
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+            }
+
+            Text(scoreCoreText)
+                .font(scoreFont)
+                .foregroundStyle(.white.opacity(scoreOpacity))
+
+            if let aggregateAwayText {
+                Text(aggregateAwayText)
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
     }
 
     private var scoreCoreText: String {
@@ -2769,6 +2789,16 @@ private struct MultiMatchEntryCell: View {
             return "\(home) - \(away)"
         }
         return "vs"
+    }
+
+    private var aggregateHomeText: String? {
+        guard showsAggregateScore, let home = match.aggregateHomeScore else { return nil }
+        return "(\(home))"
+    }
+
+    private var aggregateAwayText: String? {
+        guard showsAggregateScore, let away = match.aggregateAwayScore else { return nil }
+        return "(\(away))"
     }
 
     private var timeText: String {
@@ -2795,6 +2825,25 @@ private struct MultiMatchEntryCell: View {
 
     private var showsChannelLogo: Bool {
         match.isInProgress && !primaryChannelName.isEmpty
+    }
+
+    private var showsAggregateScore: Bool {
+        guard match.hasScore,
+              let home = match.aggregateHomeScore,
+              let away = match.aggregateAwayScore else {
+            return false
+        }
+        return home != 0 || away != 0
+    }
+
+    private var scoreSlotWidth: CGFloat {
+        showsAggregateScore ? 72 : (live ? 38 : 32)
+    }
+
+    private var scoreFont: Font {
+        showsAggregateScore
+            ? .caption.monospacedDigit().weight(.bold)
+            : .callout.monospacedDigit().weight(.bold)
     }
 
     private var scoreOpacity: Double {
