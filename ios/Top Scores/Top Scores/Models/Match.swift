@@ -709,8 +709,11 @@ struct Match: Identifiable, Codable, Hashable {
             return nil
         }
 
-        let winner = aggregateHomeScore > aggregateAwayScore ? homeTeam : awayTeam
-        return "\(winner) win \(aggregateHomeScore) - \(aggregateAwayScore) on aggregate"
+        let homeWins = aggregateHomeScore > aggregateAwayScore
+        let winner = homeWins ? homeTeam : awayTeam
+        let winnerScore = homeWins ? aggregateHomeScore : aggregateAwayScore
+        let loserScore = homeWins ? aggregateAwayScore : aggregateHomeScore
+        return "\(winner) win \(winnerScore) - \(loserScore) on aggregate"
     }
 
     private static func isUpcomingScorelessFixture(

@@ -231,7 +231,12 @@ final class LiveActivitySyncService {
                 }
             }
         }
-        await requestLiveActivityReconcile()
+        let reconcileResponse = await requestLiveActivityReconcile()
+        // If no active activity and the server has live content, start one directly
+        // so push-to-start (which requires background) is not the only path.
+        if activeActivities.isEmpty, let contentState = reconcileResponse {
+            await startForegroundActivityIfNeeded(contentState: contentState)
+        }
         await fetchServerDebugState()
     }
 
@@ -297,15 +302,47 @@ final class LiveActivitySyncService {
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "activity-ended")
     }
 
-    private func requestLiveActivityReconcile() async {
-        guard let endpoint = endpointURL(path: "live-activity/reconcile") else { return }
+    @available(iOS 16.1, *)
+    private func requestLiveActivityReconcile() async -> TopScoresLiveActivityAttributes.ContentState? {
+        guard let endpoint = endpointURL(path: "live-activity/reconcile") else { return nil }
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
             "force": true,
             "trigger": "app_foreground"
         ]
-        await sendJSONRequest(url: endpoint, payload: payload, logContext: "live-activity-reconcile")
+        guard let responseData = await sendJSONRequestReturningData(url: endpoint, payload: payload, logContext: "live-activity-reconcile") else {
+            return nil
+        }
+        guard
+            let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+            let foregroundStart = json["foregroundStart"] as? [String: Any],
+            let rawContentState = foregroundStart["contentState"]
+        else { return nil }
+        guard let contentStateData = try? JSONSerialization.data(withJSONObject: rawContentState),
+              let contentState = try? JSONDecoder().decode(TopScoresLiveActivityAttributes.ContentState.self, from: contentStateData)
+        else { return nil }
+        return contentState
+    }
+
+    @available(iOS 16.1, *)
+    private func startForegroundActivityIfNeeded(contentState: TopScoresLiveActivityAttributes.ContentState) async {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            NSLog("[LiveActivitySync] Foreground start skipped: activities not enabled")
+            return
+        }
+        do {
+            let attributes = TopScoresLiveActivityAttributes(appScope: "top-scores")
+            let activity = try Activity.request(
+                attributes: attributes,
+                content: .init(state: contentState, staleDate: nil)
+            )
+            NSLog("[LiveActivitySync] Foreground start succeeded activityId=%@", activity.id)
+            // Register immediately — don't rely solely on activityUpdatesTask picking this up
+            beginObserving(activity)
+        } catch {
+            NSLog("[LiveActivitySync] Foreground start failed: %@", error.localizedDescription)
+        }
     }
 
     private func fetchServerDebugState() async {
@@ -356,6 +393,33 @@ final class LiveActivitySyncService {
         return baseURL.appendingPathComponent(path)
     }
 
+    private func sendJSONRequestReturningData(url: URL, payload: [String: Any], logContext: String) async -> Data? {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        DeviceIdentity.applyHeader(to: &request)
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                NSLog("[LiveActivitySync] %@ failed: invalid response type", logContext)
+                return nil
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                let body = String(data: data, encoding: .utf8) ?? "No response body"
+                NSLog("[LiveActivitySync] %@ failed: HTTP %d - %@", logContext, httpResponse.statusCode, body)
+                return nil
+            }
+            NSLog("[LiveActivitySync] %@ succeeded: HTTP %d", logContext, httpResponse.statusCode)
+            return data
+        } catch {
+            NSLog("[LiveActivitySync] %@ failed: %@", logContext, error.localizedDescription)
+            return nil
+        }
+    }
+
     private func sendJSONRequest(url: URL, payload: [String: Any], logContext: String) async {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -398,7 +462,8 @@ final class LiveActivitySyncService {
             } else {
                 score = "nil"
             }
-            return "\(match.homeTeam) v \(match.awayTeam) \(score) \(match.matchTime ?? "nil")"
+            let channels = match.tvChannels.isEmpty ? "noCh" : match.tvChannels.joined(separator: ",")
+            return "\(match.homeTeam) v \(match.awayTeam) \(score) \(match.matchTime ?? "nil") ch=[\(channels)]"
         }.joined(separator: " | ")
         let fantasyScoreSummary = state.fantasyCurrentScore.map { " ff=\($0)" } ?? ""
         return "mode=\(state.mode) generatedAt=\(state.generatedAtEpochSeconds) delay=\(state.delayMinutes)\(fantasyScoreSummary) matches=\(state.matches.count) [\(matches)]"
@@ -418,7 +483,9 @@ final class LiveActivitySyncService {
             let homeScore = String(describing: match["homeScore"] ?? "nil")
             let awayScore = String(describing: match["awayScore"] ?? "nil")
             let matchTime = String(describing: match["matchTime"] ?? "nil")
-            return "\(homeTeam) v \(awayTeam) \(homeScore)-\(awayScore) \(matchTime)"
+            let channels = (match["tvChannels"] as? [String] ?? [])
+            let channelStr = channels.isEmpty ? "noCh" : channels.joined(separator: ",")
+            return "\(homeTeam) v \(awayTeam) \(homeScore)-\(awayScore) \(matchTime) ch=[\(channelStr)]"
         }.joined(separator: " | ")
         let fantasyScore = String(describing: serverPresentation?["fantasyCurrentScore"] ?? "nil")
         return "activityId=\(currentActivityId) tokenUpdatedAt=\(currentActivityTokenUpdatedAt) lastDispatchAt=\(lastDispatchAt) serverMode=\(mode) delay=\(delayMinutes) ff=\(fantasyScore) matches=[\(matches)]"

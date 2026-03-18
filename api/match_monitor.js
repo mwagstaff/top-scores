@@ -2794,6 +2794,16 @@ function canonicalLiveActivityChannelName(channelName) {
   if (normalizedChannel.includes("channel4")) {
     return "Channel 4";
   }
+  // Filter out placeholder/unknown strings that aren't real channels
+  if (
+    normalizedChannel === "tbc" ||
+    normalizedChannel === "tbd" ||
+    normalizedChannel === "tba" ||
+    normalizedChannel === "tobeconfirmed" ||
+    normalizedChannel === "tobeannounced"
+  ) {
+    return null;
+  }
   return String(channelName || "").trim() || null;
 }
 
@@ -3249,7 +3259,9 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
     // Use fixture-level keys (time-insensitive) in addition to exact keys so that a canonical
     // match already seen via a monitored entry with a drifted kickoff time is not re-added.
     const dedupeKeys = liveActivityEntryDedupKeys({ matchId, match: canonicalMatch });
-    if (!matchId || dedupeKeys.some((key) => seenKeys.has(key))) return;
+    // Skip matches with no match_details_id — they cannot be live-monitored and will
+    // always contribute stale pre-kickoff data to the content state.
+    if (!matchId || !canonicalMatch.match_details_id || dedupeKeys.some((key) => seenKeys.has(key))) return;
 
     // Try exact-ID lookup first; fall back to time-insensitive fixture keys so that a monitored
     // entry started under a slightly different kickoff time is still merged into the canonical.

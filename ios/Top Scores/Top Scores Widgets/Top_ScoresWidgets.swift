@@ -1713,10 +1713,14 @@ private final class WidgetTvLogoResolver {
     }
 
     func image(for channelName: String, allowsFallback: Bool = true) -> UIImage? {
+        let normalizedRequest = Self.normalizedKey(channelName)
+        NSLog("[Widget][TvLogo] image(for:) channelName='\(channelName)' normalized='\(normalizedRequest)' lookupSize=\(normalizedLookup.count)")
+
         let cacheKey = "\(allowsFallback ? "fallback" : "strict")|\(channelName)"
         lock.lock()
         if let cached = cache[cacheKey] {
             lock.unlock()
+            NSLog("[Widget][TvLogo] image(for:) cache HIT for '\(channelName)'")
             return cached
         }
         lock.unlock()
@@ -1726,9 +1730,16 @@ private final class WidgetTvLogoResolver {
         } else {
             resolveExplicitURL(for: channelName)
         }
+
+        if let url {
+            NSLog("[Widget][TvLogo] image(for:) resolved URL = \(url.path)")
+        } else {
+            NSLog("[Widget][TvLogo] image(for:) resolved URL = nil (returning nil image) for '\(channelName)'")
+        }
         guard let url else { return nil }
 
         let image = UIImage(contentsOfFile: url.path)
+        NSLog("[Widget][TvLogo] image(for:) UIImage load \(image != nil ? "SUCCESS" : "FAILED") from \(url.lastPathComponent)")
         if let image {
             lock.lock()
             cache[cacheKey] = image
@@ -1739,19 +1750,97 @@ private final class WidgetTvLogoResolver {
     }
 
     private func loadLogos() {
-        let urls = logoBundles().flatMap { bundle in
-            var resolved = bundle.urls(forResourcesWithExtension: "png", subdirectory: "tv-logos") ?? []
-            if resolved.isEmpty {
-                resolved = bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []
+        NSLog("[Widget][TvLogo] ── loadLogos START ──")
+        NSLog("[Widget][TvLogo] Bundle.main.bundleURL = \(Bundle.main.bundleURL)")
+        NSLog("[Widget][TvLogo] Bundle.main.bundlePath = \(Bundle.main.bundlePath)")
+        NSLog("[Widget][TvLogo] Bundle.main.bundleURL.pathExtension = \(Bundle.main.bundleURL.pathExtension)")
+        NSLog("[Widget][TvLogo] Bundle.allBundles.count = \(Bundle.allBundles.count)")
+        NSLog("[Widget][TvLogo] Bundle.allFrameworks.count = \(Bundle.allFrameworks.count)")
+
+        let bundles = logoBundles()
+        NSLog("[Widget][TvLogo] logoBundles() returned \(bundles.count) bundle(s)")
+
+        var allUrls: [URL] = []
+        for (i, bundle) in bundles.enumerated() {
+            let bundlePath = bundle.bundlePath
+            NSLog("[Widget][TvLogo] Bundle[\(i)] path = \(bundlePath)")
+
+            // Check tv-logos subdirectory existence via FileManager
+            let tvLogosDir = URL(fileURLWithPath: bundlePath).appendingPathComponent("tv-logos")
+            let tvLogosDirExists = FileManager.default.fileExists(atPath: tvLogosDir.path)
+            NSLog("[Widget][TvLogo] Bundle[\(i)] tv-logos dir exists (FileManager) = \(tvLogosDirExists)")
+
+            // Try Bundle API — subdirectory
+            let fromSubdir = bundle.urls(forResourcesWithExtension: "png", subdirectory: "tv-logos") ?? []
+            NSLog("[Widget][TvLogo] Bundle[\(i)] Bundle API tv-logos/png count = \(fromSubdir.count)")
+
+            // Try Bundle API — root
+            let fromRoot = bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []
+            NSLog("[Widget][TvLogo] Bundle[\(i)] Bundle API root/png count = \(fromRoot.count)")
+            allUrls.append(contentsOf: fromSubdir)
+            allUrls.append(contentsOf: fromRoot)
+
+            // FileManager — tv-logos subdirectory
+            if tvLogosDirExists {
+                if let fmSubdir = try? FileManager.default.contentsOfDirectory(at: tvLogosDir, includingPropertiesForKeys: nil) {
+                    let pngs = fmSubdir.filter { $0.pathExtension.lowercased() == "png" }
+                    NSLog("[Widget][TvLogo] Bundle[\(i)] FileManager tv-logos/png count = \(pngs.count)")
+                    if !pngs.isEmpty {
+                        NSLog("[Widget][TvLogo] Bundle[\(i)] FileManager tv-logos first 5: \(pngs.prefix(5).map { $0.lastPathComponent })")
+                    }
+                    allUrls.append(contentsOf: pngs)
+                } else {
+                    NSLog("[Widget][TvLogo] Bundle[\(i)] FileManager tv-logos enumeration FAILED")
+                }
+            } else {
+                // Log what IS in the bundle root to help diagnose where files ended up
+                let bundleDir = URL(fileURLWithPath: bundlePath)
+                if let rootContents = try? FileManager.default.contentsOfDirectory(at: bundleDir, includingPropertiesForKeys: nil) {
+                    let names = rootContents.prefix(20).map { $0.lastPathComponent }
+                    NSLog("[Widget][TvLogo] Bundle[\(i)] root contents (first 20): \(names)")
+                    let rootPngs = rootContents.filter { $0.pathExtension.lowercased() == "png" }
+                    NSLog("[Widget][TvLogo] Bundle[\(i)] FileManager root/png count = \(rootPngs.count)")
+                    allUrls.append(contentsOf: rootPngs)
+                } else {
+                    NSLog("[Widget][TvLogo] Bundle[\(i)] root enumeration FAILED")
+                }
             }
-            return resolved
         }
-        for url in urls {
+
+        NSLog("[Widget][TvLogo] Total URLs collected before dedup: \(allUrls.count)")
+
+        for url in allUrls {
             let fileName = url.deletingPathExtension().lastPathComponent
+            guard !fileName.isEmpty else { continue }
             let normalized = Self.normalizedKey(fileName)
+            guard !normalized.isEmpty else { continue }
             normalizedLookup[normalized] = normalizedLookup[normalized] ?? url
         }
 
+        NSLog("[Widget][TvLogo] normalizedLookup count after bundle scan = \(normalizedLookup.count)")
+
+        // Last-resort: explicit per-resource lookup via Bundle.main.path(forResource:ofType:)
+        // This is the most direct Bundle API and works even when enumeration-based approaches fail.
+        let knownLogoNames = ["amazon", "bbc", "sky", "itv", "tnt", "apple", "channel 4", "_noLogo"]
+        for name in knownLogoNames {
+            let key = Self.normalizedKey(name)
+            guard normalizedLookup[key] == nil else { continue }
+            if let path = Bundle.main.path(forResource: name, ofType: "png") {
+                let url = URL(fileURLWithPath: path)
+                normalizedLookup[key] = url
+                NSLog("[Widget][TvLogo] explicit path(forResource:) FOUND '\(name)' at \(path)")
+            } else {
+                NSLog("[Widget][TvLogo] explicit path(forResource:) MISSING '\(name)'")
+            }
+        }
+
+        NSLog("[Widget][TvLogo] normalizedLookup count = \(normalizedLookup.count)")
+        // Log whether specific keys we care about are present
+        let keysToCheck = ["amazon", "amazonprime", "primevideo", "sky", "bbc", "itv"]
+        for key in keysToCheck {
+            NSLog("[Widget][TvLogo] key '\(key)' present = \(normalizedLookup[key] != nil)")
+        }
+        NSLog("[Widget][TvLogo] ── loadLogos END ──")
     }
 
     private func logoBundles() -> [Bundle] {
@@ -1766,17 +1855,30 @@ private final class WidgetTvLogoResolver {
         }
 
         let mainBundleURL = Bundle.main.bundleURL
+        NSLog("[Widget][TvLogo] logoBundles: mainBundleURL.pathExtension = '\(mainBundleURL.pathExtension)'")
         if mainBundleURL.pathExtension == "appex" {
-            let containingAppURL = mainBundleURL.deletingLastPathComponent().deletingLastPathComponent()
+            let plugInsDir = mainBundleURL.deletingLastPathComponent()
+            let containingAppURL = plugInsDir.deletingLastPathComponent()
+            NSLog("[Widget][TvLogo] logoBundles: PlugIns dir = \(plugInsDir.path)")
+            NSLog("[Widget][TvLogo] logoBundles: Derived containing app URL = \(containingAppURL.path)")
+            let containingAppExists = FileManager.default.fileExists(atPath: containingAppURL.path)
+            NSLog("[Widget][TvLogo] logoBundles: Containing app URL exists = \(containingAppExists)")
             if let containingAppBundle = Bundle(url: containingAppURL) {
                 let url = containingAppBundle.bundleURL
+                let alreadySeen = seenURLs.contains(url)
+                NSLog("[Widget][TvLogo] logoBundles: Containing app bundle loaded, alreadySeen = \(alreadySeen)")
                 if !seenURLs.contains(url) {
                     seenURLs.insert(url)
                     output.append(containingAppBundle)
                 }
+            } else {
+                NSLog("[Widget][TvLogo] logoBundles: Bundle(url:) FAILED for containing app URL")
             }
+        } else {
+            NSLog("[Widget][TvLogo] logoBundles: NOT an .appex bundle — skipping containing app lookup")
         }
 
+        NSLog("[Widget][TvLogo] logoBundles: returning \(output.count) bundles")
         return output
     }
 
@@ -2019,9 +2121,15 @@ private struct TopScoresLiveActivityLockScreenView: View {
                             }
                             Spacer(minLength: 0)
                             if let fantasyScoreText {
-                                Text(fantasyScoreText)
-                                    .lineLimit(1)
-                                    .padding(.trailing, 5)
+                                HStack(spacing: 3) {
+                                    Image("FantasyPremierLeagueLion")
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 12, height: 12)
+                                    Text(fantasyScoreText)
+                                        .lineLimit(1)
+                                }
+                                .padding(.trailing, 5)
                             }
                         }
                     }
@@ -2049,7 +2157,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
 
     private var fantasyScoreText: String? {
         guard let fantasyCurrentScore = state.fantasyCurrentScore else { return nil }
-        return "FF: \(fantasyCurrentScore)"
+        return "\(fantasyCurrentScore)"
     }
 
     private var topScoresBlue: Color {

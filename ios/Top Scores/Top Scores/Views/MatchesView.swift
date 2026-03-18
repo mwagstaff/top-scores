@@ -171,6 +171,7 @@ struct MatchesView: View {
         }
         .onAppear {
             guard isSelected else { return }
+            LiveActivitySyncService.shared.reconcileOnForeground()
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             matchesStore.configure(with: snapshot, mode: mode)
             let days = matchesStore.groupedMatches
@@ -182,6 +183,7 @@ struct MatchesView: View {
         }
         .onChange(of: isSelected) { _, selected in
             guard selected else { return }
+            LiveActivitySyncService.shared.reconcileOnForeground()
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             matchesStore.configure(with: snapshot, mode: mode)
             let days = matchesStore.groupedMatches

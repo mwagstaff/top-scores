@@ -14166,7 +14166,7 @@ app.get(`${API_PREFIX}/fantasy/transfers/recommendations/:elementId`, (req, res)
   }
 });
 
-app.post(`${API_PREFIX}/fantasy/assistant-manager/:entryId/sync`, (req, res) => {
+app.post(`${API_PREFIX}/fantasy/assistant-manager/:entryId/sync`, async (req, res) => {
   setFantasyBootstrapHeaders(res);
 
   const entryID = parseFiniteNumber(req.params.entryId, 0);
@@ -14178,12 +14178,14 @@ app.post(`${API_PREFIX}/fantasy/assistant-manager/:entryId/sync`, (req, res) => 
   }
 
   touchFantasyAssistantEntry(entryID);
-  void refreshFantasyAssistantManagerEntry(entryID, { trigger: "sync" }).catch((error) => {
+  try {
+    await refreshFantasyAssistantManagerEntry(entryID, { trigger: "sync" });
+  } catch (error) {
     console.warn(
       `[FantasyAssistantManager] sync failed entry_id=${entryID}:`,
       error && error.message ? error.message : error
     );
-  });
+  }
 
   const response = buildFantasyAssistantManagerResponse(entryID);
   res.status(response.ready ? 200 : 202).json(response);
@@ -17594,11 +17596,93 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
     });
+
+    // Build foreground-start content state so the app can call Activity.request()
+    // when it is in the foreground and push-to-start can't reach it.
+    let foregroundStart = null;
+    if (userDeviceToken) {
+      try {
+        const record = await getUserPreferences(userDeviceToken);
+        if (record) {
+          const hooks = matchMonitor.__testHooks;
+          if (
+            hooks &&
+            typeof hooks.monitoredMatchStatesSnapshot === "function" &&
+            typeof hooks.buildLiveActivityEntriesForUser === "function" &&
+            typeof hooks.buildLiveActivityPresentationForUser === "function" &&
+            typeof hooks.buildLiveActivityContentState === "function"
+          ) {
+            const nowMs = Date.now();
+            const operationalDataset = await getOperationalDataset("merged_matches");
+            const operationalMatches =
+              operationalDataset && Array.isArray(operationalDataset.payload)
+                ? operationalDataset.payload
+                : [];
+            const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
+            const entries = hooks.buildLiveActivityEntriesForUser(
+              record,
+              monitoredEntries,
+              operationalMatches,
+              nowMs
+            );
+            const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs);
+            if (presentation && presentation.mode) {
+              const contentState = hooks.buildLiveActivityContentState(
+                presentation.mode,
+                presentation.matches,
+                presentation.delayMinutes,
+                nowMs,
+                presentation.fantasyCurrentScore
+              );
+
+              // Before telling the client to start a new foreground activity, end any
+              // existing activity push token for this device. This prevents the device
+              // from briefly showing two live activity widgets simultaneously (the old
+              // one lingering while the new one is created).
+              const liveActivityState =
+                record.liveActivity && typeof record.liveActivity === "object"
+                  ? record.liveActivity
+                  : {};
+              const existingActivityPushToken = normalizeLiveActivityToken(
+                liveActivityState.currentActivityPushToken
+              );
+              if (existingActivityPushToken) {
+                const endTimestamp = Math.floor(nowMs / 1000);
+                try {
+                  await sendLiveActivityPush({
+                    token: existingActivityPushToken,
+                    event: "end",
+                    contentState: {
+                      mode: "ended",
+                      generatedAtEpochSeconds: endTimestamp,
+                      delayMinutes: 0,
+                      delayLabel: null,
+                      fantasyCurrentScore: null,
+                      matches: [],
+                    },
+                    dismissalDate: endTimestamp,
+                    isDevelopmentBuild: Boolean(record.isDevelopmentBuild),
+                  });
+                } catch (_endErr) {
+                  // Non-fatal — proceed with foreground start regardless
+                }
+              }
+
+              foregroundStart = { contentState };
+            }
+          }
+        }
+      } catch (_err) {
+        // Non-fatal: foreground start is best-effort
+      }
+    }
+
     res.status(200).json({
       success: true,
       userDeviceToken: userDeviceToken || null,
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
+      foregroundStart,
       ...result,
     });
   } catch (error) {
