@@ -3810,8 +3810,28 @@ function buildLiveActivityContentState(
     awayTeam: String(match.away_team || ""),
     homeScore: toNumericScore(match.home_score),
     awayScore: toNumericScore(match.away_score),
-    aggregateHomeScore: toNumericScore(match.aggregate_home_score),
-    aggregateAwayScore: toNumericScore(match.aggregate_away_score),
+    aggregateHomeScore: (() => {
+      const firstLegHome = toNumericScore(match.first_leg_home_score);
+      const firstLegAway = toNumericScore(match.first_leg_away_score);
+      const homeScore = toNumericScore(match.home_score);
+      const awayScore = toNumericScore(match.away_score);
+      if (Number.isFinite(firstLegHome) && Number.isFinite(firstLegAway) &&
+          Number.isFinite(homeScore) && Number.isFinite(awayScore)) {
+        return firstLegHome + homeScore;
+      }
+      return toNumericScore(match.aggregate_home_score);
+    })(),
+    aggregateAwayScore: (() => {
+      const firstLegHome = toNumericScore(match.first_leg_home_score);
+      const firstLegAway = toNumericScore(match.first_leg_away_score);
+      const homeScore = toNumericScore(match.home_score);
+      const awayScore = toNumericScore(match.away_score);
+      if (Number.isFinite(firstLegHome) && Number.isFinite(firstLegAway) &&
+          Number.isFinite(homeScore) && Number.isFinite(awayScore)) {
+        return firstLegAway + awayScore;
+      }
+      return toNumericScore(match.aggregate_away_score);
+    })(),
     matchTime: displayStatusToken(match.score_status),
     homeTeamScore: toNumericScore(match.home_team_score),
     awayTeamScore: toNumericScore(match.away_team_score),
