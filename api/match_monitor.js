@@ -3682,15 +3682,40 @@ function liveActivityModeForMatches(
   return null;
 }
 
+const TWO_LEG_KNOCKOUT_SUBCATEGORY_PATTERNS = [
+  /\bLast\s+\d+\b/i,
+  /\bRound\s+of\s+\d+\b/i,
+  /\bQuarter[- ]Finals?\b/i,
+  /\bSemi[- ]Finals?\b/i,
+  /\bPlay-?Offs?\b/i,
+  /\bQualifying\b/i,
+  /\bQualification\b/i,
+  /\bPreliminary\s+Round\b/i,
+  /\b(?:First|Second|1st|2nd)\s+Leg\b/i,
+];
+
+function isLikelyTwoLegKnockoutSubcategory(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return false;
+  return TWO_LEG_KNOCKOUT_SUBCATEGORY_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 function sanitizeAggregateForLiveActivity(match) {
   if (!match || typeof match !== "object") return match;
 
   const aggregateHomeScore = toNumericScore(match.aggregate_home_score);
   const aggregateAwayScore = toNumericScore(match.aggregate_away_score);
+  const firstLegHomeScore = toNumericScore(match.first_leg_home_score);
+  const firstLegAwayScore = toNumericScore(match.first_leg_away_score);
   if (!Number.isFinite(aggregateHomeScore) || !Number.isFinite(aggregateAwayScore)) {
     return match;
   }
-  if (aggregateHomeScore !== 0 || aggregateAwayScore !== 0) {
+  if (
+    aggregateHomeScore !== 0 ||
+    aggregateAwayScore !== 0 ||
+    (Number.isFinite(firstLegHomeScore) && Number.isFinite(firstLegAwayScore)) ||
+    isLikelyTwoLegKnockoutSubcategory(match.league_subcategory)
+  ) {
     return match;
   }
 
@@ -3699,6 +3724,35 @@ function sanitizeAggregateForLiveActivity(match) {
     aggregate_home_score: null,
     aggregate_away_score: null,
   };
+}
+
+function resolveLiveActivityAggregateScores(match) {
+  if (!match || typeof match !== "object") {
+    return { home: null, away: null };
+  }
+
+  const aggregateHomeScore = toNumericScore(match.aggregate_home_score);
+  const aggregateAwayScore = toNumericScore(match.aggregate_away_score);
+  if (Number.isFinite(aggregateHomeScore) && Number.isFinite(aggregateAwayScore)) {
+    return { home: aggregateHomeScore, away: aggregateAwayScore };
+  }
+
+  const firstLegHomeScore = toNumericScore(match.first_leg_home_score);
+  const firstLegAwayScore = toNumericScore(match.first_leg_away_score);
+  if (!Number.isFinite(firstLegHomeScore) || !Number.isFinite(firstLegAwayScore)) {
+    return { home: aggregateHomeScore, away: aggregateAwayScore };
+  }
+
+  const homeScore = toNumericScore(match.home_score);
+  const awayScore = toNumericScore(match.away_score);
+  if (Number.isFinite(homeScore) && Number.isFinite(awayScore)) {
+    return {
+      home: firstLegHomeScore + homeScore,
+      away: firstLegAwayScore + awayScore,
+    };
+  }
+
+  return { home: firstLegHomeScore, away: firstLegAwayScore };
 }
 
 function shouldSuppressPreKickoffScoresForLiveActivity(match, nowMs = Date.now()) {
@@ -3777,8 +3831,6 @@ function sanitizePreKickoffScoresForLiveActivity(match, nowMs = Date.now(), cont
     ...match,
     home_score: null,
     away_score: null,
-    aggregate_home_score: null,
-    aggregate_away_score: null,
     score_status: null,
   };
 }
@@ -3797,6 +3849,7 @@ function buildLiveActivityContentState(
     const match = mode.includes("upcoming")
       ? sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state")
       : rawMatch;
+    const aggregate = resolveLiveActivityAggregateScores(match);
     return {
     matchId: String(match.match_details_id || ""),
     date: String(match.date || ""),
@@ -3810,28 +3863,10 @@ function buildLiveActivityContentState(
     awayTeam: String(match.away_team || ""),
     homeScore: toNumericScore(match.home_score),
     awayScore: toNumericScore(match.away_score),
-    aggregateHomeScore: (() => {
-      const firstLegHome = toNumericScore(match.first_leg_home_score);
-      const firstLegAway = toNumericScore(match.first_leg_away_score);
-      const homeScore = toNumericScore(match.home_score);
-      const awayScore = toNumericScore(match.away_score);
-      if (Number.isFinite(firstLegHome) && Number.isFinite(firstLegAway) &&
-          Number.isFinite(homeScore) && Number.isFinite(awayScore)) {
-        return firstLegHome + homeScore;
-      }
-      return toNumericScore(match.aggregate_home_score);
-    })(),
-    aggregateAwayScore: (() => {
-      const firstLegHome = toNumericScore(match.first_leg_home_score);
-      const firstLegAway = toNumericScore(match.first_leg_away_score);
-      const homeScore = toNumericScore(match.home_score);
-      const awayScore = toNumericScore(match.away_score);
-      if (Number.isFinite(firstLegHome) && Number.isFinite(firstLegAway) &&
-          Number.isFinite(homeScore) && Number.isFinite(awayScore)) {
-        return firstLegAway + awayScore;
-      }
-      return toNumericScore(match.aggregate_away_score);
-    })(),
+    aggregateHomeScore: aggregate.home,
+    aggregateAwayScore: aggregate.away,
+    firstLegHomeScore: toNumericScore(match.first_leg_home_score),
+    firstLegAwayScore: toNumericScore(match.first_leg_away_score),
     matchTime: displayStatusToken(match.score_status),
     homeTeamScore: toNumericScore(match.home_team_score),
     awayTeamScore: toNumericScore(match.away_team_score),

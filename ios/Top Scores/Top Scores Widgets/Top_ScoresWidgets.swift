@@ -8,6 +8,28 @@ private enum WidgetAppGroupConfig {
     static let sharedMatchesFileName = "shared-matches.json"
 }
 
+private let likelyTwoLegKnockoutSubcategoryPatterns: [String] = [
+    #"(?i)\bLast\s+\d+\b"#,
+    #"(?i)\bRound\s+of\s+\d+\b"#,
+    #"(?i)\bQuarter[- ]Finals?\b"#,
+    #"(?i)\bSemi[- ]Finals?\b"#,
+    #"(?i)\bPlay-?Offs?\b"#,
+    #"(?i)\bQualifying\b"#,
+    #"(?i)\bQualification\b"#,
+    #"(?i)\bPreliminary\s+Round\b"#,
+    #"(?i)\b(?:First|Second|1st|2nd)\s+Leg\b"#,
+]
+
+private func isLikelyTwoLegKnockoutSubcategory(_ value: String?) -> Bool {
+    guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !normalized.isEmpty else {
+        return false
+    }
+    return likelyTwoLegKnockoutSubcategoryPatterns.contains { pattern in
+        normalized.range(of: pattern, options: .regularExpression) != nil
+    }
+}
+
 private struct WidgetPreferencesSnapshot: Codable, Equatable {
     let selectedLeagues: [String]
     let selectedChannels: [String]
@@ -52,7 +74,43 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
     let tvChannels: [String]
     let homeScore: Int?
     let awayScore: Int?
+    let aggregateHomeScore: Int?
+    let aggregateAwayScore: Int?
+    let firstLegHomeScore: Int?
+    let firstLegAwayScore: Int?
     let scoreStatus: String?
+
+    init(
+        date: String,
+        time: String,
+        homeTeam: String,
+        awayTeam: String,
+        league: String,
+        leagueSubcategory: String?,
+        tvChannels: [String],
+        homeScore: Int?,
+        awayScore: Int?,
+        aggregateHomeScore: Int? = nil,
+        aggregateAwayScore: Int? = nil,
+        firstLegHomeScore: Int? = nil,
+        firstLegAwayScore: Int? = nil,
+        scoreStatus: String?
+    ) {
+        self.date = date
+        self.time = time
+        self.homeTeam = homeTeam
+        self.awayTeam = awayTeam
+        self.league = league
+        self.leagueSubcategory = leagueSubcategory
+        self.tvChannels = tvChannels
+        self.homeScore = homeScore
+        self.awayScore = awayScore
+        self.aggregateHomeScore = aggregateHomeScore
+        self.aggregateAwayScore = aggregateAwayScore
+        self.firstLegHomeScore = firstLegHomeScore
+        self.firstLegAwayScore = firstLegAwayScore
+        self.scoreStatus = scoreStatus
+    }
 
     var id: String {
         "\(date)|\(time)|\(league)|\(homeTeam)|\(awayTeam)"
@@ -132,6 +190,10 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
             tvChannels: channels,
             homeScore: homeScore,
             awayScore: awayScore,
+            aggregateHomeScore: aggregateHomeScore,
+            aggregateAwayScore: aggregateAwayScore,
+            firstLegHomeScore: firstLegHomeScore,
+            firstLegAwayScore: firstLegAwayScore,
             scoreStatus: scoreStatus
         )
     }
@@ -146,6 +208,10 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         case tvChannels = "tv_channels"
         case homeScore = "home_score"
         case awayScore = "away_score"
+        case aggregateHomeScore = "aggregate_home_score"
+        case aggregateAwayScore = "aggregate_away_score"
+        case firstLegHomeScore = "first_leg_home_score"
+        case firstLegAwayScore = "first_leg_away_score"
         case scoreStatus = "score_status"
     }
 }
@@ -188,6 +254,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let awayScore: Int?
     let aggregateHomeScore: Int?
     let aggregateAwayScore: Int?
+    let firstLegHomeScore: Int?
+    let firstLegAwayScore: Int?
     let matchTime: String?
     let homeTeamScore: Double?
     let awayTeamScore: Double?
@@ -214,6 +282,18 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
             .uppercased()
             .replacingOccurrences(of: ".", with: "")
         return normalized.hasPrefix("FT") || normalized.hasPrefix("AET")
+    }
+
+    var hasDisplayableAggregateScore: Bool {
+        guard let aggregateHomeScore, let aggregateAwayScore else { return false }
+        return aggregateHomeScore != 0 ||
+            aggregateAwayScore != 0 ||
+            (firstLegHomeScore != nil && firstLegAwayScore != nil) ||
+            isLikelyTwoLegKnockoutSubcategory(leagueSubcategory)
+    }
+
+    var shouldShowAggregateBracketScoresInline: Bool {
+        !hasScore && !isInProgress && !isFinished && hasDisplayableAggregateScore
     }
 
     var suppressedScoreSummary: String? {
@@ -267,6 +347,56 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
     }
 
     let appScope: String
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private extension TopScoresLiveActivityMatchState {
+    var matchDay: Date? {
+        WidgetMatchDateParser.shared.parse(date: date, time: "00:00")
+            ?? WidgetMatchDateParser.shared.parse(date: date, time: time)
+    }
+
+    var isScheduledForToday: Bool {
+        guard let matchDay else { return false }
+        return Calendar.current.isDateInToday(matchDay)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private enum LiveActivityMatchDisplayFilter {
+    static func deduplicatedMatches(
+        from matches: [TopScoresLiveActivityMatchState]
+    ) -> [TopScoresLiveActivityMatchState] {
+        var seenMatchIds = Set<String>()
+        var seenTeamPairs = Set<String>()
+        return matches.filter { match in
+            if !match.matchId.isEmpty {
+                return seenMatchIds.insert(match.matchId).inserted
+            }
+            let key = "\(match.date)|\(match.homeTeam.lowercased())|\(match.awayTeam.lowercased())"
+            return seenTeamPairs.insert(key).inserted
+        }
+    }
+
+    static func displayMatches(
+        for state: TopScoresLiveActivityAttributes.ContentState
+    ) -> [TopScoresLiveActivityMatchState] {
+        let deduplicated = deduplicatedMatches(from: state.matches)
+        guard state.mode == "multi_live" || state.mode == "multi_upcoming" || state.mode == "multi_finished" else {
+            return deduplicated
+        }
+        return deduplicated.filter { match in
+            !match.isFinished || match.isScheduledForToday
+        }
+    }
+
+    static func trailingDisplayMatches(
+        for state: TopScoresLiveActivityAttributes.ContentState
+    ) -> [TopScoresLiveActivityMatchState] {
+        Array(deduplicatedMatches(from: state.matches).dropFirst()).filter { match in
+            !match.isFinished || match.isScheduledForToday
+        }
+    }
 }
 
 private enum LiveActivityRenderDiagnostics {
@@ -2018,12 +2148,12 @@ private struct TopScoresLiveActivityWidget: Widget {
     }
 
     private func compactLeadingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
-        guard let first = state.matches.first else { return "TS" }
+        guard let first = LiveActivityMatchDisplayFilter.displayMatches(for: state).first else { return "TS" }
         return String(first.homeTeam.prefix(3)).uppercased()
     }
 
     private func compactTrailingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
-        guard let first = state.matches.first else { return "" }
+        guard let first = LiveActivityMatchDisplayFilter.displayMatches(for: state).first else { return "" }
         if (state.mode.contains("live") || state.mode.contains("finished")),
            let home = first.homeScore,
            let away = first.awayScore {
@@ -2037,7 +2167,7 @@ private struct TopScoresLiveActivityWidget: Widget {
 
     private func compactTrailingOpacity(state: TopScoresLiveActivityAttributes.ContentState) -> Double {
         guard state.mode.contains("finished"),
-              let first = state.matches.first,
+              let first = LiveActivityMatchDisplayFilter.displayMatches(for: state).first,
               first.homeScore != nil,
               first.awayScore != nil else {
             return 1.0
@@ -2050,29 +2180,21 @@ private struct TopScoresLiveActivityWidget: Widget {
 private struct TopScoresLiveActivityLockScreenView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
 
-    /// Deduplicates `state.matches` as a last-resort guard against duplicate entries that can
-    /// occur when a match's kickoff time or match ID drifts between data sources server-side.
-    /// Dedup is keyed first by non-empty `matchId`, then by date + lowercased team names
-    /// (time-insensitive) so the same fixture at slightly different scheduled times is collapsed.
-    private var deduplicatedMatches: [TopScoresLiveActivityMatchState] {
-        var seenMatchIds = Set<String>()
-        var seenTeamPairs = Set<String>()
-        return state.matches.filter { match in
-            if !match.matchId.isEmpty {
-                return seenMatchIds.insert(match.matchId).inserted
-            }
-            let key = "\(match.date)|\(match.homeTeam.lowercased())|\(match.awayTeam.lowercased())"
-            return seenTeamPairs.insert(key).inserted
-        }
+    private var displayMatches: [TopScoresLiveActivityMatchState] {
+        LiveActivityMatchDisplayFilter.displayMatches(for: state)
+    }
+
+    private var trailingDisplayMatches: [TopScoresLiveActivityMatchState] {
+        LiveActivityMatchDisplayFilter.trailingDisplayMatches(for: state)
     }
 
     var body: some View {
         let isMultiMode = state.mode == "multi_live" || state.mode == "multi_upcoming" || state.mode == "multi_finished"
-        let matches = deduplicatedMatches
+        let matches = displayMatches
         // In single live/finished mode the server appends today's upcoming matches after the
         // primary match so the widget shows the full picture of today's action.
         let trailingUpcoming: [TopScoresLiveActivityMatchState] = (state.mode == "single_live" || state.mode == "single_finished")
-            ? Array(matches.dropFirst())
+            ? trailingDisplayMatches
             : []
         let hasTrailingUpcoming = !trailingUpcoming.isEmpty
         VStack(spacing: 0) {
@@ -2113,11 +2235,23 @@ private struct TopScoresLiveActivityLockScreenView: View {
                         }
                     }
                 case "multi_upcoming":
-                    MultiMatchListView(matches: matches, live: false)
+                    if matches.isEmpty {
+                        EmptyLiveActivityView()
+                    } else {
+                        MultiMatchListView(matches: matches, live: false)
+                    }
                 case "multi_live":
-                    MultiMatchListView(matches: matches, live: true)
+                    if matches.isEmpty {
+                        EmptyLiveActivityView()
+                    } else {
+                        MultiMatchListView(matches: matches, live: true)
+                    }
                 case "multi_finished":
-                    MultiMatchListView(matches: matches, live: true)
+                    if matches.isEmpty {
+                        EmptyLiveActivityView()
+                    } else {
+                        MultiMatchListView(matches: matches, live: true)
+                    }
                 case "ended":
                     EndedLiveActivityView()
                 default:
@@ -2266,7 +2400,7 @@ private struct SingleUpcomingMatchView: View {
                 HStack(spacing: 0) {
                     HStack(spacing: 14) {
                         LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
-                        LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: 18)
+                        LiveActivityUpcomingCenterIndicator(match: match, logoSize: 18)
                         LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2280,7 +2414,7 @@ private struct SingleUpcomingMatchView: View {
                 TeamNamesWithAggregateRow(
                     homeTeam: match.homeTeam,
                     awayTeam: match.awayTeam,
-                    aggregateInfo: aggregateText ?? "Kick-off"
+                    aggregateInfo: match.shouldShowAggregateBracketScoresInline ? " " : (aggregateText ?? "Kick-off")
                 )
             }
         }
@@ -2297,7 +2431,7 @@ private struct SingleUpcomingMatchView: View {
 
     private var aggregateText: String? {
         guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
-        guard home != 0 || away != 0 else { return nil }
+        guard match.hasDisplayableAggregateScore else { return nil }
         return "Agg: \(home)-\(away)"
     }
 }
@@ -2339,7 +2473,7 @@ private struct SingleLiveMatchView: View {
 
     private var aggregateText: String? {
         guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
-        guard home != 0 || away != 0 else { return nil }
+        guard match.hasDisplayableAggregateScore else { return nil }
         return "Agg: \(home)-\(away)"
     }
 }
@@ -2381,7 +2515,7 @@ private struct SingleFinishedMatchView: View {
 
     private var aggregateText: String? {
         guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
-        guard home != 0 || away != 0 else { return nil }
+        guard match.hasDisplayableAggregateScore else { return nil }
         return "Agg: \(home)-\(away)"
     }
 }
@@ -2409,7 +2543,7 @@ private struct LiveActivitySingleScoreRow: View {
                     .foregroundStyle(.white.opacity(scoreOpacity))
             }
         } else {
-            LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: 18)
+            LiveActivityUpcomingCenterIndicator(match: match, logoSize: 18)
         }
     }
 
@@ -2419,6 +2553,62 @@ private struct LiveActivitySingleScoreRow: View {
 
     private var fallbackStatus: String {
         match.isFinished ? "FT" : "LIVE"
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct LiveActivityUpcomingCenterIndicator: View {
+    let match: TopScoresLiveActivityMatchState
+    let logoSize: CGFloat
+
+    var body: some View {
+        if match.shouldShowAggregateBracketScoresInline {
+            HStack(alignment: .firstTextBaseline, spacing: logoSize >= 18 ? 4 : 2) {
+                if let aggregateHomeText {
+                    Text(aggregateHomeText)
+                        .font(aggregateFont)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+
+                Text("vs")
+                    .font(vsFont)
+                    .foregroundStyle(.white.opacity(0.85))
+
+                if let aggregateAwayText {
+                    Text(aggregateAwayText)
+                        .font(aggregateFont)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+        } else {
+            LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: logoSize)
+        }
+    }
+
+    private var aggregateHomeText: String? {
+        guard let aggregateHomeScore = match.aggregateHomeScore, match.hasDisplayableAggregateScore else {
+            return nil
+        }
+        return "(\(aggregateHomeScore))"
+    }
+
+    private var aggregateAwayText: String? {
+        guard let aggregateAwayScore = match.aggregateAwayScore, match.hasDisplayableAggregateScore else {
+            return nil
+        }
+        return "(\(aggregateAwayScore))"
+    }
+
+    private var aggregateFont: Font {
+        logoSize >= 18
+            ? .subheadline.monospacedDigit().weight(.medium)
+            : .caption2.monospacedDigit().weight(.medium)
+    }
+
+    private var vsFont: Font {
+        aggregateFont
     }
 }
 
@@ -2648,23 +2838,27 @@ private struct MultiMatchListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(chunkedMatches.enumerated()), id: \.offset) { _, rowMatches in
-                HStack(spacing: 8) {
-                    MultiMatchEntryCell(match: rowMatches[0], live: live)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                GeometryReader { proxy in
+                    let cellWidth = max(0, (proxy.size.width - 17) / 2)
+                    HStack(spacing: 8) {
+                        MultiMatchEntryCell(match: rowMatches[0], live: live)
+                            .frame(width: cellWidth, alignment: .leading)
 
-                    Rectangle()
-                        .fill(.white.opacity(0.16))
-                        .frame(width: 1)
-                        .padding(.vertical, 2)
+                        Rectangle()
+                            .fill(.white.opacity(0.16))
+                            .frame(width: 1)
+                            .padding(.vertical, 2)
 
-                    if rowMatches.count > 1 {
-                        MultiMatchEntryCell(match: rowMatches[1], live: live)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                    } else {
-                        Color.clear
-                            .frame(maxWidth: .infinity)
+                        if rowMatches.count > 1 {
+                            MultiMatchEntryCell(match: rowMatches[1], live: live)
+                                .frame(width: cellWidth, alignment: .trailing)
+                        } else {
+                            Color.clear
+                                .frame(width: cellWidth)
+                        }
                     }
                 }
+                .frame(height: 22)
             }
         }
     }
@@ -2745,11 +2939,7 @@ private struct MultiMatchEntryCell: View {
         if match.hasScore {
             scoreTextView
         } else {
-            Text("vs")
-                .font(.callout.monospacedDigit().weight(.bold))
-                .foregroundStyle(.white.opacity(scoreOpacity))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+            upcomingIndicatorView
         }
     }
 
@@ -2758,15 +2948,19 @@ private struct MultiMatchEntryCell: View {
         if match.hasScore {
             scoreTextView
         } else {
-            LiveActivityUpcomingIndicator(channels: match.tvChannels, logoSize: 15)
+            upcomingIndicatorView
         }
+    }
+
+    private var upcomingIndicatorView: some View {
+        LiveActivityUpcomingCenterIndicator(match: match, logoSize: 15)
     }
 
     private var scoreTextView: some View {
         HStack(alignment: .firstTextBaseline, spacing: showsAggregateScore ? 2 : 0) {
             if let aggregateHomeText {
                 Text(aggregateHomeText)
-                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .font(aggregateScoreFont)
                     .foregroundStyle(.white.opacity(0.72))
             }
 
@@ -2776,7 +2970,7 @@ private struct MultiMatchEntryCell: View {
 
             if let aggregateAwayText {
                 Text(aggregateAwayText)
-                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .font(aggregateScoreFont)
                     .foregroundStyle(.white.opacity(0.72))
             }
         }
@@ -2829,21 +3023,31 @@ private struct MultiMatchEntryCell: View {
 
     private var showsAggregateScore: Bool {
         guard match.hasScore,
-              let home = match.aggregateHomeScore,
-              let away = match.aggregateAwayScore else {
+              match.hasDisplayableAggregateScore,
+              match.aggregateHomeScore != nil,
+              match.aggregateAwayScore != nil else {
             return false
         }
-        return home != 0 || away != 0
+        return true
     }
 
     private var scoreSlotWidth: CGFloat {
-        showsAggregateScore ? 72 : (live ? 38 : 32)
+        if showsAggregateScore || match.shouldShowAggregateBracketScoresInline {
+            return 72
+        }
+        return live ? 38 : 32
     }
 
     private var scoreFont: Font {
         showsAggregateScore
             ? .caption.monospacedDigit().weight(.bold)
             : .callout.monospacedDigit().weight(.bold)
+    }
+
+    private var aggregateScoreFont: Font {
+        showsAggregateScore
+            ? .caption.monospacedDigit().weight(.semibold)
+            : .callout.monospacedDigit().weight(.semibold)
     }
 
     private var scoreOpacity: Double {

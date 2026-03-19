@@ -8,7 +8,10 @@ const {
     mergeMonitorCandidate,
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
+    getMatchDetailsStatePayload,
     mergeConfirmedVarDisallowedGoalsIntoPayload,
+    enrichMatchDetailsAggregateImmediately,
+    enrichKnockoutAggregatesForListMatches,
     matchDetailsNeedsBackfill,
     markMatchDetailsActive,
     isMatchDetailsActive,
@@ -195,6 +198,130 @@ test("toMatchListPayload includes details state even when details teams exactly 
   assert.equal(payload.away_score, 1);
 });
 
+test("enrichMatchDetailsAggregateImmediately fetches knockout aggregate for stale details payload", async () => {
+  const matchId = "c9aggr3g4t01";
+  const detailsUrl = `https://www.bbc.co.uk/sport/football/live/${matchId}`;
+  const payload = {
+    id: matchId,
+    details_url: detailsUrl,
+    date: "2026-03-19",
+    time: "17:45",
+    league: "UEFA Europa League",
+    league_subcategory: "Last 16",
+    home_team: "Midtjylland",
+    away_team: "Nottingham Forest",
+    home_score: null,
+    away_score: null,
+    aggregate_home_score: null,
+    aggregate_away_score: null,
+    score_status: null,
+    updated_at: "2026-03-19T01:00:00.000Z",
+  };
+
+  const persisted = [];
+  const enriched = await enrichMatchDetailsAggregateImmediately(payload, {
+    nowIso: "2026-03-19T01:05:00.000Z",
+    nowMs: Date.parse("2026-03-19T01:05:00.000Z"),
+    fetchMatchByDetailsUrl: async () => ({
+      details_url: detailsUrl,
+      home_team: "Midtjylland",
+      away_team: "Nottingham Forest",
+      aggregate_home_score: 1,
+      aggregate_away_score: 0,
+    }),
+    persistOperationalMatchDetailsSafe: async (recordsById, options) => {
+      persisted.push({ recordsById, options });
+    },
+  });
+
+  assert.equal(enriched.aggregate_home_score, 1);
+  assert.equal(enriched.aggregate_away_score, 0);
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].options.source, "request_knockout_aggregate_enrichment");
+});
+
+test("enrichKnockoutAggregatesForListMatches updates lookup for stale fixture aggregates", async () => {
+  const matchId = "c9aggr3g4t02";
+  const detailsUrl = `https://www.bbc.co.uk/sport/football/live/${matchId}`;
+  const match = {
+    date: "2026-03-19",
+    time: "20:00",
+    league: "UEFA Europa League",
+    league_subcategory: "Last 16",
+    home_team: "Aston Villa",
+    away_team: "Lille",
+    details_url: detailsUrl,
+    tv_channels: [],
+  };
+
+  const result = await enrichKnockoutAggregatesForListMatches([match], {}, {
+    nowIso: "2026-03-19T01:06:00.000Z",
+    nowMs: Date.parse("2026-03-19T01:06:00.000Z"),
+    fetchMatchByDetailsUrl: async () => ({
+      details_url: detailsUrl,
+      home_team: "Aston Villa",
+      away_team: "Lille",
+      aggregate_home_score: 1,
+      aggregate_away_score: 0,
+    }),
+    persistOperationalMatchDetailsSafe: async () => {},
+  });
+
+  assert.equal(result.enrichedCount, 1);
+  assert.equal(result.lookup[matchId].aggregate_home_score, 1);
+  assert.equal(result.lookup[matchId].aggregate_away_score, 0);
+});
+
+test("getMatchDetailsStatePayload preserves known first-leg zero aggregate", () => {
+  const payload = getMatchDetailsStatePayload({
+    id: "c5yqnegjv2xt",
+    details_url: "https://www.bbc.co.uk/sport/football/live/c5yqnegjv2xt",
+    date: "2026-03-19",
+    time: "17:45",
+    league: "UEFA Conference League",
+    league_subcategory: "Last 16",
+    home_team: "AEK Larnaca",
+    away_team: "Crystal Palace",
+    home_score: null,
+    away_score: null,
+    aggregate_home_score: 0,
+    aggregate_away_score: 0,
+    first_leg_home_score: 0,
+    first_leg_away_score: 0,
+    score_status: null,
+  });
+
+  assert.equal(payload.aggregate_home_score, 0);
+  assert.equal(payload.aggregate_away_score, 0);
+  assert.equal(payload.first_leg_home_score, 0);
+  assert.equal(payload.first_leg_away_score, 0);
+});
+
+test("getMatchDetailsStatePayload synthesizes aggregate from first-leg score when aggregate is missing", () => {
+  const payload = getMatchDetailsStatePayload({
+    id: "c5yqnegjv2xt",
+    details_url: "https://www.bbc.co.uk/sport/football/live/c5yqnegjv2xt",
+    date: "2026-03-19",
+    time: "17:45",
+    league: "UEFA Conference League",
+    league_subcategory: "Last 16",
+    home_team: "AEK Larnaca",
+    away_team: "Crystal Palace",
+    home_score: null,
+    away_score: null,
+    aggregate_home_score: null,
+    aggregate_away_score: null,
+    first_leg_home_score: 0,
+    first_leg_away_score: 0,
+    score_status: null,
+  });
+
+  assert.equal(payload.aggregate_home_score, 0);
+  assert.equal(payload.aggregate_away_score, 0);
+  assert.equal(payload.first_leg_home_score, 0);
+  assert.equal(payload.first_leg_away_score, 0);
+});
+
 test("mergeMatchDetailsPayload clears stale scores when refreshed details show a pre-match state", () => {
   const existing = {
     id: DETAILS_ID,
@@ -239,6 +366,54 @@ test("mergeMatchDetailsPayload clears stale scores when refreshed details show a
   assert.equal(merged.score_status, null);
   assert.deepStrictEqual(merged.home_goal_scorers, []);
   assert.deepStrictEqual(merged.away_goal_scorers, []);
+});
+
+test("mergeMatchDetailsPayload preserves known aggregate when refreshed pre-match payload omits aggregate fields", () => {
+  const existing = normalizeMatchDetailsPayload({
+    details_url: "https://www.bbc.co.uk/sport/football/live/c5yqnegjv2xt",
+    date: "2026-03-19",
+    time: "17:45",
+    league: "UEFA Conference League",
+    league_subcategory: "Last 16",
+    home_team: "AEK Larnaca",
+    away_team: "Crystal Palace",
+    home_score: null,
+    away_score: null,
+    aggregate_home_score: 0,
+    aggregate_away_score: 0,
+    first_leg_home_score: 0,
+    first_leg_away_score: 0,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+  });
+
+  const incoming = normalizeMatchDetailsPayload({
+    details_url: "https://www.bbc.co.uk/sport/football/live/c5yqnegjv2xt",
+    date: "2026-03-19",
+    time: "17:45",
+    league: "UEFA Conference League",
+    league_subcategory: "Last 16",
+    home_team: "AEK Larnaca",
+    away_team: "Crystal Palace",
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+    first_leg_home_score: 0,
+    first_leg_away_score: 0,
+  });
+
+  const merged = mergeMatchDetailsPayload(existing, incoming, "2026-03-19T02:20:00.000Z");
+  assert.equal(merged.aggregate_home_score, 0);
+  assert.equal(merged.aggregate_away_score, 0);
+  assert.equal(merged.first_leg_home_score, 0);
+  assert.equal(merged.first_leg_away_score, 0);
 });
 
 test("pickPreferredMatchStatus keeps AET over FT for finished matches", () => {
@@ -314,6 +489,8 @@ test("mergeMatchDetailsPayload upgrades first-half stoppage time to HT", () => {
     away_assists: [],
     home_red_cards: [],
     away_red_cards: [],
+  }, {
+    nowMs: Date.parse("2026-03-14T18:20:00.000Z"),
   });
 
   const incoming = normalizeMatchDetailsPayload({
@@ -332,6 +509,8 @@ test("mergeMatchDetailsPayload upgrades first-half stoppage time to HT", () => {
     away_assists: [],
     home_red_cards: [],
     away_red_cards: [],
+  }, {
+    nowMs: Date.parse("2026-03-14T18:20:00.000Z"),
   });
 
   const merged = mergeMatchDetailsPayload(existing, incoming, "2026-03-14T18:20:00.000Z");
@@ -1004,6 +1183,8 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
     away_score: 2,
     aggregate_home_score: null,
     aggregate_away_score: null,
+    first_leg_home_score: null,
+    first_leg_away_score: null,
     score_status: "FT",
     penalty_result: null,
     in_progress: false,

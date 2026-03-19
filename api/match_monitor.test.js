@@ -1375,6 +1375,42 @@ test("buildLiveActivityPresentationForUser suppresses zero aggregate for upcomin
   assert.equal(presentation.matches[1].aggregate_away_score, null);
 });
 
+test("buildLiveActivityPresentationForUser preserves zero aggregate for upcoming two-leg knockout ties", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 10 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "c5yqnegjv2xt",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "UEFA Conference League",
+          league_subcategory: "Last 16",
+          home_team: "AEK Larnaca",
+          away_team: "Crystal Palace",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          aggregate_home_score: 0,
+          aggregate_away_score: 0,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_upcoming");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].aggregate_home_score, 0);
+  assert.equal(presentation.matches[0].aggregate_away_score, 0);
+});
+
 test("buildLiveActivityPresentationForUser suppresses stale pre-kickoff zero scores", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs + 10 * 60 * 1000;
@@ -1439,6 +1475,108 @@ test("sanitizePreKickoffScoresForLiveActivity preserves live 0-0 scores once sta
   assert.equal(sanitized.home_score, 0);
   assert.equal(sanitized.away_score, 0);
   assert.equal(sanitized.score_status, "8");
+});
+
+test("sanitizePreKickoffScoresForLiveActivity preserves non-zero aggregate for upcoming fixtures", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 3 * 60 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const sanitized = __testHooks.sanitizePreKickoffScoresForLiveActivity(
+    {
+      match_details_id: "aggregate_fixture",
+      date: kickoff.date,
+      time: kickoff.time,
+      league: "UEFA Europa League",
+      league_subcategory: "Last 16",
+      home_team: "Midtjylland",
+      away_team: "Nottingham Forest",
+      home_score: null,
+      away_score: null,
+      aggregate_home_score: 1,
+      aggregate_away_score: 0,
+      score_status: null,
+      updated_at: new Date(nowMs).toISOString(),
+    },
+    nowMs,
+    "test"
+  );
+
+  assert.equal(sanitized.home_score, null);
+  assert.equal(sanitized.away_score, null);
+  assert.equal(sanitized.aggregate_home_score, 1);
+  assert.equal(sanitized.aggregate_away_score, 0);
+  assert.equal(sanitized.score_status, null);
+});
+
+test("buildLiveActivityContentState preserves known zero aggregate when first-leg score is explicit", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 2 * 60 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_upcoming",
+    [
+      {
+        match_details_id: "c5yqnegjv2xt",
+        date: kickoff.date,
+        time: kickoff.time,
+        league: "UEFA Conference League",
+        league_subcategory: "Last 16",
+        home_team: "AEK Larnaca",
+        away_team: "Crystal Palace",
+        home_score: null,
+        away_score: null,
+        aggregate_home_score: 0,
+        aggregate_away_score: 0,
+        first_leg_home_score: 0,
+        first_leg_away_score: 0,
+        score_status: null,
+      },
+    ],
+    0,
+    nowMs
+  );
+
+  assert.equal(contentState.matches[0].aggregateHomeScore, 0);
+  assert.equal(contentState.matches[0].aggregateAwayScore, 0);
+  assert.equal(contentState.matches[0].firstLegHomeScore, 0);
+  assert.equal(contentState.matches[0].firstLegAwayScore, 0);
+});
+
+test("buildLiveActivityContentState synthesizes upcoming aggregate from first-leg score when aggregate is missing", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs + 2 * 60 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_upcoming",
+    [
+      {
+        match_details_id: "c5yqnegjv2xt",
+        date: kickoff.date,
+        time: kickoff.time,
+        league: "UEFA Conference League",
+        league_subcategory: "Last 16",
+        home_team: "AEK Larnaca",
+        away_team: "Crystal Palace",
+        home_score: null,
+        away_score: null,
+        aggregate_home_score: null,
+        aggregate_away_score: null,
+        first_leg_home_score: 0,
+        first_leg_away_score: 0,
+        score_status: null,
+      },
+    ],
+    0,
+    nowMs
+  );
+
+  assert.equal(contentState.matches[0].aggregateHomeScore, 0);
+  assert.equal(contentState.matches[0].aggregateAwayScore, 0);
+  assert.equal(contentState.matches[0].firstLegHomeScore, 0);
+  assert.equal(contentState.matches[0].firstLegAwayScore, 0);
 });
 
 test("buildLiveActivityPresentationForUser derives delayed live score from goal timeline up to delayed minute", () => {
@@ -2091,7 +2229,9 @@ test("buildLiveActivityPresentationForUser can include later upcoming fixtures f
     nowMs
   );
 
-  assert.equal(withoutForegroundOverride.mode, null);
+  assert.equal(withoutForegroundOverride.mode, "single_upcoming");
+  assert.equal(withoutForegroundOverride.matches.length, 1);
+  assert.equal(withoutForegroundOverride.matches[0].match_details_id, "future-upcoming");
 
   const withForegroundOverride = __testHooks.buildLiveActivityPresentationForUser(
     liveActivityUser(0),

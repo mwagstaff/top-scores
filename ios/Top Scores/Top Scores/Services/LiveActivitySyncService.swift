@@ -15,6 +15,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let awayScore: Int?
     let aggregateHomeScore: Int?
     let aggregateAwayScore: Int?
+    let firstLegHomeScore: Int?
+    let firstLegAwayScore: Int?
     let matchTime: String?
     let homeTeamScore: Double?
     let awayTeamScore: Double?

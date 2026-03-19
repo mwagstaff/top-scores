@@ -166,6 +166,123 @@ struct Top_ScoresTests {
         #expect(match.winnerSummaryText == "Paris Saint-Germain win 5 - 4 on aggregate")
     }
 
+    @Test func upcomingScorelessFixture_showsAggregateBracketScoresInline() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Aston Villa",
+            awayTeam: "Lille",
+            league: "UEFA Europa League",
+            tvChannels: [],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: 1,
+            aggregateAwayScore: 0,
+            scoreStatus: nil
+        )
+
+        #expect(match.shouldShowAggregateBracketScoresInline)
+    }
+
+    @Test func upcomingScorelessFixture_hidesPlaceholderAggregateBracketScores() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Aston Villa",
+            awayTeam: "Lille",
+            league: "UEFA Europa League",
+            tvChannels: [],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: 0,
+            aggregateAwayScore: 0,
+            scoreStatus: nil
+        )
+
+        #expect(!match.shouldShowAggregateBracketScoresInline)
+    }
+
+    @Test func upcomingScorelessFixture_showsKnownZeroAggregateBracketScoresInline() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "17:45",
+            homeTeam: "AEK Larnaca",
+            awayTeam: "Crystal Palace",
+            league: "UEFA Conference League",
+            leagueSubcategory: "Last 16",
+            tvChannels: [],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: 0,
+            aggregateAwayScore: 0,
+            firstLegHomeScore: 0,
+            firstLegAwayScore: 0,
+            scoreStatus: nil
+        )
+
+        #expect(match.shouldShowAggregateBracketScoresInline)
+        #expect(match.aggregateSummaryText == "Agg: 0-0")
+    }
+
+    @Test func withDetails_preservesAggregateForUpcomingScorelessFixture() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "17:45",
+            homeTeam: "Midtjylland",
+            awayTeam: "Nottingham Forest",
+            league: "UEFA Europa League",
+            leagueSubcategory: "Last 16",
+            detailsURL: "https://www.bbc.co.uk/sport/football/live/c8r1zve354lt",
+            matchDetailsID: "c8r1zve354lt",
+            tvChannels: [],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: 1,
+            aggregateAwayScore: 0,
+            firstLegHomeScore: 1,
+            firstLegAwayScore: 0,
+            scoreStatus: nil
+        )
+
+        let payload: [String: Any?] = [
+            "id": "c8r1zve354lt",
+            "details_url": "https://www.bbc.co.uk/sport/football/live/c8r1zve354lt",
+            "date": formattedDate(offsetDays: 0),
+            "time": "17:45",
+            "league": "UEFA Europa League",
+            "home_team": "Midtjylland",
+            "away_team": "Nottingham Forest",
+            "home_score": nil,
+            "away_score": nil,
+            "aggregate_home_score": 1,
+            "aggregate_away_score": 0,
+            "first_leg_home_score": 1,
+            "first_leg_away_score": 0,
+            "score_status": nil,
+            "home_goal_scorers": [],
+            "away_goal_scorers": [],
+            "home_assists": [],
+            "away_assists": [],
+            "home_red_cards": [],
+            "away_red_cards": [],
+            "penalty_result": nil,
+            "in_progress": false,
+            "updated_at": "2026-03-19T01:42:59.740Z",
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload.compactMapValues { $0 })
+        let details = try JSONDecoder().decode(MatchDetailsPayload.self, from: data)
+
+        let merged = match.withDetails(details)
+
+        #expect(merged.homeScore == nil)
+        #expect(merged.awayScore == nil)
+        #expect(merged.aggregateHomeScore == 1)
+        #expect(merged.aggregateAwayScore == 0)
+        #expect(merged.firstLegHomeScore == 1)
+        #expect(merged.firstLegAwayScore == 0)
+        #expect(merged.shouldShowAggregateBracketScoresInline)
+    }
+
     @Test func winnerSummaryText_formatsExtraTimeWinners() async throws {
         let match = Match(
             date: "2026-03-01",

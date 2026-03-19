@@ -67,7 +67,8 @@ struct MatchRow: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.top, 2)
-                } else if let aggregateSummaryText = match.aggregateSummaryText {
+                } else if !match.shouldShowAggregateBracketScoresInline,
+                          let aggregateSummaryText = match.aggregateSummaryText {
                     Text("(\(aggregateSummaryText))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -214,6 +215,15 @@ struct MatchRow: View {
 
     private var scoreAndStatusRow: some View {
         HStack(spacing: 8) {
+            if let aggregateHomeBracketText {
+                Text(aggregateHomeBracketText)
+                    .font(aggregateBracketFont)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+
             if let homeScoreText {
                 Text(homeScoreText)
                     .font(scoreFont)
@@ -236,7 +246,32 @@ struct MatchRow: View {
                     .monospacedDigit()
                     .frame(minWidth: 14, alignment: .leading)
             }
+
+            if let aggregateAwayBracketText {
+                Text(aggregateAwayBracketText)
+                    .font(aggregateBracketFont)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
         }
+    }
+
+    private var aggregateHomeBracketText: String? {
+        guard match.shouldShowAggregateBracketScoresInline,
+              let aggregateHomeScore = match.aggregateHomeScore else {
+            return nil
+        }
+        return "(\(aggregateHomeScore))"
+    }
+
+    private var aggregateAwayBracketText: String? {
+        guard match.shouldShowAggregateBracketScoresInline,
+              let aggregateAwayScore = match.aggregateAwayScore else {
+            return nil
+        }
+        return "(\(aggregateAwayScore))"
     }
 
     private var teamNameFont: Font {
@@ -249,6 +284,10 @@ struct MatchRow: View {
 
     private var scoreFont: Font {
         isLargePresentation ? .caption : .headline
+    }
+
+    private var aggregateBracketFont: Font {
+        isLargePresentation ? .caption2 : .caption
     }
 
     private var logoSize: CGFloat {

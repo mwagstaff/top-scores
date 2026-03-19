@@ -6325,14 +6325,8 @@ function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now
   const homeScore = detailsHomeScore !== null ? detailsHomeScore : listHomeScore;
   const awayScore = detailsAwayScore !== null ? detailsAwayScore : listAwayScore;
 
-  const listAggregateHomeScore = parseNumericScore(listMatch && listMatch.aggregate_home_score);
-  const listAggregateAwayScore = parseNumericScore(listMatch && listMatch.aggregate_away_score);
-  const detailsAggregateHomeScore = parseNumericScore(
-    detailsPayload && detailsPayload.aggregate_home_score
-  );
-  const detailsAggregateAwayScore = parseNumericScore(
-    detailsPayload && detailsPayload.aggregate_away_score
-  );
+  const listAggregate = resolveKnownAggregateScores(listMatch);
+  const detailsAggregate = resolveKnownAggregateScores(detailsPayload);
 
   const listStatus = resolveMatchScoreStatus(listMatch) || (listMatch && listMatch.score_status) || null;
   const detailsStatus =
@@ -6354,15 +6348,44 @@ function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now
     home_score: homeScore,
     away_score: awayScore,
     aggregate_home_score:
-      detailsAggregateHomeScore !== null ? detailsAggregateHomeScore : listAggregateHomeScore,
+      detailsAggregate.home !== null ? detailsAggregate.home : listAggregate.home,
     aggregate_away_score:
-      detailsAggregateAwayScore !== null ? detailsAggregateAwayScore : listAggregateAwayScore,
+      detailsAggregate.away !== null ? detailsAggregate.away : listAggregate.away,
     score_status: scoreStatus,
     penalty_result:
       String((detailsPayload && detailsPayload.penalty_result) || "").trim() ||
       String((listMatch && listMatch.penalty_result) || "").trim() ||
       null,
   };
+}
+
+function resolveKnownAggregateScores(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { home: null, away: null };
+  }
+
+  const aggregateHomeScore = parseNumericScore(payload.aggregate_home_score);
+  const aggregateAwayScore = parseNumericScore(payload.aggregate_away_score);
+  if (aggregateHomeScore !== null && aggregateAwayScore !== null) {
+    return { home: aggregateHomeScore, away: aggregateAwayScore };
+  }
+
+  const firstLegHomeScore = parseNumericScore(payload.first_leg_home_score);
+  const firstLegAwayScore = parseNumericScore(payload.first_leg_away_score);
+  if (firstLegHomeScore === null || firstLegAwayScore === null) {
+    return { home: aggregateHomeScore, away: aggregateAwayScore };
+  }
+
+  const homeScore = parseNumericScore(payload.home_score);
+  const awayScore = parseNumericScore(payload.away_score);
+  if (homeScore !== null && awayScore !== null) {
+    return {
+      home: firstLegHomeScore + homeScore,
+      away: firstLegAwayScore + awayScore,
+    };
+  }
+
+  return { home: firstLegHomeScore, away: firstLegAwayScore };
 }
 
 function normalizeMatchDetailsPayload(match, options = {}) {
@@ -6426,6 +6449,8 @@ function normalizeMatchDetailsPayload(match, options = {}) {
 
 function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
   const incomingClearsScoreState = hasExplicitNoScoreState(incoming);
+  const existingAggregate = resolveKnownAggregateScores(existing);
+  const incomingAggregate = resolveKnownAggregateScores(incoming);
   const merged = {
     ...(existing || {}),
     ...incoming,
@@ -6462,21 +6487,23 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
   }
 
   if (incomingClearsScoreState) {
-    merged.aggregate_home_score = null;
-  } else if (incoming.aggregate_home_score !== null && incoming.aggregate_home_score !== undefined) {
-    merged.aggregate_home_score = incoming.aggregate_home_score;
-  } else if (existing && existing.aggregate_home_score !== undefined) {
-    merged.aggregate_home_score = existing.aggregate_home_score;
+    merged.aggregate_home_score =
+      incomingAggregate.home !== null ? incomingAggregate.home : existingAggregate.home;
+  } else if (incomingAggregate.home !== null && incomingAggregate.away !== null) {
+    merged.aggregate_home_score = incomingAggregate.home;
+  } else if (existingAggregate.home !== null && existingAggregate.away !== null) {
+    merged.aggregate_home_score = existingAggregate.home;
   } else {
     merged.aggregate_home_score = null;
   }
 
   if (incomingClearsScoreState) {
-    merged.aggregate_away_score = null;
-  } else if (incoming.aggregate_away_score !== null && incoming.aggregate_away_score !== undefined) {
-    merged.aggregate_away_score = incoming.aggregate_away_score;
-  } else if (existing && existing.aggregate_away_score !== undefined) {
-    merged.aggregate_away_score = existing.aggregate_away_score;
+    merged.aggregate_away_score =
+      incomingAggregate.away !== null ? incomingAggregate.away : existingAggregate.away;
+  } else if (incomingAggregate.home !== null && incomingAggregate.away !== null) {
+    merged.aggregate_away_score = incomingAggregate.away;
+  } else if (existingAggregate.home !== null && existingAggregate.away !== null) {
+    merged.aggregate_away_score = existingAggregate.away;
   } else {
     merged.aggregate_away_score = null;
   }
@@ -6636,19 +6663,48 @@ function matchDetailsHasStaleInProgressStatus(payload, nowMs = Date.now()) {
   return nowMs - updatedAtMs >= MATCH_DETAILS_STALE_IN_PROGRESS_MS;
 }
 
+const TWO_LEG_KNOCKOUT_SUBCATEGORY_PATTERNS = [
+  /\bLast\s+\d+\b/i,
+  /\bRound\s+of\s+\d+\b/i,
+  /\bQuarter[- ]Finals?\b/i,
+  /\bSemi[- ]Finals?\b/i,
+  /\bPlay-?Offs?\b/i,
+  /\bQualifying\b/i,
+  /\bQualification\b/i,
+  /\bPreliminary\s+Round\b/i,
+  /\b(?:First|Second|1st|2nd)\s+Leg\b/i,
+];
+
+function isLikelyTwoLegKnockoutSubcategory(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return false;
+  return TWO_LEG_KNOCKOUT_SUBCATEGORY_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 function matchDetailsMissingKnockoutAggregate(payload, nowMs = Date.now()) {
   if (!payload || typeof payload !== "object") return false;
-  // Only knockout rounds have a league_subcategory (e.g. "Last 16", "Quarter Final")
   const subcategory = String(payload.league_subcategory || "").trim();
-  if (!subcategory) return false;
-  // Skip if aggregate is already populated
+  if (!isLikelyTwoLegKnockoutSubcategory(subcategory)) return false;
   const aggHome = parseNumericScore(payload.aggregate_home_score);
   const aggAway = parseNumericScore(payload.aggregate_away_score);
   if (aggHome !== null && aggAway !== null) return false;
-  // Only apply within a window around kickoff (12h before to 2h after)
+  const effectiveNowMs = Number.isFinite(nowMs) ? Number(nowMs) : Date.now();
+  const matchDay = parseMatchDayLocal(payload.date);
+  if (matchDay) {
+    const matchDayStartMs = matchDay.getTime();
+    if (Number.isFinite(matchDayStartMs)) {
+      const matchDayEndMs = matchDayStartMs + 24 * 60 * 60 * 1000;
+      if (effectiveNowMs >= matchDayStartMs && effectiveNowMs < matchDayEndMs) {
+        return true;
+      }
+    }
+  }
   const kickoffMs = kickoffTimestampMs(payload);
   if (!Number.isFinite(kickoffMs)) return false;
-  return nowMs >= kickoffMs - 12 * 60 * 60 * 1000 && nowMs <= kickoffMs + 2 * 60 * 60 * 1000;
+  return (
+    effectiveNowMs >= kickoffMs - 12 * 60 * 60 * 1000 &&
+    effectiveNowMs <= kickoffMs + 2 * 60 * 60 * 1000
+  );
 }
 
 function matchDetailsNeedsBackfill(payload, nowMs = Date.now()) {
@@ -6662,6 +6718,110 @@ function matchDetailsNeedsBackfill(payload, nowMs = Date.now()) {
     matchDetailsHasStaleInProgressStatus(payload, nowMs) ||
     matchDetailsMissingKnockoutAggregate(payload, nowMs)
   );
+}
+
+async function enrichMatchDetailsAggregateImmediately(seedPayload, options = {}) {
+  const payload = seedPayload && typeof seedPayload === "object" ? seedPayload : null;
+  const nowMs =
+    options && Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+  if (!payload || !matchDetailsMissingKnockoutAggregate(payload, nowMs)) {
+    return payload;
+  }
+
+  const detailsUrl = String(payload.details_url || "").trim();
+  if (!detailsUrl) return payload;
+
+  const fetchMatchByDetailsUrl =
+    options && typeof options.fetchMatchByDetailsUrl === "function"
+      ? options.fetchMatchByDetailsUrl
+      : fetchBbcMatchByDetailsUrl;
+  const persistFn =
+    options && typeof options.persistOperationalMatchDetailsSafe === "function"
+      ? options.persistOperationalMatchDetailsSafe
+      : persistOperationalMatchDetailsSafe;
+  const nowIso =
+    options && typeof options.nowIso === "string" && options.nowIso.trim()
+      ? options.nowIso.trim()
+      : new Date().toISOString();
+  const persistSource =
+    options && typeof options.persistSource === "string" && options.persistSource.trim()
+      ? options.persistSource.trim()
+      : "request_knockout_aggregate_enrichment";
+
+  try {
+    const fetched = await fetchMatchByDetailsUrl(detailsUrl);
+    if (!fetched) return payload;
+
+    const combined = buildMergedMatchDetailsCandidate(payload, fetched, detailsUrl);
+    const upsertedMatchId = upsertMatchDetailsFromMatch(combined, nowIso);
+    const updatedPayload = upsertedMatchId ? matchDetailsById.get(upsertedMatchId) || null : null;
+    if (upsertedMatchId && updatedPayload) {
+      await persistFn(
+        { [upsertedMatchId]: updatedPayload },
+        {
+          replace: false,
+          updated_at: nowIso,
+          source: persistSource,
+        }
+      );
+      return updatedPayload;
+    }
+  } catch (error) {
+    console.warn(
+      `[API] Immediate aggregate enrichment failed for ${detailsUrl}:`,
+      error.message || error
+    );
+  }
+
+  return payload;
+}
+
+async function enrichKnockoutAggregatesForListMatches(matches, matchDetailsLookup, options = {}) {
+  const list = Array.isArray(matches) ? matches : [];
+  if (list.length === 0) return { lookup: matchDetailsLookup || {}, enrichedCount: 0 };
+
+  const lookup =
+    matchDetailsLookup && typeof matchDetailsLookup === "object" ? { ...matchDetailsLookup } : {};
+  const candidates = [];
+  const seenIds = new Set();
+
+  list.forEach((match) => {
+    const normalized = normalizeMatchRecord(match);
+    if (!normalized) return;
+    const detailsId =
+      matchDetailsIdFromUrl(normalized.details_url) ||
+      normalizeMatchDetailsId(normalized.match_details_id);
+    if (!detailsId || seenIds.has(detailsId)) return;
+    const existingPayload = getMatchDetailsLookupEntry(lookup, detailsId);
+    const seedPayload = existingPayload || buildFallbackMatchDetailsPayload(detailsId, normalized);
+    const nowMs =
+      options && Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+    if (!seedPayload || !matchDetailsMissingKnockoutAggregate(seedPayload, nowMs)) return;
+    seenIds.add(detailsId);
+    candidates.push({ detailsId, seedPayload });
+  });
+
+  if (candidates.length === 0) {
+    return { lookup, enrichedCount: 0 };
+  }
+
+  let enrichedCount = 0;
+  for (const candidate of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const enrichedPayload = await enrichMatchDetailsAggregateImmediately(candidate.seedPayload, {
+      ...options,
+      persistSource: "matches_list_request_knockout_aggregate_enrichment",
+    });
+    if (!enrichedPayload || !enrichedPayload.id) continue;
+    lookup[candidate.detailsId] = enrichedPayload;
+    const aggHome = parseNumericScore(enrichedPayload.aggregate_home_score);
+    const aggAway = parseNumericScore(enrichedPayload.aggregate_away_score);
+    if (aggHome !== null && aggAway !== null) {
+      enrichedCount += 1;
+    }
+  }
+
+  return { lookup, enrichedCount };
 }
 
 function matchDetailsBackfillCooldownMs(payload, reason = "success") {
@@ -7318,6 +7478,9 @@ function toMonitorCandidateFromDetailsPayload(payload, options = {}) {
       : null;
   const homeScore = parseNumericScore(payload.home_score);
   const awayScore = parseNumericScore(payload.away_score);
+  const aggregate = resolveKnownAggregateScores(payload);
+  const firstLegHomeScore = parseNumericScore(payload.first_leg_home_score);
+  const firstLegAwayScore = parseNumericScore(payload.first_leg_away_score);
 
   const candidate = {
     match_details_id: matchId,
@@ -7334,6 +7497,14 @@ function toMonitorCandidateFromDetailsPayload(payload, options = {}) {
 
   if (homeScore !== null) candidate.home_score = homeScore;
   if (awayScore !== null) candidate.away_score = awayScore;
+  if (aggregate.home !== null && aggregate.away !== null) {
+    candidate.aggregate_home_score = aggregate.home;
+    candidate.aggregate_away_score = aggregate.away;
+  }
+  if (firstLegHomeScore !== null && firstLegAwayScore !== null) {
+    candidate.first_leg_home_score = firstLegHomeScore;
+    candidate.first_leg_away_score = firstLegAwayScore;
+  }
 
   return candidate;
 }
@@ -7362,6 +7533,18 @@ function mergeMonitorCandidate(existing, incoming) {
 
   if (Number.isFinite(Number(incoming.home_score))) merged.home_score = Number(incoming.home_score);
   if (Number.isFinite(Number(incoming.away_score))) merged.away_score = Number(incoming.away_score);
+  if (Number.isFinite(Number(incoming.aggregate_home_score))) {
+    merged.aggregate_home_score = Number(incoming.aggregate_home_score);
+  }
+  if (Number.isFinite(Number(incoming.aggregate_away_score))) {
+    merged.aggregate_away_score = Number(incoming.aggregate_away_score);
+  }
+  if (Number.isFinite(Number(incoming.first_leg_home_score))) {
+    merged.first_leg_home_score = Number(incoming.first_leg_home_score);
+  }
+  if (Number.isFinite(Number(incoming.first_leg_away_score))) {
+    merged.first_leg_away_score = Number(incoming.first_leg_away_score);
+  }
 
   const mergedChannels = uniqueChannels([
     ...(Array.isArray(existing.tv_channels) ? existing.tv_channels : []),
@@ -7453,6 +7636,8 @@ function mergeTvChannels(lhs, rhs) {
 function mergePreferredMatch(existing, incoming, preferIncoming) {
   const merged = { ...existing };
   const incomingClearsScoreState = hasExplicitNoScoreState(incoming);
+  const existingAggregate = resolveKnownAggregateScores(existing);
+  const incomingAggregate = resolveKnownAggregateScores(incoming);
 
   if (preferIncoming && incoming.league) merged.league = incoming.league;
   if (!merged.league && incoming.league) merged.league = incoming.league;
@@ -7475,8 +7660,10 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
   if (incomingClearsScoreState) {
     merged.home_score = null;
     merged.away_score = null;
-    merged.aggregate_home_score = null;
-    merged.aggregate_away_score = null;
+    merged.aggregate_home_score =
+      incomingAggregate.home !== null ? incomingAggregate.home : existingAggregate.home;
+    merged.aggregate_away_score =
+      incomingAggregate.away !== null ? incomingAggregate.away : existingAggregate.away;
     merged.score_status = null;
   } else if (incoming.home_score !== undefined && incoming.home_score !== null) {
     merged.home_score = incoming.home_score;
@@ -7486,17 +7673,17 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
   }
   if (
     !incomingClearsScoreState &&
-    incoming.aggregate_home_score !== undefined &&
-    incoming.aggregate_home_score !== null
+    incomingAggregate.home !== null &&
+    incomingAggregate.away !== null
   ) {
-    merged.aggregate_home_score = incoming.aggregate_home_score;
+    merged.aggregate_home_score = incomingAggregate.home;
   }
   if (
     !incomingClearsScoreState &&
-    incoming.aggregate_away_score !== undefined &&
-    incoming.aggregate_away_score !== null
+    incomingAggregate.home !== null &&
+    incomingAggregate.away !== null
   ) {
-    merged.aggregate_away_score = incoming.aggregate_away_score;
+    merged.aggregate_away_score = incomingAggregate.away;
   }
   if (!incomingClearsScoreState && incoming.score_status) merged.score_status = incoming.score_status;
   if (incoming.details_url) merged.details_url = incoming.details_url;
@@ -10416,8 +10603,9 @@ function getMatchDetailsStatePayload(payload) {
 
   const homeScore = parseNumericScore(payload.home_score);
   const awayScore = parseNumericScore(payload.away_score);
-  const aggregateHomeScore = parseNumericScore(payload.aggregate_home_score);
-  const aggregateAwayScore = parseNumericScore(payload.aggregate_away_score);
+  const aggregate = resolveKnownAggregateScores(payload);
+  const firstLegHomeScore = parseNumericScore(payload.first_leg_home_score);
+  const firstLegAwayScore = parseNumericScore(payload.first_leg_away_score);
   const scoreStatus = resolveStableMatchScoreStatus(payload);
 
   const statePayload = {
@@ -10430,8 +10618,10 @@ function getMatchDetailsStatePayload(payload) {
     away_team: payload.away_team || null,
     home_score: homeScore,
     away_score: awayScore,
-    aggregate_home_score: aggregateHomeScore,
-    aggregate_away_score: aggregateAwayScore,
+    aggregate_home_score: aggregate.home,
+    aggregate_away_score: aggregate.away,
+    first_leg_home_score: firstLegHomeScore,
+    first_leg_away_score: firstLegAwayScore,
     score_status: scoreStatus,
     penalty_result: payload.penalty_result || null,
     in_progress: isInProgressMatchStatus(scoreStatus),
@@ -13068,8 +13258,14 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     res.set("X-Has-More", hasMore ? "true" : "false");
     res.set("X-Sort-Order", sortOrder);
 
-    const matchDetailsLookup = matchDetailsSnapshot.lookup || {};
+    let matchDetailsLookup = matchDetailsSnapshot.lookup || {};
+    const aggregateEnrichment = await enrichKnockoutAggregatesForListMatches(
+      paged,
+      matchDetailsLookup
+    );
+    matchDetailsLookup = aggregateEnrichment.lookup || matchDetailsLookup;
     const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(matchDetailsLookup);
+
     const payload = paged
       .map((match) =>
         toMatchListPayload(match, {
@@ -13179,7 +13375,12 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
 
   const payload = matchDetailsById.get(matchId) || null;
   const fallbackMatchRecord = findInMemoryMatchRecordByMatchId(matchId);
-  const responsePayload = payload || buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord);
+  const responsePayload = await enrichMatchDetailsAggregateImmediately(
+    payload || buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord),
+    {
+      persistSource: "match_details_request_knockout_aggregate_enrichment",
+    }
+  );
   if (!responsePayload) {
     scheduleMatchDetailsWarm(matchId, {
       trigger: "match_details_request",
@@ -14387,7 +14588,12 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
 
   const payload = matchDetailsById.get(detailsId) || null;
   const fallbackMatchRecord = findInMemoryMatchRecordByMatchId(detailsId);
-  const responsePayload = payload || buildFallbackMatchDetailsPayload(detailsId, fallbackMatchRecord);
+  const responsePayload = await enrichMatchDetailsAggregateImmediately(
+    payload || buildFallbackMatchDetailsPayload(detailsId, fallbackMatchRecord),
+    {
+      persistSource: "bbc_details_request_knockout_aggregate_enrichment",
+    }
+  );
   if (!responsePayload) {
     scheduleMatchDetailsWarm(detailsId, {
       trigger: "bbc_details_request",
@@ -17747,7 +17953,10 @@ module.exports = {
     mergeMonitorCandidate,
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
+    getMatchDetailsStatePayload,
     mergeConfirmedVarDisallowedGoalsIntoPayload,
+    enrichMatchDetailsAggregateImmediately,
+    enrichKnockoutAggregatesForListMatches,
     buildPrometheusMetricsText,
     matchDetailsNeedsBackfill,
     markMatchDetailsActive,
