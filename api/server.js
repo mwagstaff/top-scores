@@ -15144,6 +15144,7 @@ const {
   getFantasyReminderRecord,
   getFantasyReminderRecords,
   getBbcMatchHistoryGrouped,
+  getLiveActivityDebugRecords,
   getBbcRealtimeSnapshot,
   cleanupBbcHistory,
   saveOperationalDataset,
@@ -15725,6 +15726,170 @@ function buildAdminDeviceNotificationStatusCounts(records) {
   }, {});
 }
 
+function adminAgeSeconds(isoValue, nowMs = Date.now()) {
+  const parsed = Date.parse(String(isoValue || "").trim());
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.round((nowMs - parsed) / 1000));
+}
+
+function buildAdminLiveActivityDebugEntry(record, nowMs = Date.now()) {
+  const contentState =
+    record && record.content_state && typeof record.content_state === "object"
+      ? record.content_state
+      : null;
+  const matches = Array.isArray(contentState && contentState.matches) ? contentState.matches : [];
+  return {
+    record_id: record && record.record_id ? String(record.record_id) : null,
+    timestamp_ms: adminHistoryTimestampMs(record && record.timestamp_ms),
+    timestamp: record && record.timestamp ? String(record.timestamp) : null,
+    age_seconds: adminAgeSeconds(record && record.timestamp, nowMs),
+    record_type: record && record.record_type ? String(record.record_type) : "unknown",
+    dispatch_kind: record && record.dispatch_kind ? String(record.dispatch_kind) : null,
+    decision_type: record && record.decision_type ? String(record.decision_type) : null,
+    decision_reason: record && record.decision_reason ? String(record.decision_reason) : null,
+    status: record && record.status ? String(record.status) : null,
+    mode: record && record.mode ? String(record.mode) : null,
+    trigger: record && record.trigger ? String(record.trigger) : null,
+    environment: record && record.environment ? String(record.environment) : null,
+    elapsed_ms:
+      record && Number.isFinite(Number(record.elapsed_ms)) ? Number(record.elapsed_ms) : null,
+    dispatch_started_at:
+      record && record.dispatch_started_at ? String(record.dispatch_started_at) : null,
+    dispatch_completed_at:
+      record && record.dispatch_completed_at ? String(record.dispatch_completed_at) : null,
+    payload_hash: record && record.payload_hash ? String(record.payload_hash) : null,
+    score_hash: record && record.score_hash ? String(record.score_hash) : null,
+    last_mode: record && record.last_mode ? String(record.last_mode) : null,
+    last_payload_hash: record && record.last_payload_hash ? String(record.last_payload_hash) : null,
+    last_score_hash: record && record.last_score_hash ? String(record.last_score_hash) : null,
+    last_dispatch_at: record && record.last_dispatch_at ? String(record.last_dispatch_at) : null,
+    current_activity_id:
+      record && record.current_activity_id ? String(record.current_activity_id) : null,
+    push_token_kind: record && record.push_token_kind ? String(record.push_token_kind) : null,
+    pending_start_at: record && record.pending_start_at ? String(record.pending_start_at) : null,
+    pending_age_seconds:
+      record && Number.isFinite(Number(record.pending_age_seconds))
+        ? Number(record.pending_age_seconds)
+        : null,
+    pending_max_seconds:
+      record && Number.isFinite(Number(record.pending_max_seconds))
+        ? Number(record.pending_max_seconds)
+        : null,
+    hold_until: record && record.hold_until ? String(record.hold_until) : null,
+    error: record && record.error ? String(record.error) : null,
+    is_terminal: Boolean(record && record.is_terminal),
+    match_count: matches.length,
+    match_ids: matches
+      .map((match) => String(match && match.matchId ? match.matchId : "").trim())
+      .filter(Boolean),
+    payload: record && record.raw_payload ? record.raw_payload : null,
+    content_state: contentState,
+    raw_record: record,
+  };
+}
+
+function buildAdminLiveActivityDebugSummary(records) {
+  return (Array.isArray(records) ? records : []).reduce((acc, record) => {
+    const key = String(
+      record && record.record_type === "push"
+        ? `push:${record.dispatch_kind || "unknown"}:${record.status || "unknown"}`
+        : `${record && record.record_type ? record.record_type : "unknown"}:${record && record.decision_type ? record.decision_type : "unknown"}`
+    );
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function summarizeAdminLiveActivityState(record, nowMs = Date.now()) {
+  const liveActivity =
+    record && record.liveActivity && typeof record.liveActivity === "object" ? record.liveActivity : {};
+  return {
+    push_to_start_token_present: Boolean(
+      liveActivity.pushToStartToken && String(liveActivity.pushToStartToken).trim()
+    ),
+    push_to_start_token_updated_at: liveActivity.pushToStartTokenUpdatedAt || null,
+    push_to_start_token_age_seconds: adminAgeSeconds(
+      liveActivity.pushToStartTokenUpdatedAt,
+      nowMs
+    ),
+    current_activity_id: liveActivity.currentActivityId || null,
+    current_activity_push_token_present: Boolean(
+      liveActivity.currentActivityPushToken && String(liveActivity.currentActivityPushToken).trim()
+    ),
+    current_activity_token_updated_at: liveActivity.currentActivityTokenUpdatedAt || null,
+    current_activity_token_age_seconds: adminAgeSeconds(
+      liveActivity.currentActivityTokenUpdatedAt,
+      nowMs
+    ),
+    pending_start_at: liveActivity.pendingStartAt || null,
+    pending_start_age_seconds: adminAgeSeconds(liveActivity.pendingStartAt, nowMs),
+    last_payload_hash: liveActivity.lastPayloadHash || null,
+    last_score_hash: liveActivity.lastScoreHash || null,
+    last_mode: liveActivity.lastMode || null,
+    last_dispatch_at: liveActivity.lastDispatchAt || null,
+    last_dispatch_age_seconds: adminAgeSeconds(liveActivity.lastDispatchAt, nowMs),
+    last_start_at: liveActivity.lastStartAt || null,
+    last_start_age_seconds: adminAgeSeconds(liveActivity.lastStartAt, nowMs),
+    last_ended_at: liveActivity.lastEndedAt || null,
+    last_ended_age_seconds: adminAgeSeconds(liveActivity.lastEndedAt, nowMs),
+    test_hold_until: liveActivity.testHoldUntil || null,
+    test_hold_active:
+      adminAgeSeconds(liveActivity.testHoldUntil, nowMs) !== null &&
+      Date.parse(String(liveActivity.testHoldUntil || "").trim()) > nowMs,
+    raw_state: liveActivity,
+  };
+}
+
+async function buildAdminLiveActivityPreview(record, nowMs = Date.now()) {
+  const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
+  if (
+    !hooks ||
+    typeof hooks.monitoredMatchStatesSnapshot !== "function" ||
+    typeof hooks.buildLiveActivityEntriesForUser !== "function" ||
+    typeof hooks.buildLiveActivityPresentationForUser !== "function" ||
+    typeof hooks.buildLiveActivityContentState !== "function" ||
+    typeof hooks.combineLiveActivityOperationalMatches !== "function"
+  ) {
+    return null;
+  }
+
+  const [mergedDataset, recentDataset] = await Promise.all([
+    getOperationalDataset("merged_matches"),
+    getOperationalDataset("recent_matches"),
+  ]);
+  const operationalMatches = hooks.combineLiveActivityOperationalMatches(
+    mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
+    recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : []
+  );
+  const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
+  const entries = hooks.buildLiveActivityEntriesForUser(
+    record,
+    monitoredEntries,
+    operationalMatches,
+    nowMs
+  );
+  const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs);
+  const contentState =
+    presentation && presentation.mode
+      ? hooks.buildLiveActivityContentState(
+        presentation.mode,
+        presentation.matches,
+        presentation.delayMinutes,
+        nowMs,
+        presentation.fantasyCurrentScore
+      )
+      : null;
+
+  return {
+    generated_at: new Date(nowMs).toISOString(),
+    monitored_entry_count: Array.isArray(monitoredEntries) ? monitoredEntries.length : 0,
+    operational_match_count: Array.isArray(operationalMatches) ? operationalMatches.length : 0,
+    built_entry_count: Array.isArray(entries) ? entries.length : 0,
+    presentation,
+    content_state: contentState,
+  };
+}
+
 // Admin preferences query endpoint
 app.get(`${API_PREFIX}/admin/preferences`, async (req, res) => {
   setCacheOnlyHeaders(res);
@@ -15875,6 +16040,26 @@ app.get(`${API_PREFIX}/admin/devices/:deviceSuffix`, async (req, res) => {
     const limitedNotifications = notificationRecords
       .slice(0, ADMIN_DEVICE_NOTIFICATIONS_LIMIT)
       .map(buildAdminDeviceNotificationEntry);
+    const nowMs = Date.now();
+    const liveActivityDebugRecords = await getLiveActivityDebugRecords({
+      device_token: deviceToken,
+      limit: 40,
+      order: "desc",
+    });
+    const normalizedLiveActivityDebug = liveActivityDebugRecords.map((entry) =>
+      buildAdminLiveActivityDebugEntry(entry, nowMs)
+    );
+    const liveActivityPushes = normalizedLiveActivityDebug
+      .filter((entry) => entry.record_type === "push")
+      .slice(0, 10);
+    const liveActivityDecisions = normalizedLiveActivityDebug
+      .filter((entry) => entry.record_type !== "push")
+      .slice(0, 10);
+    const liveActivityPreview = await buildAdminLiveActivityPreview(record, nowMs).catch(
+      (error) => ({
+        error: error.message || String(error),
+      })
+    );
 
     res.status(200).json({
       success: true,
@@ -15889,6 +16074,18 @@ app.get(`${API_PREFIX}/admin/devices/:deviceSuffix`, async (req, res) => {
         total_notifications: notificationRecords.length,
         returned_notifications: limitedNotifications.length,
         status_counts: buildAdminDeviceNotificationStatusCounts(notificationRecords),
+      },
+      live_activity: {
+        state: summarizeAdminLiveActivityState(record, nowMs),
+        preview: liveActivityPreview,
+        debug: {
+          total_records_considered: normalizedLiveActivityDebug.length,
+          pushes_returned: liveActivityPushes.length,
+          decisions_returned: liveActivityDecisions.length,
+          summary_counts: buildAdminLiveActivityDebugSummary(normalizedLiveActivityDebug),
+          pushes: liveActivityPushes,
+          decisions: liveActivityDecisions,
+        },
       },
       notifications: limitedNotifications,
     });
@@ -17055,18 +17252,22 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
     let serverPresentation = null;
     try {
       const nowMs = Date.now();
-      const operationalDataset = await getOperationalDataset("merged_matches");
-      const operationalMatches =
-        operationalDataset && Array.isArray(operationalDataset.payload)
-          ? operationalDataset.payload
-          : [];
+      const [mergedDataset, recentDataset] = await Promise.all([
+        getOperationalDataset("merged_matches"),
+        getOperationalDataset("recent_matches"),
+      ]);
       const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
       if (
         hooks &&
         typeof hooks.monitoredMatchStatesSnapshot === "function" &&
         typeof hooks.buildLiveActivityEntriesForUser === "function" &&
-        typeof hooks.buildLiveActivityPresentationForUser === "function"
+        typeof hooks.buildLiveActivityPresentationForUser === "function" &&
+        typeof hooks.combineLiveActivityOperationalMatches === "function"
       ) {
+        const operationalMatches = hooks.combineLiveActivityOperationalMatches(
+          mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
+          recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : []
+        );
         const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
         const entries = hooks.buildLiveActivityEntriesForUser(
           record,
@@ -18116,15 +18317,19 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
             typeof hooks.monitoredMatchStatesSnapshot === "function" &&
             typeof hooks.buildLiveActivityEntriesForUser === "function" &&
             typeof hooks.buildLiveActivityPresentationForUser === "function" &&
-            typeof hooks.buildLiveActivityContentState === "function"
+            typeof hooks.buildLiveActivityContentState === "function" &&
+            typeof hooks.combineLiveActivityOperationalMatches === "function"
           ) {
             const nowMs = Date.now();
-            const operationalDataset = await getOperationalDataset("merged_matches");
-            const operationalMatches =
-              operationalDataset && Array.isArray(operationalDataset.payload)
-                ? operationalDataset.payload
-                : [];
+            const [mergedDataset, recentDataset] = await Promise.all([
+              getOperationalDataset("merged_matches"),
+              getOperationalDataset("recent_matches"),
+            ]);
             const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
+            const operationalMatches = hooks.combineLiveActivityOperationalMatches(
+              mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
+              recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : []
+            );
             const entries = hooks.buildLiveActivityEntriesForUser(
               record,
               monitoredEntries,

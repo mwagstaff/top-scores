@@ -452,6 +452,13 @@
         <section id="raw-preferences" class="panel hidden"></section>
       </section>
 
+      <section class="grid-2">
+        <section id="live-activity-state" class="panel hidden"></section>
+        <section id="live-activity-preview" class="panel hidden"></section>
+      </section>
+
+      <section id="live-activity-debug-panel" class="panel hidden"></section>
+
       <section id="notifications-panel" class="panel hidden"></section>
     </section>
   </div>
@@ -514,6 +521,22 @@
         minute: "2-digit",
         second: "2-digit",
       }).format(ts);
+    }
+
+    function formatSeconds(value) {
+      const seconds = Number(value);
+      if (!Number.isFinite(seconds) || seconds < 0) return "-";
+      if (seconds < 60) return `${seconds}s`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      return `${hours}h ${minutes}m`;
+    }
+
+    function formatMilliseconds(value) {
+      const ms = Number(value);
+      if (!Number.isFinite(ms) || ms < 0) return "-";
+      return `${ms} ms`;
     }
 
     function formatList(value) {
@@ -714,6 +737,186 @@
       `;
     }
 
+    function renderLiveActivityState(payload) {
+      const panel = document.getElementById("live-activity-state");
+      const liveActivity = payload && payload.live_activity && typeof payload.live_activity === "object"
+        ? payload.live_activity
+        : {};
+      const state = liveActivity.state && typeof liveActivity.state === "object"
+        ? liveActivity.state
+        : {};
+      panel.classList.remove("hidden");
+      panel.innerHTML = `
+        <div class="section-stack">
+          <div>
+            <h3>Live Activity State</h3>
+            <p>Persisted server-side state for this device.</p>
+          </div>
+          <div class="kv-grid">
+            <div class="kv-card"><div class="k">Last Mode</div><div class="v">${escapeHTML(state.last_mode || "-")}</div></div>
+            <div class="kv-card"><div class="k">Last Dispatch</div><div class="v">${escapeHTML(formatDateTime(state.last_dispatch_at))}</div></div>
+            <div class="kv-card"><div class="k">Last Dispatch Age</div><div class="v">${escapeHTML(formatSeconds(state.last_dispatch_age_seconds))}</div></div>
+            <div class="kv-card"><div class="k">Current Activity ID</div><div class="v mono">${escapeHTML(state.current_activity_id || "-")}</div></div>
+            <div class="kv-card"><div class="k">Push-to-start Token</div><div class="v">${state.push_to_start_token_present ? "Present" : "Missing"}</div></div>
+            <div class="kv-card"><div class="k">Activity Push Token</div><div class="v">${state.current_activity_push_token_present ? "Present" : "Missing"}</div></div>
+            <div class="kv-card"><div class="k">Pending Start</div><div class="v">${escapeHTML(formatDateTime(state.pending_start_at))}</div></div>
+            <div class="kv-card"><div class="k">Pending Start Age</div><div class="v">${escapeHTML(formatSeconds(state.pending_start_age_seconds))}</div></div>
+            <div class="kv-card"><div class="k">Last Payload Hash</div><div class="v mono">${escapeHTML(shortToken(state.last_payload_hash || "", 12, 10))}</div></div>
+            <div class="kv-card"><div class="k">Last Score Hash</div><div class="v mono">${escapeHTML(shortToken(state.last_score_hash || "", 12, 10))}</div></div>
+            <div class="kv-card"><div class="k">Last Start</div><div class="v">${escapeHTML(formatDateTime(state.last_start_at))}</div></div>
+            <div class="kv-card"><div class="k">Last Ended</div><div class="v">${escapeHTML(formatDateTime(state.last_ended_at))}</div></div>
+          </div>
+          <details>
+            <summary>Raw Live Activity State</summary>
+            <div class="section-stack" style="margin-top:10px;">
+              <pre>${escapeHTML(JSON.stringify(state.raw_state || {}, null, 2))}</pre>
+            </div>
+          </details>
+        </div>
+      `;
+    }
+
+    function renderLiveActivityPreview(payload) {
+      const panel = document.getElementById("live-activity-preview");
+      const liveActivity = payload && payload.live_activity && typeof payload.live_activity === "object"
+        ? payload.live_activity
+        : {};
+      const preview = liveActivity.preview && typeof liveActivity.preview === "object"
+        ? liveActivity.preview
+        : null;
+      panel.classList.remove("hidden");
+
+      if (!preview || preview.error) {
+        panel.innerHTML = `
+          <div class="section-stack">
+            <div>
+              <h3>Server Preview</h3>
+              <p>Current live-activity presentation the server would build for this device.</p>
+            </div>
+            <div class="status error">${escapeHTML(preview && preview.error ? preview.error : "Preview unavailable.")}</div>
+          </div>
+        `;
+        return;
+      }
+
+      const presentation = preview.presentation && typeof preview.presentation === "object"
+        ? preview.presentation
+        : {};
+      panel.innerHTML = `
+        <div class="section-stack">
+          <div>
+            <h3>Server Preview</h3>
+            <p>What the server currently thinks this device should see.</p>
+          </div>
+          <div class="kv-grid">
+            <div class="kv-card"><div class="k">Mode</div><div class="v">${escapeHTML(presentation.mode || "-")}</div></div>
+            <div class="kv-card"><div class="k">Preview Generated</div><div class="v">${escapeHTML(formatDateTime(preview.generated_at))}</div></div>
+            <div class="kv-card"><div class="k">Built Entries</div><div class="v">${escapeHTML(String(preview.built_entry_count ?? 0))}</div></div>
+            <div class="kv-card"><div class="k">Preview Matches</div><div class="v">${escapeHTML(String(Array.isArray(presentation.matches) ? presentation.matches.length : 0))}</div></div>
+          </div>
+          <details>
+            <summary>Raw Preview JSON</summary>
+            <div class="section-stack" style="margin-top:10px;">
+              <pre>${escapeHTML(JSON.stringify(preview, null, 2))}</pre>
+            </div>
+          </details>
+        </div>
+      `;
+    }
+
+    function renderLiveActivityDebug(payload) {
+      const panel = document.getElementById("live-activity-debug-panel");
+      const liveActivity = payload && payload.live_activity && typeof payload.live_activity === "object"
+        ? payload.live_activity
+        : {};
+      const debug = liveActivity.debug && typeof liveActivity.debug === "object"
+        ? liveActivity.debug
+        : {};
+      const pushes = Array.isArray(debug.pushes) ? debug.pushes : [];
+      const decisions = Array.isArray(debug.decisions) ? debug.decisions : [];
+      const summaryCounts = debug.summary_counts && typeof debug.summary_counts === "object"
+        ? Object.entries(debug.summary_counts).map(([key, value]) => `<span class="pill">${escapeHTML(`${key}: ${value}`)}</span>`).join("")
+        : "";
+
+      panel.classList.remove("hidden");
+      panel.innerHTML = `
+        <div class="section-stack">
+          <div class="notification-header">
+            <div>
+              <h3>Live Activity Diagnostics</h3>
+              <p>Latest raw payloads, timings, and recent no-push decisions for this device.</p>
+            </div>
+            <div class="chip-row">${summaryCounts}</div>
+          </div>
+          <div class="kv-grid">
+            <div class="kv-card"><div class="k">Push Records</div><div class="v">${escapeHTML(String(debug.pushes_returned ?? pushes.length))}</div></div>
+            <div class="kv-card"><div class="k">Decision Records</div><div class="v">${escapeHTML(String(debug.decisions_returned ?? decisions.length))}</div></div>
+          </div>
+          <div class="section-stack">
+            <h3>Latest 10 Push Payloads</h3>
+            ${pushes.length ? `<div class="notification-list">${pushes.map((entry) => `
+              <details>
+                <summary>
+                  <div class="notification-header">
+                    <div>
+                      <div>${escapeHTML((entry.dispatch_kind || "push").toUpperCase())} • ${escapeHTML(entry.mode || "-")}</div>
+                      <div class="subtle">${escapeHTML(formatDateTime(entry.timestamp))} • ${escapeHTML(formatMilliseconds(entry.elapsed_ms))} • matches=${escapeHTML(String(entry.match_count ?? 0))}</div>
+                    </div>
+                    <div class="chip-row">
+                      <span class="pill ${entry.status === "success" ? "ok" : "fail"}">${escapeHTML(entry.status || "unknown")}</span>
+                      ${entry.environment ? `<span class="pill">${escapeHTML(entry.environment)}</span>` : ""}
+                    </div>
+                  </div>
+                </summary>
+                <div class="section-stack" style="margin-top:10px;">
+                  <div class="notification-line subtle">
+                    <span>started=${escapeHTML(formatDateTime(entry.dispatch_started_at))}</span>
+                    <span>completed=${escapeHTML(formatDateTime(entry.dispatch_completed_at))}</span>
+                    ${entry.payload_hash ? `<span>payload=${escapeHTML(shortToken(entry.payload_hash, 12, 10))}</span>` : ""}
+                    ${entry.score_hash ? `<span>score=${escapeHTML(shortToken(entry.score_hash, 12, 10))}</span>` : ""}
+                  </div>
+                  ${entry.error ? `<div class="status error">${escapeHTML(entry.error)}</div>` : ""}
+                  <details>
+                    <summary>Raw APNS Payload</summary>
+                    <div class="section-stack" style="margin-top:10px;">
+                      <pre>${escapeHTML(JSON.stringify(entry.payload || {}, null, 2))}</pre>
+                    </div>
+                  </details>
+                  <details>
+                    <summary>Content State</summary>
+                    <div class="section-stack" style="margin-top:10px;">
+                      <pre>${escapeHTML(JSON.stringify(entry.content_state || {}, null, 2))}</pre>
+                    </div>
+                  </details>
+                </div>
+              </details>
+            `).join("")}</div>` : '<div class="empty">No retained live-activity push records found for this device yet.</div>'}
+          </div>
+          <div class="section-stack">
+            <h3>Recent Decisions</h3>
+            ${decisions.length ? `<div class="notification-list">${decisions.map((entry) => `
+              <details>
+                <summary>
+                  <div class="notification-header">
+                    <div>
+                      <div>${escapeHTML(entry.decision_type || entry.record_type || "decision")}</div>
+                      <div class="subtle">${escapeHTML(formatDateTime(entry.timestamp))} ${entry.decision_reason ? `• ${escapeHTML(entry.decision_reason)}` : ""}</div>
+                    </div>
+                    <div class="chip-row">
+                      ${entry.mode ? `<span class="pill">${escapeHTML(entry.mode)}</span>` : ""}
+                    </div>
+                  </div>
+                </summary>
+                <div class="section-stack" style="margin-top:10px;">
+                  <pre>${escapeHTML(JSON.stringify(entry.raw_record || {}, null, 2))}</pre>
+                </div>
+              </details>
+            `).join("")}</div>` : '<div class="empty">No recent live-activity decision records found for this device.</div>'}
+          </div>
+        </div>
+      `;
+    }
+
     function renderDetailMeta(payload) {
       const panel = document.getElementById("detail-meta");
       const device = payload.device || {};
@@ -827,6 +1030,9 @@
         renderDetailMeta(payload);
         renderFriendlyPreferences(payload.preferences_record || {});
         renderRawPreferences(payload.preferences_record || {});
+        renderLiveActivityState(payload);
+        renderLiveActivityPreview(payload);
+        renderLiveActivityDebug(payload);
         renderNotifications(payload);
       } catch (error) {
         const payload = error && error.payload ? error.payload : null;

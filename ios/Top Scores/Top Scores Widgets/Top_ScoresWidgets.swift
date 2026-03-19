@@ -350,32 +350,19 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
 }
 
 @available(iOSApplicationExtension 16.1, *)
-private extension TopScoresLiveActivityMatchState {
-    var matchDay: Date? {
-        WidgetMatchDateParser.shared.parse(date: date, time: "00:00")
-            ?? WidgetMatchDateParser.shared.parse(date: date, time: time)
-    }
-
-    var isScheduledForToday: Bool {
-        guard let matchDay else { return false }
-        return Calendar.current.isDateInToday(matchDay)
-    }
-}
-
-@available(iOSApplicationExtension 16.1, *)
 private enum LiveActivityMatchDisplayFilter {
     static func deduplicatedMatches(
         from matches: [TopScoresLiveActivityMatchState]
     ) -> [TopScoresLiveActivityMatchState] {
         var seenMatchIds = Set<String>()
         var seenTeamPairs = Set<String>()
-        return matches.filter { match in
+        return matches.reversed().filter { match in
             if !match.matchId.isEmpty {
                 return seenMatchIds.insert(match.matchId).inserted
             }
             let key = "\(match.date)|\(match.homeTeam.lowercased())|\(match.awayTeam.lowercased())"
             return seenTeamPairs.insert(key).inserted
-        }
+        }.reversed()
     }
 
     static func displayMatches(
@@ -385,17 +372,13 @@ private enum LiveActivityMatchDisplayFilter {
         guard state.mode == "multi_live" || state.mode == "multi_upcoming" || state.mode == "multi_finished" else {
             return deduplicated
         }
-        return deduplicated.filter { match in
-            !match.isFinished || match.isScheduledForToday
-        }
+        return deduplicated
     }
 
     static func trailingDisplayMatches(
         for state: TopScoresLiveActivityAttributes.ContentState
     ) -> [TopScoresLiveActivityMatchState] {
-        Array(deduplicatedMatches(from: state.matches).dropFirst()).filter { match in
-            !match.isFinished || match.isScheduledForToday
-        }
+        Array(deduplicatedMatches(from: state.matches).dropFirst())
     }
 }
 

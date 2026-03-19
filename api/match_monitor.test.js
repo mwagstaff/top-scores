@@ -1228,6 +1228,41 @@ test("mergeCanonicalLiveActivityMatch prefers more advanced canonical state when
   ]);
 });
 
+test("mergeCanonicalLiveActivityMatch prefers newer finished snapshot when canonical result is stale", () => {
+  const merged = __testHooks.mergeCanonicalLiveActivityMatch(
+    {
+      match_details_id: "c8r1zve354lt",
+      date: "2026-03-19",
+      time: "17:45",
+      league: "Premier League",
+      home_team: "Aston Villa",
+      away_team: "LOSC Lille",
+      home_score: 2,
+      away_score: 0,
+      score_status: "FT",
+      updated_at: "2026-03-19T19:40:00.000Z",
+      tv_channels: ["TNT Sports 1"],
+    },
+    {
+      match_details_id: "c8r1zve354lt",
+      date: "2026-03-19",
+      time: "17:45",
+      league: "Premier League",
+      home_team: "Aston Villa",
+      away_team: "LOSC Lille",
+      home_score: 1,
+      away_score: 0,
+      score_status: "FT",
+      updated_at: "2026-03-19T19:44:00.000Z",
+      tv_channels: ["TNT Sports 1"],
+    }
+  );
+
+  assert.equal(merged.score_status, "FT");
+  assert.equal(merged.home_score, 1);
+  assert.equal(merged.away_score, 0);
+});
+
 test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly payloads", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "single_finished",
@@ -1250,6 +1285,124 @@ test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly 
   );
 
   assert.deepStrictEqual(contentState.matches[0].tvChannels, ["Amazon", "TNT Sports"]);
+});
+
+test("buildLiveActivityContentState de-dupes duplicate match ids and keeps the freshest snapshot", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_live",
+    [
+      {
+        match_details_id: "c8r1zve354lt",
+        date: "2026-03-19",
+        time: "17:45",
+        league: "Premier League",
+        home_team: "Nottingham Forest",
+        away_team: "Brentford",
+        home_score: 0,
+        away_score: 0,
+        score_status: "17",
+        updated_at: "2026-03-19T17:17:00Z",
+        tv_channels: ["Sky Sports Main Event"],
+      },
+      {
+        match_details_id: "c8r1zve354lt",
+        date: "2026-03-19",
+        time: "17:45",
+        league: "Premier League",
+        home_team: "Nottingham Forest",
+        away_team: "Brentford",
+        home_score: 1,
+        away_score: 0,
+        score_status: "54",
+        updated_at: "2026-03-19T17:54:00Z",
+        tv_channels: ["TNT Sports 1", "Sky Sports Main Event"],
+      },
+    ],
+    2,
+    Date.parse("2026-03-19T17:56:00Z")
+  );
+
+  assert.equal(contentState.matches.length, 1);
+  assert.equal(contentState.matches[0].matchId, "c8r1zve354lt");
+  assert.equal(contentState.matches[0].homeScore, 1);
+  assert.equal(contentState.matches[0].awayScore, 0);
+  assert.equal(contentState.matches[0].matchTime, "54'");
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["TNT Sports", "Sky Sports"]);
+});
+
+test("combineLiveActivityOperationalMatches keeps recent finished matches alongside merged live matches", () => {
+  const matches = __testHooks.combineLiveActivityOperationalMatches(
+    [
+      {
+        match_details_id: "ce3g62vw192t",
+        date: "2026-03-19",
+        time: "20:00",
+        league: "Premier League",
+        home_team: "Liverpool",
+        away_team: "Chelsea",
+        home_score: 1,
+        away_score: 0,
+        score_status: "67",
+        updated_at: "2026-03-19T21:07:00Z",
+      },
+    ],
+    [
+      {
+        match_details_id: "c8r1zve354lt",
+        date: "2026-03-19",
+        time: "17:45",
+        league: "Premier League",
+        home_team: "Nottingham Forest",
+        away_team: "Brentford",
+        home_score: 1,
+        away_score: 0,
+        score_status: "FT",
+        updated_at: "2026-03-19T19:42:00Z",
+      },
+    ]
+  );
+
+  assert.deepStrictEqual(
+    matches.map((match) => match.match_details_id),
+    ["ce3g62vw192t", "c8r1zve354lt"]
+  );
+});
+
+test("combineLiveActivityOperationalMatches prefers newer corrected finished score over stale higher score", () => {
+  const matches = __testHooks.combineLiveActivityOperationalMatches(
+    [
+      {
+        match_details_id: "c8r1zve354lt",
+        date: "2026-03-19",
+        time: "17:45",
+        league: "Premier League",
+        home_team: "Aston Villa",
+        away_team: "LOSC Lille",
+        home_score: 2,
+        away_score: 0,
+        score_status: "FT",
+        updated_at: "2026-03-19T19:40:00Z",
+      },
+    ],
+    [
+      {
+        match_details_id: "c8r1zve354lt",
+        date: "2026-03-19",
+        time: "17:45",
+        league: "Premier League",
+        home_team: "Aston Villa",
+        away_team: "LOSC Lille",
+        home_score: 1,
+        away_score: 0,
+        score_status: "FT",
+        updated_at: "2026-03-19T19:44:00Z",
+      },
+    ]
+  );
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].home_score, 1);
+  assert.equal(matches[0].away_score, 0);
 });
 
 test("buildLiveActivityPresentationForUser clears delayed aggregate when current snapshot explicitly clears it", () => {

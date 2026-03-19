@@ -47,6 +47,10 @@ const FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS = parsePositiveIntOrFallback
   process.env.FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS,
   30 * 24 * 60 * 60
 );
+const LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS = parsePositiveIntOrFallback(
+  process.env.LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS,
+  14 * 24 * 60 * 60
+);
 const MAX_BBC_HISTORY_QUERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 const BBC_EVENTS_INDEX_KEY = `${DB_NAME}:bbc:events:index`;
@@ -71,6 +75,8 @@ const OPERATIONAL_DATASET_PREFIX = `${DB_NAME}:operational:dataset:`;
 const OPERATIONAL_MATCH_DETAILS_PREFIX = `${DB_NAME}:operational:match_details:`;
 const OPERATIONAL_MATCH_DETAILS_INDEX_KEY = `${DB_NAME}:operational:match_details:index`;
 const OPERATIONAL_MATCH_DETAILS_META_KEY = `${DB_NAME}:operational:match_details:meta`;
+const LIVE_ACTIVITY_DEBUG_DEVICE_INDEX_PREFIX = `${DB_NAME}:live_activity:debug:device:`;
+const LIVE_ACTIVITY_DEBUG_RECORD_PREFIX = `${DB_NAME}:live_activity:debug:record:`;
 
 let client = null;
 let isConnected = false;
@@ -249,6 +255,14 @@ async function ensureRedisTtlPolicy(redisClient) {
     {
       pattern: `${FANTASY_REMINDERS_SEND_IDEMPOTENCY_PREFIX}*`,
       ttl: FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS,
+    },
+    {
+      pattern: `${LIVE_ACTIVITY_DEBUG_RECORD_PREFIX}*`,
+      ttl: LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS,
+    },
+    {
+      pattern: `${LIVE_ACTIVITY_DEBUG_DEVICE_INDEX_PREFIX}*`,
+      ttl: LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS,
     },
   ];
   for (const policy of patternPolicies) {
@@ -915,6 +929,92 @@ async function getHistoryRecordsAll(redisClient, indexKey, contextLabel) {
   return getHistoryRecordsBySortedKeys(redisClient, keys, indexKey, contextLabel);
 }
 
+function buildLiveActivityDebugRecordKey(deviceToken, recordId) {
+  const normalizedToken = String(deviceToken || "").trim();
+  const normalizedRecordId = String(recordId || "").trim();
+  if (!normalizedToken || !normalizedRecordId) {
+    throw new Error("deviceToken and recordId are required for live activity debug record key");
+  }
+  return `${LIVE_ACTIVITY_DEBUG_RECORD_PREFIX}${sanitizeTokenForKey(normalizedToken)}:${sanitizeTokenForKey(normalizedRecordId)}`;
+}
+
+function buildLiveActivityDebugDeviceIndexKey(deviceToken) {
+  const normalizedToken = String(deviceToken || "").trim();
+  if (!normalizedToken) return null;
+  return `${LIVE_ACTIVITY_DEBUG_DEVICE_INDEX_PREFIX}${sanitizeTokenForKey(normalizedToken)}`;
+}
+
+async function saveLiveActivityDebugRecord(deviceToken, payload = {}) {
+  const normalizedToken = String(deviceToken || "").trim();
+  if (!normalizedToken) {
+    throw new Error("deviceToken is required to save live activity debug history");
+  }
+
+  const timestampMs = numericTimestampMs(payload && payload.timestamp_ms);
+  const recordId = String(
+    payload && (payload.record_id || payload.recordId) ? (payload.record_id || payload.recordId) : randomRecordId()
+  ).trim();
+  const recordKey = buildLiveActivityDebugRecordKey(normalizedToken, recordId);
+  const deviceIndexKey = buildLiveActivityDebugDeviceIndexKey(normalizedToken);
+  const record = {
+    ...(payload && typeof payload === "object" ? payload : {}),
+    record_id: recordId,
+    device_token: normalizedToken,
+    timestamp_ms: timestampMs,
+    timestamp: new Date(timestampMs).toISOString(),
+  };
+
+  try {
+    const redisClient = await getClient();
+    const transaction = redisClient.multi();
+    transaction.set(recordKey, JSON.stringify(record), { EX: LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS });
+    transaction.zAdd(deviceIndexKey, [{ score: timestampMs, value: recordKey }]);
+    transaction.expire(deviceIndexKey, LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS);
+    await transaction.exec();
+
+    const cutoffMs = pruneCutoffMs(LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS);
+    await pruneIndexEntries(redisClient, deviceIndexKey, cutoffMs);
+    return record;
+  } catch (error) {
+    console.error("[Redis] Error saving live activity debug history:", error);
+    throw error;
+  }
+}
+
+async function getLiveActivityDebugRecords(options = {}) {
+  const deviceToken = String(options && options.device_token ? options.device_token : "").trim();
+  if (!deviceToken) return [];
+
+  const order = String(options && options.order ? options.order : "desc").trim().toLowerCase() === "asc"
+    ? "asc"
+    : "desc";
+  const limit = parsePositiveIntOrFallback(options && options.limit, 10);
+
+  try {
+    const redisClient = await getClient();
+    const indexKey = buildLiveActivityDebugDeviceIndexKey(deviceToken);
+    if (!indexKey) return [];
+    const allRecords = await getHistoryRecordsAll(redisClient, indexKey, "live activity debug");
+    const filtered = allRecords.filter((record) => (
+      record &&
+      typeof record === "object" &&
+      String(record.device_token || "").trim() === deviceToken
+    ));
+    filtered.sort((lhs, rhs) => {
+      const left = numericTimestampMs(lhs && lhs.timestamp_ms);
+      const right = numericTimestampMs(rhs && rhs.timestamp_ms);
+      if (left !== right) return order === "asc" ? left - right : right - left;
+      return String(lhs && lhs.record_id ? lhs.record_id : "").localeCompare(
+        String(rhs && rhs.record_id ? rhs.record_id : "")
+      );
+    });
+    return limit > 0 ? filtered.slice(0, limit) : filtered;
+  } catch (error) {
+    console.error("[Redis] Error retrieving live activity debug history:", error);
+    return [];
+  }
+}
+
 function applyHistoryFilters(eventRecordsRaw, notificationRecordsRaw, options = {}) {
   const matchIdFilter = String(options.match_id || "").trim();
   const deviceTokenFilter = String(options.device_token || "").trim();
@@ -1008,6 +1108,7 @@ function buildHistoryRetentionPolicy() {
     notification_idempotency_ttl_seconds: BBC_NOTIFICATION_IDEMPOTENCY_TTL_SECONDS,
     fantasy_reminder_ttl_seconds: FANTASY_REMINDER_HISTORY_TTL_SECONDS,
     fantasy_reminder_idempotency_ttl_seconds: FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS,
+    live_activity_debug_ttl_seconds: LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS,
     user_preferences_ttl_seconds: USER_PREFERENCES_TTL_SECONDS,
     max_query_window_ms: MAX_BBC_HISTORY_QUERY_MS,
   };
@@ -1900,6 +2001,8 @@ module.exports = {
   saveFantasyReminderRecord,
   getFantasyReminderRecord,
   getFantasyReminderRecords,
+  saveLiveActivityDebugRecord,
+  getLiveActivityDebugRecords,
   saveBbcMatchEventHistory,
   saveBbcNotificationHistory,
   claimFantasyReminderSendIdempotency,
@@ -1921,6 +2024,8 @@ module.exports = {
     normalizeTimeRange,
     shortDeviceToken,
     normalizeFantasyReminderStatus,
+    buildLiveActivityDebugRecordKey,
+    buildLiveActivityDebugDeviceIndexKey,
     buildFantasyReminderRecordKey,
     buildFantasyReminderSendIdempotencyKey,
     buildBbcNotificationIdempotencyKey,

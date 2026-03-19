@@ -2,6 +2,7 @@ const {
   getAllUserPreferences,
   getOperationalDataset,
   updateUserLiveActivityState,
+  saveLiveActivityDebugRecord,
   saveFantasyReminderRecord,
   getFantasyReminderRecord,
   getFantasyReminderRecords,
@@ -58,6 +59,7 @@ const LIVE_ACTIVITY_DELAY_SNAPSHOT_STALE_TOLERANCE_MS = Math.max(POLL_INTERVAL_M
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
 const LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES = "merged_matches";
+const LIVE_ACTIVITY_OPERATIONAL_DATASET_RECENT_MATCHES = "recent_matches";
 const FANTASY_DEADLINE_REMINDER_EVAL_INTERVAL_MS = 60 * 1000;
 const FANTASY_DEADLINE_REMINDER_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
 const FANTASY_DEADLINE_REMINDER_DEFAULT_TIMEZONE = "Europe/London";
@@ -3033,6 +3035,22 @@ function dedupeLiveActivityEntries(entries) {
     }));
 }
 
+function dedupeLiveActivityMatches(matches) {
+  return dedupeLiveActivityEntries(
+    (Array.isArray(matches) ? matches : []).map((match) => ({
+      matchId: liveActivityMatchIdentity(match),
+      state: null,
+      match,
+    }))
+  ).map((entry) => entry.match);
+}
+
+function combineLiveActivityOperationalMatches(...collections) {
+  return dedupeLiveActivityMatches(
+    collections.flatMap((collection) => (Array.isArray(collection) ? collection : []))
+  );
+}
+
 function currentLondonDateKey(nowMs = Date.now()) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/London",
@@ -3159,16 +3177,16 @@ function compareLiveActivitySnapshotFreshness(lhs, rhs) {
   const rhsProgress = liveActivityStatusProgressValue(rhs && rhs.score_status);
   if (lhsProgress !== rhsProgress) return lhsProgress - rhsProgress;
 
-  const lhsTotalScore = totalKnownMatchScore(lhs);
-  const rhsTotalScore = totalKnownMatchScore(rhs);
-  if (lhsTotalScore !== null && rhsTotalScore !== null && lhsTotalScore !== rhsTotalScore) {
-    return lhsTotalScore - rhsTotalScore;
-  }
-
   const lhsUpdatedAtMs = parseUpdatedAtMs(lhs);
   const rhsUpdatedAtMs = parseUpdatedAtMs(rhs);
   if (lhsUpdatedAtMs !== null && rhsUpdatedAtMs !== null && lhsUpdatedAtMs !== rhsUpdatedAtMs) {
     return lhsUpdatedAtMs - rhsUpdatedAtMs;
+  }
+
+  const lhsTotalScore = totalKnownMatchScore(lhs);
+  const rhsTotalScore = totalKnownMatchScore(rhs);
+  if (lhsTotalScore !== null && rhsTotalScore !== null && lhsTotalScore !== rhsTotalScore) {
+    return lhsTotalScore - rhsTotalScore;
   }
 
   return 0;
@@ -3210,10 +3228,12 @@ function mergeCanonicalLiveActivityMatch(canonicalMatch, liveStateMatch) {
     }
   });
 
-  if (
+  const canonicalIsTerminal =
     isFinishedMatchStatus(canonical.score_status) ||
-    isPenaltyShootoutStatus(canonical.score_status)
-  ) {
+    isPenaltyShootoutStatus(canonical.score_status);
+  const canonicalIsAtLeastAsFreshAsLiveState =
+    compareLiveActivitySnapshotFreshness(canonical, liveState) >= 0;
+  if (canonicalIsTerminal && canonicalIsAtLeastAsFreshAsLiveState) {
     merged.score_status = canonical.score_status;
     merged.home_score = canonical.home_score;
     merged.away_score = canonical.away_score;
@@ -4148,7 +4168,7 @@ function buildLiveActivityContentState(
   const delayLabel = delayMinutes > 0 && (mode === "single_live" || mode === "multi_live")
     ? `Delayed ${delayMinutes} m`
     : null;
-  const normalizedMatches = matches.map((rawMatch) => {
+  const normalizedMatches = dedupeLiveActivityMatches(matches).map((rawMatch) => {
     const match = mode.includes("upcoming")
       ? sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state")
       : rawMatch;
@@ -4313,6 +4333,50 @@ function parseLiveActivityDispatchTimeMs(state) {
   return Number.isFinite(dispatchAtMs) ? dispatchAtMs : null;
 }
 
+function buildLiveActivityApsPayload(event, contentState, options = {}) {
+  const normalizedEvent = String(event || "").trim().toLowerCase();
+  const aps = {
+    timestamp: Number.isFinite(Number(options.timestamp))
+      ? Math.floor(Number(options.timestamp))
+      : Math.floor(Date.now() / 1000),
+    event: normalizedEvent,
+  };
+
+  if (contentState && typeof contentState === "object") {
+    aps["content-state"] = contentState;
+  }
+  if (Number.isFinite(Number(options.staleDate))) {
+    aps["stale-date"] = Math.floor(Number(options.staleDate));
+  }
+  if (normalizedEvent === "start") {
+    aps["attributes-type"] = LIVE_ACTIVITY_ATTRIBUTES_TYPE;
+    aps.attributes = LIVE_ACTIVITY_ATTRIBUTES;
+    if (options.alert && typeof options.alert === "object") {
+      aps.alert = options.alert;
+    }
+  }
+  if (normalizedEvent === "end" && Number.isFinite(Number(options.dismissalDate))) {
+    aps["dismissal-date"] = Math.floor(Number(options.dismissalDate));
+  }
+
+  return { aps };
+}
+
+async function persistLiveActivityDebug(user, payload = {}) {
+  if (!user || !user.deviceToken) return;
+  if (!payload || typeof payload !== "object" || Object.keys(payload).length === 0) return;
+  try {
+    await saveLiveActivityDebugRecord(user.deviceToken, payload);
+  } catch (error) {
+    console.warn(
+      `[MatchMonitor] Failed persisting live activity debug for ${shortDeviceToken(
+        user.deviceToken
+      )}:`,
+      error.message || error
+    );
+  }
+}
+
 function isTerminalLiveActivityError(result) {
   const message = String(result && result.error ? result.error : "").toLowerCase();
   if (!message) return false;
@@ -4449,6 +4513,14 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
           mode: presentation && presentation.mode ? presentation.mode : null,
         })}`
       );
+      await persistLiveActivityDebug(user, {
+        record_type: "decision",
+        decision_type: "preserve_existing_on_empty",
+        mode: presentation && presentation.mode ? presentation.mode : null,
+        activity_token_present: Boolean(activityPushToken),
+        pending_start_present: hasPendingStart,
+        preserve_existing_on_empty: preserveExistingOnEmpty,
+      });
       return;
     }
     if (isTestHoldActive) {
@@ -4459,6 +4531,11 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
           hold_until: state && state.testHoldUntil ? String(state.testHoldUntil) : null,
         })}`
       );
+      await persistLiveActivityDebug(user, {
+        record_type: "decision",
+        decision_type: "test_hold_active",
+        hold_until: state && state.testHoldUntil ? String(state.testHoldUntil) : null,
+      });
       return;
     }
     if (hasPendingStart) {
@@ -4470,23 +4547,46 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       });
     }
     if (!activityPushToken) return;
+    const endedContentState = {
+      mode: "ended",
+      generatedAtEpochSeconds: Math.floor(nowMs / 1000),
+      delayMinutes: 0,
+      delayLabel: null,
+      matches: [],
+    };
+    const endRawPayload = buildLiveActivityApsPayload("end", endedContentState, {
+      timestamp: Math.floor(nowMs / 1000),
+      dismissalDate: Math.floor(nowMs / 1000),
+    });
+    const endDispatchStartedAtMs = Date.now();
     const result = await sendLiveActivityPush({
       token: activityPushToken,
       event: "end",
-      contentState: {
-        mode: "ended",
-        generatedAtEpochSeconds: Math.floor(nowMs / 1000),
-        delayMinutes: 0,
-        delayLabel: null,
-        matches: [],
-      },
+      contentState: endedContentState,
       dismissalDate: Math.floor(nowMs / 1000),
       isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
     });
+    const endDispatchCompletedAtMs = Date.now();
     liveActivityMetrics.recordPush({
       event: "end",
       status: result.success ? "success" : "failure",
       isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+    });
+    await persistLiveActivityDebug(user, {
+      record_type: "push",
+      dispatch_kind: "end",
+      status: result.success ? "success" : "failure",
+      mode: "ended",
+      environment: result && result.environment ? result.environment : null,
+      elapsed_ms: Math.max(0, endDispatchCompletedAtMs - endDispatchStartedAtMs),
+      dispatch_started_at: new Date(endDispatchStartedAtMs).toISOString(),
+      dispatch_completed_at: new Date(endDispatchCompletedAtMs).toISOString(),
+      push_token_kind: "activity",
+      current_activity_id: state && state.currentActivityId ? String(state.currentActivityId) : null,
+      error: result && result.error ? String(result.error) : null,
+      is_terminal: Boolean(result && result.isTerminal),
+      raw_payload: endRawPayload,
+      content_state: endedContentState,
     });
     const patch = {
       currentActivityPushToken: null,
@@ -4534,9 +4634,27 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
         scoreHash,
         nowMs,
       });
+      await persistLiveActivityDebug(user, {
+        record_type: "decision",
+        decision_type: "skip",
+        decision_reason: skipReason,
+        mode: presentation.mode,
+        payload_hash: payloadHash,
+        score_hash: scoreHash,
+        last_mode: state && state.lastMode ? String(state.lastMode) : null,
+        last_payload_hash: state && state.lastPayloadHash ? String(state.lastPayloadHash) : null,
+        last_score_hash: state && state.lastScoreHash ? String(state.lastScoreHash) : null,
+        last_dispatch_at: state && state.lastDispatchAt ? String(state.lastDispatchAt) : null,
+        content_state: contentState,
+      });
       return;
     }
     logLiveActivityPayloadDiagnostics(user, "update", presentation, contentState, nowMs, payloadHash);
+    const updateRawPayload = buildLiveActivityApsPayload("update", contentState, {
+      timestamp: Math.floor(nowMs / 1000),
+      staleDate: Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
+    });
+    const updateDispatchStartedAtMs = Date.now();
     const updateResult = await sendLiveActivityPush({
       token: activityPushToken,
       event: "update",
@@ -4544,10 +4662,29 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       staleDate: Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
       isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
     });
+    const updateDispatchCompletedAtMs = Date.now();
     liveActivityMetrics.recordPush({
       event: "update",
       status: updateResult.success ? "success" : "failure",
       isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+    });
+    await persistLiveActivityDebug(user, {
+      record_type: "push",
+      dispatch_kind: "update",
+      status: updateResult.success ? "success" : "failure",
+      mode: presentation.mode,
+      environment: updateResult && updateResult.environment ? updateResult.environment : null,
+      elapsed_ms: Math.max(0, updateDispatchCompletedAtMs - updateDispatchStartedAtMs),
+      dispatch_started_at: new Date(updateDispatchStartedAtMs).toISOString(),
+      dispatch_completed_at: new Date(updateDispatchCompletedAtMs).toISOString(),
+      push_token_kind: "activity",
+      current_activity_id: state && state.currentActivityId ? String(state.currentActivityId) : null,
+      payload_hash: payloadHash,
+      score_hash: scoreHash,
+      error: updateResult && updateResult.error ? String(updateResult.error) : null,
+      is_terminal: Boolean(updateResult && updateResult.isTerminal),
+      raw_payload: updateRawPayload,
+      content_state: contentState,
     });
     if (updateResult.success) {
       await persistLiveActivityPatch(user, {
@@ -4593,6 +4730,13 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
         pending_max_seconds: Math.round(LIVE_ACTIVITY_PENDING_MAX_MS / 1000),
       })}`
     );
+    await persistLiveActivityDebug(user, {
+      record_type: "decision",
+      decision_type: "pending_start_wait",
+      pending_start_at: state && state.pendingStartAt ? String(state.pendingStartAt) : null,
+      pending_age_seconds: Math.max(0, Math.round(pendingAgeMs / 1000)),
+      pending_max_seconds: Math.round(LIVE_ACTIVITY_PENDING_MAX_MS / 1000),
+    });
     return;
   }
   if (hasPendingStart && pendingAgeMs >= LIVE_ACTIVITY_PENDING_MAX_MS) {
@@ -4615,6 +4759,15 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     ? `${first.home_team} vs ${first.away_team}`
     : "Top Scores";
   logLiveActivityPayloadDiagnostics(user, "start", presentation, contentState, nowMs, payloadHash);
+  const startRawPayload = buildLiveActivityApsPayload("start", contentState, {
+    timestamp: Math.floor(nowMs / 1000),
+    staleDate: Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
+    alert: {
+      title,
+      body,
+    },
+  });
+  const startDispatchStartedAtMs = Date.now();
   const startResult = await sendLiveActivityPush({
     token: pushToStartToken,
     event: "start",
@@ -4628,10 +4781,29 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     },
     isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
   });
+  const startDispatchCompletedAtMs = Date.now();
   liveActivityMetrics.recordPush({
     event: "start",
     status: startResult.success ? "success" : "failure",
     isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+  });
+  await persistLiveActivityDebug(user, {
+    record_type: "push",
+    dispatch_kind: "start",
+    status: startResult.success ? "success" : "failure",
+    mode: presentation.mode,
+    trigger: trigger || null,
+    environment: startResult && startResult.environment ? startResult.environment : null,
+    elapsed_ms: Math.max(0, startDispatchCompletedAtMs - startDispatchStartedAtMs),
+    dispatch_started_at: new Date(startDispatchStartedAtMs).toISOString(),
+    dispatch_completed_at: new Date(startDispatchCompletedAtMs).toISOString(),
+    push_token_kind: "push_to_start",
+    payload_hash: payloadHash,
+    score_hash: scoreHash,
+    error: startResult && startResult.error ? String(startResult.error) : null,
+    is_terminal: Boolean(startResult && startResult.isTerminal),
+    raw_payload: startRawPayload,
+    content_state: contentState,
   });
   if (startResult.success) {
     liveActivityMetrics.recordStart({
@@ -4854,9 +5026,11 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
 
   // For live/finished modes, append today's upcoming matches after the live/finished entries
   // so the widget always shows the full picture of today's action.
-  const matchesForMode = mode.includes("upcoming")
-    ? (sortedRecentKickoff.length > 0 ? sortedRecentKickoff : sortedUpcoming)
-    : [...sortedLiveAndFinished, ...sortedUpcoming].slice(0, LIVE_ACTIVITY_MAX_MATCHES);
+  const matchesForMode = dedupeLiveActivityMatches(
+    mode.includes("upcoming")
+      ? (sortedRecentKickoff.length > 0 ? sortedRecentKickoff : sortedUpcoming)
+      : [...sortedLiveAndFinished, ...sortedUpcoming].slice(0, LIVE_ACTIVITY_MAX_MATCHES)
+  );
 
   return {
     mode,
@@ -4896,9 +5070,14 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
   try {
     await ensureLiveActivityTeamRatingCache(nowMs);
     const monitoredEntries = monitoredMatchStatesSnapshot(nowMs);
-    const operationalDataset = await getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES);
-    const operationalMatches =
-      operationalDataset && Array.isArray(operationalDataset.payload) ? operationalDataset.payload : [];
+    const [mergedDataset, recentDataset] = await Promise.all([
+      getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES),
+      getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_RECENT_MATCHES),
+    ]);
+    const operationalMatches = combineLiveActivityOperationalMatches(
+      mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
+      recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : []
+    );
     const users = await getAllUserPreferences();
     if (!Array.isArray(users) || users.length === 0) return;
 
@@ -5716,6 +5895,8 @@ module.exports = {
     compareLiveActivityMatches,
     compareUpcomingLiveActivityMatches,
     buildLiveActivityEntriesForUser,
+    combineLiveActivityOperationalMatches,
+    dedupeLiveActivityMatches,
     dedupeFantasyDeadlineReminderUsers,
     evaluateFantasyDeadlineReminderDecision,
     formatFantasyDeadlineReminderTime,
