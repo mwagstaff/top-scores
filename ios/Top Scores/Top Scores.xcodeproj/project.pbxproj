@@ -982,6 +982,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Top Scores Watch";
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_CFBundlePackageType = APPL;
 				INFOPLIST_KEY_CLKComplicationPrincipalClass = "$(PRODUCT_MODULE_NAME).MatchComplicationController";
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Top Scores Watch to add matches to your calendar.";
 				INFOPLIST_KEY_NSRemindersUsageDescription = "Allow Top Scores Watch to add match reminders.";
@@ -1020,6 +1022,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Top Scores Watch";
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_CFBundlePackageType = APPL;
 				INFOPLIST_KEY_CLKComplicationPrincipalClass = "$(PRODUCT_MODULE_NAME).MatchComplicationController";
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Top Scores Watch to add matches to your calendar.";
 				INFOPLIST_KEY_NSRemindersUsageDescription = "Allow Top Scores Watch to add match reminders.";
