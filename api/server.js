@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const https = require("https");
+const crypto = require("crypto");
 const v8 = require("v8");
 const zlib = require("zlib");
 const { monitorEventLoopDelay, performance } = require("perf_hooks");
@@ -566,6 +567,29 @@ const app = express();
 const API_PREFIX = "/api/v1";
 const APP_DATA_SOURCE = "redis-operational";
 const DEVICE_TOKEN_HEADER = "x-device-token";
+const parsedRedisReconciliationIntervalMs = Number(
+  process.env.REDIS_RECONCILIATION_INTERVAL_MS || 5 * 60 * 1000
+);
+const REDIS_RECONCILIATION_INTERVAL_MS = Number.isFinite(parsedRedisReconciliationIntervalMs)
+  ? Math.max(30 * 1000, Math.floor(parsedRedisReconciliationIntervalMs))
+  : 5 * 60 * 1000;
+const REDIS_RECONCILIATION_AUTO_REPAIR = parseEnvBoolean(
+  process.env.REDIS_RECONCILIATION_AUTO_REPAIR,
+  true
+);
+const parsedRedisReconciliationSampleLimit = Number(
+  process.env.REDIS_RECONCILIATION_SAMPLE_LIMIT || 8
+);
+const REDIS_RECONCILIATION_SAMPLE_LIMIT = Number.isFinite(parsedRedisReconciliationSampleLimit)
+  ? Math.max(1, Math.floor(parsedRedisReconciliationSampleLimit))
+  : 8;
+const parsedRedisReconciliationFreshnessWarnSeconds = Number(
+  process.env.REDIS_RECONCILIATION_FRESHNESS_WARN_SECONDS || 5 * 60
+);
+const REDIS_RECONCILIATION_FRESHNESS_WARN_SECONDS =
+  Number.isFinite(parsedRedisReconciliationFreshnessWarnSeconds)
+    ? Math.max(30, Math.floor(parsedRedisReconciliationFreshnessWarnSeconds))
+    : 5 * 60;
 const parsedAppMetricsActiveWindowHours = Number(
   process.env.APP_METRICS_ACTIVE_DEVICE_WINDOW_HOURS || 24 * 30
 );
@@ -585,6 +609,8 @@ const appMetricEventsByDimension = new Map();
 const seenDeviceTokens = new Set();
 const deviceLastSeenAtMs = new Map();
 let appMetricEventsLastUpdated = null;
+let redisReconciliationState = null;
+let redisReconciliationTask = null;
 const PROCESS_START_TIME_SECONDS = Math.floor(Date.now() / 1000);
 const PROCESS_CPU_USAGE_START = process.cpuUsage();
 let processCpuUsageSample = {
@@ -4724,6 +4750,223 @@ function buildPrometheusMetricsText() {
     });
 
   liveActivityMetrics.appendPrometheusMetrics(lines, pushPrometheusSample);
+
+  const redisSyncSnapshot = currentRedisReconciliationSnapshot();
+  const redisSyncGeneratedAtSeconds = isoTimestampToSeconds(redisSyncSnapshot.generated_at);
+  const redisSyncStartedAtSeconds = isoTimestampToSeconds(redisSyncSnapshot.last_run_started_at);
+  const redisSyncCompletedAtSeconds = isoTimestampToSeconds(
+    redisSyncSnapshot.last_run_completed_at
+  );
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_generated_timestamp_seconds Timestamp of the latest stored Redis reconciliation snapshot."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_generated_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_generated_timestamp_seconds",
+    redisSyncGeneratedAtSeconds
+  );
+
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_started_timestamp_seconds Timestamp when the latest Redis reconciliation run started."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_started_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_started_timestamp_seconds",
+    redisSyncStartedAtSeconds
+  );
+
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_completed_timestamp_seconds Timestamp when the latest Redis reconciliation run completed."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_completed_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_completed_timestamp_seconds",
+    redisSyncCompletedAtSeconds
+  );
+
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_duration_seconds Duration of the latest Redis reconciliation run."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_duration_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_duration_seconds",
+    (redisSyncSnapshot.last_duration_ms || 0) / 1000
+  );
+
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_running Whether a Redis reconciliation run is currently executing (1=true, 0=false)."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_running gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_running",
+    redisSyncSnapshot.running ? 1 : 0
+  );
+
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_healthy Whether the latest Redis reconciliation snapshot is fully healthy (1=true, 0=false)."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_healthy gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_healthy",
+    redisSyncSnapshot.healthy ? 1 : 0
+  );
+
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_components_total Component counts from the latest Redis reconciliation snapshot."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_components_total gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_components_total",
+    Number(redisSyncSnapshot.summary && redisSyncSnapshot.summary.total_components) || 0,
+    { status: "total" }
+  );
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_components_total",
+    Number(redisSyncSnapshot.summary && redisSyncSnapshot.summary.healthy_components) || 0,
+    { status: "healthy" }
+  );
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_components_total",
+    Number(redisSyncSnapshot.summary && redisSyncSnapshot.summary.unhealthy_components) || 0,
+    { status: "unhealthy" }
+  );
+  pushPrometheusSample(
+    lines,
+    "top_scores_operational_redis_reconciliation_components_total",
+    Number(redisSyncSnapshot.summary && redisSyncSnapshot.summary.repaired_components) || 0,
+    { status: "repaired" }
+  );
+
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_component_status_code Status code for each operational component."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_component_status_code gauge");
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_component_in_sync Whether the component is currently in sync (1=true, 0=false)."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_component_in_sync gauge");
+  lines.push(
+    "# HELP top_scores_operational_memory_age_seconds Age of the in-memory operational component snapshot in seconds."
+  );
+  lines.push("# TYPE top_scores_operational_memory_age_seconds gauge");
+  lines.push(
+    "# HELP top_scores_operational_redis_age_seconds Age of the Redis operational component snapshot in seconds."
+  );
+  lines.push("# TYPE top_scores_operational_redis_age_seconds gauge");
+  lines.push(
+    "# HELP top_scores_operational_memory_updated_timestamp_seconds Last updated timestamp of the in-memory operational component snapshot."
+  );
+  lines.push("# TYPE top_scores_operational_memory_updated_timestamp_seconds gauge");
+  lines.push(
+    "# HELP top_scores_operational_redis_updated_timestamp_seconds Last updated timestamp of the Redis operational component snapshot."
+  );
+  lines.push("# TYPE top_scores_operational_redis_updated_timestamp_seconds gauge");
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_updated_at_delta_seconds Signed delta between memory and Redis updated_at timestamps."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_updated_at_delta_seconds gauge");
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_count_delta Signed delta between memory and Redis record counts."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_count_delta gauge");
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_diff_total Sampled diff totals from the latest reconciliation snapshot."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_diff_total gauge");
+  lines.push(
+    "# HELP top_scores_operational_redis_reconciliation_component_duration_seconds Time spent comparing and optionally repairing each component."
+  );
+  lines.push("# TYPE top_scores_operational_redis_reconciliation_component_duration_seconds gauge");
+
+  (Array.isArray(redisSyncSnapshot.components) ? redisSyncSnapshot.components : []).forEach((component) => {
+    const componentLabel = { component: component.name || "unknown" };
+    pushPrometheusSample(
+      lines,
+      "top_scores_operational_redis_reconciliation_component_status_code",
+      redisReconciliationStatusCode(component.status),
+      componentLabel
+    );
+    pushPrometheusSample(
+      lines,
+      "top_scores_operational_redis_reconciliation_component_in_sync",
+      component.status === "in_sync" ? 1 : 0,
+      componentLabel
+    );
+    pushPrometheusSample(
+      lines,
+      "top_scores_operational_memory_age_seconds",
+      Number.isFinite(component.memory && component.memory.age_seconds)
+        ? component.memory.age_seconds
+        : 0,
+      componentLabel
+    );
+    pushPrometheusSample(
+      lines,
+      "top_scores_operational_redis_age_seconds",
+      Number.isFinite(component.redis && component.redis.age_seconds)
+        ? component.redis.age_seconds
+        : 0,
+      componentLabel
+    );
+    pushPrometheusSample(
+      lines,
+      "top_scores_operational_memory_updated_timestamp_seconds",
+      isoTimestampToSeconds(component.memory && component.memory.updated_at),
+      componentLabel
+    );
+    pushPrometheusSample(
+      lines,
+      "top_scores_operational_redis_updated_timestamp_seconds",
+      isoTimestampToSeconds(component.redis && component.redis.updated_at),
+      componentLabel
+    );
+    pushPrometheusSample(
+      lines,
+      "top_scores_operational_redis_reconciliation_updated_at_delta_seconds",
+      Number.isFinite(component.updated_at_delta_seconds) ? component.updated_at_delta_seconds : 0,
+      componentLabel
+    );
+    pushPrometheusSample(
+      lines,
+      "top_scores_operational_redis_reconciliation_count_delta",
+      Number.isFinite(component.count_delta) ? component.count_delta : 0,
+      componentLabel
+    );
+    pushPrometheusSample(
+      lines,
+      "top_scores_operational_redis_reconciliation_component_duration_seconds",
+      Number(
+        (
+          ((component.timings && component.timings.total_ms) || 0) / 1000
+        ).toFixed(6)
+      ),
+      componentLabel
+    );
+    const diffSummary =
+      component.diff && component.diff.summary && typeof component.diff.summary === "object"
+        ? component.diff.summary
+        : {};
+    Object.entries(diffSummary).forEach(([kind, count]) => {
+      pushPrometheusSample(
+        lines,
+        "top_scores_operational_redis_reconciliation_diff_total",
+        Number(count) || 0,
+        {
+          component: component.name || "unknown",
+          kind,
+        }
+      );
+    });
+  });
 
   if (appMetricEventsLastUpdated) {
     const timestampSeconds = Math.floor(Date.parse(appMetricEventsLastUpdated) / 1000);
@@ -11004,6 +11247,857 @@ function currentFastMatchDetailsLookupSnapshot(trigger = "request") {
   };
 }
 
+function redisReconciliationStatusCode(status) {
+  switch (status) {
+    case "in_sync":
+      return 0;
+    case "memory_missing":
+      return 1;
+    case "redis_missing":
+      return 2;
+    case "redis_stale":
+      return 3;
+    case "redis_newer":
+      return 4;
+    case "payload_mismatch":
+      return 5;
+    case "meta_out_of_sync":
+      return 6;
+    case "empty":
+      return 7;
+    case "error":
+      return 8;
+    default:
+      return 9;
+  }
+}
+
+function stableJsonStringify(value) {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJsonStringify(entry)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJsonStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function hashComparablePayload(value) {
+  return crypto.createHash("sha1").update(stableJsonStringify(value)).digest("hex");
+}
+
+function ageSecondsFromIso(value, nowMs = Date.now()) {
+  const parsed = Date.parse(String(value || "").trim());
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.floor((nowMs - parsed) / 1000));
+}
+
+function secondsDeltaBetweenIso(leftIso, rightIso) {
+  const leftMs = Date.parse(String(leftIso || "").trim());
+  const rightMs = Date.parse(String(rightIso || "").trim());
+  if (!Number.isFinite(leftMs) || !Number.isFinite(rightMs)) return null;
+  return Math.floor((leftMs - rightMs) / 1000);
+}
+
+function buildRedisReconciliationStatePatch(patch = {}) {
+  return {
+    generated_at: patch.generated_at || new Date().toISOString(),
+    last_run_started_at: patch.last_run_started_at || null,
+    last_run_completed_at: patch.last_run_completed_at || null,
+    last_duration_ms: Number.isFinite(patch.last_duration_ms) ? patch.last_duration_ms : 0,
+    last_trigger: patch.last_trigger || null,
+    running: Boolean(patch.running),
+    healthy: Boolean(patch.healthy),
+    auto_repair_enabled:
+      patch.auto_repair_enabled !== undefined
+        ? Boolean(patch.auto_repair_enabled)
+        : REDIS_RECONCILIATION_AUTO_REPAIR,
+    config: {
+      interval_ms: REDIS_RECONCILIATION_INTERVAL_MS,
+      sample_limit: REDIS_RECONCILIATION_SAMPLE_LIMIT,
+      freshness_warn_seconds: REDIS_RECONCILIATION_FRESHNESS_WARN_SECONDS,
+    },
+    summary: patch.summary && typeof patch.summary === "object" ? patch.summary : {},
+    components: Array.isArray(patch.components) ? patch.components : [],
+    notes: Array.isArray(patch.notes) ? patch.notes : [],
+    last_error: patch.last_error || null,
+  };
+}
+
+function ensureRedisReconciliationState() {
+  if (!redisReconciliationState) {
+    redisReconciliationState = buildRedisReconciliationStatePatch({
+      healthy: true,
+      summary: {
+        total_components: 0,
+        healthy_components: 0,
+        unhealthy_components: 0,
+        status_counts: {},
+      },
+      notes: [
+        "Runtime memory is authoritative for serving responses; Redis is a persisted operational snapshot.",
+      ],
+    });
+  }
+  return redisReconciliationState;
+}
+
+function cloneComparablePayload(value) {
+  if (value === undefined) return null;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function currentOperationalDatasetMemorySnapshot(name) {
+  switch (name) {
+    case OP_DATASET_MERGED_MATCHES:
+      return currentMergedMatchesDatasetSnapshot();
+    case OP_DATASET_LIVE_MATCHES:
+      return {
+        items: Array.isArray(cachedMatches) ? cachedMatches : [],
+        updated_at: lastUpdated || null,
+        source: "memory",
+      };
+    case OP_DATASET_BBC_LIVE_MATCHES:
+      return {
+        items: Array.isArray(cachedBbcMatches) ? cachedBbcMatches : [],
+        updated_at: bbcLastUpdated || null,
+        source: "memory",
+      };
+    case OP_DATASET_BBC_RANGE_MATCHES:
+      return {
+        items: Array.isArray(cachedBbcRangeMatches) ? cachedBbcRangeMatches : [],
+        updated_at: bbcRangeLastUpdated || null,
+        source: "memory",
+      };
+    case OP_DATASET_RECENT_MATCHES:
+      return {
+        items: Array.isArray(cachedRecentMatches) ? cachedRecentMatches : [],
+        updated_at: recentLastUpdated || null,
+        source: "memory",
+      };
+    case OP_DATASET_PREMIER_LEAGUE_TEAMS:
+      return currentPremierLeagueTeamsDatasetSnapshot();
+    case OP_DATASET_CLUB_ELO_TEAMS:
+      return {
+        items: Array.isArray(cachedClubEloTeams) ? cachedClubEloTeams : [],
+        updated_at: clubEloLastUpdated || null,
+        source: "memory",
+      };
+    case OP_DATASET_FOOTBALL_DATABASE_TEAMS:
+      return {
+        items: Array.isArray(cachedFootballDatabaseTeams) ? cachedFootballDatabaseTeams : [],
+        updated_at: footballDatabaseLastUpdated || null,
+        source: "memory",
+      };
+    case OP_DATASET_NATIONAL_ELO_TEAMS:
+      return {
+        items: Array.isArray(cachedNationalEloTeams) ? cachedNationalEloTeams : [],
+        updated_at: nationalEloLastUpdated || null,
+        source: "memory",
+      };
+    case OP_DATASET_LEAGUE_TABLES:
+      return {
+        items: Array.isArray(cachedLeagueTables) ? cachedLeagueTables : [],
+        updated_at: leagueTablesLastUpdated || null,
+        source: "memory",
+      };
+    case OP_DATASET_CACHE_STATE:
+      return {
+        payload: currentCacheStateSnapshot(),
+        updated_at:
+          operationalCacheState && operationalCacheState.updated_at
+            ? operationalCacheState.updated_at
+            : null,
+        source: "memory",
+      };
+    default:
+      return {
+        items: [],
+        updated_at: null,
+        source: "memory_unknown",
+      };
+  }
+}
+
+function currentOperationalMemoryDatasetSnapshots() {
+  const output = {};
+  ADMIN_OPERATIONAL_DATASET_NAMES.forEach((name) => {
+    output[name] = currentOperationalDatasetMemorySnapshot(name);
+  });
+  return output;
+}
+
+function currentOperationalMatchDetailsMemorySnapshot() {
+  const snapshot = currentMatchDetailsLookupSnapshot();
+  const records = {};
+  if (snapshot && snapshot.lookup instanceof Map) {
+    Array.from(snapshot.lookup.entries())
+      .sort(([leftId], [rightId]) => leftId.localeCompare(rightId))
+      .forEach(([matchId, payload]) => {
+        records[matchId] = payload;
+      });
+  }
+  return {
+    updated_at: snapshot && snapshot.updated_at ? snapshot.updated_at : matchDetailsLastUpdated || null,
+    total: Object.keys(records).length,
+    records,
+    source: snapshot && snapshot.source ? snapshot.source : "memory_missing",
+  };
+}
+
+function operationalPersistOptionsForDataset(name, updatedAt, source) {
+  const options = {
+    updated_at: updatedAt || new Date().toISOString(),
+    source,
+  };
+  if (name === OP_DATASET_CLUB_ELO_TEAMS) {
+    options.ttl_seconds = CLUB_ELO_REDIS_TTL_SECONDS;
+  } else if (name === OP_DATASET_FOOTBALL_DATABASE_TEAMS) {
+    options.ttl_seconds = FOOTBALL_DATABASE_REDIS_TTL_SECONDS;
+  } else if (name === OP_DATASET_NATIONAL_ELO_TEAMS) {
+    options.ttl_seconds = NATIONAL_ELO_REDIS_TTL_SECONDS;
+  }
+  return options;
+}
+
+function comparableEntryIdentity(item, index) {
+  if (item && typeof item === "object") {
+    const candidates = [
+      item.id,
+      item.match_id,
+      item.matchId,
+      item.details_url,
+      item.detailsUrl,
+      item.name,
+      item.club,
+      item.team,
+      item.code,
+    ];
+    const first = candidates.find((candidate) => String(candidate || "").trim());
+    if (first) {
+      return String(first).trim();
+    }
+    const homeTeam = item.home_team || item.homeTeam;
+    const awayTeam = item.away_team || item.awayTeam;
+    const league = item.league || item.competition;
+    const date = item.date || "";
+    const time = item.time || "";
+    if (homeTeam || awayTeam || league || date || time) {
+      return [date, time, league, homeTeam, awayTeam].map((value) => String(value || "").trim()).join("|");
+    }
+  }
+  return `index:${index}`;
+}
+
+function comparableEntryPreview(item, index) {
+  if (item && typeof item === "object") {
+    return {
+      key: comparableEntryIdentity(item, index),
+      id: item.id || item.match_id || item.matchId || null,
+      date: item.date || null,
+      time: item.time || null,
+      league: item.league || item.competition || null,
+      home_team: item.home_team || item.homeTeam || null,
+      away_team: item.away_team || item.awayTeam || null,
+      status: item.score_status || item.match_time || item.matchTime || null,
+      updated_at: item.updated_at || null,
+      value:
+        typeof item === "object" && !Array.isArray(item)
+          ? undefined
+          : item,
+    };
+  }
+  return {
+    key: `index:${index}`,
+    value: item,
+  };
+}
+
+function buildArrayDiffSamples(memoryItems, redisItems, sampleLimit = REDIS_RECONCILIATION_SAMPLE_LIMIT) {
+  const memoryMap = new Map();
+  const redisMap = new Map();
+
+  (Array.isArray(memoryItems) ? memoryItems : []).forEach((item, index) => {
+    const identity = comparableEntryIdentity(item, index);
+    const key = memoryMap.has(identity) ? `${identity}#${index}` : identity;
+    memoryMap.set(key, {
+      hash: hashComparablePayload(item),
+      preview: comparableEntryPreview(item, index),
+    });
+  });
+
+  (Array.isArray(redisItems) ? redisItems : []).forEach((item, index) => {
+    const identity = comparableEntryIdentity(item, index);
+    const key = redisMap.has(identity) ? `${identity}#${index}` : identity;
+    redisMap.set(key, {
+      hash: hashComparablePayload(item),
+      preview: comparableEntryPreview(item, index),
+    });
+  });
+
+  const onlyInMemory = [];
+  const onlyInRedis = [];
+  const changed = [];
+  const keys = Array.from(new Set([...memoryMap.keys(), ...redisMap.keys()])).sort();
+
+  keys.forEach((key) => {
+    const memoryEntry = memoryMap.get(key);
+    const redisEntry = redisMap.get(key);
+    if (memoryEntry && !redisEntry) {
+      if (onlyInMemory.length < sampleLimit) {
+        onlyInMemory.push(memoryEntry.preview);
+      }
+      return;
+    }
+    if (!memoryEntry && redisEntry) {
+      if (onlyInRedis.length < sampleLimit) {
+        onlyInRedis.push(redisEntry.preview);
+      }
+      return;
+    }
+    if (memoryEntry && redisEntry && memoryEntry.hash !== redisEntry.hash && changed.length < sampleLimit) {
+      changed.push({
+        key,
+        memory: memoryEntry.preview,
+        redis: redisEntry.preview,
+      });
+    }
+  });
+
+  return {
+    only_in_memory: onlyInMemory,
+    only_in_redis: onlyInRedis,
+    changed,
+    summary: {
+      only_in_memory: keys.filter((key) => memoryMap.has(key) && !redisMap.has(key)).length,
+      only_in_redis: keys.filter((key) => !memoryMap.has(key) && redisMap.has(key)).length,
+      changed: keys.filter((key) => {
+        const memoryEntry = memoryMap.get(key);
+        const redisEntry = redisMap.get(key);
+        return memoryEntry && redisEntry && memoryEntry.hash !== redisEntry.hash;
+      }).length,
+    },
+  };
+}
+
+function collectObjectDiffPaths(memoryValue, redisValue, basePath = "", output = [], limit = REDIS_RECONCILIATION_SAMPLE_LIMIT) {
+  if (output.length >= limit) return output;
+
+  const bothObjects =
+    memoryValue &&
+    redisValue &&
+    typeof memoryValue === "object" &&
+    typeof redisValue === "object" &&
+    !Array.isArray(memoryValue) &&
+    !Array.isArray(redisValue);
+
+  if (bothObjects) {
+    const keys = Array.from(
+      new Set([...Object.keys(memoryValue), ...Object.keys(redisValue)])
+    ).sort();
+    keys.forEach((key) => {
+      if (output.length >= limit) return;
+      const nextPath = basePath ? `${basePath}.${key}` : key;
+      if (!Object.prototype.hasOwnProperty.call(memoryValue, key)) {
+        output.push({ path: nextPath, type: "only_in_redis" });
+        return;
+      }
+      if (!Object.prototype.hasOwnProperty.call(redisValue, key)) {
+        output.push({ path: nextPath, type: "only_in_memory" });
+        return;
+      }
+      collectObjectDiffPaths(memoryValue[key], redisValue[key], nextPath, output, limit);
+    });
+    return output;
+  }
+
+  const memorySerialized = stableJsonStringify(memoryValue);
+  const redisSerialized = stableJsonStringify(redisValue);
+  if (memorySerialized !== redisSerialized) {
+    output.push({
+      path: basePath || "$",
+      memory: memoryValue === undefined ? null : memoryValue,
+      redis: redisValue === undefined ? null : redisValue,
+    });
+  }
+  return output;
+}
+
+function buildMatchDetailsDiffSamples(memoryRecords, redisRecords, sampleLimit = REDIS_RECONCILIATION_SAMPLE_LIMIT) {
+  const memoryIds = Object.keys(memoryRecords || {}).sort();
+  const redisIds = Object.keys(redisRecords || {}).sort();
+  const memorySet = new Set(memoryIds);
+  const redisSet = new Set(redisIds);
+  const onlyInMemory = [];
+  const onlyInRedis = [];
+  const changed = [];
+
+  memoryIds.forEach((matchId) => {
+    if (!redisSet.has(matchId) && onlyInMemory.length < sampleLimit) {
+      const payload = memoryRecords[matchId];
+      onlyInMemory.push({
+        match_id: matchId,
+        updated_at: payload && payload.updated_at ? payload.updated_at : null,
+        score_status: payload && payload.score_status ? payload.score_status : null,
+        home_score: payload && payload.home_score !== undefined ? payload.home_score : null,
+        away_score: payload && payload.away_score !== undefined ? payload.away_score : null,
+      });
+    }
+  });
+  redisIds.forEach((matchId) => {
+    if (!memorySet.has(matchId) && onlyInRedis.length < sampleLimit) {
+      const payload = redisRecords[matchId];
+      onlyInRedis.push({
+        match_id: matchId,
+        updated_at: payload && payload.updated_at ? payload.updated_at : null,
+        score_status: payload && payload.score_status ? payload.score_status : null,
+        home_score: payload && payload.home_score !== undefined ? payload.home_score : null,
+        away_score: payload && payload.away_score !== undefined ? payload.away_score : null,
+      });
+    }
+  });
+
+  memoryIds.forEach((matchId) => {
+    if (!redisSet.has(matchId) || changed.length >= sampleLimit) return;
+    const memoryPayload = memoryRecords[matchId];
+    const redisPayload = redisRecords[matchId];
+    if (hashComparablePayload(memoryPayload) === hashComparablePayload(redisPayload)) return;
+    changed.push({
+      match_id: matchId,
+      memory: {
+        updated_at: memoryPayload && memoryPayload.updated_at ? memoryPayload.updated_at : null,
+        score_status: memoryPayload && memoryPayload.score_status ? memoryPayload.score_status : null,
+        home_score:
+          memoryPayload && memoryPayload.home_score !== undefined ? memoryPayload.home_score : null,
+        away_score:
+          memoryPayload && memoryPayload.away_score !== undefined ? memoryPayload.away_score : null,
+        in_progress: Boolean(memoryPayload && memoryPayload.in_progress),
+      },
+      redis: {
+        updated_at: redisPayload && redisPayload.updated_at ? redisPayload.updated_at : null,
+        score_status: redisPayload && redisPayload.score_status ? redisPayload.score_status : null,
+        home_score:
+          redisPayload && redisPayload.home_score !== undefined ? redisPayload.home_score : null,
+        away_score:
+          redisPayload && redisPayload.away_score !== undefined ? redisPayload.away_score : null,
+        in_progress: Boolean(redisPayload && redisPayload.in_progress),
+      },
+    });
+  });
+
+  return {
+    only_in_memory: onlyInMemory,
+    only_in_redis: onlyInRedis,
+    changed,
+    summary: {
+      only_in_memory: memoryIds.filter((matchId) => !redisSet.has(matchId)).length,
+      only_in_redis: redisIds.filter((matchId) => !memorySet.has(matchId)).length,
+      changed: memoryIds.filter((matchId) => {
+        if (!redisSet.has(matchId)) return false;
+        return hashComparablePayload(memoryRecords[matchId]) !== hashComparablePayload(redisRecords[matchId]);
+      }).length,
+    },
+  };
+}
+
+function buildComparableDatasetSide(payload, updatedAt, source, nowMs) {
+  const hasPayload = payload !== null && payload !== undefined;
+  const count = Array.isArray(payload)
+    ? payload.length
+    : payload && typeof payload === "object"
+      ? Object.keys(payload).length
+      : 0;
+  return {
+    source: source || null,
+    updated_at: updatedAt || null,
+    age_seconds: ageSecondsFromIso(updatedAt, nowMs),
+    has_payload: hasPayload,
+    count,
+    hash: hasPayload ? hashComparablePayload(payload) : null,
+  };
+}
+
+function buildDatasetReconciliationComponent(name, memorySnapshot, redisRecord, nowMs) {
+  const startedAtMs = Date.now();
+  const memoryPayload =
+    Object.prototype.hasOwnProperty.call(memorySnapshot || {}, "payload")
+      ? memorySnapshot.payload
+      : Array.isArray(memorySnapshot && memorySnapshot.items)
+        ? memorySnapshot.items
+        : [];
+  const redisPayload =
+    redisRecord && Object.prototype.hasOwnProperty.call(redisRecord, "payload")
+      ? redisRecord.payload
+      : null;
+  const memorySide = buildComparableDatasetSide(
+    cloneComparablePayload(memoryPayload),
+    memorySnapshot && memorySnapshot.updated_at ? memorySnapshot.updated_at : null,
+    memorySnapshot && memorySnapshot.source ? memorySnapshot.source : "memory",
+    nowMs
+  );
+  const redisSide = buildComparableDatasetSide(
+    cloneComparablePayload(redisPayload),
+    redisRecord && redisRecord.updated_at ? redisRecord.updated_at : null,
+    redisRecord && redisRecord.source ? redisRecord.source : "redis",
+    nowMs
+  );
+
+  let status = "in_sync";
+  let diff = null;
+  if (!memorySide.has_payload && !redisSide.has_payload) {
+    status = "empty";
+  } else if (!memorySide.has_payload && redisSide.has_payload) {
+    status = "memory_missing";
+  } else if (memorySide.has_payload && !redisSide.has_payload) {
+    status = "redis_missing";
+  } else if (memorySide.hash === redisSide.hash) {
+    const updatedDeltaSeconds = secondsDeltaBetweenIso(memorySide.updated_at, redisSide.updated_at);
+    if (updatedDeltaSeconds !== null && updatedDeltaSeconds !== 0) {
+      status = "meta_out_of_sync";
+    }
+  } else {
+    const updatedDeltaSeconds = secondsDeltaBetweenIso(memorySide.updated_at, redisSide.updated_at);
+    if (updatedDeltaSeconds !== null) {
+      if (updatedDeltaSeconds > 0) {
+        status = "redis_stale";
+      } else if (updatedDeltaSeconds < 0) {
+        status = "redis_newer";
+      } else {
+        status = "payload_mismatch";
+      }
+    } else {
+      status = "payload_mismatch";
+    }
+  }
+
+  if (Array.isArray(memoryPayload) || Array.isArray(redisPayload)) {
+    diff = buildArrayDiffSamples(memoryPayload, redisPayload);
+  } else if (memorySide.hash !== redisSide.hash) {
+    diff = {
+      object_paths: collectObjectDiffPaths(memoryPayload || {}, redisPayload || {}),
+      summary: {
+        changed_paths: collectObjectDiffPaths(memoryPayload || {}, redisPayload || {}, "", [], 1000)
+          .length,
+      },
+    };
+  }
+
+  const freshnessConcern =
+    redisSide.age_seconds !== null &&
+    redisSide.age_seconds > REDIS_RECONCILIATION_FRESHNESS_WARN_SECONDS &&
+    (status === "redis_stale" || status === "redis_missing" || status === "meta_out_of_sync");
+
+  return {
+    name,
+    type: "dataset",
+    status,
+    healthy: status === "in_sync" || status === "empty",
+    repair_recommended:
+      status === "redis_missing" || status === "redis_stale" || status === "meta_out_of_sync",
+    memory: memorySide,
+    redis: redisSide,
+    updated_at_delta_seconds: secondsDeltaBetweenIso(memorySide.updated_at, redisSide.updated_at),
+    count_delta: memorySide.count - redisSide.count,
+    diff,
+    timings: {
+      compare_ms: Date.now() - startedAtMs,
+    },
+    notes: freshnessConcern
+      ? [`Redis side exceeds freshness warning threshold (${REDIS_RECONCILIATION_FRESHNESS_WARN_SECONDS}s).`]
+      : [],
+  };
+}
+
+function buildMatchDetailsReconciliationComponent(memorySnapshot, redisSnapshot, nowMs) {
+  const startedAtMs = Date.now();
+  const memoryPayload = cloneComparablePayload(memorySnapshot && memorySnapshot.records);
+  const redisPayload = cloneComparablePayload(redisSnapshot && redisSnapshot.records);
+  const memorySide = buildComparableDatasetSide(
+    memoryPayload,
+    memorySnapshot && memorySnapshot.updated_at ? memorySnapshot.updated_at : null,
+    memorySnapshot && memorySnapshot.source ? memorySnapshot.source : "memory",
+    nowMs
+  );
+  const redisSide = buildComparableDatasetSide(
+    redisPayload,
+    redisSnapshot && redisSnapshot.updated_at ? redisSnapshot.updated_at : null,
+    redisSnapshot && redisSnapshot.source ? redisSnapshot.source : "redis",
+    nowMs
+  );
+
+  let status = "in_sync";
+  if (!memorySide.has_payload && !redisSide.has_payload) {
+    status = "empty";
+  } else if (!memorySide.has_payload && redisSide.has_payload) {
+    status = "memory_missing";
+  } else if (memorySide.has_payload && !redisSide.has_payload) {
+    status = "redis_missing";
+  } else if (memorySide.hash === redisSide.hash) {
+    const updatedDeltaSeconds = secondsDeltaBetweenIso(memorySide.updated_at, redisSide.updated_at);
+    if (updatedDeltaSeconds !== null && updatedDeltaSeconds !== 0) {
+      status = "meta_out_of_sync";
+    }
+  } else {
+    const updatedDeltaSeconds = secondsDeltaBetweenIso(memorySide.updated_at, redisSide.updated_at);
+    if (updatedDeltaSeconds !== null) {
+      if (updatedDeltaSeconds > 0) {
+        status = "redis_stale";
+      } else if (updatedDeltaSeconds < 0) {
+        status = "redis_newer";
+      } else {
+        status = "payload_mismatch";
+      }
+    } else {
+      status = "payload_mismatch";
+    }
+  }
+
+  return {
+    name: "match_details",
+    type: "match_details",
+    status,
+    healthy: status === "in_sync" || status === "empty",
+    repair_recommended:
+      status === "redis_missing" || status === "redis_stale" || status === "meta_out_of_sync",
+    memory: {
+      ...memorySide,
+      total: memorySnapshot && Number.isFinite(memorySnapshot.total) ? memorySnapshot.total : memorySide.count,
+    },
+    redis: {
+      ...redisSide,
+      total: redisSnapshot && Number.isFinite(redisSnapshot.total) ? redisSnapshot.total : redisSide.count,
+    },
+    updated_at_delta_seconds: secondsDeltaBetweenIso(memorySide.updated_at, redisSide.updated_at),
+    count_delta: memorySide.count - redisSide.count,
+    diff: buildMatchDetailsDiffSamples(memoryPayload || {}, redisPayload || {}),
+    timings: {
+      compare_ms: Date.now() - startedAtMs,
+    },
+    notes: [],
+  };
+}
+
+async function repairRedisReconciliationComponent(component, memoryDatasetSnapshots, memoryMatchDetailsSnapshot) {
+  const startedAtMs = Date.now();
+  if (!component || !component.repair_recommended) {
+    return {
+      attempted: false,
+      applied: false,
+      duration_ms: 0,
+    };
+  }
+
+  if (component.type === "match_details") {
+    await persistOperationalMatchDetailsSafe(memoryMatchDetailsSnapshot.records, {
+      replace: true,
+      updated_at: component.memory.updated_at || new Date().toISOString(),
+      source: "redis_reconciliation_repair",
+    });
+  } else {
+    const snapshot = memoryDatasetSnapshots[component.name];
+    const payload =
+      snapshot && Object.prototype.hasOwnProperty.call(snapshot, "payload")
+        ? snapshot.payload
+        : snapshot && Array.isArray(snapshot.items)
+          ? snapshot.items
+          : [];
+    await persistOperationalDatasetSafe(
+      component.name,
+      payload,
+      operationalPersistOptionsForDataset(
+        component.name,
+        component.memory.updated_at || new Date().toISOString(),
+        "redis_reconciliation_repair"
+      )
+    );
+  }
+
+  return {
+    attempted: true,
+    applied: true,
+    duration_ms: Date.now() - startedAtMs,
+  };
+}
+
+async function runRedisReconciliationCheck(options = {}) {
+  if (redisReconciliationTask) {
+    return redisReconciliationTask;
+  }
+
+  const trigger = options.trigger || "manual";
+  const repairEnabled =
+    options.repair !== undefined ? Boolean(options.repair) : REDIS_RECONCILIATION_AUTO_REPAIR;
+  const startedAtIso = new Date().toISOString();
+  ensureRedisReconciliationState();
+  redisReconciliationState = buildRedisReconciliationStatePatch({
+    ...redisReconciliationState,
+    generated_at: startedAtIso,
+    last_run_started_at: startedAtIso,
+    last_trigger: trigger,
+    running: true,
+    auto_repair_enabled: repairEnabled,
+    last_error: null,
+  });
+
+  redisReconciliationTask = (async () => {
+    const runStartedAtMs = Date.now();
+    const nowMs = runStartedAtMs;
+    try {
+      const [redisDatasets, redisMatchDetailsSnapshot] = await Promise.all([
+        getOperationalDatasets(ADMIN_OPERATIONAL_DATASET_NAMES),
+        getOperationalMatchDetailsSnapshotSafe(),
+      ]);
+      const memoryDatasetSnapshots = currentOperationalMemoryDatasetSnapshots();
+      const memoryMatchDetailsSnapshot = currentOperationalMatchDetailsMemorySnapshot();
+
+      const components = ADMIN_OPERATIONAL_DATASET_NAMES.map((name) =>
+        buildDatasetReconciliationComponent(
+          name,
+          memoryDatasetSnapshots[name],
+          redisDatasets && redisDatasets[name] ? redisDatasets[name] : null,
+          nowMs
+        )
+      );
+      components.push(
+        buildMatchDetailsReconciliationComponent(
+          memoryMatchDetailsSnapshot,
+          redisMatchDetailsSnapshot,
+          nowMs
+        )
+      );
+
+      for (const component of components) {
+        const canRepair = repairEnabled && component.repair_recommended && component.status !== "redis_newer";
+        const repair = canRepair
+          ? await repairRedisReconciliationComponent(
+            component,
+            memoryDatasetSnapshots,
+            memoryMatchDetailsSnapshot
+          )
+          : { attempted: false, applied: false, duration_ms: 0 };
+        component.repair = repair;
+        component.timings.total_ms =
+          (component.timings && component.timings.compare_ms ? component.timings.compare_ms : 0) +
+          (repair.duration_ms || 0);
+      }
+
+      const repairedAny = components.some(
+        (component) => component.repair && component.repair.applied
+      );
+      let finalizedComponents = components;
+      if (repairedAny) {
+        const [reloadedRedisDatasets, reloadedRedisMatchDetailsSnapshot] = await Promise.all([
+          getOperationalDatasets(ADMIN_OPERATIONAL_DATASET_NAMES),
+          getOperationalMatchDetailsSnapshotSafe(),
+        ]);
+        finalizedComponents = ADMIN_OPERATIONAL_DATASET_NAMES.map((name) => {
+          const previous = components.find((component) => component.name === name);
+          const rebuilt = buildDatasetReconciliationComponent(
+            name,
+            memoryDatasetSnapshots[name],
+            reloadedRedisDatasets && reloadedRedisDatasets[name]
+              ? reloadedRedisDatasets[name]
+              : null,
+            nowMs
+          );
+          rebuilt.repair = previous && previous.repair ? previous.repair : null;
+          rebuilt.timings.total_ms =
+            (rebuilt.timings && rebuilt.timings.compare_ms ? rebuilt.timings.compare_ms : 0) +
+            (rebuilt.repair && rebuilt.repair.duration_ms ? rebuilt.repair.duration_ms : 0);
+          return rebuilt;
+        });
+        const matchDetailsPrevious = components.find((component) => component.name === "match_details");
+        const rebuiltMatchDetails = buildMatchDetailsReconciliationComponent(
+          memoryMatchDetailsSnapshot,
+          reloadedRedisMatchDetailsSnapshot,
+          nowMs
+        );
+        rebuiltMatchDetails.repair =
+          matchDetailsPrevious && matchDetailsPrevious.repair ? matchDetailsPrevious.repair : null;
+        rebuiltMatchDetails.timings.total_ms =
+          (rebuiltMatchDetails.timings && rebuiltMatchDetails.timings.compare_ms
+            ? rebuiltMatchDetails.timings.compare_ms
+            : 0) +
+          (rebuiltMatchDetails.repair && rebuiltMatchDetails.repair.duration_ms
+            ? rebuiltMatchDetails.repair.duration_ms
+            : 0);
+        finalizedComponents.push(rebuiltMatchDetails);
+      }
+
+      const statusCounts = {};
+      finalizedComponents.forEach((component) => {
+        statusCounts[component.status] = (statusCounts[component.status] || 0) + 1;
+      });
+      const healthyComponents = finalizedComponents.filter((component) => component.healthy).length;
+      const repairedComponents = finalizedComponents.filter(
+        (component) => component.repair && component.repair.applied
+      ).length;
+      const summary = {
+        total_components: finalizedComponents.length,
+        healthy_components: healthyComponents,
+        unhealthy_components: finalizedComponents.length - healthyComponents,
+        repaired_components: repairedComponents,
+        status_counts: statusCounts,
+      };
+      const completedAtIso = new Date().toISOString();
+      redisReconciliationState = buildRedisReconciliationStatePatch({
+        generated_at: completedAtIso,
+        last_run_started_at: startedAtIso,
+        last_run_completed_at: completedAtIso,
+        last_duration_ms: Date.now() - runStartedAtMs,
+        last_trigger: trigger,
+        running: false,
+        healthy: summary.unhealthy_components === 0,
+        auto_repair_enabled: repairEnabled,
+        summary,
+        components: finalizedComponents,
+        notes: [
+          "Redis persistence is best-effort. Memory is still the live authoritative runtime cache.",
+          "Auto-repair only writes memory back to Redis when Redis is missing, older, or metadata-only stale.",
+        ],
+      });
+      return redisReconciliationState;
+    } catch (error) {
+      const completedAtIso = new Date().toISOString();
+      redisReconciliationState = buildRedisReconciliationStatePatch({
+        generated_at: completedAtIso,
+        last_run_started_at: startedAtIso,
+        last_run_completed_at: completedAtIso,
+        last_duration_ms: Date.now() - runStartedAtMs,
+        last_trigger: trigger,
+        running: false,
+        healthy: false,
+        auto_repair_enabled: repairEnabled,
+        summary: {
+          total_components: 0,
+          healthy_components: 0,
+          unhealthy_components: 0,
+          repaired_components: 0,
+          status_counts: {},
+        },
+        components: [],
+        last_error: error.message || String(error),
+        notes: [
+          "Redis reconciliation failed before a full comparison could be completed.",
+        ],
+      });
+      return redisReconciliationState;
+    } finally {
+      redisReconciliationTask = null;
+    }
+  })();
+
+  return redisReconciliationTask;
+}
+
+function currentRedisReconciliationSnapshot() {
+  return ensureRedisReconciliationState();
+}
+
 function findInMemoryMatchRecordByMatchId(matchId) {
   const normalizedMatchId = normalizeMatchDetailsId(matchId);
   if (!normalizedMatchId) return null;
@@ -13179,6 +14273,10 @@ app.get("/admin/preferences", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_preferences_ui.html"));
 });
 
+app.get("/admin/redis", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_redis_ui.html"));
+});
+
 app.get("/admin/devices", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_devices_ui.html"));
 });
@@ -13210,6 +14308,55 @@ app.get(["/healthcheck", `${API_PREFIX}/healthcheck`], (_req, res) => {
 app.get(`${API_PREFIX}/cache-state`, (_req, res) => {
   setCacheOnlyHeaders(res);
   res.json(currentCacheStateSnapshot());
+});
+
+app.get(`${API_PREFIX}/admin/redis/reconciliation`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    const refreshRaw = String(req.query.refresh || "").trim().toLowerCase();
+    const repairRaw = String(req.query.repair || "").trim().toLowerCase();
+    const refresh = refreshRaw === "1" || refreshRaw === "true" || refreshRaw === "yes";
+    const repair = repairRaw === "1" || repairRaw === "true" || repairRaw === "yes";
+    const snapshot = refresh
+      ? await runRedisReconciliationCheck({
+        trigger: "admin_api_refresh",
+        repair,
+      })
+      : currentRedisReconciliationSnapshot();
+    res.status(200).json({
+      success: true,
+      refreshed: refresh,
+      repair_requested: repair,
+      ...snapshot,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to build Redis reconciliation snapshot.",
+      message: error.message || String(error),
+    });
+  }
+});
+
+app.post(`${API_PREFIX}/admin/redis/reconciliation/run`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    const repairRaw = String(req.query.repair || req.body?.repair || "").trim().toLowerCase();
+    const repair = repairRaw === "1" || repairRaw === "true" || repairRaw === "yes";
+    const snapshot = await runRedisReconciliationCheck({
+      trigger: "admin_api_run",
+      repair,
+    });
+    res.status(202).json({
+      success: true,
+      repair_requested: repair,
+      ...snapshot,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to run Redis reconciliation.",
+      message: error.message || String(error),
+    });
+  }
 });
 
 app.post(`${API_PREFIX}/admin/cache-state/invalidate`, (req, res) => {
@@ -18117,6 +19264,28 @@ if (shouldRunRuntime) {
   setInterval(() => {
     void refreshInProgressMatchDetails({ trigger: "interval" });
   }, matchDetailsPollInterval);
+  operationalBootstrapPromise
+    .then(() =>
+      runRedisReconciliationCheck({
+        trigger: "startup_bootstrap",
+        repair: REDIS_RECONCILIATION_AUTO_REPAIR,
+      })
+    )
+    .catch((error) => {
+      console.warn("[RedisReconciliation] Initial run failed:", error.message || error);
+    });
+  setInterval(() => {
+    operationalBootstrapPromise
+      .then(() =>
+        runRedisReconciliationCheck({
+          trigger: "interval",
+          repair: REDIS_RECONCILIATION_AUTO_REPAIR,
+        })
+      )
+      .catch((error) => {
+        console.warn("[RedisReconciliation] Interval run failed:", error.message || error);
+      });
+  }, REDIS_RECONCILIATION_INTERVAL_MS);
 }
 
 // Test harness endpoints (for internal use only)

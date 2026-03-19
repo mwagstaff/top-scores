@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Redis</title>
+  <style>
+    :root {
+      --bg: #f2f5f7;
+      --panel: #ffffff;
+      --ink: #13242f;
+      --muted: #62707c;
+      --line: #d6e0e6;
+      --accent: #0f766e;
+      --accent-2: #0b5e58;
+      --ok: #166534;
+      --warn: #b45309;
+      --fail: #b91c1c;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #eef4f6 0%, #f8fafb 100%);
+      color: var(--ink);
+    }
+
+    a {
+      color: var(--accent-2);
+    }
+
+    .container {
+      max-width: 1440px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 12px 30px rgba(19, 36, 47, 0.05);
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: progress;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: #f9fbfc;
+    }
+
+    .stat .label {
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    .stat .value {
+      margin-top: 4px;
+      font-size: 1.3rem;
+      font-weight: 700;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 0.76rem;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      color: var(--ok);
+      border-color: rgba(22, 101, 52, 0.2);
+      background: rgba(22, 101, 52, 0.08);
+    }
+
+    .pill.warn {
+      color: var(--warn);
+      border-color: rgba(180, 83, 9, 0.22);
+      background: rgba(180, 83, 9, 0.09);
+    }
+
+    .pill.fail {
+      color: var(--fail);
+      border-color: rgba(185, 28, 28, 0.22);
+      background: rgba(185, 28, 28, 0.08);
+    }
+
+    .status {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .status.error {
+      color: var(--fail);
+      font-weight: 700;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .note {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: #fbfcfd;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .component {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      background: #fff;
+      display: grid;
+      gap: 12px;
+    }
+
+    .component-header,
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .component-title {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .compare-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .side {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: #fbfcfd;
+      display: grid;
+      gap: 8px;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 8px;
+      font-size: 0.9rem;
+    }
+
+    .kv .k {
+      color: var(--muted);
+    }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #fcfdfd;
+    }
+
+    summary {
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    pre {
+      margin: 10px 0 0;
+      padding: 12px;
+      overflow: auto;
+      background: #0f172a;
+      color: #d8e5ef;
+      border-radius: 10px;
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 980px) {
+      .summary,
+      .grid-2,
+      .compare-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="panel">
+      <div class="header">
+        <div>
+          <h1>Redis Diagnostics</h1>
+          <p>Memory is the live runtime source. Redis is the persisted operational snapshot used for bootstrap and some background flows.</p>
+        </div>
+        <div class="actions">
+          <label><input id="repairToggle" type="checkbox"> Repair on manual actions</label>
+          <button id="refreshButton" class="secondary">Refresh Snapshot</button>
+          <button id="runButton">Run Reconciliation</button>
+        </div>
+      </div>
+      <div id="statusLine" class="status" style="margin-top: 12px;">Loading Redis reconciliation snapshot...</div>
+    </section>
+
+    <section class="panel">
+      <div class="summary" id="summary"></div>
+    </section>
+
+    <section class="panel grid-2">
+      <div class="list">
+        <h2>Process</h2>
+        <div class="note">1. Source fetchers update in-memory caches first.</div>
+        <div class="note">2. The same flow then persists a best-effort snapshot to Redis.</div>
+        <div class="note">3. On restart, the server hydrates memory from Redis before live refreshes run.</div>
+        <div class="note">4. Divergence can happen if Redis writes fail, expire, lag, or a different process writes newer data.</div>
+      </div>
+      <div class="list">
+        <h2>Current Config</h2>
+        <div id="configList" class="list"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="component-header">
+        <h2>Components</h2>
+        <span id="componentCount" class="pill">0 components</span>
+      </div>
+      <div id="components" class="list" style="margin-top: 12px;"></div>
+    </section>
+  </div>
+
+  <script>
+    const summaryEl = document.getElementById("summary");
+    const statusLineEl = document.getElementById("statusLine");
+    const configListEl = document.getElementById("configList");
+    const componentsEl = document.getElementById("components");
+    const componentCountEl = document.getElementById("componentCount");
+    const refreshButton = document.getElementById("refreshButton");
+    const runButton = document.getElementById("runButton");
+    const repairToggle = document.getElementById("repairToggle");
+    const appBasePath = (() => {
+      const pathname = window.location.pathname || "";
+      const adminIndex = pathname.indexOf("/admin/");
+      if (adminIndex <= 0) return "";
+      return pathname.slice(0, adminIndex);
+    })();
+
+    function buildApiUrl(path) {
+      const normalizedPath = String(path || "");
+      if (!normalizedPath.startsWith("/")) return normalizedPath;
+      return `${appBasePath}${normalizedPath}`;
+    }
+
+    async function readJsonResponse(response) {
+      const raw = await response.text();
+      let payload = null;
+      try {
+        payload = raw ? JSON.parse(raw) : {};
+      } catch (_error) {
+        payload = null;
+      }
+
+      if (!response.ok) {
+        const message =
+          payload && typeof payload === "object"
+            ? payload.message || payload.error
+            : raw || `Request failed (${response.status})`;
+        throw new Error(message || `Request failed (${response.status})`);
+      }
+
+      if (!payload || typeof payload !== "object") {
+        throw new Error("Expected JSON response from Redis reconciliation API.");
+      }
+
+      return payload;
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "n/a";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString();
+    }
+
+    function formatDurationMs(value) {
+      const ms = Number(value);
+      if (!Number.isFinite(ms)) return "n/a";
+      if (ms < 1000) return `${ms} ms`;
+      return `${(ms / 1000).toFixed(2)} s`;
+    }
+
+    function formatSeconds(value) {
+      const seconds = Number(value);
+      if (!Number.isFinite(seconds)) return "n/a";
+      if (seconds < 60) return `${seconds}s`;
+      if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
+      return `${(seconds / 3600).toFixed(1)}h`;
+    }
+
+    function formatMaybe(value) {
+      if (value === null || value === undefined || value === "") return "n/a";
+      return String(value);
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;");
+    }
+
+    function statusPill(status, healthy) {
+      const css = healthy ? "ok" : status === "redis_newer" || status === "meta_out_of_sync" ? "warn" : "fail";
+      return `<span class="pill ${css}">${escapeHtml(status || "unknown")}</span>`;
+    }
+
+    function statCard(label, value, extra = "") {
+      return `
+        <div class="stat">
+          <div class="label">${escapeHtml(label)}</div>
+          <div class="value">${escapeHtml(value)}</div>
+          ${extra ? `<div class="status" style="margin-top: 6px;">${extra}</div>` : ""}
+        </div>
+      `;
+    }
+
+    function renderSummary(snapshot) {
+      const summary = snapshot.summary || {};
+      summaryEl.innerHTML = [
+        statCard("Overall", snapshot.healthy ? "Healthy" : "Drift Detected", statusPill(snapshot.healthy ? "healthy" : "unhealthy", snapshot.healthy)),
+        statCard("Last Run", formatDateTime(snapshot.last_run_completed_at), `Duration ${formatDurationMs(snapshot.last_duration_ms)}`),
+        statCard("Components", `${summary.healthy_components || 0}/${summary.total_components || 0}`, `${summary.unhealthy_components || 0} unhealthy`),
+        statCard("Repaired", String(summary.repaired_components || 0), snapshot.auto_repair_enabled ? "Auto-repair enabled" : "Auto-repair disabled"),
+        statCard("Trigger", formatMaybe(snapshot.last_trigger), snapshot.running ? "Run in progress" : "Idle"),
+      ].join("");
+    }
+
+    function renderConfig(snapshot) {
+      const config = snapshot.config || {};
+      const notes = Array.isArray(snapshot.notes) ? snapshot.notes : [];
+      configListEl.innerHTML = [
+        `<div class="note">Interval: <strong>${formatDurationMs(config.interval_ms)}</strong></div>`,
+        `<div class="note">Sample limit: <strong>${escapeHtml(formatMaybe(config.sample_limit))}</strong></div>`,
+        `<div class="note">Freshness warn threshold: <strong>${formatSeconds(config.freshness_warn_seconds)}</strong></div>`,
+        `<div class="note">Latest generated snapshot: <strong>${escapeHtml(formatDateTime(snapshot.generated_at))}</strong></div>`,
+        ...notes.map((note) => `<div class="note">${escapeHtml(note)}</div>`),
+      ].join("");
+    }
+
+    function renderDiff(diff) {
+      if (!diff) {
+        return `<div class="status">No diff details recorded.</div>`;
+      }
+      return `
+        <details>
+          <summary>Diff Details</summary>
+          <pre>${escapeHtml(JSON.stringify(diff, null, 2))}</pre>
+        </details>
+      `;
+    }
+
+    function renderSide(title, side) {
+      return `
+        <div class="side">
+          <h3>${escapeHtml(title)}</h3>
+          <div class="kv"><div class="k">Source</div><div>${escapeHtml(formatMaybe(side.source))}</div></div>
+          <div class="kv"><div class="k">Updated</div><div>${escapeHtml(formatDateTime(side.updated_at))}</div></div>
+          <div class="kv"><div class="k">Age</div><div>${escapeHtml(formatSeconds(side.age_seconds))}</div></div>
+          <div class="kv"><div class="k">Count</div><div>${escapeHtml(formatMaybe(side.total ?? side.count))}</div></div>
+          <div class="kv"><div class="k">Hash</div><div class="mono">${escapeHtml(formatMaybe(side.hash))}</div></div>
+        </div>
+      `;
+    }
+
+    function renderComponents(snapshot) {
+      const components = Array.isArray(snapshot.components) ? snapshot.components : [];
+      componentCountEl.textContent = `${components.length} components`;
+      componentsEl.innerHTML = components.map((component) => `
+        <article class="component">
+          <div class="component-header">
+            <div class="component-title">
+              <h3>${escapeHtml(component.name || "unknown")}</h3>
+              ${statusPill(component.status, component.healthy)}
+              ${component.repair && component.repair.applied ? '<span class="pill ok">repaired</span>' : ""}
+              ${component.repair_recommended ? '<span class="pill warn">repair recommended</span>' : ""}
+            </div>
+            <div class="meta-row">
+              <span class="pill">delta ${escapeHtml(formatSeconds(component.updated_at_delta_seconds))}</span>
+              <span class="pill">count Δ ${escapeHtml(formatMaybe(component.count_delta))}</span>
+              <span class="pill">compare ${escapeHtml(formatDurationMs(component.timings && component.timings.compare_ms))}</span>
+              <span class="pill">total ${escapeHtml(formatDurationMs(component.timings && component.timings.total_ms))}</span>
+            </div>
+          </div>
+          <div class="compare-grid">
+            ${renderSide("Memory", component.memory || {})}
+            ${renderSide("Redis", component.redis || {})}
+          </div>
+          ${(Array.isArray(component.notes) && component.notes.length)
+            ? `<div class="list">${component.notes.map((note) => `<div class="note">${escapeHtml(note)}</div>`).join("")}</div>`
+            : ""}
+          ${renderDiff(component.diff)}
+        </article>
+      `).join("");
+    }
+
+    async function loadSnapshot(options = {}) {
+      const refresh = Boolean(options.refresh);
+      const repair = Boolean(options.repair);
+      const isRun = Boolean(options.run);
+      refreshButton.disabled = true;
+      runButton.disabled = true;
+      statusLineEl.className = "status";
+      statusLineEl.textContent = isRun ? "Running reconciliation..." : "Loading Redis reconciliation snapshot...";
+
+      try {
+        let response;
+        if (isRun) {
+          response = await fetch(buildApiUrl(`/api/v1/admin/redis/reconciliation/run?repair=${repair ? "1" : "0"}`), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ repair }),
+          });
+        } else {
+          response = await fetch(buildApiUrl(`/api/v1/admin/redis/reconciliation?refresh=${refresh ? "1" : "0"}&repair=${repair ? "1" : "0"}`));
+        }
+        const payload = await readJsonResponse(response);
+        renderSummary(payload);
+        renderConfig(payload);
+        renderComponents(payload);
+        statusLineEl.textContent = payload.running
+          ? "Reconciliation is running."
+          : `Last completed ${formatDateTime(payload.last_run_completed_at)}.`;
+        if (payload.last_error) {
+          statusLineEl.className = "status error";
+          statusLineEl.textContent = payload.last_error;
+        }
+      } catch (error) {
+        statusLineEl.className = "status error";
+        statusLineEl.textContent = error.message || String(error);
+      } finally {
+        refreshButton.disabled = false;
+        runButton.disabled = false;
+      }
+    }
+
+    refreshButton.addEventListener("click", () => {
+      loadSnapshot({ refresh: true, repair: repairToggle.checked });
+    });
+
+    runButton.addEventListener("click", () => {
+      loadSnapshot({ run: true, repair: repairToggle.checked });
+    });
+
+    loadSnapshot();
+  </script>
+</body>
+</html>

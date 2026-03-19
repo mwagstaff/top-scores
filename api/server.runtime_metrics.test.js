@@ -30,6 +30,11 @@ test("buildPrometheusMetricsText includes top-scores runtime health metrics", ()
     "top_scores_live_activity_payload_size_bytes_min",
     "top_scores_live_activity_payload_size_bytes_max",
     "top_scores_live_activity_payload_size_bytes_avg",
+    "top_scores_operational_redis_reconciliation_generated_timestamp_seconds",
+    "top_scores_operational_redis_reconciliation_duration_seconds",
+    "top_scores_operational_redis_reconciliation_component_status_code",
+    "top_scores_operational_memory_age_seconds",
+    "top_scores_operational_redis_age_seconds",
   ].forEach((metricName) => {
     assert.match(metricsText, new RegExp(`(^|\\n)# HELP ${metricName}\\b`));
   });
