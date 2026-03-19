@@ -1405,6 +1405,54 @@ test("combineLiveActivityOperationalMatches prefers newer corrected finished sco
   assert.equal(matches[0].away_score, 0);
 });
 
+test("enrichLiveActivityOperationalMatches restores missing match id and finished state from details", () => {
+  const matches = __testHooks.enrichLiveActivityOperationalMatches(
+    [
+      {
+        date: "2026-03-19",
+        time: "17:45",
+        league: "UEFA Europa League",
+        league_subcategory: "Last 16",
+        home_team: "FC Midtjylland",
+        away_team: "Nottingham Forest",
+        home_score: 0,
+        away_score: 0,
+        aggregate_home_score: 0,
+        aggregate_away_score: 0,
+        score_status: null,
+        tv_channels: ["TNT Sports"],
+      },
+    ],
+    {
+      cmidtforest: {
+        id: "cmidtforest",
+        date: "2026-03-19",
+        time: "17:45",
+        league: "UEFA Europa League",
+        league_subcategory: "Last 16",
+        home_team: "Midtjylland",
+        away_team: "Nottingham Forest",
+        home_score: 1,
+        away_score: 2,
+        aggregate_home_score: 2,
+        aggregate_away_score: 2,
+        score_status: "AET",
+        penalty_result: "Nottingham Forest win 3 - 0 on penalties",
+        updated_at: "2026-03-19T20:38:00Z",
+      },
+    }
+  );
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].match_details_id, "cmidtforest");
+  assert.equal(matches[0].home_score, 1);
+  assert.equal(matches[0].away_score, 2);
+  assert.equal(matches[0].aggregate_home_score, 2);
+  assert.equal(matches[0].aggregate_away_score, 2);
+  assert.equal(matches[0].score_status, "AET");
+  assert.equal(matches[0].penalty_result, "Nottingham Forest win 3 - 0 on penalties");
+});
+
 test("buildLiveActivityPresentationForUser clears delayed aggregate when current snapshot explicitly clears it", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 8 * 60 * 1000;

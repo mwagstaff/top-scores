@@ -15848,7 +15848,8 @@ async function buildAdminLiveActivityPreview(record, nowMs = Date.now()) {
     typeof hooks.buildLiveActivityEntriesForUser !== "function" ||
     typeof hooks.buildLiveActivityPresentationForUser !== "function" ||
     typeof hooks.buildLiveActivityContentState !== "function" ||
-    typeof hooks.combineLiveActivityOperationalMatches !== "function"
+    typeof hooks.combineLiveActivityOperationalMatches !== "function" ||
+    typeof hooks.enrichLiveActivityOperationalMatches !== "function"
   ) {
     return null;
   }
@@ -15857,9 +15858,20 @@ async function buildAdminLiveActivityPreview(record, nowMs = Date.now()) {
     getOperationalDataset("merged_matches"),
     getOperationalDataset("recent_matches"),
   ]);
+  const matchDetailsSnapshot = await getAllOperationalMatchDetails();
+  const detailsRecords =
+    matchDetailsSnapshot && matchDetailsSnapshot.records && typeof matchDetailsSnapshot.records === "object"
+      ? matchDetailsSnapshot.records
+      : {};
   const operationalMatches = hooks.combineLiveActivityOperationalMatches(
-    mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
-    recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : []
+    hooks.enrichLiveActivityOperationalMatches(
+      mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
+      detailsRecords
+    ),
+    hooks.enrichLiveActivityOperationalMatches(
+      recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : [],
+      detailsRecords
+    )
   );
   const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
   const entries = hooks.buildLiveActivityEntriesForUser(
@@ -17252,9 +17264,10 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
     let serverPresentation = null;
     try {
       const nowMs = Date.now();
-      const [mergedDataset, recentDataset] = await Promise.all([
+      const [mergedDataset, recentDataset, matchDetailsSnapshot] = await Promise.all([
         getOperationalDataset("merged_matches"),
         getOperationalDataset("recent_matches"),
+        getAllOperationalMatchDetails(),
       ]);
       const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
       if (
@@ -17262,11 +17275,24 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
         typeof hooks.monitoredMatchStatesSnapshot === "function" &&
         typeof hooks.buildLiveActivityEntriesForUser === "function" &&
         typeof hooks.buildLiveActivityPresentationForUser === "function" &&
-        typeof hooks.combineLiveActivityOperationalMatches === "function"
+        typeof hooks.combineLiveActivityOperationalMatches === "function" &&
+        typeof hooks.enrichLiveActivityOperationalMatches === "function"
       ) {
+        const detailsRecords =
+          matchDetailsSnapshot &&
+          matchDetailsSnapshot.records &&
+          typeof matchDetailsSnapshot.records === "object"
+            ? matchDetailsSnapshot.records
+            : {};
         const operationalMatches = hooks.combineLiveActivityOperationalMatches(
-          mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
-          recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : []
+          hooks.enrichLiveActivityOperationalMatches(
+            mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
+            detailsRecords
+          ),
+          hooks.enrichLiveActivityOperationalMatches(
+            recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : [],
+            detailsRecords
+          )
         );
         const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
         const entries = hooks.buildLiveActivityEntriesForUser(
@@ -18318,17 +18344,31 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
             typeof hooks.buildLiveActivityEntriesForUser === "function" &&
             typeof hooks.buildLiveActivityPresentationForUser === "function" &&
             typeof hooks.buildLiveActivityContentState === "function" &&
-            typeof hooks.combineLiveActivityOperationalMatches === "function"
+            typeof hooks.combineLiveActivityOperationalMatches === "function" &&
+            typeof hooks.enrichLiveActivityOperationalMatches === "function"
           ) {
             const nowMs = Date.now();
-            const [mergedDataset, recentDataset] = await Promise.all([
+            const [mergedDataset, recentDataset, matchDetailsSnapshot] = await Promise.all([
               getOperationalDataset("merged_matches"),
               getOperationalDataset("recent_matches"),
+              getAllOperationalMatchDetails(),
             ]);
             const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
+            const detailsRecords =
+              matchDetailsSnapshot &&
+              matchDetailsSnapshot.records &&
+              typeof matchDetailsSnapshot.records === "object"
+                ? matchDetailsSnapshot.records
+                : {};
             const operationalMatches = hooks.combineLiveActivityOperationalMatches(
-              mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
-              recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : []
+              hooks.enrichLiveActivityOperationalMatches(
+                mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
+                detailsRecords
+              ),
+              hooks.enrichLiveActivityOperationalMatches(
+                recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : [],
+                detailsRecords
+              )
             );
             const entries = hooks.buildLiveActivityEntriesForUser(
               record,

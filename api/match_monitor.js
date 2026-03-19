@@ -1,6 +1,7 @@
 const {
   getAllUserPreferences,
   getOperationalDataset,
+  getAllOperationalMatchDetails,
   updateUserLiveActivityState,
   saveLiveActivityDebugRecord,
   saveFantasyReminderRecord,
@@ -2874,6 +2875,37 @@ function canonicalLiveActivityChannels(channels) {
   return output;
 }
 
+const LIVE_ACTIVITY_FIXTURE_TOKEN_STOP_WORDS = new Set([
+  "fc",
+  "cf",
+  "sc",
+  "afc",
+  "ac",
+  "sv",
+  "fk",
+  "bk",
+  "bc",
+  "ks",
+  "nk",
+  "club",
+  "de",
+  "the",
+  "and",
+  "as",
+  "kf",
+  "vfb",
+  "vfl",
+  "tsg",
+  "ifk",
+  "fkf",
+  "fsv",
+  "us",
+  "ca",
+  "cd",
+  "ud",
+  "rc",
+]);
+
 function liveActivityMatchIdentity(match) {
   if (!match || typeof match !== "object") return null;
   const explicitId = String(match.match_details_id || match.matchId || match.id || "").trim();
@@ -2913,13 +2945,19 @@ function liveActivityMatchDedupKeys(match, extraIdentity = null) {
 }
 
 function normalizeLiveActivityFixtureToken(value) {
-  return String(value || "")
+  const normalized = String(value || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .replace(/\s+/g, " ");
+  if (!normalized) return "";
+  const tokens = normalized
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token && !LIVE_ACTIVITY_FIXTURE_TOKEN_STOP_WORDS.has(token));
+  return tokens.length > 0 ? tokens.join(" ") : normalized;
 }
 
 function liveActivityFixtureDedupKeys(match) {
@@ -3049,6 +3087,119 @@ function combineLiveActivityOperationalMatches(...collections) {
   return dedupeLiveActivityMatches(
     collections.flatMap((collection) => (Array.isArray(collection) ? collection : []))
   );
+}
+
+function buildLiveActivityMatchDetailsLookup(detailsRecords) {
+  const lookup = new Map();
+
+  const upsert = (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const detailsId = String(payload.id || "").trim();
+    const pseudoMatch = {
+      match_details_id: detailsId || null,
+      date: payload.date || null,
+      time: payload.time || null,
+      league: payload.league || null,
+      home_team: payload.home_team || null,
+      away_team: payload.away_team || null,
+    };
+    const keys = liveActivityEntryDedupKeys({
+      matchId: detailsId || null,
+      match: pseudoMatch,
+      state: null,
+    });
+    if (keys.length === 0) return;
+
+    keys.forEach((key) => {
+      const existing = lookup.get(key);
+      if (!existing || compareLiveActivitySnapshotFreshness(existing, payload) < 0) {
+        lookup.set(key, payload);
+      }
+    });
+  };
+
+  if (detailsRecords instanceof Map) {
+    detailsRecords.forEach((payload) => upsert(payload));
+  } else if (detailsRecords && typeof detailsRecords === "object") {
+    Object.values(detailsRecords).forEach((payload) => upsert(payload));
+  }
+
+  return lookup;
+}
+
+function enrichLiveActivityOperationalMatch(match, detailsLookup) {
+  if (!match || typeof match !== "object") return null;
+  if (!(detailsLookup instanceof Map) || detailsLookup.size === 0) {
+    return { ...match };
+  }
+
+  const lookupKeys = liveActivityEntryDedupKeys({
+    matchId: liveActivityMatchIdentity(match),
+    match,
+    state: null,
+  });
+  const detailsPayload = lookupKeys
+    .map((key) => detailsLookup.get(key))
+    .find((candidate) => candidate && typeof candidate === "object");
+  if (!detailsPayload) {
+    return { ...match };
+  }
+
+  const enriched = mergeSnapshotWithFallback(match, {
+    date: detailsPayload.date,
+    time: detailsPayload.time,
+    league: detailsPayload.league,
+    league_subcategory: detailsPayload.league_subcategory,
+    home_team: detailsPayload.home_team,
+    away_team: detailsPayload.away_team,
+    home_score: toNumericScore(detailsPayload.home_score),
+    away_score: toNumericScore(detailsPayload.away_score),
+    aggregate_home_score: toNumericScore(detailsPayload.aggregate_home_score),
+    aggregate_away_score: toNumericScore(detailsPayload.aggregate_away_score),
+    first_leg_home_score: toNumericScore(detailsPayload.first_leg_home_score),
+    first_leg_away_score: toNumericScore(detailsPayload.first_leg_away_score),
+    score_status: String(detailsPayload.score_status || "").trim() || null,
+    penalty_result: String(detailsPayload.penalty_result || "").trim() || null,
+    updated_at: String(detailsPayload.updated_at || "").trim() || null,
+    home_goal_scorers: Array.isArray(detailsPayload.home_goal_scorers)
+      ? detailsPayload.home_goal_scorers
+      : undefined,
+    away_goal_scorers: Array.isArray(detailsPayload.away_goal_scorers)
+      ? detailsPayload.away_goal_scorers
+      : undefined,
+    home_assists: Array.isArray(detailsPayload.home_assists)
+      ? detailsPayload.home_assists
+      : undefined,
+    away_assists: Array.isArray(detailsPayload.away_assists)
+      ? detailsPayload.away_assists
+      : undefined,
+    home_red_cards: Array.isArray(detailsPayload.home_red_cards)
+      ? detailsPayload.home_red_cards
+      : undefined,
+    away_red_cards: Array.isArray(detailsPayload.away_red_cards)
+      ? detailsPayload.away_red_cards
+      : undefined,
+    home_yellow_cards: Array.isArray(detailsPayload.home_yellow_cards)
+      ? detailsPayload.home_yellow_cards
+      : undefined,
+    away_yellow_cards: Array.isArray(detailsPayload.away_yellow_cards)
+      ? detailsPayload.away_yellow_cards
+      : undefined,
+  });
+
+  const detailsId = String(detailsPayload.id || "").trim();
+  if (detailsId) {
+    enriched.match_details_id = detailsId;
+  }
+
+  return enriched;
+}
+
+function enrichLiveActivityOperationalMatches(matches, detailsRecords) {
+  const detailsLookup = buildLiveActivityMatchDetailsLookup(detailsRecords);
+  return (Array.isArray(matches) ? matches : [])
+    .map((match) => enrichLiveActivityOperationalMatch(match, detailsLookup))
+    .filter(Boolean);
 }
 
 function currentLondonDateKey(nowMs = Date.now()) {
@@ -5070,13 +5221,24 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
   try {
     await ensureLiveActivityTeamRatingCache(nowMs);
     const monitoredEntries = monitoredMatchStatesSnapshot(nowMs);
-    const [mergedDataset, recentDataset] = await Promise.all([
+    const [mergedDataset, recentDataset, matchDetailsSnapshot] = await Promise.all([
       getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES),
       getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_RECENT_MATCHES),
+      getAllOperationalMatchDetails(),
     ]);
+    const detailsRecords =
+      matchDetailsSnapshot && matchDetailsSnapshot.records && typeof matchDetailsSnapshot.records === "object"
+        ? matchDetailsSnapshot.records
+        : {};
     const operationalMatches = combineLiveActivityOperationalMatches(
-      mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
-      recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : []
+      enrichLiveActivityOperationalMatches(
+        mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
+        detailsRecords
+      ),
+      enrichLiveActivityOperationalMatches(
+        recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : [],
+        detailsRecords
+      )
     );
     const users = await getAllUserPreferences();
     if (!Array.isArray(users) || users.length === 0) return;
@@ -5897,6 +6059,7 @@ module.exports = {
     buildLiveActivityEntriesForUser,
     combineLiveActivityOperationalMatches,
     dedupeLiveActivityMatches,
+    enrichLiveActivityOperationalMatches,
     dedupeFantasyDeadlineReminderUsers,
     evaluateFantasyDeadlineReminderDecision,
     formatFantasyDeadlineReminderTime,
