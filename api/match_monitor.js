@@ -100,6 +100,7 @@ let liveActivityTeamRatingFetchedAtMs = 0;
 let liveActivityTeamRatingLastAttemptAtMs = 0;
 let liveActivityTeamRatingRefreshPromise = null;
 let liveActivityPremierLeagueTeamLookup = null;
+let liveActivityMatchDetailsProvider = null;
 
 // Match status helpers - mirrors server.js MATCH_STATUS_* constants
 const MATCH_STATUS_MINUTE_PATTERN = /^(\d{1,3})(?:\+(\d{1,2}))?'?$/;
@@ -1969,6 +1970,10 @@ function initialize(baseURL = "http://localhost:3000/api/v1") {
   console.log("[MatchMonitor] Initialized with API base URL:", apiBaseURL);
 }
 
+function setLiveActivityMatchDetailsProvider(provider) {
+  liveActivityMatchDetailsProvider = typeof provider === "function" ? provider : null;
+}
+
 /**
  * Start monitoring for match events
  */
@@ -3200,6 +3205,32 @@ function enrichLiveActivityOperationalMatches(matches, detailsRecords) {
   return (Array.isArray(matches) ? matches : [])
     .map((match) => enrichLiveActivityOperationalMatch(match, detailsLookup))
     .filter(Boolean);
+}
+
+async function resolveLiveActivityMatchDetailsRecords(options = {}) {
+  const explicitRecords =
+    options && options.matchDetailsRecords && typeof options.matchDetailsRecords === "object"
+      ? options.matchDetailsRecords
+      : null;
+  if (explicitRecords) return explicitRecords;
+
+  if (typeof liveActivityMatchDetailsProvider === "function") {
+    try {
+      const provided = await liveActivityMatchDetailsProvider();
+      if (provided instanceof Map) return provided;
+      if (provided && typeof provided === "object") return provided;
+    } catch (error) {
+      console.warn(
+        "[MatchMonitor] Failed resolving live activity match details from provider:",
+        error.message || error
+      );
+    }
+  }
+
+  const matchDetailsSnapshot = await getAllOperationalMatchDetails();
+  return matchDetailsSnapshot && matchDetailsSnapshot.records && typeof matchDetailsSnapshot.records === "object"
+    ? matchDetailsSnapshot.records
+    : {};
 }
 
 function currentLondonDateKey(nowMs = Date.now()) {
@@ -5221,15 +5252,11 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
   try {
     await ensureLiveActivityTeamRatingCache(nowMs);
     const monitoredEntries = monitoredMatchStatesSnapshot(nowMs);
-    const [mergedDataset, recentDataset, matchDetailsSnapshot] = await Promise.all([
+    const [mergedDataset, recentDataset, detailsRecords] = await Promise.all([
       getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES),
       getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_RECENT_MATCHES),
-      getAllOperationalMatchDetails(),
+      resolveLiveActivityMatchDetailsRecords(options),
     ]);
-    const detailsRecords =
-      matchDetailsSnapshot && matchDetailsSnapshot.records && typeof matchDetailsSnapshot.records === "object"
-        ? matchDetailsSnapshot.records
-        : {};
     const operationalMatches = combineLiveActivityOperationalMatches(
       enrichLiveActivityOperationalMatches(
         mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
@@ -6018,6 +6045,7 @@ function getStatus(options = {}) {
 
 module.exports = {
   initialize,
+  setLiveActivityMatchDetailsProvider,
   startMonitoring,
   stopMonitoring,
   getStatus,
