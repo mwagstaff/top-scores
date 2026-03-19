@@ -141,6 +141,11 @@ struct PreferencesView: View {
                         Text("Displays the FPL icon before kick-off once line-ups are available against matches involving your players, then shows total estimated points for the players involved while matches are in play.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+
+                        Toggle("Deadline reminder push", isOn: fantasyDeadlineRemindersEnabledBinding)
+                        Text("Sends one push reminder 24 hours before the next Fantasy Premier League deadline when your fantasy team is connected.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
                     Section("Channels") {
@@ -303,6 +308,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.showFantasyMatchPills },
             set: { preferences.showFantasyMatchPills = $0 }
+        )
+    }
+
+    private var fantasyDeadlineRemindersEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.fantasyDeadlineRemindersEnabled },
+            set: { preferences.fantasyDeadlineRemindersEnabled = $0 }
         )
     }
 

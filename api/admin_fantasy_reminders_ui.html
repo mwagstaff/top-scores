@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Fantasy Reminders</title>
+  <style>
+    :root {
+      --bg: #f3f5f7;
+      --panel: #ffffff;
+      --ink: #10202c;
+      --muted: #5c6b76;
+      --line: #d7e0e6;
+      --accent: #0f766e;
+      --accent-soft: #d8f3ef;
+      --warn: #b45309;
+      --fail: #b91c1c;
+      --ok: #166534;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #eef4f6 0%, #f8fafb 100%);
+      color: var(--ink);
+    }
+    a { color: #0b5e58; }
+    button, input {
+      font: inherit;
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    button {
+      border: 0;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.ghost {
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+    }
+    .container {
+      max-width: 1480px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(16, 32, 44, 0.05);
+    }
+    h1, h2, h3, p { margin: 0; }
+    p { color: var(--muted); }
+    .header-links, .chip-row, .form-row, .inline-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .header-links { margin-top: 10px; }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .stat, .next-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: #f9fbfc;
+    }
+    .stat .label, .meta {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .stat .value {
+      margin-top: 4px;
+      font-size: 1.2rem;
+      font-weight: 700;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 16px;
+    }
+    .status {
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+    .status.error { color: var(--fail); font-weight: 700; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 0.74rem;
+      white-space: nowrap;
+    }
+    .pill.ok { color: var(--ok); border-color: rgba(22, 101, 52, 0.24); background: rgba(22, 101, 52, 0.09); }
+    .pill.fail { color: var(--fail); border-color: rgba(185, 28, 28, 0.24); background: rgba(185, 28, 28, 0.08); }
+    .pill.warn { color: var(--warn); border-color: rgba(180, 83, 9, 0.24); background: rgba(180, 83, 9, 0.08); }
+    .list-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1180px;
+      font-size: 0.88rem;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f8fafc;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+    tbody td {
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    tbody tr:hover { background: rgba(15, 118, 110, 0.04); }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.8rem;
+    }
+    .empty {
+      text-align: center;
+      padding: 24px;
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.7);
+    }
+    .section-stack { display: grid; gap: 12px; }
+
+    @media (max-width: 980px) {
+      body { padding: 12px; }
+      .summary, .grid-2 { grid-template-columns: 1fr; }
+      table { min-width: 920px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="panel">
+      <h1>Fantasy Reminder Admin</h1>
+      <p>Upcoming and past Fantasy Football deadline reminder pushes, with immediate test-send for scheduled reminders.</p>
+      <div class="header-links">
+        <a id="link-reminders" href="./fantasy-reminders">Fantasy Reminders</a>
+        <a id="link-devices" href="./devices">Devices</a>
+        <a id="link-preferences" href="./preferences">Preferences</a>
+        <a id="link-fixtures" href="./fixtures">Fixtures</a>
+        <a id="link-history" href="./bbc-history">BBC History</a>
+      </div>
+    </section>
+
+    <section class="panel section-stack">
+      <div class="form-row">
+        <div style="min-width:280px; flex:1 1 320px;">
+          <label for="device-token" class="meta">Device token filter</label>
+          <input id="device-token" type="text" placeholder="optional exact device token">
+        </div>
+        <div class="inline-actions">
+          <button id="reload-button" type="button">Reload reminders</button>
+        </div>
+      </div>
+      <div id="page-status" class="status">Loading reminder data…</div>
+    </section>
+
+    <section id="summary" class="panel summary"></section>
+
+    <section class="grid-2">
+      <section class="panel">
+        <div class="section-stack">
+          <div>
+            <h2>Next Gameweek</h2>
+            <p>Current server-side target for reminder scheduling.</p>
+          </div>
+          <div id="next-gameweek" class="next-card"></div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="section-stack">
+          <div>
+            <h2>Status Counts</h2>
+            <p>Computed from stored reminder records.</p>
+          </div>
+          <div id="status-counts" class="chip-row"></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="panel section-stack">
+      <div>
+        <h2>Upcoming</h2>
+        <p>Reminders scheduled for the future. Use “Send now” to trigger the reminder immediately for that device without consuming the scheduled send.</p>
+      </div>
+      <div class="list-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Gameweek</th>
+              <th>Scheduled</th>
+              <th>Deadline</th>
+              <th>Status</th>
+              <th>Device</th>
+              <th>Message</th>
+              <th>Test</th>
+            </tr>
+          </thead>
+          <tbody id="upcoming-rows"></tbody>
+        </table>
+      </div>
+      <div id="upcoming-empty" class="empty" style="display:none;">No upcoming reminders matched the current filter.</div>
+    </section>
+
+    <section class="panel section-stack">
+      <div>
+        <h2>Past</h2>
+        <p>Reminders whose scheduled delivery time has passed.</p>
+      </div>
+      <div class="list-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Gameweek</th>
+              <th>Scheduled</th>
+              <th>Deadline</th>
+              <th>Status</th>
+              <th>Sent</th>
+              <th>Device</th>
+              <th>Message</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody id="past-rows"></tbody>
+        </table>
+      </div>
+      <div id="past-empty" class="empty" style="display:none;">No past reminders matched the current filter.</div>
+    </section>
+  </div>
+
+  <script>
+    function buildApiBasePrefix() {
+      const pathname = String(window.location.pathname || "");
+      const adminSuffixPattern = /\/admin\/fantasy-reminders\/?$/;
+      const basePrefix = pathname.replace(adminSuffixPattern, "");
+      return basePrefix && basePrefix !== "/" ? basePrefix : "";
+    }
+
+    const API_BASE_PREFIX = buildApiBasePrefix();
+    const API_URL = `${API_BASE_PREFIX}/api/v1/admin/fantasy-reminders`;
+    document.getElementById("link-reminders").href = `${API_BASE_PREFIX}/admin/fantasy-reminders`;
+    document.getElementById("link-devices").href = `${API_BASE_PREFIX}/admin/devices`;
+    document.getElementById("link-preferences").href = `${API_BASE_PREFIX}/admin/preferences`;
+    document.getElementById("link-fixtures").href = `${API_BASE_PREFIX}/admin/fixtures`;
+    document.getElementById("link-history").href = `${API_BASE_PREFIX}/admin/bbc-history`;
+
+    function escapeHTML(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function formatDateTime(value) {
+      const timestamp = Date.parse(String(value || ""));
+      if (!Number.isFinite(timestamp)) return "-";
+      return new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(timestamp);
+    }
+
+    function formatCompactDateTime(value) {
+      const timestamp = Date.parse(String(value || ""));
+      if (!Number.isFinite(timestamp)) return "-";
+      return new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(timestamp);
+    }
+
+    function statusPill(status) {
+      const normalized = String(status || "unknown").toLowerCase();
+      let cls = "pill";
+      if (normalized === "sent") cls = "pill ok";
+      if (normalized === "failed" || normalized === "expired") cls = "pill fail";
+      if (normalized === "due" || normalized === "superseded") cls = "pill warn";
+      return `<span class="${cls}">${escapeHTML(normalized)}</span>`;
+    }
+
+    async function fetchJson(url, options = {}) {
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          Accept: "application/json",
+          ...(options.headers || {}),
+        },
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && (payload.error || payload.message)
+          ? `${payload.error || payload.message}`
+          : `Request failed (${response.status})`;
+        const error = new Error(message);
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    }
+
+    function renderSummary(summary) {
+      const node = document.getElementById("summary");
+      const statusCounts = summary && typeof summary.status_counts === "object" ? summary.status_counts : {};
+      node.innerHTML = `
+        <div class="stat"><div class="label">Total Records</div><div class="value">${escapeHTML(String(summary && summary.total || 0))}</div></div>
+        <div class="stat"><div class="label">Upcoming</div><div class="value">${escapeHTML(String(summary && summary.upcoming || 0))}</div></div>
+        <div class="stat"><div class="label">Past</div><div class="value">${escapeHTML(String(summary && summary.past || 0))}</div></div>
+        <div class="stat"><div class="label">Sent</div><div class="value">${escapeHTML(String(statusCounts.sent || 0))}</div></div>
+      `;
+    }
+
+    function renderNextGameweek(nextGameweek) {
+      const node = document.getElementById("next-gameweek");
+      if (!nextGameweek) {
+        node.innerHTML = '<div class="status">No next gameweek currently available from the server cache.</div>';
+        return;
+      }
+      node.innerHTML = `
+        <div class="section-stack">
+          <div><strong>${escapeHTML(nextGameweek.gameweek_name || `GW ${nextGameweek.gameweek_id || "-"}`)}</strong></div>
+          <div class="chip-row">
+            <span class="pill">Deadline ${escapeHTML(formatDateTime(nextGameweek.deadline_time))}</span>
+            <span class="pill ${nextGameweek.is_due ? "warn" : ""}">Reminder ${escapeHTML(formatDateTime(nextGameweek.scheduled_for))}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderStatusCounts(summary) {
+      const node = document.getElementById("status-counts");
+      const statusCounts = summary && typeof summary.status_counts === "object" ? summary.status_counts : {};
+      const entries = Object.entries(statusCounts);
+      node.innerHTML = entries.length
+        ? entries.map(([key, value]) => statusPill(`${key}: ${value}`)).join("")
+        : '<span class="status">No reminder records found.</span>';
+    }
+
+    function rowMessage(record) {
+      const lines = [];
+      if (record.title) lines.push(`<div><strong>${escapeHTML(record.title)}</strong></div>`);
+      if (record.body) lines.push(`<div>${escapeHTML(record.body)}</div>`);
+      if (record.device_time_zone || record.device_locale) {
+        lines.push(
+          `<div class="meta">${escapeHTML(record.device_time_zone || "-")} ${record.device_locale ? `| ${record.device_locale}` : ""}</div>`
+        );
+      }
+      return lines.join("");
+    }
+
+    function upcomingRow(record) {
+      const button = record.can_test_send
+        ? `<button type="button" class="ghost send-now" data-reminder-id="${escapeHTML(record.reminder_id)}">Send now</button>`
+        : '<span class="status">Unavailable</span>';
+      const testState = record.last_test_status
+        ? `${statusPill(record.last_test_status)} <span class="meta">${escapeHTML(formatCompactDateTime(record.last_test_sent_at))}</span>`
+        : '<span class="status">No test send yet.</span>';
+      return `
+        <tr>
+          <td>
+            <div><strong>${escapeHTML(record.gameweek_name || `GW ${record.gameweek_id || "-"}`)}</strong></div>
+            <div class="meta mono">${escapeHTML(record.reminder_id || "-")}</div>
+          </td>
+          <td>${escapeHTML(formatDateTime(record.scheduled_for))}</td>
+          <td>${escapeHTML(formatDateTime(record.deadline_time))}</td>
+          <td>${statusPill(record.effective_status)}</td>
+          <td>
+            <div class="mono">${escapeHTML(record.device_token_short || "-")}</div>
+            <div class="meta">${record.apns_token_present ? "APNS stored" : "No APNS"}</div>
+          </td>
+          <td>${rowMessage(record)}</td>
+          <td>
+            <div class="section-stack">
+              <div>${button}</div>
+              <div>${testState}</div>
+              <div class="status" id="test-status-${escapeHTML(record.reminder_id)}"></div>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+
+    function pastRow(record) {
+      const notes = [];
+      if (record.last_error) notes.push(`<div class="status error">${escapeHTML(record.last_error)}</div>`);
+      if (record.last_test_status) {
+        notes.push(
+          `<div>${statusPill(`test_${record.last_test_status}`)} <span class="meta">${escapeHTML(formatCompactDateTime(record.last_test_sent_at))}</span></div>`
+        );
+      }
+      return `
+        <tr>
+          <td>
+            <div><strong>${escapeHTML(record.gameweek_name || `GW ${record.gameweek_id || "-"}`)}</strong></div>
+            <div class="meta mono">${escapeHTML(record.reminder_id || "-")}</div>
+          </td>
+          <td>${escapeHTML(formatDateTime(record.scheduled_for))}</td>
+          <td>${escapeHTML(formatDateTime(record.deadline_time))}</td>
+          <td>${statusPill(record.effective_status)}</td>
+          <td>${escapeHTML(formatDateTime(record.sent_at))}</td>
+          <td>
+            <div class="mono">${escapeHTML(record.device_token_short || "-")}</div>
+            <div class="meta">${record.environment ? escapeHTML(record.environment) : "-"}</div>
+          </td>
+          <td>${rowMessage(record)}</td>
+          <td>${notes.join("") || '<span class="status">-</span>'}</td>
+        </tr>
+      `;
+    }
+
+    async function sendNow(reminderId) {
+      const statusNode = document.getElementById(`test-status-${reminderId}`);
+      if (statusNode) {
+        statusNode.textContent = "Sending…";
+        statusNode.className = "status";
+      }
+      try {
+        const payload = await fetchJson(
+          `${API_BASE_PREFIX}/api/v1/admin/fantasy-reminders/${encodeURIComponent(reminderId)}/test-send`,
+          { method: "POST" }
+        );
+        if (statusNode) {
+          statusNode.textContent = "Test push sent.";
+        }
+        await loadPage();
+      } catch (error) {
+        if (statusNode) {
+          statusNode.textContent = error.message || "Failed to send test push.";
+          statusNode.className = "status error";
+        }
+      }
+    }
+
+    async function loadPage() {
+      const pageStatus = document.getElementById("page-status");
+      pageStatus.textContent = "Loading reminder data…";
+      pageStatus.className = "status";
+
+      const url = new URL(API_URL, window.location.origin);
+      const deviceToken = String(document.getElementById("device-token").value || "").trim();
+      if (deviceToken) url.searchParams.set("device_token", deviceToken);
+
+      try {
+        const payload = await fetchJson(url.toString());
+        renderSummary(payload.summary || {});
+        renderNextGameweek(payload.next_gameweek || null);
+        renderStatusCounts(payload.summary || {});
+
+        const upcoming = Array.isArray(payload.upcoming) ? payload.upcoming : [];
+        const past = Array.isArray(payload.past) ? payload.past : [];
+        const upcomingRows = document.getElementById("upcoming-rows");
+        const pastRows = document.getElementById("past-rows");
+
+        upcomingRows.innerHTML = upcoming.map(upcomingRow).join("");
+        pastRows.innerHTML = past.map(pastRow).join("");
+        document.getElementById("upcoming-empty").style.display = upcoming.length ? "none" : "block";
+        document.getElementById("past-empty").style.display = past.length ? "none" : "block";
+
+        document.querySelectorAll(".send-now").forEach((button) => {
+          button.addEventListener("click", () => sendNow(button.dataset.reminderId));
+        });
+
+        pageStatus.textContent = `Loaded ${payload.summary && payload.summary.total ? payload.summary.total : 0} reminder record(s).`;
+      } catch (error) {
+        pageStatus.textContent = error.message || "Failed to load reminder data.";
+        pageStatus.className = "status error";
+      }
+    }
+
+    document.getElementById("reload-button").addEventListener("click", () => {
+      loadPage();
+    });
+
+    loadPage();
+  </script>
+</body>
+</html>

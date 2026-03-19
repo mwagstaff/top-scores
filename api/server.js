@@ -11667,6 +11667,21 @@ async function updateFantasyBootstrapStatic(options = {}) {
     console.info(
       `[FPLBootstrap] Download complete source=${FPL_BOOTSTRAP_SOURCE_URL} trigger=${trigger} bytes=${fantasyBootstrapPayloadBytes} events=${fantasyBootstrapEventsCount} duration_ms=${Date.now() - startedAtMs} updated_at=${fantasyBootstrapLastUpdated}`
     );
+    if (
+      matchMonitor &&
+      typeof matchMonitor.runFantasyDeadlineReminderEvaluationNow === "function"
+    ) {
+      void matchMonitor
+        .runFantasyDeadlineReminderEvaluationNow({
+          reason: `fpl_bootstrap_refresh:${trigger}`,
+        })
+        .catch((error) => {
+          console.warn(
+            "[FPLBootstrap] Fantasy deadline reminder refresh after bootstrap failed:",
+            error && error.message ? error.message : error
+          );
+        });
+    }
     logPollSuccess("fpl_bootstrap_static", {
       source: SOURCE_FPL_BOOTSTRAP,
       trigger,
@@ -12605,6 +12620,146 @@ function normalizeNotificationStatusForAdmin(status) {
   return normalized;
 }
 
+function normalizeFantasyReminderStatusForAdmin(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!normalized) return "unknown";
+  return normalized;
+}
+
+function fantasyReminderTimestampMsForAdmin(value) {
+  const direct = Number(value);
+  if (Number.isFinite(direct) && direct > 0) return Math.floor(direct);
+  const parsed = Date.parse(String(value || "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function effectiveFantasyReminderStatusForAdmin(record, nowMs = Date.now()) {
+  const rawStatus = normalizeFantasyReminderStatusForAdmin(record && record.status);
+  const deadlineTimeMs = fantasyReminderTimestampMsForAdmin(
+    record && (record.deadline_time_ms || record.deadline_time)
+  );
+  const scheduledForMs = fantasyReminderTimestampMsForAdmin(
+    record && (record.scheduled_for_ms || record.scheduled_for)
+  );
+
+  if (rawStatus === "scheduled") {
+    if (Number.isFinite(deadlineTimeMs) && deadlineTimeMs > 0 && deadlineTimeMs <= nowMs) {
+      return "expired";
+    }
+    if (Number.isFinite(scheduledForMs) && scheduledForMs > 0 && scheduledForMs <= nowMs) {
+      return "due";
+    }
+  }
+
+  return rawStatus;
+}
+
+function buildAdminFantasyReminderEntry(record, nowMs = Date.now()) {
+  const scheduledForMs = fantasyReminderTimestampMsForAdmin(
+    record && (record.scheduled_for_ms || record.scheduled_for)
+  );
+  const deadlineTimeMs = fantasyReminderTimestampMsForAdmin(
+    record && (record.deadline_time_ms || record.deadline_time)
+  );
+  const sentAtMs = fantasyReminderTimestampMsForAdmin(
+    record && (record.sent_at_ms || record.sent_at)
+  );
+  const effectiveStatus = effectiveFantasyReminderStatusForAdmin(record, nowMs);
+  const isPast = Number.isFinite(scheduledForMs) && scheduledForMs > 0 ? scheduledForMs < nowMs : false;
+
+  return {
+    reminder_id: record && record.reminder_id ? String(record.reminder_id) : null,
+    kind: record && record.kind ? String(record.kind) : "fantasy_deadline",
+    source: record && record.source ? String(record.source) : null,
+    status: normalizeFantasyReminderStatusForAdmin(record && record.status),
+    effective_status: effectiveStatus,
+    is_past: isPast,
+    can_test_send:
+      effectiveStatus === "scheduled" &&
+      Boolean(record && record.apns_token) &&
+      Number.isFinite(deadlineTimeMs) &&
+      deadlineTimeMs > nowMs,
+    gameweek_id:
+      record && record.gameweek_id !== undefined && record.gameweek_id !== null
+        ? Number(record.gameweek_id)
+        : null,
+    gameweek_name: record && record.gameweek_name ? String(record.gameweek_name) : null,
+    title: record && record.title ? String(record.title) : null,
+    body: record && record.body ? String(record.body) : null,
+    device_token: record && record.device_token ? String(record.device_token) : null,
+    device_token_short: shortDeviceTokenForAdmin(record && record.device_token),
+    apns_token_present: Boolean(record && record.apns_token),
+    dedupe_basis: record && record.dedupe_basis ? String(record.dedupe_basis) : null,
+    target_key: record && record.target_key ? String(record.target_key) : null,
+    scheduled_for_ms: scheduledForMs || null,
+    scheduled_for:
+      Number.isFinite(scheduledForMs) && scheduledForMs > 0
+        ? new Date(scheduledForMs).toISOString()
+        : record && record.scheduled_for
+          ? String(record.scheduled_for)
+          : null,
+    deadline_time_ms: deadlineTimeMs || null,
+    deadline_time:
+      Number.isFinite(deadlineTimeMs) && deadlineTimeMs > 0
+        ? new Date(deadlineTimeMs).toISOString()
+        : record && record.deadline_time
+          ? String(record.deadline_time)
+          : null,
+    sent_at_ms: sentAtMs || null,
+    sent_at:
+      Number.isFinite(sentAtMs) && sentAtMs > 0
+        ? new Date(sentAtMs).toISOString()
+        : record && record.sent_at
+          ? String(record.sent_at)
+          : null,
+    updated_at: record && record.updated_at ? String(record.updated_at) : null,
+    environment: record && record.environment ? String(record.environment) : null,
+    last_error: record && record.last_error ? String(record.last_error) : null,
+    is_development_build: Boolean(record && record.is_development_build),
+    device_time_zone: record && record.device_time_zone ? String(record.device_time_zone) : null,
+    device_locale: record && record.device_locale ? String(record.device_locale) : null,
+    last_test_status:
+      record && record.last_test_status ? String(record.last_test_status) : null,
+    last_test_error:
+      record && record.last_test_error ? String(record.last_test_error) : null,
+    last_test_sent_at:
+      record && record.last_test_sent_at ? String(record.last_test_sent_at) : null,
+    payload: record && record.payload ? record.payload : null,
+  };
+}
+
+function buildAdminFantasyReminderStatusCounts(records, nowMs = Date.now()) {
+  return (Array.isArray(records) ? records : []).reduce((acc, record) => {
+    const key = effectiveFantasyReminderStatusForAdmin(record, nowMs);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function buildNextFantasyReminderSummary(nextGameweek, nowMs = Date.now()) {
+  if (!nextGameweek || typeof nextGameweek !== "object") return null;
+  const deadlineTime = String(nextGameweek.deadline_time || "").trim();
+  const deadlineTimeMs = Date.parse(deadlineTime);
+  const scheduledForMs = Number.isFinite(deadlineTimeMs)
+    ? deadlineTimeMs - 24 * 60 * 60 * 1000
+    : null;
+  return {
+    gameweek_id:
+      nextGameweek.id !== undefined && nextGameweek.id !== null ? Number(nextGameweek.id) : null,
+    gameweek_name: nextGameweek.name ? String(nextGameweek.name) : null,
+    deadline_time: deadlineTime || null,
+    deadline_time_ms: Number.isFinite(deadlineTimeMs) ? deadlineTimeMs : null,
+    scheduled_for:
+      Number.isFinite(scheduledForMs) ? new Date(scheduledForMs).toISOString() : null,
+    scheduled_for_ms: Number.isFinite(scheduledForMs) ? scheduledForMs : null,
+    is_due:
+      Number.isFinite(scheduledForMs) &&
+      Number.isFinite(deadlineTimeMs) &&
+      scheduledForMs <= nowMs &&
+      deadlineTimeMs > nowMs,
+  };
+}
+
 function notificationGroupKeyForAdmin(record) {
   const eventType = String(record && record.event_type ? record.event_type : "unknown").trim();
   const eventKey = String(record && record.event_key ? record.event_key : "").trim();
@@ -13030,6 +13185,10 @@ app.get("/admin/devices", (_req, res) => {
 
 app.get("/admin/devices/:deviceSuffix", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_devices_ui.html"));
+});
+
+app.get("/admin/fantasy-reminders", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_fantasy_reminders_ui.html"));
 });
 
 app.get("/admin/fixtures", (_req, res) => {
@@ -14982,6 +15141,8 @@ const {
   getUserPreferences,
   deleteUserPreferences,
   getAllUserPreferences,
+  getFantasyReminderRecord,
+  getFantasyReminderRecords,
   getBbcMatchHistoryGrouped,
   getBbcRealtimeSnapshot,
   cleanupBbcHistory,
@@ -15736,6 +15897,104 @@ app.get(`${API_PREFIX}/admin/devices/:deviceSuffix`, async (req, res) => {
     res.status(500).json({
       error: "Failed to retrieve admin device details",
       message: error.message,
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/admin/fantasy-reminders`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const deviceTokenFilter = normalizeDeviceToken(req.query.device_token);
+  const statusFilter =
+    typeof req.query.status === "string" ? String(req.query.status).trim().toLowerCase() : "";
+  const limitUpcoming = parsePositiveInt(req.query.limit_upcoming, 100, 1, 1000);
+  const limitPast = parsePositiveInt(req.query.limit_past, 200, 1, 2000);
+  const nowMs = Date.now();
+
+  try {
+    const records = await getFantasyReminderRecords({
+      device_token: deviceTokenFilter || undefined,
+      status: statusFilter || undefined,
+      order: "desc",
+    });
+    const normalized = records.map((record) => buildAdminFantasyReminderEntry(record, nowMs));
+    const upcoming = normalized
+      .filter((record) => !record.is_past)
+      .sort((lhs, rhs) => (lhs.scheduled_for_ms || 0) - (rhs.scheduled_for_ms || 0))
+      .slice(0, limitUpcoming);
+    const past = normalized
+      .filter((record) => record.is_past)
+      .sort((lhs, rhs) => (rhs.scheduled_for_ms || 0) - (lhs.scheduled_for_ms || 0))
+      .slice(0, limitPast);
+    const nextGameweek = buildNextFantasyReminderSummary(fantasyBootstrapNextEvent, nowMs);
+
+    res.status(200).json({
+      success: true,
+      generated_at: new Date(nowMs).toISOString(),
+      filters: {
+        device_token: deviceTokenFilter || null,
+        status: statusFilter || null,
+        limit_upcoming: limitUpcoming,
+        limit_past: limitPast,
+      },
+      next_gameweek: nextGameweek,
+      summary: {
+        total: normalized.length,
+        upcoming: normalized.filter((record) => !record.is_past).length,
+        past: normalized.filter((record) => record.is_past).length,
+        status_counts: buildAdminFantasyReminderStatusCounts(records, nowMs),
+      },
+      upcoming,
+      past,
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving fantasy reminder admin data:", error);
+    res.status(500).json({
+      error: "Failed to retrieve fantasy reminder admin data",
+      message: error.message,
+    });
+  }
+});
+
+app.post(`${API_PREFIX}/admin/fantasy-reminders/:reminderId/test-send`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const reminderId = String(req.params.reminderId || "").trim();
+  if (!reminderId) {
+    res.status(400).json({ error: "Missing reminder id." });
+    return;
+  }
+
+  try {
+    const record = await getFantasyReminderRecord(reminderId);
+    if (!record) {
+      res.status(404).json({ error: "Reminder not found.", reminder_id: reminderId });
+      return;
+    }
+
+    const result = await matchMonitor.sendFantasyDeadlineReminderNow(reminderId, {
+      reason: "admin_test_send",
+    });
+    if (!result || !result.success) {
+      res.status(409).json({
+        error: result && result.error ? result.error : "Failed to send reminder test push.",
+        reminder_id: reminderId,
+        ...result,
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      reminder_id: reminderId,
+      ...result,
+    });
+  } catch (error) {
+    console.error("[API] Error test-sending fantasy reminder:", error);
+    res.status(500).json({
+      error: "Failed to send fantasy reminder test push",
+      message: error.message,
+      reminder_id: reminderId,
     });
   }
 });

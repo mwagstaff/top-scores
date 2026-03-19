@@ -2,8 +2,12 @@ const {
   getAllUserPreferences,
   getOperationalDataset,
   updateUserLiveActivityState,
+  saveFantasyReminderRecord,
+  getFantasyReminderRecord,
+  getFantasyReminderRecords,
   saveBbcMatchEventHistory,
   saveBbcNotificationHistory,
+  claimFantasyReminderSendIdempotency,
   claimBbcNotificationIdempotency,
 } = require("./redis_client");
 const { sendNotification, sendLiveActivityPush } = require("./apns_client");
@@ -54,6 +58,9 @@ const LIVE_ACTIVITY_DELAY_SNAPSHOT_STALE_TOLERANCE_MS = Math.max(POLL_INTERVAL_M
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
 const LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES = "merged_matches";
+const FANTASY_DEADLINE_REMINDER_EVAL_INTERVAL_MS = 60 * 1000;
+const FANTASY_DEADLINE_REMINDER_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
+const FANTASY_DEADLINE_REMINDER_DEFAULT_TIMEZONE = "Europe/London";
 const LIVE_ACTIVITY_TEAM_RATING_STOP_WORDS = new Set([
   "fc",
   "cf",
@@ -1506,8 +1513,9 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
     if (newStatus === "AET") {
       ftBody += " (AET)";
     }
-    if (isPenaltyShootoutStatus(newStatus) && newMatch.penalty_result) {
-      ftBody += ` (${newMatch.penalty_result} on penalties)`;
+    const penaltySuffix = penaltyResultSuffix(newMatch);
+    if (penaltySuffix) {
+      ftBody += penaltySuffix;
     }
 
     events.push({
@@ -1758,6 +1766,14 @@ function formatScoreline(match, homeScore, awayScore) {
   );
 }
 
+function penaltyResultSuffix(match) {
+  const penaltyResult = String(match && match.penalty_result ? match.penalty_result : "").trim();
+  if (!penaltyResult) {
+    return "";
+  }
+  return ` (${penaltyResult})`;
+}
+
 function buildScoreChangeEvent(oldMatch, newMatch) {
   const previous = scoreSnapshot(oldMatch || {});
   const current = scoreSnapshot(newMatch || {});
@@ -1892,8 +1908,13 @@ let isMonitoring = false;
 let dailyMatchesCheckTimer = null;
 let cleanupTimer = null;
 let liveActivityEvalTimer = null;
+let fantasyDeadlineReminderEvalTimer = null;
 let liveActivityEvalInFlight = false;
 let liveActivityEvalStartedAtMs = 0;
+let fantasyDeadlineReminderEvalInFlight = false;
+let fantasyDeadlineReminderLastEvaluationAt = null;
+let fantasyDeadlineReminderLastEvaluationError = null;
+let fantasyDeadlineReminderLastStats = null;
 let dailyMatchesCheckInFlight = false;
 let liveActivityStartupKickTimers = [];
 let apiBaseURL = "http://localhost:3000/api/v1";
@@ -1984,6 +2005,12 @@ function startMonitoring() {
     evaluateAndDispatchLiveActivities,
     LIVE_ACTIVITY_EVAL_INTERVAL_MS
   );
+
+  // Start fantasy deadline reminder evaluation loop.
+  void evaluateFantasyDeadlineReminders({ reason: "startup" });
+  fantasyDeadlineReminderEvalTimer = setInterval(() => {
+    void evaluateFantasyDeadlineReminders({ reason: "interval" });
+  }, FANTASY_DEADLINE_REMINDER_EVAL_INTERVAL_MS);
 }
 
 /**
@@ -2009,6 +2036,11 @@ function stopMonitoring() {
   if (liveActivityEvalTimer) {
     clearInterval(liveActivityEvalTimer);
     liveActivityEvalTimer = null;
+  }
+
+  if (fantasyDeadlineReminderEvalTimer) {
+    clearInterval(fantasyDeadlineReminderEvalTimer);
+    fantasyDeadlineReminderEvalTimer = null;
   }
 
   // Cancel all scheduled notifications
@@ -3657,6 +3689,277 @@ function hasConnectedFantasyTeam(fantasyState) {
   });
 }
 
+function userRecordUpdatedAtMs(user) {
+  const parsed = Date.parse(String(user && user.updatedAt ? user.updatedAt : "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function safeIntlDateTimeFormat(locale, options) {
+  try {
+    return new Intl.DateTimeFormat(locale || undefined, options);
+  } catch (_error) {
+    return new Intl.DateTimeFormat(undefined, options);
+  }
+}
+
+function isValidTimeZone(value) {
+  const candidate = String(value || "").trim();
+  if (!candidate) return false;
+  try {
+    new Intl.DateTimeFormat("en-GB", { timeZone: candidate }).format(Date.now());
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function userPreferencesForReminder(user) {
+  return user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
+}
+
+function resolveFantasyReminderTimeZone(user) {
+  const prefs = userPreferencesForReminder(user);
+  const candidates = [
+    prefs.deviceTimeZone,
+    prefs.deviceTimezone,
+    prefs.timeZone,
+    prefs.timezone,
+  ];
+  for (const candidate of candidates) {
+    if (isValidTimeZone(candidate)) {
+      return String(candidate).trim();
+    }
+  }
+  return FANTASY_DEADLINE_REMINDER_DEFAULT_TIMEZONE;
+}
+
+function resolveFantasyReminderLocale(user) {
+  const prefs = userPreferencesForReminder(user);
+  const candidate = String(
+    prefs.deviceLocale || prefs.locale || prefs.language || "en-GB"
+  ).trim();
+  return candidate || "en-GB";
+}
+
+function localDateKeyForTimeZone(timestampMs, timeZone) {
+  if (!Number.isFinite(timestampMs)) return "";
+  return safeIntlDateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(timestampMs);
+}
+
+function fantasyDeadlineRelativeDayLabel(deadlineTimeMs, nowMs, timeZone, locale) {
+  const deadlineDateKey = localDateKeyForTimeZone(deadlineTimeMs, timeZone);
+  if (!deadlineDateKey) return "";
+  const todayKey = localDateKeyForTimeZone(nowMs, timeZone);
+  if (deadlineDateKey === todayKey) return "today";
+  const tomorrowKey = localDateKeyForTimeZone(nowMs + 24 * 60 * 60 * 1000, timeZone);
+  if (deadlineDateKey === tomorrowKey) return "tomorrow";
+  return safeIntlDateTimeFormat(locale, {
+    timeZone,
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+  }).format(deadlineTimeMs);
+}
+
+function formatFantasyDeadlineReminderTime(deadlineTimeMs, user, nowMs = Date.now()) {
+  const timeZone = resolveFantasyReminderTimeZone(user);
+  const locale = resolveFantasyReminderLocale(user);
+  const timeLabel = safeIntlDateTimeFormat(locale, {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(deadlineTimeMs);
+  const relativeLabel = fantasyDeadlineRelativeDayLabel(
+    deadlineTimeMs,
+    nowMs,
+    timeZone,
+    locale
+  );
+  return relativeLabel ? `${timeLabel} ${relativeLabel}` : timeLabel;
+}
+
+function buildFantasyReminderTarget(user) {
+  const apnsToken = String(user && user.apnsToken ? user.apnsToken : "").trim();
+  if (apnsToken) {
+    return {
+      targetKey: `apns:${apnsToken}`,
+      dedupeBasis: "apns_token",
+    };
+  }
+
+  const deviceToken = String(user && user.deviceToken ? user.deviceToken : "").trim();
+  if (deviceToken) {
+    return {
+      targetKey: `device:${deviceToken}`,
+      dedupeBasis: "device_token",
+    };
+  }
+
+  return null;
+}
+
+function buildFantasyDeadlineReminderId(targetKey, nextGameweek) {
+  const gameweekId = String(nextGameweek && nextGameweek.id ? nextGameweek.id : "unknown").trim();
+  const deadlineTime = String(
+    nextGameweek && nextGameweek.deadline_time ? nextGameweek.deadline_time : ""
+  ).trim();
+  const digest = crypto
+    .createHash("sha1")
+    .update(`${targetKey}|${gameweekId}|${deadlineTime}`)
+    .digest("hex");
+  return `fantasy_deadline:${gameweekId}:${digest}`;
+}
+
+function buildFantasyDeadlineReminderBody(deadlineTimeMs, user, nowMs = Date.now()) {
+  return `Reminder: Fantasy Football deadline due soon (${formatFantasyDeadlineReminderTime(
+    deadlineTimeMs,
+    user,
+    nowMs
+  )})`;
+}
+
+function evaluateFantasyDeadlineReminderDecision(user, nextGameweek, nowMs = Date.now()) {
+  const prefs = userPreferencesForReminder(user);
+  const target = buildFantasyReminderTarget(user);
+  const deadlineTimeRaw = String(
+    nextGameweek && nextGameweek.deadline_time ? nextGameweek.deadline_time : ""
+  ).trim();
+  const deadlineTimeMs = Date.parse(deadlineTimeRaw);
+
+  if (!prefs.notificationsEnabled) {
+    return { shouldSchedule: false, reason: "notifications_disabled" };
+  }
+  if (prefs.fantasyDeadlineRemindersEnabled === false) {
+    return { shouldSchedule: false, reason: "deadline_reminder_disabled" };
+  }
+  if (!String(user && user.apnsToken ? user.apnsToken : "").trim()) {
+    return { shouldSchedule: false, reason: "missing_apns_token" };
+  }
+  if (!target) {
+    return { shouldSchedule: false, reason: "missing_delivery_target" };
+  }
+  if (!hasConnectedFantasyTeam(user && user.fantasy)) {
+    return { shouldSchedule: false, reason: "missing_fantasy_team" };
+  }
+  if (!Number.isFinite(deadlineTimeMs)) {
+    return { shouldSchedule: false, reason: "invalid_deadline_time" };
+  }
+  if (deadlineTimeMs <= nowMs) {
+    return { shouldSchedule: false, reason: "deadline_passed" };
+  }
+
+  return {
+    shouldSchedule: true,
+    reason: "eligible",
+    deadlineTimeMs: Math.floor(deadlineTimeMs),
+    scheduledForMs: Math.floor(deadlineTimeMs - FANTASY_DEADLINE_REMINDER_LOOKAHEAD_MS),
+    targetKey: target.targetKey,
+    dedupeBasis: target.dedupeBasis,
+  };
+}
+
+function buildFantasyDeadlineReminderRecord(user, nextGameweek, nowMs = Date.now(), decision = null) {
+  const resolvedDecision =
+    decision && typeof decision === "object"
+      ? decision
+      : evaluateFantasyDeadlineReminderDecision(user, nextGameweek, nowMs);
+  if (!resolvedDecision.shouldSchedule) {
+    return null;
+  }
+
+  const reminderId = buildFantasyDeadlineReminderId(resolvedDecision.targetKey, nextGameweek);
+  const title = "Fantasy Football deadline";
+  const body = buildFantasyDeadlineReminderBody(
+    resolvedDecision.deadlineTimeMs,
+    user,
+    resolvedDecision.scheduledForMs
+  );
+  const deviceTimeZone = resolveFantasyReminderTimeZone(user);
+  const deviceLocale = resolveFantasyReminderLocale(user);
+
+  return {
+    reminder_id: reminderId,
+    kind: "fantasy_deadline",
+    source: "fantasy_deadline_reminder",
+    status: "scheduled",
+    target_key: resolvedDecision.targetKey,
+    dedupe_basis: resolvedDecision.dedupeBasis,
+    device_token: user && user.deviceToken ? String(user.deviceToken).trim() : null,
+    apns_token: user && user.apnsToken ? String(user.apnsToken).trim() : null,
+    is_development_build: Boolean(user && user.isDevelopmentBuild),
+    user_updated_at: user && user.updatedAt ? String(user.updatedAt) : null,
+    gameweek_id:
+      nextGameweek && nextGameweek.id !== undefined && nextGameweek.id !== null
+        ? Number(nextGameweek.id)
+        : null,
+    gameweek_name:
+      nextGameweek && nextGameweek.name ? String(nextGameweek.name).trim() : null,
+    scheduled_for_ms: resolvedDecision.scheduledForMs,
+    deadline_time_ms: resolvedDecision.deadlineTimeMs,
+    device_time_zone: deviceTimeZone,
+    device_locale: deviceLocale,
+    title,
+    body,
+    payload: {
+      type: "fantasy_deadline_reminder",
+      source: "fantasy_deadline_reminder",
+      reminderId,
+      gameweekId:
+        nextGameweek && nextGameweek.id !== undefined && nextGameweek.id !== null
+          ? Number(nextGameweek.id)
+          : null,
+      gameweekName:
+        nextGameweek && nextGameweek.name ? String(nextGameweek.name).trim() : null,
+      deadlineTime: new Date(resolvedDecision.deadlineTimeMs).toISOString(),
+      scheduledFor: new Date(resolvedDecision.scheduledForMs).toISOString(),
+      deviceTimeZone,
+      deviceLocale,
+    },
+  };
+}
+
+function dedupeFantasyDeadlineReminderUsers(users, nextGameweek, nowMs = Date.now()) {
+  const deduped = new Map();
+
+  (Array.isArray(users) ? users : []).forEach((user) => {
+    const decision = evaluateFantasyDeadlineReminderDecision(user, nextGameweek, nowMs);
+    if (!decision.shouldSchedule) return;
+
+    const existing = deduped.get(decision.targetKey);
+    if (!existing || userRecordUpdatedAtMs(user) >= userRecordUpdatedAtMs(existing.user)) {
+      deduped.set(decision.targetKey, { user, decision });
+    }
+  });
+
+  return Array.from(deduped.values()).map((entry) => ({
+    ...entry,
+    record: buildFantasyDeadlineReminderRecord(entry.user, nextGameweek, nowMs, entry.decision),
+  }));
+}
+
+function fantasyReminderStatus(record) {
+  return String(record && record.status ? record.status : "").trim().toLowerCase();
+}
+
+function isFantasyDeadlineReminderDue(record, nowMs = Date.now()) {
+  const status = fantasyReminderStatus(record);
+  const scheduledForMs = Number(record && record.scheduled_for_ms);
+  const deadlineTimeMs = Number(record && record.deadline_time_ms);
+  return (
+    status === "scheduled" &&
+    Number.isFinite(scheduledForMs) &&
+    Number.isFinite(deadlineTimeMs) &&
+    scheduledForMs <= nowMs &&
+    deadlineTimeMs > nowMs
+  );
+}
+
 function fantasyCurrentScoreForUser(user) {
   const fantasy = user && user.fantasy && typeof user.fantasy === "object" ? user.fantasy : null;
   if (!hasConnectedFantasyTeam(fantasy)) return null;
@@ -4651,6 +4954,359 @@ async function runLiveActivityEvaluationNow(options = {}) {
   };
 }
 
+async function sendFantasyDeadlineReminderRecord(record, options = {}) {
+  const reminderId = String(record && record.reminder_id ? record.reminder_id : "").trim();
+  if (!reminderId) {
+    throw new Error("Missing reminder_id");
+  }
+
+  const title = String(record && record.title ? record.title : "Fantasy Football deadline");
+  const body = String(
+    record && record.body ? record.body : "Reminder: Fantasy Football deadline due soon"
+  );
+  const apnsToken = String(record && record.apns_token ? record.apns_token : "").trim();
+  if (!apnsToken) {
+    throw new Error("Missing APNS token for fantasy deadline reminder");
+  }
+
+  const isTest = options && options.isTest === true;
+  let idempotency = { claimed: true, source: "disabled" };
+  if (!isTest) {
+    idempotency = await claimFantasyReminderSendIdempotency(reminderId, {
+      context: {
+        reminder_id: reminderId,
+        device_token: shortDeviceToken(record && record.device_token),
+        gameweek_id: record && record.gameweek_id ? record.gameweek_id : null,
+      },
+    });
+    if (!idempotency.claimed) {
+      return {
+        success: false,
+        dedupeSkipped: true,
+        environment:
+          record && record.is_development_build ? "sandbox" : "production",
+        idempotencySource: idempotency.source || null,
+      };
+    }
+  }
+
+  const payload = {
+    ...(record && record.payload && typeof record.payload === "object" ? record.payload : {}),
+    reminderId,
+    source: isTest ? "fantasy_deadline_reminder_test" : "fantasy_deadline_reminder",
+    requestedAt: new Date().toISOString(),
+    test: isTest,
+  };
+  const result = await sendNotification(
+    apnsToken,
+    title,
+    body,
+    payload,
+    Boolean(record && record.is_development_build)
+  );
+  console.info(
+    `[MatchMonitor] Fantasy deadline reminder ${isTest ? "test " : ""}delivery ${
+      result && result.success ? "sent" : "failed"
+    } reminder_id=${reminderId} device=${shortDeviceToken(
+      record && record.device_token
+    )} environment=${
+      result && result.environment
+        ? result.environment
+        : record && record.is_development_build
+          ? "sandbox"
+          : "production"
+    } error=${result && result.error ? String(result.error) : "none"}`
+  );
+  const nowIso = new Date().toISOString();
+  const patch = isTest
+    ? {
+        reminder_id: reminderId,
+        last_test_sent_at: nowIso,
+        last_test_sent_at_ms: Date.parse(nowIso),
+        last_test_status: result && result.success ? "sent" : "failed",
+        last_test_error: result && result.error ? String(result.error) : null,
+        last_test_environment:
+          result && result.environment
+            ? result.environment
+            : record && record.is_development_build
+              ? "sandbox"
+              : "production",
+      }
+    : {
+        reminder_id: reminderId,
+        status: result && result.success ? "sent" : "failed",
+        sent_at: nowIso,
+        sent_at_ms: Date.parse(nowIso),
+        last_delivery_at: nowIso,
+        last_delivery_at_ms: Date.parse(nowIso),
+        last_error: result && result.error ? String(result.error) : null,
+        environment:
+          result && result.environment
+            ? result.environment
+            : record && record.is_development_build
+              ? "sandbox"
+              : "production",
+        apns_result_success: Boolean(result && result.success),
+        idempotency_source: idempotency.source || null,
+      };
+
+  await saveFantasyReminderRecord(patch, { mergeExisting: true });
+  return {
+    ...result,
+    dedupeSkipped: false,
+    idempotencySource: idempotency.source || null,
+  };
+}
+
+async function evaluateFantasyDeadlineReminders(options = {}) {
+  if (fantasyDeadlineReminderEvalInFlight) {
+    return {
+      success: false,
+      skipped: true,
+      reason: "evaluation_in_progress",
+      stats: fantasyDeadlineReminderLastStats,
+    };
+  }
+
+  fantasyDeadlineReminderEvalInFlight = true;
+  const nowMs =
+    options && Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  try {
+    const nextGameweek = await fetchJsonWithTimeout(`${apiBaseURL}/fantasy/gameweek/next`);
+    const deadlineTimeMs = Date.parse(
+      String(nextGameweek && nextGameweek.deadline_time ? nextGameweek.deadline_time : "").trim()
+    );
+    if (!Number.isFinite(deadlineTimeMs) || deadlineTimeMs <= nowMs) {
+      fantasyDeadlineReminderLastEvaluationAt = nowIso;
+      fantasyDeadlineReminderLastEvaluationError = null;
+      fantasyDeadlineReminderLastStats = {
+        next_gameweek_id:
+          nextGameweek && nextGameweek.id !== undefined && nextGameweek.id !== null
+            ? Number(nextGameweek.id)
+            : null,
+        eligible_count: 0,
+        due_count: 0,
+        sent_count: 0,
+        superseded_count: 0,
+        expired_count: 0,
+      };
+      return {
+        success: true,
+        nextGameweek,
+        stats: fantasyDeadlineReminderLastStats,
+      };
+    }
+
+    const [allUsers, existingRecords] = await Promise.all([
+      getAllUserPreferences(),
+      getFantasyReminderRecords({ order: "desc" }),
+    ]);
+    const dedupedTargets = dedupeFantasyDeadlineReminderUsers(allUsers, nextGameweek, nowMs);
+    const eligibleRecords = dedupedTargets
+      .map((entry) => entry.record)
+      .filter((record) => record && typeof record === "object");
+    const eligibleReminderIds = new Set(
+      eligibleRecords.map((record) => String(record.reminder_id || "").trim()).filter(Boolean)
+    );
+    const gameweekId = String(nextGameweek && nextGameweek.id ? nextGameweek.id : "").trim();
+
+    let expiredCount = 0;
+    for (const record of existingRecords) {
+      const status = fantasyReminderStatus(record);
+      const recordDeadlineMs = Number(record && record.deadline_time_ms);
+      if (status !== "scheduled" || !Number.isFinite(recordDeadlineMs) || recordDeadlineMs > nowMs) {
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await saveFantasyReminderRecord(
+        {
+          reminder_id: record.reminder_id,
+          status: "expired",
+          expired_at: nowIso,
+          expired_at_ms: nowMs,
+        },
+        { mergeExisting: true }
+      );
+      expiredCount += 1;
+    }
+
+    let supersededCount = 0;
+    for (const record of existingRecords) {
+      const recordGameweekId = String(record && record.gameweek_id ? record.gameweek_id : "").trim();
+      const status = fantasyReminderStatus(record);
+      const recordDeadlineMs = Number(record && record.deadline_time_ms);
+      if (
+        !gameweekId ||
+        recordGameweekId !== gameweekId ||
+        status !== "scheduled" ||
+        !Number.isFinite(recordDeadlineMs) ||
+        recordDeadlineMs <= nowMs
+      ) {
+        continue;
+      }
+      if (eligibleReminderIds.has(String(record.reminder_id || "").trim())) {
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await saveFantasyReminderRecord(
+        {
+          reminder_id: record.reminder_id,
+          status: "superseded",
+          superseded_at: nowIso,
+          superseded_at_ms: nowMs,
+        },
+        { mergeExisting: true }
+      );
+      supersededCount += 1;
+    }
+
+    const dueRecords = [];
+    for (const record of eligibleRecords) {
+      const existingRecord = await getFantasyReminderRecord(record.reminder_id);
+      const existingStatus = fantasyReminderStatus(existingRecord);
+      if (existingRecord && (existingStatus === "sent" || existingStatus === "failed")) {
+        continue;
+      }
+
+      const scheduledRecord =
+        existingRecord && existingStatus !== "superseded" && existingStatus !== "expired"
+          ? {
+              ...record,
+              ...existingRecord,
+              reminder_id: record.reminder_id,
+              status: existingStatus || "scheduled",
+            }
+          : record;
+
+      // eslint-disable-next-line no-await-in-loop
+      const savedRecord = await saveFantasyReminderRecord(
+        {
+          ...record,
+          status: scheduledRecord.status || "scheduled",
+        },
+        { mergeExisting: true }
+      );
+
+      if (isFantasyDeadlineReminderDue(savedRecord, nowMs)) {
+        dueRecords.push(savedRecord);
+      }
+    }
+
+    let sentCount = 0;
+    for (const dueRecord of dueRecords) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const result = await sendFantasyDeadlineReminderRecord(dueRecord, {
+          isTest: false,
+          reason: String(options && options.reason ? options.reason : "scheduled_poll"),
+        });
+        if (result && result.success) {
+          sentCount += 1;
+        }
+      } catch (error) {
+        console.warn(
+          `[MatchMonitor] Fantasy deadline reminder send failed ${dueRecord.reminder_id}:`,
+          error && error.message ? error.message : error
+        );
+        // eslint-disable-next-line no-await-in-loop
+        await saveFantasyReminderRecord(
+          {
+            reminder_id: dueRecord.reminder_id,
+            status: "failed",
+            sent_at: nowIso,
+            sent_at_ms: nowMs,
+            last_delivery_at: nowIso,
+            last_delivery_at_ms: nowMs,
+            last_error: error && error.message ? error.message : String(error),
+          },
+          { mergeExisting: true }
+        );
+      }
+    }
+
+    fantasyDeadlineReminderLastEvaluationAt = nowIso;
+    fantasyDeadlineReminderLastEvaluationError = null;
+    fantasyDeadlineReminderLastStats = {
+      next_gameweek_id:
+        nextGameweek && nextGameweek.id !== undefined && nextGameweek.id !== null
+          ? Number(nextGameweek.id)
+          : null,
+      next_gameweek_name:
+        nextGameweek && nextGameweek.name ? String(nextGameweek.name) : null,
+      deadline_time:
+        nextGameweek && nextGameweek.deadline_time ? String(nextGameweek.deadline_time) : null,
+      eligible_count: eligibleRecords.length,
+      due_count: dueRecords.length,
+      sent_count: sentCount,
+      superseded_count: supersededCount,
+      expired_count: expiredCount,
+    };
+
+    return {
+      success: true,
+      nextGameweek,
+      stats: fantasyDeadlineReminderLastStats,
+    };
+  } catch (error) {
+    fantasyDeadlineReminderLastEvaluationAt = nowIso;
+    fantasyDeadlineReminderLastEvaluationError = error && error.message ? error.message : String(error);
+    console.warn(
+      "[MatchMonitor] Fantasy deadline reminder evaluation failed:",
+      fantasyDeadlineReminderLastEvaluationError
+    );
+    return {
+      success: false,
+      error: fantasyDeadlineReminderLastEvaluationError,
+      stats: fantasyDeadlineReminderLastStats,
+    };
+  } finally {
+    fantasyDeadlineReminderEvalInFlight = false;
+  }
+}
+
+async function runFantasyDeadlineReminderEvaluationNow(options = {}) {
+  return evaluateFantasyDeadlineReminders({
+    ...options,
+    reason: String(options && options.reason ? options.reason : "manual"),
+  });
+}
+
+async function sendFantasyDeadlineReminderNow(reminderId, options = {}) {
+  const record = await getFantasyReminderRecord(reminderId);
+  if (!record) {
+    return {
+      success: false,
+      error: "Reminder not found",
+      reminderId,
+    };
+  }
+
+  const currentStatus = fantasyReminderStatus(record);
+  const deadlineTimeMs = Number(record && record.deadline_time_ms);
+  if (
+    currentStatus !== "scheduled" ||
+    !Number.isFinite(deadlineTimeMs) ||
+    deadlineTimeMs <= Date.now()
+  ) {
+    return {
+      success: false,
+      error: "Only upcoming scheduled reminders can be test-sent immediately.",
+      reminderId,
+    };
+  }
+
+  const result = await sendFantasyDeadlineReminderRecord(record, {
+    ...options,
+    isTest: true,
+  });
+  return {
+    reminderId,
+    ...result,
+  };
+}
+
 /**
  * Schedule a notification for a user (with delay if configured)
  */
@@ -4988,6 +5644,12 @@ function getStatus(options = {}) {
     finishedMatchCount: finishedMatchIds.size,
     scheduledNotificationCount: scheduledNotifications.size,
     dedupSetSize: sentNotifications.size,
+    fantasyDeadlineReminders: {
+      eval_in_flight: fantasyDeadlineReminderEvalInFlight,
+      last_evaluation_at: fantasyDeadlineReminderLastEvaluationAt,
+      last_evaluation_error: fantasyDeadlineReminderLastEvaluationError,
+      stats: fantasyDeadlineReminderLastStats,
+    },
     diagnostics: {
       filter: {
         match_id: matchIdFilter || null,
@@ -5019,9 +5681,14 @@ module.exports = {
   stopMonitoring,
   getStatus,
   runLiveActivityEvaluationNow,
+  runFantasyDeadlineReminderEvaluationNow,
+  sendFantasyDeadlineReminderNow,
   __testHooks: {
     annotateMatchWithLiveActivityTeamRatings,
     buildMatchEvents,
+    buildFantasyDeadlineReminderBody,
+    buildFantasyDeadlineReminderId,
+    buildFantasyDeadlineReminderRecord,
     buildNotificationPayload,
     buildScoreCorrectionEvent,
     buildScoreChangeEvent,
@@ -5049,10 +5716,14 @@ module.exports = {
     compareLiveActivityMatches,
     compareUpcomingLiveActivityMatches,
     buildLiveActivityEntriesForUser,
+    dedupeFantasyDeadlineReminderUsers,
+    evaluateFantasyDeadlineReminderDecision,
+    formatFantasyDeadlineReminderTime,
     monitoredMatchStatesSnapshot,
     evaluateUserNotificationDecision,
     filterCanonicalLiveActivityMatchesForUser,
     firstFixtureSectionMatches,
+    isFantasyDeadlineReminderDue,
     isEnglishPremierLeagueTeam,
     isLikelyTerminalStaleLiveMatch,
     mergeCanonicalLiveActivityMatch,

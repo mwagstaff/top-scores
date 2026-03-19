@@ -233,6 +233,7 @@
         <a id="back-results" class="chip" href="./results">Back to Results</a>
         <a id="link-fixtures" class="chip" href="./fixtures">Fixtures</a>
         <a id="link-devices" class="chip" href="./devices">Devices</a>
+        <a id="link-reminders" class="chip" href="./fantasy-reminders">Fantasy Reminders</a>
         <a id="link-preferences" class="chip" href="./preferences">Preferences</a>
         <a id="link-history" class="chip" href="./bbc-history">BBC History</a>
       </div>
@@ -292,6 +293,7 @@
     const backResultsNode = document.getElementById("back-results");
     const fixturesNode = document.getElementById("link-fixtures");
     const devicesNode = document.getElementById("link-devices");
+    const remindersNode = document.getElementById("link-reminders");
     const preferencesNode = document.getElementById("link-preferences");
     const historyNode = document.getElementById("link-history");
 
@@ -496,6 +498,7 @@
       backResultsNode.href = `${apiBasePrefix}/admin/results`;
       fixturesNode.href = `${apiBasePrefix}/admin/fixtures`;
       devicesNode.href = `${apiBasePrefix}/admin/devices`;
+      remindersNode.href = `${apiBasePrefix}/admin/fantasy-reminders`;
       preferencesNode.href = `${apiBasePrefix}/admin/preferences`;
       historyNode.href = `${apiBasePrefix}/admin/bbc-history`;
 

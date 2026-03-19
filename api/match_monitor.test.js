@@ -3176,6 +3176,64 @@ test("suppresses aggregate 0-0 in full-time notifications", () => {
   assert.equal(events[0].body, "Burnley 0 - 0 AFC Bournemouth");
 });
 
+test("includes penalty result in AET full-time notifications", () => {
+  const monitorState = newMonitorState();
+
+  const oldMatch = {
+    home_team: "Midtjylland",
+    away_team: "Nottingham Forest",
+    score_status: "119'",
+    home_score: 1,
+    away_score: 2,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    aggregate_home_score: 2,
+    aggregate_away_score: 2,
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    score_status: "AET",
+    penalty_result: "Nottingham Forest win 3 - 0 on penalties",
+  };
+
+  const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "fulltime");
+  assert.equal(
+    events[0].body,
+    "Midtjylland 1 - 2 Nottingham Forest (agg: 2-2) (AET) (Nottingham Forest win 3 - 0 on penalties)"
+  );
+});
+
+test("does not duplicate penalty wording in penalty-shootout full-time notifications", () => {
+  const monitorState = newMonitorState();
+
+  const oldMatch = {
+    home_team: "West Ham United",
+    away_team: "Brentford",
+    score_status: "AET",
+    home_score: 2,
+    away_score: 2,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    score_status: "PENS",
+    penalty_result: "West Ham United win 5 - 3 on penalties",
+  };
+
+  const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "fulltime");
+  assert.equal(
+    events[0].body,
+    "West Ham United 2 - 2 Brentford (West Ham United win 5 - 3 on penalties)"
+  );
+});
+
 test("counts own goals for event detection", () => {
   const total = __testHooks.countGoals([
     { player: "Eric Garcia", own_goal_times: ["6'"] },
@@ -3608,4 +3666,87 @@ test("evaluateUserNotificationDecision treats confirmed VAR reversals as delayed
     reason: "eligible",
     delayMinutes: 3,
   });
+});
+
+test("evaluateFantasyDeadlineReminderDecision requires a connected fantasy team", () => {
+  const decision = __testHooks.evaluateFantasyDeadlineReminderDecision(
+    {
+      apnsToken: "apns-token",
+      deviceToken: "device-token",
+      preferences: {
+        notificationsEnabled: true,
+        fantasyDeadlineRemindersEnabled: true,
+      },
+      fantasy: null,
+    },
+    {
+      id: 31,
+      name: "Gameweek 31",
+      deadline_time: "2026-03-21T11:00:00Z",
+    },
+    Date.parse("2026-03-20T10:59:00Z")
+  );
+
+  assert.deepStrictEqual(decision, {
+    shouldSchedule: false,
+    reason: "missing_fantasy_team",
+  });
+});
+
+test("formatFantasyDeadlineReminderTime uses synced timezone and tomorrow wording", () => {
+  const formatted = __testHooks.formatFantasyDeadlineReminderTime(
+    Date.parse("2026-03-20T18:30:00Z"),
+    {
+      preferences: {
+        deviceLocale: "en-GB",
+        deviceTimeZone: "Europe/London",
+      },
+    },
+    Date.parse("2026-03-19T18:29:00Z")
+  );
+
+  assert.equal(formatted, "18:30 tomorrow");
+});
+
+test("dedupeFantasyDeadlineReminderUsers collapses duplicate APNS targets to the freshest record", () => {
+  const deduped = __testHooks.dedupeFantasyDeadlineReminderUsers(
+    [
+      {
+        deviceToken: "older-device",
+        apnsToken: "shared-apns-token",
+        updatedAt: "2026-03-19T10:00:00.000Z",
+        preferences: {
+          notificationsEnabled: true,
+          fantasyDeadlineRemindersEnabled: true,
+        },
+        fantasy: {
+          managerEntryID: 123,
+        },
+      },
+      {
+        deviceToken: "newer-device",
+        apnsToken: "shared-apns-token",
+        updatedAt: "2026-03-19T10:05:00.000Z",
+        preferences: {
+          notificationsEnabled: true,
+          fantasyDeadlineRemindersEnabled: true,
+          deviceTimeZone: "Europe/London",
+          deviceLocale: "en-GB",
+        },
+        fantasy: {
+          managerEntryID: 456,
+        },
+      },
+    ],
+    {
+      id: 31,
+      name: "Gameweek 31",
+      deadline_time: "2026-03-21T18:30:00Z",
+    },
+    Date.parse("2026-03-20T18:29:00Z")
+  );
+
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0].user.deviceToken, "newer-device");
+  assert.equal(deduped[0].record.dedupe_basis, "apns_token");
 });

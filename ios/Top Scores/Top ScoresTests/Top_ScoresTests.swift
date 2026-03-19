@@ -23,6 +23,7 @@ struct Top_ScoresTests {
         #expect(store.notificationDelayMinutes == 2)
         #expect(store.notificationEventTypes == PreferencesStore.defaultNotificationEventTypes)
         #expect(store.notificationUseViewingFilter)
+        #expect(store.fantasyDeadlineRemindersEnabled)
         #expect(store.matchGroupSortOrder == .kickoffThenTeamScore)
         #expect(!store.showTodayUnfinishedFixturesBadge)
         #expect(store.showFantasyMatchPills)

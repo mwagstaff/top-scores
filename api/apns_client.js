@@ -239,7 +239,10 @@ async function sendNotification(deviceToken, title, body, data = {}, isDevelopme
         ? sendResult.failure.response.reason
         : sendResult.failure.error;
       const errorText = extractFailureError(sendResult.failure);
-      console.error(`[APNS] Failed to send notification (${environment}):`, reason);
+      console.error(
+        `[APNS] Failed to send notification (${environment}) to ${deviceToken.substring(0, 12)}...:`,
+        reason
+      );
       return {
         success: false,
         error: errorText,
@@ -249,7 +252,10 @@ async function sendNotification(deviceToken, title, body, data = {}, isDevelopme
     }
 
     const error = sendResult.error || new Error("unknown");
-    console.error(`[APNS] Error sending notification (${environment}):`, error);
+    console.error(
+      `[APNS] Error sending notification (${environment}) to ${deviceToken.substring(0, 12)}...:`,
+      error
+    );
     return {
       success: false,
       error: error.message || String(error),

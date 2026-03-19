@@ -224,7 +224,10 @@ actor PreferencesSyncService {
                 "notificationUseViewingFilter": snapshot.notificationUseViewingFilter,
                 "notificationCompetitionFilterEnabled": snapshot.notificationCompetitionFilterEnabled,
                 "notificationSelectedLeagues": snapshot.notificationSelectedLeagues,
-                "showTodayUnfinishedFixturesBadge": snapshot.showTodayUnfinishedFixturesBadge
+                "fantasyDeadlineRemindersEnabled": snapshot.fantasyDeadlineRemindersEnabled,
+                "showTodayUnfinishedFixturesBadge": snapshot.showTodayUnfinishedFixturesBadge,
+                "deviceLocale": Locale.current.identifier,
+                "deviceTimeZone": TimeZone.current.identifier
             ]
         ]
 
@@ -372,7 +375,9 @@ actor PreferencesSyncService {
                 notificationUseViewingFilter: preferences["notificationUseViewingFilter"] as? Bool ?? PreferencesStore.defaultNotificationUseViewingFilter,
                 notificationCompetitionFilterEnabled: preferences["notificationCompetitionFilterEnabled"] as? Bool ?? PreferencesStore.defaultNotificationCompetitionFilterEnabled,
                 notificationSelectedLeagues: preferences["notificationSelectedLeagues"] as? [String] ?? PreferencesStore.defaultNotificationSelectedLeagues,
-                showTodayUnfinishedFixturesBadge: preferences["showTodayUnfinishedFixturesBadge"] as? Bool ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
+                fantasyDeadlineRemindersEnabled: preferences["fantasyDeadlineRemindersEnabled"] as? Bool ?? PreferencesStore.defaultFantasyDeadlineRemindersEnabled,
+                showTodayUnfinishedFixturesBadge: preferences["showTodayUnfinishedFixturesBadge"] as? Bool ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
+                showFantasyMatchPills: preferences["showFantasyMatchPills"] as? Bool ?? PreferencesStore.defaultShowFantasyMatchPills
             )
 
             NSLog("[PreferencesSync] Successfully fetched preferences from Redis")

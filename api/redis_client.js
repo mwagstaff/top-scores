@@ -39,6 +39,14 @@ const USER_PREFERENCES_TTL_SECONDS = parsePositiveIntOrFallback(
   process.env.USER_PREFERENCES_TTL_SECONDS,
   180 * 24 * 60 * 60
 );
+const FANTASY_REMINDER_HISTORY_TTL_SECONDS = parsePositiveIntOrFallback(
+  process.env.FANTASY_REMINDER_HISTORY_TTL_SECONDS,
+  180 * 24 * 60 * 60
+);
+const FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS = parsePositiveIntOrFallback(
+  process.env.FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS,
+  30 * 24 * 60 * 60
+);
 const MAX_BBC_HISTORY_QUERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 const BBC_EVENTS_INDEX_KEY = `${DB_NAME}:bbc:events:index`;
@@ -52,6 +60,12 @@ const BBC_NOTIFICATIONS_MATCH_DEVICE_INDEX_PREFIX =
 const BBC_NOTIFICATIONS_RECORD_PREFIX = `${DB_NAME}:bbc:notifications:record:`;
 const BBC_NOTIFICATION_IDEMPOTENCY_PREFIX =
   `${DB_NAME}:bbc:notifications:idempotency:`;
+
+const FANTASY_REMINDERS_INDEX_KEY = `${DB_NAME}:fantasy:reminders:index`;
+const FANTASY_REMINDERS_DEVICE_INDEX_PREFIX = `${DB_NAME}:fantasy:reminders:device:`;
+const FANTASY_REMINDERS_RECORD_PREFIX = `${DB_NAME}:fantasy:reminders:record:`;
+const FANTASY_REMINDERS_SEND_IDEMPOTENCY_PREFIX =
+  `${DB_NAME}:fantasy:reminders:idempotency:`;
 
 const OPERATIONAL_DATASET_PREFIX = `${DB_NAME}:operational:dataset:`;
 const OPERATIONAL_MATCH_DETAILS_PREFIX = `${DB_NAME}:operational:match_details:`;
@@ -200,6 +214,11 @@ async function ensureRedisTtlPolicy(redisClient) {
       BBC_NOTIFICATIONS_INDEX_KEY,
       BBC_NOTIFICATION_HISTORY_TTL_SECONDS
     ),
+    ensureFiniteTtlForKey(
+      redisClient,
+      FANTASY_REMINDERS_INDEX_KEY,
+      FANTASY_REMINDER_HISTORY_TTL_SECONDS
+    ),
   ]);
 
   const patternPolicies = [
@@ -218,6 +237,18 @@ async function ensureRedisTtlPolicy(redisClient) {
     {
       pattern: `${BBC_NOTIFICATION_IDEMPOTENCY_PREFIX}*`,
       ttl: BBC_NOTIFICATION_IDEMPOTENCY_TTL_SECONDS,
+    },
+    {
+      pattern: `${FANTASY_REMINDERS_RECORD_PREFIX}*`,
+      ttl: FANTASY_REMINDER_HISTORY_TTL_SECONDS,
+    },
+    {
+      pattern: `${FANTASY_REMINDERS_DEVICE_INDEX_PREFIX}*`,
+      ttl: FANTASY_REMINDER_HISTORY_TTL_SECONDS,
+    },
+    {
+      pattern: `${FANTASY_REMINDERS_SEND_IDEMPOTENCY_PREFIX}*`,
+      ttl: FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS,
     },
   ];
   for (const policy of patternPolicies) {
@@ -975,9 +1006,263 @@ function buildHistoryRetentionPolicy() {
     event_ttl_seconds: BBC_EVENT_HISTORY_TTL_SECONDS,
     notification_ttl_seconds: BBC_NOTIFICATION_HISTORY_TTL_SECONDS,
     notification_idempotency_ttl_seconds: BBC_NOTIFICATION_IDEMPOTENCY_TTL_SECONDS,
+    fantasy_reminder_ttl_seconds: FANTASY_REMINDER_HISTORY_TTL_SECONDS,
+    fantasy_reminder_idempotency_ttl_seconds: FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS,
     user_preferences_ttl_seconds: USER_PREFERENCES_TTL_SECONDS,
     max_query_window_ms: MAX_BBC_HISTORY_QUERY_MS,
   };
+}
+
+function fantasyReminderTimestampMs(value) {
+  const direct = Number(value);
+  if (Number.isFinite(direct) && direct > 0) return Math.floor(direct);
+  const parsed = Date.parse(String(value || "").trim());
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  return null;
+}
+
+function normalizeFantasyReminderStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "scheduled";
+  return normalized;
+}
+
+function buildFantasyReminderRecordKey(reminderId) {
+  const normalizedId = String(reminderId || "").trim();
+  if (!normalizedId) {
+    throw new Error("reminderId is required for fantasy reminder record key");
+  }
+  return `${FANTASY_REMINDERS_RECORD_PREFIX}${sanitizeTokenForKey(normalizedId)}`;
+}
+
+function buildFantasyReminderDeviceIndexKey(deviceToken) {
+  const normalizedToken = String(deviceToken || "").trim();
+  if (!normalizedToken) return null;
+  return `${FANTASY_REMINDERS_DEVICE_INDEX_PREFIX}${sanitizeTokenForKey(normalizedToken)}`;
+}
+
+async function saveFantasyReminderRecord(payload, options = {}) {
+  const reminderId = String(
+    payload && (payload.reminder_id || payload.reminderId) ? (payload.reminder_id || payload.reminderId) : ""
+  ).trim();
+  if (!reminderId) {
+    throw new Error("reminder_id is required to save fantasy reminder record");
+  }
+
+  const redisClient = await getClient();
+  const recordKey = buildFantasyReminderRecordKey(reminderId);
+  const mergeExisting = options && options.mergeExisting !== false;
+  const rawExisting = mergeExisting ? await redisClient.get(recordKey) : null;
+  const existing = rawExisting ? safeJsonParse(rawExisting, `fantasy reminder ${reminderId}`) : null;
+
+  const deviceToken = String(
+    payload && (payload.device_token || payload.deviceToken)
+      ? (payload.device_token || payload.deviceToken)
+      : existing && existing.device_token
+        ? existing.device_token
+        : ""
+  ).trim();
+  const apnsToken = normalizeOptionalToken(
+    payload && Object.prototype.hasOwnProperty.call(payload, "apns_token")
+      ? payload.apns_token
+      : payload && Object.prototype.hasOwnProperty.call(payload, "apnsToken")
+        ? payload.apnsToken
+        : existing && existing.apns_token
+  );
+  const scheduledForMs = fantasyReminderTimestampMs(
+    payload && Object.prototype.hasOwnProperty.call(payload, "scheduled_for_ms")
+      ? payload.scheduled_for_ms
+      : payload && Object.prototype.hasOwnProperty.call(payload, "scheduledForMs")
+        ? payload.scheduledForMs
+        : existing && existing.scheduled_for_ms
+  );
+  if (!Number.isFinite(scheduledForMs)) {
+    throw new Error("scheduled_for_ms is required to save fantasy reminder record");
+  }
+
+  const deadlineTimeMs = fantasyReminderTimestampMs(
+    payload && Object.prototype.hasOwnProperty.call(payload, "deadline_time_ms")
+      ? payload.deadline_time_ms
+      : payload && Object.prototype.hasOwnProperty.call(payload, "deadlineTimeMs")
+        ? payload.deadlineTimeMs
+        : payload && Object.prototype.hasOwnProperty.call(payload, "deadline_time")
+          ? payload.deadline_time
+          : payload && Object.prototype.hasOwnProperty.call(payload, "deadlineTime")
+            ? payload.deadlineTime
+            : existing && existing.deadline_time_ms
+              ? existing.deadline_time_ms
+              : existing && existing.deadline_time
+  );
+  if (!Number.isFinite(deadlineTimeMs)) {
+    throw new Error("deadline_time is required to save fantasy reminder record");
+  }
+
+  const nowIso = new Date().toISOString();
+  const previousDeviceIndexKey = buildFantasyReminderDeviceIndexKey(existing && existing.device_token);
+  const nextDeviceIndexKey = buildFantasyReminderDeviceIndexKey(deviceToken);
+
+  const record = {
+    ...(existing && typeof existing === "object" ? existing : {}),
+    ...(payload && typeof payload === "object" ? payload : {}),
+    reminder_id: reminderId,
+    device_token: deviceToken || null,
+    apns_token: apnsToken || null,
+    scheduled_for_ms: scheduledForMs,
+    scheduled_for: new Date(scheduledForMs).toISOString(),
+    deadline_time_ms: deadlineTimeMs,
+    deadline_time: new Date(deadlineTimeMs).toISOString(),
+    status: normalizeFantasyReminderStatus(
+      payload && Object.prototype.hasOwnProperty.call(payload, "status")
+        ? payload.status
+        : existing && existing.status
+    ),
+    created_at:
+      existing && existing.created_at ? String(existing.created_at) : nowIso,
+    updated_at: nowIso,
+  };
+
+  try {
+    const transaction = redisClient.multi();
+    transaction.set(recordKey, JSON.stringify(record), { EX: FANTASY_REMINDER_HISTORY_TTL_SECONDS });
+    transaction.zAdd(FANTASY_REMINDERS_INDEX_KEY, [{ score: scheduledForMs, value: recordKey }]);
+    transaction.expire(FANTASY_REMINDERS_INDEX_KEY, FANTASY_REMINDER_HISTORY_TTL_SECONDS);
+
+    if (previousDeviceIndexKey && previousDeviceIndexKey !== nextDeviceIndexKey) {
+      transaction.zRem(previousDeviceIndexKey, recordKey);
+    }
+    if (nextDeviceIndexKey) {
+      transaction.zAdd(nextDeviceIndexKey, [{ score: scheduledForMs, value: recordKey }]);
+      transaction.expire(nextDeviceIndexKey, FANTASY_REMINDER_HISTORY_TTL_SECONDS);
+    }
+    await transaction.exec();
+
+    const cutoffMs = pruneCutoffMs(FANTASY_REMINDER_HISTORY_TTL_SECONDS);
+    await Promise.all([
+      pruneIndexEntries(redisClient, FANTASY_REMINDERS_INDEX_KEY, cutoffMs),
+      nextDeviceIndexKey ? pruneIndexEntries(redisClient, nextDeviceIndexKey, cutoffMs) : Promise.resolve(),
+      previousDeviceIndexKey && previousDeviceIndexKey !== nextDeviceIndexKey
+        ? pruneIndexEntries(redisClient, previousDeviceIndexKey, cutoffMs)
+        : Promise.resolve(),
+    ]);
+
+    return record;
+  } catch (error) {
+    console.error("[Redis] Error saving fantasy reminder record:", error);
+    throw error;
+  }
+}
+
+async function getFantasyReminderRecord(reminderId) {
+  const normalizedId = String(reminderId || "").trim();
+  if (!normalizedId) return null;
+
+  try {
+    const redisClient = await getClient();
+    const raw = await redisClient.get(buildFantasyReminderRecordKey(normalizedId));
+    if (!raw) return null;
+    const parsed = safeJsonParse(raw, `fantasy reminder ${normalizedId}`);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (error) {
+    console.error("[Redis] Error retrieving fantasy reminder record:", error);
+    return null;
+  }
+}
+
+async function getFantasyReminderRecords(options = {}) {
+  const statusFilter = normalizeOptionalToken(options.status);
+  const reminderIdFilter = normalizeOptionalToken(options.reminder_id);
+  const gameweekIdFilter =
+    options && options.gameweek_id !== undefined && options.gameweek_id !== null
+      ? String(options.gameweek_id).trim()
+      : "";
+  const deviceTokenFilter = normalizeOptionalToken(options.device_token);
+  const order = String(options.order || "desc").trim().toLowerCase() === "asc" ? "asc" : "desc";
+  const limit = parsePositiveIntOrFallback(options.limit, 0);
+
+  try {
+    const redisClient = await getClient();
+    const indexKey = deviceTokenFilter
+      ? buildFantasyReminderDeviceIndexKey(deviceTokenFilter)
+      : FANTASY_REMINDERS_INDEX_KEY;
+    const records = await getHistoryRecordsAll(redisClient, indexKey, "fantasy reminder");
+    const filtered = records.filter((record) => {
+      if (!record || typeof record !== "object") return false;
+      if (statusFilter && normalizeFantasyReminderStatus(record.status) !== statusFilter) return false;
+      if (reminderIdFilter && String(record.reminder_id || "").trim() !== reminderIdFilter) return false;
+      if (gameweekIdFilter && String(record.gameweek_id || "").trim() !== gameweekIdFilter) return false;
+      if (deviceTokenFilter && String(record.device_token || "").trim() !== deviceTokenFilter) return false;
+      return true;
+    });
+
+    filtered.sort((lhs, rhs) => {
+      const left = fantasyReminderTimestampMs(lhs && lhs.scheduled_for_ms) || 0;
+      const right = fantasyReminderTimestampMs(rhs && rhs.scheduled_for_ms) || 0;
+      if (left !== right) return order === "asc" ? left - right : right - left;
+      return String(lhs && lhs.reminder_id ? lhs.reminder_id : "").localeCompare(
+        String(rhs && rhs.reminder_id ? rhs.reminder_id : "")
+      );
+    });
+
+    return limit > 0 ? filtered.slice(0, limit) : filtered;
+  } catch (error) {
+    console.error("[Redis] Error retrieving fantasy reminder records:", error);
+    return [];
+  }
+}
+
+function buildFantasyReminderSendIdempotencyKey(reminderId) {
+  const normalizedId = String(reminderId || "").trim();
+  if (!normalizedId) {
+    throw new Error("reminderId is required to build fantasy reminder idempotency key");
+  }
+  return `${FANTASY_REMINDERS_SEND_IDEMPOTENCY_PREFIX}${hashForRedisKey(normalizedId)}`;
+}
+
+async function claimFantasyReminderSendIdempotency(reminderId, options = {}) {
+  const normalizedId = String(reminderId || "").trim();
+  if (!normalizedId) {
+    throw new Error("reminderId is required to claim fantasy reminder idempotency");
+  }
+
+  const ttlSeconds = parsePositiveIntOrFallback(
+    options && options.ttl_seconds,
+    FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS
+  );
+  const idempotencyKey = buildFantasyReminderSendIdempotencyKey(normalizedId);
+  const nowIso = new Date().toISOString();
+  const payload = JSON.stringify({
+    reminder_id: normalizedId,
+    claimed_at: nowIso,
+    context: options && options.context ? options.context : null,
+  });
+
+  try {
+    const redisClient = await getClient();
+    const result = await redisClient.set(idempotencyKey, payload, {
+      NX: true,
+      EX: ttlSeconds,
+    });
+    return {
+      claimed: result === "OK",
+      key: idempotencyKey,
+      ttl_seconds: ttlSeconds,
+      claimed_at: nowIso,
+      source: "redis",
+    };
+  } catch (error) {
+    console.warn(
+      `[Redis] Fantasy reminder idempotency unavailable for ${normalizedId.slice(0, 80)}...:`,
+      error.message || error
+    );
+    return {
+      claimed: true,
+      key: null,
+      ttl_seconds: ttlSeconds,
+      claimed_at: nowIso,
+      source: "degraded",
+      error: error.message || String(error),
+    };
+  }
 }
 
 function buildOperationalDatasetKey(name) {
@@ -1612,8 +1897,12 @@ module.exports = {
   getUserPreferences,
   deleteUserPreferences,
   getAllUserPreferences,
+  saveFantasyReminderRecord,
+  getFantasyReminderRecord,
+  getFantasyReminderRecords,
   saveBbcMatchEventHistory,
   saveBbcNotificationHistory,
+  claimFantasyReminderSendIdempotency,
   claimBbcNotificationIdempotency,
   getBbcMatchHistoryGrouped,
   getBbcRealtimeSnapshot,
@@ -1631,6 +1920,9 @@ module.exports = {
     sanitizeTokenForKey,
     normalizeTimeRange,
     shortDeviceToken,
+    normalizeFantasyReminderStatus,
+    buildFantasyReminderRecordKey,
+    buildFantasyReminderSendIdempotencyKey,
     buildBbcNotificationIdempotencyKey,
     countKeysByPattern,
   },

@@ -48,6 +48,7 @@ struct PreferencesSnapshot: Codable, Equatable {
     let notificationUseViewingFilter: Bool
     let notificationCompetitionFilterEnabled: Bool
     let notificationSelectedLeagues: [String]
+    let fantasyDeadlineRemindersEnabled: Bool
     let showTodayUnfinishedFixturesBadge: Bool
     let showFantasyMatchPills: Bool
 
@@ -67,6 +68,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         notificationUseViewingFilter: Bool = PreferencesStore.defaultNotificationUseViewingFilter,
         notificationCompetitionFilterEnabled: Bool = PreferencesStore.defaultNotificationCompetitionFilterEnabled,
         notificationSelectedLeagues: [String] = PreferencesStore.defaultNotificationSelectedLeagues,
+        fantasyDeadlineRemindersEnabled: Bool = PreferencesStore.defaultFantasyDeadlineRemindersEnabled,
         showTodayUnfinishedFixturesBadge: Bool = PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
         showFantasyMatchPills: Bool = PreferencesStore.defaultShowFantasyMatchPills
     ) {
@@ -85,6 +87,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         self.notificationUseViewingFilter = notificationUseViewingFilter
         self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
         self.notificationSelectedLeagues = notificationSelectedLeagues
+        self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.showFantasyMatchPills = showFantasyMatchPills
     }
@@ -105,6 +108,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         case notificationUseViewingFilter
         case notificationCompetitionFilterEnabled
         case notificationSelectedLeagues
+        case fantasyDeadlineRemindersEnabled
         case showTodayUnfinishedFixturesBadge
         case showFantasyMatchPills
     }
@@ -129,6 +133,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         notificationUseViewingFilter = try container.decodeIfPresent(Bool.self, forKey: .notificationUseViewingFilter) ?? PreferencesStore.defaultNotificationUseViewingFilter
         notificationCompetitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationCompetitionFilterEnabled) ?? PreferencesStore.defaultNotificationCompetitionFilterEnabled
         notificationSelectedLeagues = try container.decodeIfPresent([String].self, forKey: .notificationSelectedLeagues) ?? PreferencesStore.defaultNotificationSelectedLeagues
+        fantasyDeadlineRemindersEnabled = try container.decodeIfPresent(Bool.self, forKey: .fantasyDeadlineRemindersEnabled) ?? PreferencesStore.defaultFantasyDeadlineRemindersEnabled
         showTodayUnfinishedFixturesBadge = try container.decodeIfPresent(Bool.self, forKey: .showTodayUnfinishedFixturesBadge) ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
         showFantasyMatchPills = try container.decodeIfPresent(Bool.self, forKey: .showFantasyMatchPills) ?? PreferencesStore.defaultShowFantasyMatchPills
     }
@@ -159,6 +164,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultNotificationUseViewingFilter = true
     nonisolated static let defaultNotificationCompetitionFilterEnabled = true
     nonisolated static let defaultNotificationSelectedLeagues: [String] = []
+    nonisolated static let defaultFantasyDeadlineRemindersEnabled = true
     nonisolated static let defaultShowTodayUnfinishedFixturesBadge = false
     nonisolated static let defaultShowFantasyMatchPills = true
     #if DEBUG
@@ -225,6 +231,10 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var fantasyDeadlineRemindersEnabled: Bool {
+        didSet { persist() }
+    }
+
     @Published var showTodayUnfinishedFixturesBadge: Bool {
         didSet { persist() }
     }
@@ -269,6 +279,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationCompetitionFilterEnabled
         let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
             ?? Self.defaultNotificationSelectedLeagues
+        let fantasyDeadlineRemindersEnabled = userDefaults.object(forKey: Keys.fantasyDeadlineRemindersEnabled) as? Bool
+            ?? Self.defaultFantasyDeadlineRemindersEnabled
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
         let showFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
@@ -293,6 +305,7 @@ final class PreferencesStore: ObservableObject {
         self.notificationUseViewingFilter = notificationUseViewingFilter
         self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
         self.notificationSelectedLeagues = notificationSelectedLeagues
+        self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.showFantasyMatchPills = showFantasyMatchPills
         #if DEBUG
@@ -323,6 +336,7 @@ final class PreferencesStore: ObservableObject {
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
             notificationSelectedLeagues: notificationSelectedLeagues,
+            fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             showFantasyMatchPills: showFantasyMatchPills
         )
@@ -345,6 +359,7 @@ final class PreferencesStore: ObservableObject {
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
             notificationSelectedLeagues: notificationSelectedLeagues,
+            fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             showFantasyMatchPills: showFantasyMatchPills
         )
@@ -366,6 +381,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(notificationUseViewingFilter, forKey: Keys.notificationUseViewingFilter)
         userDefaults.set(notificationCompetitionFilterEnabled, forKey: Keys.notificationCompetitionFilterEnabled)
         userDefaults.set(notificationSelectedLeagues, forKey: Keys.notificationSelectedLeagues)
+        userDefaults.set(fantasyDeadlineRemindersEnabled, forKey: Keys.fantasyDeadlineRemindersEnabled)
         userDefaults.set(showTodayUnfinishedFixturesBadge, forKey: Keys.showTodayUnfinishedFixturesBadge)
         userDefaults.set(showFantasyMatchPills, forKey: Keys.showFantasyMatchPills)
         #if DEBUG
@@ -415,6 +431,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationCompetitionFilterEnabled
         let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
             ?? Self.defaultNotificationSelectedLeagues
+        let fantasyDeadlineRemindersEnabled = userDefaults.object(forKey: Keys.fantasyDeadlineRemindersEnabled) as? Bool
+            ?? Self.defaultFantasyDeadlineRemindersEnabled
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
         let showFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
@@ -436,6 +454,7 @@ final class PreferencesStore: ObservableObject {
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
             notificationSelectedLeagues: notificationSelectedLeagues,
+            fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             showFantasyMatchPills: showFantasyMatchPills
         )
@@ -457,6 +476,7 @@ final class PreferencesStore: ObservableObject {
         static let notificationUseViewingFilter = "preferences.notificationUseViewingFilter"
         static let notificationCompetitionFilterEnabled = "preferences.notificationCompetitionFilterEnabled"
         static let notificationSelectedLeagues = "preferences.notificationSelectedLeagues"
+        static let fantasyDeadlineRemindersEnabled = "preferences.fantasyDeadlineRemindersEnabled"
         static let showTodayUnfinishedFixturesBadge = "preferences.showTodayUnfinishedFixturesBadge"
         static let showFantasyMatchPills = "preferences.showFantasyMatchPills"
         #if DEBUG
