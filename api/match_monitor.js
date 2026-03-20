@@ -7,6 +7,7 @@ const {
   saveFantasyReminderRecord,
   getFantasyReminderRecord,
   getFantasyReminderRecords,
+  getLiveActivityMatchTimelineSnapshotsAt,
   saveBbcMatchEventHistory,
   saveBbcNotificationHistory,
   claimFantasyReminderSendIdempotency,
@@ -3561,6 +3562,45 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
   return dedupeLiveActivityEntries(entries);
 }
 
+function collectLiveActivityTimelineCandidateMatchIds(monitoredEntries, operationalMatches) {
+  const matchIds = new Set();
+  const collectFromMatch = (match) => {
+    if (!match || typeof match !== "object") return;
+    if (!isLiveMatchStatus(match.score_status)) return;
+    const matchId = liveActivityMatchIdentity(match);
+    if (!matchId) return;
+    matchIds.add(String(matchId).trim().toLowerCase());
+  };
+
+  (Array.isArray(monitoredEntries) ? monitoredEntries : []).forEach((entry) => {
+    collectFromMatch(entry && entry.match ? entry.match : null);
+  });
+  (Array.isArray(operationalMatches) ? operationalMatches : []).forEach((match) => {
+    collectFromMatch(match);
+  });
+
+  return Array.from(matchIds);
+}
+
+async function loadRedisDelayedSnapshotsByMatchId(matchIds, delayMinutes, nowMs = Date.now()) {
+  const normalizedDelayMinutes = Math.max(0, Number(delayMinutes || 0));
+  if (normalizedDelayMinutes <= 0) return {};
+
+  const normalizedMatchIds = Array.from(
+    new Set(
+      (Array.isArray(matchIds) ? matchIds : [])
+        .map((matchId) => String(matchId || "").trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+  if (normalizedMatchIds.length === 0) return {};
+
+  const targetMs = nowMs - normalizedDelayMinutes * 60 * 1000;
+  if (!Number.isFinite(targetMs) || targetMs <= 0) return {};
+
+  return getLiveActivityMatchTimelineSnapshotsAt(normalizedMatchIds, targetMs);
+}
+
 function compareLiveActivityMatches(lhs, rhs) {
   const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
   const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
@@ -5041,6 +5081,10 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
 function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(), options = {}) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
   const delayMinutes = liveActivityDelayMinutesFromPreferences(prefs);
+  const delayedSnapshotsByMatchId =
+    options && options.delayedSnapshotsByMatchId && typeof options.delayedSnapshotsByMatchId === "object"
+      ? options.delayedSnapshotsByMatchId
+      : null;
   const fantasyCurrentScore = fantasyCurrentScoreForUser(user);
   const eligible = [];
 
@@ -5077,7 +5121,14 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     }
 
     if (isLiveMatchStatus(status)) {
-      const delayed = delayedSnapshotForMatch(state, delayMinutes, nowMs);
+      const timelineMatchId =
+        liveActivityMatchIdentity(currentMatch) ||
+        (entry && entry.matchId ? String(entry.matchId) : "");
+      const delayedFromRedis =
+        timelineMatchId && delayedSnapshotsByMatchId
+          ? delayedSnapshotsByMatchId[String(timelineMatchId).trim().toLowerCase()] || null
+          : null;
+      const delayed = delayedFromRedis || delayedSnapshotForMatch(state, delayMinutes, nowMs);
       const delayedLiveState = buildDelayedLiveState(currentMatch, delayed, delayMinutes);
 
       if (!hasFullDelayBufferForMatch(state, delayMinutes, nowMs)) {
@@ -5295,6 +5346,31 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
     const filteredUsers = userDeviceTokenFilter
       ? users.filter((user) => String(user && user.deviceToken ? user.deviceToken : "") === userDeviceTokenFilter)
       : users;
+    const candidateMatchIds = collectLiveActivityTimelineCandidateMatchIds(
+      monitoredEntries,
+      operationalMatches
+    );
+    const delayedSnapshotsByDelay = new Map();
+    const distinctDelayMinutes = Array.from(
+      new Set(
+        filteredUsers
+          .map((user) =>
+            liveActivityDelayMinutesFromPreferences(
+              user && user.preferences && typeof user.preferences === "object"
+                ? user.preferences
+                : {}
+            )
+          )
+          .filter((delayMinutes) => Number(delayMinutes) > 0)
+      )
+    );
+    for (const delayMinutes of distinctDelayMinutes) {
+      // eslint-disable-next-line no-await-in-loop
+      delayedSnapshotsByDelay.set(
+        Number(delayMinutes),
+        await loadRedisDelayedSnapshotsByMatchId(candidateMatchIds, Number(delayMinutes), nowMs)
+      );
+    }
 
     for (const user of filteredUsers) {
       const liveActivityState =
@@ -5309,7 +5385,13 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
       if (!hasStartToken && !hasActivityToken) continue;
 
       const entries = buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatches, nowMs);
-      const presentation = buildLiveActivityPresentationForUser(user, entries, nowMs);
+      const userDelayMinutes = liveActivityDelayMinutesFromPreferences(
+        user && user.preferences && typeof user.preferences === "object" ? user.preferences : {}
+      );
+      const presentation = buildLiveActivityPresentationForUser(user, entries, nowMs, {
+        delayedSnapshotsByMatchId:
+          delayedSnapshotsByDelay.get(Number(userDelayMinutes)) || null,
+      });
       try {
         await dispatchLiveActivityForUser(user, presentation, nowMs, {
           forceDispatch,
@@ -6110,6 +6192,7 @@ module.exports = {
     compareLiveActivityMatches,
     compareUpcomingLiveActivityMatches,
     buildLiveActivityEntriesForUser,
+    collectLiveActivityTimelineCandidateMatchIds,
     combineLiveActivityOperationalMatches,
     dedupeLiveActivityMatches,
     enrichLiveActivityOperationalMatches,
@@ -6124,6 +6207,7 @@ module.exports = {
     isEnglishPremierLeagueTeam,
     isLikelyTerminalStaleLiveMatch,
     mergeCanonicalLiveActivityMatch,
+    loadRedisDelayedSnapshotsByMatchId,
     sanitizePreKickoffScoresForLiveActivity,
     shouldSuppressPreKickoffScoresForLiveActivity,
     shouldSkipLiveActivityUpdate,

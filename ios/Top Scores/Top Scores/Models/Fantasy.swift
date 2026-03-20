@@ -1603,6 +1603,23 @@ struct FantasySquadDisplayData: Hashable {
         return startersRemaining + benchRemaining
     }
 
+    func matchesAssistantExpectedPointsSection(
+        _ section: FantasyAssistantManagerResponse.ExpectedPointsSection?,
+        eventID: Int?
+    ) -> Bool {
+        guard let section else { return false }
+        if let eventID, eventID > 0, eventID != gameweekID {
+            return false
+        }
+
+        let expectedPlayers = section.starters + section.bench
+        guard expectedPlayers.count == allPlayers.count else {
+            return false
+        }
+
+        return Set(expectedPlayers.map(\.elementID)) == Set(allPlayers.map(\.elementID))
+    }
+
     func applyingExpectedPoints(
         _ section: FantasyAssistantManagerResponse.ExpectedPointsSection?
     ) -> FantasySquadDisplayData {

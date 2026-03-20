@@ -2104,6 +2104,141 @@ test("buildLiveActivityPresentationForUser keeps live match visible during resta
   assert.equal(presentation.matches[0].away_score, 0);
 });
 
+test("buildLiveActivityPresentationForUser prefers Redis delayed snapshot over stale local delay reconstruction", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 95 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(2),
+    [
+      {
+        matchId: "c-bournemouth-manutd",
+        state: {
+          lastState: {
+            match_details_id: "c-bournemouth-manutd",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Premier League",
+            home_team: "AFC Bournemouth",
+            away_team: "Manchester United",
+            home_score: 2,
+            away_score: 2,
+            score_status: "90+6",
+            home_goal_scorers: [
+              {
+                player: "Ryan Christie",
+                goal_times: ["67'"],
+                own_goal_times: [],
+              },
+            ],
+            away_goal_scorers: [
+              {
+                player: "Bruno Fernandes",
+                goal_times: ["61'"],
+                own_goal_times: [],
+              },
+            ],
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 60 * 1000,
+              match: {
+                match_details_id: "c-bournemouth-manutd",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Premier League",
+                home_team: "AFC Bournemouth",
+                away_team: "Manchester United",
+                home_score: 1,
+                away_score: 1,
+                score_status: "90+4",
+                home_goal_scorers: [
+                  {
+                    player: "Ryan Christie",
+                    goal_times: ["67'"],
+                    own_goal_times: [],
+                  },
+                ],
+                away_goal_scorers: [
+                  {
+                    player: "Bruno Fernandes",
+                    goal_times: ["61'"],
+                    own_goal_times: [],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "c-bournemouth-manutd",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "AFC Bournemouth",
+          away_team: "Manchester United",
+          home_score: 2,
+          away_score: 2,
+          score_status: "90+6",
+          home_goal_scorers: [
+            {
+              player: "Ryan Christie",
+              goal_times: ["67'"],
+              own_goal_times: [],
+            },
+          ],
+          away_goal_scorers: [
+            {
+              player: "Bruno Fernandes",
+              goal_times: ["61'"],
+              own_goal_times: [],
+            },
+          ],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs,
+    {
+      delayedSnapshotsByMatchId: {
+        "c-bournemouth-manutd": {
+          match_details_id: "c-bournemouth-manutd",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "AFC Bournemouth",
+          away_team: "Manchester United",
+          home_score: 2,
+          away_score: 2,
+          score_status: "90+4",
+          home_goal_scorers: [
+            {
+              player: "Ryan Christie",
+              goal_times: ["67'", "81'"],
+              own_goal_times: [],
+            },
+          ],
+          away_goal_scorers: [
+            {
+              player: "Bruno Fernandes",
+              goal_times: ["61'"],
+              own_goal_times: ["71'"],
+            },
+          ],
+        },
+      },
+    }
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "90+4");
+  assert.equal(presentation.matches[0].home_score, 2);
+  assert.equal(presentation.matches[0].away_score, 2);
+});
+
 test("buildLiveActivityPresentationForUser uses notification delay when no dedicated live activity delay is configured", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 23 * 60 * 1000;

@@ -138,7 +138,7 @@ final class FantasyViewModel: ObservableObject {
     /// Builds the expected-points dictionary that was previously computed inline inside each MatchRow body.
     private func buildExpectedPointsDictionary() -> [Int: Int] {
         guard let squad = data,
-              let section = assistantManagerPreview?.expectedPoints
+              let section = currentSquadExpectedPointsSection
         else { return [:] }
 
         let starterExpectedPoints = Dictionary(
@@ -162,6 +162,40 @@ final class FantasyViewModel: ObservableObject {
             result[player.elementID] = Int(pts.rounded())
         }
         return result
+    }
+
+    private func isFreshAssistantManagerResponse(_ response: FantasyAssistantManagerResponse?) -> Bool {
+        guard let response else { return false }
+        return response.ready && response.stale != true
+    }
+
+    var currentSquadExpectedPointsSection: FantasyAssistantManagerResponse.ExpectedPointsSection? {
+        guard let squad = data,
+              let response = assistantManagerPreview,
+              isFreshAssistantManagerResponse(response),
+              squad.matchesAssistantExpectedPointsSection(
+                  response.expectedPoints,
+                  eventID: response.currentEventID
+              )
+        else {
+            return nil
+        }
+
+        return response.expectedPoints
+    }
+
+    var currentSquadProjectedGameweekPoints: Double? {
+        guard let squad = data,
+              let section = currentSquadExpectedPointsSection
+        else {
+            return nil
+        }
+
+        return squad.projectedGameweekPoints(using: section)
+    }
+
+    var isCurrentSquadExpectedPointsLoading: Bool {
+        currentSquadExpectedPointsSection == nil
     }
 
     func isEligibleFantasyFixture(_ match: Match) -> Bool {
@@ -458,7 +492,7 @@ final class FantasyViewModel: ObservableObject {
             apiBaseURL: apiBaseURL,
             forceRefresh: forceRefresh
         )
-        if response.ready {
+        if isFreshAssistantManagerResponse(response) {
             assistantManagerPreview = response
             rebuildMatchRowContext()
         }
@@ -488,7 +522,7 @@ final class FantasyViewModel: ObservableObject {
         let response = try await timed("assistant_manager entry_id=\(entryID)") {
             try await serverClient.fetchFantasyAssistantManager(entryID: entryID)
         }
-        if response.ready {
+        if isFreshAssistantManagerResponse(response) {
             cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: now)
         } else {
             cachedAssistantManagerResponses.removeValue(forKey: cacheKey)
@@ -509,7 +543,7 @@ final class FantasyViewModel: ObservableObject {
         let response = try await timed("assistant_manager_sync entry_id=\(entryID)") {
             try await serverClient.syncFantasyAssistantManager(entryID: entryID)
         }
-        if response.ready {
+        if isFreshAssistantManagerResponse(response) {
             cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: Date())
         } else {
             cachedAssistantManagerResponses.removeValue(forKey: cacheKey)
@@ -539,10 +573,12 @@ final class FantasyViewModel: ObservableObject {
             let response = try await timed("assistant_manager_sync entry_id=\(entryID)") {
                 try await serverClient.syncFantasyAssistantManager(entryID: entryID)
             }
-            if response.ready {
+            if isFreshAssistantManagerResponse(response) {
                 cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: Date())
                 assistantManagerPreview = response
                 rebuildMatchRowContext()
+            } else {
+                cachedAssistantManagerResponses.removeValue(forKey: cacheKey)
             }
         } catch {
             logPerf("assistant_manager_sync_failed entry_id=\(entryID) error=\"\(error.localizedDescription)\"")

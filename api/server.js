@@ -7187,6 +7187,14 @@ async function enrichMatchDetailsAggregateImmediately(seedPayload, options = {})
           source: persistSource,
         }
       );
+      await persistLiveActivityMatchTimelineSnapshotsSafe(
+        { [upsertedMatchId]: updatedPayload },
+        {
+          updated_at: nowIso,
+          observed_at_ms: Date.parse(nowIso),
+          source: persistSource,
+        }
+      );
       return updatedPayload;
     }
   } catch (error) {
@@ -7303,6 +7311,16 @@ function scheduleMatchDetailsBackfill(payload, options = {}) {
           {
             replace: false,
             updated_at: nowIso,
+            source: `async_match_details_backfill:${trigger}`,
+          }
+        );
+        await persistLiveActivityMatchTimelineSnapshotsSafe(
+          {
+            [upsertedMatchId]: updatedPayload,
+          },
+          {
+            updated_at: nowIso,
+            observed_at_ms: Date.parse(nowIso),
             source: `async_match_details_backfill:${trigger}`,
           }
         );
@@ -7534,6 +7552,11 @@ async function refreshInProgressMatchDetails(options = {}) {
       await persistOperationalMatchDetailsSafe(updatedDetailsSubset, {
         replace: false,
         updated_at: nowIso,
+        source: SOURCE_BBC_MATCH_DETAILS,
+      });
+      await persistLiveActivityMatchTimelineSnapshotsSafe(updatedDetailsSubset, {
+        updated_at: nowIso,
+        observed_at_ms: Date.parse(nowIso),
         source: SOURCE_BBC_MATCH_DETAILS,
       });
     }
@@ -10638,6 +10661,62 @@ async function persistOperationalMatchDetailsSafe(recordsById, options = {}) {
     });
     console.warn(
       "[OperationalState] Failed to persist match details to Redis:",
+      error.message || error
+    );
+    return null;
+  }
+}
+
+function shouldPersistLiveActivityTimelineSnapshot(payload) {
+  if (!payload || typeof payload !== "object") return false;
+
+  const matchId = normalizeMatchDetailsId(payload.id || payload.match_details_id);
+  if (!matchId) return false;
+
+  const status = String(payload.score_status || "").trim();
+  if (isInProgressMatchStatus(status) || isFinishedMatchStatus(status)) {
+    return true;
+  }
+
+  const homeScoreKnown = payload.home_score !== null && payload.home_score !== undefined;
+  const awayScoreKnown = payload.away_score !== null && payload.away_score !== undefined;
+  return homeScoreKnown && awayScoreKnown;
+}
+
+async function persistLiveActivityMatchTimelineSnapshotsSafe(recordsById, options = {}) {
+  const candidates = {};
+
+  Object.entries(recordsById && typeof recordsById === "object" ? recordsById : {}).forEach(
+    ([matchId, payload]) => {
+      if (!shouldPersistLiveActivityTimelineSnapshot(payload)) return;
+      const normalizedMatchId = normalizeMatchDetailsId(
+        matchId || (payload && (payload.id || payload.match_details_id))
+      );
+      if (!normalizedMatchId) return;
+      candidates[normalizedMatchId] = payload;
+    }
+  );
+
+  if (Object.keys(candidates).length === 0) {
+    return {
+      observed_at_ms: null,
+      upserted: 0,
+    };
+  }
+
+  const observedAtMsRaw =
+    options && Object.prototype.hasOwnProperty.call(options, "observed_at_ms")
+      ? Number(options.observed_at_ms)
+      : Date.parse(String(options && options.updated_at ? options.updated_at : "").trim());
+  const observedAtMs = Number.isFinite(observedAtMsRaw) ? Math.floor(observedAtMsRaw) : Date.now();
+
+  try {
+    return await saveLiveActivityMatchTimelineSnapshots(candidates, {
+      observed_at_ms: observedAtMs,
+    });
+  } catch (error) {
+    console.warn(
+      "[OperationalState] Failed to persist live activity match timeline snapshots:",
       error.message || error
     );
     return null;
@@ -17951,6 +18030,7 @@ const {
   saveOperationalDataset,
   getOperationalDataset,
   getOperationalDatasets,
+  saveLiveActivityMatchTimelineSnapshots,
   saveOperationalMatchDetailsRecords,
   getOperationalMatchDetails,
   getAllOperationalMatchDetails,
@@ -21179,8 +21259,10 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
             typeof hooks.buildLiveActivityEntriesForUser === "function" &&
             typeof hooks.buildLiveActivityPresentationForUser === "function" &&
             typeof hooks.buildLiveActivityContentState === "function" &&
+            typeof hooks.collectLiveActivityTimelineCandidateMatchIds === "function" &&
             typeof hooks.combineLiveActivityOperationalMatches === "function" &&
-            typeof hooks.enrichLiveActivityOperationalMatches === "function"
+            typeof hooks.enrichLiveActivityOperationalMatches === "function" &&
+            typeof hooks.loadRedisDelayedSnapshotsByMatchId === "function"
           ) {
             const nowMs = Date.now();
             const [mergedDataset, recentDataset] = await Promise.all([
@@ -21208,7 +21290,31 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
               operationalMatches,
               nowMs
             );
-            const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs);
+            const delayMinutes =
+              record && record.preferences && typeof record.preferences === "object"
+                ? Math.max(
+                  0,
+                  Number(
+                    record.preferences.liveActivityDelayMinutes ??
+                      record.preferences.notificationDelayMinutes ??
+                      0
+                  )
+                )
+                : 0;
+            const delayedSnapshotsByMatchId =
+              delayMinutes > 0
+                ? await hooks.loadRedisDelayedSnapshotsByMatchId(
+                  hooks.collectLiveActivityTimelineCandidateMatchIds(
+                    monitoredEntries,
+                    operationalMatches
+                  ),
+                  delayMinutes,
+                  nowMs
+                )
+                : null;
+            const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs, {
+              delayedSnapshotsByMatchId,
+            });
             if (presentation && presentation.mode) {
               const contentState = hooks.buildLiveActivityContentState(
                 presentation.mode,

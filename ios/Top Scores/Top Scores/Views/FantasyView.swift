@@ -517,8 +517,9 @@ struct FantasyView: View {
                     }
 
                     if let data = fantasyViewModel.data {
+                        let expectedPointsSection = fantasyViewModel.currentSquadExpectedPointsSection
                         let displayData = data.applyingExpectedPoints(
-                            fantasyViewModel.assistantManagerPreview?.expectedPoints
+                            expectedPointsSection
                         )
                         if let shareImportStatusMessage {
                             shareImportStatusCard(
@@ -529,10 +530,8 @@ struct FantasyView: View {
                         scoreSummaryCard(
                             data,
                             showsActiveChipMessage: data.hasActiveChip,
-                            projectedGameweekPoints: fantasyViewModel.assistantManagerPreview?.expectedPoints.map {
-                                data.projectedGameweekPoints(using: $0)
-                            },
-                            isExpectedPointsLoading: fantasyViewModel.assistantManagerPreview?.ready != true,
+                            projectedGameweekPoints: fantasyViewModel.currentSquadProjectedGameweekPoints,
+                            isExpectedPointsLoading: fantasyViewModel.isCurrentSquadExpectedPointsLoading,
                             moreRivalsTapAction: {
                                 withAnimation(.easeInOut(duration: 0.25)) {
                                     proxy.scrollTo(rivalsSectionScrollID, anchor: .top)
@@ -1386,10 +1385,8 @@ struct FantasyView: View {
                 managerName: myManagerName,
                 currentGameweekScore: mySquad.resolvedCurrentScore,
                 allGameweeksScore: profile?.summaryOverallPoints,
-                projectedGameweekPoints: fantasyViewModel.assistantManagerPreview?.expectedPoints.map {
-                    mySquad.projectedGameweekPoints(using: $0)
-                },
-                isExpectedPointsLoading: fantasyViewModel.assistantManagerPreview?.ready != true,
+                projectedGameweekPoints: fantasyViewModel.currentSquadProjectedGameweekPoints,
+                isExpectedPointsLoading: fantasyViewModel.isCurrentSquadExpectedPointsLoading,
                 hasActiveChipInCurrentGameweek: mySquad.hasActiveChip,
                 squad: mySquad,
                 clubBadgeSrc: profile?.clubBadgeSrc,
@@ -6240,7 +6237,7 @@ private struct FantasyAssistantManagerSheet: View {
                 forceRefresh: forceFetch || attempt > 0
             )
             lastResponse = loaded
-            if loaded.ready {
+            if loaded.ready && loaded.stale != true {
                 return loaded
             }
             try? await Task.sleep(nanoseconds: 450_000_000)

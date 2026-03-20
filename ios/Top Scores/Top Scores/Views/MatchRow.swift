@@ -600,7 +600,7 @@ struct MatchDetailView: View {
         guard preferences.showFantasyExpectedPoints,
               isEligibleFantasyFixture,
               let squad = fantasyViewModel.data?.applyingExpectedPoints(
-                fantasyViewModel.assistantManagerPreview?.expectedPoints
+                fantasyViewModel.currentSquadExpectedPointsSection
               )
         else {
             return []

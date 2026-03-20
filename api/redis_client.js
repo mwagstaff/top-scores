@@ -51,6 +51,10 @@ const LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS = parsePositiveIntOrFallback(
   process.env.LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS,
   14 * 24 * 60 * 60
 );
+const LIVE_ACTIVITY_MATCH_TIMELINE_TTL_SECONDS = parsePositiveIntOrFallback(
+  process.env.LIVE_ACTIVITY_MATCH_TIMELINE_TTL_SECONDS,
+  12 * 60 * 60
+);
 const MAX_BBC_HISTORY_QUERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 const BBC_EVENTS_INDEX_KEY = `${DB_NAME}:bbc:events:index`;
@@ -77,6 +81,7 @@ const OPERATIONAL_MATCH_DETAILS_INDEX_KEY = `${DB_NAME}:operational:match_detail
 const OPERATIONAL_MATCH_DETAILS_META_KEY = `${DB_NAME}:operational:match_details:meta`;
 const LIVE_ACTIVITY_DEBUG_DEVICE_INDEX_PREFIX = `${DB_NAME}:live_activity:debug:device:`;
 const LIVE_ACTIVITY_DEBUG_RECORD_PREFIX = `${DB_NAME}:live_activity:debug:record:`;
+const LIVE_ACTIVITY_MATCH_TIMELINE_INDEX_PREFIX = `${DB_NAME}:live_activity:timeline:match:`;
 
 let client = null;
 let isConnected = false;
@@ -263,6 +268,10 @@ async function ensureRedisTtlPolicy(redisClient) {
     {
       pattern: `${LIVE_ACTIVITY_DEBUG_DEVICE_INDEX_PREFIX}*`,
       ttl: LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS,
+    },
+    {
+      pattern: `${LIVE_ACTIVITY_MATCH_TIMELINE_INDEX_PREFIX}*`,
+      ttl: LIVE_ACTIVITY_MATCH_TIMELINE_TTL_SECONDS,
     },
   ];
   for (const policy of patternPolicies) {
@@ -936,6 +945,149 @@ function buildLiveActivityDebugRecordKey(deviceToken, recordId) {
     throw new Error("deviceToken and recordId are required for live activity debug record key");
   }
   return `${LIVE_ACTIVITY_DEBUG_RECORD_PREFIX}${sanitizeTokenForKey(normalizedToken)}:${sanitizeTokenForKey(normalizedRecordId)}`;
+}
+
+function buildLiveActivityMatchTimelineIndexKey(matchId) {
+  const normalizedMatchId = String(matchId || "").trim();
+  if (!normalizedMatchId) {
+    throw new Error("matchId is required for live activity match timeline index key");
+  }
+  return `${LIVE_ACTIVITY_MATCH_TIMELINE_INDEX_PREFIX}${sanitizeTokenForKey(normalizedMatchId)}`;
+}
+
+function normalizeLiveActivityTimelineSnapshot(snapshot = {}, matchId, timestampMs = Date.now()) {
+  const source = snapshot && typeof snapshot === "object" ? snapshot : {};
+  const toNullableNumber = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const toOptionalString = (value) => {
+    const normalized = String(value || "").trim();
+    return normalized || null;
+  };
+  const cloneEntries = (entries) =>
+    Array.isArray(entries) ? entries.map((entry) => ({ ...entry })) : [];
+
+  return {
+    match_id: String(matchId || "").trim(),
+    timestamp_ms: numericTimestampMs(timestampMs),
+    timestamp: new Date(numericTimestampMs(timestampMs)).toISOString(),
+    match_details_id: toOptionalString(
+      source.match_details_id || source.matchId || source.id || matchId
+    ),
+    date: toOptionalString(source.date),
+    time: toOptionalString(source.time),
+    league: toOptionalString(source.league),
+    league_subcategory: toOptionalString(source.league_subcategory),
+    home_team: toOptionalString(source.home_team),
+    away_team: toOptionalString(source.away_team),
+    home_score: toNullableNumber(source.home_score),
+    away_score: toNullableNumber(source.away_score),
+    aggregate_home_score: toNullableNumber(source.aggregate_home_score),
+    aggregate_away_score: toNullableNumber(source.aggregate_away_score),
+    first_leg_home_score: toNullableNumber(source.first_leg_home_score),
+    first_leg_away_score: toNullableNumber(source.first_leg_away_score),
+    score_status: toOptionalString(source.score_status),
+    penalty_result: toOptionalString(source.penalty_result),
+    updated_at: toOptionalString(source.updated_at),
+    tv_channels: Array.isArray(source.tv_channels) ? source.tv_channels.slice() : [],
+    home_goal_scorers: cloneEntries(source.home_goal_scorers),
+    away_goal_scorers: cloneEntries(source.away_goal_scorers),
+  };
+}
+
+async function saveLiveActivityMatchTimelineSnapshots(recordsById, options = {}) {
+  const observedAtMs = numericTimestampMs(
+    options && Object.prototype.hasOwnProperty.call(options, "observed_at_ms")
+      ? options.observed_at_ms
+      : Date.now()
+  );
+  const snapshots = Object.entries(recordsById && typeof recordsById === "object" ? recordsById : {})
+    .map(([matchId, payload]) => [
+      String(matchId || "").trim().toLowerCase(),
+      normalizeLiveActivityTimelineSnapshot(payload, matchId, observedAtMs),
+    ])
+    .filter(([matchId, snapshot]) => Boolean(matchId) && snapshot && snapshot.match_id);
+
+  if (snapshots.length === 0) {
+    return {
+      observed_at_ms: observedAtMs,
+      upserted: 0,
+    };
+  }
+
+  try {
+    const redisClient = await getClient();
+    const cutoffMs = pruneCutoffMs(LIVE_ACTIVITY_MATCH_TIMELINE_TTL_SECONDS);
+    const transaction = redisClient.multi();
+
+    snapshots.forEach(([matchId, snapshot]) => {
+      const indexKey = buildLiveActivityMatchTimelineIndexKey(matchId);
+      transaction.zAdd(indexKey, [
+        {
+          score: snapshot.timestamp_ms,
+          value: JSON.stringify(snapshot),
+        },
+      ]);
+      transaction.zRemRangeByScore(indexKey, 0, cutoffMs);
+      transaction.expire(indexKey, LIVE_ACTIVITY_MATCH_TIMELINE_TTL_SECONDS);
+    });
+
+    await transaction.exec();
+    return {
+      observed_at_ms: observedAtMs,
+      upserted: snapshots.length,
+    };
+  } catch (error) {
+    console.error("[Redis] Error saving live activity match timeline snapshots:", error);
+    throw error;
+  }
+}
+
+async function getLiveActivityMatchTimelineSnapshotsAt(matchIds = [], targetMs = Date.now()) {
+  const normalizedMatchIds = Array.from(
+    new Set(
+      (Array.isArray(matchIds) ? matchIds : [])
+        .map((matchId) => String(matchId || "").trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+  const resolvedTargetMs = numericTimestampMs(targetMs);
+
+  if (normalizedMatchIds.length === 0) {
+    return {};
+  }
+
+  try {
+    const redisClient = await getClient();
+    const result = {};
+
+    await Promise.all(
+      normalizedMatchIds.map(async (matchId) => {
+        const indexKey = buildLiveActivityMatchTimelineIndexKey(matchId);
+        const members = await redisClient.zRangeByScore(indexKey, 0, resolvedTargetMs);
+        if (!Array.isArray(members) || members.length === 0) {
+          return;
+        }
+
+        for (let index = members.length - 1; index >= 0; index -= 1) {
+          const member = members[index];
+          const parsed = safeJsonParse(member, `live activity match timeline ${matchId}`);
+          if (!parsed || typeof parsed !== "object") {
+            continue;
+          }
+          result[matchId] = parsed;
+          return;
+        }
+      })
+    );
+
+    return result;
+  } catch (error) {
+    console.error("[Redis] Error retrieving live activity match timeline snapshots:", error);
+    return {};
+  }
 }
 
 function buildLiveActivityDebugDeviceIndexKey(deviceToken) {
@@ -2003,6 +2155,8 @@ module.exports = {
   getFantasyReminderRecords,
   saveLiveActivityDebugRecord,
   getLiveActivityDebugRecords,
+  saveLiveActivityMatchTimelineSnapshots,
+  getLiveActivityMatchTimelineSnapshotsAt,
   saveBbcMatchEventHistory,
   saveBbcNotificationHistory,
   claimFantasyReminderSendIdempotency,
@@ -2026,6 +2180,7 @@ module.exports = {
     normalizeFantasyReminderStatus,
     buildLiveActivityDebugRecordKey,
     buildLiveActivityDebugDeviceIndexKey,
+    buildLiveActivityMatchTimelineIndexKey,
     buildFantasyReminderRecordKey,
     buildFantasyReminderSendIdempotencyKey,
     buildBbcNotificationIdempotencyKey,

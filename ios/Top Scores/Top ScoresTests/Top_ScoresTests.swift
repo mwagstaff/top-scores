@@ -984,6 +984,82 @@ struct Top_ScoresTests {
         #expect(abs(squad.projectedGameweekPoints(using: section) - 36.0) < 0.001)
     }
 
+    @Test func fantasySquadMatchesExpectedPointsSection_requiresMatchingPlayersAndGameweek() async throws {
+        let squad = FantasySquadDisplayData(
+            gameweekID: 31,
+            gameweekTitle: "GW31",
+            deadlineGameweekID: nil,
+            deadlineTime: nil,
+            totalPoints: 0,
+            hasActiveFixtures: false,
+            hasStartedFixturesInGameweek: false,
+            hasFixturesPlayedToday: false,
+            isEstimatedScore: false,
+            estimatedCurrentScore: 0,
+            scoreCalculationRulesApplied: [],
+            rank: nil,
+            overallRank: nil,
+            transfersCost: nil,
+            pointsOnBench: nil,
+            activeChips: [],
+            goalkeepers: [
+                makeFantasyPlayer(
+                    elementID: 1,
+                    pickPosition: 1,
+                    positionType: .goalkeeper,
+                    displayName: "Keeper",
+                    fullName: "Keeper",
+                    teamName: "Everton"
+                )
+            ],
+            defenders: [
+                makeFantasyPlayer(
+                    elementID: 2,
+                    pickPosition: 2,
+                    positionType: .defender,
+                    displayName: "Defender",
+                    fullName: "Defender",
+                    teamName: "Liverpool"
+                )
+            ],
+            midfielders: [],
+            forwards: [],
+            bench: [
+                makeFantasyPlayer(
+                    elementID: 12,
+                    pickPosition: 12,
+                    positionType: .goalkeeper,
+                    displayName: "Bench",
+                    fullName: "Bench Keeper",
+                    teamName: "Chelsea"
+                )
+            ]
+        )
+
+        let matchingSection = FantasyAssistantManagerResponse.ExpectedPointsSection(
+            starters: [
+                makeExpectedPointsPlayer(elementID: 1, pickPosition: 1, expectedPointsNextGameweek: 4.0),
+                makeExpectedPointsPlayer(elementID: 2, pickPosition: 2, expectedPointsNextGameweek: 5.0)
+            ],
+            bench: [
+                makeExpectedPointsPlayer(elementID: 12, pickPosition: 12, expectedPointsNextGameweek: 3.0)
+            ]
+        )
+        let mismatchedSection = FantasyAssistantManagerResponse.ExpectedPointsSection(
+            starters: [
+                makeExpectedPointsPlayer(elementID: 1, pickPosition: 1, expectedPointsNextGameweek: 4.0),
+                makeExpectedPointsPlayer(elementID: 99, pickPosition: 2, expectedPointsNextGameweek: 5.0)
+            ],
+            bench: [
+                makeExpectedPointsPlayer(elementID: 12, pickPosition: 12, expectedPointsNextGameweek: 3.0)
+            ]
+        )
+
+        #expect(squad.matchesAssistantExpectedPointsSection(matchingSection, eventID: 31))
+        #expect(!squad.matchesAssistantExpectedPointsSection(matchingSection, eventID: 32))
+        #expect(!squad.matchesAssistantExpectedPointsSection(mismatchedSection, eventID: 31))
+    }
+
     @Test func fantasyTeamLookupKeys_handleClubPrefixesAndSuffixes() async throws {
         seedTeamIdentityStore()
         #expect(fantasyTeamLookupKeys("AFC Bournemouth").contains("bournemouth"))
