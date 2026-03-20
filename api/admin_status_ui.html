@@ -693,11 +693,16 @@
           const status = item && (item.status || item.reconciliation_status || item.level || "n/a");
           const level = item && (item.level || (item.reconciliation_healthy === false ? "warn" : "ok"));
           const metaLines = [];
+          if (item && item.note) metaLines.push(item.note);
+          if (item && item.summary) metaLines.push(item.summary);
           if (item && item.updated_at) metaLines.push(`Updated ${formatDateTime(item.updated_at)}`);
+          if (item && item.last_success_at) metaLines.push(`Last success ${formatDateTime(item.last_success_at)}`);
+          if (item && item.last_failure_at) metaLines.push(`Last failure ${formatDateTime(item.last_failure_at)}`);
           if (item && item.count !== undefined && item.count !== null) metaLines.push(`Count ${item.count}`);
           if (item && item.source) metaLines.push(`Source ${item.source}`);
           if (item && item.interval_ms) metaLines.push(`Interval ${item.interval_ms} ms`);
           if (item && item.url) metaLines.push(item.url);
+          if (item && item.inactive_reason) metaLines.push(`Inactive reason: ${item.inactive_reason}`);
           if (item && item.last_error) metaLines.push(`Last error: ${item.last_error}`);
           return `
             <article class="subcard">

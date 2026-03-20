@@ -1928,6 +1928,45 @@ function currentFantasyEventLiveSourceURL() {
   return FPL_EVENT_LIVE_SOURCE_URL_TEMPLATE.replace("{event}", String(currentEventID));
 }
 
+function currentFantasyEventLiveAvailability() {
+  const currentEventID = Number(fantasyBootstrapCurrentEvent && fantasyBootstrapCurrentEvent.id) || 0;
+  const sourceURL = currentFantasyEventLiveSourceURL();
+
+  if (!currentEventID) {
+    return {
+      active: false,
+      reason: "No current FPL event is marked in bootstrap data.",
+      current_event_id: null,
+      source_url: null,
+    };
+  }
+
+  if (!Array.isArray(cachedFantasyFixtures) || cachedFantasyFixtures.length === 0) {
+    return {
+      active: false,
+      reason: "FPL fixtures are not loaded yet, so event-live polling is idle.",
+      current_event_id: currentEventID,
+      source_url: sourceURL,
+    };
+  }
+
+  if (!currentEventHasMutableFantasyFixtures()) {
+    return {
+      active: false,
+      reason: "Current FPL event has no started mutable fixtures, so event-live polling is idle.",
+      current_event_id: currentEventID,
+      source_url: sourceURL,
+    };
+  }
+
+  return {
+    active: true,
+    reason: null,
+    current_event_id: currentEventID,
+    source_url: sourceURL,
+  };
+}
+
 function fantasyBootstrapAgeSeconds(nowMs = Date.now()) {
   if (!fantasyBootstrapLastUpdated) return Number.POSITIVE_INFINITY;
   const parsed = Date.parse(fantasyBootstrapLastUpdated);
@@ -14769,6 +14808,16 @@ function buildAgeHealth(updatedAt, intervalMs, options = {}) {
   const lastFailureAt = options.lastFailureAt || null;
   const lastSuccessAt = options.lastSuccessAt || null;
   const lastError = options.lastError || null;
+  const inactive =
+    options.inactive && typeof options.inactive === "object" ? options.inactive : null;
+
+  if (inactive && inactive.active === false) {
+    return {
+      level: inactive.level || "ok",
+      status: inactive.status || "inactive",
+      age_seconds: null,
+    };
+  }
 
   if (!updatedAt) {
     if (running) {
@@ -14863,6 +14912,7 @@ function buildUpstreamFeedSnapshot(options = {}) {
     lastSuccessAt: options.last_success_at || diagnostics.last_success_at,
     lastError: diagnostics.last_error,
     allowMissing: Boolean(options.allow_missing),
+    inactive: options.inactive,
   });
 
   return {
@@ -14880,6 +14930,10 @@ function buildUpstreamFeedSnapshot(options = {}) {
     last_error: diagnostics.last_error || null,
     recent_errors: diagnostics.recent_errors,
     retry: options.retry || { mode: "none" },
+    inactive_reason:
+      options.inactive && options.inactive.active === false
+        ? options.inactive.reason || null
+        : null,
     level: health.level,
     status: health.status,
   };
@@ -15086,11 +15140,12 @@ async function buildAdminArchitectureOverviewPayload() {
     last_failure_at: fantasyFixturesLastFailureAt,
     running: fantasyFixturesUpdating,
   });
+  const fplEventLiveAvailability = currentFantasyEventLiveAvailability();
   const fplEventLiveFeed = buildUpstreamFeedSnapshot({
     id: COMPONENT_SOURCE_FPL_EVENT_LIVE,
     title: "FPL Event Live",
     runtimeId: COMPONENT_SOURCE_FPL_EVENT_LIVE,
-    url: currentFantasyEventLiveSourceURL(),
+    url: fplEventLiveAvailability.source_url,
     interval_ms: FPL_EVENT_LIVE_INTERVAL_MS,
     updated_at: fantasyEventLiveLastUpdated,
     count: cachedFantasyEventLive && Array.isArray(cachedFantasyEventLive.elements)
@@ -15100,6 +15155,14 @@ async function buildAdminArchitectureOverviewPayload() {
     last_failure_at: fantasyEventLiveLastFailureAt,
     running: fantasyEventLiveUpdating,
     allow_missing: true,
+    inactive: fplEventLiveAvailability.active
+      ? null
+      : {
+        active: false,
+        status: "inactive",
+        level: "ok",
+        reason: fplEventLiveAvailability.reason,
+      },
   });
   const fplHealth = combineAdminHealth(fplBootstrapFeed, fplFixturesFeed, fplEventLiveFeed);
 
@@ -15527,6 +15590,12 @@ async function buildAdminArchitectureComponentDetail(componentId) {
   }
 
   if (componentId === "fantasy_api") {
+    const fantasyRecentErrors = mergeRuntimeDiagnostics([
+      COMPONENT_SOURCE_FPL_BOOTSTRAP,
+      COMPONENT_SOURCE_FPL_FIXTURES,
+      COMPONENT_SOURCE_FPL_EVENT_LIVE,
+    ]).recent_errors;
+    const eventLiveAvailability = currentFantasyEventLiveAvailability();
     return {
       component,
       detail: {
@@ -15536,6 +15605,10 @@ async function buildAdminArchitectureComponentDetail(componentId) {
           { label: "Bootstrap Updated", value: fantasyBootstrapLastUpdated || "n/a" },
           { label: "Fixtures Updated", value: fantasyFixturesLastUpdated || "n/a" },
           { label: "Event Live Updated", value: fantasyEventLiveLastUpdated || "n/a" },
+          { label: "Event Live Status", value: feedSnapshots.fpl_event_live && feedSnapshots.fpl_event_live.status ? feedSnapshots.fpl_event_live.status : "n/a" },
+          { label: "Event Live Reason", value: (feedSnapshots.fpl_event_live && feedSnapshots.fpl_event_live.inactive_reason) || "actively polling or recently updated" },
+          { label: "Current Event ID", value: eventLiveAvailability.current_event_id || "n/a" },
+          { label: "Next Event ID", value: fantasyBootstrapNextEvent && fantasyBootstrapNextEvent.id ? fantasyBootstrapNextEvent.id : "n/a" },
         ],
         data_flow: {
           reads_from: ["FPL API memory caches", "filesystem config JSON files"],
@@ -15544,6 +15617,25 @@ async function buildAdminArchitectureComponentDetail(componentId) {
         failure_impact: [
           "Fantasy gameweek/bootstrap/score/recommendation flows can return stale or unavailable data.",
           "This path is independent of the operational Redis reconciliation flow.",
+        ],
+        recent_errors: fantasyRecentErrors,
+        subcomponents: [
+          {
+            ...feedSnapshots.fpl_bootstrap,
+            note: fantasyBootstrapGameUpdating
+              ? `Upstream game update in progress: ${fantasyBootstrapGameUpdatingMessage || "reported by FPL API"}`
+              : "Bootstrap data powers current/next gameweek context and player/team lookup endpoints.",
+          },
+          {
+            ...feedSnapshots.fpl_fixtures,
+            note: "Fixtures drive fantasy score context and upcoming fixture calculations.",
+          },
+          {
+            ...feedSnapshots.fpl_event_live,
+            note:
+              (feedSnapshots.fpl_event_live && feedSnapshots.fpl_event_live.inactive_reason) ||
+              "Event-live polling only runs while the current gameweek has started mutable fixtures.",
+          },
         ],
       },
     };
