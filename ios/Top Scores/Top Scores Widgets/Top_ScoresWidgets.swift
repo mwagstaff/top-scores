@@ -2372,39 +2372,65 @@ private struct SingleUpcomingMatchView: View {
 
     var body: some View {
         SingleMatchCardChrome {
-            VStack(alignment: .leading, spacing: 8) {
-                UpcomingCompetitionHeaderRow(
-                    league: match.league,
-                    subheading: match.leagueSubcategory,
-                    kickoffDate: kickoffDate,
-                    primaryChannel: primaryChannel
-                )
-
-                HStack(spacing: 0) {
-                    HStack(spacing: 14) {
-                        LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
-                        LiveActivityUpcomingCenterIndicator(match: match, logoSize: 18)
-                        LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
+            VStack(alignment: .leading, spacing: 7) {
+                SingleUpcomingGridRow {
+                    Text(match.league)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                } center: {
+                    if let primaryChannel {
+                        LiveActivityChannelLogo(channelName: primaryChannel, size: 16)
+                    } else {
+                        Color.clear
+                            .frame(width: 16 * 1.8, height: 16)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                } right: {
+                    Text(headerTrailingText)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
 
+                SingleUpcomingGridRow {
+                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
+                } center: {
                     Text(match.time)
                         .font(.subheadline.monospacedDigit().weight(.semibold))
                         .foregroundStyle(.white)
-                        .frame(minWidth: 44, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                } right: {
+                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
                 }
 
-                TeamNamesWithAggregateRow(
-                    homeTeam: match.homeTeam,
-                    awayTeam: match.awayTeam,
-                    aggregateInfo: match.shouldShowAggregateBracketScoresInline ? " " : (aggregateText ?? "Kick-off")
-                )
+                SingleUpcomingGridRow {
+                    Text(match.homeTeam)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                } center: {
+                    if let aggregateText {
+                        Text(aggregateText)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.65))
+                            .lineLimit(1)
+                    } else {
+                        Color.clear
+                            .frame(height: 1)
+                    }
+                } right: {
+                    Text(match.awayTeam)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
             }
         }
-    }
-
-    private var kickoffDate: Date? {
-        WidgetMatchDateParser.shared.parse(date: match.date, time: match.time)
     }
 
     private var primaryChannel: String? {
@@ -2412,10 +2438,21 @@ private struct SingleUpcomingMatchView: View {
         return primary?.isEmpty == false ? primary : nil
     }
 
+    private var headerTrailingText: String {
+        if let primaryChannel {
+            return primaryChannel
+        }
+        if let subheading = match.leagueSubcategory?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !subheading.isEmpty {
+            return subheading
+        }
+        return " "
+    }
+
     private var aggregateText: String? {
         guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
         guard match.hasDisplayableAggregateScore else { return nil }
-        return "Agg: \(home)-\(away)"
+        return "(\(home)-\(away))"
     }
 }
 
@@ -2722,6 +2759,36 @@ private struct UpcomingCompetitionHeaderRow: View {
                 .foregroundStyle(.white.opacity(0.55))
         } else {
             KickoffCountdownLabel(kickoffDate: kickoffDate)
+        }
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct SingleUpcomingGridRow<Left: View, Center: View, Right: View>: View {
+    private let left: Left
+    private let center: Center
+    private let right: Right
+
+    init(
+        @ViewBuilder left: () -> Left,
+        @ViewBuilder center: () -> Center,
+        @ViewBuilder right: () -> Right
+    ) {
+        self.left = left()
+        self.center = center()
+        self.right = right()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            left
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            center
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            right
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 }
