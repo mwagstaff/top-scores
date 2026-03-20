@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Status</title>
+  <style>
+    :root {
+      --bg: #eef4f6;
+      --panel: #ffffff;
+      --ink: #13242f;
+      --muted: #60707b;
+      --line: #d4e0e6;
+      --accent: #0f766e;
+      --accent-2: #115e59;
+      --ok: #166534;
+      --warn: #b45309;
+      --fail: #b91c1c;
+      --shadow: 0 14px 32px rgba(19, 36, 47, 0.06);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #eef4f6 0%, #f8fafb 100%);
+      color: var(--ink);
+    }
+
+    a {
+      color: var(--accent-2);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .container {
+      max-width: 1480px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .header,
+    .toolbar,
+    .section-header,
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: progress;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 4px 10px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      color: var(--ok);
+      border-color: rgba(22, 101, 52, 0.2);
+      background: rgba(22, 101, 52, 0.08);
+    }
+
+    .pill.warn {
+      color: var(--warn);
+      border-color: rgba(180, 83, 9, 0.22);
+      background: rgba(180, 83, 9, 0.08);
+    }
+
+    .pill.fail {
+      color: var(--fail);
+      border-color: rgba(185, 28, 28, 0.22);
+      background: rgba(185, 28, 28, 0.08);
+    }
+
+    .status {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .status.error {
+      color: var(--fail);
+      font-weight: 700;
+    }
+
+    .summary-grid,
+    .cards,
+    .stats-grid,
+    .detail-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .summary-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .cards {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .stats-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .detail-grid {
+      grid-template-columns: 1.2fr 1fr;
+    }
+
+    .stat,
+    .card,
+    .note,
+    .subcard {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      background: #fbfcfd;
+    }
+
+    .stat .label,
+    .mini-label {
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    .stat .value {
+      margin-top: 6px;
+      font-size: 1.28rem;
+      font-weight: 700;
+    }
+
+    .card {
+      display: grid;
+      gap: 10px;
+    }
+
+    .card a {
+      color: inherit;
+    }
+
+    .card-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .mono,
+    pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.8rem;
+    }
+
+    pre {
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      background: #0f172a;
+      color: #d8e5ef;
+      border-radius: 10px;
+      line-height: 1.45;
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .list-item {
+      padding-left: 18px;
+      position: relative;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .list-item::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 9px;
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    .diagram-wrap {
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+
+    svg {
+      width: 100%;
+      min-width: 1180px;
+      height: auto;
+      display: block;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    @media (max-width: 1080px) {
+      .summary-grid,
+      .cards,
+      .stats-grid,
+      .detail-grid {
+        grid-template-columns: 1fr;
+      }
+
+      body {
+        padding: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="panel">
+      <div class="header">
+        <div>
+          <h1 id="pageTitle">Architecture Status</h1>
+          <p id="pageSubtitle">Runtime architecture view across upstream sources, in-memory caches, Redis, and consuming functionality.</p>
+        </div>
+        <div class="toolbar">
+          <a id="backLink" class="pill hidden" href="#">Back To Overview</a>
+          <button id="refreshButton">Refresh</button>
+        </div>
+      </div>
+      <div id="statusLine" class="status" style="margin-top: 12px;">Loading status overview...</div>
+    </section>
+
+    <section id="overviewSection" class="list">
+      <section class="panel">
+        <div class="summary-grid" id="summaryGrid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <div>
+            <h2>Flow Diagram</h2>
+            <p>Click any node to open a detailed health page for that component.</p>
+          </div>
+        </div>
+        <div class="diagram-wrap" style="margin-top: 12px;">
+          <svg id="diagram" viewBox="0 0 1360 1100" aria-label="Architecture flow diagram"></svg>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <div>
+            <h2>Notes</h2>
+            <p>Runtime semantics extracted from the current server implementation.</p>
+          </div>
+        </div>
+        <div class="list" id="notesList" style="margin-top: 12px;"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <div>
+            <h2>Components</h2>
+            <p>Fallback list with the same targets as the diagram.</p>
+          </div>
+        </div>
+        <div class="cards" id="componentsGrid" style="margin-top: 12px;"></div>
+      </section>
+    </section>
+
+    <section id="detailSection" class="hidden">
+      <section class="panel">
+        <div class="row">
+          <div>
+            <h2 id="detailTitle">Component</h2>
+            <p id="detailDescription">Loading component detail...</p>
+          </div>
+          <div id="detailHealth"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="stats-grid" id="detailStats"></div>
+      </section>
+
+      <section class="detail-grid">
+        <section class="panel">
+          <div class="section-header">
+            <div>
+              <h2>Data Flow</h2>
+              <p>Where this component reads from, writes to, and who depends on it.</p>
+            </div>
+          </div>
+          <div id="detailDataFlow" class="list" style="margin-top: 12px;"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-header">
+            <div>
+              <h2>Failure Impact</h2>
+              <p>Expected user-visible degradation if this component is unhealthy.</p>
+            </div>
+          </div>
+          <div id="detailImpact" class="list" style="margin-top: 12px;"></div>
+        </section>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <div>
+            <h2>Subcomponents</h2>
+            <p>Feed-level or dataset-level detail for the selected component.</p>
+          </div>
+        </div>
+        <div id="detailSubcomponents" class="cards" style="margin-top: 12px;"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <div>
+            <h2>Recent Errors</h2>
+            <p>Most recent recorded runtime errors for this component.</p>
+          </div>
+        </div>
+        <div id="detailErrors" class="list" style="margin-top: 12px;"></div>
+      </section>
+
+      <section class="panel hidden" id="detailRawPanel">
+        <div class="section-header">
+          <div>
+            <h2>Raw Detail</h2>
+            <p>Structured payload returned by the diagnostics endpoint.</p>
+          </div>
+        </div>
+        <pre id="detailRaw" style="margin-top: 12px;"></pre>
+      </section>
+    </section>
+  </div>
+
+  <script>
+    const refreshButton = document.getElementById("refreshButton");
+    const statusLineEl = document.getElementById("statusLine");
+    const pageTitleEl = document.getElementById("pageTitle");
+    const pageSubtitleEl = document.getElementById("pageSubtitle");
+    const backLinkEl = document.getElementById("backLink");
+    const overviewSection = document.getElementById("overviewSection");
+    const detailSection = document.getElementById("detailSection");
+    const summaryGridEl = document.getElementById("summaryGrid");
+    const notesListEl = document.getElementById("notesList");
+    const componentsGridEl = document.getElementById("componentsGrid");
+    const diagramEl = document.getElementById("diagram");
+    const detailTitleEl = document.getElementById("detailTitle");
+    const detailDescriptionEl = document.getElementById("detailDescription");
+    const detailHealthEl = document.getElementById("detailHealth");
+    const detailStatsEl = document.getElementById("detailStats");
+    const detailDataFlowEl = document.getElementById("detailDataFlow");
+    const detailImpactEl = document.getElementById("detailImpact");
+    const detailSubcomponentsEl = document.getElementById("detailSubcomponents");
+    const detailErrorsEl = document.getElementById("detailErrors");
+    const detailRawPanelEl = document.getElementById("detailRawPanel");
+    const detailRawEl = document.getElementById("detailRaw");
+
+    const appBasePath = (() => {
+      const pathname = window.location.pathname || "";
+      const adminIndex = pathname.indexOf("/admin/");
+      if (adminIndex <= 0) return "";
+      return pathname.slice(0, adminIndex);
+    })();
+
+    const layout = {
+      source_live_football: { x: 40, y: 70 },
+      source_bbc_live: { x: 40, y: 170 },
+      source_bbc_range: { x: 40, y: 270 },
+      source_bbc_match_details: { x: 40, y: 370 },
+      source_bbc_tables: { x: 40, y: 470 },
+      source_club_elo_rankings: { x: 40, y: 570 },
+      source_club_elo_fixtures: { x: 40, y: 670 },
+      source_football_database: { x: 40, y: 770 },
+      source_national_elo: { x: 40, y: 870 },
+      source_fpl_api: { x: 40, y: 970 },
+      operational_memory: { x: 430, y: 260 },
+      operational_redis: { x: 430, y: 420 },
+      redis_reconciliation: { x: 430, y: 580 },
+      matches_api: { x: 820, y: 200 },
+      metadata_api: { x: 820, y: 340 },
+      tables_api: { x: 820, y: 480 },
+      fantasy_api: { x: 820, y: 620 },
+      match_monitor: { x: 820, y: 760 },
+    };
+
+    const NODE_WIDTH = 260;
+    const NODE_HEIGHT = 80;
+
+    function buildApiUrl(path) {
+      return `${appBasePath}${path}`;
+    }
+
+    function buildAppUrl(path) {
+      const rawPath = String(path || "").trim();
+      if (!rawPath) {
+        return appBasePath || "/";
+      }
+      if (/^https?:\/\//i.test(rawPath)) {
+        return rawPath;
+      }
+      if (!rawPath.startsWith("/")) {
+        return `${appBasePath}/${rawPath}`;
+      }
+      if (appBasePath && (rawPath === appBasePath || rawPath.startsWith(`${appBasePath}/`))) {
+        return rawPath;
+      }
+      return `${appBasePath}${rawPath}`;
+    }
+
+    function currentComponentId() {
+      const match = (window.location.pathname || "").match(/\/admin\/status\/([^/]+)\/?$/);
+      return match ? decodeURIComponent(match[1]) : "";
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "n/a";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString();
+    }
+
+    function formatAge(seconds) {
+      const value = Number(seconds);
+      if (!Number.isFinite(value)) return "n/a";
+      if (value < 60) return `${value}s`;
+      if (value < 3600) return `${(value / 60).toFixed(1)}m`;
+      if (value < 86400) return `${(value / 3600).toFixed(1)}h`;
+      return `${(value / 86400).toFixed(1)}d`;
+    }
+
+    function levelClass(level) {
+      if (level === "fail") return "fail";
+      if (level === "warn") return "warn";
+      return "ok";
+    }
+
+    function pill(label, level = "ok") {
+      return `<span class="pill ${levelClass(level)}">${escapeHtml(label)}</span>`;
+    }
+
+    async function readJsonResponse(response) {
+      const raw = await response.text();
+      let payload = null;
+      try {
+        payload = raw ? JSON.parse(raw) : {};
+      } catch (_error) {
+        payload = null;
+      }
+      if (!response.ok) {
+        const message =
+          payload && typeof payload === "object"
+            ? payload.message || payload.error
+            : raw || `Request failed (${response.status})`;
+        throw new Error(message || `Request failed (${response.status})`);
+      }
+      if (!payload || typeof payload !== "object") {
+        throw new Error("Expected JSON response.");
+      }
+      return payload;
+    }
+
+    function renderSummary(payload) {
+      const summary = payload.summary || {};
+      summaryGridEl.innerHTML = [
+        {
+          label: "Components",
+          value: summary.total || 0,
+          extra: `${summary.ok || 0} ok / ${summary.warn || 0} warn / ${summary.fail || 0} fail`,
+        },
+        {
+          label: "Generated",
+          value: formatDateTime(payload.generated_at),
+          extra: "Overview snapshot",
+        },
+        {
+          label: "Redis Recon",
+          value: payload.redis && payload.redis.reconciliation && payload.redis.reconciliation.healthy ? "Healthy" : "Drift",
+          extra:
+            payload.redis && payload.redis.reconciliation
+              ? `Last run ${formatDateTime(payload.redis.reconciliation.last_run_completed_at)}`
+              : "n/a",
+        },
+        {
+          label: "Redis Connectivity",
+          value: payload.redis && payload.redis.connectivity ? payload.redis.connectivity.status : "n/a",
+          extra:
+            payload.redis && payload.redis.connectivity && payload.redis.connectivity.error
+              ? payload.redis.connectivity.error
+              : "Probe completed",
+        },
+      ].map((item) => `
+        <div class="stat">
+          <div class="label">${escapeHtml(item.label)}</div>
+          <div class="value">${escapeHtml(String(item.value))}</div>
+          <div class="status" style="margin-top: 6px;">${escapeHtml(item.extra)}</div>
+        </div>
+      `).join("");
+    }
+
+    function renderNotes(payload) {
+      const notes = Array.isArray(payload.notes) ? payload.notes : [];
+      notesListEl.innerHTML = notes.length
+        ? notes.map((note) => `<div class="list-item">${escapeHtml(note)}</div>`).join("")
+        : `<div class="empty">No notes available.</div>`;
+    }
+
+    function renderComponentCards(components) {
+      componentsGridEl.innerHTML = components.map((component) => `
+        <article class="card">
+          <div class="card-title">
+            <div>
+              <div class="mini-label">${escapeHtml(component.group || "component")}</div>
+              <a href="${escapeHtml(buildAppUrl(component.detail_path))}"><strong>${escapeHtml(component.label)}</strong></a>
+            </div>
+            ${pill(component.status || component.level || "unknown", component.level)}
+          </div>
+          <div class="status">${escapeHtml(component.summary || "")}</div>
+          <div class="status">Updated ${escapeHtml(formatDateTime(component.updated_at))}</div>
+          <div class="status">Age ${escapeHtml(formatAge(component.age_seconds))}</div>
+        </article>
+      `).join("");
+    }
+
+    function renderDiagram(components, edges) {
+      const byId = new Map(components.map((component) => [component.id, component]));
+      const lines = [];
+      const nodes = [];
+
+      edges.forEach((edge) => {
+        const from = layout[edge.from];
+        const to = layout[edge.to];
+        if (!from || !to) return;
+        const startX = from.x + NODE_WIDTH;
+        const startY = from.y + NODE_HEIGHT / 2;
+        const endX = to.x;
+        const endY = to.y + NODE_HEIGHT / 2;
+        const midX = (startX + endX) / 2;
+        lines.push(`
+          <path d="M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}"
+            fill="none" stroke="#9fb3bc" stroke-width="2.5" stroke-linecap="round" />
+        `);
+      });
+
+      components.forEach((component) => {
+        const position = layout[component.id];
+        if (!position) return;
+        const cls = levelClass(component.level);
+        const stroke = cls === "fail" ? "#b91c1c" : cls === "warn" ? "#b45309" : "#166534";
+        const fill = cls === "fail" ? "rgba(185,28,28,0.08)" : cls === "warn" ? "rgba(180,83,9,0.08)" : "rgba(22,101,52,0.08)";
+        const summary = component.summary ? String(component.summary).slice(0, 34) : "";
+        nodes.push(`
+          <a href="${escapeHtml(buildAppUrl(component.detail_path))}">
+            <rect x="${position.x}" y="${position.y}" width="${NODE_WIDTH}" height="${NODE_HEIGHT}" rx="14"
+              fill="${fill}" stroke="${stroke}" stroke-width="2"></rect>
+            <text x="${position.x + 16}" y="${position.y + 26}" font-size="16" font-weight="700" fill="#13242f">
+              ${escapeHtml(component.short_label || component.label)}
+            </text>
+            <text x="${position.x + 16}" y="${position.y + 48}" font-size="12" fill="#60707b">
+              ${escapeHtml(component.status || "")}
+            </text>
+            <text x="${position.x + 16}" y="${position.y + 66}" font-size="12" fill="#60707b">
+              ${escapeHtml(summary)}
+            </text>
+          </a>
+        `);
+      });
+
+      diagramEl.innerHTML = `
+        <text x="40" y="34" font-size="18" font-weight="700" fill="#13242f">External Sources</text>
+        <text x="430" y="34" font-size="18" font-weight="700" fill="#13242f">Runtime + Persistence</text>
+        <text x="820" y="34" font-size="18" font-weight="700" fill="#13242f">Consumers</text>
+        ${lines.join("")}
+        ${nodes.join("")}
+      `;
+    }
+
+    function renderOverview(payload) {
+      const components = Array.isArray(payload.components) ? payload.components : [];
+      renderSummary(payload);
+      renderNotes(payload);
+      renderComponentCards(components);
+      renderDiagram(components, Array.isArray(payload.edges) ? payload.edges : []);
+    }
+
+    function renderStats(target, stats) {
+      const items = Array.isArray(stats) ? stats : [];
+      target.innerHTML = items.length
+        ? items.map((item) => `
+          <div class="stat">
+            <div class="label">${escapeHtml(item.label || "Value")}</div>
+            <div class="value">${escapeHtml(String(item.value ?? "n/a"))}</div>
+          </div>
+        `).join("")
+        : `<div class="empty">No stats available.</div>`;
+    }
+
+    function renderList(target, values, formatter) {
+      const items = Array.isArray(values) ? values : [];
+      target.innerHTML = items.length
+        ? items.map((item) => `<div class="list-item">${formatter(item)}</div>`).join("")
+        : `<div class="empty">No entries.</div>`;
+    }
+
+    function renderDataFlow(flow) {
+      const entries = [];
+      const flowObject = flow && typeof flow === "object" ? flow : {};
+      Object.keys(flowObject).forEach((key) => {
+        const value = flowObject[key];
+        if (!Array.isArray(value) || value.length === 0) return;
+        entries.push(`<div class="list-item"><strong>${escapeHtml(key.replace(/_/g, " "))}:</strong> ${escapeHtml(value.join(", "))}</div>`);
+      });
+      detailDataFlowEl.innerHTML = entries.length ? entries.join("") : `<div class="empty">No data-flow detail.</div>`;
+    }
+
+    function renderSubcomponents(items) {
+      const values = Array.isArray(items) ? items : [];
+      detailSubcomponentsEl.innerHTML = values.length
+        ? values.map((item) => {
+          const title = item && (item.title || item.name || item.id || "Subcomponent");
+          const status = item && (item.status || item.reconciliation_status || item.level || "n/a");
+          const level = item && (item.level || (item.reconciliation_healthy === false ? "warn" : "ok"));
+          const metaLines = [];
+          if (item && item.updated_at) metaLines.push(`Updated ${formatDateTime(item.updated_at)}`);
+          if (item && item.count !== undefined && item.count !== null) metaLines.push(`Count ${item.count}`);
+          if (item && item.source) metaLines.push(`Source ${item.source}`);
+          if (item && item.interval_ms) metaLines.push(`Interval ${item.interval_ms} ms`);
+          if (item && item.url) metaLines.push(item.url);
+          if (item && item.last_error) metaLines.push(`Last error: ${item.last_error}`);
+          return `
+            <article class="subcard">
+              <div class="card-title">
+                <strong>${escapeHtml(String(title))}</strong>
+                ${pill(String(status), level)}
+              </div>
+              <div class="list">
+                ${metaLines.map((line) => `<div class="status">${escapeHtml(line)}</div>`).join("")}
+              </div>
+            </article>
+          `;
+        }).join("")
+        : `<div class="empty">No subcomponent detail.</div>`;
+    }
+
+    function renderDetail(payload) {
+      const component = payload.component || {};
+      const detail = payload.detail || {};
+      pageTitleEl.textContent = component.label || "Component Detail";
+      pageSubtitleEl.textContent = "Detailed health and runtime statistics for the selected architecture component.";
+      backLinkEl.classList.remove("hidden");
+      backLinkEl.href = buildAppUrl("/admin/status");
+      detailTitleEl.textContent = component.label || "Component";
+      detailDescriptionEl.textContent = detail.description || "No description available.";
+      detailHealthEl.innerHTML = [
+        pill(component.status || component.level || "unknown", component.level),
+        pill(component.group || "component", "ok"),
+      ].join(" ");
+      renderStats(detailStatsEl, detail.stats);
+      renderDataFlow(detail.data_flow);
+      renderList(detailImpactEl, detail.failure_impact, (item) => escapeHtml(item));
+      renderSubcomponents(detail.subcomponents);
+      renderList(detailErrorsEl, detail.recent_errors, (item) => {
+        const at = item && item.at ? formatDateTime(item.at) : "n/a";
+        const error = item && item.error ? item.error : String(item || "Unknown error");
+        return `<strong>${escapeHtml(at)}</strong>: ${escapeHtml(error)}`;
+      });
+
+      if (detail.raw) {
+        detailRawPanelEl.classList.remove("hidden");
+        detailRawEl.textContent = JSON.stringify(detail.raw, null, 2);
+      } else {
+        detailRawPanelEl.classList.add("hidden");
+        detailRawEl.textContent = "";
+      }
+    }
+
+    async function loadOverview() {
+      const response = await fetch(buildApiUrl("/api/v1/admin/status/overview"));
+      return readJsonResponse(response);
+    }
+
+    async function loadDetail(componentId) {
+      const response = await fetch(buildApiUrl(`/api/v1/admin/status/components/${encodeURIComponent(componentId)}`));
+      return readJsonResponse(response);
+    }
+
+    async function refresh() {
+      const componentId = currentComponentId();
+      refreshButton.disabled = true;
+      statusLineEl.className = "status";
+      statusLineEl.textContent = componentId
+        ? "Loading component detail..."
+        : "Loading status overview...";
+
+      try {
+        if (componentId) {
+          overviewSection.classList.add("hidden");
+          detailSection.classList.remove("hidden");
+          const payload = await loadDetail(componentId);
+          renderDetail(payload);
+          statusLineEl.textContent = `Detail generated ${formatDateTime(payload.component && payload.component.updated_at ? payload.component.updated_at : null)}.`;
+        } else {
+          detailSection.classList.add("hidden");
+          overviewSection.classList.remove("hidden");
+          backLinkEl.classList.add("hidden");
+          pageTitleEl.textContent = "Architecture Status";
+          pageSubtitleEl.textContent = "Runtime architecture view across upstream sources, in-memory caches, Redis, and consuming functionality.";
+          const payload = await loadOverview();
+          renderOverview(payload);
+          statusLineEl.textContent = `Overview generated ${formatDateTime(payload.generated_at)}.`;
+        }
+      } catch (error) {
+        statusLineEl.className = "status error";
+        statusLineEl.textContent = error.message || String(error);
+      } finally {
+        refreshButton.disabled = false;
+      }
+    }
+
+    refreshButton.addEventListener("click", refresh);
+    refresh();
+  </script>
+</body>
+</html>

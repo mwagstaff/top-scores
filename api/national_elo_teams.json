@@ -105,7 +105,7 @@
     "TeamCode": "EC",
     "Aliases": [],
     "OneYearRankChange": 3,
-    "OneYearRatingChange": 24
+    "OneYearRatingChange": 23
   },
   {
     "Name": "Croatia",
@@ -196,20 +196,20 @@
     "Team": "Senegal",
     "Country": "Senegal",
     "Rank": 17,
-    "Elo": 1870,
-    "Points": 1870,
+    "Elo": 1869,
+    "Points": 1869,
     "TeamCode": "SN",
     "Aliases": [],
     "OneYearRankChange": 15,
-    "OneYearRatingChange": 99
+    "OneYearRatingChange": 98
   },
   {
     "Name": "Denmark",
     "Team": "Denmark",
     "Country": "Denmark",
     "Rank": 18,
-    "Elo": 1865,
-    "Points": 1865,
+    "Elo": 1864,
+    "Points": 1864,
     "TeamCode": "DK",
     "Aliases": [],
     "OneYearRankChange": -2,
@@ -232,24 +232,24 @@
     "Team": "Mexico",
     "Country": "Mexico",
     "Rank": 20,
-    "Elo": 1856,
-    "Points": 1856,
+    "Elo": 1857,
+    "Points": 1857,
     "TeamCode": "MX",
     "Aliases": [],
     "OneYearRankChange": 13,
-    "OneYearRatingChange": 87
+    "OneYearRatingChange": 88
   },
   {
     "Name": "Belgium",
     "Team": "Belgium",
     "Country": "Belgium",
     "Rank": 21,
-    "Elo": 1849,
-    "Points": 1849,
+    "Elo": 1850,
+    "Points": 1850,
     "TeamCode": "BE",
     "Aliases": [],
     "OneYearRankChange": -4,
-    "OneYearRatingChange": -2
+    "OneYearRatingChange": -1
   },
   {
     "Name": "Paraguay",
@@ -418,7 +418,7 @@
     "Points": 1739,
     "TeamCode": "NG",
     "Aliases": [],
-    "OneYearRankChange": 36,
+    "OneYearRankChange": 35,
     "OneYearRatingChange": 189
   },
   {
@@ -526,7 +526,7 @@
     "Points": 1714,
     "TeamCode": "KO",
     "Aliases": [],
-    "OneYearRankChange": 26,
+    "OneYearRankChange": 25,
     "OneYearRatingChange": 160
   },
   {
@@ -575,7 +575,7 @@
     "TeamCode": "JO",
     "Aliases": [],
     "OneYearRankChange": 6,
-    "OneYearRatingChange": 70
+    "OneYearRatingChange": 77
   },
   {
     "Name": "Ireland",
@@ -614,40 +614,40 @@
     "OneYearRatingChange": 29
   },
   {
+    "Name": "Bolivia",
+    "Team": "Bolivia",
+    "Country": "Bolivia",
+    "Rank": 52,
+    "Elo": 1661,
+    "Points": 1661,
+    "TeamCode": "BO",
+    "Aliases": [],
+    "OneYearRankChange": -2,
+    "OneYearRatingChange": 3
+  },
+  {
     "Name": "Sweden",
     "Team": "Sweden",
     "Country": "Sweden",
-    "Rank": 52,
+    "Rank": 53,
     "Elo": 1660,
     "Points": 1660,
     "TeamCode": "SE",
     "Aliases": [],
-    "OneYearRankChange": -16,
+    "OneYearRankChange": -17,
     "OneYearRatingChange": -84
   },
   {
     "Name": "Egypt",
     "Team": "Egypt",
     "Country": "Egypt",
-    "Rank": 53,
+    "Rank": 54,
     "Elo": 1659,
     "Points": 1659,
     "TeamCode": "EG",
     "Aliases": [],
-    "OneYearRankChange": -2,
+    "OneYearRankChange": -3,
     "OneYearRatingChange": 2
-  },
-  {
-    "Name": "Bolivia",
-    "Team": "Bolivia",
-    "Country": "Bolivia",
-    "Rank": 54,
-    "Elo": 1657,
-    "Points": 1657,
-    "TeamCode": "BO",
-    "Aliases": [],
-    "OneYearRankChange": -4,
-    "OneYearRatingChange": -1
   },
   {
     "Name": "Georgia",
@@ -674,16 +674,14 @@
     "OneYearRatingChange": -77
   },
   {
-    "Name": "Democratic Republic of Congo",
-    "Team": "Democratic Republic of Congo",
-    "Country": "Democratic Republic of Congo",
+    "Name": "DR Congo",
+    "Team": "DR Congo",
+    "Country": "DR Congo",
     "Rank": 57,
     "Elo": 1639,
     "Points": 1639,
     "TeamCode": "CD",
-    "Aliases": [
-      "DR Congo"
-    ],
+    "Aliases": [],
     "OneYearRankChange": 15,
     "OneYearRatingChange": 99
   },
@@ -696,7 +694,7 @@
     "Points": 1637,
     "TeamCode": "CI",
     "Aliases": [],
-    "OneYearRankChange": 5,
+    "OneYearRankChange": 4,
     "OneYearRatingChange": 58
   },
   {
@@ -704,8 +702,8 @@
     "Team": "Costa Rica",
     "Country": "Costa Rica",
     "Rank": 59,
-    "Elo": 1633,
-    "Points": 1633,
+    "Elo": 1632,
+    "Points": 1632,
     "TeamCode": "CR",
     "Aliases": [],
     "OneYearRankChange": -7,
@@ -720,7 +718,7 @@
     "Points": 1631,
     "TeamCode": "IL",
     "Aliases": [],
-    "OneYearRankChange": -2,
+    "OneYearRankChange": -1,
     "OneYearRatingChange": 30
   },
   {
@@ -732,8 +730,8 @@
     "Points": 1614,
     "TeamCode": "TN",
     "Aliases": [],
-    "OneYearRankChange": -2,
-    "OneYearRatingChange": 16
+    "OneYearRankChange": -3,
+    "OneYearRatingChange": 8
   },
   {
     "Name": "Cameroon",
@@ -744,16 +742,16 @@
     "Points": 1606,
     "TeamCode": "CM",
     "Aliases": [],
-    "OneYearRankChange": -2,
-    "OneYearRatingChange": 12
+    "OneYearRankChange": 1,
+    "OneYearRatingChange": 28
   },
   {
     "Name": "Northern Ireland",
     "Team": "Northern Ireland",
     "Country": "Northern Ireland",
     "Rank": 63,
-    "Elo": 1603,
-    "Points": 1603,
+    "Elo": 1602,
+    "Points": 1602,
     "TeamCode": "EI",
     "Aliases": [
       "North Ireland",
@@ -809,7 +807,7 @@
     "Points": 1585,
     "TeamCode": "NZ",
     "Aliases": [],
-    "OneYearRankChange": -5,
+    "OneYearRankChange": -6,
     "OneYearRatingChange": 2
   },
   {
@@ -821,7 +819,7 @@
     "Points": 1582,
     "TeamCode": "IQ",
     "Aliases": [],
-    "OneYearRankChange": -7,
+    "OneYearRankChange": -8,
     "OneYearRatingChange": -2
   },
   {
@@ -850,8 +848,8 @@
     "Points": 1567,
     "TeamCode": "HN",
     "Aliases": [],
-    "OneYearRankChange": -2,
-    "OneYearRatingChange": 7
+    "OneYearRankChange": 1,
+    "OneYearRatingChange": 19
   },
   {
     "Name": "Iceland",
@@ -887,7 +885,7 @@
     "TeamCode": "AO",
     "Aliases": [],
     "OneYearRankChange": -6,
-    "OneYearRatingChange": -27
+    "OneYearRatingChange": -26
   },
   {
     "Name": "Haiti",
@@ -960,16 +958,16 @@
     "Points": 1526,
     "TeamCode": "GT",
     "Aliases": [],
-    "OneYearRankChange": 2,
-    "OneYearRatingChange": 19
+    "OneYearRankChange": 1,
+    "OneYearRatingChange": 7
   },
   {
     "Name": "Ghana",
     "Team": "Ghana",
     "Country": "Ghana",
     "Rank": 80,
-    "Elo": 1510,
-    "Points": 1510,
+    "Elo": 1509,
+    "Points": 1509,
     "TeamCode": "GH",
     "Aliases": [],
     "OneYearRankChange": 14,
@@ -980,11 +978,11 @@
     "Team": "Finland",
     "Country": "Finland",
     "Rank": 81,
-    "Elo": 1509,
-    "Points": 1509,
+    "Elo": 1508,
+    "Points": 1508,
     "TeamCode": "FI",
     "Aliases": [],
-    "OneYearRankChange": -8,
+    "OneYearRankChange": -7,
     "OneYearRatingChange": -29
   },
   {
@@ -1008,8 +1006,8 @@
     "Points": 1490,
     "TeamCode": "OM",
     "Aliases": [],
-    "OneYearRankChange": -3,
-    "OneYearRatingChange": -23
+    "OneYearRankChange": -2,
+    "OneYearRatingChange": -17
   },
   {
     "Name": "Guinea",
@@ -1040,11 +1038,11 @@
     "Team": "Palestine",
     "Country": "Palestine",
     "Rank": 86,
-    "Elo": 1469,
-    "Points": 1469,
+    "Elo": 1470,
+    "Points": 1470,
     "TeamCode": "PS",
     "Aliases": [],
-    "OneYearRankChange": 16,
+    "OneYearRankChange": 17,
     "OneYearRatingChange": 62
   },
   {
@@ -1056,8 +1054,8 @@
     "Points": 1466,
     "TeamCode": "CW",
     "Aliases": [],
-    "OneYearRankChange": 40,
-    "OneYearRatingChange": 131
+    "OneYearRankChange": 42,
+    "OneYearRatingChange": 143
   },
   {
     "Name": "Northern Cyprus",
@@ -1119,7 +1117,7 @@
     "Points": 1425,
     "TeamCode": "LY",
     "Aliases": [],
-    "OneYearRankChange": 18,
+    "OneYearRankChange": 19,
     "OneYearRatingChange": 34
   },
   {
@@ -1155,7 +1153,7 @@
     "Points": 1424,
     "TeamCode": "KD",
     "Aliases": [],
-    "OneYearRankChange": 2,
+    "OneYearRankChange": 4,
     "OneYearRatingChange": null
   },
   {
@@ -1179,8 +1177,20 @@
     "Points": 1410,
     "TeamCode": "BJ",
     "Aliases": [],
-    "OneYearRankChange": -2,
+    "OneYearRankChange": -3,
     "OneYearRatingChange": -19
+  },
+  {
+    "Name": "China",
+    "Team": "China",
+    "Country": "China",
+    "Rank": 97,
+    "Elo": 1410,
+    "Points": 1410,
+    "TeamCode": "CN",
+    "Aliases": [],
+    "OneYearRankChange": null,
+    "OneYearRatingChange": -15
   },
   {
     "Name": "Kazakhstan",
@@ -1191,20 +1201,8 @@
     "Points": 1410,
     "TeamCode": "KZ",
     "Aliases": [],
-    "OneYearRankChange": 2,
-    "OneYearRatingChange": -3
-  },
-  {
-    "Name": "China",
-    "Team": "China",
-    "Country": "China",
-    "Rank": 99,
-    "Elo": 1409,
-    "Points": 1409,
-    "TeamCode": "CN",
-    "Aliases": [],
-    "OneYearRankChange": 1,
-    "OneYearRatingChange": -3
+    "OneYearRankChange": -1,
+    "OneYearRatingChange": -16
   },
   {
     "Name": "Gabon",
@@ -1228,15 +1226,15 @@
     "TeamCode": "NE",
     "Aliases": [],
     "OneYearRankChange": 31,
-    "OneYearRatingChange": 84
+    "OneYearRatingChange": 83
   },
   {
     "Name": "Trinidad and Tobago",
     "Team": "Trinidad and Tobago",
     "Country": "Trinidad and Tobago",
     "Rank": 102,
-    "Elo": 1403,
-    "Points": 1403,
+    "Elo": 1399,
+    "Points": 1399,
     "TeamCode": "TT",
     "Aliases": [
       "Trinidad & Tobago",
@@ -1244,7 +1242,7 @@
       "Trinidad/Tob"
     ],
     "OneYearRankChange": 5,
-    "OneYearRatingChange": 5
+    "OneYearRatingChange": 1
   },
   {
     "Name": "Luxembourg",
@@ -1262,12 +1260,12 @@
     "Name": "Uganda",
     "Team": "Uganda",
     "Country": "Uganda",
-    "Rank": 103,
-    "Elo": 1395,
-    "Points": 1395,
+    "Rank": 104,
+    "Elo": 1394,
+    "Points": 1394,
     "TeamCode": "UG",
     "Aliases": [],
-    "OneYearRankChange": 6,
+    "OneYearRankChange": 5,
     "OneYearRatingChange": -1
   },
   {
@@ -1306,7 +1304,7 @@
     "Points": 1381,
     "TeamCode": "FO",
     "Aliases": [],
-    "OneYearRankChange": 39,
+    "OneYearRankChange": 38,
     "OneYearRatingChange": 104
   },
   {
@@ -1318,8 +1316,8 @@
     "Points": 1375,
     "TeamCode": "KP",
     "Aliases": [],
-    "OneYearRankChange": -3,
-    "OneYearRatingChange": -29
+    "OneYearRankChange": -7,
+    "OneYearRatingChange": -36
   },
   {
     "Name": "Comoros",
@@ -1330,7 +1328,7 @@
     "Points": 1374,
     "TeamCode": "KM",
     "Aliases": [],
-    "OneYearRankChange": -12,
+    "OneYearRankChange": -10,
     "OneYearRatingChange": -49
   },
   {
@@ -1354,7 +1352,7 @@
     "Points": 1370,
     "TeamCode": "ZM",
     "Aliases": [],
-    "OneYearRankChange": -9,
+    "OneYearRankChange": -7,
     "OneYearRatingChange": -37
   },
   {
@@ -1366,8 +1364,8 @@
     "Points": 1368,
     "TeamCode": "MG",
     "Aliases": [],
-    "OneYearRankChange": 28,
-    "OneYearRatingChange": 81
+    "OneYearRankChange": 18,
+    "OneYearRatingChange": 46
   },
   {
     "Name": "Thailand",
@@ -1402,8 +1400,8 @@
     "Points": 1350,
     "TeamCode": "SD",
     "Aliases": [],
-    "OneYearRankChange": -3,
-    "OneYearRatingChange": -38
+    "OneYearRankChange": -5,
+    "OneYearRatingChange": -44
   },
   {
     "Name": "Reunion",
@@ -1438,7 +1436,7 @@
     "Points": 1344,
     "TeamCode": "SL",
     "Aliases": [],
-    "OneYearRankChange": 21,
+    "OneYearRankChange": 22,
     "OneYearRatingChange": 49
   },
   {
@@ -1474,7 +1472,7 @@
     "Points": 1341,
     "TeamCode": "ID",
     "Aliases": [],
-    "OneYearRankChange": 11,
+    "OneYearRankChange": 13,
     "OneYearRatingChange": 21
   },
   {
@@ -1486,7 +1484,7 @@
     "Points": 1340,
     "TeamCode": "TZ",
     "Aliases": [],
-    "OneYearRankChange": -20,
+    "OneYearRankChange": -18,
     "OneYearRatingChange": -67
   },
   {
@@ -1534,7 +1532,7 @@
     "Points": 1330,
     "TeamCode": "MQ",
     "Aliases": [],
-    "OneYearRankChange": -28,
+    "OneYearRankChange": -26,
     "OneYearRatingChange": -87
   },
   {
@@ -1547,7 +1545,7 @@
     "TeamCode": "VN",
     "Aliases": [],
     "OneYearRankChange": -7,
-    "OneYearRatingChange": -28
+    "OneYearRatingChange": -29
   },
   {
     "Name": "Kuwait",
@@ -1558,8 +1556,8 @@
     "Points": 1328,
     "TeamCode": "KW",
     "Aliases": [],
-    "OneYearRankChange": 1,
-    "OneYearRatingChange": -6
+    "OneYearRankChange": 2,
+    "OneYearRatingChange": 6
   },
   {
     "Name": "Nicaragua",
@@ -1578,11 +1576,11 @@
     "Team": "El Salvador",
     "Country": "El Salvador",
     "Rank": 130,
-    "Elo": 1323,
-    "Points": 1323,
+    "Elo": 1324,
+    "Points": 1324,
     "TeamCode": "SV",
     "Aliases": [],
-    "OneYearRankChange": -19,
+    "OneYearRankChange": -18,
     "OneYearRatingChange": -66
   },
   {
@@ -1594,7 +1592,7 @@
     "Points": 1321,
     "TeamCode": "ZN",
     "Aliases": [],
-    "OneYearRankChange": null,
+    "OneYearRankChange": 1,
     "OneYearRatingChange": null
   },
   {
@@ -1606,16 +1604,16 @@
     "Points": 1313,
     "TeamCode": "KG",
     "Aliases": [],
-    "OneYearRankChange": 11,
+    "OneYearRankChange": 10,
     "OneYearRatingChange": 32
   },
   {
     "Name": "Malaysia",
     "Team": "Malaysia",
     "Country": "Malaysia",
-    "Rank": 133,
-    "Elo": 1312,
-    "Points": 1312,
+    "Rank": 132,
+    "Elo": 1313,
+    "Points": 1313,
     "TeamCode": "MY",
     "Aliases": [],
     "OneYearRankChange": 19,
@@ -1642,7 +1640,7 @@
     "Points": 1311,
     "TeamCode": "NA",
     "Aliases": [],
-    "OneYearRankChange": null,
+    "OneYearRankChange": 1,
     "OneYearRatingChange": -8
   },
   {
@@ -1650,11 +1648,11 @@
     "Team": "Rwanda",
     "Country": "Rwanda",
     "Rank": 136,
-    "Elo": 1309,
-    "Points": 1309,
+    "Elo": 1308,
+    "Points": 1308,
     "TeamCode": "RW",
     "Aliases": [],
-    "OneYearRankChange": -15,
+    "OneYearRankChange": -13,
     "OneYearRatingChange": -47
   },
   {
@@ -1666,7 +1664,7 @@
     "Points": 1302,
     "TeamCode": "CY",
     "Aliases": [],
-    "OneYearRankChange": null,
+    "OneYearRankChange": 1,
     "OneYearRatingChange": 1
   },
   {
@@ -1674,12 +1672,12 @@
     "Team": "Liberia",
     "Country": "Liberia",
     "Rank": 138,
-    "Elo": 1300,
-    "Points": 1300,
+    "Elo": 1299,
+    "Points": 1299,
     "TeamCode": "LR",
     "Aliases": [],
     "OneYearRankChange": 12,
-    "OneYearRatingChange": 35
+    "OneYearRatingChange": 43
   },
   {
     "Name": "Tajikistan",
@@ -1690,23 +1688,8 @@
     "Points": 1297,
     "TeamCode": "TJ",
     "Aliases": [],
-    "OneYearRankChange": -3,
+    "OneYearRankChange": -2,
     "OneYearRatingChange": -8
-  },
-  {
-    "Name": "Dominican Republic",
-    "Team": "Dominican Republic",
-    "Country": "Dominican Republic",
-    "Rank": 140,
-    "Elo": 1294,
-    "Points": 1294,
-    "TeamCode": "DO",
-    "Aliases": [
-      "Dominican Rep",
-      "Dominican R"
-    ],
-    "OneYearRankChange": -1,
-    "OneYearRatingChange": 6
   },
   {
     "Name": "New Caledonia",
@@ -1719,8 +1702,23 @@
     "Aliases": [
       "N Caledonia"
     ],
-    "OneYearRankChange": 11,
+    "OneYearRankChange": 9,
     "OneYearRatingChange": 33
+  },
+  {
+    "Name": "Dominican Republic",
+    "Team": "Dominican Republic",
+    "Country": "Dominican Republic",
+    "Rank": 141,
+    "Elo": 1293,
+    "Points": 1293,
+    "TeamCode": "DO",
+    "Aliases": [
+      "Dominican Rep",
+      "Dominican R"
+    ],
+    "OneYearRankChange": -1,
+    "OneYearRatingChange": 6
   },
   {
     "Name": "Moldova",
@@ -1731,7 +1729,7 @@
     "Points": 1288,
     "TeamCode": "MD",
     "Aliases": [],
-    "OneYearRankChange": -18,
+    "OneYearRankChange": -19,
     "OneYearRatingChange": -67
   },
   {
@@ -1743,7 +1741,7 @@
     "Points": 1286,
     "TeamCode": "LV",
     "Aliases": [],
-    "OneYearRankChange": 4,
+    "OneYearRankChange": 3,
     "OneYearRatingChange": 10
   },
   {
@@ -1767,7 +1765,7 @@
     "Points": 1278,
     "TeamCode": "MT",
     "Aliases": [],
-    "OneYearRankChange": 4,
+    "OneYearRankChange": 3,
     "OneYearRatingChange": 9
   },
   {
@@ -1775,11 +1773,11 @@
     "Team": "Lithuania",
     "Country": "Lithuania",
     "Rank": 146,
-    "Elo": 1276,
-    "Points": 1276,
+    "Elo": 1277,
+    "Points": 1277,
     "TeamCode": "LT",
     "Aliases": [],
-    "OneYearRankChange": -4,
+    "OneYearRankChange": -5,
     "OneYearRatingChange": -7
   },
   {
@@ -1803,7 +1801,7 @@
     "Points": 1264,
     "TeamCode": "ET",
     "Aliases": [],
-    "OneYearRankChange": null,
+    "OneYearRankChange": -1,
     "OneYearRatingChange": -11
   },
   {
@@ -1815,7 +1813,7 @@
     "Points": 1252,
     "TeamCode": "MW",
     "Aliases": [],
-    "OneYearRankChange": -14,
+    "OneYearRankChange": -13,
     "OneYearRatingChange": -57
   },
   {
@@ -1829,7 +1827,7 @@
     "Aliases": [
       "Guinea-Biss"
     ],
-    "OneYearRankChange": -20,
+    "OneYearRankChange": -22,
     "OneYearRatingChange": -86
   },
   {
@@ -1841,7 +1839,7 @@
     "Points": 1239,
     "TeamCode": "BI",
     "Aliases": [],
-    "OneYearRankChange": -7,
+    "OneYearRankChange": -8,
     "OneYearRatingChange": -41
   },
   {
@@ -1849,16 +1847,16 @@
     "Team": "Central African Republic",
     "Country": "Central African Republic",
     "Rank": 152,
-    "Elo": 1238,
-    "Points": 1238,
+    "Elo": 1237,
+    "Points": 1237,
     "TeamCode": "CF",
     "Aliases": [
       "Central African Rep",
       "C African Rep",
       "C Afr Rep"
     ],
-    "OneYearRankChange": -11,
-    "OneYearRatingChange": -47
+    "OneYearRankChange": null,
+    "OneYearRatingChange": -12
   },
   {
     "Name": "Cuba",
@@ -1869,7 +1867,7 @@
     "Points": 1229,
     "TeamCode": "CU",
     "Aliases": [],
-    "OneYearRankChange": -9,
+    "OneYearRankChange": -10,
     "OneYearRatingChange": -51
   },
   {
@@ -1877,8 +1875,8 @@
     "Team": "French Guiana",
     "Country": "French Guiana",
     "Rank": 154,
-    "Elo": 1220,
-    "Points": 1220,
+    "Elo": 1223,
+    "Points": 1223,
     "TeamCode": "GF",
     "Aliases": [
       "Fr Guiana"
@@ -1907,7 +1905,7 @@
     "Points": 1216,
     "TeamCode": "LS",
     "Aliases": [],
-    "OneYearRankChange": -1,
+    "OneYearRankChange": null,
     "OneYearRatingChange": -14
   },
   {
@@ -1931,8 +1929,8 @@
     "Points": 1211,
     "TeamCode": "SW",
     "Aliases": [],
-    "OneYearRankChange": null,
-    "OneYearRatingChange": -7
+    "OneYearRankChange": -4,
+    "OneYearRatingChange": -23
   },
   {
     "Name": "Congo",
@@ -1943,7 +1941,7 @@
     "Points": 1207,
     "TeamCode": "CG",
     "Aliases": [],
-    "OneYearRankChange": -3,
+    "OneYearRankChange": -2,
     "OneYearRatingChange": -16
   },
   {
@@ -1963,8 +1961,8 @@
     "Team": "Saint Vincent and the Grenadines",
     "Country": "Saint Vincent and the Grenadines",
     "Rank": 161,
-    "Elo": 1173,
-    "Points": 1173,
+    "Elo": 1171,
+    "Points": 1171,
     "TeamCode": "VC",
     "Aliases": [
       "St Vincent & Grenadines",
@@ -1972,8 +1970,8 @@
       "St Vincent/Gren",
       "St Vincent/G"
     ],
-    "OneYearRankChange": 6,
-    "OneYearRatingChange": 42
+    "OneYearRankChange": 8,
+    "OneYearRatingChange": 50
   },
   {
     "Name": "Philippines",
@@ -1984,7 +1982,7 @@
     "Points": 1155,
     "TeamCode": "PH",
     "Aliases": [],
-    "OneYearRankChange": 8,
+    "OneYearRankChange": 7,
     "OneYearRatingChange": 34
   },
   {
@@ -1996,7 +1994,7 @@
     "Points": 1151,
     "TeamCode": "YE",
     "Aliases": [],
-    "OneYearRankChange": 6,
+    "OneYearRankChange": 5,
     "OneYearRatingChange": 26
   },
   {
@@ -2004,8 +2002,8 @@
     "Team": "Eritrea",
     "Country": "Eritrea",
     "Rank": 164,
-    "Elo": 1140,
-    "Points": 1140,
+    "Elo": 1139,
+    "Points": 1139,
     "TeamCode": "ER",
     "Aliases": [],
     "OneYearRankChange": 1,
@@ -2016,18 +2014,18 @@
     "Team": "Hong Kong",
     "Country": "Hong Kong",
     "Rank": 165,
-    "Elo": 1135,
-    "Points": 1135,
+    "Elo": 1136,
+    "Points": 1136,
     "TeamCode": "HK",
     "Aliases": [],
     "OneYearRankChange": 1,
-    "OneYearRatingChange": -1
+    "OneYearRatingChange": -2
   },
   {
     "Name": "Papua New Guinea",
     "Team": "Papua New Guinea",
     "Country": "Papua New Guinea",
-    "Rank": 165,
+    "Rank": 166,
     "Elo": 1135,
     "Points": 1135,
     "TeamCode": "PG",
@@ -2036,20 +2034,8 @@
       "Papua N Guin",
       "Papua N G"
     ],
-    "OneYearRankChange": 8,
+    "OneYearRankChange": 7,
     "OneYearRatingChange": 31
-  },
-  {
-    "Name": "Puerto Rico",
-    "Team": "Puerto Rico",
-    "Country": "Puerto Rico",
-    "Rank": 167,
-    "Elo": 1134,
-    "Points": 1134,
-    "TeamCode": "PR",
-    "Aliases": [],
-    "OneYearRankChange": 5,
-    "OneYearRatingChange": 14
   },
   {
     "Name": "South Sudan",
@@ -2060,8 +2046,20 @@
     "Points": 1134,
     "TeamCode": "SS",
     "Aliases": [],
-    "OneYearRankChange": 3,
+    "OneYearRankChange": 2,
     "OneYearRatingChange": 13
+  },
+  {
+    "Name": "Puerto Rico",
+    "Team": "Puerto Rico",
+    "Country": "Puerto Rico",
+    "Rank": 168,
+    "Elo": 1133,
+    "Points": 1133,
+    "TeamCode": "PR",
+    "Aliases": [],
+    "OneYearRankChange": 4,
+    "OneYearRatingChange": 14
   },
   {
     "Name": "Singapore",
@@ -2085,19 +2083,7 @@
     "TeamCode": "IN",
     "Aliases": [],
     "OneYearRankChange": -8,
-    "OneYearRatingChange": -52
-  },
-  {
-    "Name": "Bermuda",
-    "Team": "Bermuda",
-    "Country": "Bermuda",
-    "Rank": 171,
-    "Elo": 1120,
-    "Points": 1120,
-    "TeamCode": "BM",
-    "Aliases": [],
-    "OneYearRankChange": -7,
-    "OneYearRatingChange": -22
+    "OneYearRatingChange": -55
   },
   {
     "Name": "Chad",
@@ -2112,16 +2098,28 @@
     "OneYearRatingChange": -46
   },
   {
+    "Name": "Bermuda",
+    "Team": "Bermuda",
+    "Country": "Bermuda",
+    "Rank": 172,
+    "Elo": 1119,
+    "Points": 1119,
+    "TeamCode": "BM",
+    "Aliases": [],
+    "OneYearRankChange": -8,
+    "OneYearRatingChange": -22
+  },
+  {
     "Name": "Grenada",
     "Team": "Grenada",
     "Country": "Grenada",
-    "Rank": 173,
+    "Rank": 172,
     "Elo": 1119,
     "Points": 1119,
     "TeamCode": "GD",
     "Aliases": [],
-    "OneYearRankChange": 6,
-    "OneYearRatingChange": 55
+    "OneYearRankChange": 7,
+    "OneYearRatingChange": 47
   },
   {
     "Name": "Vanuatu",
@@ -2144,7 +2142,7 @@
     "Points": 1108,
     "TeamCode": "FJ",
     "Aliases": [],
-    "OneYearRankChange": -21,
+    "OneYearRankChange": -20,
     "OneYearRatingChange": -125
   },
   {
@@ -2152,12 +2150,12 @@
     "Team": "Belize",
     "Country": "Belize",
     "Rank": 176,
-    "Elo": 1103,
-    "Points": 1103,
+    "Elo": 1105,
+    "Points": 1105,
     "TeamCode": "BZ",
     "Aliases": [],
     "OneYearRankChange": -1,
-    "OneYearRatingChange": 10
+    "OneYearRatingChange": 9
   },
   {
     "Name": "Mauritius",
@@ -2182,7 +2180,7 @@
     "Aliases": [
       "Solomon Isl"
     ],
-    "OneYearRankChange": -10,
+    "OneYearRankChange": -11,
     "OneYearRatingChange": -36
   },
   {
@@ -2313,7 +2311,7 @@
     "TeamCode": "MS",
     "Aliases": [],
     "OneYearRankChange": 1,
-    "OneYearRatingChange": 20
+    "OneYearRatingChange": 21
   },
   {
     "Name": "Somalia",
@@ -2368,11 +2366,11 @@
     "Team": "Myanmar",
     "Country": "Myanmar",
     "Rank": 193,
-    "Elo": 944,
-    "Points": 944,
+    "Elo": 945,
+    "Points": 945,
     "TeamCode": "MM",
     "Aliases": [],
-    "OneYearRankChange": 4,
+    "OneYearRankChange": 3,
     "OneYearRatingChange": 27
   },
   {
@@ -2392,8 +2390,8 @@
     "Team": "Dominica",
     "Country": "Dominica",
     "Rank": 195,
-    "Elo": 939,
-    "Points": 939,
+    "Elo": 938,
+    "Points": 938,
     "TeamCode": "DM",
     "Aliases": [],
     "OneYearRankChange": -7,
@@ -2408,7 +2406,7 @@
     "Points": 921,
     "TeamCode": "BB",
     "Aliases": [],
-    "OneYearRankChange": -6,
+    "OneYearRankChange": -7,
     "OneYearRatingChange": -29
   },
   {
@@ -2464,15 +2462,15 @@
     "Team": "Antigua and Barbuda",
     "Country": "Antigua and Barbuda",
     "Rank": 201,
-    "Elo": 895,
-    "Points": 895,
+    "Elo": 894,
+    "Points": 894,
     "TeamCode": "AG",
     "Aliases": [
       "Antigua & Barbuda",
       "Antigua/Barbuda",
       "Antigua/Barb"
     ],
-    "OneYearRankChange": -5,
+    "OneYearRankChange": -4,
     "OneYearRatingChange": -23
   },
   {
@@ -2497,7 +2495,7 @@
     "TeamCode": "KH",
     "Aliases": [],
     "OneYearRankChange": 2,
-    "OneYearRatingChange": -5
+    "OneYearRatingChange": -4
   },
   {
     "Name": "Seychelles",
@@ -2521,7 +2519,7 @@
     "TeamCode": "MV",
     "Aliases": [],
     "OneYearRankChange": -2,
-    "OneYearRatingChange": -48
+    "OneYearRatingChange": -45
   },
   {
     "Name": "San Marino",
@@ -2532,7 +2530,7 @@
     "Points": 833,
     "TeamCode": "SM",
     "Aliases": [],
-    "OneYearRankChange": null,
+    "OneYearRankChange": -1,
     "OneYearRatingChange": -15
   },
   {
@@ -2552,12 +2550,12 @@
     "Team": "Bonaire",
     "Country": "Bonaire",
     "Rank": 208,
-    "Elo": 822,
-    "Points": 822,
+    "Elo": 823,
+    "Points": 823,
     "TeamCode": "BQ",
     "Aliases": [],
     "OneYearRankChange": -1,
-    "OneYearRatingChange": -16
+    "OneYearRatingChange": -15
   },
   {
     "Name": "Cayman Islands",
@@ -2630,8 +2628,8 @@
     "Team": "Mongolia",
     "Country": "Mongolia",
     "Rank": 214,
-    "Elo": 729,
-    "Points": 729,
+    "Elo": 730,
+    "Points": 730,
     "TeamCode": "MN",
     "Aliases": [],
     "OneYearRankChange": null,
@@ -2791,8 +2789,8 @@
     "Team": "Turks and Caicos Islands",
     "Country": "Turks and Caicos Islands",
     "Rank": 226,
-    "Elo": 656,
-    "Points": 656,
+    "Elo": 657,
+    "Points": 657,
     "TeamCode": "TC",
     "Aliases": [
       "Turks and Caicos",
@@ -2823,7 +2821,7 @@
     "Points": 645,
     "TeamCode": "AI",
     "Aliases": [],
-    "OneYearRankChange": 1,
+    "OneYearRankChange": 3,
     "OneYearRatingChange": 24
   },
   {
@@ -2843,8 +2841,8 @@
     "Team": "Cook Islands",
     "Country": "Cook Islands",
     "Rank": 230,
-    "Elo": 621,
-    "Points": 621,
+    "Elo": 622,
+    "Points": 622,
     "TeamCode": "CK",
     "Aliases": [],
     "OneYearRankChange": -1,
@@ -2869,8 +2867,8 @@
     "Team": "Bhutan",
     "Country": "Bhutan",
     "Rank": 232,
-    "Elo": 614,
-    "Points": 614,
+    "Elo": 615,
+    "Points": 615,
     "TeamCode": "BT",
     "Aliases": [],
     "OneYearRankChange": -3,
@@ -2886,7 +2884,7 @@
     "TeamCode": "MO",
     "Aliases": [],
     "OneYearRankChange": -1,
-    "OneYearRatingChange": -4
+    "OneYearRatingChange": -3
   },
   {
     "Name": "Christmas Island",
@@ -2918,15 +2916,14 @@
     "OneYearRatingChange": null
   },
   {
-    "Name": "Federated States of Micronesia",
-    "Team": "Federated States of Micronesia",
-    "Country": "Federated States of Micronesia",
+    "Name": "FS Micronesia",
+    "Team": "FS Micronesia",
+    "Country": "FS Micronesia",
     "Rank": 236,
     "Elo": 563,
     "Points": 563,
     "TeamCode": "FM",
     "Aliases": [
-      "FS Micronesia",
       "FSM"
     ],
     "OneYearRankChange": null,

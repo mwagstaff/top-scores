@@ -651,6 +651,22 @@ const SOURCE_RECENT_CACHE = "recent_matches_cache";
 const SOURCE_FPL_BOOTSTRAP = "fpl_bootstrap_static";
 const SOURCE_FPL_FIXTURES = "fpl_fixtures";
 const SOURCE_FPL_EVENT_LIVE = "fpl_event_live";
+const COMPONENT_SOURCE_LIVE_FOOTBALL = "source_live_football";
+const COMPONENT_SOURCE_BBC_LIVE = "source_bbc_live";
+const COMPONENT_SOURCE_BBC_RANGE = "source_bbc_range";
+const COMPONENT_SOURCE_BBC_MATCH_DETAILS = "source_bbc_match_details";
+const COMPONENT_SOURCE_BBC_TABLES_PREMIER_TEAMS = "source_bbc_premier_teams";
+const COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES = "source_bbc_league_tables";
+const COMPONENT_SOURCE_CLUB_ELO = "source_club_elo_rankings";
+const COMPONENT_SOURCE_CLUB_ELO_FIXTURES = "source_club_elo_fixtures";
+const COMPONENT_SOURCE_FOOTBALL_DATABASE = "source_football_database";
+const COMPONENT_SOURCE_NATIONAL_ELO = "source_national_elo";
+const COMPONENT_SOURCE_FPL_BOOTSTRAP = "source_fpl_bootstrap";
+const COMPONENT_SOURCE_FPL_FIXTURES = "source_fpl_fixtures";
+const COMPONENT_SOURCE_FPL_EVENT_LIVE = "source_fpl_event_live";
+const COMPONENT_OPERATIONAL_REDIS = "operational_redis";
+const COMPONENT_REDIS_RECONCILIATION = "redis_reconciliation";
+const COMPONENT_BOOTSTRAP = "operational_bootstrap";
 const OP_DATASET_LIVE_MATCHES = "live_matches";
 const OP_DATASET_BBC_LIVE_MATCHES = "bbc_live_matches";
 const OP_DATASET_BBC_RANGE_MATCHES = "bbc_range_matches";
@@ -877,6 +893,96 @@ let teamColorsConfig = Object.freeze({
 });
 let teamColorsLoadedAt = null;
 let teamColorsMtimeMs = null;
+const RUNTIME_COMPONENT_ERROR_LIMIT = 8;
+const runtimeComponentDiagnostics = Object.create(null);
+
+function safeCloneDiagnosticsValue(value) {
+  if (value === undefined) return null;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function ensureRuntimeComponentDiagnostics(componentId) {
+  const normalized = String(componentId || "").trim();
+  if (!normalized) {
+    return {
+      running: false,
+      last_started_at: null,
+      last_success_at: null,
+      last_success: null,
+      last_failure_at: null,
+      last_error: null,
+      recent_errors: [],
+    };
+  }
+  if (!runtimeComponentDiagnostics[normalized]) {
+    runtimeComponentDiagnostics[normalized] = {
+      running: false,
+      last_started_at: null,
+      last_success_at: null,
+      last_success: null,
+      last_failure_at: null,
+      last_error: null,
+      recent_errors: [],
+    };
+  }
+  return runtimeComponentDiagnostics[normalized];
+}
+
+function trimRuntimeComponentErrors(entry) {
+  if (!entry || !Array.isArray(entry.recent_errors)) return;
+  if (entry.recent_errors.length > RUNTIME_COMPONENT_ERROR_LIMIT) {
+    entry.recent_errors.splice(0, entry.recent_errors.length - RUNTIME_COMPONENT_ERROR_LIMIT);
+  }
+}
+
+function recordRuntimeComponentStart(componentId, meta = {}) {
+  const entry = ensureRuntimeComponentDiagnostics(componentId);
+  entry.running = true;
+  entry.last_started_at = new Date().toISOString();
+  entry.last_context = safeCloneDiagnosticsValue(meta);
+}
+
+function recordRuntimeComponentSuccess(componentId, meta = {}) {
+  const entry = ensureRuntimeComponentDiagnostics(componentId);
+  entry.running = false;
+  entry.last_success_at = new Date().toISOString();
+  entry.last_success = safeCloneDiagnosticsValue(meta);
+}
+
+function recordRuntimeComponentFailure(componentId, error, meta = {}) {
+  const entry = ensureRuntimeComponentDiagnostics(componentId);
+  const message =
+    error && error.message ? String(error.message) : String(error || "Unknown error");
+  const nowIso = new Date().toISOString();
+  entry.running = false;
+  entry.last_failure_at = nowIso;
+  entry.last_error = message;
+  entry.recent_errors.push({
+    at: nowIso,
+    error: message,
+    meta: safeCloneDiagnosticsValue(meta),
+  });
+  trimRuntimeComponentErrors(entry);
+}
+
+function currentRuntimeComponentDiagnostics(componentId) {
+  const entry = ensureRuntimeComponentDiagnostics(componentId);
+  return {
+    running: Boolean(entry.running),
+    last_started_at: entry.last_started_at || null,
+    last_success_at: entry.last_success_at || null,
+    last_success: safeCloneDiagnosticsValue(entry.last_success),
+    last_failure_at: entry.last_failure_at || null,
+    last_error: entry.last_error || null,
+    recent_errors: Array.isArray(entry.recent_errors)
+      ? entry.recent_errors.slice().reverse()
+      : [],
+  };
+}
 
 const STAGE_PATTERNS = [
   /\s*[-:–]\s*Round\s+\w+$/i,
@@ -7294,6 +7400,10 @@ async function refreshInProgressMatchDetails(options = {}) {
   let success = false;
   let recordsFetched = 0;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_BBC_MATCH_DETAILS, {
+    trigger,
+    poll_interval_ms: MATCH_DETAILS_POLL_INTERVAL_MS,
+  });
 
   try {
     const targets = collectInProgressMatchDetailTargets();
@@ -7361,7 +7471,18 @@ async function refreshInProgressMatchDetails(options = {}) {
       updated_at: nowIso,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_BBC_MATCH_DETAILS, {
+      trigger,
+      targets: targets.length,
+      refreshed: refreshedDetailsIds.size,
+      updated_at: nowIso,
+      poll_interval_ms: MATCH_DETAILS_POLL_INTERVAL_MS,
+    });
   } catch (err) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_MATCH_DETAILS, err, {
+      trigger,
+      poll_interval_ms: MATCH_DETAILS_POLL_INTERVAL_MS,
+    });
     console.warn("Failed to refresh in-progress match details:", err.message || err);
   } finally {
     trackSourceUpdateMetrics({
@@ -10371,8 +10492,26 @@ function writeMissingTeamLogos(outputPath, teamNames) {
 async function persistOperationalDatasetSafe(name, payload, options = {}) {
   if (!name) return null;
   try {
-    return await saveOperationalDataset(name, payload, options);
+    const result = await saveOperationalDataset(name, payload, options);
+    recordRuntimeComponentSuccess(COMPONENT_OPERATIONAL_REDIS, {
+      operation: "save_dataset",
+      dataset: name,
+      updated_at: options.updated_at || null,
+      source: options.source || null,
+      count: Array.isArray(payload)
+        ? payload.length
+        : payload && typeof payload === "object"
+          ? Object.keys(payload).length
+          : 0,
+    });
+    return result;
   } catch (error) {
+    recordRuntimeComponentFailure(COMPONENT_OPERATIONAL_REDIS, error, {
+      operation: "save_dataset",
+      dataset: name,
+      updated_at: options.updated_at || null,
+      source: options.source || null,
+    });
     console.warn(
       `[OperationalState] Failed to persist dataset ${name}:`,
       error.message || error
@@ -10396,8 +10535,23 @@ async function loadOperationalDatasetSafe(name) {
 
 async function persistOperationalMatchDetailsSafe(recordsById, options = {}) {
   try {
-    return await saveOperationalMatchDetailsRecords(recordsById, options);
+    const result = await saveOperationalMatchDetailsRecords(recordsById, options);
+    recordRuntimeComponentSuccess(COMPONENT_OPERATIONAL_REDIS, {
+      operation: "save_match_details",
+      updated_at: options.updated_at || null,
+      source: options.source || null,
+      replace: Boolean(options.replace),
+      count:
+        recordsById && typeof recordsById === "object" ? Object.keys(recordsById).length : 0,
+    });
+    return result;
   } catch (error) {
+    recordRuntimeComponentFailure(COMPONENT_OPERATIONAL_REDIS, error, {
+      operation: "save_match_details",
+      updated_at: options.updated_at || null,
+      source: options.source || null,
+      replace: Boolean(options.replace),
+    });
     console.warn(
       "[OperationalState] Failed to persist match details to Redis:",
       error.message || error
@@ -10589,6 +10743,9 @@ function setOperationalCacheStateHeaders(res, state = operationalCacheState) {
 }
 
 async function hydrateOperationalStateFromRedis() {
+  recordRuntimeComponentStart(COMPONENT_OPERATIONAL_REDIS, {
+    operation: "hydrate_operational_state",
+  });
   try {
     const datasetRecords = await getOperationalDatasets([
       OP_DATASET_LIVE_MATCHES,
@@ -10751,12 +10908,24 @@ async function hydrateOperationalStateFromRedis() {
         cache_state_updated_at: operationalCacheState.updated_at,
       })
     );
+    recordRuntimeComponentSuccess(COMPONENT_OPERATIONAL_REDIS, {
+      operation: "hydrate_operational_state",
+      updated_at: operationalCacheState.updated_at,
+      merged_matches: cachedMergedMatches.length,
+      match_details: matchDetailsById.size,
+    });
   } catch (error) {
+    recordRuntimeComponentFailure(COMPONENT_OPERATIONAL_REDIS, error, {
+      operation: "hydrate_operational_state",
+    });
     console.warn("[OperationalState] Failed to hydrate from Redis:", error.message || error);
   }
 }
 
 async function persistStartupOperationalStateFromDisk() {
+  recordRuntimeComponentStart(COMPONENT_BOOTSTRAP, {
+    operation: "persist_startup_state_from_disk",
+  });
   await Promise.all([
     persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, cachedMatches, {
       updated_at: lastUpdated || new Date().toISOString(),
@@ -10820,6 +10989,11 @@ async function persistStartupOperationalStateFromDisk() {
       source: "startup_disk_seed",
     }),
   ]);
+  recordRuntimeComponentSuccess(COMPONENT_BOOTSTRAP, {
+    operation: "persist_startup_state_from_disk",
+    merged_matches: cachedMergedMatches.length,
+    match_details: matchDetailsById.size,
+  });
 }
 
 async function getOperationalArrayDataset(name, fallback = []) {
@@ -11932,6 +12106,10 @@ async function runRedisReconciliationCheck(options = {}) {
   const repairEnabled =
     options.repair !== undefined ? Boolean(options.repair) : REDIS_RECONCILIATION_AUTO_REPAIR;
   const startedAtIso = new Date().toISOString();
+  recordRuntimeComponentStart(COMPONENT_REDIS_RECONCILIATION, {
+    trigger,
+    repair_enabled: repairEnabled,
+  });
   ensureRedisReconciliationState();
   redisReconciliationState = buildRedisReconciliationStatePatch({
     ...redisReconciliationState,
@@ -12060,6 +12238,12 @@ async function runRedisReconciliationCheck(options = {}) {
           "Auto-repair only writes memory back to Redis when Redis is missing, older, or metadata-only stale.",
         ],
       });
+      recordRuntimeComponentSuccess(COMPONENT_REDIS_RECONCILIATION, {
+        trigger,
+        repair_enabled: repairEnabled,
+        healthy: redisReconciliationState.healthy,
+        summary,
+      });
       return redisReconciliationState;
     } catch (error) {
       const completedAtIso = new Date().toISOString();
@@ -12084,6 +12268,10 @@ async function runRedisReconciliationCheck(options = {}) {
         notes: [
           "Redis reconciliation failed before a full comparison could be completed.",
         ],
+      });
+      recordRuntimeComponentFailure(COMPONENT_REDIS_RECONCILIATION, error, {
+        trigger,
+        repair_enabled: repairEnabled,
       });
       return redisReconciliationState;
     } finally {
@@ -12338,6 +12526,11 @@ async function updateMatches(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_LIVE_FOOTBALL, {
+    trigger,
+    url: SOURCE_URL,
+    interval_ms: INTERVAL_MS,
+  });
   try {
     const matches = filterMatchesByCompetition(await fetchMatches(SOURCE_URL));
     cachedMatches = matches;
@@ -12359,7 +12552,19 @@ async function updateMatches(options = {}) {
       updated_at: lastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_LIVE_FOOTBALL, {
+      trigger,
+      url: SOURCE_URL,
+      interval_ms: INTERVAL_MS,
+      count: matches.length,
+      updated_at: lastUpdated,
+    });
   } catch (err) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_LIVE_FOOTBALL, err, {
+      trigger,
+      url: SOURCE_URL,
+      interval_ms: INTERVAL_MS,
+    });
     console.warn("Failed to update matches:", err.message || err);
   } finally {
     trackSourceUpdateMetrics({
@@ -12491,6 +12696,11 @@ async function updateBbcMatches(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_BBC_LIVE, {
+    trigger,
+    url: BBC_SOURCE_URL,
+    interval_ms: BBC_INTERVAL_MS,
+  });
   try {
     const matches = await fetchBbcFixtures(BBC_SOURCE_URL);
     const filteredMatches = filterStaleBbcMatches(matches, cachedBbcMatches);
@@ -12519,7 +12729,19 @@ async function updateBbcMatches(options = {}) {
       updated_at: bbcLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_BBC_LIVE, {
+      trigger,
+      url: BBC_SOURCE_URL,
+      interval_ms: BBC_INTERVAL_MS,
+      count: filteredMatches.length,
+      updated_at: bbcLastUpdated,
+    });
   } catch (err) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_LIVE, err, {
+      trigger,
+      url: BBC_SOURCE_URL,
+      interval_ms: BBC_INTERVAL_MS,
+    });
     console.warn("Failed to update BBC matches:", err.message || err);
   } finally {
     trackSourceUpdateMetrics({
@@ -12539,6 +12761,13 @@ async function updateBbcRangeMatches(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_BBC_RANGE, {
+    trigger,
+    url: BBC_RANGE_BASE_URL,
+    interval_ms: BBC_RANGE_INTERVAL_MS,
+    past_days: BBC_RANGE_PAST_DAYS,
+    future_days: BBC_RANGE_FUTURE_DAYS,
+  });
   try {
     const matches = filterMatchesByCompetition(
       await fetchBbcScoresFixturesByDateRange({
@@ -12569,7 +12798,23 @@ async function updateBbcRangeMatches(options = {}) {
       future_days: BBC_RANGE_FUTURE_DAYS,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_BBC_RANGE, {
+      trigger,
+      url: BBC_RANGE_BASE_URL,
+      interval_ms: BBC_RANGE_INTERVAL_MS,
+      count: matches.length,
+      updated_at: bbcRangeLastUpdated,
+      past_days: BBC_RANGE_PAST_DAYS,
+      future_days: BBC_RANGE_FUTURE_DAYS,
+    });
   } catch (err) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_RANGE, err, {
+      trigger,
+      url: BBC_RANGE_BASE_URL,
+      interval_ms: BBC_RANGE_INTERVAL_MS,
+      past_days: BBC_RANGE_PAST_DAYS,
+      future_days: BBC_RANGE_FUTURE_DAYS,
+    });
     console.warn("Failed to update BBC date-range matches:", err.message || err);
   } finally {
     trackSourceUpdateMetrics({
@@ -12589,9 +12834,23 @@ async function updatePremierLeagueTeams(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_BBC_TABLES_PREMIER_TEAMS, {
+    trigger,
+    url: EPL_SOURCE_URL,
+    interval_ms: EPL_INTERVAL_MS,
+  });
   try {
     const teams = await fetchPremierLeagueTeams(EPL_SOURCE_URL);
     if (!Array.isArray(teams) || teams.length === 0) {
+      recordRuntimeComponentFailure(
+        COMPONENT_SOURCE_BBC_TABLES_PREMIER_TEAMS,
+        new Error("Premier League table update returned no teams"),
+        {
+          trigger,
+          url: EPL_SOURCE_URL,
+          interval_ms: EPL_INTERVAL_MS,
+        }
+      );
       console.warn("Premier League table update returned no teams");
       return;
     }
@@ -12617,7 +12876,19 @@ async function updatePremierLeagueTeams(options = {}) {
       updated_at: eplLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_BBC_TABLES_PREMIER_TEAMS, {
+      trigger,
+      url: EPL_SOURCE_URL,
+      interval_ms: EPL_INTERVAL_MS,
+      count: cachedPremierLeagueTeams.length,
+      updated_at: eplLastUpdated,
+    });
   } catch (err) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_TABLES_PREMIER_TEAMS, err, {
+      trigger,
+      url: EPL_SOURCE_URL,
+      interval_ms: EPL_INTERVAL_MS,
+    });
     console.warn("Failed to update Premier League teams:", err.message || err);
   } finally {
     trackSourceUpdateMetrics({
@@ -12637,6 +12908,11 @@ async function updateLeagueTables(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES, {
+    trigger,
+    interval_ms: LEAGUE_TABLES_INTERVAL_MS,
+    urls: LEAGUE_TABLE_SOURCES.map((source) => source.url),
+  });
 
   try {
     const { tables, errors } = await fetchLeagueTables(LEAGUE_TABLE_SOURCES);
@@ -12650,6 +12926,14 @@ async function updateLeagueTables(options = {}) {
     }
 
     if (!Array.isArray(tables) || tables.length === 0) {
+      recordRuntimeComponentFailure(
+        COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES,
+        new Error("League tables update returned no tables"),
+        {
+          trigger,
+          interval_ms: LEAGUE_TABLES_INTERVAL_MS,
+        }
+      );
       console.warn("League tables update returned no tables");
       return;
     }
@@ -12709,7 +12993,19 @@ async function updateLeagueTables(options = {}) {
       updated_at: leagueTablesLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES, {
+      trigger,
+      interval_ms: LEAGUE_TABLES_INTERVAL_MS,
+      leagues: sortedTables.length,
+      rows: recordsFetched,
+      updated_at: leagueTablesLastUpdated,
+      warnings: Array.isArray(errors) ? errors.length : 0,
+    });
   } catch (err) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES, err, {
+      trigger,
+      interval_ms: LEAGUE_TABLES_INTERVAL_MS,
+    });
     console.warn("Failed to update league tables:", err.message || err);
   } finally {
     trackSourceUpdateMetrics({
@@ -12729,6 +13025,11 @@ async function updateFantasyBootstrapStatic(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_FPL_BOOTSTRAP, {
+    trigger,
+    url: FPL_BOOTSTRAP_SOURCE_URL,
+    interval_ms: FPL_BOOTSTRAP_INTERVAL_MS,
+  });
 
   console.info(
     `[FPLBootstrap] Download start source=${FPL_BOOTSTRAP_SOURCE_URL} trigger=${trigger}`
@@ -12786,6 +13087,14 @@ async function updateFantasyBootstrapStatic(options = {}) {
       updated_at: fantasyBootstrapLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_FPL_BOOTSTRAP, {
+      trigger,
+      url: FPL_BOOTSTRAP_SOURCE_URL,
+      interval_ms: FPL_BOOTSTRAP_INTERVAL_MS,
+      updated_at: fantasyBootstrapLastUpdated,
+      events: fantasyBootstrapEventsCount,
+      bytes: fantasyBootstrapPayloadBytes,
+    });
   } catch (err) {
     const gameUpdatingMessage = extractFplGameUpdatingMessageFromError(err);
     if (gameUpdatingMessage) {
@@ -12805,6 +13114,12 @@ async function updateFantasyBootstrapStatic(options = {}) {
       "Failed to update FPL bootstrap-static dataset:",
       err.message || err
     );
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_FPL_BOOTSTRAP, err, {
+      trigger,
+      url: FPL_BOOTSTRAP_SOURCE_URL,
+      interval_ms: FPL_BOOTSTRAP_INTERVAL_MS,
+      game_updating: fantasyBootstrapGameUpdating,
+    });
   } finally {
     const durationMs = Date.now() - startedAtMs;
     console.info(
@@ -12827,6 +13142,11 @@ async function updateFantasyFixtures(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_FPL_FIXTURES, {
+    trigger,
+    url: FPL_FIXTURES_SOURCE_URL,
+    interval_ms: FPL_FIXTURES_INTERVAL_MS,
+  });
 
   console.info(
     `[FPLFixtures] Download start source=${FPL_FIXTURES_SOURCE_URL} trigger=${trigger}`
@@ -12864,6 +13184,14 @@ async function updateFantasyFixtures(options = {}) {
       updated_at: fantasyFixturesLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_FPL_FIXTURES, {
+      trigger,
+      url: FPL_FIXTURES_SOURCE_URL,
+      interval_ms: FPL_FIXTURES_INTERVAL_MS,
+      updated_at: fantasyFixturesLastUpdated,
+      fixtures: recordsFetched,
+      bytes: fantasyFixturesPayloadBytes,
+    });
   } catch (err) {
     fantasyFixturesLastFailureAt = new Date().toISOString();
     fantasyFixturesLastFailureDurationSeconds = Math.max(
@@ -12874,6 +13202,11 @@ async function updateFantasyFixtures(options = {}) {
       "Failed to update FPL fixtures dataset:",
       err.message || err
     );
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_FPL_FIXTURES, err, {
+      trigger,
+      url: FPL_FIXTURES_SOURCE_URL,
+      interval_ms: FPL_FIXTURES_INTERVAL_MS,
+    });
   } finally {
     const durationMs = Date.now() - startedAtMs;
     console.info(
@@ -12901,6 +13234,11 @@ async function updateFantasyEventLive(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_FPL_EVENT_LIVE, {
+    trigger,
+    url: sourceURL,
+    interval_ms: FPL_EVENT_LIVE_INTERVAL_MS,
+  });
 
   console.info(
     `[FPLEventLive] Download start source=${sourceURL} trigger=${trigger}`
@@ -12939,6 +13277,14 @@ async function updateFantasyEventLive(options = {}) {
       updated_at: fantasyEventLiveLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_FPL_EVENT_LIVE, {
+      trigger,
+      url: sourceURL,
+      interval_ms: FPL_EVENT_LIVE_INTERVAL_MS,
+      updated_at: fantasyEventLiveLastUpdated,
+      elements: recordsFetched,
+      bytes: fantasyEventLivePayloadBytes,
+    });
   } catch (err) {
     fantasyEventLiveLastFailureAt = new Date().toISOString();
     fantasyEventLiveLastFailureDurationSeconds = Math.max(
@@ -12949,6 +13295,11 @@ async function updateFantasyEventLive(options = {}) {
       "Failed to update FPL event live dataset:",
       err.message || err
     );
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_FPL_EVENT_LIVE, err, {
+      trigger,
+      url: sourceURL,
+      interval_ms: FPL_EVENT_LIVE_INTERVAL_MS,
+    });
   } finally {
     const durationMs = Date.now() - startedAtMs;
     console.info(
@@ -12978,6 +13329,11 @@ async function updateClubEloFixtures(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_CLUB_ELO_FIXTURES, {
+    trigger,
+    url: CLUB_ELO_FIXTURES_URL,
+    interval_ms: CLUB_ELO_FIXTURES_INTERVAL_MS,
+  });
 
   try {
     const result = await fetchClubEloFixtures({
@@ -13048,6 +13404,15 @@ async function updateClubEloFixtures(options = {}) {
       updated_at: nowIso,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_CLUB_ELO_FIXTURES, {
+      trigger,
+      url: CLUB_ELO_FIXTURES_URL,
+      interval_ms: CLUB_ELO_FIXTURES_INTERVAL_MS,
+      rows: fixtures.length,
+      matched: matchedCount,
+      unmatched: unmatchedCount,
+      updated_at: nowIso,
+    });
     return {
       success: true,
       trigger,
@@ -13062,6 +13427,11 @@ async function updateClubEloFixtures(options = {}) {
       updated_at: nowIso,
     };
   } catch (err) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_CLUB_ELO_FIXTURES, err, {
+      trigger,
+      url: CLUB_ELO_FIXTURES_URL,
+      interval_ms: CLUB_ELO_FIXTURES_INTERVAL_MS,
+    });
     console.warn("Failed to update Club Elo fixtures:", err.message || err);
     return {
       success: false,
@@ -13097,6 +13467,11 @@ async function updateClubEloTeams(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_CLUB_ELO, {
+    trigger,
+    url: CLUB_ELO_BASE_URL,
+    interval_ms: CLUB_ELO_INTERVAL_MS,
+  });
 
   try {
     const result = await fetchClubEloRankings({
@@ -13132,6 +13507,14 @@ async function updateClubEloTeams(options = {}) {
       updated_at: clubEloLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_CLUB_ELO, {
+      trigger,
+      url: CLUB_ELO_BASE_URL,
+      interval_ms: CLUB_ELO_INTERVAL_MS,
+      count: teams.length,
+      updated_at: clubEloLastUpdated,
+      date: result.date,
+    });
     return {
       success: true,
       trigger,
@@ -13147,6 +13530,11 @@ async function updateClubEloTeams(options = {}) {
   } catch (err) {
     const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
     markClubEloFailure(new Date().toISOString(), durationSeconds);
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_CLUB_ELO, err, {
+      trigger,
+      url: CLUB_ELO_BASE_URL,
+      interval_ms: CLUB_ELO_INTERVAL_MS,
+    });
     console.warn("Failed to update Club Elo teams:", err.message || err);
     return {
       success: false,
@@ -13180,6 +13568,11 @@ async function updateFootballDatabaseTeams(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_FOOTBALL_DATABASE, {
+    trigger,
+    url: FOOTBALL_DATABASE_BASE_URL,
+    interval_ms: FOOTBALL_DATABASE_INTERVAL_MS,
+  });
 
   try {
     const result = await fetchFootballDatabaseRankings({
@@ -13233,6 +13626,16 @@ async function updateFootballDatabaseTeams(options = {}) {
       updated_at: footballDatabaseLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_FOOTBALL_DATABASE, {
+      trigger,
+      url: FOOTBALL_DATABASE_BASE_URL,
+      interval_ms: FOOTBALL_DATABASE_INTERVAL_MS,
+      count: teams.length,
+      updated_at: footballDatabaseLastUpdated,
+      pages_fetched: result.fetchedPages,
+      pages_total: result.totalPages,
+      retries: result && result.retry ? result.retry.retries_performed : 0,
+    });
     return {
       success: true,
       trigger,
@@ -13261,6 +13664,11 @@ async function updateFootballDatabaseTeams(options = {}) {
   } catch (err) {
     const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
     markFootballDatabaseFailure(new Date().toISOString(), durationSeconds);
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_FOOTBALL_DATABASE, err, {
+      trigger,
+      url: FOOTBALL_DATABASE_BASE_URL,
+      interval_ms: FOOTBALL_DATABASE_INTERVAL_MS,
+    });
     console.warn("Failed to update FootballDatabase teams:", err.message || err);
     return {
       success: false,
@@ -13296,6 +13704,11 @@ async function updateNationalEloTeams(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_NATIONAL_ELO, {
+    trigger,
+    url: NATIONAL_ELO_BASE_URL,
+    interval_ms: NATIONAL_ELO_INTERVAL_MS,
+  });
 
   try {
     const result = await fetchNationalEloRankings({
@@ -13348,6 +13761,14 @@ async function updateNationalEloTeams(options = {}) {
       updated_at: nationalEloLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_NATIONAL_ELO, {
+      trigger,
+      url: NATIONAL_ELO_BASE_URL,
+      interval_ms: NATIONAL_ELO_INTERVAL_MS,
+      count: teams.length,
+      updated_at: nationalEloLastUpdated,
+      retries: result && result.retry ? result.retry.retries_performed : 0,
+    });
     if (Array.isArray(result.warnings) && result.warnings.length > 0) {
       console.warn(
         `National Elo update completed with warnings (${result.warnings.length}): ${result.warnings.join(" | ")}`
@@ -13380,6 +13801,11 @@ async function updateNationalEloTeams(options = {}) {
   } catch (err) {
     const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
     markNationalEloFailure(new Date().toISOString(), durationSeconds);
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_NATIONAL_ELO, err, {
+      trigger,
+      url: NATIONAL_ELO_BASE_URL,
+      interval_ms: NATIONAL_ELO_INTERVAL_MS,
+    });
     console.warn("Failed to update National Elo teams:", err.message || err);
     if (Array.isArray(err && err.attemptErrors) && err.attemptErrors.length > 0) {
       console.warn(
@@ -14259,6 +14685,1048 @@ function setCacheOnlyHeaders(res) {
   setOperationalCacheStateHeaders(res);
 }
 
+const ADMIN_ARCH_COMPONENT_DEFS = Object.freeze([
+  { id: "source_live_football", label: "LiveFootballOnTV", short_label: "LiveFootballOnTV", group: "sources", kind: "source" },
+  { id: "source_bbc_live", label: "BBC Live Scores", short_label: "BBC Live", group: "sources", kind: "source" },
+  { id: "source_bbc_range", label: "BBC Scores + Fixtures Range", short_label: "BBC Range", group: "sources", kind: "source" },
+  { id: "source_bbc_match_details", label: "BBC Match Details", short_label: "BBC Details", group: "sources", kind: "source" },
+  { id: "source_bbc_tables", label: "BBC Tables", short_label: "BBC Tables", group: "sources", kind: "source" },
+  { id: "source_club_elo_rankings", label: "Club Elo Rankings", short_label: "Club Elo", group: "sources", kind: "source" },
+  { id: "source_club_elo_fixtures", label: "Club Elo Fixtures", short_label: "Club Elo Fx", group: "sources", kind: "source" },
+  { id: "source_football_database", label: "FootballDatabase Rankings", short_label: "FootballDB", group: "sources", kind: "source" },
+  { id: "source_national_elo", label: "National Elo Rankings", short_label: "National Elo", group: "sources", kind: "source" },
+  { id: "source_fpl_api", label: "Fantasy Premier League API", short_label: "FPL API", group: "sources", kind: "source" },
+  { id: "operational_memory", label: "In-Memory Runtime Cache", short_label: "Memory Cache", group: "runtime", kind: "cache" },
+  { id: "operational_redis", label: "Operational Redis", short_label: "Redis", group: "runtime", kind: "cache" },
+  { id: "redis_reconciliation", label: "Redis Reconciliation", short_label: "Redis Recon", group: "runtime", kind: "service" },
+  { id: "matches_api", label: "Matches + Match Details APIs", short_label: "Matches API", group: "consumers", kind: "consumer" },
+  { id: "metadata_api", label: "Metadata + Rankings APIs", short_label: "Metadata APIs", group: "consumers", kind: "consumer" },
+  { id: "tables_api", label: "League Tables API", short_label: "Tables API", group: "consumers", kind: "consumer" },
+  { id: "fantasy_api", label: "Fantasy API", short_label: "Fantasy API", group: "consumers", kind: "consumer" },
+  { id: "match_monitor", label: "Match Monitor + Push Flows", short_label: "Match Monitor", group: "consumers", kind: "consumer" },
+]);
+const ADMIN_ARCH_COMPONENT_BY_ID = new Map(
+  ADMIN_ARCH_COMPONENT_DEFS.map((component) => [component.id, component])
+);
+const ADMIN_ARCH_FLOW_EDGES = Object.freeze([
+  { from: "source_live_football", to: "operational_memory" },
+  { from: "source_bbc_live", to: "operational_memory" },
+  { from: "source_bbc_range", to: "operational_memory" },
+  { from: "source_bbc_match_details", to: "operational_memory" },
+  { from: "source_bbc_tables", to: "operational_memory" },
+  { from: "source_club_elo_rankings", to: "metadata_api" },
+  { from: "source_club_elo_fixtures", to: "operational_memory" },
+  { from: "source_football_database", to: "metadata_api" },
+  { from: "source_national_elo", to: "metadata_api" },
+  { from: "source_fpl_api", to: "fantasy_api" },
+  { from: "operational_memory", to: "operational_redis" },
+  { from: "operational_redis", to: "operational_memory" },
+  { from: "operational_memory", to: "matches_api" },
+  { from: "operational_memory", to: "metadata_api" },
+  { from: "operational_redis", to: "metadata_api" },
+  { from: "operational_redis", to: "tables_api" },
+  { from: "operational_redis", to: "match_monitor" },
+  { from: "operational_memory", to: "redis_reconciliation" },
+  { from: "operational_redis", to: "redis_reconciliation" },
+]);
+const ADMIN_STATUS_LEVEL_RANK = Object.freeze({
+  ok: 0,
+  warn: 1,
+  fail: 2,
+});
+
+function sourceLastSuccessAtIso(source) {
+  const seconds = sourceLastSuccessAtSeconds.get(source);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  return new Date(seconds * 1000).toISOString();
+}
+
+function componentLevelRank(level) {
+  return ADMIN_STATUS_LEVEL_RANK[level] ?? ADMIN_STATUS_LEVEL_RANK.ok;
+}
+
+function combineAdminHealth(...items) {
+  return items.reduce(
+    (acc, item) => {
+      if (!item) return acc;
+      const nextLevel = item.level || "ok";
+      if (componentLevelRank(nextLevel) > componentLevelRank(acc.level)) {
+        return {
+          level: nextLevel,
+          status: item.status || acc.status,
+        };
+      }
+      return acc;
+    },
+    { level: "ok", status: "healthy" }
+  );
+}
+
+function buildAgeHealth(updatedAt, intervalMs, options = {}) {
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  const ageSeconds = ageSecondsFromIso(updatedAt, nowMs);
+  const running = Boolean(options.running);
+  const lastFailureAt = options.lastFailureAt || null;
+  const lastSuccessAt = options.lastSuccessAt || null;
+  const lastError = options.lastError || null;
+
+  if (!updatedAt) {
+    if (running) {
+      return { level: "warn", status: "starting", age_seconds: null };
+    }
+    if (lastError) {
+      return { level: "fail", status: "error", age_seconds: null };
+    }
+    return {
+      level: options.allowMissing ? "warn" : "fail",
+      status: options.allowMissing ? "missing" : "uninitialized",
+      age_seconds: null,
+    };
+  }
+
+  const safeIntervalMs = Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 0;
+  const warnMs = safeIntervalMs > 0 ? Math.max(Math.floor(safeIntervalMs * 1.5), 60 * 1000) : 5 * 60 * 1000;
+  const failMs = safeIntervalMs > 0 ? Math.max(Math.floor(safeIntervalMs * 3), 5 * 60 * 1000) : 15 * 60 * 1000;
+  const ageMs = Number.isFinite(ageSeconds) ? ageSeconds * 1000 : 0;
+
+  if (ageMs > failMs) {
+    return { level: "fail", status: "stale", age_seconds: ageSeconds };
+  }
+  if (ageMs > warnMs) {
+    return {
+      level: "warn",
+      status: running ? "updating_late" : "lagging",
+      age_seconds: ageSeconds,
+    };
+  }
+  if (lastFailureAt) {
+    const failedAtMs = Date.parse(String(lastFailureAt || ""));
+    const succeededAtMs = Date.parse(String(lastSuccessAt || ""));
+    if (Number.isFinite(failedAtMs) && (!Number.isFinite(succeededAtMs) || failedAtMs > succeededAtMs)) {
+      return { level: "warn", status: "recent_failures", age_seconds: ageSeconds };
+    }
+  }
+  return {
+    level: "ok",
+    status: running ? "updating" : "healthy",
+    age_seconds: ageSeconds,
+  };
+}
+
+function mergeRuntimeDiagnostics(componentIds) {
+  const ids = Array.isArray(componentIds) ? componentIds : [componentIds];
+  const merged = {
+    running: false,
+    last_started_at: null,
+    last_success_at: null,
+    last_failure_at: null,
+    last_error: null,
+    recent_errors: [],
+  };
+
+  ids.forEach((componentId) => {
+    const diagnostics = currentRuntimeComponentDiagnostics(componentId);
+    if (!diagnostics) return;
+    if (diagnostics.running) merged.running = true;
+    if (diagnostics.last_started_at && (!merged.last_started_at || diagnostics.last_started_at > merged.last_started_at)) {
+      merged.last_started_at = diagnostics.last_started_at;
+    }
+    if (diagnostics.last_success_at && (!merged.last_success_at || diagnostics.last_success_at > merged.last_success_at)) {
+      merged.last_success_at = diagnostics.last_success_at;
+    }
+    if (diagnostics.last_failure_at && (!merged.last_failure_at || diagnostics.last_failure_at > merged.last_failure_at)) {
+      merged.last_failure_at = diagnostics.last_failure_at;
+      merged.last_error = diagnostics.last_error || merged.last_error;
+    }
+    if (Array.isArray(diagnostics.recent_errors)) {
+      merged.recent_errors.push(...diagnostics.recent_errors);
+    }
+  });
+
+  merged.recent_errors.sort((left, right) => {
+    const leftMs = Date.parse(String(left && left.at ? left.at : ""));
+    const rightMs = Date.parse(String(right && right.at ? right.at : ""));
+    return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
+  });
+  if (merged.recent_errors.length > RUNTIME_COMPONENT_ERROR_LIMIT) {
+    merged.recent_errors = merged.recent_errors.slice(0, RUNTIME_COMPONENT_ERROR_LIMIT);
+  }
+  return merged;
+}
+
+function buildUpstreamFeedSnapshot(options = {}) {
+  const diagnostics = mergeRuntimeDiagnostics(options.runtimeIds || options.runtimeId || []);
+  const updatedAt = options.updated_at || null;
+  const health = buildAgeHealth(updatedAt, options.interval_ms, {
+    running: options.running !== undefined ? options.running : diagnostics.running,
+    lastFailureAt: options.last_failure_at || diagnostics.last_failure_at,
+    lastSuccessAt: options.last_success_at || diagnostics.last_success_at,
+    lastError: diagnostics.last_error,
+    allowMissing: Boolean(options.allow_missing),
+  });
+
+  return {
+    id: options.id || null,
+    title: options.title || options.label || null,
+    url: options.url || null,
+    interval_ms: Number.isFinite(options.interval_ms) ? options.interval_ms : null,
+    updated_at: updatedAt,
+    age_seconds: health.age_seconds,
+    count: Number.isFinite(options.count) ? options.count : null,
+    running:
+      options.running !== undefined ? Boolean(options.running) : Boolean(diagnostics.running),
+    last_success_at: options.last_success_at || diagnostics.last_success_at || null,
+    last_failure_at: options.last_failure_at || diagnostics.last_failure_at || null,
+    last_error: diagnostics.last_error || null,
+    recent_errors: diagnostics.recent_errors,
+    retry: options.retry || { mode: "none" },
+    level: health.level,
+    status: health.status,
+  };
+}
+
+function findReconciliationComponentByName(snapshot, name) {
+  if (!snapshot || !Array.isArray(snapshot.components)) return null;
+  return snapshot.components.find((component) => component && component.name === name) || null;
+}
+
+async function probeRedisConnectivitySnapshot(timeoutMs = 1500) {
+  const startedAtMs = Date.now();
+  try {
+    const client = await Promise.race([
+      getClient(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("Redis probe timed out")), timeoutMs);
+      }),
+    ]);
+    return {
+      level: client && client.isReady ? "ok" : "warn",
+      status: client && client.isReady ? "connected" : "connecting",
+      is_ready: Boolean(client && client.isReady),
+      is_open: Boolean(client && client.isOpen),
+      duration_ms: Date.now() - startedAtMs,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      level: "fail",
+      status: "unavailable",
+      is_ready: false,
+      is_open: false,
+      duration_ms: Date.now() - startedAtMs,
+      error: error && error.message ? error.message : String(error),
+    };
+  }
+}
+
+function buildAdminComponentSummary(definition, options = {}) {
+  return {
+    id: definition.id,
+    label: definition.label,
+    short_label: definition.short_label,
+    group: definition.group,
+    kind: definition.kind,
+    level: options.level || "ok",
+    status: options.status || "healthy",
+    summary: options.summary || "",
+    updated_at: options.updated_at || null,
+    age_seconds: options.age_seconds ?? null,
+    detail_path: `/admin/status/${definition.id}`,
+    dependencies: Array.isArray(options.dependencies) ? options.dependencies : [],
+  };
+}
+
+async function buildAdminArchitectureOverviewPayload() {
+  const nowMs = Date.now();
+  const reconciliation = currentRedisReconciliationSnapshot();
+  const redisConnectivity = await probeRedisConnectivitySnapshot();
+  const memoryDatasets = currentOperationalMemoryDatasetSnapshots();
+  const memoryMatchDetails = currentOperationalMatchDetailsMemorySnapshot();
+  const mergedReconciliation = findReconciliationComponentByName(reconciliation, OP_DATASET_MERGED_MATCHES);
+  const recentReconciliation = findReconciliationComponentByName(reconciliation, OP_DATASET_RECENT_MATCHES);
+  const tablesReconciliation = findReconciliationComponentByName(reconciliation, OP_DATASET_LEAGUE_TABLES);
+  const detailsReconciliation = findReconciliationComponentByName(reconciliation, "match_details");
+
+  const liveFootballFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_LIVE_FOOTBALL,
+    title: "LiveFootballOnTV",
+    runtimeId: COMPONENT_SOURCE_LIVE_FOOTBALL,
+    url: SOURCE_URL,
+    interval_ms: INTERVAL_MS,
+    updated_at: lastUpdated,
+    count: cachedMatches.length,
+    last_success_at: sourceLastSuccessAtIso(SOURCE_LIVE_FOOTBALL),
+    running: updating,
+  });
+  const bbcLiveFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_BBC_LIVE,
+    title: "BBC Live Scores",
+    runtimeId: COMPONENT_SOURCE_BBC_LIVE,
+    url: BBC_SOURCE_URL,
+    interval_ms: BBC_INTERVAL_MS,
+    updated_at: bbcLastUpdated,
+    count: cachedBbcMatches.length,
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BBC_LIVE),
+    running: bbcUpdating,
+  });
+  const bbcRangeFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_BBC_RANGE,
+    title: "BBC Range Scores + Fixtures",
+    runtimeId: COMPONENT_SOURCE_BBC_RANGE,
+    url: BBC_RANGE_BASE_URL,
+    interval_ms: BBC_RANGE_INTERVAL_MS,
+    updated_at: bbcRangeLastUpdated,
+    count: cachedBbcRangeMatches.length,
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BBC_RANGE),
+    running: bbcRangeUpdating,
+  });
+  const bbcDetailsFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_BBC_MATCH_DETAILS,
+    title: "BBC Match Details",
+    runtimeId: COMPONENT_SOURCE_BBC_MATCH_DETAILS,
+    url: "bbc_details_urls",
+    interval_ms: MATCH_DETAILS_POLL_INTERVAL_MS,
+    updated_at: matchDetailsLastUpdated,
+    count: memoryMatchDetails.total,
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BBC_MATCH_DETAILS),
+    running: matchDetailsUpdating,
+  });
+  const bbcPremierFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_BBC_TABLES_PREMIER_TEAMS,
+    title: "BBC Premier League Teams",
+    runtimeId: COMPONENT_SOURCE_BBC_TABLES_PREMIER_TEAMS,
+    url: EPL_SOURCE_URL,
+    interval_ms: EPL_INTERVAL_MS,
+    updated_at: eplLastUpdated,
+    count: cachedPremierLeagueTeams.length,
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BBC_PREMIER_LEAGUE),
+    running: eplUpdating,
+    allow_missing: true,
+  });
+  const bbcLeagueTablesFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES,
+    title: "BBC League Tables",
+    runtimeId: COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES,
+    url: LEAGUE_TABLE_SOURCES[0] && LEAGUE_TABLE_SOURCES[0].url,
+    interval_ms: LEAGUE_TABLES_INTERVAL_MS,
+    updated_at: leagueTablesLastUpdated,
+    count: leagueTableRowsCount(cachedLeagueTables),
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BBC_LEAGUE_TABLES),
+    running: leagueTablesUpdating,
+  });
+  const bbcTablesHealth = combineAdminHealth(bbcPremierFeed, bbcLeagueTablesFeed);
+  const clubEloFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_CLUB_ELO,
+    title: "Club Elo Rankings",
+    runtimeId: COMPONENT_SOURCE_CLUB_ELO,
+    url: CLUB_ELO_BASE_URL,
+    interval_ms: CLUB_ELO_INTERVAL_MS,
+    updated_at: clubEloLastUpdated,
+    count: cachedClubEloTeams.length,
+    last_success_at: clubEloLastSuccessAt || sourceLastSuccessAtIso(SOURCE_CLUB_ELO),
+    last_failure_at: clubEloLastFailureAt,
+    running: clubEloUpdating,
+  });
+  const clubEloFixturesFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_CLUB_ELO_FIXTURES,
+    title: "Club Elo Fixtures",
+    runtimeId: COMPONENT_SOURCE_CLUB_ELO_FIXTURES,
+    url: CLUB_ELO_FIXTURES_URL,
+    interval_ms: CLUB_ELO_FIXTURES_INTERVAL_MS,
+    updated_at: clubEloFixturesLastUpdated,
+    count: cachedClubEloFixtures.length,
+    last_success_at: sourceLastSuccessAtIso(SOURCE_CLUB_ELO_FIXTURES),
+    running: clubEloFixturesUpdating,
+  });
+  const footballDatabaseFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_FOOTBALL_DATABASE,
+    title: "FootballDatabase Rankings",
+    runtimeId: COMPONENT_SOURCE_FOOTBALL_DATABASE,
+    url: FOOTBALL_DATABASE_BASE_URL,
+    interval_ms: FOOTBALL_DATABASE_INTERVAL_MS,
+    updated_at: footballDatabaseLastUpdated,
+    count: cachedFootballDatabaseTeams.length,
+    last_success_at: footballDatabaseLastSuccessAt || sourceLastSuccessAtIso(SOURCE_FOOTBALL_DATABASE),
+    last_failure_at: footballDatabaseLastFailureAt,
+    running: footballDatabaseUpdating,
+  });
+  const nationalEloFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_NATIONAL_ELO,
+    title: "National Elo Rankings",
+    runtimeId: COMPONENT_SOURCE_NATIONAL_ELO,
+    url: NATIONAL_ELO_BASE_URL,
+    interval_ms: NATIONAL_ELO_INTERVAL_MS,
+    updated_at: nationalEloLastUpdated,
+    count: cachedNationalEloTeams.length,
+    last_success_at: nationalEloLastSuccessAt || sourceLastSuccessAtIso(SOURCE_NATIONAL_ELO),
+    last_failure_at: nationalEloLastFailureAt,
+    running: nationalEloUpdating,
+  });
+  const fplBootstrapFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_FPL_BOOTSTRAP,
+    title: "FPL Bootstrap",
+    runtimeId: COMPONENT_SOURCE_FPL_BOOTSTRAP,
+    url: FPL_BOOTSTRAP_SOURCE_URL,
+    interval_ms: FPL_BOOTSTRAP_INTERVAL_MS,
+    updated_at: fantasyBootstrapLastUpdated,
+    count: fantasyBootstrapEventsCount,
+    last_success_at: fantasyBootstrapLastSuccessAt || sourceLastSuccessAtIso(SOURCE_FPL_BOOTSTRAP),
+    last_failure_at: fantasyBootstrapLastFailureAt,
+    running: fantasyBootstrapUpdating,
+  });
+  const fplFixturesFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_FPL_FIXTURES,
+    title: "FPL Fixtures",
+    runtimeId: COMPONENT_SOURCE_FPL_FIXTURES,
+    url: FPL_FIXTURES_SOURCE_URL,
+    interval_ms: FPL_FIXTURES_INTERVAL_MS,
+    updated_at: fantasyFixturesLastUpdated,
+    count: cachedFantasyFixtures.length,
+    last_success_at: fantasyFixturesLastSuccessAt || sourceLastSuccessAtIso(SOURCE_FPL_FIXTURES),
+    last_failure_at: fantasyFixturesLastFailureAt,
+    running: fantasyFixturesUpdating,
+  });
+  const fplEventLiveFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_FPL_EVENT_LIVE,
+    title: "FPL Event Live",
+    runtimeId: COMPONENT_SOURCE_FPL_EVENT_LIVE,
+    url: currentFantasyEventLiveSourceURL(),
+    interval_ms: FPL_EVENT_LIVE_INTERVAL_MS,
+    updated_at: fantasyEventLiveLastUpdated,
+    count: cachedFantasyEventLive && Array.isArray(cachedFantasyEventLive.elements)
+      ? cachedFantasyEventLive.elements.length
+      : 0,
+    last_success_at: fantasyEventLiveLastSuccessAt || sourceLastSuccessAtIso(SOURCE_FPL_EVENT_LIVE),
+    last_failure_at: fantasyEventLiveLastFailureAt,
+    running: fantasyEventLiveUpdating,
+    allow_missing: true,
+  });
+  const fplHealth = combineAdminHealth(fplBootstrapFeed, fplFixturesFeed, fplEventLiveFeed);
+
+  const operationalMemoryHealth = combineAdminHealth(
+    mergedReconciliation && { level: mergedReconciliation.healthy ? "ok" : "warn", status: mergedReconciliation.status },
+    recentReconciliation && { level: recentReconciliation.healthy ? "ok" : "warn", status: recentReconciliation.status },
+    tablesReconciliation && { level: tablesReconciliation.healthy ? "ok" : "warn", status: tablesReconciliation.status },
+    detailsReconciliation && { level: detailsReconciliation.healthy ? "ok" : "warn", status: detailsReconciliation.status }
+  );
+
+  const redisDiagnostics = currentRuntimeComponentDiagnostics(COMPONENT_OPERATIONAL_REDIS);
+  const redisHealth = combineAdminHealth(
+    { level: redisConnectivity.level, status: redisConnectivity.status },
+    reconciliation && { level: reconciliation.healthy ? "ok" : "warn", status: reconciliation.healthy ? "healthy" : "drift_detected" },
+    redisDiagnostics.last_error ? { level: redisConnectivity.level === "ok" ? "warn" : "fail", status: "recent_persist_errors" } : null
+  );
+  const reconHealth =
+    reconciliation && reconciliation.healthy
+      ? { level: reconciliation.running ? "warn" : "ok", status: reconciliation.running ? "running" : "healthy" }
+      : { level: reconciliation.running ? "warn" : "fail", status: reconciliation && reconciliation.running ? "running" : "drift_detected" };
+
+  const matchesApiHealth = combineAdminHealth(
+    { level: operationalMemoryHealth.level, status: operationalMemoryHealth.status },
+    { level: bbcDetailsFeed.level, status: bbcDetailsFeed.status }
+  );
+  const metadataApiHealth = combineAdminHealth(
+    { level: redisHealth.level === "fail" ? "warn" : redisHealth.level, status: redisHealth.status },
+    { level: clubEloFeed.level, status: clubEloFeed.status },
+    { level: footballDatabaseFeed.level, status: footballDatabaseFeed.status },
+    { level: nationalEloFeed.level, status: nationalEloFeed.status }
+  );
+  const tablesApiHealth = combineAdminHealth(
+    { level: redisHealth.level === "fail" ? "warn" : redisHealth.level, status: redisHealth.status },
+    { level: bbcTablesHealth.level, status: bbcTablesHealth.status }
+  );
+  const fantasyApiHealth = combineAdminHealth({ level: fplHealth.level, status: fplHealth.status });
+  const monitorStatus = matchMonitor.getStatus({ limitRecent: 10 });
+  const matchMonitorHealth = combineAdminHealth(
+    { level: redisHealth.level, status: redisHealth.status },
+    monitorStatus && monitorStatus.diagnostics && monitorStatus.diagnostics.last_error
+      ? { level: "warn", status: "runtime_errors" }
+      : { level: "ok", status: "healthy" }
+  );
+
+  const components = [
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_live_football"), {
+      level: liveFootballFeed.level,
+      status: liveFootballFeed.status,
+      summary: `${liveFootballFeed.count || 0} live TV fixtures`,
+      updated_at: liveFootballFeed.updated_at,
+      age_seconds: liveFootballFeed.age_seconds,
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_bbc_live"), {
+      level: bbcLiveFeed.level,
+      status: bbcLiveFeed.status,
+      summary: `${bbcLiveFeed.count || 0} BBC live matches`,
+      updated_at: bbcLiveFeed.updated_at,
+      age_seconds: bbcLiveFeed.age_seconds,
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_bbc_range"), {
+      level: bbcRangeFeed.level,
+      status: bbcRangeFeed.status,
+      summary: `${bbcRangeFeed.count || 0} range matches`,
+      updated_at: bbcRangeFeed.updated_at,
+      age_seconds: bbcRangeFeed.age_seconds,
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_bbc_match_details"), {
+      level: bbcDetailsFeed.level,
+      status: bbcDetailsFeed.status,
+      summary: `${bbcDetailsFeed.count || 0} match-detail records`,
+      updated_at: bbcDetailsFeed.updated_at,
+      age_seconds: bbcDetailsFeed.age_seconds,
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_bbc_tables"), {
+      level: bbcTablesHealth.level,
+      status: bbcTablesHealth.status,
+      summary: `${cachedLeagueTables.length} leagues / ${cachedPremierLeagueTeams.length} EPL teams`,
+      updated_at: newestIsoTimestamp([bbcPremierFeed.updated_at, bbcLeagueTablesFeed.updated_at]),
+      age_seconds: ageSecondsFromIso(newestIsoTimestamp([bbcPremierFeed.updated_at, bbcLeagueTablesFeed.updated_at]), nowMs),
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_club_elo_rankings"), {
+      level: clubEloFeed.level,
+      status: clubEloFeed.status,
+      summary: `${clubEloFeed.count || 0} club teams`,
+      updated_at: clubEloFeed.updated_at,
+      age_seconds: clubEloFeed.age_seconds,
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_club_elo_fixtures"), {
+      level: clubEloFixturesFeed.level,
+      status: clubEloFixturesFeed.status,
+      summary: `${clubEloFixturesFeed.count || 0} fixture rows`,
+      updated_at: clubEloFixturesFeed.updated_at,
+      age_seconds: clubEloFixturesFeed.age_seconds,
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_football_database"), {
+      level: footballDatabaseFeed.level,
+      status: footballDatabaseFeed.status,
+      summary: `${footballDatabaseFeed.count || 0} ranked clubs`,
+      updated_at: footballDatabaseFeed.updated_at,
+      age_seconds: footballDatabaseFeed.age_seconds,
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_national_elo"), {
+      level: nationalEloFeed.level,
+      status: nationalEloFeed.status,
+      summary: `${nationalEloFeed.count || 0} ranked countries`,
+      updated_at: nationalEloFeed.updated_at,
+      age_seconds: nationalEloFeed.age_seconds,
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_fpl_api"), {
+      level: fplHealth.level,
+      status: fplHealth.status,
+      summary: `${fantasyBootstrapEventsCount || 0} bootstrap events / ${cachedFantasyFixtures.length || 0} fixtures`,
+      updated_at: newestIsoTimestamp([fplBootstrapFeed.updated_at, fplFixturesFeed.updated_at, fplEventLiveFeed.updated_at]),
+      age_seconds: ageSecondsFromIso(newestIsoTimestamp([fplBootstrapFeed.updated_at, fplFixturesFeed.updated_at, fplEventLiveFeed.updated_at]), nowMs),
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("operational_memory"), {
+      level: operationalMemoryHealth.level,
+      status: operationalMemoryHealth.status,
+      summary: `${cachedMergedMatches.length} merged / ${memoryMatchDetails.total} details / ${cachedRecentMatches.length} recent`,
+      updated_at: newestIsoTimestamp([memoryDatasets[OP_DATASET_MERGED_MATCHES].updated_at, memoryMatchDetails.updated_at]),
+      age_seconds: ageSecondsFromIso(newestIsoTimestamp([memoryDatasets[OP_DATASET_MERGED_MATCHES].updated_at, memoryMatchDetails.updated_at]), nowMs),
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("operational_redis"), {
+      level: redisHealth.level,
+      status: redisHealth.status,
+      summary: `${ADMIN_OPERATIONAL_DATASET_NAMES.length + 1} operational stores`,
+      updated_at: reconciliation.generated_at || operationalCacheState.updated_at,
+      age_seconds: ageSecondsFromIso(reconciliation.generated_at || operationalCacheState.updated_at, nowMs),
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("redis_reconciliation"), {
+      level: reconHealth.level,
+      status: reconHealth.status,
+      summary: `${reconciliation.summary && reconciliation.summary.healthy_components ? reconciliation.summary.healthy_components : 0}/${reconciliation.summary && reconciliation.summary.total_components ? reconciliation.summary.total_components : 0} healthy`,
+      updated_at: reconciliation.generated_at,
+      age_seconds: ageSecondsFromIso(reconciliation.generated_at, nowMs),
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("matches_api"), {
+      level: matchesApiHealth.level,
+      status: matchesApiHealth.status,
+      summary: "/api/v1/matches and /api/v1/matches/:id",
+      updated_at: newestIsoTimestamp([memoryDatasets[OP_DATASET_MERGED_MATCHES].updated_at, memoryMatchDetails.updated_at]),
+      age_seconds: ageSecondsFromIso(newestIsoTimestamp([memoryDatasets[OP_DATASET_MERGED_MATCHES].updated_at, memoryMatchDetails.updated_at]), nowMs),
+      dependencies: ["operational_memory", "source_bbc_match_details"],
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("metadata_api"), {
+      level: metadataApiHealth.level,
+      status: metadataApiHealth.status,
+      summary: "/api/v1/teams, /channels, /competitions",
+      updated_at: newestIsoTimestamp([clubEloLastUpdated, footballDatabaseLastUpdated, nationalEloLastUpdated, operationalCacheState.updated_at]),
+      age_seconds: ageSecondsFromIso(newestIsoTimestamp([clubEloLastUpdated, footballDatabaseLastUpdated, nationalEloLastUpdated, operationalCacheState.updated_at]), nowMs),
+      dependencies: ["operational_redis", "source_club_elo_rankings", "source_football_database", "source_national_elo"],
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("tables_api"), {
+      level: tablesApiHealth.level,
+      status: tablesApiHealth.status,
+      summary: "/api/v1/tables",
+      updated_at: leagueTablesLastUpdated,
+      age_seconds: ageSecondsFromIso(leagueTablesLastUpdated, nowMs),
+      dependencies: ["operational_redis", "source_bbc_tables"],
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("fantasy_api"), {
+      level: fantasyApiHealth.level,
+      status: fantasyApiHealth.status,
+      summary: "Fantasy bootstrap, fixtures, gameweek, score helpers",
+      updated_at: newestIsoTimestamp([fantasyBootstrapLastUpdated, fantasyFixturesLastUpdated, fantasyEventLiveLastUpdated]),
+      age_seconds: ageSecondsFromIso(newestIsoTimestamp([fantasyBootstrapLastUpdated, fantasyFixturesLastUpdated, fantasyEventLiveLastUpdated]), nowMs),
+      dependencies: ["source_fpl_api"],
+    }),
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("match_monitor"), {
+      level: matchMonitorHealth.level,
+      status: matchMonitorHealth.status,
+      summary: `${monitorStatus.monitoredMatchCount || 0} monitored / ${monitorStatus.scheduledNotificationCount || 0} scheduled`,
+      updated_at: monitorStatus && monitorStatus.diagnostics && monitorStatus.diagnostics.last_check
+        ? monitorStatus.diagnostics.last_check.timestamp || null
+        : null,
+      age_seconds: ageSecondsFromIso(
+        monitorStatus && monitorStatus.diagnostics && monitorStatus.diagnostics.last_check
+          ? monitorStatus.diagnostics.last_check.timestamp || null
+          : null,
+        nowMs
+      ),
+      dependencies: ["operational_redis", "source_bbc_match_details"],
+    }),
+  ];
+
+  const summary = components.reduce(
+    (acc, component) => {
+      acc.total += 1;
+      acc[component.level] = (acc[component.level] || 0) + 1;
+      return acc;
+    },
+    { total: 0, ok: 0, warn: 0, fail: 0 }
+  );
+
+  return {
+    generated_at: new Date(nowMs).toISOString(),
+    summary,
+    notes: [
+      "Matches and match-details APIs read the in-memory runtime cache directly.",
+      "Tables, channels, competitions, and rankings endpoints use Redis-preferred operational datasets with in-memory fallback.",
+      "The match monitor and push flows depend on Redis operational state plus Redis user preference records.",
+      "Redis reconciliation compares memory against Redis and can repair Redis from memory when Redis is missing or stale.",
+    ],
+    edges: ADMIN_ARCH_FLOW_EDGES,
+    components,
+    feed_snapshots: {
+      live_football: liveFootballFeed,
+      bbc_live: bbcLiveFeed,
+      bbc_range: bbcRangeFeed,
+      bbc_match_details: bbcDetailsFeed,
+      bbc_premier_teams: bbcPremierFeed,
+      bbc_league_tables: bbcLeagueTablesFeed,
+      club_elo: clubEloFeed,
+      club_elo_fixtures: clubEloFixturesFeed,
+      football_database: footballDatabaseFeed,
+      national_elo: nationalEloFeed,
+      fpl_bootstrap: fplBootstrapFeed,
+      fpl_fixtures: fplFixturesFeed,
+      fpl_event_live: fplEventLiveFeed,
+    },
+    redis: {
+      connectivity: redisConnectivity,
+      reconciliation,
+    },
+  };
+}
+
+async function buildAdminArchitectureComponentDetail(componentId) {
+  const definition = ADMIN_ARCH_COMPONENT_BY_ID.get(componentId);
+  if (!definition) return null;
+  const overview = await buildAdminArchitectureOverviewPayload();
+  const component = overview.components.find((entry) => entry.id === componentId) || null;
+  const feedSnapshots = overview.feed_snapshots || {};
+  const reconciliation = overview.redis && overview.redis.reconciliation
+    ? overview.redis.reconciliation
+    : currentRedisReconciliationSnapshot();
+  const memoryDatasets = currentOperationalMemoryDatasetSnapshots();
+  const memoryMatchDetails = currentOperationalMatchDetailsMemorySnapshot();
+
+  if (componentId === "operational_memory") {
+    const datasetCards = [
+      { name: OP_DATASET_LIVE_MATCHES, snapshot: memoryDatasets[OP_DATASET_LIVE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_LIVE_MATCHES) },
+      { name: OP_DATASET_BBC_LIVE_MATCHES, snapshot: memoryDatasets[OP_DATASET_BBC_LIVE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_BBC_LIVE_MATCHES) },
+      { name: OP_DATASET_BBC_RANGE_MATCHES, snapshot: memoryDatasets[OP_DATASET_BBC_RANGE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_BBC_RANGE_MATCHES) },
+      { name: OP_DATASET_RECENT_MATCHES, snapshot: memoryDatasets[OP_DATASET_RECENT_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_RECENT_MATCHES) },
+      { name: OP_DATASET_MERGED_MATCHES, snapshot: memoryDatasets[OP_DATASET_MERGED_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_MERGED_MATCHES) },
+      { name: OP_DATASET_LEAGUE_TABLES, snapshot: memoryDatasets[OP_DATASET_LEAGUE_TABLES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_LEAGUE_TABLES) },
+      { name: "match_details", snapshot: memoryMatchDetails, reconciliation: findReconciliationComponentByName(reconciliation, "match_details") },
+    ].map((entry) => ({
+      title: entry.name,
+      updated_at: entry.snapshot && entry.snapshot.updated_at ? entry.snapshot.updated_at : null,
+      count:
+        entry.name === "match_details"
+          ? entry.snapshot.total
+          : Array.isArray(entry.snapshot && entry.snapshot.items)
+            ? entry.snapshot.items.length
+            : null,
+      source: entry.snapshot && entry.snapshot.source ? entry.snapshot.source : "memory",
+      reconciliation_status: entry.reconciliation ? entry.reconciliation.status : "n/a",
+      reconciliation_healthy: entry.reconciliation ? entry.reconciliation.healthy : null,
+    }));
+    return {
+      component,
+      detail: {
+        description: "The live runtime cache held inside the Node process. Source updaters write here first. `/api/v1/matches` and `/api/v1/matches/:id` read directly from this layer.",
+        stats: [
+          { label: "Merged Matches", value: cachedMergedMatches.length },
+          { label: "Recent Matches", value: cachedRecentMatches.length },
+          { label: "Match Details", value: memoryMatchDetails.total },
+          { label: "League Tables", value: cachedLeagueTables.length },
+        ],
+        data_flow: {
+          reads_from: ["All upstream fetchers", "Redis bootstrap on process start"],
+          writes_to: ["operational_redis", "matches_api"],
+          used_by: ["matches_api", "metadata_api fallback", "redis_reconciliation"],
+        },
+        failure_impact: [
+          "If this layer is empty or stale, the matches and match-details APIs are directly affected.",
+          "Redis can still help on restart, but live runtime freshness depends on the process memory state.",
+        ],
+        subcomponents: datasetCards,
+      },
+    };
+  }
+
+  if (componentId === "operational_redis") {
+    const [datasetRecords, matchDetailsSummary] = await Promise.all([
+      getOperationalDatasets(ADMIN_OPERATIONAL_DATASET_NAMES),
+      getOperationalMatchDetailsSummary(),
+    ]);
+    const datasetCards = ADMIN_OPERATIONAL_DATASET_NAMES.map((name) => {
+      const record = datasetRecords && datasetRecords[name] ? datasetRecords[name] : null;
+      return {
+        title: name,
+        updated_at: record && record.updated_at ? record.updated_at : null,
+        count: Array.isArray(record && record.payload)
+          ? record.payload.length
+          : record && record.payload && typeof record.payload === "object"
+            ? Object.keys(record.payload).length
+            : null,
+        source: record && record.source ? record.source : null,
+      };
+    });
+    datasetCards.push({
+      title: "match_details",
+      updated_at: matchDetailsSummary && matchDetailsSummary.updated_at ? matchDetailsSummary.updated_at : null,
+      count: matchDetailsSummary && Number.isFinite(matchDetailsSummary.total) ? matchDetailsSummary.total : 0,
+      source: "redis",
+    });
+    return {
+      component,
+      detail: {
+        description: "Durable operational snapshot store. Used for bootstrap, Redis-preferred metadata endpoints, admin diagnostics, and the match monitor/user-preference flows.",
+        stats: [
+          { label: "Connectivity", value: overview.redis && overview.redis.connectivity ? overview.redis.connectivity.status : "n/a" },
+          { label: "Is Ready", value: overview.redis && overview.redis.connectivity ? String(overview.redis.connectivity.is_ready) : "false" },
+          { label: "Last Probe Error", value: overview.redis && overview.redis.connectivity && overview.redis.connectivity.error ? overview.redis.connectivity.error : "n/a" },
+          { label: "Recent Persist Error", value: currentRuntimeComponentDiagnostics(COMPONENT_OPERATIONAL_REDIS).last_error || "n/a" },
+        ],
+        data_flow: {
+          reads_from: ["operational_memory persistence writes", "bootstrap reconciliation"],
+          writes_to: ["operational_memory on startup hydrate", "metadata_api", "tables_api", "match_monitor"],
+          used_by: ["operational_bootstrap", "metadata_api", "tables_api", "match_monitor"],
+        },
+        failure_impact: [
+          "Startup hydration loses its durable snapshot source.",
+          "Metadata/table/admin endpoints fall back to memory or fail to serve Redis-backed diagnostics.",
+          "Match monitor and user-preference driven push flows lose a required dependency.",
+        ],
+        recent_errors: currentRuntimeComponentDiagnostics(COMPONENT_OPERATIONAL_REDIS).recent_errors,
+        subcomponents: datasetCards,
+      },
+    };
+  }
+
+  if (componentId === "redis_reconciliation") {
+    return {
+      component,
+      detail: {
+        description: "Periodic compare-and-repair job that checks every operational dataset and the match-details store for memory/Redis drift.",
+        stats: [
+          { label: "Auto Repair Enabled", value: String(reconciliation.auto_repair_enabled) },
+          { label: "Last Trigger", value: reconciliation.last_trigger || "n/a" },
+          { label: "Last Started", value: reconciliation.last_run_started_at || "n/a" },
+          { label: "Last Completed", value: reconciliation.last_run_completed_at || "n/a" },
+          { label: "Last Duration (ms)", value: reconciliation.last_duration_ms },
+          { label: "Last Error", value: reconciliation.last_error || "n/a" },
+        ],
+        data_flow: {
+          reads_from: ["operational_memory", "operational_redis"],
+          writes_to: ["operational_redis when repair is needed"],
+          used_by: ["operational_redis", "operational_memory"],
+        },
+        failure_impact: ["Redis drift remains unresolved until a later successful run."],
+        recent_errors: currentRuntimeComponentDiagnostics(COMPONENT_REDIS_RECONCILIATION).recent_errors,
+        subcomponents: Array.isArray(reconciliation.components) ? reconciliation.components : [],
+      },
+    };
+  }
+
+  if (componentId === "matches_api") {
+    return {
+      component,
+      detail: {
+        description: "The matches list and match-details endpoints serve directly from in-memory merged matches and match-detail caches.",
+        stats: [
+          { label: "Endpoints", value: "/api/v1/matches, /api/v1/matches/:matchId, /api/v1/matches/states, /api/v1/bbc/details" },
+          { label: "Merged Matches In Memory", value: cachedMergedMatches.length },
+          { label: "Match Details In Memory", value: memoryMatchDetails.total },
+        ],
+        data_flow: {
+          reads_from: ["operational_memory.merged_matches", "operational_memory.match_details"],
+          fallback_to: ["/api/v1/matches/states can hydrate misses from Redis", "detail requests can warm/backfill asynchronously"],
+          used_by: ["iOS matches screen", "web matches screen", "watch/widget bridge"],
+        },
+        failure_impact: [
+          "If merged matches are stale, fixtures/results lists go stale immediately.",
+          "If match_details are stale, detailed scorers/cards/lineups/aggregate scores degrade or 404 until warm/backfill succeeds.",
+        ],
+      },
+    };
+  }
+
+  if (componentId === "metadata_api") {
+    return {
+      component,
+      detail: {
+        description: "Metadata-oriented APIs use Redis-preferred operational datasets, with in-memory fallback if Redis reads fail or are empty.",
+        stats: [
+          { label: "Endpoints", value: "/api/v1/teams, /api/v1/teams/:teamName, /api/v1/channels, /api/v1/competitions, /api/v1/teams/premier-league" },
+          { label: "Default Team Ranking Source", value: TEAM_RANKING_DEFAULT_SOURCE },
+          { label: "Club Elo Rows", value: cachedClubEloTeams.length },
+          { label: "FootballDatabase Rows", value: cachedFootballDatabaseTeams.length },
+          { label: "National Elo Rows", value: cachedNationalEloTeams.length },
+        ],
+        data_flow: {
+          reads_from: ["operational_redis merged/ranking datasets", "operational_memory as fallback"],
+          used_by: ["iOS/web rankings views", "filters and metadata UIs"],
+        },
+        failure_impact: [
+          "Ranking overlays, channel lists, competition lists, and team metadata can become stale or inconsistent if Redis lags memory.",
+          "If upstream ranking feeds fail, the APIs still work but serve older ranking data.",
+        ],
+      },
+    };
+  }
+
+  if (componentId === "tables_api") {
+    return {
+      component,
+      detail: {
+        description: "League table endpoints read the Redis-preferred league_tables dataset with in-memory fallback.",
+        stats: [
+          { label: "Endpoints", value: "/api/v1/tables, /api/v1/tables/:leagueId" },
+          { label: "Leagues", value: cachedLeagueTables.length },
+          { label: "Rows", value: leagueTableRowsCount(cachedLeagueTables) },
+        ],
+        data_flow: {
+          reads_from: ["operational_redis.league_tables", "operational_memory.league_tables as fallback"],
+          used_by: ["iOS tables screen", "web tables screen"],
+        },
+        failure_impact: ["Tables pages become stale if BBC tables ingestion or Redis persistence fails."],
+      },
+    };
+  }
+
+  if (componentId === "fantasy_api") {
+    return {
+      component,
+      detail: {
+        description: "Fantasy endpoints are backed by in-memory FPL caches plus filesystem config for phrases/messages/team colors.",
+        stats: [
+          { label: "Endpoints", value: "/api/v1/fantasy/*, /api/v1/team-colors" },
+          { label: "Bootstrap Updated", value: fantasyBootstrapLastUpdated || "n/a" },
+          { label: "Fixtures Updated", value: fantasyFixturesLastUpdated || "n/a" },
+          { label: "Event Live Updated", value: fantasyEventLiveLastUpdated || "n/a" },
+        ],
+        data_flow: {
+          reads_from: ["FPL API memory caches", "filesystem config JSON files"],
+          used_by: ["iOS fantasy views"],
+        },
+        failure_impact: [
+          "Fantasy gameweek/bootstrap/score/recommendation flows can return stale or unavailable data.",
+          "This path is independent of the operational Redis reconciliation flow.",
+        ],
+      },
+    };
+  }
+
+  if (componentId === "match_monitor") {
+    const status = matchMonitor.getStatus({ limitRecent: 20 });
+    return {
+      component,
+      detail: {
+        description: "Background service that monitors live matches, reads user preferences from Redis, and drives notifications and Live Activity updates.",
+        stats: [
+          { label: "Poll Interval", value: "10s for monitored matches" },
+          { label: "Monitored Match Count", value: status.monitoredMatchCount || 0 },
+          { label: "Scheduled Notifications", value: status.scheduledNotificationCount || 0 },
+          { label: "Last Error", value: status.diagnostics && status.diagnostics.last_error ? status.diagnostics.last_error : "n/a" },
+        ],
+        data_flow: {
+          reads_from: ["operational_redis merged_matches/recent_matches/match_details", "Redis user preferences", "BBC match details fetcher for live text"],
+          used_by: ["push notifications", "live activities", "fantasy reminders"],
+        },
+        failure_impact: [
+          "If Redis user preferences or operational datasets are unavailable, push/live-activity decisions degrade or stop.",
+          "If BBC match-detail freshness degrades, event detection loses detail and timing confidence.",
+        ],
+        recent_errors: status.diagnostics && status.diagnostics.last_error
+          ? [{ at: new Date().toISOString(), error: status.diagnostics.last_error }]
+          : [],
+        raw: status,
+      },
+    };
+  }
+
+  const simpleSourceMap = {
+    source_live_football: {
+      snapshot: feedSnapshots.live_football,
+      description: "Pulls TV fixture listings from LiveFootballOnTV and seeds the live_matches dataset.",
+      writes_to: ["operational_memory.live_matches", "operational_memory.recent_matches", "operational_memory.merged_matches", "operational_redis.live_matches"],
+      used_by: ["matches_api", "metadata_api"],
+      failure_impact: [
+        "TV channel and fixture listing freshness degrades for /api/v1/matches.",
+        "Recent cache and merged matches stop incorporating new LiveFootballOnTV entries until the next success.",
+      ],
+    },
+    source_bbc_live: {
+      snapshot: feedSnapshots.bbc_live,
+      description: "Polls BBC live scores every 30 seconds, overlays fresher score/status data, and seeds match details.",
+      writes_to: ["operational_memory.recent_matches", "operational_memory.match_details", "operational_redis.bbc_live_matches", "operational_redis.match_details"],
+      used_by: ["matches_api", "match_monitor"],
+      failure_impact: [
+        "Live score/status freshness regresses to whatever is already in memory.",
+        "Recent matches and match-detail seeds stop receiving BBC live overlays.",
+      ],
+    },
+    source_bbc_range: {
+      snapshot: feedSnapshots.bbc_range,
+      description: "Fetches BBC scores/fixtures across a rolling date window and is the main structural source for merged fixtures/results coverage.",
+      writes_to: ["operational_memory.merged_matches", "operational_redis.bbc_range_matches", "operational_redis.merged_matches"],
+      used_by: ["matches_api", "metadata_api"],
+      failure_impact: [
+        "Fixture/result coverage for /api/v1/matches becomes stale and new fixtures may not appear.",
+        "Merged matches stop receiving broad BBC schedule/result refreshes until the next success.",
+      ],
+    },
+    source_bbc_match_details: {
+      snapshot: feedSnapshots.bbc_match_details,
+      description: "Polls in-progress BBC match detail pages every 10 seconds for tracked matches and maintains the high-detail match_details cache.",
+      writes_to: ["operational_memory.match_details", "operational_redis.match_details"],
+      used_by: ["matches_api", "match_monitor"],
+      failure_impact: [
+        "Detailed match pages lose freshness for scorers, cards, lineups, aggregates, and live status normalization.",
+        "Live Activity and push-notification decisions have less detailed state to work from.",
+      ],
+    },
+    source_club_elo_rankings: {
+      snapshot: feedSnapshots.club_elo,
+      description: "Club Elo rankings feed used to enrich /api/v1/teams responses.",
+      writes_to: ["operational_redis.club_elo_teams"],
+      used_by: ["metadata_api"],
+      failure_impact: [
+        "Club-ranking overlays become stale in /api/v1/teams and clients that display them.",
+        "Team matching diagnostics drift until the next successful sync.",
+      ],
+    },
+    source_club_elo_fixtures: {
+      snapshot: feedSnapshots.club_elo_fixtures,
+      description: "Club Elo fixtures feed used to enrich match-detail records with probability metadata.",
+      writes_to: ["operational_memory.match_details", "operational_redis.match_details"],
+      used_by: ["matches_api"],
+      failure_impact: [
+        "Club Elo fixture metadata inside match details stops refreshing.",
+        "Only the enrichment layer fails; core fixtures/results still work from BBC/LiveFootballOnTV data.",
+      ],
+    },
+    source_football_database: {
+      snapshot: feedSnapshots.football_database,
+      description: "FootballDatabase world club rankings feed with retry/backoff and adaptive concurrency.",
+      writes_to: ["operational_redis.football_database_teams"],
+      used_by: ["metadata_api"],
+      failure_impact: [
+        "Club-ranking overlays sourced from FootballDatabase become stale.",
+        "Team matching diagnostics for FootballDatabase stop improving until the next success.",
+      ],
+    },
+    source_national_elo: {
+      snapshot: feedSnapshots.national_elo,
+      description: "National Elo TSV feed with retry/backoff for international team rankings.",
+      writes_to: ["operational_redis.national_elo_teams"],
+      used_by: ["metadata_api"],
+      failure_impact: [
+        "International ranking overlays become stale.",
+        "National-team matching diagnostics drift until the next success.",
+      ],
+    },
+    source_fpl_api: {
+      snapshot: [feedSnapshots.fpl_bootstrap, feedSnapshots.fpl_fixtures, feedSnapshots.fpl_event_live],
+      description: "Aggregates the three official Fantasy Premier League feeds cached in memory only.",
+      writes_to: ["fantasy_api in-memory caches"],
+      used_by: ["fantasy_api"],
+      failure_impact: [
+        "Fantasy gameweek/bootstrap endpoints can return 503 or stale data.",
+        "Fantasy score, transfer recommendations, and fixture context lose freshness.",
+      ],
+    },
+  };
+
+  if (componentId === "source_bbc_tables") {
+    return {
+      component,
+      detail: {
+        description: "Combines the BBC Premier League team-list puller and the multi-league BBC tables puller.",
+        subcomponents: [feedSnapshots.bbc_premier_teams, feedSnapshots.bbc_league_tables],
+        data_flow: {
+          writes_to: ["operational_memory.league_tables", "operational_redis.league_tables", "operational_redis.premier_league_teams"],
+          used_by: ["tables_api", "metadata_api"],
+        },
+        failure_impact: [
+          "Tables screens and /api/v1/tables become stale.",
+          "Premier League team-only filters can drift if the dedicated team list stops refreshing.",
+        ],
+        recent_errors: mergeRuntimeDiagnostics([
+          COMPONENT_SOURCE_BBC_TABLES_PREMIER_TEAMS,
+          COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES,
+        ]).recent_errors,
+      },
+    };
+  }
+
+  const simpleSource = simpleSourceMap[componentId];
+  if (simpleSource) {
+    const subcomponents = Array.isArray(simpleSource.snapshot)
+      ? simpleSource.snapshot
+      : [simpleSource.snapshot];
+    const recentErrors = Array.isArray(simpleSource.snapshot)
+      ? mergeRuntimeDiagnostics(
+        simpleSource.snapshot
+          .map((entry) => entry && entry.id)
+          .filter(Boolean)
+      ).recent_errors
+      : (simpleSource.snapshot && simpleSource.snapshot.recent_errors) || [];
+    return {
+      component,
+      detail: {
+        description: simpleSource.description,
+        subcomponents,
+        data_flow: {
+          writes_to: simpleSource.writes_to,
+          used_by: simpleSource.used_by,
+        },
+        failure_impact: simpleSource.failure_impact,
+        recent_errors: recentErrors,
+      },
+    };
+  }
+
+  return {
+    component,
+    detail: {
+      description: definition.label,
+    },
+  };
+}
+
 app.get("/", (_req, res) => {
   res
     .type("text/plain")
@@ -14267,6 +15735,14 @@ app.get("/", (_req, res) => {
 
 app.get("/admin/bbc-history", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_bbc_history_ui.html"));
+});
+
+app.get("/admin/status", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_status_ui.html"));
+});
+
+app.get("/admin/status/:componentId", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_status_ui.html"));
 });
 
 app.get("/admin/preferences", (_req, res) => {
@@ -14308,6 +15784,46 @@ app.get(["/healthcheck", `${API_PREFIX}/healthcheck`], (_req, res) => {
 app.get(`${API_PREFIX}/cache-state`, (_req, res) => {
   setCacheOnlyHeaders(res);
   res.json(currentCacheStateSnapshot());
+});
+
+app.get(`${API_PREFIX}/admin/status/overview`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    const payload = await buildAdminArchitectureOverviewPayload();
+    res.status(200).json({
+      success: true,
+      ...payload,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to build admin architecture overview.",
+      message: error.message || String(error),
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/admin/status/components/:componentId`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    const componentId = String(req.params.componentId || "").trim();
+    const payload = await buildAdminArchitectureComponentDetail(componentId);
+    if (!payload) {
+      res.status(404).json({
+        error: "Unknown admin status component.",
+        component_id: componentId,
+      });
+      return;
+    }
+    res.status(200).json({
+      success: true,
+      ...payload,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to build admin component detail.",
+      message: error.message || String(error),
+    });
+  }
 });
 
 app.get(`${API_PREFIX}/admin/redis/reconciliation`, async (req, res) => {
@@ -16283,6 +17799,7 @@ loadFootballDatabaseFromDisk();
 loadNationalEloFromDisk();
 // ===== User Preferences Redis Endpoints =====
 const {
+  getClient,
   saveUserPreferences,
   updateUserLiveActivityState,
   getUserPreferences,
@@ -19141,6 +20658,9 @@ async function seedOperationalStateFromDiskIfNeeded() {
 }
 
 async function bootstrapOperationalState() {
+  recordRuntimeComponentStart(COMPONENT_BOOTSTRAP, {
+    operation: "bootstrap_operational_state",
+  });
   loadMissingTeamLogosFromDisk();
 
   await hydrateOperationalStateFromRedis();
@@ -19167,11 +20687,20 @@ async function bootstrapOperationalState() {
   void updateFantasyBootstrapStatic({ trigger: "startup_bootstrap" });
   void updateFantasyFixtures({ trigger: "startup_bootstrap" });
   void updateFantasyEventLive({ trigger: "startup_bootstrap" });
+  recordRuntimeComponentSuccess(COMPONENT_BOOTSTRAP, {
+    operation: "bootstrap_operational_state",
+    seed_result: seedResult,
+    merged_matches: cachedMergedMatches.length,
+    match_details: matchDetailsById.size,
+  });
 }
 
 const shouldRunRuntime = require.main === module;
 const operationalBootstrapPromise = shouldRunRuntime
   ? bootstrapOperationalState().catch((error) => {
+    recordRuntimeComponentFailure(COMPONENT_BOOTSTRAP, error, {
+      operation: "bootstrap_operational_state",
+    });
     console.warn("[Startup] Operational bootstrap failed:", error.message || error);
   })
   : Promise.resolve();
