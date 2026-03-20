@@ -1113,6 +1113,10 @@ final class MatchesStore: ObservableObject {
         ratingLookup: TeamRatingLookup
     ) -> [Match] {
         matches.sorted { lhs, rhs in
+            if lhs.isPostponed != rhs.isPostponed {
+                return !lhs.isPostponed && rhs.isPostponed
+            }
+
             switch sortOrder {
             case .teamScore:
                 let leftScore = totalTeamRating(for: lhs, ratingLookup: ratingLookup)

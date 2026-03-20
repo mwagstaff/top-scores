@@ -91,8 +91,6 @@ struct FantasyView: View {
     @State private var isFantasyLoadingInterstitialMinimumDurationMet = false
     @State private var fantasyLoadingInterstitialSessionID = UUID()
     @State private var pendingFantasyRefreshRequest: PendingFantasyRefreshRequest?
-    @State private var isGameUpdatingLionPulsing = false
-
     private let rivalsSectionScrollID = "fantasy-rivals-section"
     private let fantasyLoadingInterstitialMinimumDurationNanoseconds: UInt64 = 3_000_000_000
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
@@ -2670,15 +2668,27 @@ struct FantasyView: View {
                 Circle()
                     .stroke(Color.accentColor.opacity(0.20), lineWidth: 1)
 
-                FantasyLionIconView(size: 42, scale: 0.94)
-                    .foregroundStyle(Color.accentColor)
-                    .scaleEffect(isGameUpdatingLionPulsing ? 1.08 : 0.94)
-                    .shadow(
-                        color: Color.accentColor.opacity(isGameUpdatingLionPulsing ? 0.34 : 0.16),
-                        radius: isGameUpdatingLionPulsing ? 18 : 8,
-                        x: 0,
-                        y: 0
-                    )
+                TimelineView(.animation) { context in
+                    let cycleDuration = 1.6
+                    let phase = context.date.timeIntervalSinceReferenceDate
+                        .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
+                    let pulse = phase < 0.5 ? phase * 2.0 : (1.0 - phase) * 2.0
+                    let opacity = 0.74 + (0.26 * pulse)
+
+                    FantasyLionIconView(size: 42, scale: 0.94)
+                        .foregroundStyle(Color.accentColor)
+                        .opacity(opacity)
+                        .frame(width: 42, height: 42)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        .transaction { transaction in
+                            transaction.animation = nil
+                        }
+                }
+                .frame(width: 42, height: 42)
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
             }
             .frame(width: 76, height: 76)
 
@@ -2709,16 +2719,6 @@ struct FantasyView: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.accentColor.opacity(0.12), lineWidth: 1)
         )
-        .animation(
-            .easeInOut(duration: 1.8).repeatForever(autoreverses: true),
-            value: isGameUpdatingLionPulsing
-        )
-        .onAppear {
-            isGameUpdatingLionPulsing = true
-        }
-        .onDisappear {
-            isGameUpdatingLionPulsing = false
-        }
     }
 
     private var shareLoadingOverlay: some View {
