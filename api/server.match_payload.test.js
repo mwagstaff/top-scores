@@ -25,6 +25,7 @@ const {
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
     bumpCacheStateSnapshot,
+    normalizeMatchStatusValue,
     normalizeTeamName,
   },
 } = require("./server");
@@ -168,6 +169,11 @@ test("normalizeTeamName canonicalizes team aliases from shared identity config",
   assert.equal(normalizeTeamName("Man City"), "manchester city");
   assert.equal(normalizeTeamName("MCI"), "manchester city");
   assert.equal(normalizeTeamName("AFC Bournemouth"), "bournemouth");
+});
+
+test("normalizeMatchStatusValue canonicalizes postponed status", () => {
+  assert.equal(normalizeMatchStatusValue("Match Postponed"), "POSTPONED");
+  assert.equal(normalizeMatchStatusValue("POSTPONED"), "POSTPONED");
 });
 
 test("toMatchListPayload includes score fields from resolved match state", () => {
@@ -364,6 +370,51 @@ test("mergeMatchDetailsPayload clears stale scores when refreshed details show a
   assert.equal(merged.home_score, null);
   assert.equal(merged.away_score, null);
   assert.equal(merged.score_status, null);
+  assert.deepStrictEqual(merged.home_goal_scorers, []);
+  assert.deepStrictEqual(merged.away_goal_scorers, []);
+});
+
+test("mergeMatchDetailsPayload clears stale scores when refreshed details show a postponed state", () => {
+  const existing = {
+    id: DETAILS_ID,
+    details_url: DETAILS_URL,
+    date: "2026-03-21",
+    time: "15:00",
+    league: "Premier League",
+    home_team: "Manchester City",
+    away_team: "Crystal Palace",
+    home_score: 2,
+    away_score: 1,
+    score_status: "67",
+    home_goal_scorers: [{ player: "A", goal_times: ["10'"] }],
+    away_goal_scorers: [{ player: "B", goal_times: ["12'"] }],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+    updated_at: "2026-03-21T00:00:00.000Z",
+  };
+
+  const incoming = normalizeMatchDetailsPayload({
+    details_url: DETAILS_URL,
+    date: "2026-03-21",
+    time: "15:00",
+    league: "Premier League",
+    home_team: "Manchester City",
+    away_team: "Crystal Palace",
+    score_status: "Match Postponed",
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+    home_red_cards: [],
+    away_red_cards: [],
+  });
+
+  const merged = mergeMatchDetailsPayload(existing, incoming, "2026-03-21T09:00:00.000Z");
+  assert.equal(merged.home_score, null);
+  assert.equal(merged.away_score, null);
+  assert.equal(merged.score_status, "POSTPONED");
   assert.deepStrictEqual(merged.home_goal_scorers, []);
   assert.deepStrictEqual(merged.away_goal_scorers, []);
 });

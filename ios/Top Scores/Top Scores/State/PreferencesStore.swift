@@ -50,7 +50,13 @@ struct PreferencesSnapshot: Codable, Equatable {
     let notificationSelectedLeagues: [String]
     let fantasyDeadlineRemindersEnabled: Bool
     let showTodayUnfinishedFixturesBadge: Bool
-    let showFantasyMatchPills: Bool
+    let showFantasyFixtureLogos: Bool
+    let showFantasyExpectedPoints: Bool
+    let showFantasyRealTimePoints: Bool
+
+    var showsFantasyDataInFixtures: Bool {
+        showFantasyFixtureLogos || showFantasyExpectedPoints || showFantasyRealTimePoints
+    }
 
     nonisolated init(
         selectedLeagues: [String],
@@ -70,7 +76,9 @@ struct PreferencesSnapshot: Codable, Equatable {
         notificationSelectedLeagues: [String] = PreferencesStore.defaultNotificationSelectedLeagues,
         fantasyDeadlineRemindersEnabled: Bool = PreferencesStore.defaultFantasyDeadlineRemindersEnabled,
         showTodayUnfinishedFixturesBadge: Bool = PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
-        showFantasyMatchPills: Bool = PreferencesStore.defaultShowFantasyMatchPills
+        showFantasyFixtureLogos: Bool = PreferencesStore.defaultShowFantasyFixtureLogos,
+        showFantasyExpectedPoints: Bool = PreferencesStore.defaultShowFantasyExpectedPoints,
+        showFantasyRealTimePoints: Bool = PreferencesStore.defaultShowFantasyRealTimePoints
     ) {
         self.selectedLeagues = selectedLeagues
         self.selectedChannels = selectedChannels
@@ -89,7 +97,9 @@ struct PreferencesSnapshot: Codable, Equatable {
         self.notificationSelectedLeagues = notificationSelectedLeagues
         self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
-        self.showFantasyMatchPills = showFantasyMatchPills
+        self.showFantasyFixtureLogos = showFantasyFixtureLogos
+        self.showFantasyExpectedPoints = showFantasyExpectedPoints
+        self.showFantasyRealTimePoints = showFantasyRealTimePoints
     }
 
     enum CodingKeys: String, CodingKey {
@@ -110,6 +120,12 @@ struct PreferencesSnapshot: Codable, Equatable {
         case notificationSelectedLeagues
         case fantasyDeadlineRemindersEnabled
         case showTodayUnfinishedFixturesBadge
+        case showFantasyFixtureLogos
+        case showFantasyExpectedPoints
+        case showFantasyRealTimePoints
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
         case showFantasyMatchPills
     }
 
@@ -135,7 +151,13 @@ struct PreferencesSnapshot: Codable, Equatable {
         notificationSelectedLeagues = try container.decodeIfPresent([String].self, forKey: .notificationSelectedLeagues) ?? PreferencesStore.defaultNotificationSelectedLeagues
         fantasyDeadlineRemindersEnabled = try container.decodeIfPresent(Bool.self, forKey: .fantasyDeadlineRemindersEnabled) ?? PreferencesStore.defaultFantasyDeadlineRemindersEnabled
         showTodayUnfinishedFixturesBadge = try container.decodeIfPresent(Bool.self, forKey: .showTodayUnfinishedFixturesBadge) ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
-        showFantasyMatchPills = try container.decodeIfPresent(Bool.self, forKey: .showFantasyMatchPills) ?? PreferencesStore.defaultShowFantasyMatchPills
+        let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        let legacyShowFantasyMatchPills =
+            try legacyContainer.decodeIfPresent(Bool.self, forKey: .showFantasyMatchPills)
+            ?? PreferencesStore.defaultShowFantasyMatchPills
+        showFantasyFixtureLogos = try container.decodeIfPresent(Bool.self, forKey: .showFantasyFixtureLogos) ?? legacyShowFantasyMatchPills
+        showFantasyExpectedPoints = try container.decodeIfPresent(Bool.self, forKey: .showFantasyExpectedPoints) ?? legacyShowFantasyMatchPills
+        showFantasyRealTimePoints = try container.decodeIfPresent(Bool.self, forKey: .showFantasyRealTimePoints) ?? legacyShowFantasyMatchPills
     }
 }
 
@@ -166,7 +188,10 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultNotificationSelectedLeagues: [String] = []
     nonisolated static let defaultFantasyDeadlineRemindersEnabled = true
     nonisolated static let defaultShowTodayUnfinishedFixturesBadge = false
-    nonisolated static let defaultShowFantasyMatchPills = true
+    nonisolated static let defaultShowFantasyFixtureLogos = false
+    nonisolated static let defaultShowFantasyExpectedPoints = false
+    nonisolated static let defaultShowFantasyRealTimePoints = false
+    nonisolated static let defaultShowFantasyMatchPills = false
     #if DEBUG
     nonisolated static let defaultShowPredictionRedoButton = false
     #endif
@@ -239,7 +264,15 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
-    @Published var showFantasyMatchPills: Bool {
+    @Published var showFantasyFixtureLogos: Bool {
+        didSet { persist() }
+    }
+
+    @Published var showFantasyExpectedPoints: Bool {
+        didSet { persist() }
+    }
+
+    @Published var showFantasyRealTimePoints: Bool {
         didSet { persist() }
     }
 
@@ -283,8 +316,14 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultFantasyDeadlineRemindersEnabled
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
-        let showFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
+        let legacyShowFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
             ?? Self.defaultShowFantasyMatchPills
+        let showFantasyFixtureLogos = userDefaults.object(forKey: Keys.showFantasyFixtureLogos) as? Bool
+            ?? legacyShowFantasyMatchPills
+        let showFantasyExpectedPoints = userDefaults.object(forKey: Keys.showFantasyExpectedPoints) as? Bool
+            ?? legacyShowFantasyMatchPills
+        let showFantasyRealTimePoints = userDefaults.object(forKey: Keys.showFantasyRealTimePoints) as? Bool
+            ?? legacyShowFantasyMatchPills
         #if DEBUG
         let showPredictionRedoButton = userDefaults.object(forKey: Keys.showPredictionRedoButton) as? Bool
             ?? Self.defaultShowPredictionRedoButton
@@ -307,7 +346,9 @@ final class PreferencesStore: ObservableObject {
         self.notificationSelectedLeagues = notificationSelectedLeagues
         self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
-        self.showFantasyMatchPills = showFantasyMatchPills
+        self.showFantasyFixtureLogos = showFantasyFixtureLogos
+        self.showFantasyExpectedPoints = showFantasyExpectedPoints
+        self.showFantasyRealTimePoints = showFantasyRealTimePoints
         #if DEBUG
         self.showPredictionRedoButton = showPredictionRedoButton
         #endif
@@ -338,8 +379,14 @@ final class PreferencesStore: ObservableObject {
             notificationSelectedLeagues: notificationSelectedLeagues,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
-            showFantasyMatchPills: showFantasyMatchPills
+            showFantasyFixtureLogos: showFantasyFixtureLogos,
+            showFantasyExpectedPoints: showFantasyExpectedPoints,
+            showFantasyRealTimePoints: showFantasyRealTimePoints
         )
+    }
+
+    var showsFantasyDataInFixtures: Bool {
+        snapshot.showsFantasyDataInFixtures
     }
 
     var unfilteredSnapshot: PreferencesSnapshot {
@@ -361,7 +408,9 @@ final class PreferencesStore: ObservableObject {
             notificationSelectedLeagues: notificationSelectedLeagues,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
-            showFantasyMatchPills: showFantasyMatchPills
+            showFantasyFixtureLogos: showFantasyFixtureLogos,
+            showFantasyExpectedPoints: showFantasyExpectedPoints,
+            showFantasyRealTimePoints: showFantasyRealTimePoints
         )
     }
 
@@ -383,7 +432,10 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(notificationSelectedLeagues, forKey: Keys.notificationSelectedLeagues)
         userDefaults.set(fantasyDeadlineRemindersEnabled, forKey: Keys.fantasyDeadlineRemindersEnabled)
         userDefaults.set(showTodayUnfinishedFixturesBadge, forKey: Keys.showTodayUnfinishedFixturesBadge)
-        userDefaults.set(showFantasyMatchPills, forKey: Keys.showFantasyMatchPills)
+        userDefaults.set(showFantasyFixtureLogos, forKey: Keys.showFantasyFixtureLogos)
+        userDefaults.set(showFantasyExpectedPoints, forKey: Keys.showFantasyExpectedPoints)
+        userDefaults.set(showFantasyRealTimePoints, forKey: Keys.showFantasyRealTimePoints)
+        userDefaults.set(showsFantasyDataInFixtures, forKey: Keys.showFantasyMatchPills)
         #if DEBUG
         userDefaults.set(showPredictionRedoButton, forKey: Keys.showPredictionRedoButton)
         #endif
@@ -435,8 +487,14 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultFantasyDeadlineRemindersEnabled
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
-        let showFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
+        let legacyShowFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
             ?? Self.defaultShowFantasyMatchPills
+        let showFantasyFixtureLogos = userDefaults.object(forKey: Keys.showFantasyFixtureLogos) as? Bool
+            ?? legacyShowFantasyMatchPills
+        let showFantasyExpectedPoints = userDefaults.object(forKey: Keys.showFantasyExpectedPoints) as? Bool
+            ?? legacyShowFantasyMatchPills
+        let showFantasyRealTimePoints = userDefaults.object(forKey: Keys.showFantasyRealTimePoints) as? Bool
+            ?? legacyShowFantasyMatchPills
 
         return PreferencesSnapshot(
             selectedLeagues: leagues,
@@ -456,7 +514,9 @@ final class PreferencesStore: ObservableObject {
             notificationSelectedLeagues: notificationSelectedLeagues,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
-            showFantasyMatchPills: showFantasyMatchPills
+            showFantasyFixtureLogos: showFantasyFixtureLogos,
+            showFantasyExpectedPoints: showFantasyExpectedPoints,
+            showFantasyRealTimePoints: showFantasyRealTimePoints
         )
     }
 
@@ -478,6 +538,9 @@ final class PreferencesStore: ObservableObject {
         static let notificationSelectedLeagues = "preferences.notificationSelectedLeagues"
         static let fantasyDeadlineRemindersEnabled = "preferences.fantasyDeadlineRemindersEnabled"
         static let showTodayUnfinishedFixturesBadge = "preferences.showTodayUnfinishedFixturesBadge"
+        static let showFantasyFixtureLogos = "preferences.showFantasyFixtureLogos"
+        static let showFantasyExpectedPoints = "preferences.showFantasyExpectedPoints"
+        static let showFantasyRealTimePoints = "preferences.showFantasyRealTimePoints"
         static let showFantasyMatchPills = "preferences.showFantasyMatchPills"
         #if DEBUG
         static let showPredictionRedoButton = "preferences.showPredictionRedoButton"

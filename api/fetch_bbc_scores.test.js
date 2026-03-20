@@ -168,6 +168,90 @@ test("parseMatchDetailsFromHtml parses own goals and red cards from key events",
   ]);
 });
 
+test("parseMatchesFromDom keeps postponed BBC fixtures without scores", () => {
+  const html = `
+    <article>
+      <div data-event-id="s-4fghd8ykrqusg7duvwfkhy6fo">
+        <div data-participant-id="home">
+          <div class="TeamNameWrapper">
+            <span>Manchester City</span>
+          </div>
+        </div>
+        <div data-testid="score">
+          <div class="HomeScore">P</div>
+          <div class="AwayScore">P</div>
+        </div>
+        <div data-participant-id="away">
+          <div class="TeamNameWrapper">
+            <span>Crystal Palace</span>
+          </div>
+        </div>
+        <div class="MatchProgress">
+          <div class="StyledPeriod">Match Postponed</div>
+        </div>
+      </div>
+    </article>
+  `;
+
+  const $ = cheerio.load(html);
+  const matches = __private.parseMatchesFromDom($);
+
+  assert.deepStrictEqual(matches, [
+    {
+      home_team: "Manchester City",
+      away_team: "Crystal Palace",
+      match_time: "POSTPONED",
+    },
+  ]);
+});
+
+test("parseScheduledMatchesFromJson preserves postponed fixtures from BBC initial data", () => {
+  const initialData = {
+    eventGroups: [
+      {
+        secondaryGroups: [
+          {
+            events: [
+              {
+                home: {
+                  fullName: "Manchester City",
+                },
+                away: {
+                  fullName: "Crystal Palace",
+                },
+                startDateTime: "2026-03-21T15:00:00Z",
+                tournament: "Premier League",
+                statusComment: {
+                  value: "Match Postponed",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const escapedInitialData = JSON.stringify(JSON.stringify(initialData));
+  const html = `<script>window.__INITIAL_DATA__=${escapedInitialData};</script>`;
+
+  const matches = __private.parseScheduledMatchesFromJson(html, {
+    fallbackDate: "2026-03-21",
+    timeZone: "Europe/London",
+  });
+
+  assert.deepStrictEqual(matches, [
+    {
+      date: "2026-03-21",
+      time: "15:00",
+      league: "Premier League",
+      home_team: "Manchester City",
+      away_team: "Crystal Palace",
+      tv_channels: [],
+      score_status: "POSTPONED",
+    },
+  ]);
+});
+
 test("parseMatchDetailsFromHtml keeps normal goal objects backward-compatible", () => {
   const html = `
     <div class="KeyEventsHome">

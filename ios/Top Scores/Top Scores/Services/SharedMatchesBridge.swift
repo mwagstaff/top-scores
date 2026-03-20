@@ -20,6 +20,9 @@ enum AppGroupConfig {
     static let refreshIntervalMinutesKey = "preferences.refreshIntervalMinutes"
     static let showAllMatchesKey = "preferences.showAllMatches"
     static let matchGroupSortOrderKey = "preferences.matchGroupSortOrder"
+    static let showFantasyFixtureLogosKey = "preferences.showFantasyFixtureLogos"
+    static let showFantasyExpectedPointsKey = "preferences.showFantasyExpectedPoints"
+    static let showFantasyRealTimePointsKey = "preferences.showFantasyRealTimePoints"
     static let showFantasyMatchPillsKey = "preferences.showFantasyMatchPills"
 }
 
@@ -144,7 +147,10 @@ enum SharedMatchesBridge {
         defaults.set(snapshot.refreshIntervalMinutes, forKey: AppGroupConfig.refreshIntervalMinutesKey)
         defaults.set(snapshot.showAllMatches, forKey: AppGroupConfig.showAllMatchesKey)
         defaults.set(snapshot.matchGroupSortOrder.rawValue, forKey: AppGroupConfig.matchGroupSortOrderKey)
-        defaults.set(snapshot.showFantasyMatchPills, forKey: AppGroupConfig.showFantasyMatchPillsKey)
+        defaults.set(snapshot.showFantasyFixtureLogos, forKey: AppGroupConfig.showFantasyFixtureLogosKey)
+        defaults.set(snapshot.showFantasyExpectedPoints, forKey: AppGroupConfig.showFantasyExpectedPointsKey)
+        defaults.set(snapshot.showFantasyRealTimePoints, forKey: AppGroupConfig.showFantasyRealTimePointsKey)
+        defaults.set(snapshot.showsFantasyDataInFixtures, forKey: AppGroupConfig.showFantasyMatchPillsKey)
     }
 
     static func clear() {

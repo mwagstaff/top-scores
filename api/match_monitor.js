@@ -4026,6 +4026,28 @@ function buildFantasyDeadlineReminderBody(deadlineTimeMs, user, nowMs = Date.now
   )})`;
 }
 
+function buildFantasyDeadlineReminderBodyFromRecord(record, nowMs = Date.now()) {
+  const deadlineTimeMs = Number(record && record.deadline_time_ms);
+  if (!Number.isFinite(deadlineTimeMs)) {
+    return String(
+      record && record.body ? record.body : "Reminder: Fantasy Football deadline due soon"
+    );
+  }
+
+  return buildFantasyDeadlineReminderBody(
+    deadlineTimeMs,
+    {
+      preferences: {
+        deviceTimeZone:
+          record && record.device_time_zone ? String(record.device_time_zone).trim() : undefined,
+        deviceLocale:
+          record && record.device_locale ? String(record.device_locale).trim() : undefined,
+      },
+    },
+    nowMs
+  );
+}
+
 function evaluateFantasyDeadlineReminderDecision(user, nextGameweek, nowMs = Date.now()) {
   const prefs = userPreferencesForReminder(user);
   const target = buildFantasyReminderTarget(user);
@@ -5328,10 +5350,10 @@ async function sendFantasyDeadlineReminderRecord(record, options = {}) {
     throw new Error("Missing reminder_id");
   }
 
+  const sendNowMs =
+    options && Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const title = String(record && record.title ? record.title : "Fantasy Football deadline");
-  const body = String(
-    record && record.body ? record.body : "Reminder: Fantasy Football deadline due soon"
-  );
+  const body = buildFantasyDeadlineReminderBodyFromRecord(record, sendNowMs);
   const apnsToken = String(record && record.apns_token ? record.apns_token : "").trim();
   if (!apnsToken) {
     throw new Error("Missing APNS token for fantasy deadline reminder");
@@ -5362,7 +5384,7 @@ async function sendFantasyDeadlineReminderRecord(record, options = {}) {
     ...(record && record.payload && typeof record.payload === "object" ? record.payload : {}),
     reminderId,
     source: isTest ? "fantasy_deadline_reminder_test" : "fantasy_deadline_reminder",
-    requestedAt: new Date().toISOString(),
+    requestedAt: new Date(sendNowMs).toISOString(),
     test: isTest,
   };
   const result = await sendNotification(
@@ -5385,10 +5407,11 @@ async function sendFantasyDeadlineReminderRecord(record, options = {}) {
           : "production"
     } error=${result && result.error ? String(result.error) : "none"}`
   );
-  const nowIso = new Date().toISOString();
+  const nowIso = new Date(sendNowMs).toISOString();
   const patch = isTest
     ? {
         reminder_id: reminderId,
+        body,
         last_test_sent_at: nowIso,
         last_test_sent_at_ms: Date.parse(nowIso),
         last_test_status: result && result.success ? "sent" : "failed",
@@ -5402,6 +5425,7 @@ async function sendFantasyDeadlineReminderRecord(record, options = {}) {
       }
     : {
         reminder_id: reminderId,
+        body,
         status: result && result.success ? "sent" : "failed",
         sent_at: nowIso,
         sent_at_ms: Date.parse(nowIso),
@@ -6056,6 +6080,7 @@ module.exports = {
     annotateMatchWithLiveActivityTeamRatings,
     buildMatchEvents,
     buildFantasyDeadlineReminderBody,
+    buildFantasyDeadlineReminderBodyFromRecord,
     buildFantasyDeadlineReminderId,
     buildFantasyDeadlineReminderRecord,
     buildNotificationPayload,

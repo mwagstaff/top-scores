@@ -26,8 +26,24 @@ struct Top_ScoresTests {
         #expect(store.fantasyDeadlineRemindersEnabled)
         #expect(store.matchGroupSortOrder == .kickoffThenTeamScore)
         #expect(!store.showTodayUnfinishedFixturesBadge)
-        #expect(store.showFantasyMatchPills)
+        #expect(!store.showFantasyFixtureLogos)
+        #expect(!store.showFantasyExpectedPoints)
+        #expect(!store.showFantasyRealTimePoints)
+        #expect(!store.showsFantasyDataInFixtures)
         #expect(!store.channelFilterEnabled)
+    }
+
+    @Test @MainActor func preferencesStore_migratesLegacyFixturesFantasyToggle() async throws {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        defaults.set(true, forKey: "preferences.showFantasyMatchPills")
+
+        let store = PreferencesStore(userDefaults: defaults)
+
+        #expect(store.showFantasyFixtureLogos)
+        #expect(store.showFantasyExpectedPoints)
+        #expect(store.showFantasyRealTimePoints)
+        #expect(store.showsFantasyDataInFixtures)
     }
 
     @Test func appIconBadgeManager_countsOnlyTodayUnfinishedFixtures() async throws {

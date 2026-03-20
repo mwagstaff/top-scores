@@ -10,6 +10,7 @@ struct PreferencesView: View {
     @State private var isSendingTestNotification = false
     @State private var testNotificationStatusMessage: String?
     @State private var testNotificationStatusIsError = false
+    @State private var predictionDebugStatusMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -137,8 +138,18 @@ struct PreferencesView: View {
                     }
 
                     Section("Fantasy Premier League") {
-                        Toggle("Show scores with fixtures", isOn: showFantasyMatchPillsBinding)
-                        Text("Displays the FPL icon before kick-off once line-ups are available against matches involving your players, then shows total estimated points for the players involved while matches are in play.")
+                        Toggle("Show FPL logo in Fixtures", isOn: showFantasyFixtureLogosBinding)
+                        Text("Displays the FPL logo against fixtures involving players from your connected team.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Show xP in Fixtures", isOn: showFantasyExpectedPointsBinding)
+                        Text("Shows expected points for your players on upcoming fixtures in the Fixtures screen.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Show live points in Fixtures", isOn: showFantasyRealTimePointsBinding)
+                        Text("Shows real-time points for your players while fixtures are in play.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -225,6 +236,17 @@ struct PreferencesView: View {
 
                             Toggle("Show prediction redo button", isOn: showPredictionRedoButtonBinding)
 
+                            Button("Clear saved predictions", role: .destructive) {
+                                FixturePredictionStore.clearAll()
+                                predictionDebugStatusMessage = "Cleared all saved predictions."
+                            }
+
+                            if let predictionDebugStatusMessage {
+                                Text(predictionDebugStatusMessage)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+
                             Text("Shows the \"Redo\" control for regenerating saved predictions. Off by default, even in debug builds.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -304,10 +326,24 @@ struct PreferencesView: View {
         )
     }
 
-    private var showFantasyMatchPillsBinding: Binding<Bool> {
+    private var showFantasyFixtureLogosBinding: Binding<Bool> {
         Binding(
-            get: { preferences.showFantasyMatchPills },
-            set: { preferences.showFantasyMatchPills = $0 }
+            get: { preferences.showFantasyFixtureLogos },
+            set: { preferences.showFantasyFixtureLogos = $0 }
+        )
+    }
+
+    private var showFantasyExpectedPointsBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showFantasyExpectedPoints },
+            set: { preferences.showFantasyExpectedPoints = $0 }
+        )
+    }
+
+    private var showFantasyRealTimePointsBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showFantasyRealTimePoints },
+            set: { preferences.showFantasyRealTimePoints = $0 }
         )
     }
 

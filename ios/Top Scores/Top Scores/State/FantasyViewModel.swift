@@ -45,6 +45,11 @@ final class FantasyViewModel: ObservableObject {
     private let leagueStandingsPageSize = 50
     private let setupRivalCandidateLimit = 200
 
+    var isShowingGameUpdatingState: Bool {
+        guard let errorMessage else { return false }
+        return Self.containsGameUpdatingText(errorMessage)
+    }
+
     private struct FantasySquadSnapshot {
         let gameweek: FantasyGameweek
         let picksResponse: FantasyPicksResponse

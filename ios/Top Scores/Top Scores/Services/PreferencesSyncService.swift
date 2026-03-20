@@ -226,6 +226,10 @@ actor PreferencesSyncService {
                 "notificationSelectedLeagues": snapshot.notificationSelectedLeagues,
                 "fantasyDeadlineRemindersEnabled": snapshot.fantasyDeadlineRemindersEnabled,
                 "showTodayUnfinishedFixturesBadge": snapshot.showTodayUnfinishedFixturesBadge,
+                "showFantasyFixtureLogos": snapshot.showFantasyFixtureLogos,
+                "showFantasyExpectedPoints": snapshot.showFantasyExpectedPoints,
+                "showFantasyRealTimePoints": snapshot.showFantasyRealTimePoints,
+                "showFantasyMatchPills": snapshot.showsFantasyDataInFixtures,
                 "deviceLocale": Locale.current.identifier,
                 "deviceTimeZone": TimeZone.current.identifier
             ]
@@ -357,6 +361,7 @@ actor PreferencesSyncService {
 
             let notificationEventTypesArray = preferences["notificationEventTypes"] as? [String]
             let notificationEventTypes = notificationEventTypesArray.map { Set($0) } ?? PreferencesStore.defaultNotificationEventTypes
+            let legacyShowFantasyMatchPills = preferences["showFantasyMatchPills"] as? Bool ?? PreferencesStore.defaultShowFantasyMatchPills
             let snapshot = PreferencesSnapshot(
                 selectedLeagues: preferences["selectedLeagues"] as? [String] ?? PreferencesStore.defaultSelectedLeagues,
                 selectedChannels: preferences["selectedChannels"] as? [String] ?? PreferencesStore.defaultSelectedChannels,
@@ -377,7 +382,9 @@ actor PreferencesSyncService {
                 notificationSelectedLeagues: preferences["notificationSelectedLeagues"] as? [String] ?? PreferencesStore.defaultNotificationSelectedLeagues,
                 fantasyDeadlineRemindersEnabled: preferences["fantasyDeadlineRemindersEnabled"] as? Bool ?? PreferencesStore.defaultFantasyDeadlineRemindersEnabled,
                 showTodayUnfinishedFixturesBadge: preferences["showTodayUnfinishedFixturesBadge"] as? Bool ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
-                showFantasyMatchPills: preferences["showFantasyMatchPills"] as? Bool ?? PreferencesStore.defaultShowFantasyMatchPills
+                showFantasyFixtureLogos: preferences["showFantasyFixtureLogos"] as? Bool ?? legacyShowFantasyMatchPills,
+                showFantasyExpectedPoints: preferences["showFantasyExpectedPoints"] as? Bool ?? legacyShowFantasyMatchPills,
+                showFantasyRealTimePoints: preferences["showFantasyRealTimePoints"] as? Bool ?? legacyShowFantasyMatchPills
             )
 
             NSLog("[PreferencesSync] Successfully fetched preferences from Redis")

@@ -21,6 +21,7 @@ struct MatchRow: View {
 
     var body: some View {
         matchCard
+            .opacity(match.isPostponed ? 0.5 : 1.0)
     }
 
     private var matchCard: some View {
@@ -88,11 +89,11 @@ struct MatchRow: View {
                         .padding(.top, 4)
                 }
 
-                if let centerFooterText, !centerFooterText.isEmpty {
-                    Text(centerFooterText)
+                if let footerLabel = resolvedCenterFooterText, !footerLabel.isEmpty {
+                    Text(footerLabel)
                         .font(centerFooterFont)
                         .fontWeight(.semibold)
-                        .foregroundStyle(centerFooterColor)
+                        .foregroundStyle(resolvedCenterFooterColor)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.top, 4)
                 }
@@ -115,14 +116,23 @@ struct MatchRow: View {
     }
 
     private var homeScoreText: String? {
-        match.homeScore.map(String.init)
+        if match.isPostponed {
+            return "P"
+        }
+        return match.homeScore.map(String.init)
     }
 
     private var awayScoreText: String? {
-        match.awayScore.map(String.init)
+        if match.isPostponed {
+            return "P"
+        }
+        return match.awayScore.map(String.init)
     }
 
     private var centerStatusText: String {
+        if match.isPostponed {
+            return match.time
+        }
         if let status = match.displayScoreStatus {
             return status
         }
@@ -136,45 +146,64 @@ struct MatchRow: View {
         match.isFinished
     }
 
-    private var fantasyBadgeMode: FantasyMatchParticipationBadge.Mode? {
+    private var shouldShowFantasyParticipationBadge: Bool {
         guard showFantasyBadge,
+              !match.isPostponed,
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              preferences.showFantasyMatchPills,
+              preferences.showFantasyFixtureLogos,
               fantasyContext.isEligibleFixture(match),
               let lookup = fantasyContext.lookup
         else {
-            return nil
+            return false
         }
 
         let participationCount = lookup.participationCount(in: match)
-        guard participationCount > 0 else { return nil }
-
-        if match.isUpcomingScorelessFixture {
-            return .upcoming
-        }
-
-        return .score(lookup.effectiveScore(in: match))
+        return participationCount > 0
     }
 
     private var fantasyPlayerContributions: [FantasyMatchContributionDisplay] {
         guard showFantasyPlayerContributions,
-              fantasyBadgeMode != nil,
+              !match.isPostponed,
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              preferences.showFantasyMatchPills,
               fantasyContext.isEligibleFixture(match),
               let lookup = fantasyContext.lookup
         else {
             return []
         }
 
+        let shouldShowExpectedPoints = match.isUpcomingScorelessFixture &&
+            preferences.showFantasyExpectedPoints &&
+            lookup.hasExpectedPoints
+        let shouldShowRealTimePoints = match.isInProgress && preferences.showFantasyRealTimePoints
+
+        guard shouldShowExpectedPoints || shouldShowRealTimePoints else {
+            return []
+        }
+
         return lookup.involvedPlayers(
             in: match,
-            preferExpectedPoints: match.isUpcomingScorelessFixture && lookup.hasExpectedPoints
+            preferExpectedPoints: shouldShowExpectedPoints
         )
     }
 
     private var shouldShowFooterRow: Bool {
-        (showBroadcastDetails && !isMatchFinished) || fantasyBadgeMode != nil
+        if match.isPostponed {
+            return false
+        }
+        return (showBroadcastDetails && !isMatchFinished) ||
+        shouldShowFantasyParticipationBadge ||
+        !fantasyPlayerContributions.isEmpty
+    }
+
+    private var resolvedCenterFooterText: String? {
+        if match.isPostponed {
+            return "Match postponed"
+        }
+        return centerFooterText
+    }
+
+    private var resolvedCenterFooterColor: Color {
+        match.isPostponed ? .secondary : centerFooterColor
     }
 
     @ViewBuilder
@@ -187,8 +216,8 @@ struct MatchRow: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
 
-            if let fantasyBadgeMode {
-                FantasyMatchParticipationBadge(mode: fantasyBadgeMode)
+            if shouldShowFantasyParticipationBadge {
+                FantasyMatchParticipationBadge()
                     .padding(.leading, showBroadcastDetails && !isMatchFinished ? 4 : 0)
             }
         }
@@ -336,13 +365,6 @@ struct MatchRow: View {
 }
 
 private struct FantasyMatchParticipationBadge: View {
-    enum Mode {
-        case upcoming
-        case score(Int)
-    }
-
-    let mode: Mode
-
     var body: some View {
         ZStack {
             Circle()
@@ -359,29 +381,12 @@ private struct FantasyMatchParticipationBadge: View {
             Circle()
                 .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
 
-            switch mode {
-            case .upcoming:
-                FantasyLionIconView(size: 14, scale: 1.10)
-                    .foregroundStyle(.white)
-            case .score(let score):
-                Text("\(score)")
-                    .font(.system(size: score >= 10 ? 11 : 12, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.white)
-                    .minimumScaleFactor(0.8)
-            }
+            FantasyLionIconView(size: 14, scale: 1.10)
+                .foregroundStyle(.white)
         }
             .frame(width: 28, height: 28)
             .shadow(color: Color.red.opacity(0.18), radius: 3, x: 0, y: 1)
-            .accessibilityLabel(accessibilityLabel)
-    }
-
-    private var accessibilityLabel: String {
-        switch mode {
-        case .upcoming:
-            return "Fantasy players involved"
-        case .score(let score):
-            return "\(score) fantasy points involved"
-        }
+            .accessibilityLabel("Fantasy players involved")
     }
 }
 
@@ -571,17 +576,29 @@ struct MatchDetailView: View {
     }
 
     private var fantasyHighlightLookup: FantasySquadMembershipLookup? {
-        guard isEligibleFantasyFixture else { return nil }
+        guard preferences.showFantasyFixtureLogos, isEligibleFantasyFixture else { return nil }
+        return FantasySquadMembershipLookup(squad: fantasyViewModel.data)
+    }
+
+    private var fantasyPointsLookup: FantasySquadMembershipLookup? {
+        guard preferences.showFantasyRealTimePoints,
+              activeMatch.isInProgress,
+              isEligibleFantasyFixture
+        else {
+            return nil
+        }
         return FantasySquadMembershipLookup(squad: fantasyViewModel.data)
     }
 
     private var shouldLoadFantasySquad: Bool {
+        preferences.showsFantasyDataInFixtures &&
         isEligibleFantasyFixture &&
         !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var fantasySquadSections: [FantasyMatchTeamSquadSection] {
-        guard isEligibleFantasyFixture,
+        guard preferences.showFantasyExpectedPoints,
+              isEligibleFantasyFixture,
               let squad = fantasyViewModel.data?.applyingExpectedPoints(
                 fantasyViewModel.assistantManagerPreview?.expectedPoints
               )
@@ -654,7 +671,8 @@ struct MatchDetailView: View {
                 if shouldShowLineupPitch {
                     MatchLineupPitchSection(
                         match: activeMatch,
-                        fantasyHighlightLookup: fantasyHighlightLookup
+                        fantasyHighlightLookup: fantasyHighlightLookup,
+                        fantasyPointsLookup: fantasyPointsLookup
                     )
                         .padding(.horizontal)
                 }
@@ -1550,6 +1568,7 @@ private struct MatchTimeStatusView: View {
 private struct MatchLineupPitchSection: View {
     let match: Match
     let fantasyHighlightLookup: FantasySquadMembershipLookup?
+    let fantasyPointsLookup: FantasySquadMembershipLookup?
 
     var body: some View {
         if let teamLineups = match.teamLineups,
@@ -1573,13 +1592,14 @@ private struct MatchLineupPitchSection: View {
                     awayYellowCards: match.awayYellowCards,
                     homeRedCards: match.homeRedCards,
                     awayRedCards: match.awayRedCards,
-                    fantasyHighlightLookup: fantasyHighlightLookup
+                    fantasyHighlightLookup: fantasyHighlightLookup,
+                    fantasyPointsLookup: fantasyPointsLookup
                 )
 
                 MatchLineupSubstitutesSection(
                     homeLineup: home,
                     awayLineup: away,
-                    fantasyHighlightLookup: fantasyHighlightLookup
+                    fantasyPointsLookup: fantasyPointsLookup
                 )
             }
         }
@@ -1598,6 +1618,7 @@ private struct MatchLineupPitchView: View {
     let homeRedCards: [MatchRedCardEvent]
     let awayRedCards: [MatchRedCardEvent]
     let fantasyHighlightLookup: FantasySquadMembershipLookup?
+    let fantasyPointsLookup: FantasySquadMembershipLookup?
 
     private var homeLookup: MatchLineupEventLookup {
         MatchLineupEventLookup(
@@ -1639,6 +1660,7 @@ private struct MatchLineupPitchView: View {
                     starters: homeLineup.startingLineup,
                     lookup: homeLookup,
                     fantasyHighlightLookup: fantasyHighlightLookup,
+                    fantasyPointsLookup: fantasyPointsLookup,
                     side: .home
                 )
 
@@ -1649,6 +1671,7 @@ private struct MatchLineupPitchView: View {
                     starters: awayLineup.startingLineup,
                     lookup: awayLookup,
                     fantasyHighlightLookup: fantasyHighlightLookup,
+                    fantasyPointsLookup: fantasyPointsLookup,
                     side: .away
                 )
             }
@@ -1672,6 +1695,7 @@ private struct MatchLineupHalfView: View {
     let starters: [MatchLineupPlayer]
     let lookup: MatchLineupEventLookup
     let fantasyHighlightLookup: FantasySquadMembershipLookup?
+    let fantasyPointsLookup: FantasySquadMembershipLookup?
     let side: MatchLineupDisplaySide
 
     private var groupedRows: [[MatchLineupPlayer]] {
@@ -1735,9 +1759,9 @@ private struct MatchLineupHalfView: View {
                             summary: lookup.summary(for: player),
                             replacementSummary: lookup.replacementSummary(for: player),
                             isFantasyHighlighted: fantasyHighlightLookup?.contains(player: player, teamName: teamName) ?? false,
-                            fantasyPoints: fantasyHighlightLookup?.points(for: player, teamName: teamName),
+                            fantasyPoints: fantasyPointsLookup?.points(for: player, teamName: teamName),
                             replacementFantasyPoints: lookup.summary(for: player).substitution.flatMap { substitution in
-                                fantasyHighlightLookup?.points(for: substitution.playerOn, teamName: teamName)
+                                fantasyPointsLookup?.points(for: substitution.playerOn, teamName: teamName)
                             },
                             numberColors: numberColors
                         )
@@ -1972,19 +1996,19 @@ private struct MatchLineupFantasyPointsBadge: View {
 private struct MatchLineupSubstitutesSection: View {
     let homeLineup: MatchTeamLineup
     let awayLineup: MatchTeamLineup
-    let fantasyHighlightLookup: FantasySquadMembershipLookup?
+    let fantasyPointsLookup: FantasySquadMembershipLookup?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            MatchLineupSubstitutesTable(lineup: homeLineup, fantasyHighlightLookup: fantasyHighlightLookup)
-            MatchLineupSubstitutesTable(lineup: awayLineup, fantasyHighlightLookup: fantasyHighlightLookup)
+            MatchLineupSubstitutesTable(lineup: homeLineup, fantasyPointsLookup: fantasyPointsLookup)
+            MatchLineupSubstitutesTable(lineup: awayLineup, fantasyPointsLookup: fantasyPointsLookup)
         }
     }
 }
 
 private struct MatchLineupSubstitutesTable: View {
     let lineup: MatchTeamLineup
-    let fantasyHighlightLookup: FantasySquadMembershipLookup?
+    let fantasyPointsLookup: FantasySquadMembershipLookup?
 
     private var rows: [MatchLineupSubstituteRow] {
         lineup.substitutes.map { substitute in
@@ -1992,7 +2016,7 @@ private struct MatchLineupSubstitutesTable: View {
             return MatchLineupSubstituteRow(
                 player: substitute,
                 substitution: substitution,
-                fantasyPoints: fantasyHighlightLookup?.points(
+                fantasyPoints: fantasyPointsLookup?.points(
                     for: substitute,
                     teamName: lineup.team ?? "Team"
                 )

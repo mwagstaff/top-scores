@@ -6306,6 +6306,7 @@ function uniqueChannels(channels) {
 
 const MATCH_STATUS_IN_PROGRESS_TOKENS = new Set(["LIVE", "HT", "ET", "PENS", "PEN", "PEN."]);
 const MATCH_STATUS_COMPLETE_TOKENS = new Set(["FT", "AET"]);
+const MATCH_STATUS_POSTPONED_TOKENS = new Set(["POSTPONED", "MATCH POSTPONED"]);
 const MATCH_STATUS_MINUTE_PATTERN = /^\d{1,3}(?:\+\d{1,2})?'?$/;
 const MATCH_DETAILS_ID_PATTERN = /^[a-z0-9]+$/i;
 const MATCH_DETAILS_EVENT_FIELDS = [
@@ -6460,6 +6461,7 @@ function normalizeMatchStatusValue(status) {
   }
 
   const token = normalized.toUpperCase();
+  if (MATCH_STATUS_POSTPONED_TOKENS.has(token)) return "POSTPONED";
   if (token === "PENS" || token === "PEN" || token === "PEN.") return "Pens";
   if (token === "HALF TIME" || token === "HALF-TIME") return "HT";
   if (token === "FULL TIME" || token === "FULL-TIME") return "FT";
@@ -6471,6 +6473,10 @@ function normalizeMatchStatusValue(status) {
     return token;
   }
   return normalized;
+}
+
+function isPostponedMatchStatus(status) {
+  return normalizeMatchStatusValue(status) === "POSTPONED";
 }
 
 function parseMatchStatusMinute(status) {
@@ -6522,10 +6528,26 @@ function pickPreferredMatchStatus(existingStatus, incomingStatus, options = {}) 
   const incomingToken = incoming.toUpperCase();
   const existingFinished = MATCH_STATUS_COMPLETE_TOKENS.has(existingToken);
   const incomingFinished = MATCH_STATUS_COMPLETE_TOKENS.has(incomingToken);
+  const existingPostponed = isPostponedMatchStatus(existing);
+  const incomingPostponed = isPostponedMatchStatus(incoming);
   const existingMinute = parseMatchStatusMinute(existing);
   const incomingMinute = parseMatchStatusMinute(incoming);
   const incomingLive =
     incomingMinute !== null || MATCH_STATUS_IN_PROGRESS_TOKENS.has(incomingToken);
+
+  if (existingPostponed && !incomingPostponed) {
+    if (incomingFinished || incomingLive) return incoming;
+    return existing;
+  }
+  if (incomingPostponed && !existingPostponed) {
+    const existingLive =
+      existingMinute !== null || MATCH_STATUS_IN_PROGRESS_TOKENS.has(existingToken);
+    if (existingFinished || existingLive) return existing;
+    return incoming;
+  }
+  if (existingPostponed && incomingPostponed) {
+    return preferIncomingOnTie ? incoming : existing;
+  }
 
   // Never regress a terminal status back to an in-progress token.
   if (existingFinished && !incomingFinished) {
@@ -6649,6 +6671,16 @@ function hasExplicitNoScoreState(match) {
   const status = resolveMatchScoreStatus(match) || match.score_status || match.match_time || null;
   const normalizedStatus = normalizeMatchStatusValue(status);
   return !normalizedStatus || TIME_ONLY_PATTERN.test(normalizedStatus);
+}
+
+function hasPostponedNoScoreState(match) {
+  if (!match || typeof match !== "object") return false;
+  const homeScore = parseNumericScore(match.home_score);
+  const awayScore = parseNumericScore(match.away_score);
+  if (homeScore !== null || awayScore !== null) return false;
+
+  const status = resolveMatchScoreStatus(match) || match.score_status || match.match_time || null;
+  return isPostponedMatchStatus(status);
 }
 
 function withStableMatchDetailsState(payload, options = {}) {
@@ -6837,6 +6869,7 @@ function normalizeMatchDetailsPayload(match, options = {}) {
 
 function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
   const incomingClearsScoreState = hasExplicitNoScoreState(incoming);
+  const incomingPostponedNoScoreState = hasPostponedNoScoreState(incoming);
   const existingAggregate = resolveKnownAggregateScores(existing);
   const incomingAggregate = resolveKnownAggregateScores(incoming);
   const merged = {
@@ -6854,7 +6887,7 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     updated_at: updatedAtIso,
   };
 
-  if (incomingClearsScoreState) {
+  if (incomingClearsScoreState || incomingPostponedNoScoreState) {
     merged.home_score = null;
   } else if (incoming.home_score !== null && incoming.home_score !== undefined) {
     merged.home_score = incoming.home_score;
@@ -6864,7 +6897,7 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     merged.home_score = null;
   }
 
-  if (incomingClearsScoreState) {
+  if (incomingClearsScoreState || incomingPostponedNoScoreState) {
     merged.away_score = null;
   } else if (incoming.away_score !== null && incoming.away_score !== undefined) {
     merged.away_score = incoming.away_score;
@@ -6874,7 +6907,7 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     merged.away_score = null;
   }
 
-  if (incomingClearsScoreState) {
+  if (incomingClearsScoreState || incomingPostponedNoScoreState) {
     merged.aggregate_home_score =
       incomingAggregate.home !== null ? incomingAggregate.home : existingAggregate.home;
   } else if (incomingAggregate.home !== null && incomingAggregate.away !== null) {
@@ -6885,7 +6918,7 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     merged.aggregate_home_score = null;
   }
 
-  if (incomingClearsScoreState) {
+  if (incomingClearsScoreState || incomingPostponedNoScoreState) {
     merged.aggregate_away_score =
       incomingAggregate.away !== null ? incomingAggregate.away : existingAggregate.away;
   } else if (incomingAggregate.home !== null && incomingAggregate.away !== null) {
@@ -6898,7 +6931,9 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
 
   merged.score_status = incomingClearsScoreState
     ? null
-    : pickPreferredMatchStatus(
+    : incomingPostponedNoScoreState
+      ? "POSTPONED"
+      : pickPreferredMatchStatus(
       existing && existing.score_status !== undefined ? existing.score_status : null,
       incoming && incoming.score_status !== undefined ? incoming.score_status : null,
       {
@@ -6922,7 +6957,7 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
 
   if (incoming.penalty_result) {
     merged.penalty_result = incoming.penalty_result;
-  } else if (incomingClearsScoreState) {
+  } else if (incomingClearsScoreState || incomingPostponedNoScoreState) {
     merged.penalty_result = null;
   } else if (existing && existing.penalty_result) {
     merged.penalty_result = existing.penalty_result;
@@ -8039,6 +8074,7 @@ function mergeTvChannels(lhs, rhs) {
 function mergePreferredMatch(existing, incoming, preferIncoming) {
   const merged = { ...existing };
   const incomingClearsScoreState = hasExplicitNoScoreState(incoming);
+  const incomingPostponedNoScoreState = hasPostponedNoScoreState(incoming);
   const existingAggregate = resolveKnownAggregateScores(existing);
   const incomingAggregate = resolveKnownAggregateScores(incoming);
 
@@ -8060,22 +8096,28 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
     merged.time = incoming.time;
   }
 
-  if (incomingClearsScoreState) {
+  if (incomingClearsScoreState || incomingPostponedNoScoreState) {
     merged.home_score = null;
     merged.away_score = null;
     merged.aggregate_home_score =
       incomingAggregate.home !== null ? incomingAggregate.home : existingAggregate.home;
     merged.aggregate_away_score =
       incomingAggregate.away !== null ? incomingAggregate.away : existingAggregate.away;
-    merged.score_status = null;
+    merged.score_status = incomingPostponedNoScoreState ? "POSTPONED" : null;
   } else if (incoming.home_score !== undefined && incoming.home_score !== null) {
     merged.home_score = incoming.home_score;
   }
-  if (!incomingClearsScoreState && incoming.away_score !== undefined && incoming.away_score !== null) {
+  if (
+    !incomingClearsScoreState &&
+    !incomingPostponedNoScoreState &&
+    incoming.away_score !== undefined &&
+    incoming.away_score !== null
+  ) {
     merged.away_score = incoming.away_score;
   }
   if (
     !incomingClearsScoreState &&
+    !incomingPostponedNoScoreState &&
     incomingAggregate.home !== null &&
     incomingAggregate.away !== null
   ) {
@@ -8083,12 +8125,15 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
   }
   if (
     !incomingClearsScoreState &&
+    !incomingPostponedNoScoreState &&
     incomingAggregate.home !== null &&
     incomingAggregate.away !== null
   ) {
     merged.aggregate_away_score = incomingAggregate.away;
   }
-  if (!incomingClearsScoreState && incoming.score_status) merged.score_status = incoming.score_status;
+  if (!incomingClearsScoreState && !incomingPostponedNoScoreState && incoming.score_status) {
+    merged.score_status = incoming.score_status;
+  }
   if (incoming.details_url) merged.details_url = incoming.details_url;
 
   [

@@ -44,6 +44,7 @@ const BBC_DETAIL_FAIL_TTL_MS = 2 * 60 * 1000;
 const BBC_DETAILS_CACHE_MAX_ENTRIES = 2000;
 const BBC_LIVE_TEXT_MAX_PAGES = 6;
 const BBC_COMPLETED_STATUSES = new Set(["FT", "AET", "Pens", "PENS", "PEN", "PEN."]);
+const BBC_POSTPONED_STATUSES = new Set(["POSTPONED", "MATCH POSTPONED"]);
 const bbcDetailsCache = new Map();
 
 const TEAM_SELECTORS = [
@@ -92,6 +93,8 @@ const STATUS_ALIASES = new Map([
   ["full-time", "FT"],
   ["extra time", "ET"],
   ["penalty shootout", "Pens"],
+  ["match postponed", "POSTPONED"],
+  ["postponed", "POSTPONED"],
 ]);
 
 function fetchHtml(url) {
@@ -469,7 +472,7 @@ function extractScoresFromAttributes($node) {
   for (const [homeKey, awayKey] of attrs) {
     const home = normalizeText($node.attr(homeKey));
     const away = normalizeText($node.attr(awayKey));
-    if (home && away) return [home, away];
+    if (isScoreValue(home) && isScoreValue(away)) return [home, away];
   }
   return null;
 }
@@ -546,9 +549,14 @@ function extractAggregateFromDocument($) {
 function normalizeStatusToken(token) {
   if (!token) return null;
   const upper = token.toUpperCase();
+  if (BBC_POSTPONED_STATUSES.has(upper)) return "POSTPONED";
   if (upper === "PENS" || upper === "PEN" || upper === "PEN.") return "Pens";
   if (["HT", "FT", "AET", "ET"].includes(upper)) return upper;
   return token;
+}
+
+function isPostponedStatus(status) {
+  return normalizeStatusToken(status) === "POSTPONED";
 }
 
 function extractStatusFromText(text) {
@@ -642,7 +650,7 @@ function extractKickoffTimeFromBbcNode($node, $) {
 }
 
 function isMatchStarted(status) {
-  return Boolean(status) && !isKickoffTime(status);
+  return Boolean(status) && !isKickoffTime(status) && !isPostponedStatus(status);
 }
 
 function isCompletedStatus(status) {
@@ -1804,26 +1812,29 @@ function parseMatchesFromDom($) {
     if (teams.length < 2) return;
     const aggregate = extractAggregateFromBbcNode($node, $);
     const bbcScores = extractScoresFromBbcNode($node, $);
-    const scores = bbcScores || (aggregate ? null : extractScores($node, $));
-    if (!scores || scores.length < 2) return;
     const kickoffTime = extractKickoffTimeFromBbcNode($node, $);
     let status = extractStatusFromBbcNode($node, $) || extractStatus($node, $);
     if ((!status || isKickoffTime(status)) && kickoffTime) {
       status = kickoffTime;
     }
-    if (aggregate && !bbcScores && kickoffTime) {
+    if (aggregate && !bbcScores && kickoffTime && !isPostponedStatus(status)) {
       status = kickoffTime;
     }
     if (!status) return;
+    const isPostponed = isPostponedStatus(status);
+    const scores = isPostponed ? null : (bbcScores || (aggregate ? null : extractScores($node, $)));
+    if (!isPostponed && (!scores || scores.length < 2)) return;
     const detailsUrl = extractDetailsUrl($node, $, BBC_BASE_URL);
 
     const parsedMatch = {
       home_team: teams[0],
-      home_score: scores[0],
       away_team: teams[1],
-      away_score: scores[1],
       match_time: status,
     };
+    if (!isPostponed) {
+      parsedMatch.home_score = scores[0];
+      parsedMatch.away_score = scores[1];
+    }
     if (detailsUrl) parsedMatch.details_url = detailsUrl;
     if (aggregate) {
       parsedMatch.aggregate_home_score = aggregate[0];
@@ -2057,20 +2068,23 @@ function extractMatchFromEvent(event) {
   );
   if (!homeName || !awayName) return null;
 
-  const homeScore = pickEventScore(event.home);
-  const awayScore = pickEventScore(event.away);
-  if (!isScoreValue(homeScore) || !isScoreValue(awayScore)) return null;
-
   const status = pickEventStatus(event);
   if (!status || isKickoffTime(status)) return null;
+  const isPostponed = isPostponedStatus(status);
+
+  const homeScore = pickEventScore(event.home);
+  const awayScore = pickEventScore(event.away);
+  if (!isPostponed && (!isScoreValue(homeScore) || !isScoreValue(awayScore))) return null;
 
   const match = {
     home_team: homeName,
-    home_score: String(homeScore),
     away_team: awayName,
-    away_score: String(awayScore),
     match_time: status,
   };
+  if (!isPostponed) {
+    match.home_score = String(homeScore);
+    match.away_score = String(awayScore);
+  }
   const aggregate = extractAggregateFromObject(event);
   if (aggregate) {
     match.aggregate_home_score = aggregate[0];
@@ -2154,19 +2168,22 @@ function extractMatchFromObject(node) {
   const away = pickString(node, ["awayTeam", "away_team", "away", "awayName", "away_team_name"]);
   if (!home || !away) return null;
 
-  const score = pickScore(node);
-  if (!score) return null;
-
   const status = pickStatus(node);
   if (!status || isKickoffTime(status)) return null;
+  const isPostponed = isPostponedStatus(status);
+
+  const score = pickScore(node);
+  if (!isPostponed && !score) return null;
 
   const match = {
     home_team: home,
-    home_score: score[0],
     away_team: away,
-    away_score: score[1],
     match_time: status,
   };
+  if (!isPostponed) {
+    match.home_score = score[0];
+    match.away_score = score[1];
+  }
   const aggregate = extractAggregateFromObject(node);
   if (aggregate) {
     match.aggregate_home_score = aggregate[0];
@@ -2623,16 +2640,17 @@ function extractScheduledMatchFromEvent(event, options = {}) {
 
   // Check if match has started before including scores
   const status = pickEventStatus(event);
-  const hasStarted = status && !isKickoffTime(status);
+  const hasMatchStatus = status && !isKickoffTime(status);
+  const shouldIncludeScores = hasMatchStatus && !isPostponedStatus(status);
 
   const score = pickScore(event);
   // Only include scores if the match has actually started
-  if (hasStarted && score && isScoreValue(score[0]) && isScoreValue(score[1])) {
+  if (shouldIncludeScores && score && isScoreValue(score[0]) && isScoreValue(score[1])) {
     match.home_score = toScoreValue(score[0]);
     match.away_score = toScoreValue(score[1]);
   }
 
-  if (hasStarted) {
+  if (hasMatchStatus) {
     match.score_status = status;
   }
 
@@ -3161,6 +3179,7 @@ module.exports = {
     normalizeDetailsUrlKey,
     parseLiveTextEntriesFromHtml,
     parseMatchesFromDom,
+    parseScheduledMatchesFromJson,
     pickCompetitionName,
     selectMatchCandidateByDetailsUrl,
     pickEventStatus,

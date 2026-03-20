@@ -468,8 +468,15 @@ struct Match: Identifiable, Codable, Hashable {
         return MatchStatusFormatter.isFinished(scoreStatus)
     }
 
+    var isPostponed: Bool {
+        MatchStatusFormatter.isPostponed(scoreStatus)
+    }
+
     var isUpcomingScorelessFixture: Bool {
-        Self.isUpcomingScorelessFixture(
+        if isPostponed {
+            return false
+        }
+        return Self.isUpcomingScorelessFixture(
             date: date,
             time: time,
             homeScore: homeScore,
@@ -630,6 +637,7 @@ struct Match: Identifiable, Codable, Hashable {
     func withDetails(_ details: MatchDetailsPayload) -> Match {
         let nextDate = details.date ?? date
         let nextTime = details.time ?? time
+        let isPostponedStatus = MatchStatusFormatter.isPostponed(details.scoreStatus)
         let shouldClearScores = Self.isUpcomingScorelessFixture(
             date: nextDate,
             time: nextTime,
@@ -637,7 +645,7 @@ struct Match: Identifiable, Codable, Hashable {
             awayScore: details.awayScore,
             scoreStatus: details.scoreStatus,
             inProgress: details.inProgress
-        )
+        ) || isPostponedStatus
         let mergedScoreStatus = MatchStatusFormatter.preferredStatus(
             current: scoreStatus,
             incoming: details.scoreStatus
@@ -659,7 +667,7 @@ struct Match: Identifiable, Codable, Hashable {
             aggregateAwayScore: details.aggregateAwayScore ?? aggregateAwayScore,
             firstLegHomeScore: details.firstLegHomeScore ?? firstLegHomeScore,
             firstLegAwayScore: details.firstLegAwayScore ?? firstLegAwayScore,
-            scoreStatus: shouldClearScores ? nil : mergedScoreStatus,
+            scoreStatus: isPostponedStatus ? mergedScoreStatus : (shouldClearScores ? nil : mergedScoreStatus),
             homeGoalScorers: details.homeGoalScorers,
             awayGoalScorers: details.awayGoalScorers,
             homeAssists: details.homeAssists,
@@ -808,21 +816,25 @@ struct Match: Identifiable, Codable, Hashable {
 enum MatchStatusFormatter {
     private static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
     private static let completeTokens: Set<String> = ["FT", "AET"]
+    private static let postponedTokens: Set<String> = ["POSTPONED", "MATCH POSTPONED"]
     private static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
     private static let maximumLiveWindow: TimeInterval = 3.5 * 60 * 60
 
     static func displayValue(for rawStatus: String) -> String {
-        let status = normalized(rawStatus)
+        let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return rawStatus }
         if isMinuteStatus(status) {
             let minuteValue = status.replacingOccurrences(of: "'", with: "")
             return "\(minuteValue)'"
         }
+        if status == "POSTPONED" {
+            return "Match postponed"
+        }
         return status
     }
 
     static func isInProgress(_ rawStatus: String) -> Bool {
-        let status = normalized(rawStatus)
+        let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return false }
         if isMinuteStatus(status) { return true }
 
@@ -832,10 +844,14 @@ enum MatchStatusFormatter {
     }
 
     static func isFinished(_ rawStatus: String) -> Bool {
-        let status = normalized(rawStatus)
+        let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return false }
         let token = status.uppercased()
         return completeTokens.contains(token)
+    }
+
+    static func isPostponed(_ rawStatus: String?) -> Bool {
+        canonicalStatus(rawStatus) == "POSTPONED"
     }
 
     static func preferredStatus(current: String?, incoming: String?) -> String? {
@@ -847,6 +863,22 @@ enum MatchStatusFormatter {
 
         let currentState = statusState(for: currentStatus)
         let incomingState = statusState(for: incomingStatus)
+
+        if currentState == .postponed && incomingState == .unknown {
+            return currentStatus
+        }
+        if incomingState == .postponed && currentState == .unknown {
+            return incomingStatus
+        }
+        if currentState == .postponed && incomingState == .postponed {
+            return incomingStatus
+        }
+        if currentState == .postponed && incomingState != .unknown {
+            return incomingStatus
+        }
+        if incomingState == .postponed && currentState != .unknown {
+            return currentStatus
+        }
 
         if currentState == .finished && incomingState != .finished {
             return currentStatus
@@ -909,7 +941,7 @@ enum MatchStatusFormatter {
         hasScore: Bool,
         now: Date = Date()
     ) -> String? {
-        guard let trimmed = trimmedStatus(rawStatus) else { return nil }
+        guard let trimmed = canonicalStatus(rawStatus) else { return nil }
 
         guard hasScore, isInProgress(trimmed), let kickoff else {
             return trimmed
@@ -951,10 +983,7 @@ enum MatchStatusFormatter {
     }
 
     static func normalizedStatus(_ value: String?) -> String? {
-        guard let value = trimmedStatus(value) else {
-            return nil
-        }
-        return value.uppercased()
+        canonicalStatus(value)
     }
 
     private static func isFirstHalfMinuteStatus(_ status: String) -> Bool {
@@ -975,7 +1004,21 @@ enum MatchStatusFormatter {
         return value
     }
 
+    private static func canonicalStatus(_ value: String?) -> String? {
+        guard let value = trimmedStatus(value) else {
+            return nil
+        }
+        let uppercased = value.uppercased()
+        if postponedTokens.contains(uppercased) {
+            return "POSTPONED"
+        }
+        return uppercased
+    }
+
     private static func statusState(for status: String) -> StatusState {
+        if status == "POSTPONED" {
+            return .postponed
+        }
         if completeTokens.contains(status) {
             return .finished
         }
@@ -986,6 +1029,7 @@ enum MatchStatusFormatter {
     }
 
     private enum StatusState {
+        case postponed
         case finished
         case inProgress
         case unknown

@@ -221,6 +221,10 @@ struct MatchesView: View {
             reportMissingTeamLogosIfNeeded(days: days)
             refreshPredictorAvailability(days: days)
         }
+        .onReceive(NotificationCenter.default.publisher(for: FixturePredictionStore.didChangeNotification)) { _ in
+            predictionDateKeys = FixturePredictionStore.storedDateKeys()
+            refreshPredictorAvailability(days: matchesStore.groupedMatches)
+        }
         .onChange(of: searchText) { _, newValue in
             scheduleDebouncedSearch(for: newValue)
         }
@@ -251,7 +255,7 @@ struct MatchesView: View {
 
     private func ensureFantasySquadLoadedIfNeeded() {
         guard mode == .fixtures,
-              preferences.showFantasyMatchPills,
+              preferences.showsFantasyDataInFixtures,
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               fantasyViewModel.data == nil,
               !fantasyViewModel.isLoading,
@@ -312,6 +316,7 @@ struct MatchesView: View {
                                     fantasyContext: fantasyViewModel.matchRowContext
                                 )
                             }
+                            .disabled(match.isPostponed)
                             .onAppear {
                                 Task {
                                     let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
@@ -738,7 +743,7 @@ struct MatchesView: View {
                 .flatMap(\.matches)
                 .filter { match in
                     guard let kickoff = match.dateTime else { return false }
-                    return kickoff > now
+                    return kickoff > now && !match.isPostponed
                 }
             guard !upcoming.isEmpty else { return }
             partialResult[day.dateKey] = upcoming
@@ -918,9 +923,10 @@ private struct PredictedFixture: Codable, Identifiable {
     let homeElo: Double?
     let awayElo: Double?
     let unavailableReason: String?
+    let isPostponed: Bool
 
     var isPredicted: Bool {
-        homeGoals != nil && awayGoals != nil && unavailableReason == nil
+        homeGoals != nil && awayGoals != nil && unavailableReason == nil && !isPostponed
     }
 
     var displayLeague: String {
@@ -941,15 +947,92 @@ private struct PredictedFixture: Codable, Identifiable {
             tvChannels: [],
             homeScore: homeGoals,
             awayScore: awayGoals,
-            scoreStatus: nil
+            scoreStatus: isPostponed ? "POSTPONED" : nil
         )
     }
 
     var statusLabelText: String {
+        if isPostponed {
+            return "Match postponed"
+        }
         if isPredicted {
             return "Predicted"
         }
         return unavailableReason ?? "Unavailable"
+    }
+
+    var cardOpacity: Double {
+        isPostponed ? 1.0 : (isPredicted ? 1.0 : 0.55)
+    }
+}
+
+extension PredictedFixture {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case date
+        case time
+        case league
+        case leagueSubcategory
+        case homeTeam
+        case awayTeam
+        case tvChannels
+        case homeGoals
+        case awayGoals
+        case expectedHomeGoals
+        case expectedAwayGoals
+        case homeWinProbability
+        case drawProbability
+        case awayWinProbability
+        case homeElo
+        case awayElo
+        case unavailableReason
+        case isPostponed
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        date = try container.decode(String.self, forKey: .date)
+        time = try container.decode(String.self, forKey: .time)
+        league = try container.decode(String.self, forKey: .league)
+        leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
+        homeTeam = try container.decode(String.self, forKey: .homeTeam)
+        awayTeam = try container.decode(String.self, forKey: .awayTeam)
+        tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
+        homeGoals = try container.decodeIfPresent(Int.self, forKey: .homeGoals)
+        awayGoals = try container.decodeIfPresent(Int.self, forKey: .awayGoals)
+        expectedHomeGoals = try container.decodeIfPresent(Double.self, forKey: .expectedHomeGoals)
+        expectedAwayGoals = try container.decodeIfPresent(Double.self, forKey: .expectedAwayGoals)
+        homeWinProbability = try container.decodeIfPresent(Double.self, forKey: .homeWinProbability)
+        drawProbability = try container.decodeIfPresent(Double.self, forKey: .drawProbability)
+        awayWinProbability = try container.decodeIfPresent(Double.self, forKey: .awayWinProbability)
+        homeElo = try container.decodeIfPresent(Double.self, forKey: .homeElo)
+        awayElo = try container.decodeIfPresent(Double.self, forKey: .awayElo)
+        unavailableReason = try container.decodeIfPresent(String.self, forKey: .unavailableReason)
+        isPostponed = try container.decodeIfPresent(Bool.self, forKey: .isPostponed) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(date, forKey: .date)
+        try container.encode(time, forKey: .time)
+        try container.encode(league, forKey: .league)
+        try container.encodeIfPresent(leagueSubcategory, forKey: .leagueSubcategory)
+        try container.encode(homeTeam, forKey: .homeTeam)
+        try container.encode(awayTeam, forKey: .awayTeam)
+        try container.encode(tvChannels, forKey: .tvChannels)
+        try container.encodeIfPresent(homeGoals, forKey: .homeGoals)
+        try container.encodeIfPresent(awayGoals, forKey: .awayGoals)
+        try container.encodeIfPresent(expectedHomeGoals, forKey: .expectedHomeGoals)
+        try container.encodeIfPresent(expectedAwayGoals, forKey: .expectedAwayGoals)
+        try container.encodeIfPresent(homeWinProbability, forKey: .homeWinProbability)
+        try container.encodeIfPresent(drawProbability, forKey: .drawProbability)
+        try container.encodeIfPresent(awayWinProbability, forKey: .awayWinProbability)
+        try container.encodeIfPresent(homeElo, forKey: .homeElo)
+        try container.encodeIfPresent(awayElo, forKey: .awayElo)
+        try container.encodeIfPresent(unavailableReason, forKey: .unavailableReason)
+        try container.encode(isPostponed, forKey: .isPostponed)
     }
 }
 
@@ -963,21 +1046,28 @@ private struct FixturePredictionCachePayload: Codable {
     var entries: [String: DailyFixturePredictions]
 }
 
-private enum FixturePredictionStore {
+enum FixturePredictionStore {
     private static let fileName = "fixture-predictions.json"
+    static let didChangeNotification = Notification.Name("FixturePredictionStore.didChange")
 
     static func storedDateKeys() -> Set<String> {
         Set(loadCache().entries.keys)
     }
 
-    static func prediction(for dateKey: String) -> DailyFixturePredictions? {
+    fileprivate static func prediction(for dateKey: String) -> DailyFixturePredictions? {
         loadCache().entries[dateKey]
     }
 
-    static func save(_ prediction: DailyFixturePredictions) {
+    fileprivate static func save(_ prediction: DailyFixturePredictions) {
         var cache = loadCache()
         cache.entries[prediction.dateKey] = prediction
         persist(cache)
+    }
+
+    static func clearAll() {
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: cacheURL)
+        notifyDidChange()
     }
 
     private static func loadCache() -> FixturePredictionCachePayload {
@@ -998,6 +1088,11 @@ private enum FixturePredictionStore {
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(payload) else { return }
         try? data.write(to: cacheURL, options: [.atomic])
+        notifyDidChange()
+    }
+
+    private static func notifyDidChange() {
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
     private static var cacheURL: URL {
@@ -1051,6 +1146,8 @@ private enum FixturePredictionGenerator {
                     let unavailableReason: String?
                     if kickoff == nil {
                         unavailableReason = "Kick-off time unavailable"
+                    } else if match.isPostponed {
+                        unavailableReason = "Match postponed"
                     } else if kickoff! <= now {
                         unavailableReason = match.isInProgress ? "Already in progress" : "Already kicked off"
                     } else {
@@ -1078,9 +1175,10 @@ private enum FixturePredictionGenerator {
                                 awayWinProbability: nil,
                                 homeElo: homeElo,
                                 awayElo: awayElo,
-                                unavailableReason: unavailableReason
+                                unavailableReason: unavailableReason,
+                                isPostponed: match.isPostponed
                             ),
-                            skippedKickedOff: kickoff != nil && kickoff! <= now,
+                            skippedKickedOff: kickoff != nil && kickoff! <= now && !match.isPostponed,
                             skippedMissingElo: false,
                             skippedUnknown: kickoff == nil
                         )
@@ -1107,7 +1205,8 @@ private enum FixturePredictionGenerator {
                             awayWinProbability: estimate.awayWinProbability,
                             homeElo: homeElo,
                             awayElo: awayElo,
-                            unavailableReason: nil
+                            unavailableReason: nil,
+                            isPostponed: false
                         ),
                         skippedKickedOff: false,
                         skippedMissingElo: false,
@@ -1557,6 +1656,8 @@ private struct DayPredictionsView: View {
                     let home = fixture.homeGoals ?? 0
                     let away = fixture.awayGoals ?? 0
                     lines.append("\(fixture.time)  \(fixture.homeTeam) \(home)-\(away) \(fixture.awayTeam)")
+                } else if fixture.isPostponed {
+                    lines.append("\(fixture.time)  \(fixture.homeTeam) P-P \(fixture.awayTeam)  [Match postponed]")
                 } else {
                     lines.append("\(fixture.time)  \(fixture.homeTeam) vs \(fixture.awayTeam)  [\(fixture.statusLabelText)]")
                 }
@@ -1582,7 +1683,7 @@ private struct PredictedMatchCard: View {
             centerFooterText: fixture.isPredicted ? nil : fixture.statusLabelText,
             centerFooterColor: fixture.isPredicted ? .accentColor : .secondary
         )
-        .opacity(fixture.isPredicted ? 1.0 : 0.55)
+        .opacity(fixture.cardOpacity)
     }
 }
 
@@ -1695,7 +1796,7 @@ private struct PredictionShareSnapshotView: View {
                                 centerFooterColor: fixture.isPredicted ? .accentColor : .secondary,
                                 isLargePresentation: true
                             )
-                            .opacity(fixture.isPredicted ? 1.0 : 0.55)
+                            .opacity(fixture.cardOpacity)
                         }
                     }
                 }

@@ -3909,6 +3909,20 @@ test("formatFantasyDeadlineReminderTime uses synced timezone and tomorrow wordin
   assert.equal(formatted, "18:30 tomorrow");
 });
 
+test("buildFantasyDeadlineReminderBodyFromRecord uses actual send day wording", () => {
+  const body = __testHooks.buildFantasyDeadlineReminderBodyFromRecord(
+    {
+      body: "Reminder: Fantasy Football deadline due soon (18:30 tomorrow)",
+      deadline_time_ms: Date.parse("2026-03-20T18:30:00Z"),
+      device_time_zone: "Europe/London",
+      device_locale: "en-GB",
+    },
+    Date.parse("2026-03-20T15:32:00Z")
+  );
+
+  assert.equal(body, "Reminder: Fantasy Football deadline due soon (18:30 today)");
+});
+
 test("dedupeFantasyDeadlineReminderUsers collapses duplicate APNS targets to the freshest record", () => {
   const deduped = __testHooks.dedupeFantasyDeadlineReminderUsers(
     [

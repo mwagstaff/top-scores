@@ -91,6 +91,7 @@ struct FantasyView: View {
     @State private var isFantasyLoadingInterstitialMinimumDurationMet = false
     @State private var fantasyLoadingInterstitialSessionID = UUID()
     @State private var pendingFantasyRefreshRequest: PendingFantasyRefreshRequest?
+    @State private var isGameUpdatingLionPulsing = false
 
     private let rivalsSectionScrollID = "fantasy-rivals-section"
     private let fantasyLoadingInterstitialMinimumDurationNanoseconds: UInt64 = 3_000_000_000
@@ -605,9 +606,15 @@ struct FantasyView: View {
             FantasyLionIconView(size: 30, scale: 0.92)
         } detail: {
             if let errorMessage = fantasyViewModel.errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
+                if fantasyViewModel.isShowingGameUpdatingState {
+                    Text("Official FPL update in progress")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
             } else if fantasyViewModel.isLoading || fantasyViewModel.isRefreshing {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -2628,24 +2635,90 @@ struct FantasyView: View {
     }
 
     private func errorCard(_ message: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Fantasy data unavailable")
-                .font(.headline)
-            Text(message)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        Group {
+            if fantasyViewModel.isShowingGameUpdatingState {
+                gameUpdatingCard
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Fantasy data unavailable")
+                        .font(.headline)
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
 
-            Button("Retry now") {
+                    Button("Retry now") {
+                        triggerFantasyRefresh(force: true)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                )
+            }
+        }
+    }
+
+    private var gameUpdatingCard: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.12))
+
+                Circle()
+                    .stroke(Color.accentColor.opacity(0.20), lineWidth: 1)
+
+                FantasyLionIconView(size: 42, scale: 0.94)
+                    .foregroundStyle(Color.accentColor)
+                    .scaleEffect(isGameUpdatingLionPulsing ? 1.08 : 0.94)
+                    .shadow(
+                        color: Color.accentColor.opacity(isGameUpdatingLionPulsing ? 0.34 : 0.16),
+                        radius: isGameUpdatingLionPulsing ? 18 : 8,
+                        x: 0,
+                        y: 0
+                    )
+            }
+            .frame(width: 76, height: 76)
+
+            VStack(spacing: 8) {
+                Text("FPL is updating right now")
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+
+                Text("The official Fantasy Premier League game is being updated, so your squad and scores will return shortly. Stay tuned...")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            Button("Check again") {
                 triggerFantasyRefresh(force: true)
             }
             .buttonStyle(.bordered)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 20)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.12), lineWidth: 1)
+        )
+        .animation(
+            .easeInOut(duration: 1.8).repeatForever(autoreverses: true),
+            value: isGameUpdatingLionPulsing
+        )
+        .onAppear {
+            isGameUpdatingLionPulsing = true
+        }
+        .onDisappear {
+            isGameUpdatingLionPulsing = false
+        }
     }
 
     private var shareLoadingOverlay: some View {
