@@ -351,12 +351,27 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
 
 @available(iOSApplicationExtension 16.1, *)
 private enum LiveActivityMatchDisplayFilter {
+    private static let postponedTokens: Set<String> = ["POSTPONED", "MATCH POSTPONED", "MATCH POSTPONED."]
+
+    private static func isPostponed(_ match: TopScoresLiveActivityMatchState) -> Bool {
+        guard let matchTime = match.matchTime?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased(),
+            !matchTime.isEmpty else {
+            return false
+        }
+        return postponedTokens.contains(matchTime)
+    }
+
     static func deduplicatedMatches(
         from matches: [TopScoresLiveActivityMatchState]
     ) -> [TopScoresLiveActivityMatchState] {
         var seenMatchIds = Set<String>()
         var seenTeamPairs = Set<String>()
         return matches.reversed().filter { match in
+            guard !isPostponed(match) else {
+                return false
+            }
             if !match.matchId.isEmpty {
                 return seenMatchIds.insert(match.matchId).inserted
             }
@@ -2652,8 +2667,8 @@ private struct LiveActivityUpcomingIndicator: View {
                 )
         } else {
             Text("vs")
-                .font(.title3.monospacedDigit().weight(.bold))
-                .foregroundStyle(.white.opacity(0.85))
+                .font(fallbackVsFont)
+                .foregroundStyle(.white.opacity(0.6))
         }
     }
 
@@ -2662,6 +2677,12 @@ private struct LiveActivityUpcomingIndicator: View {
             .lazy
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
+    }
+
+    private var fallbackVsFont: Font {
+        logoSize >= 18
+            ? .subheadline.monospacedDigit().weight(.semibold)
+            : .caption2.monospacedDigit()
     }
 }
 

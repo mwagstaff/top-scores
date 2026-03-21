@@ -108,6 +108,7 @@ const MATCH_STATUS_MINUTE_PATTERN = /^(\d{1,3})(?:\+(\d{1,2}))?'?$/;
 const MATCH_STATUS_COMPLETE_TOKENS = new Set(["FT", "AET"]);
 const MATCH_STATUS_IN_PROGRESS_TOKENS = new Set(["LIVE", "HT", "ET", "PENS", "PEN", "PEN."]);
 const MATCH_STATUS_PENALTY_TOKENS = new Set(["PENS", "PEN", "PEN."]);
+const MATCH_STATUS_POSTPONED_TOKENS = new Set(["POSTPONED", "MATCH POSTPONED"]);
 const SNAPSHOT_NULL_CLEAR_FIELDS = new Set(["aggregate_home_score", "aggregate_away_score"]);
 
 function shortDeviceToken(deviceToken) {
@@ -349,6 +350,10 @@ function isFinishedMatchStatus(status) {
 
 function isPenaltyShootoutStatus(status) {
   return MATCH_STATUS_PENALTY_TOKENS.has(normalizeStatusToken(status));
+}
+
+function isPostponedMatchStatus(status) {
+  return MATCH_STATUS_POSTPONED_TOKENS.has(normalizeStatusToken(status));
 }
 
 function parseMatchDateTimeMs(match) {
@@ -3258,6 +3263,7 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
       const dateKey = String(match.date || "").trim();
       return Boolean(dateKey) && dateKey === todayKey;
     })
+    .filter((match) => !isPostponedMatchStatus(match && match.score_status))
     .filter((match) => {
       if (
         prefs.competitionFilterEnabled &&
@@ -3465,6 +3471,10 @@ function shouldIncludeMonitoredEntryForLiveActivity(entry, user, nowMs = Date.no
 
   const kickoffMs = parseMatchDateTimeMs(match);
   const status = match.score_status;
+
+  if (isPostponedMatchStatus(status)) {
+    return false;
+  }
 
   if (isLikelyTerminalStaleLiveMatch(match, kickoffMs, nowMs)) {
     return false;
@@ -5115,6 +5125,10 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     const currentMatch = entry.match;
     const kickoffMs = parseMatchDateTimeMs(currentMatch);
     const status = currentMatch ? currentMatch.score_status : null;
+
+    if (isPostponedMatchStatus(status)) {
+      continue;
+    }
 
     if (isLikelyTerminalStaleLiveMatch(currentMatch, kickoffMs, nowMs)) {
       continue;

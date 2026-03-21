@@ -689,6 +689,90 @@ test("buildLiveActivityPresentationForUser excludes matches without matching TV 
   assert.deepStrictEqual(presentation.matches, []);
 });
 
+test("buildLiveActivityPresentationForUser excludes postponed fixtures from upcoming live activities", () => {
+  const nowMs = Date.parse("2026-03-21T09:00:00Z");
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "postponed-city-palace",
+          date: "2026-03-21",
+          time: "12:30",
+          league: "Premier League",
+          home_team: "Manchester City",
+          away_team: "Crystal Palace",
+          home_score: null,
+          away_score: null,
+          score_status: "POSTPONED",
+          tv_channels: ["TNT Sports 1"],
+        },
+      },
+      {
+        state: null,
+        match: {
+          match_details_id: "arsenal-chelsea",
+          date: "2026-03-21",
+          time: "17:30",
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Chelsea",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          tv_channels: ["Sky Sports Main Event"],
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_upcoming");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].match_details_id, "arsenal-chelsea");
+});
+
+test("buildLiveActivityEntriesForUser drops postponed canonical fixtures", () => {
+  const nowMs = Date.parse("2026-03-21T09:00:00Z");
+
+  const entries = __testHooks.buildLiveActivityEntriesForUser(
+    liveActivityUser(0),
+    [],
+    [
+      {
+        match_details_id: "postponed-city-palace",
+        date: "2026-03-21",
+        time: "12:30",
+        league: "Premier League",
+        home_team: "Manchester City",
+        away_team: "Crystal Palace",
+        home_score: null,
+        away_score: null,
+        score_status: "POSTPONED",
+        tv_channels: ["TNT Sports 1"],
+      },
+      {
+        match_details_id: "arsenal-chelsea",
+        date: "2026-03-21",
+        time: "17:30",
+        league: "Premier League",
+        home_team: "Arsenal",
+        away_team: "Chelsea",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+        tv_channels: ["Sky Sports Main Event"],
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].match.match_details_id, "arsenal-chelsea");
+});
+
 test("buildLiveActivityEntriesForUser uses the first filtered fixture section and ignores stale extra matches", () => {
   const nowMs = Date.parse("2026-03-10T23:21:00Z");
   const user = liveActivityUser(0, {
