@@ -48,6 +48,7 @@ struct PreferencesSnapshot: Codable, Equatable {
     let notificationUseViewingFilter: Bool
     let notificationCompetitionFilterEnabled: Bool
     let notificationSelectedLeagues: [String]
+    let notificationPremierLeagueTeamsOnly: Bool
     let fantasyDeadlineRemindersEnabled: Bool
     let showTodayUnfinishedFixturesBadge: Bool
     let showFantasyFixtureLogos: Bool
@@ -74,6 +75,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         notificationUseViewingFilter: Bool = PreferencesStore.defaultNotificationUseViewingFilter,
         notificationCompetitionFilterEnabled: Bool = PreferencesStore.defaultNotificationCompetitionFilterEnabled,
         notificationSelectedLeagues: [String] = PreferencesStore.defaultNotificationSelectedLeagues,
+        notificationPremierLeagueTeamsOnly: Bool = PreferencesStore.defaultNotificationPremierLeagueTeamsOnly,
         fantasyDeadlineRemindersEnabled: Bool = PreferencesStore.defaultFantasyDeadlineRemindersEnabled,
         showTodayUnfinishedFixturesBadge: Bool = PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
         showFantasyFixtureLogos: Bool = PreferencesStore.defaultShowFantasyFixtureLogos,
@@ -95,6 +97,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         self.notificationUseViewingFilter = notificationUseViewingFilter
         self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
         self.notificationSelectedLeagues = notificationSelectedLeagues
+        self.notificationPremierLeagueTeamsOnly = notificationPremierLeagueTeamsOnly
         self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
@@ -118,6 +121,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         case notificationUseViewingFilter
         case notificationCompetitionFilterEnabled
         case notificationSelectedLeagues
+        case notificationPremierLeagueTeamsOnly
         case fantasyDeadlineRemindersEnabled
         case showTodayUnfinishedFixturesBadge
         case showFantasyFixtureLogos
@@ -149,6 +153,7 @@ struct PreferencesSnapshot: Codable, Equatable {
         notificationUseViewingFilter = try container.decodeIfPresent(Bool.self, forKey: .notificationUseViewingFilter) ?? PreferencesStore.defaultNotificationUseViewingFilter
         notificationCompetitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationCompetitionFilterEnabled) ?? PreferencesStore.defaultNotificationCompetitionFilterEnabled
         notificationSelectedLeagues = try container.decodeIfPresent([String].self, forKey: .notificationSelectedLeagues) ?? PreferencesStore.defaultNotificationSelectedLeagues
+        notificationPremierLeagueTeamsOnly = try container.decodeIfPresent(Bool.self, forKey: .notificationPremierLeagueTeamsOnly) ?? PreferencesStore.defaultNotificationPremierLeagueTeamsOnly
         fantasyDeadlineRemindersEnabled = try container.decodeIfPresent(Bool.self, forKey: .fantasyDeadlineRemindersEnabled) ?? PreferencesStore.defaultFantasyDeadlineRemindersEnabled
         showTodayUnfinishedFixturesBadge = try container.decodeIfPresent(Bool.self, forKey: .showTodayUnfinishedFixturesBadge) ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
         let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
@@ -187,6 +192,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultNotificationUseViewingFilter = true
     nonisolated static let defaultNotificationCompetitionFilterEnabled = true
     nonisolated static let defaultNotificationSelectedLeagues: [String] = []
+    nonisolated static let defaultNotificationPremierLeagueTeamsOnly = true
     nonisolated static let defaultFantasyDeadlineRemindersEnabled = true
     nonisolated static let defaultShowTodayUnfinishedFixturesBadge = false
     nonisolated static let defaultShowFantasyFixtureLogos = false
@@ -257,6 +263,10 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var notificationPremierLeagueTeamsOnly: Bool {
+        didSet { persist() }
+    }
+
     @Published var fantasyDeadlineRemindersEnabled: Bool {
         didSet { persist() }
     }
@@ -313,6 +323,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationCompetitionFilterEnabled
         let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
             ?? Self.defaultNotificationSelectedLeagues
+        let notificationPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.notificationPremierLeagueTeamsOnly) as? Bool
+            ?? Self.defaultNotificationPremierLeagueTeamsOnly
         let fantasyDeadlineRemindersEnabled = userDefaults.object(forKey: Keys.fantasyDeadlineRemindersEnabled) as? Bool
             ?? Self.defaultFantasyDeadlineRemindersEnabled
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
@@ -345,6 +357,7 @@ final class PreferencesStore: ObservableObject {
         self.notificationUseViewingFilter = notificationUseViewingFilter
         self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
         self.notificationSelectedLeagues = notificationSelectedLeagues
+        self.notificationPremierLeagueTeamsOnly = notificationPremierLeagueTeamsOnly
         self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
@@ -378,6 +391,7 @@ final class PreferencesStore: ObservableObject {
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
             notificationSelectedLeagues: notificationSelectedLeagues,
+            notificationPremierLeagueTeamsOnly: notificationPremierLeagueTeamsOnly,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
@@ -407,6 +421,7 @@ final class PreferencesStore: ObservableObject {
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
             notificationSelectedLeagues: notificationSelectedLeagues,
+            notificationPremierLeagueTeamsOnly: notificationPremierLeagueTeamsOnly,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
@@ -431,6 +446,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(notificationUseViewingFilter, forKey: Keys.notificationUseViewingFilter)
         userDefaults.set(notificationCompetitionFilterEnabled, forKey: Keys.notificationCompetitionFilterEnabled)
         userDefaults.set(notificationSelectedLeagues, forKey: Keys.notificationSelectedLeagues)
+        userDefaults.set(notificationPremierLeagueTeamsOnly, forKey: Keys.notificationPremierLeagueTeamsOnly)
         userDefaults.set(fantasyDeadlineRemindersEnabled, forKey: Keys.fantasyDeadlineRemindersEnabled)
         userDefaults.set(showTodayUnfinishedFixturesBadge, forKey: Keys.showTodayUnfinishedFixturesBadge)
         userDefaults.set(showFantasyFixtureLogos, forKey: Keys.showFantasyFixtureLogos)
@@ -484,6 +500,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationCompetitionFilterEnabled
         let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
             ?? Self.defaultNotificationSelectedLeagues
+        let notificationPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.notificationPremierLeagueTeamsOnly) as? Bool
+            ?? Self.defaultNotificationPremierLeagueTeamsOnly
         let fantasyDeadlineRemindersEnabled = userDefaults.object(forKey: Keys.fantasyDeadlineRemindersEnabled) as? Bool
             ?? Self.defaultFantasyDeadlineRemindersEnabled
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
@@ -513,6 +531,7 @@ final class PreferencesStore: ObservableObject {
             notificationUseViewingFilter: notificationUseViewingFilter,
             notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
             notificationSelectedLeagues: notificationSelectedLeagues,
+            notificationPremierLeagueTeamsOnly: notificationPremierLeagueTeamsOnly,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
@@ -537,6 +556,7 @@ final class PreferencesStore: ObservableObject {
         static let notificationUseViewingFilter = "preferences.notificationUseViewingFilter"
         static let notificationCompetitionFilterEnabled = "preferences.notificationCompetitionFilterEnabled"
         static let notificationSelectedLeagues = "preferences.notificationSelectedLeagues"
+        static let notificationPremierLeagueTeamsOnly = "preferences.notificationPremierLeagueTeamsOnly"
         static let fantasyDeadlineRemindersEnabled = "preferences.fantasyDeadlineRemindersEnabled"
         static let showTodayUnfinishedFixturesBadge = "preferences.showTodayUnfinishedFixturesBadge"
         static let showFantasyFixtureLogos = "preferences.showFantasyFixtureLogos"

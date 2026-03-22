@@ -224,6 +224,7 @@ actor PreferencesSyncService {
                 "notificationUseViewingFilter": snapshot.notificationUseViewingFilter,
                 "notificationCompetitionFilterEnabled": snapshot.notificationCompetitionFilterEnabled,
                 "notificationSelectedLeagues": snapshot.notificationSelectedLeagues,
+                "notificationPremierLeagueTeamsOnly": snapshot.notificationPremierLeagueTeamsOnly,
                 "fantasyDeadlineRemindersEnabled": snapshot.fantasyDeadlineRemindersEnabled,
                 "showTodayUnfinishedFixturesBadge": snapshot.showTodayUnfinishedFixturesBadge,
                 "showFantasyFixtureLogos": snapshot.showFantasyFixtureLogos,

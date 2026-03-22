@@ -2778,8 +2778,11 @@ function evaluateUserNotificationDecision(user, match, event) {
     }
   }
 
-  // Check EPL teams filter
-  if (prefs.englishPremierLeagueTeamsOnly) {
+  // Check notification EPL teams filter
+  const notifEplOnly = prefs.notificationPremierLeagueTeamsOnly !== undefined
+    ? prefs.notificationPremierLeagueTeamsOnly
+    : prefs.englishPremierLeagueTeamsOnly;
+  if (notifEplOnly) {
     const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
     const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
     if (!homeInPremierLeague && !awayInPremierLeague) {

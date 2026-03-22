@@ -69,6 +69,12 @@ struct PreferencesView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
+                        Toggle("Premier League teams only", isOn: notificationPremierLeagueTeamsOnlyBinding)
+                            .disabled(!preferences.notificationsEnabled)
+                        Text("Only receive notifications for matches where at least one team is in the English Premier League.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
                         if preferences.notificationsEnabled {
                             Picker("Notification delay", selection: notificationDelayBinding) {
                                 Text("No delay").tag(0)
@@ -436,6 +442,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.notificationEventTypes },
             set: { preferences.notificationEventTypes = $0 }
+        )
+    }
+
+    private var notificationPremierLeagueTeamsOnlyBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.notificationPremierLeagueTeamsOnly },
+            set: { preferences.notificationPremierLeagueTeamsOnly = $0 }
         )
     }
 
