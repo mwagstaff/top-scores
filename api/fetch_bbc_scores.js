@@ -1534,6 +1534,9 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   const preferredAwayTeam = requestedAwayTeam || pageMetadata.away_team || null;
   const primaryMatchNode = selectPrimaryMatchNode($, preferredHomeTeam, preferredAwayTeam);
   const $primaryScope = primaryMatchNode ? $(primaryMatchNode) : $root;
+  const kickoffTimeFromHeader = primaryMatchNode
+    ? extractKickoffTimeFromBbcNode($primaryScope, $)
+    : null;
   const teamsFromHeader = extractTeamsFromBbcNode($primaryScope, $);
   const fallbackTeamsFromHeader = teamsFromHeader.length >= 2
     ? teamsFromHeader
@@ -1557,6 +1560,10 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
         matchTime = statusText;
       }
     }
+  }
+
+  if (kickoffTimeFromHeader) {
+    pageMetadata.time = kickoffTimeFromHeader;
   }
 
   const aggregate = primaryMatchNode
@@ -2277,7 +2284,7 @@ function readStringValue(value, depth = 0) {
     return normalizeText(String(value));
   }
   if (typeof value !== "object" || depth > 3) return null;
-  const keys = ["fullName", "name", "displayName", "title", "label", "shortName", "value", "text"];
+  const keys = ["fullName", "disambiguatedName", "name", "displayName", "title", "label", "shortName", "value", "text"];
   for (const key of keys) {
     const nested = readStringValue(value[key], depth + 1);
     if (nested) return nested;

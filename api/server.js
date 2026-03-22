@@ -7212,7 +7212,11 @@ async function enrichKnockoutAggregatesForListMatches(matches, matchDetailsLooku
   if (list.length === 0) return { lookup: matchDetailsLookup || {}, enrichedCount: 0 };
 
   const lookup =
-    matchDetailsLookup && typeof matchDetailsLookup === "object" ? { ...matchDetailsLookup } : {};
+    matchDetailsLookup instanceof Map
+      ? new Map(matchDetailsLookup)
+      : matchDetailsLookup && typeof matchDetailsLookup === "object"
+        ? { ...matchDetailsLookup }
+        : {};
   const candidates = [];
   const seenIds = new Set();
 
@@ -7244,7 +7248,11 @@ async function enrichKnockoutAggregatesForListMatches(matches, matchDetailsLooku
       persistSource: "matches_list_request_knockout_aggregate_enrichment",
     });
     if (!enrichedPayload || !enrichedPayload.id) continue;
-    lookup[candidate.detailsId] = enrichedPayload;
+    if (lookup instanceof Map) {
+      lookup.set(candidate.detailsId, enrichedPayload);
+    } else {
+      lookup[candidate.detailsId] = enrichedPayload;
+    }
     const aggHome = parseNumericScore(enrichedPayload.aggregate_home_score);
     const aggAway = parseNumericScore(enrichedPayload.aggregate_away_score);
     if (aggHome !== null && aggAway !== null) {
@@ -7685,9 +7693,25 @@ function normalizeLookupTimeValue(value) {
   return TIME_ONLY_PATTERN.test(trimmed) ? normalizeTimeValue(trimmed) : null;
 }
 
+function parseLookupTimeMinutes(value) {
+  const normalized = normalizeLookupTimeValue(value);
+  if (!normalized) return null;
+  const [hours, minutes] = normalized.split(":").map((part) => Number(part));
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return (hours * 60) + minutes;
+}
+
 function isComparableLookupTime(lhs, rhs) {
   if (!lhs || !rhs) return true;
-  return lhs === rhs || lhs === "00:00" || rhs === "00:00";
+  if (lhs === rhs || lhs === "00:00" || rhs === "00:00") return true;
+
+  const leftMinutes = parseLookupTimeMinutes(lhs);
+  const rightMinutes = parseLookupTimeMinutes(rhs);
+  if (!Number.isFinite(leftMinutes) || !Number.isFinite(rightMinutes)) {
+    return false;
+  }
+
+  return Math.abs(leftMinutes - rightMinutes) <= 120;
 }
 
 function buildMatchDetailsIdentityIndex(matchDetailsLookup) {
@@ -7753,8 +7777,8 @@ function isCompatibleMatchDetailsCandidate(candidate, normalizedMatch) {
     const exactTeamMatch =
       candidate.home === normalizedHome && candidate.away === normalizedAway;
     const exactDateMatch = candidate.date === normalizedMatch.date;
-    const exactTimeMatch = candidate.time === matchTime;
-    if (!(exactTeamMatch && exactDateMatch && exactTimeMatch)) {
+    const comparableTimeMatch = isComparableLookupTime(candidate.time, matchTime);
+    if (!(exactTeamMatch && exactDateMatch && comparableTimeMatch)) {
       return false;
     }
   }

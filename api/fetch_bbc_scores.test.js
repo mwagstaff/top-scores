@@ -252,6 +252,97 @@ test("parseScheduledMatchesFromJson preserves postponed fixtures from BBC initia
   ]);
 });
 
+test("parseScheduledMatchesFromJson keeps Scottish Championship separate from Championship", () => {
+  const initialData = {
+    eventGroups: [
+      {
+        displayLabel: "Scottish Championship",
+        displayLabelOnwardJourneyPath: "/sport/football/scottish-championship/table",
+        secondaryGroups: [
+          {
+            events: [
+              {
+                home: {
+                  fullName: "Arbroath",
+                },
+                away: {
+                  fullName: "Queen's Park",
+                },
+                startDateTime: "2026-03-21T15:00:00Z",
+                eventGroupingLabel: "Scotland - Championship",
+                tournament: {
+                  name: "Championship",
+                  disambiguatedName: "Scottish Championship",
+                  urn: "urn:bbc:sportsdata:football:tournament:scottish-championship",
+                },
+                statusComment: {
+                  value: "FT",
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        displayLabel: "Championship",
+        displayLabelOnwardJourneyPath: "/sport/football/championship/table",
+        secondaryGroups: [
+          {
+            events: [
+              {
+                home: {
+                  fullName: "Blackburn Rovers",
+                },
+                away: {
+                  fullName: "Middlesbrough",
+                },
+                startDateTime: "2026-03-21T12:30:00Z",
+                eventGroupingLabel: "England - Championship",
+                tournament: {
+                  name: "Championship",
+                  disambiguatedName: "Championship",
+                  urn: "urn:bbc:sportsdata:football:tournament:championship",
+                },
+                statusComment: {
+                  value: "FT",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const escapedInitialData = JSON.stringify(JSON.stringify(initialData));
+  const html = `<script>window.__INITIAL_DATA__=${escapedInitialData};</script>`;
+
+  const matches = __private.parseScheduledMatchesFromJson(html, {
+    fallbackDate: "2026-03-21",
+    timeZone: "Europe/London",
+  });
+
+  assert.deepStrictEqual(matches, [
+    {
+      date: "2026-03-21",
+      time: "15:00",
+      league: "Scottish Championship",
+      home_team: "Arbroath",
+      away_team: "Queen's Park",
+      tv_channels: [],
+      score_status: "FT",
+    },
+    {
+      date: "2026-03-21",
+      time: "12:30",
+      league: "Championship",
+      home_team: "Blackburn Rovers",
+      away_team: "Middlesbrough",
+      tv_channels: [],
+      score_status: "FT",
+    },
+  ]);
+});
+
 test("parseMatchDetailsFromHtml keeps normal goal objects backward-compatible", () => {
   const html = `
     <div class="KeyEventsHome">
@@ -357,6 +448,41 @@ test("parseMatchDetailsFromHtml extracts header metadata from BBC live match pag
   assert.equal(parsed.away_team, "Real Madrid");
   assert.equal(parsed.home_score, 1);
   assert.equal(parsed.away_score, 1);
+});
+
+test("parseMatchDetailsFromHtml prefers kickoff time from the match header over coverage start time", () => {
+  const html = `
+    <html>
+      <head>
+        <title>Arsenal vs Manchester City: League Cup stats &amp; head-to-head - BBC Sport</title>
+      </head>
+      <body>
+        <article data-event-id="match-1">
+          <div data-participant-id="home">
+            <div class="TeamNameWrapper">
+              <span>Arsenal</span>
+            </div>
+          </div>
+          <time datetime="2026-03-22T16:30:00Z">16:30</time>
+          <div data-participant-id="away">
+            <div class="TeamNameWrapper">
+              <span>Manchester City</span>
+            </div>
+          </div>
+        </article>
+        <script type="application/json">
+          {"coverageStartTime":"2026-03-22T15:00:00.000Z"}
+        </script>
+      </body>
+    </html>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.equal(parsed.date, "2026-03-22");
+  assert.equal(parsed.time, "16:30");
+  assert.equal(parsed.home_team, "Arsenal");
+  assert.equal(parsed.away_team, "Manchester City");
 });
 
 test("parseMatchDetailsFromHtml ignores head-to-head score widgets for pre-match fixtures", () => {

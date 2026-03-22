@@ -122,6 +122,26 @@ struct APIClient {
         )
     }
 
+    func fetchMatches(on date: String, pageSize: Int = 500) async throws -> [Match] {
+        let trimmedDate = date.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedDate.isEmpty else { return [] }
+
+        let queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "start", value: trimmedDate),
+            URLQueryItem(name: "end", value: trimmedDate),
+            URLQueryItem(name: "sort", value: "asc"),
+            URLQueryItem(name: "filter_mode", value: "intersection"),
+            URLQueryItem(name: "page_size", value: String(max(1, pageSize))),
+        ]
+
+        let request = try buildRequest(path: "matches", queryItems: queryItems)
+        let (data, http) = try await performRequest(request, operation: "matches_for_date")
+        try validateSuccess(http, data: data, operation: "matches_for_date")
+        return try await hydrateMatchStates(
+            try decodeMatches(from: data, operation: "matches_for_date")
+        )
+    }
+
     func fetchCompetitions() async throws -> [String] {
         let request = try buildRequest(path: "competitions", queryItems: [])
         let (data, http) = try await performRequest(request, operation: "competitions")

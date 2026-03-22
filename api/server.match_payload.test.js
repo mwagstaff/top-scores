@@ -796,6 +796,75 @@ test("toMatchListPayload resolves match_details_id when league label differs but
   assert.equal(payload.match_details_id, fallbackId);
 });
 
+test("toMatchListPayload resolves match_details_id when details time differs by coverage-start offset", () => {
+  const fallbackId = "cy030p56zx4t";
+  const payload = toMatchListPayload(
+    {
+      date: "2026-03-22",
+      time: "16:30",
+      league: "Carabao Cup",
+      home_team: "Arsenal",
+      away_team: "Manchester City",
+      tv_channels: ["ITV1"],
+    },
+    {
+      matchDetailsLookup: {
+        [fallbackId]: {
+          id: fallbackId,
+          date: "2026-03-22",
+          time: "15:00",
+          league: "League Cup",
+          home_team: "Arsenal",
+          away_team: "Manchester City",
+          score_status: "3",
+        },
+      },
+    }
+  );
+
+  assert.equal(payload.match_details_id, fallbackId);
+});
+
+test("enrichKnockoutAggregatesForListMatches preserves Map-backed details lookup entries", async () => {
+  const fallbackId = "cy030p56zx4t";
+  const match = {
+    date: "2026-03-22",
+    time: "16:30",
+    league: "Carabao Cup Final",
+    home_team: "Arsenal",
+    away_team: "Manchester City",
+    tv_channels: ["ITV1"],
+  };
+  const matchDetailsLookup = new Map([
+    [
+      fallbackId,
+      {
+        id: fallbackId,
+        details_url: `https://www.bbc.co.uk/sport/football/live/${fallbackId}`,
+        date: "2026-03-22",
+        time: "15:00",
+        league: "League Cup",
+        league_subcategory: "Final",
+        home_team: "Arsenal",
+        away_team: "Manchester City",
+        home_score: 0,
+        away_score: 0,
+        score_status: "50",
+      },
+    ],
+  ]);
+
+  const enrichment = await enrichKnockoutAggregatesForListMatches([match], matchDetailsLookup);
+  assert.equal(enrichment.lookup instanceof Map, true);
+
+  const payload = toMatchListPayload(match, {
+    matchDetailsLookup: enrichment.lookup,
+  });
+
+  assert.equal(payload.match_details_id, fallbackId);
+  assert.equal(payload.score_status, "50");
+});
+
 test("toMatchListPayload stabilizes stale in-progress status to FT once kickoff is well past the live window", () => {
   const payload = toMatchListPayload(
     {

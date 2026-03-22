@@ -1,8 +1,16 @@
 {
   "Premier League": 100,
   "UEFA Champions League": 90,
+  "FIFA World Cup 2026": 85,
   "UEFA Europa League": 80,
   "UEFA Conference League": 70,
+  "UEFA Nations League": 69,
   "FA Cup": 65,
-  "EFL Cup": 60
+  "English League Cup": 60,
+  "EFL Cup": 55,
+  "La Liga": 50,
+  "Scottish Premiership": 30,
+  "Scottish Championship": 25,
+  "Scottish League One": 20,
+  "Scottish League Two": 15
 }

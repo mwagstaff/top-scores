@@ -523,15 +523,21 @@ struct MatchDetailView: View {
     @State private var showCalendarPicker = false
     @State private var calendarChoices: [CalendarChoice] = []
     @State private var saveCalendarAsDefault = false
+    @State private var refreshedMatch: Match?
     @State private var detailedMatch: Match?
     @State private var detailsRefreshTask: Task<Void, Never>?
     @State private var detailsErrorMessage: String?
 
     private static let detailsRefreshIntervalNanos: UInt64 = 10_000_000_000
+    private static let idleDetailsRefreshIntervalNanos: UInt64 = 30_000_000_000
     private static let detailsCacheKeyPrefix = "match.details.cache."
 
+    private var baseMatch: Match {
+        refreshedMatch ?? match
+    }
+
     private var activeMatch: Match {
-        detailedMatch ?? match
+        detailedMatch ?? baseMatch
     }
 
     private var kickoffText: String {
@@ -694,6 +700,9 @@ struct MatchDetailView: View {
             }
             .padding(.vertical, 12)
         }
+        .refreshable {
+            await refreshDetailsManually()
+        }
         .navigationTitle("Match Details")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -832,28 +841,18 @@ struct MatchDetailView: View {
         detailsRefreshTask = nil
         detailsErrorMessage = nil
 
-        guard let detailsID = match.matchDetailsID else {
-            if match.isTestMatch == true {
-                detailedMatch = match
-                return
-            }
-            NSLog(
-                "Match details id missing for %@ vs %@ (league=%@ date=%@ time=%@)",
-                match.homeTeam,
-                match.awayTeam,
-                match.league,
-                match.date,
-                match.time
-            )
-            detailsErrorMessage = "Live events unavailable for this match."
+        if match.isTestMatch == true {
+            refreshedMatch = match
             detailedMatch = match
             return
         }
 
-        if let cached = Self.loadCachedDetails(for: detailsID) {
-            detailedMatch = match.withDetails(cached)
-        } else {
-            detailedMatch = match
+        refreshedMatch = nil
+        detailedMatch = nil
+
+        if let detailsID = match.matchDetailsID,
+           let cached = Self.loadCachedDetails(for: detailsID) {
+            detailedMatch = baseMatch.withDetails(cached)
         }
 
         guard let baseURL = URL(string: preferences.apiBaseURL) else {
@@ -861,19 +860,99 @@ struct MatchDetailView: View {
             return
         }
 
+        launchDetailsRefreshLoop(baseURL: baseURL)
+    }
+
+    private func refreshDetailsManually() async {
+        detailsRefreshTask?.cancel()
+        detailsRefreshTask = nil
+        detailsErrorMessage = nil
+
+        guard let baseURL = URL(string: preferences.apiBaseURL) else {
+            detailsErrorMessage = "Invalid API base URL."
+            return
+        }
+
+        await refreshFromServer(baseURL: baseURL)
+        launchDetailsRefreshLoop(baseURL: baseURL)
+    }
+
+    private func launchDetailsRefreshLoop(baseURL: URL) {
+        detailsRefreshTask?.cancel()
         detailsRefreshTask = Task {
             while !Task.isCancelled {
-                let fetched = await refreshDetailsOnce(detailsID: detailsID, baseURL: baseURL)
-                if fetched {
-                    let isLive = await MainActor.run { activeMatch.isInProgress }
-                    if !isLive { break }
-                }
-                try? await Task.sleep(nanoseconds: Self.detailsRefreshIntervalNanos)
+                await refreshFromServer(baseURL: baseURL)
+                let interval = await MainActor.run { refreshIntervalNanos(for: activeMatch) }
+                try? await Task.sleep(nanoseconds: interval)
             }
         }
     }
 
+    private func refreshFromServer(baseURL: URL) async {
+        let serverMatch = await refreshMatchSnapshotOnce(baseURL: baseURL)
+        let referenceMatch = await MainActor.run {
+            serverMatch ?? refreshedMatch ?? match
+        }
+
+        guard let detailsID = referenceMatch.matchDetailsID else {
+            await MainActor.run {
+                if let serverMatch {
+                    refreshedMatch = serverMatch
+                }
+                if detailedMatch == nil {
+                    detailsErrorMessage = "Live events unavailable for this match."
+                }
+            }
+            return
+        }
+
+        let fetched = await refreshDetailsOnce(
+            detailsID: detailsID,
+            baseURL: baseURL,
+            fallbackMatch: serverMatch ?? referenceMatch
+        )
+
+        if fetched {
+            return
+        }
+
+        await MainActor.run {
+            if let serverMatch {
+                refreshedMatch = serverMatch
+            }
+        }
+    }
+
+    private func refreshMatchSnapshotOnce(baseURL: URL) async -> Match? {
+        let referenceMatch = await MainActor.run { refreshedMatch ?? match }
+        let client = APIClient(baseURL: baseURL)
+
+        do {
+            let matches = try await client.fetchMatches(on: referenceMatch.date)
+            if Task.isCancelled { return nil }
+            let resolved = Self.bestMatchCandidate(for: referenceMatch, in: matches)
+            if let resolved {
+                await MainActor.run {
+                    refreshedMatch = resolved
+                }
+            }
+            return resolved
+        } catch {
+            if Self.isCancellationError(error) { return nil }
+            NSLog("Match snapshot refresh failed date=%@ error=%@", referenceMatch.date, String(describing: error))
+            return nil
+        }
+    }
+
     private func refreshDetailsOnce(detailsID: String, baseURL: URL) async -> Bool {
+        await refreshDetailsOnce(detailsID: detailsID, baseURL: baseURL, fallbackMatch: nil)
+    }
+
+    private func refreshDetailsOnce(
+        detailsID: String,
+        baseURL: URL,
+        fallbackMatch: Match?
+    ) async -> Bool {
         let client = APIClient(baseURL: baseURL)
         do {
             let details = try await client.fetchMatchDetails(matchId: detailsID)
@@ -888,7 +967,11 @@ struct MatchDetailView: View {
                 details.scoreStatus ?? "-"
             )
             await MainActor.run {
-                detailedMatch = activeMatch.withDetails(details)
+                let base = fallbackMatch ?? refreshedMatch ?? match
+                if let refreshed = fallbackMatch {
+                    refreshedMatch = refreshed
+                }
+                detailedMatch = base.withDetails(details)
                 detailsErrorMessage = nil
             }
             Self.saveCachedDetails(details, for: detailsID)
@@ -899,10 +982,17 @@ struct MatchDetailView: View {
             await MainActor.run {
                 detailsErrorMessage = detailedMatch == nil
                     ? "Unable to load match events."
-                    : "Using cached match events."
+                    : "Using latest available match events."
             }
             return false
         }
+    }
+
+    private func refreshIntervalNanos(for match: Match) -> UInt64 {
+        if match.matchDetailsID == nil || match.isInProgress {
+            return Self.detailsRefreshIntervalNanos
+        }
+        return Self.idleDetailsRefreshIntervalNanos
     }
 
     private func ensureFantasySquadLoadedIfNeeded() {
@@ -985,6 +1075,80 @@ struct MatchDetailView: View {
         if let urlError = error as? URLError, urlError.code == .cancelled { return true }
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    private static func bestMatchCandidate(for target: Match, in matches: [Match]) -> Match? {
+        let targetDetailsID = target.matchDetailsID
+
+        let ranked = matches.compactMap { candidate -> (match: Match, score: Int)? in
+            guard candidate.date == target.date else { return nil }
+            guard TeamIdentityStore.shared.matches(candidate.homeTeam, target.homeTeam),
+                  TeamIdentityStore.shared.matches(candidate.awayTeam, target.awayTeam) else {
+                return nil
+            }
+
+            var score = 0
+            if let targetDetailsID, candidate.matchDetailsID == targetDetailsID {
+                score += 1000
+            }
+
+            if candidate.homeTeam.localizedCaseInsensitiveCompare(target.homeTeam) == .orderedSame {
+                score += 50
+            }
+            if candidate.awayTeam.localizedCaseInsensitiveCompare(target.awayTeam) == .orderedSame {
+                score += 50
+            }
+
+            if candidate.time == target.time {
+                score += 30
+            } else if comparableKickoffTime(candidate.time, target.time) {
+                score += 15
+            }
+
+            if candidate.league.localizedCaseInsensitiveCompare(target.league) == .orderedSame {
+                score += 20
+            }
+
+            if candidate.matchDetailsID != nil {
+                score += 10
+            }
+            if candidate.detailsURL != nil {
+                score += 5
+            }
+
+            return (candidate, score)
+        }
+
+        return ranked
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score {
+                    return lhs.score > rhs.score
+                }
+                if lhs.match.time != rhs.match.time {
+                    return lhs.match.time < rhs.match.time
+                }
+                return lhs.match.league.localizedCaseInsensitiveCompare(rhs.match.league) == .orderedAscending
+            }
+            .first?
+            .match
+    }
+
+    private static func comparableKickoffTime(_ lhs: String, _ rhs: String) -> Bool {
+        guard let leftMinutes = kickoffMinutes(lhs),
+              let rightMinutes = kickoffMinutes(rhs) else {
+            return false
+        }
+        return abs(leftMinutes - rightMinutes) <= 120
+    }
+
+    private static func kickoffMinutes(_ value: String) -> Int? {
+        let parts = value.split(separator: ":").map { Int($0) }
+        guard parts.count == 2,
+              let hours = parts[0],
+              let minutes = parts[1] else {
+            return nil
+        }
+        return (hours * 60) + minutes
     }
 }
 
