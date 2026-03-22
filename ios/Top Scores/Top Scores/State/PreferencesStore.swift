@@ -166,6 +166,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultSelectedLeagues = [
         "Premier League",
         "FIFA World Cup 2026",
+        "FIFA World Cup Qualifying - European",
         "UEFA Champions League",
         "UEFA Conference League",
         "UEFA Europa League"

@@ -176,6 +176,7 @@ export const defaultPreferences: Preferences = {
   selectedLeagues: [
     "Premier League",
     "FIFA World Cup 2026",
+    "FIFA World Cup Qualifying - European",
     "UEFA Champions League",
     "UEFA Conference League",
     "UEFA Europa League",

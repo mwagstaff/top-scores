@@ -138,19 +138,10 @@ enum BackgroundRefreshManager {
         guard isEnabled else { return matches }
         guard !selectedLeagues.isEmpty else { return matches }
 
-        let selected = Set(selectedLeagues.map {
-            $0.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-        })
+        let selected = Set(selectedLeagues.map(CompetitionWeightConfig.canonicalFilterName))
 
         return matches.filter { match in
-            selected.contains(
-                match.league
-                    .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .lowercased()
-            )
+            selected.contains(CompetitionWeightConfig.canonicalFilterName(match.league))
         }
     }
 }

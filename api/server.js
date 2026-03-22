@@ -1025,6 +1025,18 @@ function normalizeLeagueName(name) {
   return normalized;
 }
 
+function normalizeCompetitionFilterName(name) {
+  const normalized = normalizeLeagueName(name || "");
+  if (!normalized) return "";
+
+  const lowered = normalized.toLowerCase();
+  if (/^fifa world cup(?:\s+2026)? qualifying\b/.test(lowered)) {
+    return "fifa world cup 2026";
+  }
+
+  return lowered;
+}
+
 const LEAGUE_TABLE_ID_ALIASES = {
   "uefa-champions-league": "champions-league",
   "uefa-europa-league": "europa-league",
@@ -1085,15 +1097,14 @@ function extractPremierLeagueTeamsFromTables(tables) {
 
 const ALLOWED_COMPETITION_SET = new Set(
   (SERVER_CONFIG.competitionAllowlist || [])
-    .map(normalizeLeagueName)
+    .map(normalizeCompetitionFilterName)
     .filter(Boolean)
-    .map((league) => league.toLowerCase())
 );
 
 function isAllowedCompetition(leagueName) {
   if (ALLOWED_COMPETITION_SET.size === 0) return true;
-  const normalized = normalizeLeagueName(leagueName || "");
-  return ALLOWED_COMPETITION_SET.has(normalized.toLowerCase());
+  const normalized = normalizeCompetitionFilterName(leagueName || "");
+  return ALLOWED_COMPETITION_SET.has(normalized);
 }
 
 function filterMatchesByCompetition(matches) {
@@ -8368,14 +8379,16 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
     is_test_match: true
   }));
 
-  // Merge all matches: live matches + BBC range matches + test matches
-  const allMatches = [
-    ...(Array.isArray(cachedMatches) ? cachedMatches : []),
+  const liveMatchesForMerge = Array.isArray(cachedMatches) ? cachedMatches : [];
+  const preferredMatchesForMerge = [
     ...(Array.isArray(cachedBbcRangeMatches) ? cachedBbcRangeMatches : []),
-    ...testMatchesForMerge
+    ...testMatchesForMerge,
   ];
 
-  cachedMergedMatches = mergeBbcAndLiveMatches(allMatches, []);
+  cachedMergedMatches = mergeBbcAndLiveMatches(
+    liveMatchesForMerge,
+    preferredMatchesForMerge
+  );
   indexMatchDetailsFromMatches(cachedMergedMatches);
   refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
   refreshFootballDatabaseUnmatchedTeamMetric(
@@ -10325,7 +10338,7 @@ function teamMatchesSelectionAliasAware(teamName, selection, manualMappings = nu
 function matchesFilters(match, filters) {
   const { leagues, teams, channels, dateFrom, dateTo, filterMode, manualMappings } = filters;
 
-  const matchLeague = normalizeLeagueName(match.league || "");
+  const matchLeague = normalizeCompetitionFilterName(match.league || "");
   const leagueOk =
     leagues.length === 0 ||
     leagues.some((league) => compareInsensitive(matchLeague, league) === 0);
@@ -21673,6 +21686,9 @@ module.exports = {
     normalizeMatchStatusValue,
     parseMatchStatusMinute,
     normalizeTeamName,
+    normalizeCompetitionFilterName,
+    isAllowedCompetition,
+    mergeBbcAndLiveMatches,
     matchDetailsIdFromUrl,
     filterStaleBbcMatches,
     buildDefaultOperationalCacheState,

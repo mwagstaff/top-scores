@@ -27,6 +27,9 @@ const {
     bumpCacheStateSnapshot,
     normalizeMatchStatusValue,
     normalizeTeamName,
+    normalizeCompetitionFilterName,
+    isAllowedCompetition,
+    mergeBbcAndLiveMatches,
   },
 } = require("./server");
 
@@ -174,6 +177,49 @@ test("normalizeTeamName canonicalizes team aliases from shared identity config",
 test("normalizeMatchStatusValue canonicalizes postponed status", () => {
   assert.equal(normalizeMatchStatusValue("Match Postponed"), "POSTPONED");
   assert.equal(normalizeMatchStatusValue("POSTPONED"), "POSTPONED");
+});
+
+test("normalizeCompetitionFilterName maps World Cup qualifying competitions to the World Cup family", () => {
+  assert.equal(
+    normalizeCompetitionFilterName("FIFA World Cup Qualifying - European"),
+    "fifa world cup 2026"
+  );
+  assert.equal(
+    normalizeCompetitionFilterName("FIFA World Cup 2026 Qualifying Semi-Final"),
+    "fifa world cup 2026"
+  );
+  assert.equal(isAllowedCompetition("FIFA World Cup Qualifying - European"), true);
+});
+
+test("mergeBbcAndLiveMatches prefers BBC competition metadata for duplicate fixtures", () => {
+  const merged = mergeBbcAndLiveMatches(
+    [
+      {
+        date: "2026-03-26",
+        time: "19:45",
+        league: "FIFA World Cup 2026 Qualifying Semi-Final",
+        home_team: "Italy",
+        away_team: "Northern Ireland",
+        tv_channels: ["BBC Three"],
+      },
+    ],
+    [
+      {
+        date: "2026-03-26",
+        time: "19:45",
+        league: "FIFA World Cup Qualifying - European",
+        league_subcategory: "Play-offs - Semi-finals",
+        home_team: "Italy",
+        away_team: "Northern Ireland",
+        tv_channels: [],
+      },
+    ]
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].league, "FIFA World Cup Qualifying - European");
+  assert.equal(merged[0].league_subcategory, "Play-offs - Semi-finals");
+  assert.deepStrictEqual(merged[0].tv_channels, ["BBC Three"]);
 });
 
 test("toMatchListPayload includes score fields from resolved match state", () => {
