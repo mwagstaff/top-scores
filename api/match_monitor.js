@@ -3248,6 +3248,11 @@ function currentLondonDateKey(nowMs = Date.now()) {
   }).format(new Date(nowMs));
 }
 
+function isLiveActivityMatchOnCurrentDate(match, nowMs = Date.now()) {
+  const dateKey = String(match && match.date ? match.date : "").trim();
+  return Boolean(dateKey) && dateKey === currentLondonDateKey(nowMs);
+}
+
 function canonicalLiveActivityChannelsForMatch(match) {
   const channels = canonicalLiveActivityChannels(match && match.tv_channels);
   return channels;
@@ -3255,14 +3260,10 @@ function canonicalLiveActivityChannelsForMatch(match) {
 
 function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.now()) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
-  const todayKey = currentLondonDateKey(nowMs);
 
   return (Array.isArray(matches) ? matches : [])
     .filter((match) => match && typeof match === "object")
-    .filter((match) => {
-      const dateKey = String(match.date || "").trim();
-      return Boolean(dateKey) && dateKey === todayKey;
-    })
+    .filter((match) => isLiveActivityMatchOnCurrentDate(match, nowMs))
     .filter((match) => !isPostponedMatchStatus(match && match.score_status))
     .filter((match) => {
       if (
@@ -3465,6 +3466,7 @@ function buildLiveActivityEntryLookup(entries) {
 function shouldIncludeMonitoredEntryForLiveActivity(entry, user, nowMs = Date.now()) {
   const match = entry && entry.match ? entry.match : null;
   if (!match) return false;
+  if (!isLiveActivityMatchOnCurrentDate(match, nowMs)) return false;
 
   const eligibility = isEligibleForLiveActivityByPreferences(user, match);
   if (!eligibility.eligible) return false;

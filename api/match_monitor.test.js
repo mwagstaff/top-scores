@@ -773,6 +773,78 @@ test("buildLiveActivityEntriesForUser drops postponed canonical fixtures", () =>
   assert.equal(entries[0].match.match_details_id, "arsenal-chelsea");
 });
 
+test("buildLiveActivityEntriesForUser excludes retained previous-day matches after midnight rollover", () => {
+  const nowMs = Date.parse("2026-03-22T00:24:00Z");
+
+  const entries = __testHooks.buildLiveActivityEntriesForUser(
+    liveActivityUser(0),
+    [
+      {
+        matchId: "leeds-brentford-ft",
+        state: {
+          finishedAtMs: Date.parse("2026-03-21T22:05:00Z"),
+          lastState: {
+            match_details_id: "leeds-brentford-ft",
+            date: "2026-03-21",
+            time: "20:00",
+            league: "Premier League",
+            home_team: "Leeds United",
+            away_team: "Brentford",
+            home_score: 1,
+            away_score: 0,
+            score_status: "FT",
+            updated_at: "2026-03-21T22:05:00Z",
+          },
+        },
+        match: {
+          match_details_id: "leeds-brentford-ft",
+          date: "2026-03-21",
+          time: "20:00",
+          league: "Premier League",
+          home_team: "Leeds United",
+          away_team: "Brentford",
+          home_score: 1,
+          away_score: 0,
+          score_status: "FT",
+          updated_at: "2026-03-21T22:05:00Z",
+        },
+      },
+    ],
+    [
+      {
+        match_details_id: "newcastle-sunderland",
+        date: "2026-03-22",
+        time: "12:00",
+        league: "Premier League",
+        home_team: "Newcastle United",
+        away_team: "Sunderland",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+        tv_channels: ["Sky Sports Main Event"],
+      },
+      {
+        match_details_id: "arsenal-city",
+        date: "2026-03-22",
+        time: "17:30",
+        league: "Premier League",
+        home_team: "Arsenal",
+        away_team: "Manchester City",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+        tv_channels: ["Sky Sports Premier League"],
+      },
+    ],
+    nowMs
+  );
+
+  assert.deepEqual(
+    entries.map((entry) => entry.match.match_details_id),
+    ["newcastle-sunderland", "arsenal-city"]
+  );
+});
+
 test("buildLiveActivityEntriesForUser uses the first filtered fixture section and ignores stale extra matches", () => {
   const nowMs = Date.parse("2026-03-10T23:21:00Z");
   const user = liveActivityUser(0, {

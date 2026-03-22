@@ -15981,6 +15981,10 @@ app.get("/admin/fantasy-reminders", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_fantasy_reminders_ui.html"));
 });
 
+app.get("/admin/harness", (_req, res) => {
+  res.sendFile(path.join(__dirname, "test_harness_ui.html"));
+});
+
 app.get("/admin/fixtures", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_matches_ui.html"));
 });
@@ -15991,6 +15995,10 @@ app.get("/admin/results", (_req, res) => {
 
 app.get("/admin/results/:matchId", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_match_details_ui.html"));
+});
+
+app.get("/test-harness", (_req, res) => {
+  res.redirect("/admin/harness");
 });
 
 app.get(["/healthcheck", `${API_PREFIX}/healthcheck`], (_req, res) => {
@@ -19637,8 +19645,11 @@ const { sendNotification, sendLiveActivityPush } = require("./apns_client");
 const LIVE_ACTIVITY_TEST_MODES = new Set([
   "single_upcoming",
   "single_live",
+  "single_finished",
   "multi_upcoming",
   "multi_live",
+  "multi_finished",
+  "ended",
 ]);
 const LIVE_ACTIVITY_TEST_PENDING_START_MAX_SECONDS = 2 * 60;
 
@@ -19777,6 +19788,31 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
       ),
     ];
   }
+  if (mode === "single_finished") {
+    return [
+      normalizeLiveActivityTestMatch(
+        {
+          matchId: "test_finished_1",
+          date: now.toISOString().split("T")[0],
+          time: timeLabel,
+          league: "UEFA Champions League",
+          leagueSubcategory: "Round of 16",
+          homeTeam: "Atalanta",
+          awayTeam: "Borussia Dortmund",
+          homeTeamScore: 1780,
+          awayTeamScore: 1768,
+          homeScore: 2,
+          awayScore: 1,
+          aggregateHomeScore: 4,
+          aggregateAwayScore: 3,
+          matchTime: "FT",
+          tvChannels: ["TNT Sports 1"],
+        },
+        0,
+        now
+      ),
+    ];
+  }
   if (mode === "multi_upcoming") {
     return [
       normalizeLiveActivityTestMatch(
@@ -19810,6 +19846,16 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
         now
       ),
     ];
+  }
+  if (mode === "ended") {
+    return [];
+  }
+  if (mode === "multi_finished") {
+    return defaultLiveActivityTestMatches("multi_live", now).map((match, index) => ({
+      ...match,
+      matchId: `test_multi_finished_${index + 1}`,
+      matchTime: index === 2 ? "AET" : "FT",
+    }));
   }
   return [
     normalizeLiveActivityTestMatch(
@@ -20001,11 +20047,167 @@ function defaultLiveActivityTestMatches(mode, now = new Date()) {
   ];
 }
 
-function buildLiveActivityTestContentState(payload = {}) {
-  const now = new Date();
-  const mode = normalizeLiveActivityTestMode(payload.mode, "single_live");
-  const delayMinutes = normalizeLiveActivityTestDelay(payload.delayMinutes, 0);
-  const providedMatches = Array.isArray(payload.matches) ? payload.matches : [];
+function cloneLiveActivityTestMatches(matches = []) {
+  return matches.map((match) => ({
+    ...match,
+    tvChannels: Array.isArray(match.tvChannels) ? [...match.tvChannels] : [],
+  }));
+}
+
+function makeUpcomingLiveActivityTestMatches(matches = []) {
+  return cloneLiveActivityTestMatches(matches).map((match, index) => ({
+    ...match,
+    matchId: `${match.matchId || `test_upcoming_${index + 1}`}_upcoming`,
+    homeScore: null,
+    awayScore: null,
+    matchTime: null,
+  }));
+}
+
+function buildLiveActivityTestPresets(now = new Date()) {
+  const singleUpcoming = cloneLiveActivityTestMatches(
+    defaultLiveActivityTestMatches("single_upcoming", now)
+  );
+  const singleLive = cloneLiveActivityTestMatches(
+    defaultLiveActivityTestMatches("single_live", now)
+  );
+  const singleFinished = cloneLiveActivityTestMatches(
+    defaultLiveActivityTestMatches("single_finished", now)
+  );
+  const multiLive = cloneLiveActivityTestMatches(
+    defaultLiveActivityTestMatches("multi_live", now)
+  );
+  const trailingUpcoming = makeUpcomingLiveActivityTestMatches(multiLive.slice(0, 4));
+  const multiUpcoming = makeUpcomingLiveActivityTestMatches(multiLive.slice(0, 4));
+  const multiFinished = cloneLiveActivityTestMatches(
+    defaultLiveActivityTestMatches("multi_finished", now)
+  );
+
+  return [
+    {
+      id: "single_upcoming",
+      label: "Single Upcoming",
+      description: "One upcoming fixture with aggregate score and TV badge.",
+      payload: {
+        mode: "single_upcoming",
+        matches: singleUpcoming,
+      },
+    },
+    {
+      id: "single_live",
+      label: "Single Live",
+      description: "One live match with no footer or trailing fixtures.",
+      payload: {
+        mode: "single_live",
+        matches: singleLive,
+      },
+    },
+    {
+      id: "single_live_trailing",
+      label: "Single Live + Trailing Fixtures",
+      description: "Primary live match plus four upcoming fixtures beneath it.",
+      payload: {
+        mode: "single_live",
+        matches: [...singleLive, ...trailingUpcoming],
+      },
+    },
+    {
+      id: "single_live_trailing_footer",
+      label: "Single Live + Footer Stress",
+      description:
+        "Primary live match, four trailing upcoming fixtures, a delay banner, and a fantasy score.",
+      payload: {
+        mode: "single_live",
+        delayMinutes: 8,
+        fantasyCurrentScore: 63,
+        matches: [...singleLive, ...trailingUpcoming],
+      },
+    },
+    {
+      id: "single_finished_trailing",
+      label: "Single Finished + Trailing Fixtures",
+      description: "A finished match with the upcoming-fixtures rail still visible underneath.",
+      payload: {
+        mode: "single_finished",
+        matches: [...singleFinished, ...trailingUpcoming],
+      },
+    },
+    {
+      id: "multi_upcoming",
+      label: "Multi Upcoming",
+      description: "Four upcoming fixtures in the two-column multi-match layout.",
+      payload: {
+        mode: "multi_upcoming",
+        matches: multiUpcoming,
+      },
+    },
+    {
+      id: "multi_live",
+      label: "Multi Live",
+      description: "Four simultaneous live fixtures in the standard multi-match layout.",
+      payload: {
+        mode: "multi_live",
+        matches: multiLive.slice(0, 4),
+      },
+    },
+    {
+      id: "multi_live_dense",
+      label: "Multi Live Dense",
+      description: "Eight live fixtures with both delay and fantasy footer content.",
+      payload: {
+        mode: "multi_live",
+        delayMinutes: 4,
+        fantasyCurrentScore: 72,
+        matches: multiLive.slice(0, 8),
+      },
+    },
+    {
+      id: "multi_finished",
+      label: "Multi Finished",
+      description: "Finished fixtures using the completed-match styling and opacity.",
+      payload: {
+        mode: "multi_finished",
+        matches: multiFinished.slice(0, 6),
+      },
+    },
+    {
+      id: "ended",
+      label: "Ended",
+      description: "The empty ended state that the server sends when dismissing the Live Activity.",
+      payload: {
+        mode: "ended",
+        matches: [],
+      },
+    },
+  ];
+}
+
+function resolveLiveActivityTestPreset(presetId, now = new Date()) {
+  const normalizedPresetId = String(presetId || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (!normalizedPresetId) return null;
+  return buildLiveActivityTestPresets(now).find((preset) => preset.id === normalizedPresetId) || null;
+}
+
+function buildLiveActivityTestContentState(payload = {}, now = new Date()) {
+  const preset = resolveLiveActivityTestPreset(
+    payload.presetId || payload.preset || payload.layoutPreset,
+    now
+  );
+  const presetPayload = preset && preset.payload ? preset.payload : {};
+  const rawMode =
+    payload.mode !== undefined && payload.mode !== null ? payload.mode : presetPayload.mode;
+  const mode = normalizeLiveActivityTestMode(rawMode, "single_live");
+  const rawDelayMinutes =
+    payload.delayMinutes !== undefined ? payload.delayMinutes : presetPayload.delayMinutes;
+  const delayMinutes = normalizeLiveActivityTestDelay(rawDelayMinutes, 0);
+  const providedMatches = Array.isArray(payload.matches)
+    ? payload.matches
+    : Array.isArray(presetPayload.matches)
+      ? presetPayload.matches
+      : [];
   const matchesSource =
     providedMatches.length > 0 ? providedMatches : defaultLiveActivityTestMatches(mode, now);
   const matches = matchesSource
@@ -20019,8 +20221,18 @@ function buildLiveActivityTestContentState(payload = {}) {
     generatedAtEpochSeconds: Math.floor(now.getTime() / 1000),
     delayMinutes,
     delayLabel,
-    fantasyCurrentScore: Number.isFinite(Number(payload.fantasyCurrentScore))
-      ? Number(payload.fantasyCurrentScore)
+    fantasyCurrentScore: Number.isFinite(
+      Number(
+        payload.fantasyCurrentScore !== undefined
+          ? payload.fantasyCurrentScore
+          : presetPayload.fantasyCurrentScore
+      )
+    )
+      ? Number(
+        payload.fantasyCurrentScore !== undefined
+          ? payload.fantasyCurrentScore
+          : presetPayload.fantasyCurrentScore
+      )
       : null,
     matches,
   };
@@ -20230,6 +20442,32 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
       message: error.message,
     });
   }
+});
+
+app.get(`${API_PREFIX}/live-activity/test/presets`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const presets = buildLiveActivityTestPresets().map((preset) => {
+    const payload = preset && preset.payload ? preset.payload : {};
+    return {
+      id: preset.id,
+      label: preset.label,
+      description: preset.description,
+      mode: payload.mode || null,
+      delayMinutes: Number.isFinite(Number(payload.delayMinutes))
+        ? Number(payload.delayMinutes)
+        : 0,
+      fantasyCurrentScore: Number.isFinite(Number(payload.fantasyCurrentScore))
+        ? Number(payload.fantasyCurrentScore)
+        : null,
+      matchCount: Array.isArray(payload.matches) ? payload.matches.length : 0,
+    };
+  });
+
+  res.status(200).json({
+    success: true,
+    presets,
+  });
 });
 
 app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
@@ -21417,5 +21655,8 @@ module.exports = {
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
     bumpCacheStateSnapshot,
+    buildLiveActivityTestContentState,
+    buildLiveActivityTestPresets,
+    resolveLiveActivityTestPreset,
   },
 };

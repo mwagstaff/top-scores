@@ -117,6 +117,63 @@ app.get("/api/test-match", async (_req, res) => {
   }
 });
 
+app.get("/api/live-activity/presets", async (_req, res) => {
+  try {
+    const result = await proxyToMainAPI("/api/v1/live-activity/test/presets");
+    res.status(result.status).json(result.data);
+  } catch (err) {
+    console.error("Failed to fetch live activity presets:", err);
+    res.status(500).json({ error: "Failed to fetch live activity presets" });
+  }
+});
+
+app.get("/api/live-activity/state", async (req, res) => {
+  try {
+    const params = new URLSearchParams();
+    if (typeof req.query.userDeviceToken === "string" && req.query.userDeviceToken.trim()) {
+      params.set("userDeviceToken", req.query.userDeviceToken.trim());
+    }
+    const path = params.size > 0
+      ? `/api/v1/live-activity/test/state?${params.toString()}`
+      : "/api/v1/live-activity/test/state";
+    const result = await proxyToMainAPI(path);
+    res.status(result.status).json(result.data);
+  } catch (err) {
+    console.error("Failed to fetch live activity state:", err);
+    res.status(500).json({ error: "Failed to fetch live activity state" });
+  }
+});
+
+app.post("/api/live-activity/start", async (req, res) => {
+  try {
+    const result = await proxyToMainAPI("/api/v1/live-activity/test/start", "POST", req.body);
+    res.status(result.status).json(result.data);
+  } catch (err) {
+    console.error("Failed to start live activity test push:", err);
+    res.status(500).json({ error: "Failed to start live activity test push" });
+  }
+});
+
+app.post("/api/live-activity/update", async (req, res) => {
+  try {
+    const result = await proxyToMainAPI("/api/v1/live-activity/test/update", "POST", req.body);
+    res.status(result.status).json(result.data);
+  } catch (err) {
+    console.error("Failed to update live activity test push:", err);
+    res.status(500).json({ error: "Failed to update live activity test push" });
+  }
+});
+
+app.post("/api/live-activity/end", async (req, res) => {
+  try {
+    const result = await proxyToMainAPI("/api/v1/live-activity/test/end", "POST", req.body);
+    res.status(result.status).json(result.data);
+  } catch (err) {
+    console.error("Failed to end live activity test push:", err);
+    res.status(500).json({ error: "Failed to end live activity test push" });
+  }
+});
+
 // Create a new test match
 app.post("/api/test-match/create", async (req, res) => {
   try {

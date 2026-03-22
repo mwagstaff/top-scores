@@ -2,6 +2,8 @@
 
 A standalone test harness for simulating live football matches to test the Top Scores app's real-time update functionality.
 
+The same browser UI now also includes a Live Activity harness for pushing synthetic ActivityKit payloads to a specific test device.
+
 ## Overview
 
 The test harness allows you to create and control simulated football matches with:
@@ -11,13 +13,19 @@ The test harness allows you to create and control simulated football matches wit
 - Real-time match progression (first half, HT, second half, FT, ET, penalties)
 - Full match details including goal scorers, assists, and red cards
 
+It also lets you:
+- Paste a device ID copied from the app's debug preferences
+- Inspect the server's stored Live Activity token state for that device
+- Choose from named Live Activity layout presets
+- Send synthetic start, update, and end pushes to validate lock-screen and Dynamic Island layouts
+
 ## Architecture
 
-The test harness consists of three components:
+The test harness now lives inside the main API server:
 
 1. **test_match_state.js** - Shared in-memory state module holding the active test match
-2. **test_harness_server.js** - Standalone server (port 3001) with control panel UI
-3. **Main API server integration** - Injects test match into `/matches` endpoint and provides `/matches/test_match_simulator_001` endpoint
+2. **Main API server integration** - Serves the admin UI at `/admin/harness`, injects the test match into `/matches`, and exposes the Live Activity test endpoints
+3. **test_harness_ui.html** - Browser UI for both the match simulator and Live Activity harness
 
 ## Getting Started
 
@@ -34,15 +42,23 @@ The test harness consists of three components:
    npm start
    ```
 
-2. In a separate terminal, start the test harness:
-   ```bash
-   cd api
-   npm run test-harness
-   ```
-
-3. Open http://localhost:3001 in your browser to access the control panel
+2. Open http://localhost:3000/admin/harness in your browser to access the control panel
 
 ## Using the Control Panel
+
+### Testing Live Activities
+
+1. In the iOS app, open `Preferences` → `Debug`.
+2. Copy the device ID with the new `Copy device ID` action.
+3. Paste that value into the `Live Activity Harness` section of the browser UI.
+4. Click `Refresh device state` to confirm the server has the device's push-to-start token and, if applicable, the current activity push token.
+5. Choose a layout preset such as:
+   - `Single Live + Footer Stress` to exercise the crowded single-match layout with trailing fixtures and footer content
+   - `Multi Live Dense` to stress the multi-match presentation with footer content
+   - `Single Finished + Trailing Fixtures` to inspect completed-match styling
+6. Use `Send Start`, `Send Update`, or `Send End` to push the selected synthetic payload to the device.
+
+The harness talks to the main API's `/api/v1/live-activity/test/*` endpoints and surfaces the stored token state plus the server's current presentation summary for the targeted device.
 
 ### Creating a Test Match
 
@@ -187,24 +203,20 @@ This is controlled by the `#if DEBUG` build configuration in `MatchesStore.swift
 - Ensure you're running a DEBUG build of the iOS app
 
 **Control panel not loading:**
-- Verify test harness server is running on port 3001
+- Verify the main API server is running on port 3000
+- Open `/admin/harness` on that server
 - Check browser console for errors
-- Ensure main API server is accessible
 
 **Match not progressing:**
 - Check if match is paused (click Resume)
 - Verify match hasn't already ended (FT/AET status)
-- Check test harness server console for errors
+- Check the main API server console for errors
 
 ## Technical Details
 
 ### Shared State Module
 
-The `test_match_state.js` module is imported by both:
-- Main API server (server.js)
-- Test harness server (test_harness_server.js)
-
-This allows them to share the same in-memory match state without database/Redis dependencies.
+The `test_match_state.js` module is imported by the main API server and keeps the harness state in memory without database/Redis dependencies.
 
 The harness now also generates synthetic BBC-style LiveText entries for VAR-disallowed goals so the monitor can confirm the score reversion without needing the real BBC page.
 
@@ -232,7 +244,6 @@ This means:
 ## Files
 
 - `test_match_state.js` - Shared state module
-- `test_harness_server.js` - Standalone server
 - `test_harness_ui.html` - Control panel UI
 - `server.js` - Main API (modified to inject test match)
 - `ios/Top Scores/Top Scores/Models/Match.swift` - Swift model (supports `is_test_match` field)

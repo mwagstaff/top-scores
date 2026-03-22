@@ -383,14 +383,215 @@
             margin-bottom: 10px;
             align-items: end;
         }
+
+        .lede {
+            color: #666;
+            line-height: 1.5;
+            margin-bottom: 18px;
+        }
+
+        .live-activity-card {
+            border-top: 6px solid #0b84ff;
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .status-pill.ok {
+            background: rgba(39, 174, 96, 0.12);
+            color: #1e874b;
+        }
+
+        .status-pill.warn {
+            background: rgba(243, 156, 18, 0.14);
+            color: #9a6400;
+        }
+
+        .status-pill.error {
+            background: rgba(231, 76, 60, 0.12);
+            color: #b33b2e;
+        }
+
+        .live-activity-preset-description {
+            margin: 14px 0 18px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            background: #f6f8fc;
+            color: #4f5d75;
+            line-height: 1.5;
+        }
+
+        .live-activity-state-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 14px;
+            margin-top: 18px;
+        }
+
+        .live-activity-panel {
+            background: #f8f9fb;
+            border: 1px solid #e5e9f2;
+            border-radius: 10px;
+            padding: 16px;
+        }
+
+        .live-activity-panel h3 {
+            color: #22324d;
+            font-size: 0.95rem;
+            margin-bottom: 12px;
+        }
+
+        .kv-list {
+            display: grid;
+            gap: 8px;
+        }
+
+        .kv-row {
+            display: grid;
+            grid-template-columns: 140px 1fr;
+            gap: 10px;
+            font-size: 0.9rem;
+        }
+
+        .kv-row dt {
+            color: #6b7280;
+            font-weight: 600;
+        }
+
+        .kv-row dd {
+            margin: 0;
+            color: #22324d;
+            word-break: break-word;
+        }
+
+        .json-block {
+            background: #101828;
+            color: #d0d8e8;
+            border-radius: 10px;
+            padding: 14px;
+            font-size: 0.8rem;
+            line-height: 1.45;
+            overflow: auto;
+            max-height: 340px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .muted {
+            color: #6b7280;
+        }
+
+        .inline-note {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>⚽ Match Simulator</h1>
-            <p class="subtitle">Test Harness for Top Scores App</p>
+            <h1>⚽ Top Scores Harness</h1>
+            <p class="subtitle">Synthetic match controls and Live Activity layout testing</p>
         </header>
+
+        <div class="card live-activity-card">
+            <h2>Live Activity Harness</h2>
+            <p class="lede">
+                Copy a device ID from the app's <strong>Preferences → Debug</strong> section, paste it here,
+                choose a preset, and send a synthetic Live Activity to validate layout, spacing, and overall polish.
+            </p>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="liveActivityDeviceToken">Device ID</label>
+                    <input type="text" id="liveActivityDeviceToken" placeholder="Paste the device ID from the app">
+                </div>
+
+                <div class="form-group">
+                    <label for="liveActivityPreset">Layout preset</label>
+                    <select id="liveActivityPreset"></select>
+                </div>
+
+                <div class="form-group">
+                    <label for="liveActivityDelayMinutes">Delay minutes</label>
+                    <input type="number" id="liveActivityDelayMinutes" min="0" max="10" value="0">
+                </div>
+
+                <div class="form-group">
+                    <label for="liveActivityFantasyScore">Fantasy score</label>
+                    <input type="number" id="liveActivityFantasyScore" min="0" placeholder="Optional">
+                </div>
+
+                <div class="form-group">
+                    <label for="liveActivityAlertTitle">Alert title</label>
+                    <input type="text" id="liveActivityAlertTitle" value="Top Scores Test">
+                </div>
+
+                <div class="form-group">
+                    <label for="liveActivityAlertBody">Alert body</label>
+                    <input type="text" id="liveActivityAlertBody" value="Live Activity test push">
+                </div>
+
+                <div class="form-group">
+                    <label for="liveActivityHoldSeconds">Hold seconds</label>
+                    <input type="number" id="liveActivityHoldSeconds" min="30" max="1800" value="300">
+                </div>
+            </div>
+
+            <div class="form-grid">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="liveActivityForceStart">
+                    <label for="liveActivityForceStart">End any existing activity before starting</label>
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="liveActivityFallbackStart">
+                    <label for="liveActivityFallbackStart">Fallback to a new start if update fails</label>
+                </div>
+            </div>
+
+            <div id="liveActivityPresetDescription" class="live-activity-preset-description">
+                Loading Live Activity presets...
+            </div>
+
+            <div class="btn-group">
+                <button onclick="refreshLiveActivityState()">Refresh device state</button>
+                <button onclick="sendLiveActivityCommand('start')" class="btn-success">Send Start</button>
+                <button onclick="sendLiveActivityCommand('update')" class="btn-warning">Send Update</button>
+                <button onclick="sendLiveActivityCommand('end')" class="btn-danger">Send End</button>
+            </div>
+
+            <div class="inline-note">
+                Start uses the stored push-to-start token for the device. Update and end use the stored activity push token after the app reports it back to the server.
+            </div>
+
+            <div id="liveActivityResult" class="live-activity-preset-description hidden"></div>
+
+            <div id="liveActivityState" class="live-activity-state-grid hidden">
+                <div class="live-activity-panel">
+                    <h3>Device State</h3>
+                    <dl id="liveActivityStateSummary" class="kv-list"></dl>
+                </div>
+
+                <div class="live-activity-panel">
+                    <h3>Server Presentation</h3>
+                    <dl id="liveActivityPresentationSummary" class="kv-list"></dl>
+                </div>
+
+                <div class="live-activity-panel" style="grid-column: 1 / -1;">
+                    <h3>Raw Response</h3>
+                    <pre id="liveActivityRawState" class="json-block"></pre>
+                </div>
+            </div>
+        </div>
 
         <!-- Match Status Display -->
         <div id="matchStatus" class="hidden">
@@ -588,6 +789,278 @@
 
     <script>
         let pollInterval = null;
+        let liveActivityPresets = [];
+        const liveActivityStorageKeys = {
+            deviceToken: 'top-scores.live-activity.device-token',
+            presetId: 'top-scores.live-activity.preset-id',
+        };
+        const API_BASE_PREFIX = (() => {
+            const pathname = window.location.pathname || '';
+            const adminIndex = pathname.indexOf('/admin/');
+            return adminIndex === -1 ? '' : pathname.slice(0, adminIndex);
+        })();
+        const COMPETITIONS_API_URL = `${API_BASE_PREFIX}/api/v1/competitions`;
+        const TEST_MATCH_API_BASE = `${API_BASE_PREFIX}/api/v1/test-harness/match`;
+        const LIVE_ACTIVITY_API_BASE = `${API_BASE_PREFIX}/api/v1/live-activity/test`;
+
+        function buildAppUrl(path) {
+            return `${API_BASE_PREFIX}${path}`;
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        function showLiveActivityMessage(message, tone = 'warn') {
+            const el = document.getElementById('liveActivityResult');
+            el.classList.remove('hidden');
+            el.className = 'live-activity-preset-description';
+            const pillClass = tone === 'error' ? 'error' : tone === 'ok' ? 'ok' : 'warn';
+            el.innerHTML = `<span class="status-pill ${pillClass}">${escapeHtml(message)}</span>`;
+        }
+
+        function clearLiveActivityMessage() {
+            const el = document.getElementById('liveActivityResult');
+            el.classList.add('hidden');
+            el.textContent = '';
+        }
+
+        function restoreLiveActivityInputs() {
+            const savedDeviceToken = localStorage.getItem(liveActivityStorageKeys.deviceToken);
+            if (savedDeviceToken) {
+                document.getElementById('liveActivityDeviceToken').value = savedDeviceToken;
+            }
+        }
+
+        function persistLiveActivityInputs() {
+            const deviceToken = document.getElementById('liveActivityDeviceToken').value.trim();
+            if (deviceToken) {
+                localStorage.setItem(liveActivityStorageKeys.deviceToken, deviceToken);
+            } else {
+                localStorage.removeItem(liveActivityStorageKeys.deviceToken);
+            }
+
+            const presetId = document.getElementById('liveActivityPreset').value;
+            if (presetId) {
+                localStorage.setItem(liveActivityStorageKeys.presetId, presetId);
+            } else {
+                localStorage.removeItem(liveActivityStorageKeys.presetId);
+            }
+        }
+
+        function selectedLiveActivityPreset() {
+            const presetId = document.getElementById('liveActivityPreset').value;
+            return liveActivityPresets.find((preset) => preset.id === presetId) || null;
+        }
+
+        function applyLiveActivityPreset(preset) {
+            if (!preset) return;
+            document.getElementById('liveActivityDelayMinutes').value = Number.isFinite(Number(preset.delayMinutes))
+                ? Number(preset.delayMinutes)
+                : 0;
+            document.getElementById('liveActivityFantasyScore').value =
+                Number.isFinite(Number(preset.fantasyCurrentScore))
+                    ? Number(preset.fantasyCurrentScore)
+                    : '';
+            document.getElementById('liveActivityAlertTitle').value = 'Top Scores Test';
+            document.getElementById('liveActivityAlertBody').value = `Live Activity test: ${preset.label}`;
+        }
+
+        function renderLiveActivityPresetDescription() {
+            const preset = selectedLiveActivityPreset();
+            const descriptionEl = document.getElementById('liveActivityPresetDescription');
+            if (!preset) {
+                descriptionEl.textContent = 'Choose a preset to see which Live Activity layout it exercises.';
+                return;
+            }
+
+            descriptionEl.innerHTML = `
+                <strong>${escapeHtml(preset.label)}</strong><br>
+                ${escapeHtml(preset.description)}<br>
+                <span class="muted">Mode: ${escapeHtml(preset.mode || 'unknown')} • Matches: ${escapeHtml(preset.matchCount || 0)} • Delay: ${escapeHtml(preset.delayMinutes || 0)}m${preset.fantasyCurrentScore != null ? ` • Fantasy: ${escapeHtml(preset.fantasyCurrentScore)}` : ''}</span>
+            `;
+        }
+
+        async function loadLiveActivityPresets() {
+            const select = document.getElementById('liveActivityPreset');
+            select.innerHTML = '<option value="">Loading presets...</option>';
+
+            try {
+                const response = await fetch(`${LIVE_ACTIVITY_API_BASE}/presets`);
+                const payload = await response.json();
+                if (!response.ok || !payload || !Array.isArray(payload.presets)) {
+                    throw new Error(payload && payload.error ? payload.error : `Request failed with ${response.status}`);
+                }
+
+                liveActivityPresets = payload.presets;
+                select.innerHTML = '';
+                liveActivityPresets.forEach((preset) => {
+                    const option = document.createElement('option');
+                    option.value = preset.id;
+                    option.textContent = preset.label;
+                    select.appendChild(option);
+                });
+
+                const savedPresetId = localStorage.getItem(liveActivityStorageKeys.presetId);
+                const defaultPresetId =
+                    (savedPresetId && liveActivityPresets.some((preset) => preset.id === savedPresetId))
+                        ? savedPresetId
+                        : (liveActivityPresets.find((preset) => preset.id === 'single_live_trailing_footer') || liveActivityPresets[0] || {}).id;
+                if (defaultPresetId) {
+                    select.value = defaultPresetId;
+                    applyLiveActivityPreset(selectedLiveActivityPreset());
+                }
+                renderLiveActivityPresetDescription();
+            } catch (err) {
+                console.error('Failed to load live activity presets:', err);
+                select.innerHTML = '<option value="">Unable to load presets</option>';
+                document.getElementById('liveActivityPresetDescription').textContent =
+                    'Failed to load presets from the server. Make sure the main API is running.';
+            }
+        }
+
+        function liveActivityDeviceToken() {
+            return document.getElementById('liveActivityDeviceToken').value.trim();
+        }
+
+        function buildLiveActivityPayload(action) {
+            const deviceToken = liveActivityDeviceToken();
+            if (!deviceToken) {
+                throw new Error('Paste a device ID from the app before sending a Live Activity test.');
+            }
+
+            persistLiveActivityInputs();
+
+            const payload = {
+                userDeviceToken: deviceToken,
+                presetId: document.getElementById('liveActivityPreset').value || undefined,
+                delayMinutes: Number(document.getElementById('liveActivityDelayMinutes').value || 0),
+                title: document.getElementById('liveActivityAlertTitle').value.trim() || 'Top Scores Test',
+                body: document.getElementById('liveActivityAlertBody').value.trim() || 'Live Activity test push',
+            };
+
+            const fantasyScoreRaw = document.getElementById('liveActivityFantasyScore').value.trim();
+            if (fantasyScoreRaw !== '') {
+                payload.fantasyCurrentScore = Number(fantasyScoreRaw);
+            }
+
+            if (action === 'start') {
+                payload.forceStart = document.getElementById('liveActivityForceStart').checked;
+                payload.fallbackStartOnUpdateFailure = document.getElementById('liveActivityFallbackStart').checked;
+                payload.testHoldSeconds = Number(document.getElementById('liveActivityHoldSeconds').value || 300);
+            }
+
+            return payload;
+        }
+
+        function renderKeyValueList(targetId, rows) {
+            const el = document.getElementById(targetId);
+            el.innerHTML = rows.map(([label, value]) => `
+                <div class="kv-row">
+                    <dt>${escapeHtml(label)}</dt>
+                    <dd>${escapeHtml(value == null || value === '' ? '—' : value)}</dd>
+                </div>
+            `).join('');
+        }
+
+        function renderLiveActivityState(payload) {
+            const stateEl = document.getElementById('liveActivityState');
+            stateEl.classList.remove('hidden');
+
+            const liveActivity = payload && payload.liveActivity ? payload.liveActivity : {};
+            const serverPresentation = payload && payload.serverPresentation ? payload.serverPresentation : {};
+
+            renderKeyValueList('liveActivityStateSummary', [
+                ['Device ID', payload.userDeviceToken || liveActivityDeviceToken()],
+                ['APNS token', payload.apnsTokenPresent ? 'Present' : 'Missing'],
+                ['Build environment', payload.isDevelopmentBuild ? 'Development' : 'Production'],
+                ['Push-to-start token', liveActivity.pushToStartToken ? 'Present' : 'Missing'],
+                ['Push-to-start updated', liveActivity.pushToStartTokenUpdatedAt || '—'],
+                ['Activity token', liveActivity.currentActivityPushToken ? 'Present' : 'Missing'],
+                ['Activity token updated', liveActivity.currentActivityTokenUpdatedAt || '—'],
+                ['Current activity ID', liveActivity.currentActivityId || '—'],
+                ['Last mode', liveActivity.lastMode || '—'],
+                ['Last dispatch', liveActivity.lastDispatchAt || '—'],
+                ['Pending start', liveActivity.pendingStartAt || '—'],
+                ['Hold until', liveActivity.testHoldUntil || '—'],
+            ]);
+
+            renderKeyValueList('liveActivityPresentationSummary', [
+                ['Mode', serverPresentation.mode || '—'],
+                ['Delay', Number.isFinite(Number(serverPresentation.delayMinutes)) ? `${Number(serverPresentation.delayMinutes)} min` : '—'],
+                ['Fantasy score', serverPresentation.fantasyCurrentScore == null ? '—' : serverPresentation.fantasyCurrentScore],
+                ['Visible matches', Array.isArray(serverPresentation.matches) ? serverPresentation.matches.length : 0],
+                ['Presentation error', serverPresentation.error || '—'],
+            ]);
+
+            document.getElementById('liveActivityRawState').textContent = JSON.stringify(payload, null, 2);
+        }
+
+        async function refreshLiveActivityState() {
+            const deviceToken = liveActivityDeviceToken();
+            if (!deviceToken) {
+                showLiveActivityMessage('Paste a device ID first.', 'warn');
+                return;
+            }
+
+            persistLiveActivityInputs();
+            clearLiveActivityMessage();
+
+            try {
+                const response = await fetch(`${LIVE_ACTIVITY_API_BASE}/state?userDeviceToken=${encodeURIComponent(deviceToken)}`);
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload && payload.error ? payload.error : `Request failed with ${response.status}`);
+                }
+                renderLiveActivityState(payload);
+                showLiveActivityMessage('Fetched current server state for this device.', 'ok');
+            } catch (err) {
+                console.error('Failed to fetch live activity state:', err);
+                showLiveActivityMessage(err.message || 'Failed to fetch live activity state.', 'error');
+            }
+        }
+
+        async function sendLiveActivityCommand(action) {
+            let payload;
+            try {
+                payload = buildLiveActivityPayload(action);
+            } catch (err) {
+                showLiveActivityMessage(err.message || 'Invalid Live Activity test payload.', 'warn');
+                return;
+            }
+
+            clearLiveActivityMessage();
+
+            try {
+                const response = await fetch(`${LIVE_ACTIVITY_API_BASE}/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result && (result.error || result.message) ? (result.error || result.message) : `Request failed with ${response.status}`);
+                }
+
+                showLiveActivityMessage(
+                    action === 'end'
+                        ? 'Sent Live Activity end request.'
+                        : `Sent Live Activity ${action} request.`,
+                    result && result.success ? 'ok' : 'warn'
+                );
+                document.getElementById('liveActivityRawState').textContent = JSON.stringify(result, null, 2);
+                document.getElementById('liveActivityState').classList.remove('hidden');
+                await refreshLiveActivityState();
+            } catch (err) {
+                console.error(`Failed to ${action} live activity:`, err);
+                showLiveActivityMessage(err.message || `Failed to ${action} live activity.`, 'error');
+            }
+        }
 
         async function loadCompetitions() {
             const select = document.getElementById('league');
@@ -607,7 +1080,7 @@
             ];
 
             try {
-                const response = await fetch('/api/competitions', {
+                const response = await fetch(COMPETITIONS_API_URL, {
                     method: 'GET',
                     headers: {
                         'Accept': 'application/json'
@@ -657,7 +1130,7 @@
 
         async function loadMatchStatus() {
             try {
-                const response = await fetch('/api/test-match');
+                const response = await fetch(TEST_MATCH_API_BASE);
                 const data = await response.json();
 
                 if (data.active) {
@@ -709,7 +1182,7 @@
             // Update match details link
             const matchDetailsLink = document.getElementById('matchDetailsLink');
             if (match.match_details_id) {
-                const apiUrl = `http://localhost:3000/api/v1/matches/${match.match_details_id}`;
+                const apiUrl = buildAppUrl(`/api/v1/matches/${encodeURIComponent(match.match_details_id)}`);
                 matchDetailsLink.href = apiUrl;
                 matchDetailsLink.textContent = apiUrl;
             } else {
@@ -934,7 +1407,7 @@
             };
 
             try {
-                const response = await fetch('/api/test-match/create', {
+                const response = await fetch(`${TEST_MATCH_API_BASE}/create`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
@@ -954,7 +1427,7 @@
 
         async function startMatch() {
             try {
-                await fetch('/api/test-match/start', { method: 'POST' });
+                await fetch(`${TEST_MATCH_API_BASE}/start`, { method: 'POST' });
                 await loadMatchStatus();
             } catch (err) {
                 console.error('Failed to start match:', err);
@@ -963,7 +1436,7 @@
 
         async function pauseMatch() {
             try {
-                await fetch('/api/test-match/pause', { method: 'POST' });
+                await fetch(`${TEST_MATCH_API_BASE}/pause`, { method: 'POST' });
                 await loadMatchStatus();
             } catch (err) {
                 console.error('Failed to pause match:', err);
@@ -972,7 +1445,7 @@
 
         async function resumeMatch() {
             try {
-                await fetch('/api/test-match/resume', { method: 'POST' });
+                await fetch(`${TEST_MATCH_API_BASE}/resume`, { method: 'POST' });
                 await loadMatchStatus();
             } catch (err) {
                 console.error('Failed to resume match:', err);
@@ -987,7 +1460,7 @@
                 return;
             }
             try {
-                const response = await fetch('/api/test-match/set-speed', {
+                const response = await fetch(`${TEST_MATCH_API_BASE}/set-speed`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ speedMs: secs * 1000 })
@@ -1014,7 +1487,7 @@
             };
 
             try {
-                await fetch('/api/test-match/add-goal', {
+                await fetch(`${TEST_MATCH_API_BASE}/add-goal`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
@@ -1037,7 +1510,7 @@
             };
 
             try {
-                await fetch('/api/test-match/add-red-card', {
+                await fetch(`${TEST_MATCH_API_BASE}/add-red-card`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
@@ -1064,7 +1537,7 @@
             };
 
             try {
-                const response = await fetch('/api/test-match/simulate-var-disallowed-goal', {
+                const response = await fetch(`${TEST_MATCH_API_BASE}/simulate-var-disallowed-goal`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
@@ -1085,7 +1558,7 @@
 
         async function jumpToHT() {
             try {
-                await fetch('/api/test-match/jump-to-ht', { method: 'POST' });
+                await fetch(`${TEST_MATCH_API_BASE}/jump-to-ht`, { method: 'POST' });
                 await loadMatchStatus();
             } catch (err) {
                 console.error('Failed to jump to HT:', err);
@@ -1094,7 +1567,7 @@
 
         async function jumpToFT() {
             try {
-                await fetch('/api/test-match/jump-to-ft', { method: 'POST' });
+                await fetch(`${TEST_MATCH_API_BASE}/jump-to-ft`, { method: 'POST' });
                 await loadMatchStatus();
             } catch (err) {
                 console.error('Failed to jump to FT:', err);
@@ -1107,7 +1580,7 @@
             }
 
             try {
-                await fetch('/api/test-match/restart', { method: 'POST' });
+                await fetch(`${TEST_MATCH_API_BASE}/restart`, { method: 'POST' });
                 await loadMatchStatus();
             } catch (err) {
                 console.error('Failed to restart match:', err);
@@ -1120,7 +1593,7 @@
             }
 
             try {
-                await fetch('/api/test-match/delete', { method: 'POST' });
+                await fetch(`${TEST_MATCH_API_BASE}/delete`, { method: 'POST' });
                 stopPolling();
                 await loadMatchStatus();
             } catch (err) {
@@ -1147,9 +1620,25 @@
 
         // Initialize on page load
         window.addEventListener('load', async () => {
+            restoreLiveActivityInputs();
+            await loadLiveActivityPresets();
             await loadCompetitions();
             await loadMatchStatus();
             startPolling();
+
+            const presetSelect = document.getElementById('liveActivityPreset');
+            presetSelect.addEventListener('change', () => {
+                applyLiveActivityPreset(selectedLiveActivityPreset());
+                renderLiveActivityPresetDescription();
+                persistLiveActivityInputs();
+            });
+
+            document.getElementById('liveActivityDeviceToken').addEventListener('change', persistLiveActivityInputs);
+            document.getElementById('liveActivityDeviceToken').addEventListener('blur', persistLiveActivityInputs);
+
+            if (liveActivityDeviceToken()) {
+                await refreshLiveActivityState();
+            }
         });
 
         // Clean up on page unload

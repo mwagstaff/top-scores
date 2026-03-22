@@ -2195,6 +2195,9 @@ private struct TopScoresLiveActivityLockScreenView: View {
             ? trailingDisplayMatches
             : []
         let hasTrailingUpcoming = !trailingUpcoming.isEmpty
+        let hasFooterContent = delayBannerText != nil || fantasyScoreText != nil
+        let usesDenseLayout = isMultiMode || hasTrailingUpcoming
+        let usesCompactSingleCardLayout = hasTrailingUpcoming || hasFooterContent
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 switch state.mode {
@@ -2207,7 +2210,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
                 case "single_live":
                     VStack(alignment: .leading, spacing: 6) {
                         if let match = matches.first {
-                            SingleLiveMatchView(match: match)
+                            SingleLiveMatchView(match: match, compact: usesCompactSingleCardLayout)
                         } else {
                             EmptyLiveActivityView()
                         }
@@ -2215,13 +2218,13 @@ private struct TopScoresLiveActivityLockScreenView: View {
                             Rectangle()
                                 .fill(.white.opacity(0.16))
                                 .frame(height: 1)
-                            MultiMatchListView(matches: trailingUpcoming, live: false)
+                            MultiMatchListView(matches: trailingUpcoming, live: false, maxMatches: 4, compact: true)
                         }
                     }
                 case "single_finished":
                     VStack(alignment: .leading, spacing: 6) {
                         if let match = matches.first {
-                            SingleFinishedMatchView(match: match)
+                            SingleFinishedMatchView(match: match, compact: usesCompactSingleCardLayout)
                         } else {
                             EmptyLiveActivityView()
                         }
@@ -2229,7 +2232,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
                             Rectangle()
                                 .fill(.white.opacity(0.16))
                                 .frame(height: 1)
-                            MultiMatchListView(matches: trailingUpcoming, live: false)
+                            MultiMatchListView(matches: trailingUpcoming, live: false, maxMatches: 4, compact: true)
                         }
                     }
                 case "multi_upcoming":
@@ -2257,7 +2260,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, isMultiMode || hasTrailingUpcoming ? 6 : 8)
+            .padding(.vertical, usesDenseLayout ? 4 : 8)
 
             if delayBannerText != nil || fantasyScoreText != nil {
                 Group {
@@ -2291,7 +2294,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.vertical, usesDenseLayout ? 4 : 6)
                 .frame(maxWidth: .infinity)
                 .background(footerBannerBackground)
             }
@@ -2474,20 +2477,22 @@ private struct SingleUpcomingMatchView: View {
 @available(iOSApplicationExtension 16.1, *)
 private struct SingleLiveMatchView: View {
     let match: TopScoresLiveActivityMatchState
+    var compact: Bool = false
 
     var body: some View {
-        SingleMatchCardChrome {
-            VStack(alignment: .leading, spacing: 8) {
+        SingleMatchCardChrome(horizontalPadding: compact ? 10 : 11, verticalPadding: compact ? 7 : 10) {
+            VStack(alignment: .leading, spacing: compact ? 6 : 8) {
                 CompetitionHeaderRow(
                     league: match.league,
                     subheading: match.leagueSubcategory ?? "Live now",
-                    primaryChannel: primaryChannel
+                    primaryChannel: primaryChannel,
+                    compact: compact
                 )
 
-                HStack(spacing: 10) {
+                HStack(spacing: compact ? 8 : 10) {
                     LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
                     Spacer(minLength: 8)
-                    LiveActivitySingleScoreRow(match: match)
+                    LiveActivitySingleScoreRow(match: match, compact: compact)
                     Spacer(minLength: 8)
                     LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
                 }
@@ -2516,20 +2521,22 @@ private struct SingleLiveMatchView: View {
 @available(iOSApplicationExtension 16.1, *)
 private struct SingleFinishedMatchView: View {
     let match: TopScoresLiveActivityMatchState
+    var compact: Bool = false
 
     var body: some View {
-        SingleMatchCardChrome {
-            VStack(alignment: .leading, spacing: 8) {
+        SingleMatchCardChrome(horizontalPadding: compact ? 10 : 11, verticalPadding: compact ? 7 : 10) {
+            VStack(alignment: .leading, spacing: compact ? 6 : 8) {
                 CompetitionHeaderRow(
                     league: match.league,
                     subheading: match.leagueSubcategory ?? "Full time",
-                    primaryChannel: primaryChannel
+                    primaryChannel: primaryChannel,
+                    compact: compact
                 )
 
-                HStack(spacing: 10) {
+                HStack(spacing: compact ? 8 : 10) {
                     LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
                     Spacer(minLength: 8)
-                    LiveActivitySingleScoreRow(match: match)
+                    LiveActivitySingleScoreRow(match: match, compact: compact)
                     Spacer(minLength: 8)
                     LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
                 }
@@ -2563,18 +2570,19 @@ private enum LiveActivityScoreStyle {
 @available(iOSApplicationExtension 16.1, *)
 private struct LiveActivitySingleScoreRow: View {
     let match: TopScoresLiveActivityMatchState
+    var compact: Bool = false
 
     var body: some View {
         if let homeScore = match.homeScore, let awayScore = match.awayScore {
-            HStack(spacing: 9) {
+            HStack(spacing: compact ? 7 : 9) {
                 Text("\(homeScore)")
-                    .font(.title3.monospacedDigit().weight(.bold))
+                    .font(scoreFont)
                     .foregroundStyle(.white.opacity(scoreOpacity))
                 Text(match.matchTime ?? fallbackStatus)
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.white.opacity(0.75))
                 Text("\(awayScore)")
-                    .font(.title3.monospacedDigit().weight(.bold))
+                    .font(scoreFont)
                     .foregroundStyle(.white.opacity(scoreOpacity))
             }
         } else {
@@ -2588,6 +2596,12 @@ private struct LiveActivitySingleScoreRow: View {
 
     private var fallbackStatus: String {
         match.isFinished ? "FT" : "LIVE"
+    }
+
+    private var scoreFont: Font {
+        compact
+            ? .headline.monospacedDigit().weight(.bold)
+            : .title3.monospacedDigit().weight(.bold)
     }
 }
 
@@ -2689,15 +2703,23 @@ private struct LiveActivityUpcomingIndicator: View {
 @available(iOSApplicationExtension 16.1, *)
 private struct SingleMatchCardChrome<Content: View>: View {
     private let content: Content
+    private let horizontalPadding: CGFloat
+    private let verticalPadding: CGFloat
 
-    init(@ViewBuilder content: () -> Content) {
+    init(
+        horizontalPadding: CGFloat = 11,
+        verticalPadding: CGFloat = 10,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.horizontalPadding = horizontalPadding
+        self.verticalPadding = verticalPadding
         self.content = content()
     }
 
     var body: some View {
         content
-            .padding(.horizontal, 11)
-            .padding(.vertical, 10)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
     }
 }
 
@@ -2706,6 +2728,7 @@ private struct CompetitionHeaderRow: View {
     let league: String
     let subheading: String
     let primaryChannel: String?
+    var compact: Bool = false
 
     var body: some View {
         ZStack {
@@ -2724,7 +2747,7 @@ private struct CompetitionHeaderRow: View {
             }
 
             if let primaryChannel {
-                LiveActivityChannelLogo(channelName: primaryChannel, size: 16)
+                LiveActivityChannelLogo(channelName: primaryChannel, size: compact ? 14 : 16)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2905,6 +2928,8 @@ private struct TeamNamesWithAggregateRow: View {
 private struct MultiMatchListView: View {
     let matches: [TopScoresLiveActivityMatchState]
     let live: Bool
+    var maxMatches: Int = 8
+    var compact: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -2912,7 +2937,7 @@ private struct MultiMatchListView: View {
                 GeometryReader { proxy in
                     let cellWidth = max(0, (proxy.size.width - 17) / 2)
                     HStack(spacing: 8) {
-                        MultiMatchEntryCell(match: rowMatches[0], live: live)
+                        MultiMatchEntryCell(match: rowMatches[0], live: live, compact: compact)
                             .frame(width: cellWidth, alignment: .leading)
 
                         Rectangle()
@@ -2921,7 +2946,7 @@ private struct MultiMatchListView: View {
                             .padding(.vertical, 2)
 
                         if rowMatches.count > 1 {
-                            MultiMatchEntryCell(match: rowMatches[1], live: live)
+                            MultiMatchEntryCell(match: rowMatches[1], live: live, compact: compact)
                                 .frame(width: cellWidth, alignment: .trailing)
                         } else {
                             Color.clear
@@ -2929,13 +2954,13 @@ private struct MultiMatchListView: View {
                         }
                     }
                 }
-                .frame(height: 22)
+                .frame(height: compact ? 20 : 22)
             }
         }
     }
 
     private var visibleMatches: [TopScoresLiveActivityMatchState] {
-        Array(matches.prefix(8))
+        Array(matches.prefix(maxMatches))
     }
 
     private var chunkedMatches: [[TopScoresLiveActivityMatchState]] {
@@ -2949,6 +2974,7 @@ private struct MultiMatchListView: View {
 private struct MultiMatchEntryCell: View {
     let match: TopScoresLiveActivityMatchState
     let live: Bool
+    var compact: Bool = false
 
     var body: some View {
         Group {
@@ -3002,7 +3028,7 @@ private struct MultiMatchEntryCell: View {
                 }
             }
         }
-        .frame(minHeight: 22, alignment: .leading)
+        .frame(minHeight: compact ? 20 : 22, alignment: .leading)
     }
 
     @ViewBuilder

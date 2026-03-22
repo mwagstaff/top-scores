@@ -10,7 +10,7 @@
     "fetch:national-elo": "node fetch_national_elo_rankings.js",
     "test:bbc-details": "node test_bbc_match_details.js",
     "start": "node server.js",
-    "test-harness": "node test_harness_server.js",
+    "test-harness": "node -e \"console.log('Start the main API server with npm start, then open http://localhost:3000/admin/harness')\"",
     "live-activity:harness": "./live_activity_test_harness.sh"
   },
   "dependencies": {

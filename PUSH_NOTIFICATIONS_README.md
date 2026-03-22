@@ -211,7 +211,7 @@ curl -X POST http://localhost:3000/api/v1/notifications/test \
 
 ### 3. Test Match Monitoring
 
-1. Create a test match using the test harness UI at `http://localhost:3000/test-harness`
+1. Create a test match using the test harness UI at `http://localhost:3000/admin/harness`
 2. Enable notifications in the iOS app
 3. Set your preferences to include the test match's league
 4. Start the test match

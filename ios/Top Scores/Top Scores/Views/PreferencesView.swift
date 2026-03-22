@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct PreferencesView: View {
     @EnvironmentObject private var preferences: PreferencesStore
@@ -11,6 +14,7 @@ struct PreferencesView: View {
     @State private var testNotificationStatusMessage: String?
     @State private var testNotificationStatusIsError = false
     @State private var predictionDebugStatusMessage: String?
+    @State private var deviceIDDebugStatusMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -210,6 +214,31 @@ struct PreferencesView: View {
                         Text("These settings are available in debug builds only and will not appear in production.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Device Identity")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+
+                            Text("Use this ID in the Live Activity server harness to target this device.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
+                            Text(DeviceIdentity.currentToken)
+                                .font(.footnote.monospaced())
+                                .textSelection(.enabled)
+
+                            Button("Copy device ID") {
+                                copyDebugDeviceID()
+                            }
+
+                            if let deviceIDDebugStatusMessage {
+                                Text(deviceIDDebugStatusMessage)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
 
                         VStack(alignment: .leading, spacing: 8) {
                             Text("API")
@@ -488,6 +517,11 @@ struct PreferencesView: View {
             }
             isSendingTestNotification = false
         }
+    }
+
+    private func copyDebugDeviceID() {
+        UIPasteboard.general.string = DeviceIdentity.currentToken
+        deviceIDDebugStatusMessage = "Copied device ID for the Live Activity harness."
     }
     #endif
 
