@@ -252,6 +252,54 @@ test("parseScheduledMatchesFromJson preserves postponed fixtures from BBC initia
   ]);
 });
 
+test("parseScheduledMatchesFromJson converts UTC kickoff times into Europe/London after BST starts", () => {
+  const initialData = {
+    eventGroups: [
+      {
+        secondaryGroups: [
+          {
+            events: [
+              {
+                home: {
+                  fullName: "Manchester City",
+                },
+                away: {
+                  fullName: "Liverpool",
+                },
+                startDateTime: "2026-04-04T11:45:00Z",
+                tournament: "FA Cup",
+                secondaryGroupName: "Quarter-finals",
+                statusComment: {
+                  value: "12:45",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const escapedInitialData = JSON.stringify(JSON.stringify(initialData));
+  const html = `<script>window.__INITIAL_DATA__=${escapedInitialData};</script>`;
+
+  const matches = __private.parseScheduledMatchesFromJson(html, {
+    fallbackDate: "2026-04-04",
+    timeZone: "Europe/London",
+  });
+
+  assert.deepStrictEqual(matches, [
+    {
+      date: "2026-04-04",
+      time: "12:45",
+      league: "FA Cup",
+      league_subcategory: "Quarter-finals",
+      home_team: "Manchester City",
+      away_team: "Liverpool",
+      tv_channels: [],
+    },
+  ]);
+});
+
 test("parseScheduledMatchesFromJson keeps Scottish Championship separate from Championship", () => {
   const initialData = {
     eventGroups: [

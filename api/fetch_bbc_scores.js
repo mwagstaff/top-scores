@@ -2489,9 +2489,24 @@ function parseDateTimeCandidate(candidate, fallbackDate, timeZone) {
     return { date: fullDate[1], time: "00:00" };
   }
 
-  const dateAndTime = text.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
-  if (dateAndTime) {
-    return { date: dateAndTime[1], time: dateAndTime[2] };
+  const zonedDateTime = text.match(
+    /^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i
+  );
+  if (zonedDateTime) {
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) {
+      return {
+        date: formatDateInTimeZone(parsed, timeZone),
+        time: formatTimeInTimeZone(parsed, timeZone),
+      };
+    }
+  }
+
+  const localDateTime = text.match(
+    /^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/
+  );
+  if (localDateTime) {
+    return { date: localDateTime[1], time: localDateTime[2] };
   }
 
   const kickoffTime = normalizeKickoffTimeToken(text);
