@@ -1,6 +1,6 @@
 import Foundation
 
-struct MatchGoalScorer: Codable, Hashable {
+struct MatchGoalScorer: Codable, Hashable, Sendable {
     let player: String
     let goalTimes: [String]
     let ownGoalTimes: [String]
@@ -38,7 +38,7 @@ struct MatchGoalScorer: Codable, Hashable {
     }
 }
 
-struct MatchAssistProvider: Codable, Hashable {
+struct MatchAssistProvider: Codable, Hashable, Sendable {
     let player: String
     let assistTimes: [String]
 
@@ -68,7 +68,7 @@ struct MatchAssistProvider: Codable, Hashable {
     }
 }
 
-struct MatchRedCardEvent: Codable, Hashable {
+struct MatchRedCardEvent: Codable, Hashable, Sendable {
     let player: String
     let redCardTimes: [String]
 
@@ -98,7 +98,7 @@ struct MatchRedCardEvent: Codable, Hashable {
     }
 }
 
-struct MatchYellowCardEvent: Codable, Hashable {
+struct MatchYellowCardEvent: Codable, Hashable, Sendable {
     let player: String
     let yellowCardTimes: [String]
 
@@ -128,7 +128,7 @@ struct MatchYellowCardEvent: Codable, Hashable {
     }
 }
 
-struct MatchLineupPlayer: Codable, Hashable, Identifiable {
+struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
     let number: Int
     let name: String
     let positionCategory: String?
@@ -166,7 +166,7 @@ struct MatchLineupPlayer: Codable, Hashable, Identifiable {
     }
 }
 
-struct MatchLineupSubstitution: Codable, Hashable, Identifiable {
+struct MatchLineupSubstitution: Codable, Hashable, Identifiable, Sendable {
     let minute: String
     let playerOff: MatchLineupPlayer
     let playerOn: MatchLineupPlayer
@@ -182,7 +182,7 @@ struct MatchLineupSubstitution: Codable, Hashable, Identifiable {
     }
 }
 
-struct MatchTeamLineup: Codable, Hashable {
+struct MatchTeamLineup: Codable, Hashable, Sendable {
     let team: String?
     let manager: String?
     let formation: String?
@@ -200,12 +200,12 @@ struct MatchTeamLineup: Codable, Hashable {
     }
 }
 
-struct MatchTeamLineups: Codable, Hashable {
+struct MatchTeamLineups: Codable, Hashable, Sendable {
     let home: MatchTeamLineup?
     let away: MatchTeamLineup?
 }
 
-struct MatchDetailsPayload: Codable, Hashable {
+struct MatchDetailsPayload: Codable, Hashable, Sendable {
     let id: String
     let detailsURL: String?
     let date: String?
@@ -293,7 +293,7 @@ struct MatchDetailsPayload: Codable, Hashable {
     }
 }
 
-struct Match: Identifiable, Codable, Hashable {
+struct Match: Identifiable, Codable, Hashable, Sendable {
     let date: String
     let time: String
     let homeTeam: String
@@ -302,6 +302,7 @@ struct Match: Identifiable, Codable, Hashable {
     let leagueSubcategory: String?
     let detailsURL: String?
     let matchDetailsIDValue: String?
+    let hasBbcSourceValue: Bool?
     let tvChannels: [String]
     let homeScore: Int?
     let awayScore: Int?
@@ -331,6 +332,7 @@ struct Match: Identifiable, Codable, Hashable {
         leagueSubcategory: String? = nil,
         detailsURL: String? = nil,
         matchDetailsID: String? = nil,
+        hasBbcSource: Bool? = nil,
         tvChannels: [String],
         homeScore: Int? = nil,
         awayScore: Int? = nil,
@@ -359,6 +361,7 @@ struct Match: Identifiable, Codable, Hashable {
         self.leagueSubcategory = leagueSubcategory
         self.detailsURL = detailsURL
         self.matchDetailsIDValue = Self.normalizedMatchDetailsID(matchDetailsID)
+        self.hasBbcSourceValue = hasBbcSource
         self.tvChannels = tvChannels
         self.homeScore = homeScore
         self.awayScore = awayScore
@@ -393,6 +396,12 @@ struct Match: Identifiable, Codable, Hashable {
             return explicit
         }
         return Self.matchDetailsID(from: detailsURL)
+    }
+
+    var hasBbcMatchEntry: Bool {
+        hasBbcSourceValue == true ||
+            matchDetailsID != nil ||
+            tvChannels.contains { $0.caseInsensitiveCompare("BBC Sport Website") == .orderedSame }
     }
 
     var dateOnly: Date? {
@@ -512,6 +521,7 @@ struct Match: Identifiable, Codable, Hashable {
             leagueSubcategory: leagueSubcategory,
             detailsURL: detailsURL,
             matchDetailsID: matchDetailsIDValue,
+            hasBbcSource: hasBbcSourceValue,
             tvChannels: tvChannels,
             homeScore: home,
             awayScore: away,
@@ -544,6 +554,7 @@ struct Match: Identifiable, Codable, Hashable {
             leagueSubcategory: leagueSubcategory,
             detailsURL: detailsURL,
             matchDetailsID: matchDetailsIDValue,
+            hasBbcSource: hasBbcSourceValue,
             tvChannels: channels,
             homeScore: homeScore,
             awayScore: awayScore,
@@ -578,6 +589,7 @@ struct Match: Identifiable, Codable, Hashable {
         matchDetailsIDValue = Self.normalizedMatchDetailsID(
             try container.decodeIfPresent(String.self, forKey: .matchDetailsIDValue)
         )
+        hasBbcSourceValue = try container.decodeIfPresent(Bool.self, forKey: .hasBbcSourceValue)
         tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
         homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
         awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
@@ -613,6 +625,7 @@ struct Match: Identifiable, Codable, Hashable {
         case leagueSubcategory = "league_subcategory"
         case detailsURL = "details_url"
         case matchDetailsIDValue = "match_details_id"
+        case hasBbcSourceValue = "has_bbc_source"
         case tvChannels = "tv_channels"
         case homeScore = "home_score"
         case awayScore = "away_score"
@@ -660,6 +673,7 @@ struct Match: Identifiable, Codable, Hashable {
             leagueSubcategory: leagueSubcategory,
             detailsURL: details.detailsURL ?? detailsURL,
             matchDetailsID: details.id,
+            hasBbcSource: hasBbcSourceValue,
             tvChannels: tvChannels,
             homeScore: shouldClearScores ? nil : (details.homeScore ?? homeScore),
             awayScore: shouldClearScores ? nil : (details.awayScore ?? awayScore),

@@ -283,6 +283,7 @@ final class MatchesStore: ObservableObject {
         var hasMore: Bool = true
         var isLoading: Bool = false
         var lastUpdated: Date?
+        var fixtureCoverageEnd: Date?
         var isUsingCache: Bool = false
         var errorMessage: String?
     }
@@ -298,6 +299,7 @@ final class MatchesStore: ObservableObject {
     private var bbcLiveLastFetchedAt: Date?
     private var cacheStateLastFetchedAt: Date?
     private var bbcLiveRefreshTask: Task<Void, Never>?
+    private var fixturesBackgroundLoadTask: Task<Void, Never>?
     private var teamRankingsRefreshTask: Task<Void, Never>?
     private var groupingTask: Task<Void, Never>?
     private var teamRatingLookup = TeamRatingLookup(
@@ -310,6 +312,11 @@ final class MatchesStore: ObservableObject {
     private let cacheStateRefreshInterval: TimeInterval = 30
     private let configureRefreshInterval: TimeInterval = 30
     private let pageSize = 120
+    private let fixturesInitialLoadDays = 5
+    private let fixturesFutureLoadDays = 90
+    private let fixturesLazyBatchDays = 14
+    private let fixturesLazyParallelRequests = 3
+    private let fixturesLazyPageSize = 500
     // Results are filtered client-side after paging; advance a few pages to avoid empty-first-page windows.
     private let resultsAutoAdvancePageLimit = 8
     private let prefetchThreshold = 20
@@ -325,17 +332,29 @@ final class MatchesStore: ObservableObject {
     }
 
     func configure(with snapshot: PreferencesSnapshot, mode: MatchesViewMode) {
+        let previousSnapshot = currentSnapshot
         let modeChanged = activeMode != mode
-        let snapshotChanged = currentSnapshot != snapshot
+        let snapshotChanged = previousSnapshot != snapshot
+        let dataSourceChanged = previousSnapshot?.apiBaseURL != snapshot.apiBaseURL
         currentSnapshot = snapshot
         activeMode = mode
-        let currentModeState = state(for: mode)
 
-        if snapshotChanged {
+        if dataSourceChanged || previousSnapshot == nil {
             loadCache(snapshot: snapshot)
+        } else if snapshotChanged {
+            reapplyLocalFilters(using: snapshot)
+            persistCombinedCacheAndSync(snapshot: snapshot)
+        }
+
+        let currentModeState = state(for: mode)
+        if dataSourceChanged ||
+            snapshotChanged ||
+            currentModeState.matches.isEmpty ||
+            modeChanged ||
+            shouldRefreshOnConfigure(currentModeState) {
             Task { await refresh(preferences: snapshot, mode: mode) }
-        } else if currentModeState.matches.isEmpty || modeChanged || shouldRefreshOnConfigure(currentModeState) {
-            Task { await refresh(preferences: snapshot, mode: mode) }
+        } else if mode == .fixtures {
+            scheduleRemainingFixtureLoadingIfNeeded(preferences: snapshot)
         }
 
         publishState(for: mode)
@@ -354,6 +373,8 @@ final class MatchesStore: ObservableObject {
         refreshTimer = nil
         bbcLiveRefreshTask?.cancel()
         bbcLiveRefreshTask = nil
+        fixturesBackgroundLoadTask?.cancel()
+        fixturesBackgroundLoadTask = nil
         teamRankingsRefreshTask?.cancel()
         teamRankingsRefreshTask = nil
     }
@@ -363,7 +384,11 @@ final class MatchesStore: ObservableObject {
     }
 
     func refresh(preferences: PreferencesSnapshot, mode: MatchesViewMode) async {
-        await fetchPage(preferences: preferences, mode: mode, reset: true)
+        if mode == .fixtures {
+            await refreshFixtures(preferences: preferences)
+        } else {
+            await fetchPage(preferences: preferences, mode: mode, reset: true)
+        }
     }
 
     func prefetchIfNeeded(
@@ -372,12 +397,101 @@ final class MatchesStore: ObservableObject {
         mode: MatchesViewMode
     ) async {
         guard mode == activeMode else { return }
+        guard mode == .results else { return }
         let currentState = state(for: mode)
         guard !currentState.isLoading, currentState.hasMore else { return }
         guard let index = currentState.matches.firstIndex(where: { $0.id == currentMatch.id }) else { return }
         let triggerIndex = max(0, currentState.matches.count - prefetchThreshold)
         guard index >= triggerIndex else { return }
         await fetchPage(preferences: preferences, mode: mode, reset: false)
+    }
+
+    private func refreshFixtures(preferences: PreferencesSnapshot) async {
+        guard let baseURL = URL(string: preferences.apiBaseURL) else {
+            setError("Invalid API base URL.", for: .fixtures)
+            return
+        }
+
+        let client = APIClient(baseURL: baseURL)
+        await reconcileServerCacheStateIfNeeded(client: client)
+
+        var fixtureState = state(for: .fixtures)
+        if fixtureState.isLoading { return }
+
+        fixturesBackgroundLoadTask?.cancel()
+        fixturesBackgroundLoadTask = nil
+
+        fixtureState.isLoading = true
+        fixtureState.errorMessage = nil
+        fixtureState.isUsingCache = fixtureState.isUsingCache && !fixtureState.matches.isEmpty
+        modeStates[.fixtures] = fixtureState
+        if activeMode == .fixtures {
+            publishState(for: .fixtures)
+        }
+
+        do {
+            let today = Self.startOfToday()
+            let initialEnd = Self.dayOffset(fixturesInitialLoadDays - 1, from: today)
+            let response = try await client.fetchMatchesInRange(
+                preferences: preferences,
+                mode: .fixtures,
+                startDate: today,
+                endDate: initialEnd,
+                pageSize: fixturesLazyPageSize,
+                includePreferenceFilters: false,
+                hydrateStates: true
+            )
+
+            var incoming = response.matches
+
+            #if !DEBUG
+            incoming = incoming.filter { $0.isTestMatch != true }
+            #endif
+
+            let effectiveSnapshot = resolvedSnapshot(for: preferences)
+            var nextState = state(for: .fixtures)
+            nextState.unfilteredMatches = Self.replacingMatches(
+                in: nextState.unfilteredMatches,
+                with: incoming,
+                within: today...initialEnd
+            )
+            nextState.matches = visibleMatches(
+                from: nextState.unfilteredMatches,
+                snapshot: effectiveSnapshot,
+                mode: .fixtures
+            )
+            nextState.lastUpdated = Self.maxDate(nextState.lastUpdated, response.lastUpdated)
+            nextState.fixtureCoverageEnd = Self.maxDate(nextState.fixtureCoverageEnd, initialEnd)
+            nextState.page = 0
+            nextState.hasMore = false
+            nextState.isLoading = false
+            nextState.isUsingCache = false
+            nextState.errorMessage = nil
+            modeStates[.fixtures] = nextState
+
+            persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
+
+            if activeMode == .fixtures {
+                publishState(for: .fixtures)
+            }
+            refreshTeamRatingLookup(apiBaseURL: effectiveSnapshot.apiBaseURL)
+            updateRefreshTimer(using: effectiveSnapshot, matches: combinedLoadedMatches())
+            scheduleRemainingFixtureLoadingIfNeeded(preferences: effectiveSnapshot)
+        } catch {
+            if Self.isCancellationError(error) {
+                var cancelledState = state(for: .fixtures)
+                cancelledState.isLoading = false
+                cancelledState.errorMessage = nil
+                modeStates[.fixtures] = cancelledState
+                if activeMode == .fixtures {
+                    publishState(for: .fixtures)
+                }
+                NSLog("Matches refresh cancelled for mode=%@", MatchesViewMode.fixtures.rawValue)
+                return
+            }
+            NSLog("Matches refresh failed for mode=%@ error=%@", MatchesViewMode.fixtures.rawValue, String(describing: error))
+            setError("Unable to load matches. Check your API URL or connection.", for: .fixtures)
+        }
     }
 
     private func fetchPage(preferences: PreferencesSnapshot, mode: MatchesViewMode, reset: Bool) async {
@@ -434,23 +548,11 @@ final class MatchesStore: ObservableObject {
                     NSLog("[DEBUG fetchPage] Birmingham vs Leeds decoded with status=%@ hasScore=%d", birdsMatch.scoreStatus ?? "nil", birdsMatch.hasScore)
                 }
 
-                let competitionFiltered = Self.applyCompetitionFilters(
+                let modeFiltered = Self.applyPreferenceFilters(
                     to: incoming,
-                    selectedLeagues: preferences.selectedLeagues,
-                    isEnabled: preferences.competitionFilterEnabled
+                    snapshot: preferences,
+                    mode: mode
                 )
-
-                let dateFiltered = Self.filterMatches(competitionFiltered, for: mode)
-
-                let modeFiltered: [Match]
-                if mode == .fixtures && preferences.channelFilterEnabled {
-                    modeFiltered = Self.applyChannelFilters(
-                        to: dateFiltered,
-                        selectedChannels: preferences.selectedChannels
-                    )
-                } else {
-                    modeFiltered = dateFiltered
-                }
                 mergedIncoming = Self.mergePages(existing: mergedIncoming, incoming: incoming)
                 mergedModeFiltered = Self.mergePages(existing: mergedModeFiltered, incoming: modeFiltered)
 
@@ -474,15 +576,20 @@ final class MatchesStore: ObservableObject {
             )
 
             var nextState = state(for: mode)
-            let mergedVisibleMatches = reset
-                ? Self.mergeRefreshedMatches(existing: nextState.matches, incoming: mergedModeFiltered)
-                : Self.mergePages(existing: nextState.matches, incoming: mergedModeFiltered)
             let mergedUnfilteredMatches = reset
                 ? Self.mergeRefreshedMatches(existing: nextState.unfilteredMatches, incoming: mergedIncoming)
                 : Self.mergePages(existing: nextState.unfilteredMatches, incoming: mergedIncoming)
 
-            nextState.matches = Self.sortedMatches(mergedVisibleMatches, descendingDates: mode == .results)
-            nextState.unfilteredMatches = Self.sortedMatches(mergedUnfilteredMatches, descendingDates: mode == .results)
+            let effectiveSnapshot = resolvedSnapshot(for: preferences)
+            nextState.unfilteredMatches = Self.sortedMatches(
+                mergedUnfilteredMatches,
+                descendingDates: mode == .results
+            )
+            nextState.matches = visibleMatches(
+                from: nextState.unfilteredMatches,
+                snapshot: effectiveSnapshot,
+                mode: mode
+            )
             nextState.page = max(0, requestedPage - 1)
             nextState.hasMore = nextHasMore
             if let updated = newestLastUpdated {
@@ -493,13 +600,13 @@ final class MatchesStore: ObservableObject {
             nextState.errorMessage = nil
 
             modeStates[mode] = nextState
-            persistCombinedCacheAndSync(snapshot: preferences)
+            persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
 
             if mode == activeMode {
                 publishState(for: mode)
             }
-            refreshTeamRatingLookup(apiBaseURL: preferences.apiBaseURL)
-            updateRefreshTimer(using: preferences, matches: combinedLoadedMatches())
+            refreshTeamRatingLookup(apiBaseURL: effectiveSnapshot.apiBaseURL)
+            updateRefreshTimer(using: effectiveSnapshot, matches: combinedLoadedMatches())
         } catch {
             if Self.isCancellationError(error) {
                 var cancelledState = state(for: mode)
@@ -515,6 +622,201 @@ final class MatchesStore: ObservableObject {
             NSLog("Matches refresh failed for mode=%@ error=%@", mode.rawValue, String(describing: error))
             setError("Unable to load matches. Check your API URL or connection.", for: mode)
         }
+    }
+
+    private struct FixtureRangeLoadResult: Sendable {
+        let range: ClosedRange<Date>
+        let matches: [Match]
+        let lastUpdated: Date?
+    }
+
+    private func scheduleRemainingFixtureLoadingIfNeeded(preferences: PreferencesSnapshot) {
+        guard fixturesBackgroundLoadTask == nil else { return }
+        guard let baseURL = URL(string: preferences.apiBaseURL) else { return }
+
+        let ranges = fixtureLazyLoadRanges(for: state(for: .fixtures).unfilteredMatches)
+        guard !ranges.isEmpty else { return }
+
+        fixturesBackgroundLoadTask = Task { [weak self] in
+            guard let self else { return }
+            let maxParallelRequests = max(1, self.fixturesLazyParallelRequests)
+            let pageSize = self.fixturesLazyPageSize
+
+            var nextIndex = 0
+            while nextIndex < ranges.count {
+                if Task.isCancelled { break }
+                let batchEnd = min(ranges.count, nextIndex + maxParallelRequests)
+                let batch = Array(ranges[nextIndex..<batchEnd])
+                do {
+                    let loadedRanges = try await withThrowingTaskGroup(
+                        of: FixtureRangeLoadResult?.self,
+                        returning: [FixtureRangeLoadResult].self
+                    ) { group in
+                        for range in batch {
+                            group.addTask {
+                                try await Self.loadFixtureRange(
+                                    range,
+                                    preferences: preferences,
+                                    baseURL: baseURL,
+                                    pageSize: pageSize
+                                )
+                            }
+                        }
+
+                        var loaded: [FixtureRangeLoadResult] = []
+                        for try await result in group {
+                            if let result {
+                                loaded.append(result)
+                            }
+                        }
+                        return loaded.sorted { $0.range.lowerBound < $1.range.lowerBound }
+                    }
+                    if Task.isCancelled { break }
+                    applyLoadedFixtureRanges(loadedRanges, fallbackSnapshot: preferences)
+                } catch {
+                    if Self.isCancellationError(error) {
+                        break
+                    }
+                    NSLog("Fixtures lazy load failed error=%@", String(describing: error))
+                    break
+                }
+                nextIndex = batchEnd
+            }
+
+            self.fixturesBackgroundLoadTask = nil
+            let effectiveSnapshot = self.resolvedSnapshot(for: preferences)
+            if !Task.isCancelled {
+                self.scheduleRemainingFixtureLoadingIfNeeded(preferences: effectiveSnapshot)
+            }
+        }
+    }
+
+    private func applyLoadedFixtureRanges(
+        _ loadedRanges: [FixtureRangeLoadResult],
+        fallbackSnapshot: PreferencesSnapshot
+    ) {
+        guard !loadedRanges.isEmpty else { return }
+
+        let effectiveSnapshot = resolvedSnapshot(for: fallbackSnapshot)
+        var fixtureState = state(for: .fixtures)
+        var newestLastUpdated = fixtureState.lastUpdated
+
+        for loadedRange in loadedRanges {
+            fixtureState.unfilteredMatches = Self.replacingMatches(
+                in: fixtureState.unfilteredMatches,
+                with: loadedRange.matches,
+                within: loadedRange.range
+            )
+            newestLastUpdated = Self.maxDate(newestLastUpdated, loadedRange.lastUpdated)
+            fixtureState.fixtureCoverageEnd = Self.maxDate(
+                fixtureState.fixtureCoverageEnd,
+                loadedRange.range.upperBound
+            )
+        }
+
+        fixtureState.matches = visibleMatches(
+            from: fixtureState.unfilteredMatches,
+            snapshot: effectiveSnapshot,
+            mode: .fixtures
+        )
+        fixtureState.lastUpdated = newestLastUpdated
+        fixtureState.isUsingCache = false
+        modeStates[.fixtures] = fixtureState
+
+        persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
+
+        if activeMode == .fixtures {
+            publishState(for: .fixtures)
+        }
+        updateRefreshTimer(using: effectiveSnapshot, matches: combinedLoadedMatches())
+    }
+
+    private func reapplyLocalFilters(using snapshot: PreferencesSnapshot) {
+        for mode in modeStates.keys {
+            var current = state(for: mode)
+            guard !current.unfilteredMatches.isEmpty else { continue }
+            current.matches = visibleMatches(
+                from: current.unfilteredMatches,
+                snapshot: snapshot,
+                mode: mode
+            )
+            modeStates[mode] = current
+        }
+    }
+
+    private func visibleMatches(
+        from matches: [Match],
+        snapshot: PreferencesSnapshot,
+        mode: MatchesViewMode
+    ) -> [Match] {
+        let filtered = Self.applyPreferenceFilters(to: matches, snapshot: snapshot, mode: mode)
+        let sorted = Self.sortedMatches(filtered, descendingDates: mode == .results)
+        guard mode == .fixtures, !cachedBbcLiveMatches.isEmpty else { return sorted }
+        return MatchScoreResolver.applyScores(to: sorted, using: cachedBbcLiveMatches)
+    }
+
+    private func fixtureLazyLoadRanges(for matches: [Match]) -> [ClosedRange<Date>] {
+        let today = Self.startOfToday()
+        let initialWindowEnd = Self.dayOffset(fixturesInitialLoadDays - 1, from: today)
+        let overallEnd = Self.dayOffset(fixturesFutureLoadDays - 1, from: today)
+        guard initialWindowEnd < overallEnd else { return [] }
+
+        let loadedUntil = state(for: .fixtures).fixtureCoverageEnd ?? Self.loadedFixtureCoverageEnd(
+            in: matches,
+            minimumDate: initialWindowEnd
+        )
+        let nextStart = Self.dayOffset(1, from: loadedUntil ?? initialWindowEnd)
+        guard nextStart <= overallEnd else { return [] }
+
+        var ranges: [ClosedRange<Date>] = []
+        var cursor = nextStart
+        while cursor <= overallEnd {
+            let end = min(
+                Self.dayOffset(fixturesLazyBatchDays - 1, from: cursor),
+                overallEnd
+            )
+            ranges.append(cursor...end)
+            cursor = Self.dayOffset(1, from: end)
+        }
+        return ranges
+    }
+
+    private func resolvedSnapshot(for fallback: PreferencesSnapshot) -> PreferencesSnapshot {
+        guard let snapshot = currentSnapshot, snapshot.apiBaseURL == fallback.apiBaseURL else {
+            return fallback
+        }
+        return snapshot
+    }
+
+    private static func loadFixtureRange(
+        _ range: ClosedRange<Date>?,
+        preferences: PreferencesSnapshot,
+        baseURL: URL,
+        pageSize: Int
+    ) async throws -> FixtureRangeLoadResult? {
+        guard let range else { return nil }
+        let client = APIClient(baseURL: baseURL)
+
+        let response = try await client.fetchMatchesInRange(
+            preferences: preferences,
+            mode: .fixtures,
+            startDate: range.lowerBound,
+            endDate: range.upperBound,
+            pageSize: pageSize,
+            includePreferenceFilters: false,
+            hydrateStates: false
+        )
+
+        var matches = response.matches
+        #if !DEBUG
+        matches = matches.filter { $0.isTestMatch != true }
+        #endif
+
+        return FixtureRangeLoadResult(
+            range: range,
+            matches: matches,
+            lastUpdated: response.lastUpdated
+        )
     }
 
     private func reconcileServerCacheStateIfNeeded(client: APIClient, force: Bool = false) async {
@@ -540,6 +842,8 @@ final class MatchesStore: ObservableObject {
         if invalidation.shouldClearMatchCaches {
             MatchCache.clear()
             SharedMatchesBridge.clear()
+            fixturesBackgroundLoadTask?.cancel()
+            fixturesBackgroundLoadTask = nil
             // Reset pagination state but keep in-memory matches visible until fresh data arrives.
             // Clearing modeStates here would blank the UI and force a full-screen spinner even
             // though the user has perfectly usable cached data. The incoming fetchPage (reset: true)
@@ -548,6 +852,7 @@ final class MatchesStore: ObservableObject {
                 var state = modeStates[key] ?? ModeState()
                 state.page = 0
                 state.hasMore = true
+                state.fixtureCoverageEnd = nil
                 state.isUsingCache = false
                 modeStates[key] = state
             }
@@ -611,9 +916,13 @@ final class MatchesStore: ObservableObject {
 
     private func rescoreVisibleFixtures() {
         var fixtureState = state(for: .fixtures)
-        guard !fixtureState.matches.isEmpty else { return }
-        let rescored = MatchScoreResolver.applyScores(to: fixtureState.matches, using: cachedBbcLiveMatches)
-        fixtureState.matches = rescored
+        guard !fixtureState.unfilteredMatches.isEmpty else { return }
+        let snapshot = currentSnapshot ?? PreferencesStore.loadSnapshot()
+        fixtureState.matches = visibleMatches(
+            from: fixtureState.unfilteredMatches,
+            snapshot: snapshot,
+            mode: .fixtures
+        )
         modeStates[.fixtures] = fixtureState
         if activeMode == .fixtures {
             publishState(for: .fixtures)
@@ -628,29 +937,27 @@ final class MatchesStore: ObservableObject {
         }
 
         let cachedMatches = payload.matches
-        let competitionFiltered = Self.applyCompetitionFilters(
-            to: cachedMatches,
-            selectedLeagues: snapshot.selectedLeagues,
-            isEnabled: snapshot.competitionFilterEnabled
-        )
-        let fixturesBase = Self.filterMatches(competitionFiltered, for: .fixtures)
-        let fixtures = snapshot.channelFilterEnabled
-            ? Self.applyChannelFilters(to: fixturesBase, selectedChannels: snapshot.selectedChannels)
-            : fixturesBase
-        let results = Self.filterMatches(competitionFiltered, for: .results)
-
-        let unfilteredFixtures = Self.filterMatches(cachedMatches, for: .fixtures)
-        let unfilteredResults = Self.filterMatches(cachedMatches, for: .results)
+        let unfilteredFixtures = Self.storageMatches(cachedMatches, for: .fixtures)
+        let unfilteredResults = Self.storageMatches(cachedMatches, for: .results)
 
         var fixtureState = ModeState()
-        fixtureState.matches = Self.sortedMatches(fixtures)
         fixtureState.unfilteredMatches = Self.sortedMatches(unfilteredFixtures)
+        fixtureState.matches = visibleMatches(
+            from: fixtureState.unfilteredMatches,
+            snapshot: snapshot,
+            mode: .fixtures
+        )
         fixtureState.lastUpdated = payload.lastUpdated
+        fixtureState.fixtureCoverageEnd = payload.fixtureCoverageEnd
         fixtureState.isUsingCache = true
 
         var resultState = ModeState()
-        resultState.matches = Self.sortedMatches(results, descendingDates: true)
         resultState.unfilteredMatches = Self.sortedMatches(unfilteredResults, descendingDates: true)
+        resultState.matches = visibleMatches(
+            from: resultState.unfilteredMatches,
+            snapshot: snapshot,
+            mode: .results
+        )
         resultState.lastUpdated = payload.lastUpdated
         resultState.isUsingCache = true
 
@@ -658,10 +965,9 @@ final class MatchesStore: ObservableObject {
         bbcLiveLastFetchedAt = nil
         publishState(for: activeMode)
 
-        let combinedFiltered = Self.sortedMatches(fixtures + results)
         let combinedUnfiltered = Self.sortedMatches(cachedMatches)
         SharedMatchesBridge.saveAndSync(
-            matches: combinedFiltered,
+            matches: Self.sortedMatches(combinedLoadedMatches()),
             unfilteredMatches: combinedUnfiltered,
             lastUpdated: payload.lastUpdated,
             snapshot: snapshot
@@ -671,9 +977,14 @@ final class MatchesStore: ObservableObject {
     private func persistCombinedCacheAndSync(snapshot: PreferencesSnapshot) {
         let combined = Self.sortedMatches(combinedLoadedMatches())
         let unfilteredCombined = Self.sortedMatches(combinedUnfilteredMatches())
-        guard !combined.isEmpty else { return }
+        guard !unfilteredCombined.isEmpty else { return }
         let latestUpdated = latestLastUpdatedAcrossModes()
-        MatchCache.save(matches: unfilteredCombined, lastUpdated: latestUpdated, snapshot: snapshot)
+        MatchCache.save(
+            matches: unfilteredCombined,
+            lastUpdated: latestUpdated,
+            fixtureCoverageEnd: state(for: .fixtures).fixtureCoverageEnd,
+            snapshot: snapshot
+        )
         SharedMatchesBridge.saveAndSync(
             matches: combined,
             unfilteredMatches: unfilteredCombined,
@@ -904,9 +1215,81 @@ final class MatchesStore: ObservableObject {
         return value.uppercased()
     }
 
-    private static func filterMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
+    private static let homeNationsTeamKeys: Set<String> = [
+        "England",
+        "Northern Ireland",
+        "Scotland",
+        "Wales",
+    ].map(TeamIdentityStore.normalizedKey).reduce(into: Set<String>()) { partialResult, key in
+        if !key.isEmpty {
+            partialResult.insert(key)
+        }
+    }
+
+    private static let premierLeagueTeamKeys: Set<String> = [
+        "Arsenal",
+        "Aston Villa",
+        "Bournemouth",
+        "AFC Bournemouth",
+        "Brentford",
+        "Brighton",
+        "Brighton and Hove Albion",
+        "Brighton & Hove Albion",
+        "Burnley",
+        "Chelsea",
+        "Crystal Palace",
+        "Everton",
+        "Fulham",
+        "Leeds",
+        "Leeds United",
+        "Liverpool",
+        "Manchester City",
+        "Man City",
+        "Manchester United",
+        "Man United",
+        "Newcastle",
+        "Newcastle United",
+        "Nottingham Forest",
+        "Nottm Forest",
+        "Sunderland",
+        "Tottenham",
+        "Tottenham Hotspur",
+        "Spurs",
+        "West Ham",
+        "West Ham United",
+        "Wolverhampton Wanderers",
+        "Wolves",
+    ].map(TeamIdentityStore.normalizedKey).reduce(into: Set<String>()) { partialResult, key in
+        if !key.isEmpty {
+            partialResult.insert(key)
+        }
+    }
+
+    static func filterMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = startOfToday()
+        return matches.filter { match in
+            if mode == .fixtures, !match.hasBbcMatchEntry {
+                return false
+            }
+            guard let date = match.dateOnly else {
+                return mode == .fixtures
+            }
+            let day = calendar.startOfDay(for: date)
+            switch mode {
+            case .fixtures:
+                return day >= today
+            case .results:
+                if day < today { return true }
+                if day > today { return false }
+                return match.isInProgress || match.isFinished
+            }
+        }
+    }
+
+    private static func storageMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
+        let calendar = Calendar.current
+        let today = startOfToday()
         return matches.filter { match in
             guard let date = match.dateOnly else {
                 return mode == .fixtures
@@ -921,6 +1304,24 @@ final class MatchesStore: ObservableObject {
                 return match.isInProgress || match.isFinished
             }
         }
+    }
+
+    static func applyPreferenceFilters(
+        to matches: [Match],
+        snapshot: PreferencesSnapshot,
+        mode: MatchesViewMode
+    ) -> [Match] {
+        let competitionFiltered = applyCompetitionFilters(
+            to: matches,
+            selectedLeagues: snapshot.selectedLeagues,
+            isEnabled: snapshot.competitionFilterEnabled,
+            englishPremierLeagueTeamsOnly: snapshot.effectiveEnglishPremierLeagueTeamsOnly,
+            homeNationsFilterEnabled: snapshot.effectiveHomeNationsFilterEnabled,
+            majorTournamentsFilterEnabled: snapshot.effectiveMajorTournamentsFilterEnabled
+        )
+        let dateFiltered = filterMatches(competitionFiltered, for: mode)
+        guard mode == .fixtures, snapshot.channelFilterEnabled else { return dateFiltered }
+        return applyChannelFilters(to: dateFiltered, selectedChannels: snapshot.selectedChannels)
     }
 
     private static func sortedMatches(_ matches: [Match], descendingDates: Bool = false) -> [Match] {
@@ -979,15 +1380,130 @@ final class MatchesStore: ObservableObject {
     private static func applyCompetitionFilters(
         to matches: [Match],
         selectedLeagues: [String],
-        isEnabled: Bool
+        isEnabled: Bool,
+        englishPremierLeagueTeamsOnly: Bool = false,
+        homeNationsFilterEnabled: Bool = false,
+        majorTournamentsFilterEnabled: Bool = false
     ) -> [Match] {
         guard isEnabled else { return matches }
-        guard !selectedLeagues.isEmpty else { return matches }
-
         let selected = Set(selectedLeagues.map(CompetitionWeightConfig.canonicalFilterName))
+        let hasLeagueFilter = !selected.isEmpty
+        let hasCategoryFilters =
+            englishPremierLeagueTeamsOnly ||
+            homeNationsFilterEnabled ||
+            majorTournamentsFilterEnabled
+
+        guard hasLeagueFilter || hasCategoryFilters else { return matches }
 
         return matches.filter { match in
-            selected.contains(CompetitionWeightConfig.canonicalFilterName(match.league))
+            let matchesSelectedLeague =
+                !hasLeagueFilter ||
+                selected.contains(CompetitionWeightConfig.canonicalFilterName(match.league))
+            guard matchesSelectedLeague else { return false }
+
+            guard hasCategoryFilters else { return true }
+            return matchPassesCompetitionCategoryFilters(
+                match,
+                englishPremierLeagueTeamsOnly: englishPremierLeagueTeamsOnly,
+                homeNationsFilterEnabled: homeNationsFilterEnabled,
+                majorTournamentsFilterEnabled: majorTournamentsFilterEnabled
+            )
+        }
+    }
+
+    private static func matchPassesCompetitionCategoryFilters(
+        _ match: Match,
+        englishPremierLeagueTeamsOnly: Bool,
+        homeNationsFilterEnabled: Bool,
+        majorTournamentsFilterEnabled: Bool
+    ) -> Bool {
+        var predicates: [Bool] = []
+        if englishPremierLeagueTeamsOnly {
+            predicates.append(matchIncludesPremierLeagueTeam(match))
+        }
+        if homeNationsFilterEnabled {
+            predicates.append(matchIncludesHomeNation(match))
+        }
+        if majorTournamentsFilterEnabled {
+            predicates.append(matchIsMajorTournament(match))
+        }
+        return predicates.contains(true)
+    }
+
+    private static func matchIncludesPremierLeagueTeam(_ match: Match) -> Bool {
+        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
+        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
+        return !homeKeys.isDisjoint(with: premierLeagueTeamKeys) ||
+            !awayKeys.isDisjoint(with: premierLeagueTeamKeys)
+    }
+
+    private static func matchIncludesHomeNation(_ match: Match) -> Bool {
+        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
+        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
+        return !homeKeys.isDisjoint(with: homeNationsTeamKeys) ||
+            !awayKeys.isDisjoint(with: homeNationsTeamKeys)
+    }
+
+    private static func matchIsMajorTournament(_ match: Match) -> Bool {
+        let league = CompetitionWeightConfig.normalizeCompetitionName(match.league)
+        let subcategory = CompetitionWeightConfig.normalizeCompetitionName(match.leagueSubcategory ?? "")
+        guard !league.isEmpty else { return false }
+        if league.range(of: #"\bqualif(?:ying|ication)\b"#, options: .regularExpression) != nil ||
+            subcategory.range(of: #"\bqualif(?:ying|ication)\b"#, options: .regularExpression) != nil {
+            return false
+        }
+
+        return league.range(
+            of: #"^(?:fifa world cup(?:\s+\d{4})?|(?:uefa\s+)?european championship(?:\s+\d{4})?|(?:uefa\s+)?euro(?:\s+\d{4})?)$"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    private static func replacingMatches(
+        in existing: [Match],
+        with incoming: [Match],
+        within range: ClosedRange<Date>
+    ) -> [Match] {
+        let preserved = existing.filter { !matchesDate($0, within: range) }
+        return mergePages(existing: preserved, incoming: incoming)
+    }
+
+    private static func matchesDate(_ match: Match, within range: ClosedRange<Date>) -> Bool {
+        guard let date = match.dateOnly.map({ Calendar.current.startOfDay(for: $0) }) else {
+            return false
+        }
+        return range.contains(date)
+    }
+
+    private static func loadedFixtureCoverageEnd(
+        in matches: [Match],
+        minimumDate: Date
+    ) -> Date? {
+        let fixtureDates = storageMatches(matches, for: .fixtures)
+            .compactMap(\.dateOnly)
+            .map { Calendar.current.startOfDay(for: $0) }
+            .filter { $0 >= minimumDate }
+        return fixtureDates.max()
+    }
+
+    private static func startOfToday(now: Date = Date()) -> Date {
+        Calendar.current.startOfDay(for: now)
+    }
+
+    private static func dayOffset(_ value: Int, from date: Date) -> Date {
+        Calendar.current.date(byAdding: .day, value: value, to: date) ?? date
+    }
+
+    private static func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {
+        switch (lhs, rhs) {
+        case let (left?, right?):
+            return max(left, right)
+        case let (left?, nil):
+            return left
+        case let (nil, right?):
+            return right
+        case (nil, nil):
+            return nil
         }
     }
 

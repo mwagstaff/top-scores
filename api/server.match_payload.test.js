@@ -30,6 +30,9 @@ const {
     normalizeCompetitionFilterName,
     isAllowedCompetition,
     mergeBbcAndLiveMatches,
+    matchIncludesHomeNation,
+    matchIsMajorTournament,
+    matchPassesCategoryFilters,
   },
 } = require("./server");
 
@@ -168,6 +171,22 @@ test("toMatchListPayload upgrades status from match details by match id despite 
   assert.equal(payload.score_status, "FT");
 });
 
+test("toMatchListPayload preserves explicit BBC-source flag without requiring match_details_id", () => {
+  const payload = toMatchListPayload(
+    baseMatch({
+      details_url: null,
+      match_details_id: null,
+      has_bbc_source: true,
+      home_score: null,
+      away_score: null,
+      score_status: null,
+    })
+  );
+
+  assert.equal(payload.has_bbc_source, true);
+  assert.equal(payload.match_details_id, undefined);
+});
+
 test("normalizeTeamName canonicalizes team aliases from shared identity config", () => {
   assert.equal(normalizeTeamName("Man City"), "manchester city");
   assert.equal(normalizeTeamName("MCI"), "manchester city");
@@ -189,6 +208,97 @@ test("normalizeCompetitionFilterName maps World Cup qualifying competitions to t
     "fifa world cup 2026"
   );
   assert.equal(isAllowedCompetition("FIFA World Cup Qualifying - European"), true);
+});
+
+test("matchIncludesHomeNation matches the requested home nations only", () => {
+  assert.equal(
+    matchIncludesHomeNation(
+      baseMatch({
+        league: "International Friendly",
+        home_team: "England",
+        away_team: "Brazil",
+      })
+    ),
+    true
+  );
+
+  assert.equal(
+    matchIncludesHomeNation(
+      baseMatch({
+        league: "International Friendly",
+        home_team: "France",
+        away_team: "Germany",
+      })
+    ),
+    false
+  );
+});
+
+test("matchIsMajorTournament includes World Cup and Euros but excludes qualifying", () => {
+  assert.equal(
+    matchIsMajorTournament(
+      baseMatch({
+        league: "FIFA World Cup 2026 Group A",
+      })
+    ),
+    true
+  );
+
+  assert.equal(
+    matchIsMajorTournament(
+      baseMatch({
+        league: "UEFA European Championship Semi-Finals",
+      })
+    ),
+    true
+  );
+
+  assert.equal(
+    matchIsMajorTournament(
+      baseMatch({
+        league: "FIFA World Cup Qualifying - European",
+      })
+    ),
+    false
+  );
+});
+
+test("matchPassesCategoryFilters uses union semantics across domestic and international toggles", () => {
+  const premierLeagueTeams = ["Arsenal", "Chelsea"];
+
+  assert.equal(
+    matchPassesCategoryFilters(
+      baseMatch({
+        league: "International Friendly",
+        home_team: "Scotland",
+        away_team: "Denmark",
+      }),
+      {
+        eplOnly: true,
+        homeNations: true,
+        majorTournaments: false,
+        premierLeagueTeams,
+      }
+    ),
+    true
+  );
+
+  assert.equal(
+    matchPassesCategoryFilters(
+      baseMatch({
+        league: "Serie A",
+        home_team: "Napoli",
+        away_team: "Roma",
+      }),
+      {
+        eplOnly: true,
+        homeNations: true,
+        majorTournaments: true,
+        premierLeagueTeams,
+      }
+    ),
+    false
+  );
 });
 
 test("mergeBbcAndLiveMatches prefers BBC competition metadata for duplicate fixtures", () => {

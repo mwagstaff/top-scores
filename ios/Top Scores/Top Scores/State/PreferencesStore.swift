@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-enum MatchGroupSortOrder: String, Codable, CaseIterable, Identifiable {
+enum MatchGroupSortOrder: String, Codable, CaseIterable, Identifiable, Sendable {
     case alphabetical
     case teamScore
     case kickoffThenAlphabetical
@@ -32,12 +32,14 @@ enum MatchGroupSortOrder: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct PreferencesSnapshot: Codable, Equatable {
+struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let selectedLeagues: [String]
     let selectedChannels: [String]
     let competitionFilterEnabled: Bool
     let channelFilterEnabled: Bool
     let englishPremierLeagueTeamsOnly: Bool
+    let homeNationsFilterEnabled: Bool
+    let majorTournamentsFilterEnabled: Bool
     let apiBaseURL: String
     let refreshIntervalMinutes: Int
     let showAllMatches: Bool
@@ -59,12 +61,26 @@ struct PreferencesSnapshot: Codable, Equatable {
         showFantasyFixtureLogos || showFantasyExpectedPoints || showFantasyRealTimePoints
     }
 
+    var effectiveEnglishPremierLeagueTeamsOnly: Bool {
+        competitionFilterEnabled && englishPremierLeagueTeamsOnly
+    }
+
+    var effectiveHomeNationsFilterEnabled: Bool {
+        competitionFilterEnabled && homeNationsFilterEnabled
+    }
+
+    var effectiveMajorTournamentsFilterEnabled: Bool {
+        competitionFilterEnabled && majorTournamentsFilterEnabled
+    }
+
     nonisolated init(
         selectedLeagues: [String],
         selectedChannels: [String],
         competitionFilterEnabled: Bool = PreferencesStore.defaultCompetitionFilterEnabled,
         channelFilterEnabled: Bool = PreferencesStore.defaultChannelFilterEnabled,
         englishPremierLeagueTeamsOnly: Bool,
+        homeNationsFilterEnabled: Bool = PreferencesStore.defaultHomeNationsFilterEnabled,
+        majorTournamentsFilterEnabled: Bool = PreferencesStore.defaultMajorTournamentsFilterEnabled,
         apiBaseURL: String,
         refreshIntervalMinutes: Int,
         showAllMatches: Bool = false,
@@ -87,6 +103,8 @@ struct PreferencesSnapshot: Codable, Equatable {
         self.competitionFilterEnabled = competitionFilterEnabled
         self.channelFilterEnabled = channelFilterEnabled
         self.englishPremierLeagueTeamsOnly = englishPremierLeagueTeamsOnly
+        self.homeNationsFilterEnabled = homeNationsFilterEnabled
+        self.majorTournamentsFilterEnabled = majorTournamentsFilterEnabled
         self.apiBaseURL = apiBaseURL
         self.refreshIntervalMinutes = refreshIntervalMinutes
         self.showAllMatches = showAllMatches
@@ -111,6 +129,8 @@ struct PreferencesSnapshot: Codable, Equatable {
         case competitionFilterEnabled
         case channelFilterEnabled
         case englishPremierLeagueTeamsOnly
+        case homeNationsFilterEnabled
+        case majorTournamentsFilterEnabled
         case apiBaseURL
         case refreshIntervalMinutes
         case showAllMatches
@@ -140,6 +160,8 @@ struct PreferencesSnapshot: Codable, Equatable {
         competitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .competitionFilterEnabled) ?? PreferencesStore.defaultCompetitionFilterEnabled
         channelFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .channelFilterEnabled) ?? PreferencesStore.defaultChannelFilterEnabled
         englishPremierLeagueTeamsOnly = try container.decode(Bool.self, forKey: .englishPremierLeagueTeamsOnly)
+        homeNationsFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .homeNationsFilterEnabled) ?? PreferencesStore.defaultHomeNationsFilterEnabled
+        majorTournamentsFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .majorTournamentsFilterEnabled) ?? PreferencesStore.defaultMajorTournamentsFilterEnabled
         apiBaseURL = try container.decode(String.self, forKey: .apiBaseURL)
         refreshIntervalMinutes = try container.decode(Int.self, forKey: .refreshIntervalMinutes)
         showAllMatches = try container.decodeIfPresent(Bool.self, forKey: .showAllMatches) ?? false
@@ -182,6 +204,8 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultRefreshIntervalMinutes = 10
     nonisolated static let defaultSelectedChannels = ["Amazon (all)", "BBC (all)", "ITV (all)", "Sky (all)", "TNT (all)"]
     nonisolated static let defaultEnglishPremierLeagueTeamsOnly = true
+    nonisolated static let defaultHomeNationsFilterEnabled = true
+    nonisolated static let defaultMajorTournamentsFilterEnabled = true
     nonisolated static let defaultCompetitionFilterEnabled = false
     nonisolated static let defaultChannelFilterEnabled = false
     nonisolated static let defaultShowAllMatches = false
@@ -220,6 +244,14 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var englishPremierLeagueTeamsOnly: Bool {
+        didSet { persist() }
+    }
+
+    @Published var homeNationsFilterEnabled: Bool {
+        didSet { persist() }
+    }
+
+    @Published var majorTournamentsFilterEnabled: Bool {
         didSet { persist() }
     }
 
@@ -302,6 +334,10 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultChannelFilterEnabled
         let englishPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.englishPremierLeagueTeamsOnly) as? Bool
             ?? Self.defaultEnglishPremierLeagueTeamsOnly
+        let homeNationsFilterEnabled = userDefaults.object(forKey: Keys.homeNationsFilterEnabled) as? Bool
+            ?? Self.defaultHomeNationsFilterEnabled
+        let majorTournamentsFilterEnabled = userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool
+            ?? Self.defaultMajorTournamentsFilterEnabled
         let apiBaseURL = userDefaults.string(forKey: Keys.apiBaseURL) ?? Self.defaultApiBaseURL
         let refreshInterval = userDefaults.object(forKey: Keys.refreshIntervalMinutes) as? Int
             ?? Self.defaultRefreshIntervalMinutes
@@ -347,6 +383,8 @@ final class PreferencesStore: ObservableObject {
         self.competitionFilterEnabled = competitionFilterEnabled
         self.channelFilterEnabled = channelFilterEnabled
         self.englishPremierLeagueTeamsOnly = englishPremierLeagueTeamsOnly
+        self.homeNationsFilterEnabled = homeNationsFilterEnabled
+        self.majorTournamentsFilterEnabled = majorTournamentsFilterEnabled
         self.apiBaseURL = apiBaseURL
         self.refreshIntervalMinutes = max(1, refreshInterval)
         self.showAllMatches = showAllMatches
@@ -381,6 +419,8 @@ final class PreferencesStore: ObservableObject {
             competitionFilterEnabled: competitionFilterEnabled,
             channelFilterEnabled: channelFilterEnabled,
             englishPremierLeagueTeamsOnly: englishPremierLeagueTeamsOnly,
+            homeNationsFilterEnabled: homeNationsFilterEnabled,
+            majorTournamentsFilterEnabled: majorTournamentsFilterEnabled,
             apiBaseURL: apiBaseURL,
             refreshIntervalMinutes: refreshIntervalMinutes,
             showAllMatches: showAllMatches,
@@ -411,6 +451,8 @@ final class PreferencesStore: ObservableObject {
             competitionFilterEnabled: false,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: false,
+            homeNationsFilterEnabled: false,
+            majorTournamentsFilterEnabled: false,
             apiBaseURL: apiBaseURL,
             refreshIntervalMinutes: refreshIntervalMinutes,
             showAllMatches: showAllMatches,
@@ -436,6 +478,8 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(competitionFilterEnabled, forKey: Keys.competitionFilterEnabled)
         userDefaults.set(channelFilterEnabled, forKey: Keys.channelFilterEnabled)
         userDefaults.set(englishPremierLeagueTeamsOnly, forKey: Keys.englishPremierLeagueTeamsOnly)
+        userDefaults.set(homeNationsFilterEnabled, forKey: Keys.homeNationsFilterEnabled)
+        userDefaults.set(majorTournamentsFilterEnabled, forKey: Keys.majorTournamentsFilterEnabled)
         userDefaults.set(apiBaseURL, forKey: Keys.apiBaseURL)
         userDefaults.set(refreshIntervalMinutes, forKey: Keys.refreshIntervalMinutes)
         userDefaults.set(showAllMatches, forKey: Keys.showAllMatches)
@@ -479,6 +523,10 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultChannelFilterEnabled
         let englishPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.englishPremierLeagueTeamsOnly) as? Bool
             ?? Self.defaultEnglishPremierLeagueTeamsOnly
+        let homeNationsFilterEnabled = userDefaults.object(forKey: Keys.homeNationsFilterEnabled) as? Bool
+            ?? Self.defaultHomeNationsFilterEnabled
+        let majorTournamentsFilterEnabled = userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool
+            ?? Self.defaultMajorTournamentsFilterEnabled
         let apiBaseURL = userDefaults.string(forKey: Keys.apiBaseURL) ?? Self.defaultApiBaseURL
         let refreshInterval = userDefaults.object(forKey: Keys.refreshIntervalMinutes) as? Int
             ?? Self.defaultRefreshIntervalMinutes
@@ -521,6 +569,8 @@ final class PreferencesStore: ObservableObject {
             competitionFilterEnabled: competitionFilterEnabled,
             channelFilterEnabled: channelFilterEnabled,
             englishPremierLeagueTeamsOnly: englishPremierLeagueTeamsOnly,
+            homeNationsFilterEnabled: homeNationsFilterEnabled,
+            majorTournamentsFilterEnabled: majorTournamentsFilterEnabled,
             apiBaseURL: apiBaseURL,
             refreshIntervalMinutes: max(1, refreshInterval),
             showAllMatches: showAllMatches,
@@ -546,6 +596,8 @@ final class PreferencesStore: ObservableObject {
         static let competitionFilterEnabled = "preferences.competitionFilterEnabled"
         static let channelFilterEnabled = "preferences.channelFilterEnabled"
         static let englishPremierLeagueTeamsOnly = "preferences.englishPremierLeagueTeamsOnly"
+        static let homeNationsFilterEnabled = "preferences.homeNationsFilterEnabled"
+        static let majorTournamentsFilterEnabled = "preferences.majorTournamentsFilterEnabled"
         static let apiBaseURL = "preferences.apiBaseURL"
         static let refreshIntervalMinutes = "preferences.refreshIntervalMinutes"
         static let showAllMatches = "preferences.showAllMatches"

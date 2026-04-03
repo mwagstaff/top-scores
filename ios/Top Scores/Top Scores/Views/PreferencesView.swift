@@ -22,12 +22,26 @@ struct PreferencesView: View {
                 headerView
                 Form {
 
-                    Section("Filters") {
-                        Toggle("Premier League teams only", isOn: englishPremierLeagueTeamsOnlyBinding)
-                        Text("Show only matches where at least one team is in the English Premier League.")
+                    Section("International games") {
+                        Toggle("Home nations", isOn: homeNationsFilterEnabledBinding)
+                        Text("Show international matches involving England, Northern Ireland, Scotland, or Wales, including friendlies.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
+                        Toggle("Major tournaments", isOn: majorTournamentsFilterEnabledBinding)
+                        Text("Show FIFA World Cup and UEFA European Championship matches, excluding qualifying games.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Section("Domestic games") {
+                        Toggle("Premier League teams only", isOn: englishPremierLeagueTeamsOnlyBinding)
+                        Text("Show domestic matches involving at least one English Premier League team.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Section("Display") {
                         Toggle("Show unfinished fixtures badge", isOn: showTodayUnfinishedFixturesBadgeBinding)
                         Text("Shows the number of today's fixtures that have not started or are still in play on the app icon.")
                             .font(.footnote)
@@ -344,6 +358,20 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.englishPremierLeagueTeamsOnly },
             set: { preferences.englishPremierLeagueTeamsOnly = $0 }
+        )
+    }
+
+    private var homeNationsFilterEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.homeNationsFilterEnabled },
+            set: { preferences.homeNationsFilterEnabled = $0 }
+        )
+    }
+
+    private var majorTournamentsFilterEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.majorTournamentsFilterEnabled },
+            set: { preferences.majorTournamentsFilterEnabled = $0 }
         )
     }
 

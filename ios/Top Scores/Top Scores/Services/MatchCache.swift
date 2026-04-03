@@ -70,12 +70,14 @@ struct MatchCachePayload: Codable {
     let snapshot: PreferencesSnapshot
     let matches: [Match]
     let lastUpdated: Date?
+    let fixtureCoverageEnd: Date?
     let cacheGenerations: CacheGenerationSnapshot?
 
     enum CodingKeys: String, CodingKey {
         case snapshot
         case matches
         case lastUpdated
+        case fixtureCoverageEnd = "fixture_coverage_end"
         case cacheGenerations = "cache_generations"
     }
 
@@ -83,11 +85,13 @@ struct MatchCachePayload: Codable {
         snapshot: PreferencesSnapshot,
         matches: [Match],
         lastUpdated: Date?,
+        fixtureCoverageEnd: Date?,
         cacheGenerations: CacheGenerationSnapshot?
     ) {
         self.snapshot = snapshot
         self.matches = matches
         self.lastUpdated = lastUpdated
+        self.fixtureCoverageEnd = fixtureCoverageEnd
         self.cacheGenerations = cacheGenerations
     }
 }
@@ -101,7 +105,7 @@ enum MatchCache {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let payload = try? decoder.decode(MatchCachePayload.self, from: data) else { return nil }
-        guard payload.snapshot == snapshot else { return nil }
+        guard payload.snapshot.apiBaseURL == snapshot.apiBaseURL else { return nil }
         let knownGenerations = knownServerGenerations()
         if isPayloadStale(payload, comparedTo: knownGenerations) {
             clear()
@@ -110,12 +114,18 @@ enum MatchCache {
         return payload
     }
 
-    static func save(matches: [Match], lastUpdated: Date?, snapshot: PreferencesSnapshot) {
+    static func save(
+        matches: [Match],
+        lastUpdated: Date?,
+        fixtureCoverageEnd: Date?,
+        snapshot: PreferencesSnapshot
+    ) {
         let knownGenerations = knownServerGenerations()
         let payload = MatchCachePayload(
             snapshot: snapshot,
             matches: matches,
             lastUpdated: lastUpdated,
+            fixtureCoverageEnd: fixtureCoverageEnd,
             cacheGenerations: knownGenerations.hasAnyGeneration ? knownGenerations : nil
         )
         let encoder = JSONEncoder()

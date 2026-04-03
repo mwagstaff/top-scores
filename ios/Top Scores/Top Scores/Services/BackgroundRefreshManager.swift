@@ -53,11 +53,31 @@ enum BackgroundRefreshManager {
                     }
                 }
                 let response = try await client.fetchMatches(preferences: snapshot)
-                let preferenceFiltered = applyPreferenceFilters(to: response.matches, snapshot: snapshot)
-                let sorted = sortedMatches(preferenceFiltered)
+                let visibleFixtures = MatchesStore.applyPreferenceFilters(
+                    to: response.matches,
+                    snapshot: snapshot,
+                    mode: .fixtures
+                )
+                let visibleResults = MatchesStore.applyPreferenceFilters(
+                    to: response.matches,
+                    snapshot: snapshot,
+                    mode: .results
+                )
+                let mergedVisible = mergeMatches(visibleFixtures + visibleResults)
+                let sorted = sortedMatches(mergedVisible)
                 let unfilteredSorted = sortedMatches(response.matches)
+                let fixtureCoverageEnd = Calendar.current.date(
+                    byAdding: .day,
+                    value: 89,
+                    to: Calendar.current.startOfDay(for: Date())
+                )
 
-                MatchCache.save(matches: unfilteredSorted, lastUpdated: response.lastUpdated, snapshot: snapshot)
+                MatchCache.save(
+                    matches: unfilteredSorted,
+                    lastUpdated: response.lastUpdated,
+                    fixtureCoverageEnd: fixtureCoverageEnd,
+                    snapshot: snapshot
+                )
                 SharedMatchesBridge.saveAndSync(
                     matches: sorted,
                     unfilteredMatches: unfilteredSorted,
@@ -104,44 +124,14 @@ enum BackgroundRefreshManager {
         }
     }
 
-    private static func applyPreferenceFilters(to matches: [Match], snapshot: PreferencesSnapshot) -> [Match] {
-        let competitionFiltered = applyCompetitionFilters(
-            to: matches,
-            selectedLeagues: snapshot.selectedLeagues,
-            isEnabled: snapshot.competitionFilterEnabled
-        )
-        guard snapshot.channelFilterEnabled else { return competitionFiltered }
-        guard !snapshot.selectedChannels.isEmpty else { return competitionFiltered }
-
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-
-        return competitionFiltered.compactMap { match in
-            if let date = match.dateOnly, calendar.startOfDay(for: date) < today {
-                return match
-            }
-
-            let relevantChannels = ChannelSelection.filterChannels(
-                match.tvChannels,
-                selectedOptions: snapshot.selectedChannels
-            )
-            guard !relevantChannels.isEmpty else { return nil }
-            return match.withTvChannels(relevantChannels)
+    private static func mergeMatches(_ matches: [Match]) -> [Match] {
+        var merged: [Match] = []
+        var seen = Set<String>()
+        for match in matches {
+            guard !seen.contains(match.id) else { continue }
+            seen.insert(match.id)
+            merged.append(match)
         }
-    }
-
-    private static func applyCompetitionFilters(
-        to matches: [Match],
-        selectedLeagues: [String],
-        isEnabled: Bool
-    ) -> [Match] {
-        guard isEnabled else { return matches }
-        guard !selectedLeagues.isEmpty else { return matches }
-
-        let selected = Set(selectedLeagues.map(CompetitionWeightConfig.canonicalFilterName))
-
-        return matches.filter { match in
-            selected.contains(CompetitionWeightConfig.canonicalFilterName(match.league))
-        }
+        return merged
     }
 }

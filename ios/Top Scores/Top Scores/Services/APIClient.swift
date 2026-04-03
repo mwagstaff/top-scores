@@ -26,7 +26,12 @@ struct APIClient {
     }
 
     func fetchMatches(preferences: PreferencesSnapshot) async throws -> MatchResponse {
-        async let fixturesTask = fetchAllMatches(preferences: preferences, mode: .fixtures)
+        async let fixturesTask = fetchAllMatches(
+            preferences: preferences,
+            mode: .fixtures,
+            includePreferenceFilters: false,
+            hydrateStates: false
+        )
         async let resultsTask = fetchAllMatches(preferences: preferences, mode: .results)
         let fixtures = try await fixturesTask
         let results = try await resultsTask
@@ -69,31 +74,27 @@ struct APIClient {
         preferences: PreferencesSnapshot,
         mode: MatchesViewMode,
         page: Int,
-        pageSize: Int = 120
+        pageSize: Int = 120,
+        dateRangeQueryItems: [URLQueryItem]? = nil,
+        includePreferenceFilters: Bool = true,
+        hydrateStates: Bool = true
     ) async throws -> MatchPageResponse {
-        var queryItems: [URLQueryItem] = dateRangeQueryItems(mode: mode)
-        queryItems.append(URLQueryItem(name: "sort", value: mode.sortOrder))
-        queryItems.append(URLQueryItem(name: "filter_mode", value: "intersection"))
-        queryItems.append(URLQueryItem(name: "page", value: String(max(1, page))))
-        queryItems.append(URLQueryItem(name: "page_size", value: String(max(1, pageSize))))
-        if preferences.competitionFilterEnabled {
-            preferences.selectedLeagues.forEach { queryItems.append(URLQueryItem(name: "league", value: $0)) }
-        }
-        if mode == .fixtures && preferences.channelFilterEnabled {
-            ChannelSelection.apiQueryValues(from: preferences.selectedChannels).forEach {
-                queryItems.append(URLQueryItem(name: "channel", value: $0))
-            }
-        }
-        if preferences.englishPremierLeagueTeamsOnly {
-            queryItems.append(URLQueryItem(name: "epl_only", value: "true"))
-        }
+        let queryItems = Self.matchesPageQueryItems(
+            preferences: preferences,
+            mode: mode,
+            page: page,
+            pageSize: pageSize,
+            dateRangeQueryItems: dateRangeQueryItems ?? Self.dateRangeQueryItems(mode: mode),
+            includePreferenceFilters: includePreferenceFilters
+        )
 
         let request = try buildRequest(path: "matches", queryItems: queryItems)
         let (data, http) = try await performRequest(request, operation: "matches_page")
         try validateSuccess(http, data: data, operation: "matches_page")
-        let matches = try await hydrateMatchStates(
-            try decodeMatches(from: data, operation: "matches_page")
-        )
+        let decodedMatches = try decodeMatches(from: data, operation: "matches_page")
+        let matches = hydrateStates
+            ? try await hydrateMatchStates(decodedMatches)
+            : decodedMatches
 
         let lastUpdated = http
             .value(forHTTPHeaderField: "X-Last-Updated")
@@ -119,6 +120,58 @@ struct APIClient {
             pageSize: resolvedPageSize,
             totalCount: totalCount,
             hasMore: hasMore
+        )
+    }
+
+    static func matchesPageQueryItems(
+        preferences: PreferencesSnapshot,
+        mode: MatchesViewMode,
+        page: Int,
+        pageSize: Int = 120,
+        dateRangeQueryItems: [URLQueryItem],
+        includePreferenceFilters: Bool = true
+    ) -> [URLQueryItem] {
+        var queryItems = dateRangeQueryItems
+        queryItems.append(URLQueryItem(name: "sort", value: mode.sortOrder))
+        queryItems.append(URLQueryItem(name: "filter_mode", value: "intersection"))
+        queryItems.append(URLQueryItem(name: "page", value: String(max(1, page))))
+        queryItems.append(URLQueryItem(name: "page_size", value: String(max(1, pageSize))))
+        if includePreferenceFilters && preferences.competitionFilterEnabled {
+            preferences.selectedLeagues.forEach { queryItems.append(URLQueryItem(name: "league", value: $0)) }
+        }
+        if includePreferenceFilters && mode == .fixtures && preferences.channelFilterEnabled {
+            ChannelSelection.apiQueryValues(from: preferences.selectedChannels).forEach {
+                queryItems.append(URLQueryItem(name: "channel", value: $0))
+            }
+        }
+        if includePreferenceFilters && preferences.effectiveEnglishPremierLeagueTeamsOnly {
+            queryItems.append(URLQueryItem(name: "epl_only", value: "true"))
+        }
+        if includePreferenceFilters && preferences.effectiveHomeNationsFilterEnabled {
+            queryItems.append(URLQueryItem(name: "home_nations", value: "true"))
+        }
+        if includePreferenceFilters && preferences.effectiveMajorTournamentsFilterEnabled {
+            queryItems.append(URLQueryItem(name: "major_tournaments", value: "true"))
+        }
+        return queryItems
+    }
+
+    func fetchMatchesInRange(
+        preferences: PreferencesSnapshot,
+        mode: MatchesViewMode,
+        startDate: Date,
+        endDate: Date,
+        pageSize: Int = 500,
+        includePreferenceFilters: Bool = true,
+        hydrateStates: Bool = true
+    ) async throws -> MatchResponse {
+        try await fetchAllMatches(
+            preferences: preferences,
+            mode: mode,
+            pageSize: pageSize,
+            dateRangeQueryItems: Self.dateRangeQueryItems(startDate: startDate, endDate: endDate),
+            includePreferenceFilters: includePreferenceFilters,
+            hydrateStates: hydrateStates
         )
     }
 
@@ -431,7 +484,7 @@ struct APIClient {
         ]
     }
 
-    private func dateRangeQueryItems(mode: MatchesViewMode, now: Date = Date()) -> [URLQueryItem] {
+    private static func dateRangeQueryItems(mode: MatchesViewMode, now: Date = Date()) -> [URLQueryItem] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         let startDate: Date
@@ -446,6 +499,10 @@ struct APIClient {
             endDate = today
         }
 
+        return dateRangeQueryItems(startDate: startDate, endDate: endDate)
+    }
+
+    private static func dateRangeQueryItems(startDate: Date, endDate: Date) -> [URLQueryItem] {
         let formatter = Self.dateFormatter
         return [
             URLQueryItem(name: "start", value: formatter.string(from: startDate)),
@@ -455,7 +512,11 @@ struct APIClient {
 
     private func fetchAllMatches(
         preferences: PreferencesSnapshot,
-        mode: MatchesViewMode
+        mode: MatchesViewMode,
+        pageSize: Int = 120,
+        dateRangeQueryItems: [URLQueryItem]? = nil,
+        includePreferenceFilters: Bool = true,
+        hydrateStates: Bool = true
     ) async throws -> MatchResponse {
         var page = 1
         var allMatches: [Match] = []
@@ -466,7 +527,11 @@ struct APIClient {
             let response = try await fetchMatchesPage(
                 preferences: preferences,
                 mode: mode,
-                page: page
+                page: page,
+                pageSize: pageSize,
+                dateRangeQueryItems: dateRangeQueryItems,
+                includePreferenceFilters: includePreferenceFilters,
+                hydrateStates: hydrateStates
             )
             response.matches.forEach { match in
                 if !seen.contains(match.id) {

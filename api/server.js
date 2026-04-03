@@ -7659,6 +7659,10 @@ function normalizeMatchRecord(match) {
     record.match_details_id = String(match.match_details_id);
   }
 
+  if (match.has_bbc_source === true) {
+    record.has_bbc_source = true;
+  }
+
   [
     "home_goal_scorers",
     "away_goal_scorers",
@@ -7898,6 +7902,9 @@ function toMatchListPayload(match, options = {}) {
 
   if (normalized.league_subcategory) {
     payload.league_subcategory = normalized.league_subcategory;
+  }
+  if (normalized.has_bbc_source === true) {
+    payload.has_bbc_source = true;
   }
 
   // Try to get match details ID from details_url or explicit match_details_id field
@@ -8193,6 +8200,9 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
     merged.score_status = incoming.score_status;
   }
   if (incoming.details_url) merged.details_url = incoming.details_url;
+  if (existing.has_bbc_source === true || incoming.has_bbc_source === true) {
+    merged.has_bbc_source = true;
+  }
 
   [
     "home_goal_scorers",
@@ -8381,7 +8391,9 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
 
   const liveMatchesForMerge = Array.isArray(cachedMatches) ? cachedMatches : [];
   const preferredMatchesForMerge = [
-    ...(Array.isArray(cachedBbcRangeMatches) ? cachedBbcRangeMatches : []),
+    ...(Array.isArray(cachedBbcRangeMatches)
+      ? cachedBbcRangeMatches.map((match) => ({ ...match, has_bbc_source: true }))
+      : []),
     ...testMatchesForMerge,
   ];
 
@@ -10325,6 +10337,69 @@ function matchIncludesPremierLeagueTeam(match, premierLeagueTeams) {
     teamMatchesPremierLeague(match.home_team, premierLeagueTeams) ||
     teamMatchesPremierLeague(match.away_team, premierLeagueTeams)
   );
+}
+
+const HOME_NATIONS_TEAMS = new Set([
+  "england",
+  "northern ireland",
+  "scotland",
+  "wales",
+]);
+
+const MAJOR_TOURNAMENT_PATTERNS = [
+  /^fifa world cup(?:\s+\d{4})?$/i,
+  /^(?:uefa\s+)?european championship(?:\s+\d{4})?$/i,
+  /^(?:uefa\s+)?euro(?:\s+\d{4})?$/i,
+];
+
+const QUALIFYING_COMPETITION_PATTERN = /\bqualif(?:ying|ication)\b/i;
+
+function normalizeFilterTeamName(teamName) {
+  return normalizeTeamName(teamName).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function matchIncludesHomeNation(match) {
+  if (!match) return false;
+  return [match.home_team, match.away_team].some((teamName) =>
+    HOME_NATIONS_TEAMS.has(normalizeFilterTeamName(teamName))
+  );
+}
+
+function matchIsMajorTournament(match) {
+  if (!match) return false;
+
+  const rawLeague = String(match.league || "").trim();
+  const rawSubcategory = String(match.league_subcategory || "").trim();
+  if (!rawLeague) return false;
+  if (
+    QUALIFYING_COMPETITION_PATTERN.test(rawLeague) ||
+    QUALIFYING_COMPETITION_PATTERN.test(rawSubcategory)
+  ) {
+    return false;
+  }
+
+  const normalizedLeague = normalizeLeagueName(rawLeague).replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalizedLeague) return false;
+
+  return MAJOR_TOURNAMENT_PATTERNS.some((pattern) => pattern.test(normalizedLeague));
+}
+
+function matchPassesCategoryFilters(match, options = {}) {
+  const predicates = [];
+  if (options.eplOnly) {
+    predicates.push((candidate) =>
+      matchIncludesPremierLeagueTeam(candidate, options.premierLeagueTeams)
+    );
+  }
+  if (options.homeNations) {
+    predicates.push(matchIncludesHomeNation);
+  }
+  if (options.majorTournaments) {
+    predicates.push(matchIsMajorTournament);
+  }
+
+  if (predicates.length === 0) return true;
+  return predicates.some((predicate) => predicate(match));
 }
 
 function teamMatchesSelectionAliasAware(teamName, selection, manualMappings = null) {
@@ -16266,6 +16341,8 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const dateFrom = range.start;
     const dateTo = range.end;
     const eplOnly = isTruthyParam(req.query.epl_only);
+    const homeNations = isTruthyParam(req.query.home_nations);
+    const majorTournaments = isTruthyParam(req.query.major_tournaments);
 
     let filtered = mergedMatches.filter((match) =>
       matchesFilters(match, {
@@ -16279,9 +16356,14 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       })
     );
 
-    if (eplOnly) {
+    if (eplOnly || homeNations || majorTournaments) {
       filtered = filtered.filter((match) =>
-        matchIncludesPremierLeagueTeam(match, premierLeagueDataset.items)
+        matchPassesCategoryFilters(match, {
+          eplOnly,
+          homeNations,
+          majorTournaments,
+          premierLeagueTeams: premierLeagueDataset.items,
+        })
       );
     }
 
@@ -21689,6 +21771,9 @@ module.exports = {
     normalizeCompetitionFilterName,
     isAllowedCompetition,
     mergeBbcAndLiveMatches,
+    matchIncludesHomeNation,
+    matchIsMajorTournament,
+    matchPassesCategoryFilters,
     matchDetailsIdFromUrl,
     filterStaleBbcMatches,
     buildDefaultOperationalCacheState,
