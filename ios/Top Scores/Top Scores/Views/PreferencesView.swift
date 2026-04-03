@@ -54,6 +54,11 @@ struct PreferencesView: View {
                         Text("Shows the number of today's fixtures that have not started or are still in play on the app icon.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+
+                        Toggle("Compact view", isOn: compactFixturesViewEnabledBinding)
+                        Text("Shows Fixtures in a denser single-line layout with the primary TV logo to fit more matches on screen.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
                     Section("Competitions") {
@@ -447,6 +452,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.showTodayUnfinishedFixturesBadge },
             set: { preferences.showTodayUnfinishedFixturesBadge = $0 }
+        )
+    }
+
+    private var compactFixturesViewEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.compactFixturesViewEnabled },
+            set: { preferences.compactFixturesViewEnabled = $0 }
         )
     }
 

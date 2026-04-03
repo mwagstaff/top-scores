@@ -106,6 +106,10 @@ struct MatchesView: View {
         preferences.showAllMatches
     }
 
+    private var usesCompactFixtureRows: Bool {
+        mode == .fixtures && preferences.compactFixturesViewEnabled
+    }
+
     private var normalizedDebouncedQuery: String {
         Self.normalizedSearchText(debouncedSearchText)
     }
@@ -293,62 +297,28 @@ struct MatchesView: View {
 
     private var matchesList: some View {
         List {
-            ForEach(displayedMatchDays) { day in
-                Section {
-                    ForEach(day.leagues) { league in
-                        Text(league.league)
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
-                            .textCase(nil)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 2, trailing: 16))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-
-                        ForEach(league.matches) { match in
-                            NavigationLink {
-                                MatchDetailView(
-                                    match: match,
-                                    highlightToday: day.isToday,
-                                    showFantasyBadge: mode == .fixtures
-                                )
-                            } label: {
-                                MatchRow(
-                                    match: match,
-                                    highlightToday: day.isToday,
-                                    showLeague: false,
-                                    showFantasyBadge: mode == .fixtures,
-                                    showFantasyPlayerContributions: mode == .fixtures,
-                                    teamLogoScale: 1.1,
-                                    // Only enable this if needing to debug elo scores
-                                    // centerFooterText: matchDebugFooterText(for: match)
-                                    fantasyContext: fantasyViewModel.matchRowContext
-                                )
-                            }
-                            .disabled(match.isPostponed)
-                            .onAppear {
-                                Task {
-                                    let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-                                    await matchesStore.prefetchIfNeeded(
-                                        currentMatch: match,
-                                        preferences: snapshot,
-                                        mode: mode
-                                    )
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                        }
-                    }
-                } header: {
+            if usesCompactFixtureRows {
+                ForEach(Array(displayedMatchDays.enumerated()), id: \.element.id) { index, day in
                     sectionHeader(for: day)
+                        .listRowInsets(EdgeInsets(top: index == 0 ? 2 : 6, leading: 16, bottom: 0, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+
+                    compactLeagueRows(for: day)
+                }
+            } else {
+                ForEach(displayedMatchDays) { day in
+                    Section {
+                        standardLeagueRows(for: day)
+                    } header: {
+                        sectionHeader(for: day)
+                    }
                 }
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .environment(\.defaultMinListRowHeight, usesCompactFixtureRows ? 1 : 44)
         .safeAreaPadding(.bottom, 80)
         .refreshable {
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
@@ -359,7 +329,7 @@ struct MatchesView: View {
     private func sectionHeader(for day: MatchDay) -> some View {
         HStack(spacing: 12) {
             Text(day.displayDate)
-                .font(.title3)
+                .font(usesCompactFixtureRows ? .subheadline : .title3)
                 .fontWeight(.semibold)
 
             Spacer()
@@ -369,6 +339,77 @@ struct MatchesView: View {
             }
         }
         .textCase(nil)
+    }
+
+    @ViewBuilder
+    private func standardLeagueRows(for day: MatchDay) -> some View {
+        ForEach(day.leagues) { league in
+            leagueHeadingRow(for: league.league)
+
+            ForEach(league.matches) { match in
+                matchRow(for: match, day: day)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func compactLeagueRows(for day: MatchDay) -> some View {
+        ForEach(day.leagues) { league in
+            leagueHeadingRow(for: league.league)
+
+            ForEach(league.matches) { match in
+                matchRow(for: match, day: day)
+            }
+        }
+    }
+
+    private func leagueHeadingRow(for leagueName: String) -> some View {
+        Text(leagueName)
+            .font(usesCompactFixtureRows ? .footnote : .subheadline)
+            .fontWeight(.semibold)
+            .foregroundStyle(.secondary)
+            .textCase(nil)
+            .listRowInsets(EdgeInsets(top: usesCompactFixtureRows ? 0 : 8, leading: 16, bottom: usesCompactFixtureRows ? 0 : 2, trailing: 16))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+
+    private func matchRow(for match: Match, day: MatchDay) -> some View {
+        NavigationLink {
+            MatchDetailView(
+                match: match,
+                highlightToday: day.isToday,
+                showFantasyBadge: mode == .fixtures
+            )
+        } label: {
+            MatchRow(
+                match: match,
+                highlightToday: day.isToday,
+                showLeague: false,
+                showFantasyBadge: mode == .fixtures,
+                showFantasyPlayerContributions: mode == .fixtures,
+                teamLogoScale: 1.1,
+                layoutStyle: usesCompactFixtureRows ? .compactFixture : .standard,
+                // Only enable this if needing to debug elo scores
+                // centerFooterText: matchDebugFooterText(for: match)
+                fantasyContext: fantasyViewModel.matchRowContext
+            )
+        }
+        .disabled(match.isPostponed)
+        .onAppear {
+            Task {
+                let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+                await matchesStore.prefetchIfNeeded(
+                    currentMatch: match,
+                    preferences: snapshot,
+                    mode: mode
+                )
+            }
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: usesCompactFixtureRows ? 0 : 4, leading: 16, bottom: usesCompactFixtureRows ? 1 : 8, trailing: 16))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 
     private func matchDebugFooterText(for match: Match) -> String? {
@@ -411,8 +452,8 @@ struct MatchesView: View {
                     .font(.caption)
                     .fontWeight(.semibold)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, usesCompactFixtureRows ? 9 : 10)
+            .padding(.vertical, usesCompactFixtureRows ? 4 : 6)
             .background(
                 Capsule()
                     .fill(Color(.tertiarySystemBackground))

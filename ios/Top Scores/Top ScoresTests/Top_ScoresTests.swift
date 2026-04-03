@@ -28,11 +28,23 @@ struct Top_ScoresTests {
         #expect(store.fantasyDeadlineRemindersEnabled)
         #expect(store.matchGroupSortOrder == .kickoffThenTeamScore)
         #expect(!store.showTodayUnfinishedFixturesBadge)
+        #expect(!store.compactFixturesViewEnabled)
         #expect(!store.showFantasyFixtureLogos)
         #expect(!store.showFantasyExpectedPoints)
         #expect(!store.showFantasyRealTimePoints)
         #expect(!store.showsFantasyDataInFixtures)
         #expect(!store.channelFilterEnabled)
+    }
+
+    @Test @MainActor func preferencesStore_persistsCompactFixturesViewSetting() async throws {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+
+        let store = PreferencesStore(userDefaults: defaults)
+        store.compactFixturesViewEnabled = true
+
+        let reloaded = PreferencesStore(userDefaults: defaults)
+        #expect(reloaded.compactFixturesViewEnabled)
     }
 
     @Test @MainActor func preferencesStore_migratesLegacyFixturesFantasyToggle() async throws {

@@ -2,6 +2,11 @@ import Foundation
 import SwiftUI
 import EventKit
 
+enum MatchRowLayoutStyle {
+    case standard
+    case compactFixture
+}
+
 struct MatchRow: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
@@ -17,6 +22,7 @@ struct MatchRow: View {
     var centerFooterColor: Color = .secondary
     var isLargePresentation: Bool = false
     var teamLogoScale: CGFloat = 1.0
+    var layoutStyle: MatchRowLayoutStyle = .standard
     var fantasyContext: FantasyMatchRowContext = .empty
 
     var body: some View {
@@ -25,6 +31,17 @@ struct MatchRow: View {
     }
 
     private var matchCard: some View {
+        Group {
+            switch layoutStyle {
+            case .standard:
+                standardMatchCard
+            case .compactFixture:
+                compactFixtureMatchCard
+            }
+        }
+    }
+
+    private var standardMatchCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             if showLeague {
                 Text(match.displayLeague)
@@ -101,6 +118,61 @@ struct MatchRow: View {
 
             if shouldShowFooterRow {
                 footerRow
+            }
+        }
+        .padding(cardPadding)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .stroke(highlightToday ? Color(.systemYellow).opacity(0.35) : .clear, lineWidth: 1)
+        )
+    }
+
+    private var compactFixtureMatchCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showLeague {
+                Text(match.displayLeague)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(alignment: .center, spacing: 6) {
+                TeamLogo(name: match.homeTeam, size: logoSize)
+
+                Text(match.homeTeam)
+                    .font(teamNameFont)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .layoutPriority(1)
+
+                scoreAndStatusRow
+
+                Text(match.awayTeam)
+                    .font(teamNameFont)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+
+                TeamLogo(name: match.awayTeam, size: logoSize)
+
+                if let primaryBroadcastLogo {
+                    Image(uiImage: primaryBroadcastLogo)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: compactBroadcastLogoWidth, height: compactBroadcastLogoHeight)
+                        .layoutPriority(2)
+                        .fixedSize()
+                        .accessibilityHidden(true)
+                }
             }
         }
         .padding(cardPadding)
@@ -285,6 +357,7 @@ struct MatchRow: View {
                     .fixedSize()
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var aggregateHomeBracketText: String? {
@@ -304,7 +377,15 @@ struct MatchRow: View {
     }
 
     private var teamNameFont: Font {
-        isLargePresentation ? .caption : .subheadline
+        if isLargePresentation {
+            return .caption
+        }
+        switch layoutStyle {
+        case .standard:
+            return .subheadline
+        case .compactFixture:
+            return .footnote
+        }
     }
 
     private var centerFooterFont: Font {
@@ -312,24 +393,70 @@ struct MatchRow: View {
     }
 
     private var scoreFont: Font {
-        isLargePresentation ? .caption : .headline
+        if isLargePresentation {
+            return .caption
+        }
+        switch layoutStyle {
+        case .standard:
+            return .headline
+        case .compactFixture:
+            return .subheadline
+        }
     }
 
     private var aggregateBracketFont: Font {
-        isLargePresentation ? .caption2 : .caption
+        if isLargePresentation {
+            return .caption2
+        }
+        switch layoutStyle {
+        case .standard:
+            return .caption
+        case .compactFixture:
+            return .caption2
+        }
     }
 
     private var logoSize: CGFloat {
-        let baseSize: CGFloat = isLargePresentation ? 34 : 22
+        let baseSize: CGFloat
+        if isLargePresentation {
+            baseSize = 34
+        } else {
+            switch layoutStyle {
+            case .standard:
+                baseSize = 22
+            case .compactFixture:
+                baseSize = 18
+            }
+        }
         return baseSize * teamLogoScale
     }
 
     private var cardPadding: CGFloat {
-        isLargePresentation ? 16 : 12
+        if isLargePresentation {
+            return 16
+        }
+        switch layoutStyle {
+        case .standard:
+            return 12
+        case .compactFixture:
+            return 8
+        }
     }
 
     private var cardCornerRadius: CGFloat {
         isLargePresentation ? 18 : 14
+    }
+
+    private var primaryBroadcastLogo: UIImage? {
+        TvLogoResolver.shared.images(for: match.tvChannels).first
+    }
+
+    private var compactBroadcastLogoHeight: CGFloat {
+        isLargePresentation ? 16 : 13
+    }
+
+    private var compactBroadcastLogoWidth: CGFloat {
+        isLargePresentation ? 26 : 22
     }
 
     private var homeTeamEvents: [MatchTeamTimelineEvent] {
