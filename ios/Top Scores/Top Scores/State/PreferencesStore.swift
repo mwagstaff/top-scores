@@ -38,6 +38,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let competitionFilterEnabled: Bool
     let channelFilterEnabled: Bool
     let englishPremierLeagueTeamsOnly: Bool
+    let majorUEFAClubGamesEnabled: Bool
     let homeNationsFilterEnabled: Bool
     let majorTournamentsFilterEnabled: Bool
     let apiBaseURL: String
@@ -62,15 +63,19 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     }
 
     var effectiveEnglishPremierLeagueTeamsOnly: Bool {
-        competitionFilterEnabled && englishPremierLeagueTeamsOnly
+        englishPremierLeagueTeamsOnly
+    }
+
+    var effectiveMajorUEFAClubGamesEnabled: Bool {
+        majorUEFAClubGamesEnabled
     }
 
     var effectiveHomeNationsFilterEnabled: Bool {
-        competitionFilterEnabled && homeNationsFilterEnabled
+        homeNationsFilterEnabled
     }
 
     var effectiveMajorTournamentsFilterEnabled: Bool {
-        competitionFilterEnabled && majorTournamentsFilterEnabled
+        majorTournamentsFilterEnabled
     }
 
     nonisolated init(
@@ -79,6 +84,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         competitionFilterEnabled: Bool = PreferencesStore.defaultCompetitionFilterEnabled,
         channelFilterEnabled: Bool = PreferencesStore.defaultChannelFilterEnabled,
         englishPremierLeagueTeamsOnly: Bool,
+        majorUEFAClubGamesEnabled: Bool = PreferencesStore.defaultMajorUEFAClubGamesEnabled,
         homeNationsFilterEnabled: Bool = PreferencesStore.defaultHomeNationsFilterEnabled,
         majorTournamentsFilterEnabled: Bool = PreferencesStore.defaultMajorTournamentsFilterEnabled,
         apiBaseURL: String,
@@ -103,6 +109,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.competitionFilterEnabled = competitionFilterEnabled
         self.channelFilterEnabled = channelFilterEnabled
         self.englishPremierLeagueTeamsOnly = englishPremierLeagueTeamsOnly
+        self.majorUEFAClubGamesEnabled = majorUEFAClubGamesEnabled
         self.homeNationsFilterEnabled = homeNationsFilterEnabled
         self.majorTournamentsFilterEnabled = majorTournamentsFilterEnabled
         self.apiBaseURL = apiBaseURL
@@ -129,6 +136,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case competitionFilterEnabled
         case channelFilterEnabled
         case englishPremierLeagueTeamsOnly
+        case majorUEFAClubGamesEnabled
         case homeNationsFilterEnabled
         case majorTournamentsFilterEnabled
         case apiBaseURL
@@ -160,6 +168,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         competitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .competitionFilterEnabled) ?? PreferencesStore.defaultCompetitionFilterEnabled
         channelFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .channelFilterEnabled) ?? PreferencesStore.defaultChannelFilterEnabled
         englishPremierLeagueTeamsOnly = try container.decode(Bool.self, forKey: .englishPremierLeagueTeamsOnly)
+        majorUEFAClubGamesEnabled = try container.decodeIfPresent(Bool.self, forKey: .majorUEFAClubGamesEnabled) ?? PreferencesStore.defaultMajorUEFAClubGamesEnabled
         homeNationsFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .homeNationsFilterEnabled) ?? PreferencesStore.defaultHomeNationsFilterEnabled
         majorTournamentsFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .majorTournamentsFilterEnabled) ?? PreferencesStore.defaultMajorTournamentsFilterEnabled
         apiBaseURL = try container.decode(String.self, forKey: .apiBaseURL)
@@ -204,6 +213,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultRefreshIntervalMinutes = 10
     nonisolated static let defaultSelectedChannels = ["Amazon (all)", "BBC (all)", "ITV (all)", "Sky (all)", "TNT (all)"]
     nonisolated static let defaultEnglishPremierLeagueTeamsOnly = true
+    nonisolated static let defaultMajorUEFAClubGamesEnabled = true
     nonisolated static let defaultHomeNationsFilterEnabled = true
     nonisolated static let defaultMajorTournamentsFilterEnabled = true
     nonisolated static let defaultCompetitionFilterEnabled = false
@@ -244,6 +254,10 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var englishPremierLeagueTeamsOnly: Bool {
+        didSet { persist() }
+    }
+
+    @Published var majorUEFAClubGamesEnabled: Bool {
         didSet { persist() }
     }
 
@@ -334,6 +348,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultChannelFilterEnabled
         let englishPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.englishPremierLeagueTeamsOnly) as? Bool
             ?? Self.defaultEnglishPremierLeagueTeamsOnly
+        let majorUEFAClubGamesEnabled = userDefaults.object(forKey: Keys.majorUEFAClubGamesEnabled) as? Bool
+            ?? Self.defaultMajorUEFAClubGamesEnabled
         let homeNationsFilterEnabled = userDefaults.object(forKey: Keys.homeNationsFilterEnabled) as? Bool
             ?? Self.defaultHomeNationsFilterEnabled
         let majorTournamentsFilterEnabled = userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool
@@ -383,6 +399,7 @@ final class PreferencesStore: ObservableObject {
         self.competitionFilterEnabled = competitionFilterEnabled
         self.channelFilterEnabled = channelFilterEnabled
         self.englishPremierLeagueTeamsOnly = englishPremierLeagueTeamsOnly
+        self.majorUEFAClubGamesEnabled = majorUEFAClubGamesEnabled
         self.homeNationsFilterEnabled = homeNationsFilterEnabled
         self.majorTournamentsFilterEnabled = majorTournamentsFilterEnabled
         self.apiBaseURL = apiBaseURL
@@ -419,6 +436,7 @@ final class PreferencesStore: ObservableObject {
             competitionFilterEnabled: competitionFilterEnabled,
             channelFilterEnabled: channelFilterEnabled,
             englishPremierLeagueTeamsOnly: englishPremierLeagueTeamsOnly,
+            majorUEFAClubGamesEnabled: majorUEFAClubGamesEnabled,
             homeNationsFilterEnabled: homeNationsFilterEnabled,
             majorTournamentsFilterEnabled: majorTournamentsFilterEnabled,
             apiBaseURL: apiBaseURL,
@@ -451,6 +469,7 @@ final class PreferencesStore: ObservableObject {
             competitionFilterEnabled: false,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: false,
+            majorUEFAClubGamesEnabled: false,
             homeNationsFilterEnabled: false,
             majorTournamentsFilterEnabled: false,
             apiBaseURL: apiBaseURL,
@@ -478,6 +497,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(competitionFilterEnabled, forKey: Keys.competitionFilterEnabled)
         userDefaults.set(channelFilterEnabled, forKey: Keys.channelFilterEnabled)
         userDefaults.set(englishPremierLeagueTeamsOnly, forKey: Keys.englishPremierLeagueTeamsOnly)
+        userDefaults.set(majorUEFAClubGamesEnabled, forKey: Keys.majorUEFAClubGamesEnabled)
         userDefaults.set(homeNationsFilterEnabled, forKey: Keys.homeNationsFilterEnabled)
         userDefaults.set(majorTournamentsFilterEnabled, forKey: Keys.majorTournamentsFilterEnabled)
         userDefaults.set(apiBaseURL, forKey: Keys.apiBaseURL)
@@ -523,6 +543,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultChannelFilterEnabled
         let englishPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.englishPremierLeagueTeamsOnly) as? Bool
             ?? Self.defaultEnglishPremierLeagueTeamsOnly
+        let majorUEFAClubGamesEnabled = userDefaults.object(forKey: Keys.majorUEFAClubGamesEnabled) as? Bool
+            ?? Self.defaultMajorUEFAClubGamesEnabled
         let homeNationsFilterEnabled = userDefaults.object(forKey: Keys.homeNationsFilterEnabled) as? Bool
             ?? Self.defaultHomeNationsFilterEnabled
         let majorTournamentsFilterEnabled = userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool
@@ -569,6 +591,7 @@ final class PreferencesStore: ObservableObject {
             competitionFilterEnabled: competitionFilterEnabled,
             channelFilterEnabled: channelFilterEnabled,
             englishPremierLeagueTeamsOnly: englishPremierLeagueTeamsOnly,
+            majorUEFAClubGamesEnabled: majorUEFAClubGamesEnabled,
             homeNationsFilterEnabled: homeNationsFilterEnabled,
             majorTournamentsFilterEnabled: majorTournamentsFilterEnabled,
             apiBaseURL: apiBaseURL,
@@ -596,6 +619,7 @@ final class PreferencesStore: ObservableObject {
         static let competitionFilterEnabled = "preferences.competitionFilterEnabled"
         static let channelFilterEnabled = "preferences.channelFilterEnabled"
         static let englishPremierLeagueTeamsOnly = "preferences.englishPremierLeagueTeamsOnly"
+        static let majorUEFAClubGamesEnabled = "preferences.majorUEFAClubGamesEnabled"
         static let homeNationsFilterEnabled = "preferences.homeNationsFilterEnabled"
         static let majorTournamentsFilterEnabled = "preferences.majorTournamentsFilterEnabled"
         static let apiBaseURL = "preferences.apiBaseURL"

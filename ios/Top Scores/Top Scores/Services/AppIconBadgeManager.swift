@@ -3,6 +3,20 @@ import UIKit
 import UserNotifications
 
 enum AppIconBadgeManager {
+    private actor BadgeState {
+        var lastAppliedCount: Int?
+
+        func shouldApply(_ count: Int) -> Bool {
+            if lastAppliedCount == count {
+                return false
+            }
+            lastAppliedCount = count
+            return true
+        }
+    }
+
+    private static let badgeState = BadgeState()
+
     static func update(preferences: PreferencesSnapshot, matches: [Match]) async {
         guard preferences.showTodayUnfinishedFixturesBadge else {
             await clear()
@@ -26,6 +40,10 @@ enum AppIconBadgeManager {
     }
 
     private static func setBadgeCount(_ count: Int) async {
+        guard await badgeState.shouldApply(count) else {
+            return
+        }
+
         if #available(iOS 16.0, *) {
             do {
                 try await UNUserNotificationCenter.current().setBadgeCount(count)

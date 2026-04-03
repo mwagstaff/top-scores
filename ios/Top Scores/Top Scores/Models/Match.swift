@@ -610,10 +610,6 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         penaltyResult = try container.decodeIfPresent(String.self, forKey: .penaltyResult)
         isTestMatch = try container.decodeIfPresent(Bool.self, forKey: .isTestMatch)
 
-        // Debug log for Pens/AET status
-        if let status = scoreStatus, (status.uppercased() == "PENS" || status.uppercased() == "PEN" || status.uppercased() == "PEN." || status.uppercased() == "AET") {
-            NSLog("[DEBUG Match decode] Decoded match with status=%@ for %@ vs %@ (league=%@)", status, homeTeam, awayTeam, league)
-        }
     }
 
     enum CodingKeys: String, CodingKey {

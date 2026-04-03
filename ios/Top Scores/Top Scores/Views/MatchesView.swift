@@ -86,6 +86,7 @@ struct MatchesView: View {
     @State private var predictorAvailabilityTask: Task<Void, Never>?
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var searchFilterWorkItem: DispatchWorkItem?
+    @State private var groupedSideEffectsTask: Task<Void, Never>?
     @State private var predictionErrorMessage: String?
     @State private var predictableDateKeys: Set<String> = []
     @State private var isSearchVisible = false
@@ -99,6 +100,7 @@ struct MatchesView: View {
     private static let minimumSearchCharacters = 3
     private static let searchDebounceNanoseconds: UInt64 = 250_000_000
     private static let searchFilterQueue = DispatchQueue(label: "TopScores.match-search", qos: .userInitiated)
+    private let groupedSideEffectsDelayNanos: UInt64 = 1_500_000_000
 
     private var showAllMatches: Bool {
         preferences.showAllMatches
@@ -173,37 +175,32 @@ struct MatchesView: View {
         }
         .onAppear {
             guard isSelected else { return }
+            matchesStore.setModeVisibility(mode, isVisible: true)
             LiveActivitySyncService.shared.reconcileOnForeground()
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             NSLog("[MatchesView] onAppear mode=%@ selected=%d snapshot=%@", mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
             let days = matchesStore.groupedMatches
-            rebuildSearchIndex(from: days)
-            ensureFantasySquadLoadedIfNeeded()
-            reportMissingTeamLogosIfNeeded(days: days)
+            scheduleGroupedSideEffects(for: days, immediate: false)
             predictionDateKeys = FixturePredictionStore.storedDateKeys()
-            refreshPredictorAvailability(days: days)
         }
         .onChange(of: isSelected) { _, selected in
+            matchesStore.setModeVisibility(mode, isVisible: selected)
             guard selected else { return }
             LiveActivitySyncService.shared.reconcileOnForeground()
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             NSLog("[MatchesView] isSelected mode=%@ selected=%d snapshot=%@", mode.rawValue, selected, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
             let days = matchesStore.groupedMatches
-            rebuildSearchIndex(from: days)
-            ensureFantasySquadLoadedIfNeeded()
-            reportMissingTeamLogosIfNeeded(days: days)
+            scheduleGroupedSideEffects(for: days, immediate: false)
             predictionDateKeys = FixturePredictionStore.storedDateKeys()
-            refreshPredictorAvailability(days: days)
         }
         .onChange(of: preferences.snapshot) { _, _ in
             guard isSelected else { return }
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             NSLog("[MatchesView] snapshot_change mode=%@ snapshot=%@", mode.rawValue, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
-            ensureFantasySquadLoadedIfNeeded()
-            refreshPredictorAvailability(days: matchesStore.groupedMatches)
+            scheduleGroupedSideEffects(for: matchesStore.groupedMatches, immediate: false)
         }
         .onChange(of: preferences.showAllMatches) { _, newValue in
             guard isSelected else { return }
@@ -222,24 +219,23 @@ struct MatchesView: View {
             }
         }
         .onChange(of: matchesStore.groupedMatches) { _, days in
-            rebuildSearchIndex(from: days)
-            ensureFantasySquadLoadedIfNeeded()
-            reportMissingTeamLogosIfNeeded(days: days)
-            refreshPredictorAvailability(days: days)
+            scheduleGroupedSideEffects(for: days, immediate: false)
         }
         .onReceive(NotificationCenter.default.publisher(for: FixturePredictionStore.didChangeNotification)) { _ in
             predictionDateKeys = FixturePredictionStore.storedDateKeys()
-            refreshPredictorAvailability(days: matchesStore.groupedMatches)
+            scheduleGroupedSideEffects(for: matchesStore.groupedMatches, immediate: false)
         }
         .onChange(of: searchText) { _, newValue in
             scheduleDebouncedSearch(for: newValue)
         }
         .onDisappear {
+            matchesStore.setModeVisibility(mode, isVisible: false)
             matchesStore.stopAutoRefresh()
             predictionTask?.cancel()
             predictorAvailabilityTask?.cancel()
             searchDebounceTask?.cancel()
             searchFilterWorkItem?.cancel()
+            groupedSideEffectsTask?.cancel()
         }
         .fullScreenCover(item: $activePredictionJob) { job in
             PredictionInterstitialView(displayDate: job.displayDate)
@@ -290,6 +286,7 @@ struct MatchesView: View {
 
     private func debugSnapshotSummary(_ snapshot: PreferencesSnapshot) -> String {
         "competition=\(snapshot.competitionFilterEnabled) epl=\(snapshot.englishPremierLeagueTeamsOnly) " +
+        "major_uefa=\(snapshot.majorUEFAClubGamesEnabled) " +
         "home_nations=\(snapshot.homeNationsFilterEnabled) major=\(snapshot.majorTournamentsFilterEnabled) " +
         "channels=\(snapshot.channelFilterEnabled) show_all=\(snapshot.showAllMatches)"
     }
@@ -561,6 +558,20 @@ struct MatchesView: View {
             guard !Task.isCancelled else { return }
             debouncedSearchText = trimmed
             applySearchFilter()
+        }
+    }
+
+    private func scheduleGroupedSideEffects(for days: [MatchDay], immediate: Bool) {
+        groupedSideEffectsTask?.cancel()
+        groupedSideEffectsTask = Task {
+            if !immediate {
+                try? await Task.sleep(nanoseconds: groupedSideEffectsDelayNanos)
+            }
+            guard !Task.isCancelled else { return }
+            rebuildSearchIndex(from: days)
+            ensureFantasySquadLoadedIfNeeded()
+            reportMissingTeamLogosIfNeeded(days: days)
+            refreshPredictorAvailability(days: days)
         }
     }
 

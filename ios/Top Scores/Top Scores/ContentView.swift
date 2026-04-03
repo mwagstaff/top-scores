@@ -70,9 +70,6 @@ struct ContentView: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .background(Color(.systemBackground))
             .onChange(of: selectedTab) { _, newValue in
-                Task {
-                    await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
-                }
                 guard newValue == 3 else { return }
                 deferredFantasyRefreshTask?.cancel()
                 deferredFantasyRefreshTask = Task {
@@ -109,6 +106,16 @@ struct ContentView: View {
                     guard !Task.isCancelled else { return }
                     await refreshFantasySummaryIfNeeded(force: false)
                 }
+            }
+            .onChange(of: preferences.snapshot) { _, _ in
+                guard selectedTab != 0, selectedTab != 1 else { return }
+                let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+                matchesStore.prepareForPreferencesChange(snapshot, publishVisibleState: false)
+            }
+            .onChange(of: preferences.showAllMatches) { _, newValue in
+                guard selectedTab != 0, selectedTab != 1 else { return }
+                let snapshot = newValue ? preferences.unfilteredSnapshot : preferences.snapshot
+                matchesStore.prepareForPreferencesChange(snapshot, publishVisibleState: false)
             }
         }
     }

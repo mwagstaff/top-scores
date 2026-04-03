@@ -67,6 +67,7 @@ struct CacheInvalidationResult: Hashable {
 }
 
 struct MatchCachePayload: Codable {
+    let cacheFormatVersion: Int?
     let snapshot: PreferencesSnapshot
     let matches: [Match]
     let lastUpdated: Date?
@@ -74,6 +75,7 @@ struct MatchCachePayload: Codable {
     let cacheGenerations: CacheGenerationSnapshot?
 
     enum CodingKeys: String, CodingKey {
+        case cacheFormatVersion = "cache_format_version"
         case snapshot
         case matches
         case lastUpdated
@@ -82,12 +84,14 @@ struct MatchCachePayload: Codable {
     }
 
     init(
+        cacheFormatVersion: Int?,
         snapshot: PreferencesSnapshot,
         matches: [Match],
         lastUpdated: Date?,
         fixtureCoverageEnd: Date?,
         cacheGenerations: CacheGenerationSnapshot?
     ) {
+        self.cacheFormatVersion = cacheFormatVersion
         self.snapshot = snapshot
         self.matches = matches
         self.lastUpdated = lastUpdated
@@ -99,12 +103,17 @@ struct MatchCachePayload: Codable {
 enum MatchCache {
     private static let fileName = "matches-cache.json"
     private static let knownGenerationsKey = "match_cache.known_server_generations"
+    private static let currentCacheFormatVersion = 2
 
     static func load(for snapshot: PreferencesSnapshot) -> MatchCachePayload? {
         guard let data = try? Data(contentsOf: cacheURL) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let payload = try? decoder.decode(MatchCachePayload.self, from: data) else { return nil }
+        guard payload.cacheFormatVersion == currentCacheFormatVersion else {
+            clear()
+            return nil
+        }
         guard payload.snapshot.apiBaseURL == snapshot.apiBaseURL else { return nil }
         let knownGenerations = knownServerGenerations()
         if isPayloadStale(payload, comparedTo: knownGenerations) {
@@ -122,6 +131,7 @@ enum MatchCache {
     ) {
         let knownGenerations = knownServerGenerations()
         let payload = MatchCachePayload(
+            cacheFormatVersion: currentCacheFormatVersion,
             snapshot: snapshot,
             matches: matches,
             lastUpdated: lastUpdated,

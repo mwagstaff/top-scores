@@ -6,6 +6,9 @@ import UIKit
 struct PreferencesView: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @StateObject private var viewModel = PreferencesViewModel()
+    #if DEBUG
+    @ObservedObject private var fixtureLoadDiagnostics = FixtureLoadDiagnosticsStore.shared
+    #endif
     @State private var leagueSearch = ""
     @State private var channelSearch = ""
     @State private var notificationLeagueSearch = ""
@@ -22,6 +25,18 @@ struct PreferencesView: View {
                 headerView
                 Form {
 
+                    Section("Club games") {
+                        Toggle("Premier League teams only", isOn: englishPremierLeagueTeamsOnlyBinding)
+                        Text("Show club matches involving at least one English Premier League team.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("All major UEFA games", isOn: majorUEFAClubGamesEnabledBinding)
+                        Text("Always show UEFA Champions League, Europa League, and Conference League quarter-finals, semi-finals, and finals, even when no Premier League team is involved.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Section("International games") {
                         Toggle("Home nations", isOn: homeNationsFilterEnabledBinding)
                         Text("Show international matches involving England, Northern Ireland, Scotland, or Wales, including friendlies.")
@@ -30,13 +45,6 @@ struct PreferencesView: View {
 
                         Toggle("Major tournaments", isOn: majorTournamentsFilterEnabledBinding)
                         Text("Show FIFA World Cup and UEFA European Championship matches, excluding qualifying games.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Section("Domestic games") {
-                        Toggle("Premier League teams only", isOn: englishPremierLeagueTeamsOnlyBinding)
-                        Text("Show domestic matches involving at least one English Premier League team.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -319,6 +327,43 @@ struct PreferencesView: View {
                             }
                         }
                         .padding(.vertical, 4)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Fixture logs")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Button("Clear") {
+                                    fixtureLoadDiagnostics.clear()
+                                }
+                                .font(.footnote)
+                            }
+
+                            Text("Shows the initial fixture load and lazy backfill timings for the Fixtures screen.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
+                            if fixtureLoadDiagnostics.entries.isEmpty {
+                                Text("No fixture load logs yet.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(fixtureLoadDiagnostics.entries) { entry in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("\(debugTimestampFormatter.string(from: entry.recordedAt))  \(entry.title)")
+                                            .font(.footnote.monospaced())
+                                            .fontWeight(.semibold)
+                                        Text(entry.summary)
+                                            .font(.footnote.monospaced())
+                                            .foregroundStyle(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
                     }
                     #endif
                 }
@@ -347,6 +392,15 @@ struct PreferencesView: View {
         }
     }
 
+    #if DEBUG
+    private var debugTimestampFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }
+    #endif
+
     private var refreshIntervalBinding: Binding<Int> {
         Binding(
             get: { preferences.refreshIntervalMinutes },
@@ -365,6 +419,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.homeNationsFilterEnabled },
             set: { preferences.homeNationsFilterEnabled = $0 }
+        )
+    }
+
+    private var majorUEFAClubGamesEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.majorUEFAClubGamesEnabled },
+            set: { preferences.majorUEFAClubGamesEnabled = $0 }
         )
     }
 

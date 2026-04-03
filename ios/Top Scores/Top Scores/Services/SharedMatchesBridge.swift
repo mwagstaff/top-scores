@@ -16,6 +16,7 @@ enum AppGroupConfig {
     static let competitionFilterEnabledKey = "preferences.competitionFilterEnabled"
     static let channelFilterEnabledKey = "preferences.channelFilterEnabled"
     static let englishPremierLeagueTeamsOnlyKey = "preferences.englishPremierLeagueTeamsOnly"
+    static let majorUEFAClubGamesEnabledKey = "preferences.majorUEFAClubGamesEnabled"
     static let apiBaseURLKey = "preferences.apiBaseURL"
     static let refreshIntervalMinutesKey = "preferences.refreshIntervalMinutes"
     static let showAllMatchesKey = "preferences.showAllMatches"
@@ -143,6 +144,7 @@ enum SharedMatchesBridge {
         defaults.set(snapshot.competitionFilterEnabled, forKey: AppGroupConfig.competitionFilterEnabledKey)
         defaults.set(snapshot.channelFilterEnabled, forKey: AppGroupConfig.channelFilterEnabledKey)
         defaults.set(snapshot.englishPremierLeagueTeamsOnly, forKey: AppGroupConfig.englishPremierLeagueTeamsOnlyKey)
+        defaults.set(snapshot.majorUEFAClubGamesEnabled, forKey: AppGroupConfig.majorUEFAClubGamesEnabledKey)
         defaults.set(snapshot.apiBaseURL, forKey: AppGroupConfig.apiBaseURLKey)
         defaults.set(snapshot.refreshIntervalMinutes, forKey: AppGroupConfig.refreshIntervalMinutesKey)
         defaults.set(snapshot.showAllMatches, forKey: AppGroupConfig.showAllMatchesKey)
