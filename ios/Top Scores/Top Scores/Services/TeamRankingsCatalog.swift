@@ -1,12 +1,12 @@
 import Foundation
 
-struct TeamRatingResolution {
+struct TeamRatingResolution: Sendable {
     let rating: Double
     let usedDefault: Bool
 }
 
-struct TeamRatingLookup {
-    private struct Candidate {
+struct TeamRatingLookup: Sendable {
+    private struct Candidate: Sendable {
         let key: String
         let tokens: [String]
         let rating: Double

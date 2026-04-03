@@ -31,10 +31,10 @@ enum BackgroundRefreshManager {
     }
 
     static func handleAppRefresh(task: BGAppRefreshTask) {
-        let snapshot = PreferencesStore.loadSnapshot()
-        scheduleNextRefresh(intervalMinutes: snapshot.refreshIntervalMinutes)
-
         let operation = Task {
+            let snapshot = await PreferencesStore.loadSnapshot()
+            scheduleNextRefresh(intervalMinutes: snapshot.refreshIntervalMinutes)
+
             guard let baseURL = URL(string: snapshot.apiBaseURL) else {
                 task.setTaskCompleted(success: false)
                 return
@@ -53,12 +53,12 @@ enum BackgroundRefreshManager {
                     }
                 }
                 let response = try await client.fetchMatches(preferences: snapshot)
-                let visibleFixtures = MatchesStore.applyPreferenceFilters(
+                let visibleFixtures = await MatchesStore.applyPreferenceFilters(
                     to: response.matches,
                     snapshot: snapshot,
                     mode: .fixtures
                 )
-                let visibleResults = MatchesStore.applyPreferenceFilters(
+                let visibleResults = await MatchesStore.applyPreferenceFilters(
                     to: response.matches,
                     snapshot: snapshot,
                     mode: .results

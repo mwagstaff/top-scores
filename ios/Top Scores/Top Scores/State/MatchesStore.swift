@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-struct MatchDay: Identifiable, Hashable {
+struct MatchDay: Identifiable, Hashable, Sendable {
     let id: String
     let dateKey: String
     let displayDate: String
@@ -261,10 +261,212 @@ enum MatchScoreResolver {
 
 }
 
-struct MatchLeague: Identifiable, Hashable {
+struct MatchLeague: Identifiable, Hashable, Sendable {
     let id: String
     let league: String
     let matches: [Match]
+}
+
+private enum MatchGroupingEngine {
+    static func groupMatches(
+        _ matches: [Match],
+        descendingDates: Bool = false,
+        sortOrder: MatchGroupSortOrder,
+        ratingLookup: TeamRatingLookup
+    ) -> [MatchDay] {
+        let groupedByDate = Dictionary(grouping: matches) { $0.date }
+        var dateKeys = groupedByDate.keys.sorted()
+        if descendingDates {
+            dateKeys.reverse()
+        }
+        let calendar = Calendar.current
+
+        let dateDays: [MatchDay] = dateKeys.compactMap { dateKey -> MatchDay? in
+            guard let matchesForDate = groupedByDate[dateKey] else { return nil }
+            let displayDate: String
+            let parsedDate = MatchDateParser.shared.parse(date: dateKey, time: "00:00")
+            let isToday = parsedDate.map { calendar.isDateInToday($0) } ?? false
+            let isTomorrow = parsedDate.map { calendar.isDateInTomorrow($0) } ?? false
+            if let parsedDate {
+                displayDate = MatchDateParser.shared.displayDateWithRelative(parsedDate)
+            } else {
+                displayDate = dateKey
+            }
+
+            let groupedByLeague = Dictionary(grouping: matchesForDate) { $0.displayLeague }
+            let leagueSections = groupedByLeague.compactMap {
+                entry -> (
+                    league: String,
+                    matches: [Match],
+                    totalTeamRating: Double,
+                    leadingMatchRating: Double,
+                    leadingMatchKickoff: Date,
+                    leadingMatchHomeTeam: String,
+                    leadingMatchAwayTeam: String,
+                    weight: Double
+                )?
+                in
+                let (league, leagueMatches) = entry
+                let sortedLeagueMatches = sortMatchesWithinLeague(
+                    leagueMatches,
+                    sortOrder: sortOrder,
+                    ratingLookup: ratingLookup
+                )
+                guard let leadingMatch = sortedLeagueMatches.first else { return nil }
+                return (
+                    league: league,
+                    matches: sortedLeagueMatches,
+                    totalTeamRating: totalTeamRating(for: leagueMatches, ratingLookup: ratingLookup),
+                    leadingMatchRating: totalTeamRating(for: leadingMatch, ratingLookup: ratingLookup),
+                    leadingMatchKickoff: matchSortDate(for: leadingMatch),
+                    leadingMatchHomeTeam: leadingMatch.homeTeam,
+                    leadingMatchAwayTeam: leadingMatch.awayTeam,
+                    weight: competitionWeight(forCompetitionName: league)
+                )
+            }
+            .sorted { lhs, rhs in
+                switch sortOrder {
+                case .kickoffThenTeamScore:
+                    if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
+                        return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
+                    }
+                    if lhs.leadingMatchRating != rhs.leadingMatchRating {
+                        return lhs.leadingMatchRating > rhs.leadingMatchRating
+                    }
+                case .kickoffThenAlphabetical:
+                    if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
+                        return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
+                    }
+                    let homeCompare = lhs.leadingMatchHomeTeam.localizedCaseInsensitiveCompare(rhs.leadingMatchHomeTeam)
+                    if homeCompare != .orderedSame {
+                        return homeCompare == .orderedAscending
+                    }
+                    let awayCompare = lhs.leadingMatchAwayTeam.localizedCaseInsensitiveCompare(rhs.leadingMatchAwayTeam)
+                    if awayCompare != .orderedSame {
+                        return awayCompare == .orderedAscending
+                    }
+                case .teamScore, .alphabetical:
+                    if lhs.totalTeamRating != rhs.totalTeamRating {
+                        return lhs.totalTeamRating > rhs.totalTeamRating
+                    }
+                    if lhs.leadingMatchRating != rhs.leadingMatchRating {
+                        return lhs.leadingMatchRating > rhs.leadingMatchRating
+                    }
+                }
+                if lhs.weight != rhs.weight {
+                    return lhs.weight > rhs.weight
+                }
+                return lhs.league.localizedCaseInsensitiveCompare(rhs.league) == .orderedAscending
+            }
+            .map { section in
+                MatchLeague(id: "\(dateKey)|\(section.league)", league: section.league, matches: section.matches)
+            }
+
+            return MatchDay(
+                id: dateKey,
+                dateKey: dateKey,
+                displayDate: displayDate,
+                isToday: isToday,
+                isTomorrow: isTomorrow,
+                leagues: leagueSections
+            )
+        }
+
+        return dateDays
+    }
+
+    static func matchSortDate(for match: Match) -> Date {
+        match.dateTime ?? MatchDateParser.shared.parse(date: match.date, time: "00:00") ?? .distantFuture
+    }
+
+    static func competitionWeight(for match: Match) -> Double {
+        if let displayWeight = CompetitionWeightConfig.weight(for: match.displayLeague) {
+            return displayWeight
+        }
+        return CompetitionWeightConfig.weight(for: match.league) ?? 0
+    }
+
+    static func competitionWeight(forCompetitionName competitionName: String) -> Double {
+        CompetitionWeightConfig.weight(for: competitionName) ?? 0
+    }
+
+    static func sortMatchesWithinLeague(
+        _ matches: [Match],
+        sortOrder: MatchGroupSortOrder,
+        ratingLookup: TeamRatingLookup
+    ) -> [Match] {
+        matches.sorted { lhs, rhs in
+            if lhs.isPostponed != rhs.isPostponed {
+                return !lhs.isPostponed && rhs.isPostponed
+            }
+
+            switch sortOrder {
+            case .teamScore:
+                let leftScore = totalTeamRating(for: lhs, ratingLookup: ratingLookup)
+                let rightScore = totalTeamRating(for: rhs, ratingLookup: ratingLookup)
+                if leftScore != rightScore {
+                    return leftScore > rightScore
+                }
+            case .alphabetical:
+                let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
+                if homeCompare != .orderedSame {
+                    return homeCompare == .orderedAscending
+                }
+                let awayCompare = lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam)
+                if awayCompare != .orderedSame {
+                    return awayCompare == .orderedAscending
+                }
+            case .kickoffThenTeamScore:
+                let leftDate = matchSortDate(for: lhs)
+                let rightDate = matchSortDate(for: rhs)
+                if leftDate != rightDate {
+                    return leftDate < rightDate
+                }
+                let leftScore = totalTeamRating(for: lhs, ratingLookup: ratingLookup)
+                let rightScore = totalTeamRating(for: rhs, ratingLookup: ratingLookup)
+                if leftScore != rightScore {
+                    return leftScore > rightScore
+                }
+            case .kickoffThenAlphabetical:
+                let leftDate = matchSortDate(for: lhs)
+                let rightDate = matchSortDate(for: rhs)
+                if leftDate != rightDate {
+                    return leftDate < rightDate
+                }
+                let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
+                if homeCompare != .orderedSame {
+                    return homeCompare == .orderedAscending
+                }
+                let awayCompare = lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam)
+                if awayCompare != .orderedSame {
+                    return awayCompare == .orderedAscending
+                }
+            }
+
+            let leftDate = matchSortDate(for: lhs)
+            let rightDate = matchSortDate(for: rhs)
+            if leftDate != rightDate {
+                return leftDate < rightDate
+            }
+
+            let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
+            if homeCompare != .orderedSame {
+                return homeCompare == .orderedAscending
+            }
+
+            return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
+        }
+    }
+
+    static func totalTeamRating(for matches: [Match], ratingLookup: TeamRatingLookup) -> Double {
+        matches.reduce(0) { partialResult, match in
+            partialResult + totalTeamRating(for: match, ratingLookup: ratingLookup)
+        }
+    }
+
+    static func totalTeamRating(for match: Match, ratingLookup: TeamRatingLookup) -> Double {
+        ratingLookup.resolvedRating(for: match.homeTeam) + ratingLookup.resolvedRating(for: match.awayTeam)
+    }
 }
 
 @MainActor
@@ -295,6 +497,8 @@ final class MatchesStore: ObservableObject {
         .fixtures: ModeState(),
         .results: ModeState(),
     ]
+    private var refreshTasks: [MatchesViewMode: Task<Void, Never>] = [:]
+    private var refreshTaskIDs: [MatchesViewMode: UUID] = [:]
     private var cachedBbcLiveMatches: [BbcMatch] = []
     private var bbcLiveLastFetchedAt: Date?
     private var cacheStateLastFetchedAt: Date?
@@ -339,6 +543,12 @@ final class MatchesStore: ObservableObject {
         currentSnapshot = snapshot
         activeMode = mode
 
+        Self.log(
+            "configure mode=\(mode.rawValue) selected_snapshot=\(Self.snapshotDebugSummary(snapshot)) " +
+            "previous_snapshot=\(previousSnapshot.map(Self.snapshotDebugSummary) ?? "nil") " +
+            "snapshot_changed=\(snapshotChanged) data_source_changed=\(dataSourceChanged) mode_changed=\(modeChanged)"
+        )
+
         if dataSourceChanged || previousSnapshot == nil {
             loadCache(snapshot: snapshot)
         } else if snapshotChanged {
@@ -352,7 +562,7 @@ final class MatchesStore: ObservableObject {
             currentModeState.matches.isEmpty ||
             modeChanged ||
             shouldRefreshOnConfigure(currentModeState) {
-            Task { await refresh(preferences: snapshot, mode: mode) }
+            startRefreshTask(preferences: snapshot, mode: mode, reason: "configure")
         } else if mode == .fixtures {
             scheduleRemainingFixtureLoadingIfNeeded(preferences: snapshot)
         }
@@ -371,6 +581,7 @@ final class MatchesStore: ObservableObject {
     func stopAutoRefresh() {
         refreshTimer?.invalidate()
         refreshTimer = nil
+        cancelRefreshTasks(reason: "stop_auto_refresh")
         bbcLiveRefreshTask?.cancel()
         bbcLiveRefreshTask = nil
         fixturesBackgroundLoadTask?.cancel()
@@ -406,6 +617,40 @@ final class MatchesStore: ObservableObject {
         await fetchPage(preferences: preferences, mode: mode, reset: false)
     }
 
+    private func startRefreshTask(
+        preferences: PreferencesSnapshot,
+        mode: MatchesViewMode,
+        reason: String
+    ) {
+        if let existingTask = refreshTasks[mode] {
+            Self.log("refresh_task_cancel mode=\(mode.rawValue) reason=\(reason) existing_in_flight=true")
+            existingTask.cancel()
+        }
+
+        let taskID = UUID()
+        refreshTaskIDs[mode] = taskID
+        Self.log(
+            "refresh_task_start mode=\(mode.rawValue) reason=\(reason) snapshot=\(Self.snapshotDebugSummary(preferences))"
+        )
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.refresh(preferences: preferences, mode: mode)
+            if self.refreshTaskIDs[mode] == taskID {
+                self.refreshTasks[mode] = nil
+                self.refreshTaskIDs[mode] = nil
+            }
+        }
+        refreshTasks[mode] = task
+    }
+
+    private func cancelRefreshTasks(reason: String) {
+        guard !refreshTasks.isEmpty else { return }
+        Self.log("refresh_tasks_cancel_all reason=\(reason) count=\(refreshTasks.count)")
+        refreshTasks.values.forEach { $0.cancel() }
+        refreshTasks.removeAll()
+        refreshTaskIDs.removeAll()
+    }
+
     private func refreshFixtures(preferences: PreferencesSnapshot) async {
         guard let baseURL = URL(string: preferences.apiBaseURL) else {
             setError("Invalid API base URL.", for: .fixtures)
@@ -416,7 +661,19 @@ final class MatchesStore: ObservableObject {
         await reconcileServerCacheStateIfNeeded(client: client)
 
         var fixtureState = state(for: .fixtures)
-        if fixtureState.isLoading { return }
+        if fixtureState.isLoading {
+            Self.log(
+                "fixtures_refresh_skip reason=already_loading visible=\(fixtureState.matches.count) " +
+                "stored=\(fixtureState.unfilteredMatches.count) coverage_end=\(Self.formatDateForLog(fixtureState.fixtureCoverageEnd))"
+            )
+            return
+        }
+
+        Self.log(
+            "fixtures_refresh_begin snapshot=\(Self.snapshotDebugSummary(preferences)) " +
+            "visible=\(fixtureState.matches.count) stored=\(fixtureState.unfilteredMatches.count) " +
+            "coverage_end=\(Self.formatDateForLog(fixtureState.fixtureCoverageEnd))"
+        )
 
         fixturesBackgroundLoadTask?.cancel()
         fixturesBackgroundLoadTask = nil
@@ -469,6 +726,13 @@ final class MatchesStore: ObservableObject {
             nextState.errorMessage = nil
             modeStates[.fixtures] = nextState
 
+            Self.log(
+                "fixtures_refresh_complete visible=\(nextState.matches.count) stored=\(nextState.unfilteredMatches.count) " +
+                "last_updated=\(Self.formatDateForLog(nextState.lastUpdated)) " +
+                "coverage_end=\(Self.formatDateForLog(nextState.fixtureCoverageEnd)) " +
+                "sample=\(Self.matchSample(nextState.matches))"
+            )
+
             persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
 
             if activeMode == .fixtures {
@@ -490,6 +754,7 @@ final class MatchesStore: ObservableObject {
                 return
             }
             NSLog("Matches refresh failed for mode=%@ error=%@", MatchesViewMode.fixtures.rawValue, String(describing: error))
+            Self.log("fixtures_refresh_failed error=\(String(describing: error))")
             setError("Unable to load matches. Check your API URL or connection.", for: .fixtures)
         }
     }
@@ -506,8 +771,19 @@ final class MatchesStore: ObservableObject {
         }
 
         var current = state(for: mode)
-        if current.isLoading { return }
+        if current.isLoading {
+            Self.log(
+                "paged_refresh_skip mode=\(mode.rawValue) reset=\(reset) reason=already_loading visible=\(current.matches.count) " +
+                "stored=\(current.unfilteredMatches.count) page=\(current.page)"
+            )
+            return
+        }
         if !reset && !current.hasMore { return }
+
+        Self.log(
+            "paged_refresh_begin mode=\(mode.rawValue) reset=\(reset) snapshot=\(Self.snapshotDebugSummary(preferences)) " +
+            "visible=\(current.matches.count) stored=\(current.unfilteredMatches.count) page=\(current.page)"
+        )
 
         current.isLoading = true
         current.errorMessage = nil
@@ -600,6 +876,10 @@ final class MatchesStore: ObservableObject {
             nextState.errorMessage = nil
 
             modeStates[mode] = nextState
+            Self.log(
+                "paged_refresh_complete mode=\(mode.rawValue) visible=\(nextState.matches.count) stored=\(nextState.unfilteredMatches.count) " +
+                "page=\(nextState.page) has_more=\(nextState.hasMore) sample=\(Self.matchSample(nextState.matches))"
+            )
             persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
 
             if mode == activeMode {
@@ -723,6 +1003,14 @@ final class MatchesStore: ObservableObject {
         fixtureState.isUsingCache = false
         modeStates[.fixtures] = fixtureState
 
+        let rangeSummary = loadedRanges.map {
+            "\(Self.formatDateForLog($0.range.lowerBound))...\(Self.formatDateForLog($0.range.upperBound))(\($0.matches.count))"
+        }.joined(separator: ",")
+        Self.log(
+            "fixtures_lazy_batch_applied ranges=\(rangeSummary) visible=\(fixtureState.matches.count) " +
+            "stored=\(fixtureState.unfilteredMatches.count) coverage_end=\(Self.formatDateForLog(fixtureState.fixtureCoverageEnd))"
+        )
+
         persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
 
         if activeMode == .fixtures {
@@ -741,6 +1029,10 @@ final class MatchesStore: ObservableObject {
                 mode: mode
             )
             modeStates[mode] = current
+            Self.log(
+                "reapply_local_filters mode=\(mode.rawValue) snapshot=\(Self.snapshotDebugSummary(snapshot)) " +
+                "visible=\(current.matches.count) stored=\(current.unfilteredMatches.count) sample=\(Self.matchSample(current.matches))"
+            )
         }
     }
 
@@ -894,16 +1186,15 @@ final class MatchesStore: ObservableObject {
         guard shouldRefreshBbcLive(force: force) else { return }
         guard bbcLiveRefreshTask == nil else { return }
 
-        bbcLiveRefreshTask = Task {
+        bbcLiveRefreshTask = Task { [weak self] in
+            guard let self else { return }
             let fresh = (try? await client.fetchBbcLiveMatches()) ?? []
-            await MainActor.run {
-                if !fresh.isEmpty {
-                    self.cachedBbcLiveMatches = fresh
-                }
-                self.bbcLiveLastFetchedAt = Date()
-                self.bbcLiveRefreshTask = nil
-                self.rescoreVisibleFixtures()
+            if !fresh.isEmpty {
+                self.cachedBbcLiveMatches = fresh
             }
+            self.bbcLiveLastFetchedAt = Date()
+            self.bbcLiveRefreshTask = nil
+            self.rescoreVisibleFixtures()
         }
     }
 
@@ -1074,15 +1365,14 @@ final class MatchesStore: ObservableObject {
         lastUpdated = current.lastUpdated
         isUsingCache = current.isUsingCache
 
-        // Run the grouping work off the main thread so it doesn't block the UI.
-        // Cancel any previous task so stale results can't overwrite newer ones.
+        // Cancel any previous grouping task so stale results can't overwrite newer ones.
         groupingTask?.cancel()
         let matchesToGroup = current.matches
         let descendingDates = (mode == .results)
         let sortOrder = currentSnapshot?.matchGroupSortOrder ?? PreferencesStore.defaultMatchGroupSortOrder
         let ratingLookup = teamRatingLookup
         groupingTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let grouped = MatchesStore.groupMatches(
+            let grouped = MatchGroupingEngine.groupMatches(
                 matchesToGroup,
                 descendingDates: descendingDates,
                 sortOrder: sortOrder,
@@ -1326,14 +1616,14 @@ final class MatchesStore: ObservableObject {
 
     private static func sortedMatches(_ matches: [Match], descendingDates: Bool = false) -> [Match] {
         matches.sorted { lhs, rhs in
-            let leftDate = matchSortDate(for: lhs)
-            let rightDate = matchSortDate(for: rhs)
+            let leftDate = MatchGroupingEngine.matchSortDate(for: lhs)
+            let rightDate = MatchGroupingEngine.matchSortDate(for: rhs)
             if leftDate != rightDate {
                 return descendingDates ? leftDate > rightDate : leftDate < rightDate
             }
 
-            let leftWeight = competitionWeight(for: lhs)
-            let rightWeight = competitionWeight(for: rhs)
+            let leftWeight = MatchGroupingEngine.competitionWeight(for: lhs)
+            let rightWeight = MatchGroupingEngine.competitionWeight(for: rhs)
             if leftWeight != rightWeight {
                 return leftWeight > rightWeight
             }
@@ -1350,21 +1640,6 @@ final class MatchesStore: ObservableObject {
 
             return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
         }
-    }
-
-    nonisolated private static func matchSortDate(for match: Match) -> Date {
-        match.dateTime ?? MatchDateParser.shared.parse(date: match.date, time: "00:00") ?? .distantFuture
-    }
-
-    private static func competitionWeight(for match: Match) -> Double {
-        if let displayWeight = CompetitionWeightConfig.weight(for: match.displayLeague) {
-            return displayWeight
-        }
-        return CompetitionWeightConfig.weight(for: match.league) ?? 0
-    }
-
-    nonisolated private static func competitionWeight(forCompetitionName competitionName: String) -> Double {
-        CompetitionWeightConfig.weight(for: competitionName) ?? 0
     }
 
     private static func applyChannelFilters(to matches: [Match], selectedChannels: [String]) -> [Match] {
@@ -1507,188 +1782,33 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    nonisolated private static func groupMatches(
-        _ matches: [Match],
-        descendingDates: Bool = false,
-        sortOrder: MatchGroupSortOrder,
-        ratingLookup: TeamRatingLookup
-    ) -> [MatchDay] {
-        let groupedByDate = Dictionary(grouping: matches) { $0.date }
-        var dateKeys = groupedByDate.keys.sorted()
-        if descendingDates {
-            dateKeys.reverse()
-        }
-        let calendar = Calendar.current
-
-        let dateDays: [MatchDay] = dateKeys.compactMap { dateKey -> MatchDay? in
-            guard let matchesForDate = groupedByDate[dateKey] else { return nil }
-            let displayDate: String
-            let parsedDate = MatchDateParser.shared.parse(date: dateKey, time: "00:00")
-            let isToday = parsedDate.map { calendar.isDateInToday($0) } ?? false
-            let isTomorrow = parsedDate.map { calendar.isDateInTomorrow($0) } ?? false
-            if let parsedDate {
-                displayDate = MatchDateParser.shared.displayDateWithRelative(parsedDate)
-            } else {
-                displayDate = dateKey
-            }
-
-            let groupedByLeague = Dictionary(grouping: matchesForDate) { $0.displayLeague }
-            let leagueSections = groupedByLeague.compactMap {
-                entry -> (
-                    league: String,
-                    matches: [Match],
-                    totalTeamRating: Double,
-                    leadingMatchRating: Double,
-                    leadingMatchKickoff: Date,
-                    leadingMatchHomeTeam: String,
-                    leadingMatchAwayTeam: String,
-                    weight: Double
-                )?
-                in
-                let (league, leagueMatches) = entry
-                let sortedLeagueMatches = Self.sortMatchesWithinLeague(
-                    leagueMatches,
-                    sortOrder: sortOrder,
-                    ratingLookup: ratingLookup
-                )
-                guard let leadingMatch = sortedLeagueMatches.first else { return nil }
-                return (
-                    league: league,
-                    matches: sortedLeagueMatches,
-                    totalTeamRating: Self.totalTeamRating(for: leagueMatches, ratingLookup: ratingLookup),
-                    leadingMatchRating: Self.totalTeamRating(for: leadingMatch, ratingLookup: ratingLookup),
-                    leadingMatchKickoff: Self.matchSortDate(for: leadingMatch),
-                    leadingMatchHomeTeam: leadingMatch.homeTeam,
-                    leadingMatchAwayTeam: leadingMatch.awayTeam,
-                    weight: Self.competitionWeight(forCompetitionName: league)
-                )
-            }
-            .sorted { lhs, rhs in
-                switch sortOrder {
-                case .kickoffThenTeamScore:
-                    if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
-                        return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
-                    }
-                    if lhs.leadingMatchRating != rhs.leadingMatchRating {
-                        return lhs.leadingMatchRating > rhs.leadingMatchRating
-                    }
-                case .kickoffThenAlphabetical:
-                    if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
-                        return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
-                    }
-                    let homeCompare = lhs.leadingMatchHomeTeam.localizedCaseInsensitiveCompare(rhs.leadingMatchHomeTeam)
-                    if homeCompare != .orderedSame {
-                        return homeCompare == .orderedAscending
-                    }
-                    let awayCompare = lhs.leadingMatchAwayTeam.localizedCaseInsensitiveCompare(rhs.leadingMatchAwayTeam)
-                    if awayCompare != .orderedSame {
-                        return awayCompare == .orderedAscending
-                    }
-                case .teamScore, .alphabetical:
-                    if lhs.totalTeamRating != rhs.totalTeamRating {
-                        return lhs.totalTeamRating > rhs.totalTeamRating
-                    }
-                    if lhs.leadingMatchRating != rhs.leadingMatchRating {
-                        return lhs.leadingMatchRating > rhs.leadingMatchRating
-                    }
-                }
-                if lhs.weight != rhs.weight {
-                    return lhs.weight > rhs.weight
-                }
-                return lhs.league.localizedCaseInsensitiveCompare(rhs.league) == .orderedAscending
-            }
-            .map { section in
-                MatchLeague(id: "\(dateKey)|\(section.league)", league: section.league, matches: section.matches)
-            }
-
-            return MatchDay(
-                id: dateKey,
-                dateKey: dateKey,
-                displayDate: displayDate,
-                isToday: isToday,
-                isTomorrow: isTomorrow,
-                leagues: leagueSections
-            )
-        }
-
-        return dateDays
+    private static func snapshotDebugSummary(_ snapshot: PreferencesSnapshot) -> String {
+        "competition=\(snapshot.competitionFilterEnabled) leagues=\(snapshot.selectedLeagues.count) " +
+        "channels=\(snapshot.channelFilterEnabled) selected_channels=\(snapshot.selectedChannels.count) " +
+        "epl=\(snapshot.englishPremierLeagueTeamsOnly)/effective=\(snapshot.effectiveEnglishPremierLeagueTeamsOnly) " +
+        "home_nations=\(snapshot.homeNationsFilterEnabled)/effective=\(snapshot.effectiveHomeNationsFilterEnabled) " +
+        "major=\(snapshot.majorTournamentsFilterEnabled)/effective=\(snapshot.effectiveMajorTournamentsFilterEnabled) " +
+        "show_all=\(snapshot.showAllMatches)"
     }
 
-    nonisolated private static func sortMatchesWithinLeague(
-        _ matches: [Match],
-        sortOrder: MatchGroupSortOrder,
-        ratingLookup: TeamRatingLookup
-    ) -> [Match] {
-        matches.sorted { lhs, rhs in
-            if lhs.isPostponed != rhs.isPostponed {
-                return !lhs.isPostponed && rhs.isPostponed
-            }
-
-            switch sortOrder {
-            case .teamScore:
-                let leftScore = totalTeamRating(for: lhs, ratingLookup: ratingLookup)
-                let rightScore = totalTeamRating(for: rhs, ratingLookup: ratingLookup)
-                if leftScore != rightScore {
-                    return leftScore > rightScore
-                }
-            case .alphabetical:
-                let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
-                if homeCompare != .orderedSame {
-                    return homeCompare == .orderedAscending
-                }
-                let awayCompare = lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam)
-                if awayCompare != .orderedSame {
-                    return awayCompare == .orderedAscending
-                }
-            case .kickoffThenTeamScore:
-                let leftDate = matchSortDate(for: lhs)
-                let rightDate = matchSortDate(for: rhs)
-                if leftDate != rightDate {
-                    return leftDate < rightDate
-                }
-                let leftScore = totalTeamRating(for: lhs, ratingLookup: ratingLookup)
-                let rightScore = totalTeamRating(for: rhs, ratingLookup: ratingLookup)
-                if leftScore != rightScore {
-                    return leftScore > rightScore
-                }
-            case .kickoffThenAlphabetical:
-                let leftDate = matchSortDate(for: lhs)
-                let rightDate = matchSortDate(for: rhs)
-                if leftDate != rightDate {
-                    return leftDate < rightDate
-                }
-                let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
-                if homeCompare != .orderedSame {
-                    return homeCompare == .orderedAscending
-                }
-                let awayCompare = lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam)
-                if awayCompare != .orderedSame {
-                    return awayCompare == .orderedAscending
-                }
-            }
-
-            let leftDate = matchSortDate(for: lhs)
-            let rightDate = matchSortDate(for: rhs)
-            if leftDate != rightDate {
-                return leftDate < rightDate
-            }
-
-            let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
-            if homeCompare != .orderedSame {
-                return homeCompare == .orderedAscending
-            }
-
-            return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
+    private static func matchSample(_ matches: [Match], limit: Int = 4) -> String {
+        let sample = matches.prefix(limit).map { match in
+            "\(match.homeTeam) v \(match.awayTeam) [\(match.league)]"
         }
+        return sample.isEmpty ? "[]" : "[\(sample.joined(separator: " | "))]"
     }
 
-    nonisolated private static func totalTeamRating(for matches: [Match], ratingLookup: TeamRatingLookup) -> Double {
-        matches.reduce(0) { partialResult, match in
-            partialResult + totalTeamRating(for: match, ratingLookup: ratingLookup)
-        }
+    private static func formatDateForLog(_ date: Date?) -> String {
+        guard let date else { return "nil" }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 
-    nonisolated private static func totalTeamRating(for match: Match, ratingLookup: TeamRatingLookup) -> Double {
-        ratingLookup.resolvedRating(for: match.homeTeam) + ratingLookup.resolvedRating(for: match.awayTeam)
+    private static func log(_ message: String) {
+        NSLog("[MatchesStore] %@", message)
     }
+
 }

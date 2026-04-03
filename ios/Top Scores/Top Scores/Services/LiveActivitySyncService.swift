@@ -284,7 +284,7 @@ final class LiveActivitySyncService {
     }
 
     private func uploadPushToStartToken(_ tokenData: Data) async {
-        guard let endpoint = endpointURL(path: "live-activity/push-to-start-token") else { return }
+        guard let endpoint = await endpointURL(path: "live-activity/push-to-start-token") else { return }
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "pushToStartToken": Self.hexString(from: tokenData),
@@ -294,7 +294,7 @@ final class LiveActivitySyncService {
     }
 
     private func uploadActivityPushToken(activityID: String, tokenData: Data) async {
-        guard let endpoint = endpointURL(path: "live-activity/activity-token") else { return }
+        guard let endpoint = await endpointURL(path: "live-activity/activity-token") else { return }
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "activityId": activityID,
@@ -305,7 +305,7 @@ final class LiveActivitySyncService {
     }
 
     private func uploadActivityEnded(activityID: String) async {
-        guard let endpoint = endpointURL(path: "live-activity/activity-ended") else { return }
+        guard let endpoint = await endpointURL(path: "live-activity/activity-ended") else { return }
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "activityId": activityID,
@@ -316,7 +316,7 @@ final class LiveActivitySyncService {
 
     @available(iOS 16.1, *)
     private func requestLiveActivityReconcile() async -> TopScoresLiveActivityAttributes.ContentState? {
-        guard let endpoint = endpointURL(path: "live-activity/reconcile") else { return nil }
+        guard let endpoint = await endpointURL(path: "live-activity/reconcile") else { return nil }
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
@@ -358,7 +358,7 @@ final class LiveActivitySyncService {
     }
 
     private func fetchServerDebugState() async {
-        guard var endpoint = endpointURL(path: "live-activity/test/state") else { return }
+        guard var endpoint = await endpointURL(path: "live-activity/test/state") else { return }
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "userDeviceToken", value: DeviceIdentity.currentToken)]
         if let url = components?.url {
@@ -396,8 +396,8 @@ final class LiveActivitySyncService {
         }
     }
 
-    private func endpointURL(path: String) -> URL? {
-        let snapshot = PreferencesStore.loadSnapshot()
+    private func endpointURL(path: String) async -> URL? {
+        let snapshot = await PreferencesStore.loadSnapshot()
         guard let baseURL = URL(string: snapshot.apiBaseURL) else {
             NSLog("[LiveActivitySync] Invalid API base URL: %@", snapshot.apiBaseURL)
             return nil

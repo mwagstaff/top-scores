@@ -93,6 +93,8 @@ struct MatchesView: View {
     @State private var debouncedSearchText = ""
     @State private var filteredMatchDays: [MatchDay] = []
     @State private var indexedMatchDays: [IndexedMatchDay] = []
+    @State private var reportedMissingLogoNames: Set<String> = []
+    @State private var lastPredictorCandidateDateKeys: Set<String> = []
 
     private static let minimumSearchCharacters = 3
     private static let searchDebounceNanoseconds: UInt64 = 250_000_000
@@ -173,6 +175,7 @@ struct MatchesView: View {
             guard isSelected else { return }
             LiveActivitySyncService.shared.reconcileOnForeground()
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+            NSLog("[MatchesView] onAppear mode=%@ selected=%d snapshot=%@", mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
             let days = matchesStore.groupedMatches
             rebuildSearchIndex(from: days)
@@ -185,6 +188,7 @@ struct MatchesView: View {
             guard selected else { return }
             LiveActivitySyncService.shared.reconcileOnForeground()
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+            NSLog("[MatchesView] isSelected mode=%@ selected=%d snapshot=%@", mode.rawValue, selected, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
             let days = matchesStore.groupedMatches
             rebuildSearchIndex(from: days)
@@ -196,6 +200,7 @@ struct MatchesView: View {
         .onChange(of: preferences.snapshot) { _, _ in
             guard isSelected else { return }
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+            NSLog("[MatchesView] snapshot_change mode=%@ snapshot=%@", mode.rawValue, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
             ensureFantasySquadLoadedIfNeeded()
             refreshPredictorAvailability(days: matchesStore.groupedMatches)
@@ -203,6 +208,7 @@ struct MatchesView: View {
         .onChange(of: preferences.showAllMatches) { _, newValue in
             guard isSelected else { return }
             let snapshot = newValue ? preferences.unfilteredSnapshot : preferences.snapshot
+            NSLog("[MatchesView] showAllMatches_change mode=%@ value=%d snapshot=%@", mode.rawValue, newValue, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
             toastMessage = newValue ? "Viewing all matches (unfiltered)" : "Viewing preferred matches only"
             withAnimation {
@@ -280,6 +286,12 @@ struct MatchesView: View {
                 trackedLeagues: []
             )
         }
+    }
+
+    private func debugSnapshotSummary(_ snapshot: PreferencesSnapshot) -> String {
+        "competition=\(snapshot.competitionFilterEnabled) epl=\(snapshot.englishPremierLeagueTeamsOnly) " +
+        "home_nations=\(snapshot.homeNationsFilterEnabled) major=\(snapshot.majorTournamentsFilterEnabled) " +
+        "channels=\(snapshot.channelFilterEnabled) show_all=\(snapshot.showAllMatches)"
     }
 
     private var matchesList: some View {
@@ -468,6 +480,7 @@ struct MatchesView: View {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         isSearchVisible = true
                     }
+                    rebuildSearchIndex(from: matchesStore.groupedMatches)
                 }
             } label: {
                 Image(systemName: isSearchVisible ? "magnifyingglass.circle.fill" : "magnifyingglass")
@@ -552,6 +565,12 @@ struct MatchesView: View {
     }
 
     private func rebuildSearchIndex(from days: [MatchDay]) {
+        guard isSearchVisible || isSearchFilteringActive else {
+            indexedMatchDays = []
+            filteredMatchDays = []
+            return
+        }
+
         indexedMatchDays = days.map { day in
             let indexedLeagues = day.leagues.map { league in
                 let indexedMatches = league.matches.map { match in
@@ -750,9 +769,14 @@ struct MatchesView: View {
         }
 
         guard !candidateDays.isEmpty else {
+            lastPredictorCandidateDateKeys = []
             predictableDateKeys = []
             return
         }
+
+        let candidateDateKeys = Set(candidateDays.keys)
+        guard candidateDateKeys != lastPredictorCandidateDateKeys else { return }
+        lastPredictorCandidateDateKeys = candidateDateKeys
 
         predictorAvailabilityTask?.cancel()
         let apiBaseURL = preferences.apiBaseURL
@@ -773,14 +797,16 @@ struct MatchesView: View {
             .flatMap(\.matches)
             .flatMap { [$0.homeTeam, $0.awayTeam] }
 
-        let missingTeamNames = LogoResolver.shared.missingTeamNames(in: allTeamNames)
+        let missingTeamNames = Set(LogoResolver.shared.missingTeamNames(in: allTeamNames))
+            .subtracting(reportedMissingLogoNames)
         guard !missingTeamNames.isEmpty else { return }
         guard let baseURL = URL(string: preferences.apiBaseURL) else { return }
+        reportedMissingLogoNames.formUnion(missingTeamNames)
 
         Task {
             let client = APIClient(baseURL: baseURL)
             do {
-                try await client.reportMissingTeamLogos(missingTeamNames)
+                try await client.reportMissingTeamLogos(Array(missingTeamNames))
             } catch {
                 NSLog("Missing logo audit post failed error=%@", String(describing: error))
             }
