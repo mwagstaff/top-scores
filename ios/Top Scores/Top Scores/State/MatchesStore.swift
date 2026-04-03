@@ -519,8 +519,11 @@ final class MatchesStore: ObservableObject {
     private let fixturesInitialLoadDays = 5
     private let fixturesFutureLoadDays = 90
     private let fixturesLazyBatchDays = 14
-    private let fixturesLazyParallelRequests = 3
+    private let fixturesLazyParallelRequests = 1
     private let fixturesLazyPageSize = 500
+    private let fixturesLazyStartDelayNanos: UInt64 = 8_000_000_000
+    private let fixturesLazyInterBatchDelayNanos: UInt64 = 2_000_000_000
+    private let teamRankingsRefreshDelayNanos: UInt64 = 4_000_000_000
     // Results are filtered client-side after paging; advance a few pages to avoid empty-first-page windows.
     private let resultsAutoAdvancePageLimit = 8
     private let prefetchThreshold = 20
@@ -921,6 +924,11 @@ final class MatchesStore: ObservableObject {
             guard let self else { return }
             let maxParallelRequests = max(1, self.fixturesLazyParallelRequests)
             let pageSize = self.fixturesLazyPageSize
+            var appliedAnyRanges = false
+
+            if self.fixturesLazyStartDelayNanos > 0 {
+                try? await Task.sleep(nanoseconds: self.fixturesLazyStartDelayNanos)
+            }
 
             var nextIndex = 0
             while nextIndex < ranges.count {
@@ -952,7 +960,14 @@ final class MatchesStore: ObservableObject {
                         return loaded.sorted { $0.range.lowerBound < $1.range.lowerBound }
                     }
                     if Task.isCancelled { break }
-                    applyLoadedFixtureRanges(loadedRanges, fallbackSnapshot: preferences)
+                    if !loadedRanges.isEmpty {
+                        appliedAnyRanges = true
+                        applyLoadedFixtureRanges(
+                            loadedRanges,
+                            fallbackSnapshot: preferences,
+                            publishImmediately: false
+                        )
+                    }
                 } catch {
                     if Self.isCancellationError(error) {
                         break
@@ -961,10 +976,16 @@ final class MatchesStore: ObservableObject {
                     break
                 }
                 nextIndex = batchEnd
+                if nextIndex < ranges.count && self.fixturesLazyInterBatchDelayNanos > 0 {
+                    try? await Task.sleep(nanoseconds: self.fixturesLazyInterBatchDelayNanos)
+                }
             }
 
             self.fixturesBackgroundLoadTask = nil
             let effectiveSnapshot = self.resolvedSnapshot(for: preferences)
+            if !Task.isCancelled && appliedAnyRanges {
+                self.finalizeDeferredFixtureLoad(snapshot: effectiveSnapshot)
+            }
             if !Task.isCancelled {
                 self.scheduleRemainingFixtureLoadingIfNeeded(preferences: effectiveSnapshot)
             }
@@ -973,11 +994,11 @@ final class MatchesStore: ObservableObject {
 
     private func applyLoadedFixtureRanges(
         _ loadedRanges: [FixtureRangeLoadResult],
-        fallbackSnapshot: PreferencesSnapshot
+        fallbackSnapshot: PreferencesSnapshot,
+        publishImmediately: Bool
     ) {
         guard !loadedRanges.isEmpty else { return }
 
-        let effectiveSnapshot = resolvedSnapshot(for: fallbackSnapshot)
         var fixtureState = state(for: .fixtures)
         var newestLastUpdated = fixtureState.lastUpdated
 
@@ -994,11 +1015,14 @@ final class MatchesStore: ObservableObject {
             )
         }
 
-        fixtureState.matches = visibleMatches(
-            from: fixtureState.unfilteredMatches,
-            snapshot: effectiveSnapshot,
-            mode: .fixtures
-        )
+        if publishImmediately {
+            let effectiveSnapshot = resolvedSnapshot(for: fallbackSnapshot)
+            fixtureState.matches = visibleMatches(
+                from: fixtureState.unfilteredMatches,
+                snapshot: effectiveSnapshot,
+                mode: .fixtures
+            )
+        }
         fixtureState.lastUpdated = newestLastUpdated
         fixtureState.isUsingCache = false
         modeStates[.fixtures] = fixtureState
@@ -1011,12 +1035,38 @@ final class MatchesStore: ObservableObject {
             "stored=\(fixtureState.unfilteredMatches.count) coverage_end=\(Self.formatDateForLog(fixtureState.fixtureCoverageEnd))"
         )
 
-        persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
+        persistDeferredFixtureCache(snapshot: resolvedSnapshot(for: fallbackSnapshot))
+    }
 
+    private func finalizeDeferredFixtureLoad(snapshot: PreferencesSnapshot) {
+        var fixtureState = state(for: .fixtures)
+        fixtureState.matches = visibleMatches(
+            from: fixtureState.unfilteredMatches,
+            snapshot: snapshot,
+            mode: .fixtures
+        )
+        fixtureState.isUsingCache = false
+        modeStates[.fixtures] = fixtureState
+        Self.log(
+            "fixtures_lazy_finalize visible=\(fixtureState.matches.count) stored=\(fixtureState.unfilteredMatches.count) " +
+            "coverage_end=\(Self.formatDateForLog(fixtureState.fixtureCoverageEnd))"
+        )
+        persistCombinedCacheAndSync(snapshot: snapshot)
         if activeMode == .fixtures {
             publishState(for: .fixtures)
         }
-        updateRefreshTimer(using: effectiveSnapshot, matches: combinedLoadedMatches())
+        updateRefreshTimer(using: snapshot, matches: combinedLoadedMatches())
+    }
+
+    private func persistDeferredFixtureCache(snapshot: PreferencesSnapshot) {
+        let unfilteredCombined = Self.sortedMatches(combinedUnfilteredMatches())
+        guard !unfilteredCombined.isEmpty else { return }
+        MatchCache.save(
+            matches: unfilteredCombined,
+            lastUpdated: latestLastUpdatedAcrossModes(),
+            fixtureCoverageEnd: state(for: .fixtures).fixtureCoverageEnd,
+            snapshot: snapshot
+        )
     }
 
     private func reapplyLocalFilters(using snapshot: PreferencesSnapshot) {
@@ -1287,6 +1337,11 @@ final class MatchesStore: ObservableObject {
     private func refreshTeamRatingLookup(apiBaseURL: String) {
         teamRankingsRefreshTask?.cancel()
         teamRankingsRefreshTask = Task { [weak self] in
+            if let self, self.teamRankingsRefreshDelayNanos > 0 {
+                try? await Task.sleep(nanoseconds: self.teamRankingsRefreshDelayNanos)
+            }
+            guard !Task.isCancelled else { return }
+
             let cachedSettings = await TeamRankingSettingsCatalog.shared.settings()
             let cachedEntries = await TeamRankingsCatalog.shared.cachedEntries()
             await self?.applyTeamRatingSnapshot(

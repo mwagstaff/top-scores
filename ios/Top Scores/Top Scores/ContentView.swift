@@ -14,9 +14,11 @@ struct ContentView: View {
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @AppStorage("fantasy.managerEntryID") private var fantasyManagerEntryID = ""
     @State private var selectedTab = 0
+    @State private var deferredFantasyRefreshTask: Task<Void, Never>?
 
     private let fantasyLiveRefreshInterval: TimeInterval = 30
     private let fantasyIdleRefreshInterval: TimeInterval = 5 * 60
+    private let fantasyStartupDelayNanos: UInt64 = 10_000_000_000
 
     var body: some View {
         GeometryReader { proxy in
@@ -67,9 +69,14 @@ struct ContentView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .background(Color(.systemBackground))
-            .onChange(of: selectedTab) { _, _ in
+            .onChange(of: selectedTab) { _, newValue in
                 Task {
                     await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
+                }
+                guard newValue == 3 else { return }
+                deferredFantasyRefreshTask?.cancel()
+                deferredFantasyRefreshTask = Task {
+                    await refreshFantasySummaryIfNeeded(force: false)
                 }
             }
             .onChange(of: fantasyManagerEntryID) { _, newValue in
@@ -83,11 +90,23 @@ struct ContentView: View {
                 }
             }
             .task(id: fantasyManagerEntryID) {
-                await refreshFantasySummaryIfNeeded(force: true)
+                deferredFantasyRefreshTask?.cancel()
+                deferredFantasyRefreshTask = Task {
+                    if selectedTab != 3 {
+                        try? await Task.sleep(nanoseconds: fantasyStartupDelayNanos)
+                    }
+                    guard !Task.isCancelled else { return }
+                    await refreshFantasySummaryIfNeeded(force: selectedTab == 3)
+                }
             }
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else { return }
-                Task {
+                deferredFantasyRefreshTask?.cancel()
+                deferredFantasyRefreshTask = Task {
+                    if selectedTab != 3 {
+                        try? await Task.sleep(nanoseconds: fantasyStartupDelayNanos)
+                    }
+                    guard !Task.isCancelled else { return }
                     await refreshFantasySummaryIfNeeded(force: false)
                 }
             }

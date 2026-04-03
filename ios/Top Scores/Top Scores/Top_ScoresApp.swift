@@ -14,7 +14,11 @@ struct Top_ScoresApp: App {
     @StateObject private var preferences = PreferencesStore()
     @StateObject private var matchesStore = MatchesStore()
     @StateObject private var fantasyViewModel = FantasyViewModel()
+    @State private var deferredStartupWorkTask: Task<Void, Never>?
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    private let startupDeferredDelayNanos: UInt64 = 8_000_000_000
+    private let startupDeferredSpacingNanos: UInt64 = 2_000_000_000
 
     init() {
         NSLog("=====================================")
@@ -30,96 +34,85 @@ struct Top_ScoresApp: App {
                 .environmentObject(preferences)
                 .environmentObject(matchesStore)
                 .environmentObject(fantasyViewModel)
-                .task {
-                    async let leagueTablesWarmTask: Void = LeagueTablesCatalog.shared.prefetch(
-                        apiBaseURL: preferences.snapshot.apiBaseURL
-                    )
-                    async let teamRankingsWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
-                        apiBaseURL: preferences.snapshot.apiBaseURL
-                    )
-                    async let teamRankingSettingsWarmTask: Void =
-                        TeamRankingSettingsCatalog.shared.ensureFresh(
-                            apiBaseURL: preferences.snapshot.apiBaseURL
-                        )
-                    async let fantasyLoadingMessagesWarmTask: Void =
-                        FantasyLoadingMessagesCatalog.shared.ensureFresh(
-                            apiBaseURL: preferences.snapshot.apiBaseURL
-                        )
-                    async let teamColorsWarmTask: Void =
-                        TeamColorCatalog.shared.ensureFresh(
-                            apiBaseURL: preferences.snapshot.apiBaseURL
-                        )
-                    _ = await (
-                        leagueTablesWarmTask,
-                        teamRankingsWarmTask,
-                        teamRankingSettingsWarmTask,
-                        fantasyLoadingMessagesWarmTask,
-                        teamColorsWarmTask
-                    )
-                }
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .background:
+                deferredStartupWorkTask?.cancel()
+                deferredStartupWorkTask = nil
                 BackgroundRefreshManager.scheduleNextRefresh(
                     intervalMinutes: preferences.refreshIntervalMinutes,
                     hasInProgressMatches: matchesStore.hasInProgressMatches
                 )
             case .active:
                 LiveActivitySyncService.shared.reconcileOnForeground()
-                let syncSnapshot = preferences.snapshot
-                let refreshSnapshot = preferences.showAllMatches
-                    ? preferences.unfilteredSnapshot
-                    : syncSnapshot
-                Task {
-                    async let refreshTask: Void = matchesStore.refresh(preferences: refreshSnapshot)
-                    async let syncTask: Void = PreferencesSyncService.shared.syncPreferences(syncSnapshot)
-                    async let metricTask: Void = AppMetricsService.shared.sendAppOpenMetric(
-                        apiBaseURL: syncSnapshot.apiBaseURL
-                    )
-                    async let leagueTablesWarmTask: Void = LeagueTablesCatalog.shared.prefetch(
-                        apiBaseURL: syncSnapshot.apiBaseURL
-                    )
-                    async let teamRankingWarmTask: Void = TeamRankingsCatalog.shared.ensureFresh(
-                        apiBaseURL: syncSnapshot.apiBaseURL
-                    )
-                    async let teamRankingSettingsWarmTask: Void =
-                        TeamRankingSettingsCatalog.shared.ensureFresh(
-                            apiBaseURL: syncSnapshot.apiBaseURL
-                        )
-                    async let fantasyLoadingMessagesWarmTask: Void =
-                        FantasyLoadingMessagesCatalog.shared.ensureFresh(
-                            apiBaseURL: syncSnapshot.apiBaseURL
-                        )
-                    async let teamColorsWarmTask: Void =
-                        TeamColorCatalog.shared.ensureFresh(
-                            apiBaseURL: syncSnapshot.apiBaseURL
-                        )
-                    _ = await (
-                        refreshTask,
-                        syncTask,
-                        metricTask,
-                        leagueTablesWarmTask,
-                        teamRankingWarmTask,
-                        teamRankingSettingsWarmTask,
-                        fantasyLoadingMessagesWarmTask,
-                        teamColorsWarmTask
-                    )
-                }
+                scheduleDeferredStartupWork(snapshot: preferences.snapshot)
             default:
                 break
             }
         }
     }
+
+    private func scheduleDeferredStartupWork(snapshot: PreferencesSnapshot) {
+        deferredStartupWorkTask?.cancel()
+        deferredStartupWorkTask = Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: startupDeferredDelayNanos)
+            guard !Task.isCancelled else { return }
+
+            await PreferencesSyncService.shared.syncPreferences(snapshot)
+            guard !Task.isCancelled else { return }
+
+            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
+            guard !Task.isCancelled else { return }
+
+            await AppMetricsService.shared.sendAppOpenMetric(apiBaseURL: snapshot.apiBaseURL)
+            guard !Task.isCancelled else { return }
+
+            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
+            guard !Task.isCancelled else { return }
+
+            await LeagueTablesCatalog.shared.prefetch(apiBaseURL: snapshot.apiBaseURL)
+            guard !Task.isCancelled else { return }
+
+            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
+            guard !Task.isCancelled else { return }
+
+            await TeamRankingSettingsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
+            guard !Task.isCancelled else { return }
+
+            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
+            guard !Task.isCancelled else { return }
+
+            await TeamRankingsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
+            guard !Task.isCancelled else { return }
+
+            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
+            guard !Task.isCancelled else { return }
+
+            await FantasyLoadingMessagesCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
+            guard !Task.isCancelled else { return }
+
+            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
+            guard !Task.isCancelled else { return }
+
+            await TeamColorCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
+        }
+    }
 }
 
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    private let liveActivityStartupDelayNanos: UInt64 = 5_000_000_000
+    private let notificationAuthorizationDelayNanos: UInt64 = 12_000_000_000
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        LiveActivitySyncService.shared.start()
-
-        // Request notification authorization
         Task {
+            try? await Task.sleep(nanoseconds: liveActivityStartupDelayNanos)
+            LiveActivitySyncService.shared.start()
+        }
+
+        Task {
+            try? await Task.sleep(nanoseconds: notificationAuthorizationDelayNanos)
             await NotificationManager.shared.requestAuthorization()
         }
         return true
