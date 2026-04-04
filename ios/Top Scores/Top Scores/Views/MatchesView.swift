@@ -100,6 +100,18 @@ struct MatchesView: View {
     private static let minimumSearchCharacters = 3
     private static let searchDebounceNanoseconds: UInt64 = 250_000_000
     private static let searchFilterQueue = DispatchQueue(label: "TopScores.match-search", qos: .userInitiated)
+
+    private enum CompactFixturesSpacing {
+        static let dayHeaderTopFirst: CGFloat = 4
+        static let dayHeaderTop: CGFloat = 8
+        static let dayHeaderBottom: CGFloat = 1
+        static let leagueHeadingTop: CGFloat = 2
+        static let leagueHeadingBottom: CGFloat = 1
+        static let rowTop: CGFloat = 1
+        static let rowBottom: CGFloat = 3
+        static let minListRowHeight: CGFloat = 18
+    }
+
     private let groupedSideEffectsDelayNanos: UInt64 = 1_500_000_000
 
     private var showAllMatches: Bool {
@@ -300,7 +312,16 @@ struct MatchesView: View {
             if usesCompactFixtureRows {
                 ForEach(Array(displayedMatchDays.enumerated()), id: \.element.id) { index, day in
                     sectionHeader(for: day)
-                        .listRowInsets(EdgeInsets(top: index == 0 ? 2 : 6, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(
+                            EdgeInsets(
+                                top: index == 0
+                                    ? CompactFixturesSpacing.dayHeaderTopFirst
+                                    : CompactFixturesSpacing.dayHeaderTop,
+                                leading: 16,
+                                bottom: CompactFixturesSpacing.dayHeaderBottom,
+                                trailing: 16
+                            )
+                        )
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
 
@@ -318,7 +339,10 @@ struct MatchesView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, usesCompactFixtureRows ? 1 : 44)
+        .environment(
+            \.defaultMinListRowHeight,
+            usesCompactFixtureRows ? CompactFixturesSpacing.minListRowHeight : 44
+        )
         .safeAreaPadding(.bottom, 80)
         .refreshable {
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
@@ -369,7 +393,14 @@ struct MatchesView: View {
             .fontWeight(.semibold)
             .foregroundStyle(.secondary)
             .textCase(nil)
-            .listRowInsets(EdgeInsets(top: usesCompactFixtureRows ? 0 : 8, leading: 16, bottom: usesCompactFixtureRows ? 0 : 2, trailing: 16))
+            .listRowInsets(
+                EdgeInsets(
+                    top: usesCompactFixtureRows ? CompactFixturesSpacing.leagueHeadingTop : 8,
+                    leading: 16,
+                    bottom: usesCompactFixtureRows ? CompactFixturesSpacing.leagueHeadingBottom : 2,
+                    trailing: 16
+                )
+            )
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
     }
@@ -407,7 +438,14 @@ struct MatchesView: View {
             }
         }
         .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets(top: usesCompactFixtureRows ? 0 : 4, leading: 16, bottom: usesCompactFixtureRows ? 1 : 8, trailing: 16))
+        .listRowInsets(
+            EdgeInsets(
+                top: usesCompactFixtureRows ? CompactFixturesSpacing.rowTop : 4,
+                leading: 16,
+                bottom: usesCompactFixtureRows ? CompactFixturesSpacing.rowBottom : 8,
+                trailing: 16
+            )
+        )
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
     }

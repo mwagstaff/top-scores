@@ -422,10 +422,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     var hasKnownAggregateScore: Bool {
-        guard let aggregateHomeScore, let aggregateAwayScore else { return false }
-        return aggregateHomeScore != 0 ||
-            aggregateAwayScore != 0 ||
-            (firstLegHomeScore != nil && firstLegAwayScore != nil)
+        aggregateHomeScore != nil && aggregateAwayScore != nil
     }
 
     var hasDisplayableAggregateScore: Bool {

@@ -6797,26 +6797,7 @@ function resolveKnownAggregateScores(payload) {
 
   const aggregateHomeScore = parseNumericScore(payload.aggregate_home_score);
   const aggregateAwayScore = parseNumericScore(payload.aggregate_away_score);
-  if (aggregateHomeScore !== null && aggregateAwayScore !== null) {
-    return { home: aggregateHomeScore, away: aggregateAwayScore };
-  }
-
-  const firstLegHomeScore = parseNumericScore(payload.first_leg_home_score);
-  const firstLegAwayScore = parseNumericScore(payload.first_leg_away_score);
-  if (firstLegHomeScore === null || firstLegAwayScore === null) {
-    return { home: aggregateHomeScore, away: aggregateAwayScore };
-  }
-
-  const homeScore = parseNumericScore(payload.home_score);
-  const awayScore = parseNumericScore(payload.away_score);
-  if (homeScore !== null && awayScore !== null) {
-    return {
-      home: firstLegHomeScore + homeScore,
-      away: firstLegAwayScore + awayScore,
-    };
-  }
-
-  return { home: firstLegHomeScore, away: firstLegAwayScore };
+  return { home: aggregateHomeScore, away: aggregateAwayScore };
 }
 
 function normalizeMatchDetailsPayload(match, options = {}) {
@@ -6990,11 +6971,9 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
 
   merged.in_progress = isInProgressMatchStatus(merged.score_status);
 
-  // For knockout second legs, BBC shows only the first-leg aggregate (e.g. "(Agg 1-1)") before
-  // the match starts, then switches to the running total (e.g. "(Agg 3-2)") during play.
-  // Capture the first-leg result once when we first see an aggregate on a pre-kickoff match
-  // so the match monitor can compute a real-time aggregate (first_leg + current_score) in
-  // notifications rather than relying on the BBC-cached running total, which can lag goals.
+  // For knockout second legs, BBC's pre-kickoff aggregate reflects the first-leg result.
+  // Capture that first-leg snapshot once so we retain the original leg score separately
+  // from any explicit aggregate that BBC later publishes during the match.
   const existingFirstLegHome =
     existing && existing.first_leg_home_score != null ? existing.first_leg_home_score : null;
   if (existingFirstLegHome !== null) {

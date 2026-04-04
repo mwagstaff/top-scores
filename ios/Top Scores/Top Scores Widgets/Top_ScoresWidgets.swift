@@ -8,28 +8,6 @@ private enum WidgetAppGroupConfig {
     static let sharedMatchesFileName = "shared-matches.json"
 }
 
-private let likelyTwoLegKnockoutSubcategoryPatterns: [String] = [
-    #"(?i)\bLast\s+\d+\b"#,
-    #"(?i)\bRound\s+of\s+\d+\b"#,
-    #"(?i)\bQuarter[- ]Finals?\b"#,
-    #"(?i)\bSemi[- ]Finals?\b"#,
-    #"(?i)\bPlay-?Offs?\b"#,
-    #"(?i)\bQualifying\b"#,
-    #"(?i)\bQualification\b"#,
-    #"(?i)\bPreliminary\s+Round\b"#,
-    #"(?i)\b(?:First|Second|1st|2nd)\s+Leg\b"#,
-]
-
-private func isLikelyTwoLegKnockoutSubcategory(_ value: String?) -> Bool {
-    guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-          !normalized.isEmpty else {
-        return false
-    }
-    return likelyTwoLegKnockoutSubcategoryPatterns.contains { pattern in
-        normalized.range(of: pattern, options: .regularExpression) != nil
-    }
-}
-
 private struct WidgetPreferencesSnapshot: Codable, Equatable {
     let selectedLeagues: [String]
     let selectedChannels: [String]
@@ -285,11 +263,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     }
 
     var hasDisplayableAggregateScore: Bool {
-        guard let aggregateHomeScore, let aggregateAwayScore else { return false }
-        return aggregateHomeScore != 0 ||
-            aggregateAwayScore != 0 ||
-            (firstLegHomeScore != nil && firstLegAwayScore != nil) ||
-            isLikelyTwoLegKnockoutSubcategory(leagueSubcategory)
+        aggregateHomeScore != nil && aggregateAwayScore != nil
     }
 
     var shouldShowAggregateBracketScoresInline: Bool {

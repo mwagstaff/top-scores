@@ -1678,7 +1678,7 @@ test("buildLiveActivityPresentationForUser clears delayed aggregate when current
   assert.equal(presentation.matches[0].aggregate_away_score, null);
 });
 
-test("buildLiveActivityPresentationForUser suppresses zero aggregate for upcoming live activity entries", () => {
+test("buildLiveActivityPresentationForUser preserves explicit zero aggregate for upcoming live activity entries", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs + 10 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -1726,13 +1726,13 @@ test("buildLiveActivityPresentationForUser suppresses zero aggregate for upcomin
 
   assert.equal(presentation.mode, "multi_upcoming");
   assert.equal(presentation.matches.length, 2);
-  assert.equal(presentation.matches[0].aggregate_home_score, null);
-  assert.equal(presentation.matches[0].aggregate_away_score, null);
-  assert.equal(presentation.matches[1].aggregate_home_score, null);
-  assert.equal(presentation.matches[1].aggregate_away_score, null);
+  assert.equal(presentation.matches[0].aggregate_home_score, 0);
+  assert.equal(presentation.matches[0].aggregate_away_score, 0);
+  assert.equal(presentation.matches[1].aggregate_home_score, 0);
+  assert.equal(presentation.matches[1].aggregate_away_score, 0);
 });
 
-test("buildLiveActivityPresentationForUser preserves zero aggregate for upcoming two-leg knockout ties", () => {
+test("buildLiveActivityPresentationForUser preserves explicit zero aggregate for upcoming knockout ties", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs + 10 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -1802,8 +1802,8 @@ test("buildLiveActivityPresentationForUser suppresses stale pre-kickoff zero sco
   assert.equal(presentation.matches.length, 1);
   assert.equal(presentation.matches[0].home_score, null);
   assert.equal(presentation.matches[0].away_score, null);
-  assert.equal(presentation.matches[0].aggregate_home_score, null);
-  assert.equal(presentation.matches[0].aggregate_away_score, null);
+  assert.equal(presentation.matches[0].aggregate_home_score, 0);
+  assert.equal(presentation.matches[0].aggregate_away_score, 0);
   assert.equal(presentation.matches[0].score_status, null);
 });
 
@@ -1901,7 +1901,7 @@ test("buildLiveActivityContentState preserves known zero aggregate when first-le
   assert.equal(contentState.matches[0].firstLegAwayScore, 0);
 });
 
-test("buildLiveActivityContentState synthesizes upcoming aggregate from first-leg score when aggregate is missing", () => {
+test("buildLiveActivityContentState does not synthesize aggregate from first-leg score when aggregate is missing", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs + 2 * 60 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -1930,8 +1930,8 @@ test("buildLiveActivityContentState synthesizes upcoming aggregate from first-le
     nowMs
   );
 
-  assert.equal(contentState.matches[0].aggregateHomeScore, 0);
-  assert.equal(contentState.matches[0].aggregateAwayScore, 0);
+  assert.equal(contentState.matches[0].aggregateHomeScore, null);
+  assert.equal(contentState.matches[0].aggregateAwayScore, null);
   assert.equal(contentState.matches[0].firstLegHomeScore, 0);
   assert.equal(contentState.matches[0].firstLegAwayScore, 0);
 });
@@ -3619,7 +3619,7 @@ test("includes aggregate score in goal notification body when available", () => 
   assert.equal(goals[0].body, "Atletico Madrid 1 - 0 Club Brugge (agg: 4-3) (A. Griezmann)");
 });
 
-test("suppresses aggregate 0-0 in score update notifications", () => {
+test("includes explicit aggregate 0-0 in score update notifications", () => {
   const oldMatch = {
     home_team: "Wolves",
     away_team: "Aston Villa",
@@ -3639,10 +3639,10 @@ test("suppresses aggregate 0-0 in score update notifications", () => {
 
   const event = __testHooks.buildScoreChangeEvent(oldMatch, newMatch);
   assert.ok(event);
-  assert.equal(event.body, "Wolves 2 - 0 Aston Villa (87')");
+  assert.equal(event.body, "Wolves 2 - 0 Aston Villa (agg: 0-0) (87')");
 });
 
-test("suppresses aggregate 0-0 in full-time notifications", () => {
+test("includes explicit aggregate 0-0 in full-time notifications", () => {
   const monitorState = newMonitorState();
 
   const oldMatch = {
@@ -3665,7 +3665,7 @@ test("suppresses aggregate 0-0 in full-time notifications", () => {
   const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
   assert.equal(events.length, 1);
   assert.equal(events[0].type, "fulltime");
-  assert.equal(events[0].body, "Burnley 0 - 0 AFC Bournemouth");
+  assert.equal(events[0].body, "Burnley 0 - 0 AFC Bournemouth (agg: 0-0)");
 });
 
 test("includes penalty result in AET full-time notifications", () => {

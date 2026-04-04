@@ -383,6 +383,7 @@ function isLikelyTerminalStaleLiveMatch(match, kickoffMs, nowMs = Date.now()) {
 }
 
 function toNumericScore(value) {
+  if (value === undefined || value === null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -1745,26 +1746,6 @@ function aggregateScoreSuffix(match, homeScore, awayScore) {
   const aggregateAwayScore = toNumericScore(match && match.aggregate_away_score);
   if (!Number.isFinite(aggregateHomeScore) || !Number.isFinite(aggregateAwayScore)) {
     return "";
-  }
-  if (aggregateHomeScore === 0 && aggregateAwayScore === 0) {
-    return "";
-  }
-  // BBC updates its reported aggregate to the running total as goals are scored, but it
-  // lags behind the live score by at least one scrape cycle. If the server captured the
-  // first-leg result separately (before the match started), compute the real-time aggregate
-  // as first_leg + current_score so goal notifications always show the correct running total.
-  const firstLegHome = toNumericScore(match && match.first_leg_home_score);
-  const firstLegAway = toNumericScore(match && match.first_leg_away_score);
-  if (
-    Number.isFinite(firstLegHome) &&
-    Number.isFinite(firstLegAway) &&
-    Number.isFinite(homeScore) &&
-    Number.isFinite(awayScore)
-  ) {
-    const realTimeAggHome = firstLegHome + homeScore;
-    const realTimeAggAway = firstLegAway + awayScore;
-    if (realTimeAggHome === 0 && realTimeAggAway === 0) return "";
-    return ` (agg: ${realTimeAggHome}-${realTimeAggAway})`;
   }
   return ` (agg: ${aggregateHomeScore}-${aggregateAwayScore})`;
 }
@@ -4264,41 +4245,17 @@ function liveActivityModeForMatches(
   return null;
 }
 
-const TWO_LEG_KNOCKOUT_SUBCATEGORY_PATTERNS = [
-  /\bLast\s+\d+\b/i,
-  /\bRound\s+of\s+\d+\b/i,
-  /\bQuarter[- ]Finals?\b/i,
-  /\bSemi[- ]Finals?\b/i,
-  /\bPlay-?Offs?\b/i,
-  /\bQualifying\b/i,
-  /\bQualification\b/i,
-  /\bPreliminary\s+Round\b/i,
-  /\b(?:First|Second|1st|2nd)\s+Leg\b/i,
-];
-
-function isLikelyTwoLegKnockoutSubcategory(value) {
-  const normalized = String(value || "").trim();
-  if (!normalized) return false;
-  return TWO_LEG_KNOCKOUT_SUBCATEGORY_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
 function sanitizeAggregateForLiveActivity(match) {
   if (!match || typeof match !== "object") return match;
 
   const aggregateHomeScore = toNumericScore(match.aggregate_home_score);
   const aggregateAwayScore = toNumericScore(match.aggregate_away_score);
-  const firstLegHomeScore = toNumericScore(match.first_leg_home_score);
-  const firstLegAwayScore = toNumericScore(match.first_leg_away_score);
-  if (!Number.isFinite(aggregateHomeScore) || !Number.isFinite(aggregateAwayScore)) {
-    return match;
-  }
-  if (
-    aggregateHomeScore !== 0 ||
-    aggregateAwayScore !== 0 ||
-    (Number.isFinite(firstLegHomeScore) && Number.isFinite(firstLegAwayScore)) ||
-    isLikelyTwoLegKnockoutSubcategory(match.league_subcategory)
-  ) {
-    return match;
+  if (Number.isFinite(aggregateHomeScore) && Number.isFinite(aggregateAwayScore)) {
+    return {
+      ...match,
+      aggregate_home_score: aggregateHomeScore,
+      aggregate_away_score: aggregateAwayScore,
+    };
   }
 
   return {
@@ -4315,26 +4272,7 @@ function resolveLiveActivityAggregateScores(match) {
 
   const aggregateHomeScore = toNumericScore(match.aggregate_home_score);
   const aggregateAwayScore = toNumericScore(match.aggregate_away_score);
-  if (Number.isFinite(aggregateHomeScore) && Number.isFinite(aggregateAwayScore)) {
-    return { home: aggregateHomeScore, away: aggregateAwayScore };
-  }
-
-  const firstLegHomeScore = toNumericScore(match.first_leg_home_score);
-  const firstLegAwayScore = toNumericScore(match.first_leg_away_score);
-  if (!Number.isFinite(firstLegHomeScore) || !Number.isFinite(firstLegAwayScore)) {
-    return { home: aggregateHomeScore, away: aggregateAwayScore };
-  }
-
-  const homeScore = toNumericScore(match.home_score);
-  const awayScore = toNumericScore(match.away_score);
-  if (Number.isFinite(homeScore) && Number.isFinite(awayScore)) {
-    return {
-      home: firstLegHomeScore + homeScore,
-      away: firstLegAwayScore + awayScore,
-    };
-  }
-
-  return { home: firstLegHomeScore, away: firstLegAwayScore };
+  return { home: aggregateHomeScore, away: aggregateAwayScore };
 }
 
 function shouldSuppressPreKickoffScoresForLiveActivity(match, nowMs = Date.now()) {

@@ -459,7 +459,7 @@ test("getMatchDetailsStatePayload preserves known first-leg zero aggregate", () 
   assert.equal(payload.first_leg_away_score, 0);
 });
 
-test("getMatchDetailsStatePayload synthesizes aggregate from first-leg score when aggregate is missing", () => {
+test("getMatchDetailsStatePayload does not synthesize aggregate from first-leg score when aggregate is missing", () => {
   const payload = getMatchDetailsStatePayload({
     id: "c5yqnegjv2xt",
     details_url: "https://www.bbc.co.uk/sport/football/live/c5yqnegjv2xt",
@@ -478,8 +478,8 @@ test("getMatchDetailsStatePayload synthesizes aggregate from first-leg score whe
     score_status: null,
   });
 
-  assert.equal(payload.aggregate_home_score, 0);
-  assert.equal(payload.aggregate_away_score, 0);
+  assert.equal(payload.aggregate_home_score, null);
+  assert.equal(payload.aggregate_away_score, null);
   assert.equal(payload.first_leg_home_score, 0);
   assert.equal(payload.first_leg_away_score, 0);
 });
