@@ -4214,6 +4214,31 @@ test("buildFantasyDeadlineReminderBodyFromRecord uses actual send day wording", 
   assert.equal(body, "Reminder: Fantasy Football deadline due soon (18:30 today)");
 });
 
+test("dedupePushNotificationUsers collapses duplicate APNS targets to the freshest record", () => {
+  const deduped = __testHooks.dedupePushNotificationUsers([
+    {
+      deviceToken: "older-device",
+      apnsToken: "shared-apns-token",
+      updatedAt: "2026-03-19T10:00:00.000Z",
+      preferences: {
+        notificationsEnabled: true,
+      },
+    },
+    {
+      deviceToken: "newer-device",
+      apnsToken: "shared-apns-token",
+      updatedAt: "2026-03-19T10:05:00.000Z",
+      preferences: {
+        notificationsEnabled: false,
+      },
+    },
+  ]);
+
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0].deviceToken, "newer-device");
+  assert.equal(deduped[0].preferences.notificationsEnabled, false);
+});
+
 test("dedupeFantasyDeadlineReminderUsers collapses duplicate APNS targets to the freshest record", () => {
   const deduped = __testHooks.dedupeFantasyDeadlineReminderUsers(
     [

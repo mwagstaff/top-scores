@@ -536,6 +536,7 @@ final class MatchesStore: ObservableObject {
     ]
     private var refreshTasks: [MatchesViewMode: Task<Void, Never>] = [:]
     private var refreshTaskIDs: [MatchesViewMode: UUID] = [:]
+    private var refreshTaskSnapshots: [MatchesViewMode: PreferencesSnapshot] = [:]
     private var cachedBbcLiveMatches: [BbcMatch] = []
     private var bbcLiveLastFetchedAt: Date?
     private var cacheStateLastFetchedAt: Date?
@@ -713,13 +714,24 @@ final class MatchesStore: ObservableObject {
         mode: MatchesViewMode,
         reason: String
     ) {
+        if refreshTasks[mode] != nil, refreshTaskSnapshots[mode] == preferences {
+            Self.log(
+                "refresh_task_skip mode=\(mode.rawValue) reason=\(reason) existing_in_flight=true snapshot_unchanged=true"
+            )
+            return
+        }
+
         if let existingTask = refreshTasks[mode] {
             Self.log("refresh_task_cancel mode=\(mode.rawValue) reason=\(reason) existing_in_flight=true")
             existingTask.cancel()
+            var currentModeState = state(for: mode)
+            currentModeState.isLoading = false
+            modeStates[mode] = currentModeState
         }
 
         let taskID = UUID()
         refreshTaskIDs[mode] = taskID
+        refreshTaskSnapshots[mode] = preferences
         Self.log(
             "refresh_task_start mode=\(mode.rawValue) reason=\(reason) snapshot=\(Self.snapshotDebugSummary(preferences))"
         )
@@ -729,6 +741,7 @@ final class MatchesStore: ObservableObject {
             if self.refreshTaskIDs[mode] == taskID {
                 self.refreshTasks[mode] = nil
                 self.refreshTaskIDs[mode] = nil
+                self.refreshTaskSnapshots[mode] = nil
             }
         }
         refreshTasks[mode] = task
@@ -740,6 +753,7 @@ final class MatchesStore: ObservableObject {
         refreshTasks.values.forEach { $0.cancel() }
         refreshTasks.removeAll()
         refreshTaskIDs.removeAll()
+        refreshTaskSnapshots.removeAll()
     }
 
     private func refreshFixtures(preferences: PreferencesSnapshot) async {
@@ -1019,10 +1033,6 @@ final class MatchesStore: ObservableObject {
 
     private func scheduleRemainingFixtureLoadingIfNeeded(preferences: PreferencesSnapshot) {
         guard fixturesBackgroundLoadTask == nil else { return }
-        guard !visibleModes.contains(.fixtures) else {
-            Self.log("fixtures_lazy_skip reason=fixtures_visible")
-            return
-        }
         guard let baseURL = URL(string: preferences.apiBaseURL) else { return }
 
         let ranges = fixtureLazyLoadRanges(for: state(for: .fixtures).unfilteredMatches)
@@ -1034,7 +1044,7 @@ final class MatchesStore: ObservableObject {
             let pageSize = self.fixturesLazyPageSize
             var appliedAnyRanges = false
 
-            if self.fixturesLazyStartDelayNanos > 0 {
+            if self.fixturesLazyStartDelayNanos > 0 && !self.visibleModes.contains(.fixtures) {
                 try? await Task.sleep(nanoseconds: self.fixturesLazyStartDelayNanos)
             }
 
@@ -1073,7 +1083,7 @@ final class MatchesStore: ObservableObject {
                         applyLoadedFixtureRanges(
                             loadedRanges,
                             fallbackSnapshot: preferences,
-                            publishImmediately: false
+                            publishImmediately: self.visibleModes.contains(.fixtures)
                         )
                     }
                 } catch {
@@ -1235,7 +1245,8 @@ final class MatchesStore: ObservableObject {
         mode: MatchesViewMode
     ) -> [Match] {
         let filtered = Self.applyPreferenceFilters(to: matches, snapshot: snapshot, mode: mode)
-        let sorted = Self.sortedMatches(filtered, descendingDates: mode == .results)
+        let deduplicated = Self.deduplicatedMatches(filtered)
+        let sorted = Self.sortedMatches(deduplicated, descendingDates: mode == .results)
         guard mode == .fixtures, !cachedBbcLiveMatches.isEmpty else { return sorted }
         return MatchScoreResolver.applyScores(to: sorted, using: cachedBbcLiveMatches)
     }
@@ -1423,8 +1434,9 @@ final class MatchesStore: ObservableObject {
         }
 
         let cachedMatches = payload.matches
-        let unfilteredFixtures = Self.storageMatches(cachedMatches, for: .fixtures)
-        let unfilteredResults = Self.storageMatches(cachedMatches, for: .results)
+        let deduplicatedCachedMatches = Self.deduplicatedMatches(cachedMatches)
+        let unfilteredFixtures = Self.storageMatches(deduplicatedCachedMatches, for: .fixtures)
+        let unfilteredResults = Self.storageMatches(deduplicatedCachedMatches, for: .results)
 
         var fixtureState = ModeState()
         fixtureState.unfilteredMatches = Self.sortedMatches(unfilteredFixtures)
@@ -1451,7 +1463,7 @@ final class MatchesStore: ObservableObject {
         bbcLiveLastFetchedAt = nil
         publishState(for: activeMode)
 
-        let combinedUnfiltered = Self.sortedMatches(cachedMatches)
+        let combinedUnfiltered = Self.sortedMatches(deduplicatedCachedMatches)
         SharedMatchesBridge.saveAndSync(
             matches: Self.sortedMatches(combinedLoadedMatches()),
             unfilteredMatches: combinedUnfiltered,
@@ -1540,12 +1552,12 @@ final class MatchesStore: ObservableObject {
 
     private func combinedLoadedMatches() -> [Match] {
         let allMatches = modeStates.values.flatMap(\.matches)
-        return Self.mergePages(existing: [], incoming: allMatches)
+        return Self.deduplicatedMatches(Self.mergePages(existing: [], incoming: allMatches))
     }
 
     private func combinedUnfilteredMatches() -> [Match] {
         let allMatches = modeStates.values.flatMap(\.unfilteredMatches)
-        return Self.mergePages(existing: [], incoming: allMatches)
+        return Self.deduplicatedMatches(Self.mergePages(existing: [], incoming: allMatches))
     }
 
     private func setError(_ message: String, for mode: MatchesViewMode) {
@@ -1651,6 +1663,57 @@ final class MatchesStore: ObservableObject {
             }
         }
         return merged
+    }
+
+    private static func deduplicatedMatches(_ matches: [Match]) -> [Match] {
+        var deduplicated: [Match] = []
+        var indicesByIdentity: [String: Int] = [:]
+
+        for match in matches {
+            let identities = matchIdentityKeys(for: match)
+            let existingIndex = identities.compactMap { indicesByIdentity[$0] }.first
+
+            if let existingIndex {
+                let preferred = preferredMatch(existing: deduplicated[existingIndex], incoming: match)
+                deduplicated[existingIndex] = preferred
+                for key in matchIdentityKeys(for: preferred) {
+                    indicesByIdentity[key] = existingIndex
+                }
+            } else {
+                let nextIndex = deduplicated.count
+                deduplicated.append(match)
+                for key in identities {
+                    indicesByIdentity[key] = nextIndex
+                }
+            }
+        }
+
+        return deduplicated
+    }
+
+    private static func matchIdentityKeys(for match: Match) -> [String] {
+        var keys: [String] = []
+        if let matchDetailsID = match.matchDetailsID, !matchDetailsID.isEmpty {
+            keys.append("match:\(matchDetailsID)")
+        }
+
+        let homeTeamKey = TeamIdentityStore.normalizedKey(
+            TeamIdentityStore.shared.canonicalName(for: match.homeTeam)
+        )
+        let awayTeamKey = TeamIdentityStore.normalizedKey(
+            TeamIdentityStore.shared.canonicalName(for: match.awayTeam)
+        )
+        let normalizedTime = match.time.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !match.date.isEmpty, !homeTeamKey.isEmpty, !awayTeamKey.isEmpty {
+            keys.append("fixture:\(match.date)|\(homeTeamKey)|\(awayTeamKey)")
+            if !normalizedTime.isEmpty {
+                keys.append("fixture_time:\(match.date)|\(normalizedTime)|\(homeTeamKey)|\(awayTeamKey)")
+            }
+        }
+
+        keys.append("row:\(match.id)")
+        return Array(Set(keys))
     }
 
     static func mergeRefreshedMatches(existing: [Match], incoming: [Match]) -> [Match] {

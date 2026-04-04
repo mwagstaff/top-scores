@@ -103,7 +103,7 @@ struct MatchCachePayload: Codable {
 enum MatchCache {
     private static let fileName = "matches-cache.json"
     private static let knownGenerationsKey = "match_cache.known_server_generations"
-    private static let currentCacheFormatVersion = 2
+    private static let currentCacheFormatVersion = 3
 
     static func load(for snapshot: PreferencesSnapshot) -> MatchCachePayload? {
         guard let data = try? Data(contentsOf: cacheURL) else { return nil }

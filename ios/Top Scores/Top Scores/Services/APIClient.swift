@@ -132,6 +132,7 @@ struct APIClient {
         includePreferenceFilters: Bool = true
     ) -> [URLQueryItem] {
         var queryItems = dateRangeQueryItems
+        queryItems.append(URLQueryItem(name: "mode", value: mode.rawValue))
         queryItems.append(URLQueryItem(name: "sort", value: mode.sortOrder))
         queryItems.append(URLQueryItem(name: "filter_mode", value: "intersection"))
         queryItems.append(URLQueryItem(name: "page", value: String(max(1, page))))

@@ -2636,11 +2636,16 @@ async function sendNotificationForEvent(matchId, match, event) {
   try {
     // Get all user preferences
     const allUsers = await getAllUserPreferences();
-    console.log(`[MatchMonitor] Checking ${allUsers.length} users for ${event.type} event: ${match.home_team} vs ${match.away_team}`);
+    const notificationUsers = dedupePushNotificationUsers(allUsers);
+    console.log(
+      `[MatchMonitor] Checking ${notificationUsers.length} notification target(s) ` +
+      `from ${allUsers.length} stored user preference record(s) for ${event.type} event: ` +
+      `${match.home_team} vs ${match.away_team}`
+    );
 
     // Filter users who should receive this notification
     const interestedUsers = [];
-    for (const user of allUsers) {
+    for (const user of notificationUsers) {
       const decision = evaluateUserNotificationDecision(user, match, event);
       logDecision("user_eligibility", {
         match_id: matchId,
@@ -2661,6 +2666,7 @@ async function sendNotificationForEvent(matchId, match, event) {
       event_type: event.type,
       event_key: event.eventKey || null,
       users_total: allUsers.length,
+      users_deduped: notificationUsers.length,
       users_interested: interestedUsers.length,
     });
 
@@ -3930,6 +3936,42 @@ function hasConnectedFantasyTeam(fantasyState) {
 function userRecordUpdatedAtMs(user) {
   const parsed = Date.parse(String(user && user.updatedAt ? user.updatedAt : "").trim());
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildPushNotificationTarget(user) {
+  const apnsToken = String(user && user.apnsToken ? user.apnsToken : "").trim();
+  if (apnsToken) {
+    return {
+      targetKey: `apns:${apnsToken}`,
+      dedupeBasis: "apns_token",
+    };
+  }
+
+  const deviceToken = String(user && user.deviceToken ? user.deviceToken : "").trim();
+  if (deviceToken) {
+    return {
+      targetKey: `device:${deviceToken}`,
+      dedupeBasis: "device_token",
+    };
+  }
+
+  return null;
+}
+
+function dedupePushNotificationUsers(users) {
+  const deduped = new Map();
+
+  (Array.isArray(users) ? users : []).forEach((user) => {
+    const target = buildPushNotificationTarget(user);
+    if (!target) return;
+
+    const existing = deduped.get(target.targetKey);
+    if (!existing || userRecordUpdatedAtMs(user) >= userRecordUpdatedAtMs(existing)) {
+      deduped.set(target.targetKey, user);
+    }
+  });
+
+  return Array.from(deduped.values());
 }
 
 function safeIntlDateTimeFormat(locale, options) {
@@ -6153,6 +6195,7 @@ module.exports = {
     combineLiveActivityOperationalMatches,
     dedupeLiveActivityMatches,
     enrichLiveActivityOperationalMatches,
+    dedupePushNotificationUsers,
     dedupeFantasyDeadlineReminderUsers,
     evaluateFantasyDeadlineReminderDecision,
     formatFantasyDeadlineReminderTime,

@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   __private: {
     toMatchListPayload,
+    dedupeMatchListPayloads,
     toMonitorCandidateFromDetailsPayload,
     mergeMonitorCandidate,
     buildMonitorCandidatesForDate,
@@ -28,11 +29,13 @@ const {
     normalizeMatchStatusValue,
     normalizeTeamName,
     normalizeCompetitionFilterName,
+    normalizeMatchesListMode,
     isAllowedCompetition,
     mergeBbcAndLiveMatches,
     matchIncludesHomeNation,
     matchIsMajorTournament,
     matchPassesCategoryFilters,
+    isListPayloadVisibleForMode,
   },
 } = require("./server");
 
@@ -210,6 +213,14 @@ test("normalizeCompetitionFilterName maps World Cup qualifying competitions to t
   assert.equal(isAllowedCompetition("FIFA World Cup Qualifying - European"), true);
 });
 
+test("normalizeMatchesListMode only accepts fixtures and results", () => {
+  assert.equal(normalizeMatchesListMode("fixtures"), "fixtures");
+  assert.equal(normalizeMatchesListMode("results"), "results");
+  assert.equal(normalizeMatchesListMode("RESULTS"), "results");
+  assert.equal(normalizeMatchesListMode(""), null);
+  assert.equal(normalizeMatchesListMode("table"), null);
+});
+
 test("matchIncludesHomeNation matches the requested home nations only", () => {
   assert.equal(
     matchIncludesHomeNation(
@@ -358,6 +369,107 @@ test("toMatchListPayload includes details state even when details teams exactly 
   assert.equal(payload.score_status, "FT");
   assert.equal(payload.home_score, 2);
   assert.equal(payload.away_score, 1);
+});
+
+test("dedupeMatchListPayloads collapses duplicate match ids and preserves the richest fields", () => {
+  const deduped = dedupeMatchListPayloads([
+    {
+      date: "2026-04-04",
+      time: "12:30",
+      league: "FA Cup",
+      league_subcategory: "Quarter-finals",
+      home_team: "Manchester City",
+      away_team: "Liverpool",
+      match_details_id: "clydqev9y9et",
+      has_bbc_source: true,
+      tv_channels: ["BBC One"],
+    },
+    {
+      date: "2026-04-04",
+      time: "12:30",
+      league: "FA Cup",
+      home_team: "Manchester City",
+      away_team: "Liverpool",
+      match_details_id: "clydqev9y9et",
+      home_score: 4,
+      away_score: 0,
+      score_status: "FT",
+      tv_channels: ["BBC iPlayer"],
+    },
+  ]);
+
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0].match_details_id, "clydqev9y9et");
+  assert.equal(deduped[0].score_status, "FT");
+  assert.equal(deduped[0].home_score, 4);
+  assert.equal(deduped[0].away_score, 0);
+  assert.equal(deduped[0].has_bbc_source, true);
+  assert.deepEqual(deduped[0].tv_channels, ["BBC One", "BBC iPlayer"]);
+  assert.equal(deduped[0].league_subcategory, "Quarter-finals");
+});
+
+test("dedupeMatchListPayloads collapses duplicate fixtures even when one row lacks a matching id", () => {
+  const deduped = dedupeMatchListPayloads([
+    {
+      date: "2026-04-04",
+      time: "12:30",
+      league: "FA Cup",
+      home_team: "Manchester City",
+      away_team: "Liverpool",
+      home_score: 4,
+      away_score: 0,
+      score_status: "FT",
+    },
+    {
+      date: "2026-04-04",
+      time: "12:00",
+      league: "FA Cup",
+      home_team: "Man City",
+      away_team: "Liverpool",
+      match_details_id: "clydqev9y9et",
+      tv_channels: ["BBC Sport Website"],
+    },
+  ]);
+
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0].match_details_id, "clydqev9y9et");
+  assert.equal(deduped[0].home_score, 4);
+  assert.equal(deduped[0].away_score, 0);
+  assert.equal(deduped[0].score_status, "FT");
+  assert.deepEqual(deduped[0].tv_channels, ["BBC Sport Website"]);
+});
+
+test("isListPayloadVisibleForMode excludes future same-day fixtures from results", () => {
+  const now = new Date("2026-04-04T17:45:00Z");
+  assert.equal(
+    isListPayloadVisibleForMode(
+      {
+        date: "2026-04-04",
+        time: "20:00",
+        home_team: "Southampton",
+        away_team: "Arsenal",
+        score_status: null,
+      },
+      "results",
+      now
+    ),
+    false
+  );
+
+  assert.equal(
+    isListPayloadVisibleForMode(
+      {
+        date: "2026-04-04",
+        time: "17:15",
+        home_team: "Chelsea",
+        away_team: "Port Vale",
+        score_status: "72",
+      },
+      "results",
+      now
+    ),
+    true
+  );
 });
 
 test("enrichMatchDetailsAggregateImmediately fetches knockout aggregate for stale details payload", async () => {
@@ -894,6 +1006,43 @@ test("toMatchListPayload resolves match_details_id from details lookup when list
   assert.equal(payload.match_details_id, fallbackId);
 });
 
+test("toMatchListPayload ignores incompatible match details payloads and leaves the fixture unhydrated", () => {
+  const payload = toMatchListPayload(
+    {
+      date: "2026-04-04",
+      time: "19:45",
+      league: "Premier League",
+      home_team: "Southampton",
+      away_team: "Arsenal",
+      details_url: "https://www.bbc.co.uk/sport/football/live/clydqev9y9et",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+      tv_channels: ["Sky Sports Main Event"],
+    },
+    {
+      matchDetailsLookup: {
+        clydqev9y9et: {
+          id: "clydqev9y9et",
+          date: "2026-04-04",
+          time: "12:30",
+          league: "FA Cup",
+          home_team: "Manchester City",
+          away_team: "Liverpool",
+          home_score: 4,
+          away_score: 0,
+          score_status: "FT",
+        },
+      },
+    }
+  );
+
+  assert.equal(payload.match_details_id, undefined);
+  assert.equal(payload.home_score, undefined);
+  assert.equal(payload.away_score, undefined);
+  assert.equal(payload.score_status, undefined);
+});
+
 test("toMatchListPayload does not resolve match_details_id from details lookup when date conflicts", () => {
   const fallbackId = "ce3k6y7dg63t";
   const payload = toMatchListPayload(
@@ -1015,6 +1164,7 @@ test("enrichKnockoutAggregatesForListMatches preserves Map-backed details lookup
 
   const payload = toMatchListPayload(match, {
     matchDetailsLookup: enrichment.lookup,
+    nowMs: Date.parse("2026-03-22T16:50:00.000Z"),
   });
 
   assert.equal(payload.match_details_id, fallbackId);
@@ -1215,6 +1365,51 @@ test("buildMonitorCandidatesForDate supports Map lookups and reuses details to r
   assert.equal(candidates[0].score_status, "FT");
   assert.equal(candidates[0].home_score, 1);
   assert.equal(candidates[0].away_score, 3);
+});
+
+test("buildMonitorCandidatesForDate overlays BBC live state when merged details lag behind", () => {
+  const candidates = buildMonitorCandidatesForDate(
+    "2026-04-04",
+    [
+      {
+        date: "2026-04-04",
+        time: "17:30",
+        league: "FA Cup",
+        home_team: "Chelsea",
+        away_team: "Port Vale",
+        tv_channels: ["BBC One"],
+        match_details_id: "clyew9r7jdet",
+      },
+    ],
+    {
+      clyew9r7jdet: {
+        id: "clyew9r7jdet",
+        date: "2026-04-04",
+        time: "17:30",
+        league: "FA Cup",
+        home_team: "Chelsea",
+        away_team: "Port Vale",
+        updated_at: "2026-04-04T17:40:00.000Z",
+      },
+    },
+    {
+      bbcMatches: [
+        {
+          home_team: "Chelsea",
+          away_team: "Port Vale",
+          home_score: 2,
+          away_score: 0,
+          match_time: "42",
+        },
+      ],
+    }
+  );
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].match_details_id, "clyew9r7jdet");
+  assert.equal(candidates[0].score_status, "42");
+  assert.equal(candidates[0].home_score, 2);
+  assert.equal(candidates[0].away_score, 0);
 });
 
 test("resolveStableMatchScoreStatus converts stale added-time statuses to FT after the live window", () => {

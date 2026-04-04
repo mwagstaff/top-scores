@@ -6749,25 +6749,39 @@ function getMatchDetailsLookupEntry(matchDetailsLookup, detailsId) {
 }
 
 function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now()) {
+  const compatibleDetailsPayload = isCompatibleMatchDetailsPayloadForListMatch(
+    listMatch,
+    detailsPayload
+  )
+    ? detailsPayload
+    : null;
   const listHomeScore = parseNumericScore(listMatch && listMatch.home_score);
   const listAwayScore = parseNumericScore(listMatch && listMatch.away_score);
-  const detailsHomeScore = parseNumericScore(detailsPayload && detailsPayload.home_score);
-  const detailsAwayScore = parseNumericScore(detailsPayload && detailsPayload.away_score);
+  const detailsHomeScore = parseNumericScore(
+    compatibleDetailsPayload && compatibleDetailsPayload.home_score
+  );
+  const detailsAwayScore = parseNumericScore(
+    compatibleDetailsPayload && compatibleDetailsPayload.away_score
+  );
   const homeScore = detailsHomeScore !== null ? detailsHomeScore : listHomeScore;
   const awayScore = detailsAwayScore !== null ? detailsAwayScore : listAwayScore;
 
   const listAggregate = resolveKnownAggregateScores(listMatch);
-  const detailsAggregate = resolveKnownAggregateScores(detailsPayload);
+  const detailsAggregate = resolveKnownAggregateScores(compatibleDetailsPayload);
 
   const listStatus = resolveMatchScoreStatus(listMatch) || (listMatch && listMatch.score_status) || null;
   const detailsStatus =
-    resolveMatchScoreStatus(detailsPayload) || (detailsPayload && detailsPayload.score_status) || null;
+    resolveMatchScoreStatus(compatibleDetailsPayload) ||
+    (compatibleDetailsPayload && compatibleDetailsPayload.score_status) ||
+    null;
   const preferredStatus = pickPreferredMatchStatus(listStatus, detailsStatus, {
     preferIncomingOnTie: true,
   });
 
-  const kickoffDate = (listMatch && listMatch.date) || (detailsPayload && detailsPayload.date) || null;
-  const kickoffTime = (listMatch && listMatch.time) || (detailsPayload && detailsPayload.time) || null;
+  const kickoffDate =
+    (listMatch && listMatch.date) || (compatibleDetailsPayload && compatibleDetailsPayload.date) || null;
+  const kickoffTime =
+    (listMatch && listMatch.time) || (compatibleDetailsPayload && compatibleDetailsPayload.time) || null;
   const scoreStatus = stabilizeMatchStatus(preferredStatus, {
     date: kickoffDate,
     time: kickoffTime,
@@ -6784,7 +6798,7 @@ function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now
       detailsAggregate.away !== null ? detailsAggregate.away : listAggregate.away,
     score_status: scoreStatus,
     penalty_result:
-      String((detailsPayload && detailsPayload.penalty_result) || "").trim() ||
+      String((compatibleDetailsPayload && compatibleDetailsPayload.penalty_result) || "").trim() ||
       String((listMatch && listMatch.penalty_result) || "").trim() ||
       null,
   };
@@ -7708,6 +7722,39 @@ function isComparableLookupTime(lhs, rhs) {
   return Math.abs(leftMinutes - rightMinutes) <= 120;
 }
 
+function isCompatibleMatchDetailsPayloadForListMatch(listMatch, detailsPayload) {
+  const normalizedList = normalizeMatchRecord(listMatch);
+  if (!normalizedList || !detailsPayload || typeof detailsPayload !== "object") {
+    return false;
+  }
+
+  const detailsHome = normalizeTeamIdentity(detailsPayload.home_team);
+  const detailsAway = normalizeTeamIdentity(detailsPayload.away_team);
+  if (!detailsHome || !detailsAway) {
+    return false;
+  }
+
+  if (
+    detailsHome !== normalizeTeamIdentity(normalizedList.home_team) ||
+    detailsAway !== normalizeTeamIdentity(normalizedList.away_team)
+  ) {
+    return false;
+  }
+
+  const detailsDate = normalizeLookupDateValue(detailsPayload.date);
+  if (detailsDate && detailsDate !== normalizedList.date) {
+    return false;
+  }
+
+  const matchTime = normalizeLookupTimeValue(normalizedList.time) || "00:00";
+  const detailsTime = normalizeLookupTimeValue(detailsPayload.time);
+  if (detailsTime && !isComparableLookupTime(detailsTime, matchTime)) {
+    return false;
+  }
+
+  return true;
+}
+
 function buildMatchDetailsIdentityIndex(matchDetailsLookup) {
   const byExact = new Map();
   const byTeams = new Map();
@@ -7886,17 +7933,40 @@ function toMatchListPayload(match, options = {}) {
     payload.has_bbc_source = true;
   }
 
-  // Try to get match details ID from details_url or explicit match_details_id field
+  let detailsPayload = null;
+  const resolveCompatibleLookupEntry = (candidateId) => {
+    const normalizedCandidateId = normalizeMatchDetailsId(candidateId);
+    if (!normalizedCandidateId) return { detailsId: null, detailsPayload: null };
+    const candidatePayload = getMatchDetailsLookupEntry(matchDetailsLookup, normalizedCandidateId);
+    if (!candidatePayload) {
+      return { detailsId: normalizedCandidateId, detailsPayload: null };
+    }
+    if (!isCompatibleMatchDetailsPayloadForListMatch(normalized, candidatePayload)) {
+      return { detailsId: null, detailsPayload: null };
+    }
+    return { detailsId: normalizedCandidateId, detailsPayload: candidatePayload };
+  };
+
+  // Try to get match details ID from details_url or explicit match_details_id field.
   let detailsId = matchDetailsIdFromUrl(normalized.details_url);
   if (!detailsId && normalized.match_details_id) {
-    // For test matches or matches with explicit match_details_id
     detailsId = normalizeMatchDetailsId(normalized.match_details_id);
   }
+
+  if (detailsId) {
+    const compatibleLookup = resolveCompatibleLookupEntry(detailsId);
+    detailsId = compatibleLookup.detailsId;
+    detailsPayload = compatibleLookup.detailsPayload;
+  }
+
   if (!detailsId && matchDetailsLookup) {
-    detailsId = resolveMatchDetailsIdFromLookup(normalized, {
+    const resolvedDetailsId = resolveMatchDetailsIdFromLookup(normalized, {
       matchDetailsLookup,
       matchDetailsIdentityIndex,
     });
+    const compatibleLookup = resolveCompatibleLookupEntry(resolvedDetailsId);
+    detailsId = compatibleLookup.detailsId;
+    detailsPayload = compatibleLookup.detailsPayload;
   }
   if (detailsId) {
     payload.match_details_id = detailsId;
@@ -7904,7 +7974,7 @@ function toMatchListPayload(match, options = {}) {
 
   const resolvedState = buildResolvedListMatchState(
     normalized,
-    getMatchDetailsLookupEntry(matchDetailsLookup, detailsId),
+    detailsPayload,
     Number.isFinite(options.nowMs) ? options.nowMs : Date.now()
   );
 
@@ -7927,6 +7997,156 @@ function toMatchListPayload(match, options = {}) {
   }
 
   return payload;
+}
+
+function matchListPayloadIdentityKeys(payload) {
+  if (!payload || typeof payload !== "object") return [];
+
+  const keys = [];
+  const matchId = normalizeMatchDetailsId(payload.match_details_id);
+  if (matchId) {
+    keys.push(`match:${matchId}`);
+  }
+
+  const date = String(payload.date || "").trim();
+  const time = normalizeTimeValue(payload.time);
+  const league = String(payload.league || "").trim().toLowerCase();
+  const homeTeam = normalizeTeamIdentity(payload.home_team);
+  const awayTeam = normalizeTeamIdentity(payload.away_team);
+  if (date || time || league || homeTeam || awayTeam) {
+    keys.push(`row:${date}|${time}|${league}|${homeTeam}|${awayTeam}`);
+  }
+  if (date && homeTeam && awayTeam) {
+    keys.push(`fixture:${date}|${homeTeam}|${awayTeam}`);
+    if (time) {
+      keys.push(`fixture_time:${date}|${time}|${homeTeam}|${awayTeam}`);
+    }
+  }
+
+  return Array.from(new Set(keys.filter(Boolean)));
+}
+
+function mergeMatchListPayload(existing, incoming) {
+  if (!existing) return incoming ? { ...incoming } : null;
+  if (!incoming) return { ...existing };
+
+  const merged = { ...existing };
+  const textFields = [
+    "date",
+    "time",
+    "league",
+    "league_subcategory",
+    "home_team",
+    "away_team",
+    "score_status",
+    "penalty_result",
+  ];
+
+  textFields.forEach((field) => {
+    const value = incoming[field];
+    if (value !== null && value !== undefined && String(value).trim().length > 0) {
+      merged[field] = value;
+    }
+  });
+
+  const numericFields = [
+    "home_score",
+    "away_score",
+    "aggregate_home_score",
+    "aggregate_away_score",
+    "first_leg_home_score",
+    "first_leg_away_score",
+  ];
+  numericFields.forEach((field) => {
+    if (Number.isFinite(Number(incoming[field]))) {
+      merged[field] = Number(incoming[field]);
+    }
+  });
+
+  if (incoming.has_bbc_source === true) {
+    merged.has_bbc_source = true;
+  }
+
+  const mergedChannels = uniqueChannels([
+    ...(Array.isArray(existing.tv_channels) ? existing.tv_channels : []),
+    ...(Array.isArray(incoming.tv_channels) ? incoming.tv_channels : []),
+  ]);
+  if (mergedChannels.length > 0) {
+    merged.tv_channels = mergedChannels;
+  } else if (!Array.isArray(merged.tv_channels)) {
+    merged.tv_channels = [];
+  }
+
+  const matchId =
+    normalizeMatchDetailsId(incoming.match_details_id) ||
+    normalizeMatchDetailsId(existing.match_details_id);
+  if (matchId) {
+    merged.match_details_id = matchId;
+  }
+
+  return merged;
+}
+
+function dedupeMatchListPayloads(payloads) {
+  const deduped = [];
+  const keyToIndex = new Map();
+
+  for (const payload of Array.isArray(payloads) ? payloads : []) {
+    if (!payload || typeof payload !== "object") continue;
+
+    const identityKeys = matchListPayloadIdentityKeys(payload);
+    const existingIndex = identityKeys.find((key) => keyToIndex.has(key));
+    if (existingIndex === undefined) {
+      const nextIndex = deduped.length;
+      deduped.push({ ...payload });
+      identityKeys.forEach((key) => keyToIndex.set(key, nextIndex));
+      continue;
+    }
+
+    const targetIndex = keyToIndex.get(existingIndex);
+    const merged = mergeMatchListPayload(deduped[targetIndex], payload);
+    deduped[targetIndex] = merged;
+    matchListPayloadIdentityKeys(merged).forEach((key) => keyToIndex.set(key, targetIndex));
+  }
+
+  return deduped;
+}
+
+function listPayloadHasBbcMatchEntry(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  if (payload.has_bbc_source === true) return true;
+  if (normalizeMatchDetailsId(payload.match_details_id)) return true;
+  return uniqueChannels(payload.tv_channels).some(
+    (channel) => compareInsensitive(channel, "BBC Sport Website") === 0
+  );
+}
+
+function isListPayloadVisibleForMode(payload, mode, now = new Date()) {
+  if (!payload || typeof payload !== "object") return false;
+  if (mode === "fixtures" && !listPayloadHasBbcMatchEntry(payload)) {
+    return false;
+  }
+
+  const day = parseMatchDayLocal(payload.date);
+  if (!day) {
+    return mode === "fixtures";
+  }
+
+  const todayStart = startOfTodayLocal(now);
+  const dayMs = day.getTime();
+  const todayStartMs = todayStart.getTime();
+
+  if (mode === "fixtures") {
+    return dayMs >= todayStartMs;
+  }
+
+  if (dayMs < todayStartMs) return true;
+  if (dayMs > todayStartMs) return false;
+
+  return Boolean(
+    isInProgressMatchStatus(payload.score_status) ||
+    isFinishedMatchStatus(payload.score_status)
+  );
 }
 
 function monitorCandidateSortAsc(lhs, rhs) {
@@ -8041,7 +8261,7 @@ function mergeMonitorCandidate(existing, incoming) {
   return merged;
 }
 
-function buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup) {
+function buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup, options = {}) {
   if (!isDateOnly(date)) return [];
 
   const candidatesById = new Map();
@@ -8093,7 +8313,7 @@ function buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup) {
     markSource(matchId, "details");
   }
 
-  return Array.from(candidatesById.values())
+  const candidates = Array.from(candidatesById.values())
     .map((candidate) => {
       const matchId = normalizeMatchDetailsId(candidate && candidate.match_details_id);
       const sources = matchId && sourceTagsById.has(matchId)
@@ -8105,6 +8325,11 @@ function buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup) {
       };
     })
     .sort(monitorCandidateSortAsc);
+
+  return applyScoresToMatches(
+    candidates,
+    Array.isArray(options && options.bbcMatches) ? options.bbcMatches : []
+  );
 }
 
 function mergeTvChannels(lhs, rhs) {
@@ -14101,6 +14326,14 @@ function parseRequiredDateRange(query) {
   return { start, end };
 }
 
+function normalizeMatchesListMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "fixtures" || normalized === "results") {
+    return normalized;
+  }
+  return null;
+}
+
 function parsePositiveInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -16314,6 +16547,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const channels = normalizeListParam(req.query.channel);
     const manualMappings = loadClubEloManualMappings();
     const filterMode = req.query.filter_mode ? String(req.query.filter_mode) : "union";
+    const listMode = normalizeMatchesListMode(req.query.mode);
     const sortOrder = String(req.query.sort || "asc").toLowerCase() === "desc" ? "desc" : "asc";
     const pageSize = parsePositiveInt(req.query.page_size, 100, 1, 500);
     const page = parsePositiveInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
@@ -16388,11 +16622,36 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       filtered = filtered.slice().reverse();
     }
 
-    const totalCount = filtered.length;
+    let matchDetailsLookup = matchDetailsSnapshot.lookup || {};
+    const aggregateEnrichment = await enrichKnockoutAggregatesForListMatches(
+      filtered,
+      matchDetailsLookup
+    );
+    matchDetailsLookup = aggregateEnrichment.lookup || matchDetailsLookup;
+    const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(matchDetailsLookup);
+
+    let payload = dedupeMatchListPayloads(
+      filtered
+        .map((match) =>
+          toMatchListPayload(match, {
+            matchDetailsLookup,
+            matchDetailsIdentityIndex,
+          })
+        )
+        .filter(Boolean)
+    );
+    if (listMode) {
+      payload = payload.filter((item) => isListPayloadVisibleForMode(item, listMode));
+    }
+    if (sortOrder === "desc") {
+      payload = payload.slice().reverse();
+    }
+
+    const totalCount = payload.length;
     const totalPages = totalCount > 0 ? Math.ceil(totalCount / pageSize) : 0;
     const pageStart = (page - 1) * pageSize;
     const pageEnd = pageStart + pageSize;
-    const paged = pageStart >= totalCount ? [] : filtered.slice(pageStart, pageEnd);
+    const paged = pageStart >= totalCount ? [] : payload.slice(pageStart, pageEnd);
     const hasMore = page < totalPages;
 
     res.set("X-Total-Count", String(totalCount));
@@ -16401,24 +16660,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     res.set("X-Total-Pages", String(totalPages));
     res.set("X-Has-More", hasMore ? "true" : "false");
     res.set("X-Sort-Order", sortOrder);
-
-    let matchDetailsLookup = matchDetailsSnapshot.lookup || {};
-    const aggregateEnrichment = await enrichKnockoutAggregatesForListMatches(
-      paged,
-      matchDetailsLookup
-    );
-    matchDetailsLookup = aggregateEnrichment.lookup || matchDetailsLookup;
-    const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(matchDetailsLookup);
-
-    const payload = paged
-      .map((match) =>
-        toMatchListPayload(match, {
-          matchDetailsLookup,
-          matchDetailsIdentityIndex,
-        })
-      )
-      .filter(Boolean);
-    res.json(payload);
+    res.json(paged);
   } catch (err) {
     console.warn("Failed to serve /matches from cache:", err.message || err);
     res.status(500).json({ error: "Failed to serve matches from cache" });
@@ -16571,7 +16813,9 @@ app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
     const matchDetailsSnapshot = currentFastMatchDetailsLookupSnapshot("monitor_candidates_request");
     const matchDetailsLookup = matchDetailsSnapshot.lookup || {};
     const mergedItems = Array.isArray(mergedDataset.items) ? mergedDataset.items : [];
-    const candidates = buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup);
+    const candidates = buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup, {
+      bbcMatches: Array.isArray(cachedBbcMatches) ? cachedBbcMatches : [],
+    });
     const existingCandidateIds = new Set(
       candidates.map((candidate) => normalizeMatchDetailsId(candidate && candidate.match_details_id))
     );
@@ -21727,6 +21971,7 @@ module.exports = {
   app,
   __private: {
     toMatchListPayload,
+    dedupeMatchListPayloads,
     toMonitorCandidateFromDetailsPayload,
     mergeMonitorCandidate,
     buildMonitorCandidatesForDate,
@@ -21748,11 +21993,13 @@ module.exports = {
     parseMatchStatusMinute,
     normalizeTeamName,
     normalizeCompetitionFilterName,
+    normalizeMatchesListMode,
     isAllowedCompetition,
     mergeBbcAndLiveMatches,
     matchIncludesHomeNation,
     matchIsMajorTournament,
     matchPassesCategoryFilters,
+    isListPayloadVisibleForMode,
     matchDetailsIdFromUrl,
     filterStaleBbcMatches,
     buildDefaultOperationalCacheState,

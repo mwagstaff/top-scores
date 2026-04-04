@@ -641,6 +641,10 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     func withDetails(_ details: MatchDetailsPayload) -> Match {
+        guard isCompatible(with: details) else {
+            return self
+        }
+
         let nextDate = details.date ?? date
         let nextTime = details.time ?? time
         let isPostponedStatus = MatchStatusFormatter.isPostponed(details.scoreStatus)
@@ -689,6 +693,31 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         )
     }
 
+    func isCompatible(with details: MatchDetailsPayload) -> Bool {
+        let detailsHome = details.homeTeam?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let detailsAway = details.awayTeam?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !detailsHome.isEmpty, !detailsAway.isEmpty else {
+            return false
+        }
+
+        guard TeamIdentityStore.shared.matches(homeTeam, detailsHome),
+              TeamIdentityStore.shared.matches(awayTeam, detailsAway)
+        else {
+            return false
+        }
+
+        if let detailsDate = Self.normalizedLookupDate(details.date), detailsDate != date {
+            return false
+        }
+
+        if let detailsTime = Self.normalizedLookupTime(details.time),
+           !Self.areComparableLookupTimes(detailsTime, Self.normalizedLookupTime(time) ?? "00:00") {
+            return false
+        }
+
+        return true
+    }
+
     func stabilizedScoreStatus(now: Date = Date()) -> String? {
         MatchStatusFormatter.stabilizedStatus(
             scoreStatus,
@@ -719,6 +748,53 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         guard normalized.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
         return normalized
     }
+
+    private static func normalizedLookupDate(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        return Self.dateOnlyPattern.firstMatch(in: normalized, options: [], range: NSRange(location: 0, length: normalized.utf16.count)) != nil
+            ? normalized
+            : nil
+    }
+
+    private static func normalizedLookupTime(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        return Self.timeOnlyPattern.firstMatch(in: normalized, options: [], range: NSRange(location: 0, length: normalized.utf16.count)) != nil
+            ? normalized
+            : nil
+    }
+
+    private static func areComparableLookupTimes(_ lhs: String, _ rhs: String) -> Bool {
+        if lhs == rhs || lhs == "00:00" || rhs == "00:00" {
+            return true
+        }
+
+        guard let leftMinutes = lookupTimeMinutes(lhs), let rightMinutes = lookupTimeMinutes(rhs) else {
+            return false
+        }
+
+        return abs(leftMinutes - rightMinutes) <= 120
+    }
+
+    private static func lookupTimeMinutes(_ value: String) -> Int? {
+        let components = value.split(separator: ":")
+        guard components.count == 2,
+              let hours = Int(components[0]),
+              let minutes = Int(components[1]),
+              (0 ... 23).contains(hours),
+              (0 ... 59).contains(minutes)
+        else {
+            return nil
+        }
+
+        return (hours * 60) + minutes
+    }
+
+    private static let dateOnlyPattern = try! NSRegularExpression(pattern: #"^\d{4}-\d{2}-\d{2}$"#)
+    private static let timeOnlyPattern = try! NSRegularExpression(pattern: #"^\d{2}:\d{2}$"#)
 
     private func adjustedAggregate(base: Int?, previousScore: Int?, nextScore: Int) -> Int? {
         guard let base else { return nil }
