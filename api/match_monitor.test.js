@@ -1419,6 +1419,43 @@ test("mergeCanonicalLiveActivityMatch prefers newer finished snapshot when canon
   assert.equal(merged.away_score, 0);
 });
 
+test("mergeCanonicalLiveActivityMatch prefers resolved penalty result over transient shootout tally", () => {
+  const merged = __testHooks.mergeCanonicalLiveActivityMatch(
+    {
+      match_details_id: "c75k3rv779xt",
+      date: "2026-04-05",
+      time: "15:30",
+      league: "FA Cup",
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      home_score: 2,
+      away_score: 2,
+      score_status: "AET",
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+      updated_at: "2026-04-05T18:47:00.000Z",
+      tv_channels: ["TNT Sports 1"],
+    },
+    {
+      match_details_id: "c75k3rv779xt",
+      date: "2026-04-05",
+      time: "15:30",
+      league: "FA Cup",
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      home_score: 3,
+      away_score: 2,
+      score_status: "PENS",
+      updated_at: "2026-04-05T18:46:00.000Z",
+      tv_channels: ["TNT Sports 1"],
+    }
+  );
+
+  assert.equal(merged.home_score, 2);
+  assert.equal(merged.away_score, 2);
+  assert.equal(merged.score_status, "AET");
+  assert.equal(merged.penalty_result, "Leeds United win 4 - 2 on penalties");
+});
+
 test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly payloads", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "single_finished",
@@ -1484,6 +1521,75 @@ test("buildLiveActivityContentState de-dupes duplicate match ids and keeps the f
   assert.equal(contentState.matches[0].awayScore, 0);
   assert.equal(contentState.matches[0].matchTime, "54'");
   assert.deepStrictEqual(contentState.matches[0].tvChannels, ["TNT Sports", "Sky Sports"]);
+});
+
+test("buildLiveActivityContentState carries the penalty winner side for widget score rendering", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_finished",
+    [
+      {
+        match_details_id: "c75k3rv779xt",
+        date: "2026-04-05",
+        time: "15:30",
+        league: "FA Cup",
+        home_team: "West Ham United",
+        away_team: "Leeds United",
+        home_score: 2,
+        away_score: 2,
+        score_status: "AET",
+        penalty_result: "Leeds United win 4 - 2 on penalties",
+      },
+    ],
+    0,
+    Date.parse("2026-04-05T19:48:00Z")
+  );
+
+  assert.equal(contentState.matches[0].penaltyWinner, "away");
+});
+
+test("buildLiveActivityScoreHash changes when a penalties winner is added to a drawn scoreline", () => {
+  const baseState = __testHooks.buildLiveActivityContentState(
+    "multi_live",
+    [
+      {
+        match_details_id: "c75k3rv779xt",
+        date: "2026-04-05",
+        time: "15:30",
+        league: "FA Cup",
+        home_team: "West Ham United",
+        away_team: "Leeds United",
+        home_score: 2,
+        away_score: 2,
+        score_status: "AET",
+      },
+    ],
+    0,
+    Date.parse("2026-04-05T19:48:00Z")
+  );
+  const penaltiesState = __testHooks.buildLiveActivityContentState(
+    "multi_live",
+    [
+      {
+        match_details_id: "c75k3rv779xt",
+        date: "2026-04-05",
+        time: "15:30",
+        league: "FA Cup",
+        home_team: "West Ham United",
+        away_team: "Leeds United",
+        home_score: 2,
+        away_score: 2,
+        score_status: "AET",
+        penalty_result: "Leeds United win 4 - 2 on penalties",
+      },
+    ],
+    0,
+    Date.parse("2026-04-05T19:49:00Z")
+  );
+
+  assert.notEqual(
+    __testHooks.buildLiveActivityScoreHash(baseState),
+    __testHooks.buildLiveActivityScoreHash(penaltiesState)
+  );
 });
 
 test("combineLiveActivityOperationalMatches keeps recent finished matches alongside merged live matches", () => {

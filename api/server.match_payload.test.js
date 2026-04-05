@@ -10,6 +10,7 @@ const {
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
     getMatchDetailsStatePayload,
+    transformBbcLiveMatchWithDetails,
     mergeConfirmedVarDisallowedGoalsIntoPayload,
     enrichMatchDetailsAggregateImmediately,
     enrichKnockoutAggregatesForListMatches,
@@ -901,6 +902,145 @@ test("mergeConfirmedVarDisallowedGoalsIntoPayload appends confirmed disallowed g
       player: "Wilfried Gnonto",
       assist_times: ["19'"],
     },
+  ]);
+});
+
+test("mergeConfirmedVarDisallowedGoalsIntoPayload removes stale disallowed goals from scorelines", async () => {
+  const merged = await mergeConfirmedVarDisallowedGoalsIntoPayload(
+    {
+      id: DETAILS_ID,
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      home_score: 3,
+      away_score: 2,
+      score_status: "AET",
+      home_goal_scorers: [
+        {
+          player: "Mateus Fernandes",
+          goal_times: ["90+3'"],
+          own_goal_times: [],
+        },
+        {
+          player: "A. Disasi",
+          goal_times: ["90+6'"],
+          own_goal_times: [],
+        },
+        {
+          player: "V. Castellanos",
+          goal_times: ["91'"],
+          own_goal_times: [],
+        },
+      ],
+      away_goal_scorers: [
+        {
+          player: "A. Tanaka",
+          goal_times: ["26'"],
+          own_goal_times: [],
+        },
+        {
+          player: "D. Calvert-Lewin",
+          goal_times: ["75' pen"],
+          own_goal_times: [],
+        },
+      ],
+      home_assists: [
+        {
+          player: "A. Traoré",
+          assist_times: ["90+6'", "91'"],
+        },
+      ],
+      away_assists: [
+        {
+          player: "N. Okafor",
+          assist_times: ["26'"],
+        },
+      ],
+    },
+    {
+      loadHistory: async () => ({
+        matches: [
+          {
+            match_id: DETAILS_ID,
+            events: [
+              {
+                event_type: "goal",
+                disallowed_by_var: true,
+                team: "home",
+                scorer: "V. Castellanos",
+                assister: "A. Traoré",
+                goal_time: "91'",
+              },
+            ],
+          },
+        ],
+      }),
+    }
+  );
+
+  assert.equal(merged.home_score, 2);
+  assert.equal(merged.away_score, 2);
+  assert.deepStrictEqual(merged.home_goal_scorers, [
+    {
+      player: "Mateus Fernandes",
+      goal_times: ["90+3'"],
+      own_goal_times: [],
+    },
+    {
+      player: "A. Disasi",
+      goal_times: ["90+6'"],
+      own_goal_times: [],
+    },
+    {
+      player: "V. Castellanos",
+      goal_times: [],
+      own_goal_times: [],
+      disallowed_goal_times: ["91'"],
+    },
+  ]);
+  assert.deepStrictEqual(merged.home_assists, [
+    {
+      player: "A. Traoré",
+      assist_times: ["90+6'", "91'"],
+    },
+  ]);
+});
+
+test("transformBbcLiveMatchWithDetails replaces transient shootout tally with confirmed AET score", () => {
+  const transformed = transformBbcLiveMatchWithDetails(
+    {
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      home_score: 3,
+      away_score: 2,
+      match_time: "Pens",
+      details_url: "https://www.bbc.co.uk/sport/football/live/c75k3rv779xt",
+    },
+    {
+      id: "c75k3rv779xt",
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      home_score: 2,
+      away_score: 2,
+      score_status: "AET",
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+      home_goal_scorers: [
+        { player: "Mateus Fernandes", goal_times: ["90+3'"], own_goal_times: [] },
+        { player: "A. Disasi", goal_times: ["90+6'"], own_goal_times: [] },
+      ],
+      away_goal_scorers: [
+        { player: "A. Tanaka", goal_times: ["26'"], own_goal_times: [] },
+        { player: "D. Calvert-Lewin", goal_times: ["75' pen"], own_goal_times: [] },
+      ],
+    }
+  );
+
+  assert.equal(transformed.home_score, 2);
+  assert.equal(transformed.away_score, 2);
+  assert.equal(transformed.match_time, "AET");
+  assert.equal(transformed.penalty_result, "Leeds United win 4 - 2 on penalties");
+  assert.deepStrictEqual(transformed.home_goal_scorers, [
+    { player: "Mateus Fernandes", goal_times: ["90+3'"], own_goal_times: [] },
+    { player: "A. Disasi", goal_times: ["90+6'"], own_goal_times: [] },
   ]);
 });
 

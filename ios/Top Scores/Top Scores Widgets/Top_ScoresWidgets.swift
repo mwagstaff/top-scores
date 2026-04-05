@@ -235,6 +235,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let firstLegHomeScore: Int?
     let firstLegAwayScore: Int?
     let matchTime: String?
+    let penaltyWinner: String?
     let homeTeamScore: Double?
     let awayTeamScore: Double?
     let totalTeamScore: Double?
@@ -264,6 +265,14 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
 
     var hasDisplayableAggregateScore: Bool {
         aggregateHomeScore != nil && aggregateAwayScore != nil
+    }
+
+    var homeWonOnPenalties: Bool {
+        penaltyWinner?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "home"
+    }
+
+    var awayWonOnPenalties: Bool {
+        penaltyWinner?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "away"
     }
 
     var shouldShowAggregateBracketScoresInline: Bool {
@@ -388,7 +397,9 @@ private enum LiveActivityRenderDiagnostics {
         let matches = state.matches.prefix(4).map { match -> String in
             let score: String
             if match.hasScore, let home = match.homeScore, let away = match.awayScore {
-                score = "\(home)-\(away)"
+                let homeText = match.homeWonOnPenalties ? "\(home) (P)" : "\(home)"
+                let awayText = match.awayWonOnPenalties ? "\(away) (P)" : "\(away)"
+                score = "\(homeText)-\(awayText)"
             } else if let suppressed = match.suppressedScoreSummary {
                 score = "suppressed:\(suppressed)"
             } else {
@@ -2129,7 +2140,9 @@ private struct TopScoresLiveActivityWidget: Widget {
         if (state.mode.contains("live") || state.mode.contains("finished")),
            let home = first.homeScore,
            let away = first.awayScore {
-            return "\(home)-\(away)"
+            let homeText = first.homeWonOnPenalties ? "\(home) (P)" : "\(home)"
+            let awayText = first.awayWonOnPenalties ? "\(away) (P)" : "\(away)"
+            return "\(homeText)-\(awayText)"
         }
         if state.mode.contains("finished") {
             return first.matchTime ?? first.time
@@ -2549,13 +2562,13 @@ private struct LiveActivitySingleScoreRow: View {
     var body: some View {
         if let homeScore = match.homeScore, let awayScore = match.awayScore {
             HStack(spacing: compact ? 7 : 9) {
-                Text("\(homeScore)")
+                Text(homeScoreText(homeScore))
                     .font(scoreFont)
                     .foregroundStyle(.white.opacity(scoreOpacity))
-                Text(match.matchTime ?? fallbackStatus)
+                Text(scoreSeparatorText)
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.white.opacity(0.75))
-                Text("\(awayScore)")
+                Text(awayScoreText(awayScore))
                     .font(scoreFont)
                     .foregroundStyle(.white.opacity(scoreOpacity))
             }
@@ -2572,10 +2585,25 @@ private struct LiveActivitySingleScoreRow: View {
         match.isFinished ? "FT" : "LIVE"
     }
 
+    private var scoreSeparatorText: String {
+        if match.homeWonOnPenalties || match.awayWonOnPenalties {
+            return "-"
+        }
+        return match.matchTime ?? fallbackStatus
+    }
+
     private var scoreFont: Font {
         compact
             ? .headline.monospacedDigit().weight(.bold)
             : .title3.monospacedDigit().weight(.bold)
+    }
+
+    private func homeScoreText(_ score: Int) -> String {
+        match.homeWonOnPenalties ? "\(score) (P)" : "\(score)"
+    }
+
+    private func awayScoreText(_ score: Int) -> String {
+        match.awayWonOnPenalties ? "\(score) (P)" : "\(score)"
     }
 }
 

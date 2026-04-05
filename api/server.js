@@ -11532,6 +11532,49 @@ function getMatchDetailsStatePayload(payload) {
   return statePayload;
 }
 
+function transformBbcLiveMatchWithDetails(match, detailsPayload) {
+  if (!match || typeof match !== "object") return match;
+  if (!detailsPayload || typeof detailsPayload !== "object") return { ...match };
+
+  const penaltyResult = String(detailsPayload.penalty_result || "").trim();
+  if (!penaltyResult) {
+    return { ...match };
+  }
+
+  const transformed = { ...match };
+  const detailsHomeScore = parseNumericScore(detailsPayload.home_score);
+  const detailsAwayScore = parseNumericScore(detailsPayload.away_score);
+  const detailsAggregate = resolveKnownAggregateScores(detailsPayload);
+  const detailsStatus = String(detailsPayload.score_status || "").trim() || "AET";
+
+  if (detailsHomeScore !== null && detailsAwayScore !== null) {
+    transformed.home_score = detailsHomeScore;
+    transformed.away_score = detailsAwayScore;
+  }
+  if (detailsAggregate.home !== null && detailsAggregate.away !== null) {
+    transformed.aggregate_home_score = detailsAggregate.home;
+    transformed.aggregate_away_score = detailsAggregate.away;
+  }
+
+  transformed.match_time = detailsStatus;
+  transformed.penalty_result = penaltyResult;
+
+  [
+    "home_goal_scorers",
+    "away_goal_scorers",
+    "home_assists",
+    "away_assists",
+    "home_red_cards",
+    "away_red_cards",
+  ].forEach((field) => {
+    if (Array.isArray(detailsPayload[field])) {
+      transformed[field] = detailsPayload[field];
+    }
+  });
+
+  return transformed;
+}
+
 function currentMatchDetailsLookupSnapshot() {
   if (matchDetailsById.size > 0) {
     return {
@@ -12888,10 +12931,19 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayload(payload, options = {}
       : [],
   };
 
+  const disallowedCountsByTeam = {
+    home: 0,
+    away: 0,
+  };
+  const removedCountsByTeam = {
+    home: 0,
+    away: 0,
+  };
+
   const mergeEvent = (targetList, event) => {
     const playerName = String(event && (event.scorer || event.player) ? (event.scorer || event.player) : "").trim();
     const goalTime = String(event && event.goal_time ? event.goal_time : "").trim();
-    if (!playerName || !goalTime) return;
+    if (!playerName || !goalTime) return false;
 
     let target = targetList.find((entry) => String(entry && entry.player ? entry.player : "").trim() === playerName);
     if (!target) {
@@ -12903,12 +12955,24 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayload(payload, options = {}
       };
       targetList.push(target);
     }
+    if (!Array.isArray(target.goal_times)) {
+      target.goal_times = [];
+    }
+    if (!Array.isArray(target.own_goal_times)) {
+      target.own_goal_times = [];
+    }
     if (!Array.isArray(target.disallowed_goal_times)) {
       target.disallowed_goal_times = [];
+    }
+    const removedAllowedGoal = target.goal_times.includes(goalTime) || target.own_goal_times.includes(goalTime);
+    if (removedAllowedGoal) {
+      target.goal_times = target.goal_times.filter((minute) => minute !== goalTime);
+      target.own_goal_times = target.own_goal_times.filter((minute) => minute !== goalTime);
     }
     if (!target.disallowed_goal_times.includes(goalTime)) {
       target.disallowed_goal_times.push(goalTime);
     }
+    return removedAllowedGoal;
   };
 
   const mergeAssist = (targetList, event) => {
@@ -12934,13 +12998,45 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayload(payload, options = {}
 
   disallowedEvents.forEach((event) => {
     if (event.team === "home") {
-      mergeEvent(merged.home_goal_scorers, event);
+      disallowedCountsByTeam.home += 1;
+      if (mergeEvent(merged.home_goal_scorers, event)) {
+        removedCountsByTeam.home += 1;
+      }
       mergeAssist(merged.home_assists, event);
     } else if (event.team === "away") {
-      mergeEvent(merged.away_goal_scorers, event);
+      disallowedCountsByTeam.away += 1;
+      if (mergeEvent(merged.away_goal_scorers, event)) {
+        removedCountsByTeam.away += 1;
+      }
       mergeAssist(merged.away_assists, event);
     }
   });
+
+  const reconcileScore = (field, scorers, removedCount, disallowedCount) => {
+    const currentScore = parseNumericScore(merged[field]);
+    if (currentScore === null) return;
+
+    const validGoalCount = countGoalsFromScorers(scorers);
+    if (currentScore <= validGoalCount) return;
+
+    const overage = currentScore - validGoalCount;
+    if ((removedCount > 0 && overage <= removedCount) || overage <= disallowedCount) {
+      merged[field] = validGoalCount;
+    }
+  };
+
+  reconcileScore(
+    "home_score",
+    merged.home_goal_scorers,
+    removedCountsByTeam.home,
+    disallowedCountsByTeam.home
+  );
+  reconcileScore(
+    "away_score",
+    merged.away_goal_scorers,
+    removedCountsByTeam.away,
+    disallowedCountsByTeam.away
+  );
 
   return merged;
 }
@@ -17938,9 +18034,9 @@ app.get(`${API_PREFIX}/bbc/live`, async (_req, res) => {
   }
   res.set("X-Operational-Source", bbcLiveDataset.source || "unknown");
 
-  // Transform "Pens" to "AET" for completed penalty shootouts in BBC Live matches
+  // Rewrite completed penalty shootouts from canonical match-details state so clients do not
+  // display transient shootout tallies instead of the settled post-AET scoreline.
   const transformedMatches = bbcLiveDataset.items.map((match) => {
-    // If match has Pens status and we have match details with penalty_result, change to AET
     if (match.match_time === "Pens" || match.match_time === "PEN" || match.match_time === "PEN.") {
       const detailsId = matchDetailsIdFromUrl(match.details_url);
       if (detailsId) {
@@ -17949,7 +18045,7 @@ app.get(`${API_PREFIX}/bbc/live`, async (_req, res) => {
             ? matchDetailsSnapshot.records[detailsId]
             : null;
         if (matchDetails && matchDetails.penalty_result) {
-          return { ...match, match_time: "AET" };
+          return transformBbcLiveMatchWithDetails(match, matchDetails);
         }
       }
     }
@@ -21977,6 +22073,7 @@ module.exports = {
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
     getMatchDetailsStatePayload,
+    transformBbcLiveMatchWithDetails,
     mergeConfirmedVarDisallowedGoalsIntoPayload,
     enrichMatchDetailsAggregateImmediately,
     enrichKnockoutAggregatesForListMatches,

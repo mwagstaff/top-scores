@@ -356,6 +356,44 @@ function hasPenaltyShootoutResult(match) {
   return Boolean(String(match && match.penalty_result ? match.penalty_result : "").trim());
 }
 
+function penaltyShootoutWinnerSide(match) {
+  const penaltyResult = String(match && match.penalty_result ? match.penalty_result : "").trim();
+  if (!penaltyResult) return null;
+
+  const winnerSegment = penaltyResult.split(/\bwin\b/i)[0].trim();
+  if (!winnerSegment) return null;
+
+  const normalizedWinner = normalizeLiveActivityFixtureToken(winnerSegment);
+  const normalizedHomeTeam = normalizeLiveActivityFixtureToken(
+    (match && (match.home_team || match.homeTeam)) || ""
+  );
+  const normalizedAwayTeam = normalizeLiveActivityFixtureToken(
+    (match && (match.away_team || match.awayTeam)) || ""
+  );
+
+  if (
+    normalizedWinner &&
+    normalizedHomeTeam &&
+    (normalizedWinner === normalizedHomeTeam ||
+      normalizedWinner.includes(normalizedHomeTeam) ||
+      normalizedHomeTeam.includes(normalizedWinner))
+  ) {
+    return "home";
+  }
+
+  if (
+    normalizedWinner &&
+    normalizedAwayTeam &&
+    (normalizedWinner === normalizedAwayTeam ||
+      normalizedWinner.includes(normalizedAwayTeam) ||
+      normalizedAwayTeam.includes(normalizedWinner))
+  ) {
+    return "away";
+  }
+
+  return null;
+}
+
 function isResolvedPenaltyShootoutMatch(match) {
   return isPenaltyShootoutStatus(match && match.score_status) && hasPenaltyShootoutResult(match);
 }
@@ -3372,6 +3410,12 @@ function parseUpdatedAtMs(match) {
 }
 
 function compareLiveActivitySnapshotFreshness(lhs, rhs) {
+  const lhsHasPenaltyResult = hasPenaltyShootoutResult(lhs);
+  const rhsHasPenaltyResult = hasPenaltyShootoutResult(rhs);
+  if (lhsHasPenaltyResult !== rhsHasPenaltyResult) {
+    return lhsHasPenaltyResult ? 1 : -1;
+  }
+
   const lhsProgress = liveActivityStatusProgressValue(lhs && lhs.score_status);
   const rhsProgress = liveActivityStatusProgressValue(rhs && rhs.score_status);
   if (lhsProgress !== rhsProgress) return lhsProgress - rhsProgress;
@@ -4457,6 +4501,7 @@ function buildLiveActivityContentState(
     firstLegHomeScore: toNumericScore(match.first_leg_home_score),
     firstLegAwayScore: toNumericScore(match.first_leg_away_score),
     matchTime: displayStatusToken(match.score_status),
+    penaltyWinner: penaltyShootoutWinnerSide(match),
     homeTeamScore: toNumericScore(match.home_team_score),
     awayTeamScore: toNumericScore(match.away_team_score),
     totalTeamScore: toNumericScore(match.total_team_score),
@@ -4582,6 +4627,10 @@ function buildLiveActivityScoreHash(contentState) {
       awayScore: toNumericScore(match && match.awayScore),
       aggregateHomeScore: toNumericScore(match && match.aggregateHomeScore),
       aggregateAwayScore: toNumericScore(match && match.aggregateAwayScore),
+      penaltyWinner:
+        match && Object.prototype.hasOwnProperty.call(match, "penaltyWinner")
+          ? String(match.penaltyWinner || "").trim() || null
+          : null,
     })),
   });
 }
@@ -6208,6 +6257,7 @@ module.exports = {
     isFinishedMatchStatus,
     isPenaltyShootoutStatus,
     isResolvedPenaltyShootoutMatch,
+    penaltyShootoutWinnerSide,
     shouldStopMonitoringAsIrrelevant,
     buildLiveActivityContentState,
     buildLiveActivityPayloadHash,
