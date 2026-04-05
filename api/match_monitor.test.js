@@ -3726,6 +3726,59 @@ test("does not duplicate penalty wording in penalty-shootout full-time notificat
   );
 });
 
+test("keeps unresolved penalty shootouts relevant until the result is confirmed", () => {
+  assert.equal(
+    __testHooks.isMatchRelevant({
+      date: "2026-04-05",
+      time: "18:30",
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      score_status: "PENS",
+      home_score: 3,
+      away_score: 2,
+    }),
+    true
+  );
+
+  assert.equal(
+    __testHooks.isMatchRelevant({
+      date: "2026-04-05",
+      time: "18:30",
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      score_status: "PENS",
+      home_score: 2,
+      away_score: 2,
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+    }),
+    false
+  );
+});
+
+test("does not emit full-time for penalty shootouts until the result is confirmed", () => {
+  const monitorState = newMonitorState();
+
+  const oldMatch = {
+    home_team: "West Ham United",
+    away_team: "Leeds United",
+    score_status: "AET",
+    home_score: 2,
+    away_score: 2,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    score_status: "PENS",
+    home_score: 3,
+    away_score: 2,
+  };
+
+  const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
+  assert.deepStrictEqual(events, []);
+});
+
 test("counts own goals for event detection", () => {
   const total = __testHooks.countGoals([
     { player: "Eric Garcia", own_goal_times: ["6'"] },

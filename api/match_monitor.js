@@ -352,6 +352,18 @@ function isPenaltyShootoutStatus(status) {
   return MATCH_STATUS_PENALTY_TOKENS.has(normalizeStatusToken(status));
 }
 
+function hasPenaltyShootoutResult(match) {
+  return Boolean(String(match && match.penalty_result ? match.penalty_result : "").trim());
+}
+
+function isResolvedPenaltyShootoutMatch(match) {
+  return isPenaltyShootoutStatus(match && match.score_status) && hasPenaltyShootoutResult(match);
+}
+
+function isTerminalMatchState(match) {
+  return isFinishedMatchStatus(match && match.score_status) || isResolvedPenaltyShootoutMatch(match);
+}
+
 function isPostponedMatchStatus(status) {
   return MATCH_STATUS_POSTPONED_TOKENS.has(normalizeStatusToken(status));
 }
@@ -736,6 +748,14 @@ async function ensureLiveActivityTeamRatingCache(nowMs = Date.now()) {
 function evaluateMatchRelevance(match, nowMs = Date.now()) {
   const status = match ? match.score_status : null;
 
+  if (isResolvedPenaltyShootoutMatch(match)) {
+    return {
+      relevant: false,
+      reason: "terminal_status",
+      kickoff_delta_ms: null,
+    };
+  }
+
   if (isLiveMatchStatus(status)) {
     return {
       relevant: true,
@@ -745,7 +765,7 @@ function evaluateMatchRelevance(match, nowMs = Date.now()) {
   }
 
   // Avoid starting monitoring for matches already marked complete.
-  if (isFinishedMatchStatus(status) || isPenaltyShootoutStatus(status)) {
+  if (isTerminalMatchState(match)) {
     return {
       relevant: false,
       reason: "terminal_status",
@@ -807,6 +827,13 @@ function evaluateStopMonitoringDecision(match, monitorState, nowMs = Date.now())
     };
   }
 
+  if (isResolvedPenaltyShootoutMatch(match)) {
+    return {
+      stop: false,
+      reason: "status_penalties",
+    };
+  }
+
   if (isLiveMatchStatus(match && match.score_status)) {
     return {
       stop: false,
@@ -817,12 +844,6 @@ function evaluateStopMonitoringDecision(match, monitorState, nowMs = Date.now())
     return {
       stop: false,
       reason: "status_finished",
-    };
-  }
-  if (isPenaltyShootoutStatus(match && match.score_status)) {
-    return {
-      stop: false,
-      reason: "status_penalties",
     };
   }
 
@@ -1515,7 +1536,7 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   }
 
   // Full-time (including penalties)
-  const newIsFulltime = isFinishedMatchStatus(newStatus) || isPenaltyShootoutStatus(newStatus);
+  const newIsFulltime = isTerminalMatchState(newMatch);
   if (!lifecycle.fulltimeEmitted && newIsFulltime && oldStatus !== newStatus) {
     const homeScore = toNumericScore(newMatch.home_score) ?? countGoals(newMatch.home_goal_scorers);
     const awayScore = toNumericScore(newMatch.away_score) ?? countGoals(newMatch.away_goal_scorers);
@@ -2378,7 +2399,7 @@ async function monitorMatch(matchId, initialMatch) {
       // If the first state is already live, don't send a synthetic delayed kickoff later.
       kickoffEmitted: isLiveMatchStatus(initialStatus),
       halftimeEmitted: initialStatus === "HT",
-      fulltimeEmitted: isFinishedMatchStatus(initialStatus) || isPenaltyShootoutStatus(initialStatus),
+      fulltimeEmitted: isTerminalMatchState(seedMatch),
     },
   });
   appendMonitorHistorySnapshot(monitoredMatches.get(matchId), seedMatch, startedAtMs);
@@ -2510,10 +2531,8 @@ async function pollMatchDetails(matchId) {
       goals_away: countGoals(currentMatch.away_goal_scorers),
     });
 
-    const statusToken = normalizeStatusToken(currentMatch.score_status);
-
     // Stop monitoring once the match is finished.
-    if (isFinishedMatchStatus(statusToken) || isPenaltyShootoutStatus(statusToken)) {
+    if (isTerminalMatchState(currentMatch)) {
       console.log(`[MatchMonitor] Match ${matchId} finished (${currentMatch.score_status}), stopping monitoring`);
       logDecision("monitor_stop", {
         match_id: matchId,
@@ -3470,6 +3489,14 @@ function shouldIncludeMonitoredEntryForLiveActivity(entry, user, nowMs = Date.no
 
   if (isLikelyTerminalStaleLiveMatch(match, kickoffMs, nowMs)) {
     return false;
+  }
+
+  if (isResolvedPenaltyShootoutMatch(match)) {
+    const hasTrackedState = Boolean(entry && entry.state && typeof entry.state === "object");
+    if (!hasTrackedState && parseUpdatedAtMs(match) === null) {
+      return false;
+    }
+    return shouldRetainFinishedMatchForLiveActivity(entry, nowMs);
   }
 
   if (isLiveMatchStatus(status)) {
@@ -6180,6 +6207,7 @@ module.exports = {
     isLiveMatchStatus,
     isFinishedMatchStatus,
     isPenaltyShootoutStatus,
+    isResolvedPenaltyShootoutMatch,
     shouldStopMonitoringAsIrrelevant,
     buildLiveActivityContentState,
     buildLiveActivityPayloadHash,
