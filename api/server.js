@@ -6706,14 +6706,35 @@ function hasPostponedNoScoreState(match) {
   return isPostponedMatchStatus(status);
 }
 
+function reconcilePenaltyShootoutDrawState(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+
+  const penaltyResult = String(payload.penalty_result || "").trim();
+  if (!penaltyResult) return payload;
+
+  const homeScore = parseNumericScore(payload.home_score);
+  const awayScore = parseNumericScore(payload.away_score);
+  if (homeScore === null || awayScore === null || homeScore === awayScore) {
+    return payload;
+  }
+
+  const drawnScore = Math.min(homeScore, awayScore);
+  return {
+    ...payload,
+    home_score: drawnScore,
+    away_score: drawnScore,
+  };
+}
+
 function withStableMatchDetailsState(payload, options = {}) {
   if (!payload || typeof payload !== "object") return null;
   const scoreStatus = resolveStableMatchScoreStatus(payload, options);
-  return {
+  const stable = {
     ...payload,
     score_status: scoreStatus,
     in_progress: isInProgressMatchStatus(scoreStatus),
   };
+  return reconcilePenaltyShootoutDrawState(stable);
 }
 
 function pruneInactiveMatchDetailsRefreshEntries(nowMs = Date.now()) {
@@ -11701,24 +11722,25 @@ async function getOperationalArrayDataset(name, fallback = []) {
 
 function getMatchDetailsStatePayload(payload) {
   if (!payload || typeof payload !== "object") return null;
-  const id = normalizeMatchDetailsId(payload.id);
+  const normalizedPayload = reconcilePenaltyShootoutDrawState(withStableMatchDetailsState(payload) || payload);
+  const id = normalizeMatchDetailsId(normalizedPayload.id);
   if (!id) return null;
 
-  const homeScore = parseNumericScore(payload.home_score);
-  const awayScore = parseNumericScore(payload.away_score);
-  const aggregate = resolveKnownAggregateScores(payload);
-  const firstLegHomeScore = parseNumericScore(payload.first_leg_home_score);
-  const firstLegAwayScore = parseNumericScore(payload.first_leg_away_score);
-  const scoreStatus = resolveStableMatchScoreStatus(payload);
+  const homeScore = parseNumericScore(normalizedPayload.home_score);
+  const awayScore = parseNumericScore(normalizedPayload.away_score);
+  const aggregate = resolveKnownAggregateScores(normalizedPayload);
+  const firstLegHomeScore = parseNumericScore(normalizedPayload.first_leg_home_score);
+  const firstLegAwayScore = parseNumericScore(normalizedPayload.first_leg_away_score);
+  const scoreStatus = resolveStableMatchScoreStatus(normalizedPayload);
 
   const statePayload = {
     id,
-    details_url: payload.details_url || null,
-    date: payload.date || null,
-    time: payload.time || null,
-    league: payload.league || null,
-    home_team: payload.home_team || null,
-    away_team: payload.away_team || null,
+    details_url: normalizedPayload.details_url || null,
+    date: normalizedPayload.date || null,
+    time: normalizedPayload.time || null,
+    league: normalizedPayload.league || null,
+    home_team: normalizedPayload.home_team || null,
+    away_team: normalizedPayload.away_team || null,
     home_score: homeScore,
     away_score: awayScore,
     aggregate_home_score: aggregate.home,
@@ -11726,17 +11748,17 @@ function getMatchDetailsStatePayload(payload) {
     first_leg_home_score: firstLegHomeScore,
     first_leg_away_score: firstLegAwayScore,
     score_status: scoreStatus,
-    penalty_result: payload.penalty_result || null,
+    penalty_result: normalizedPayload.penalty_result || null,
     in_progress: isInProgressMatchStatus(scoreStatus),
-    updated_at: payload.updated_at || null,
-    tv_channels: uniqueChannels(payload.tv_channels),
+    updated_at: normalizedPayload.updated_at || null,
+    tv_channels: uniqueChannels(normalizedPayload.tv_channels),
   };
 
-  if (payload.has_bbc_source === true) {
+  if (normalizedPayload.has_bbc_source === true) {
     statePayload.has_bbc_source = true;
   }
 
-  const teamLineups = normalizeTeamLineupsPayload(payload.team_lineups);
+  const teamLineups = normalizeTeamLineupsPayload(normalizedPayload.team_lineups);
   if (teamLineups) {
     statePayload.team_lineups = teamLineups;
   }

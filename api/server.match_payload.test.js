@@ -319,6 +319,23 @@ test("buildCanonicalMatchWriteAuditEntry captures previous and next summaries", 
   });
 });
 
+test("getMatchDetailsStatePayload normalizes settled penalty shootouts back to a draw scoreline", () => {
+  const payload = getMatchDetailsStatePayload({
+    ...detailsPayload({
+      home_score: 3,
+      away_score: 2,
+      score_status: "AET",
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+    }),
+    home_team: "West Ham United",
+    away_team: "Leeds United",
+  });
+
+  assert.equal(payload.home_score, 2);
+  assert.equal(payload.away_score, 2);
+  assert.equal(payload.penalty_result, "Leeds United win 4 - 2 on penalties");
+});
+
 test("normalizeTeamName canonicalizes team aliases from shared identity config", () => {
   assert.equal(normalizeTeamName("Man City"), "manchester city");
   assert.equal(normalizeTeamName("MCI"), "manchester city");

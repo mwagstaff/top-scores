@@ -327,8 +327,8 @@
 
     async function main() {
       try {
-        const parts = window.location.pathname.split("/").filter(Boolean);
-        const matchId = parts[3] || "";
+        const detailMatch = window.location.pathname.match(/\/admin\/redis\/matches\/([^/?#]+)$/);
+        const matchId = detailMatch ? decodeURIComponent(detailMatch[1]) : "";
         if (matchId) {
           await renderDetailView(matchId);
         } else {
