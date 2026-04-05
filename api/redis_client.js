@@ -79,6 +79,7 @@ const OPERATIONAL_DATASET_PREFIX = `${DB_NAME}:operational:dataset:`;
 const OPERATIONAL_MATCH_DETAILS_PREFIX = `${DB_NAME}:operational:match_details:`;
 const OPERATIONAL_MATCH_DETAILS_INDEX_KEY = `${DB_NAME}:operational:match_details:index`;
 const OPERATIONAL_MATCH_DETAILS_META_KEY = `${DB_NAME}:operational:match_details:meta`;
+const OPERATIONAL_MATCH_WRITE_LOG_PREFIX = `${DB_NAME}:operational:match_write_log:`;
 const LIVE_ACTIVITY_DEBUG_DEVICE_INDEX_PREFIX = `${DB_NAME}:live_activity:debug:device:`;
 const LIVE_ACTIVITY_DEBUG_RECORD_PREFIX = `${DB_NAME}:live_activity:debug:record:`;
 const LIVE_ACTIVITY_MATCH_TIMELINE_INDEX_PREFIX = `${DB_NAME}:live_activity:timeline:match:`;
@@ -1534,6 +1535,14 @@ function buildOperationalMatchDetailsKey(matchId) {
   return `${OPERATIONAL_MATCH_DETAILS_PREFIX}${sanitizeTokenForKey(normalized)}`;
 }
 
+function buildOperationalMatchWriteLogKey(matchId) {
+  const normalized = String(matchId || "").trim();
+  if (!normalized) {
+    throw new Error("matchId is required for operational match write log key");
+  }
+  return `${OPERATIONAL_MATCH_WRITE_LOG_PREFIX}${sanitizeTokenForKey(normalized)}`;
+}
+
 function normalizeOperationalRecordsInput(recordsById) {
   if (recordsById instanceof Map) {
     return Array.from(recordsById.entries());
@@ -1812,6 +1821,121 @@ async function getOperationalMatchDetailsSummary() {
       total: 0,
       updated_at: null,
       source: null,
+      error: error.message || String(error),
+    };
+  }
+}
+
+async function saveOperationalMatchWriteLogEntries(entriesByMatchId, options = {}) {
+  const records = normalizeOperationalRecordsInput(entriesByMatchId)
+    .map(([matchId, entries]) => [
+      String(matchId || "").trim().toLowerCase(),
+      Array.isArray(entries) ? entries.filter((entry) => entry && typeof entry === "object") : [],
+    ])
+    .filter(([matchId, entries]) => Boolean(matchId) && entries.length > 0);
+
+  if (records.length === 0) {
+    return {
+      written: 0,
+      matches: 0,
+      ttl_seconds: null,
+      max_entries_per_match: null,
+    };
+  }
+
+  const ttlSecondsRaw = Number(options.ttl_seconds);
+  const ttlSeconds = Number.isFinite(ttlSecondsRaw) && ttlSecondsRaw > 0
+    ? Math.floor(ttlSecondsRaw)
+    : null;
+  const maxEntriesRaw = Number(options.max_entries_per_match);
+  const maxEntriesPerMatch = Number.isFinite(maxEntriesRaw) && maxEntriesRaw > 0
+    ? Math.floor(maxEntriesRaw)
+    : null;
+
+  try {
+    const redisClient = await getClient();
+    const transaction = redisClient.multi();
+    let written = 0;
+
+    records.forEach(([matchId, entries]) => {
+      const key = buildOperationalMatchWriteLogKey(matchId);
+      const serializedEntries = entries.map((entry) =>
+        JSON.stringify({
+          ...entry,
+          match_id: String(entry.match_id || matchId).trim().toLowerCase(),
+        })
+      );
+      if (serializedEntries.length === 0) return;
+      transaction.lPush(key, serializedEntries);
+      if (maxEntriesPerMatch) {
+        transaction.lTrim(key, 0, maxEntriesPerMatch - 1);
+      }
+      if (ttlSeconds) {
+        transaction.expire(key, ttlSeconds);
+      }
+      written += serializedEntries.length;
+    });
+
+    await transaction.exec();
+    return {
+      written,
+      matches: records.length,
+      ttl_seconds: ttlSeconds,
+      max_entries_per_match: maxEntriesPerMatch,
+    };
+  } catch (error) {
+    console.error("[Redis] Error saving operational match write logs:", error);
+    throw error;
+  }
+}
+
+async function getOperationalMatchWriteLog(matchId, options = {}) {
+  const normalized = String(matchId || "").trim().toLowerCase();
+  if (!normalized) {
+    return {
+      match_id: null,
+      total: 0,
+      page: 1,
+      page_size: 0,
+      entries: [],
+    };
+  }
+
+  const pageSize = Number(options.page_size);
+  const normalizedPageSize = Number.isFinite(pageSize) && pageSize > 0
+    ? Math.min(500, Math.floor(pageSize))
+    : 200;
+  const page = Number(options.page);
+  const normalizedPage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+  const start = (normalizedPage - 1) * normalizedPageSize;
+  const stop = start + normalizedPageSize - 1;
+
+  try {
+    const redisClient = await getClient();
+    const key = buildOperationalMatchWriteLogKey(normalized);
+    const [total, values] = await Promise.all([
+      redisClient.lLen(key),
+      redisClient.lRange(key, start, stop),
+    ]);
+    const entries = (Array.isArray(values) ? values : [])
+      .map((raw) => safeJsonParse(raw, `operational match write log ${normalized}`))
+      .filter((entry) => entry && typeof entry === "object");
+
+    return {
+      match_id: normalized,
+      total: Number(total || 0),
+      page: normalizedPage,
+      page_size: normalizedPageSize,
+      entries,
+    };
+  } catch (error) {
+    console.error(`[Redis] Error retrieving operational match write log ${normalized}:`, error);
+    return {
+      match_id: normalized,
+      total: 0,
+      page: normalizedPage,
+      page_size: normalizedPageSize,
+      entries: [],
       error: error.message || String(error),
     };
   }
@@ -2171,6 +2295,8 @@ module.exports = {
   getOperationalMatchDetails,
   getAllOperationalMatchDetails,
   getOperationalMatchDetailsSummary,
+  saveOperationalMatchWriteLogEntries,
+  getOperationalMatchWriteLog,
   closeRedisConnection,
   __historyConfig: buildHistoryRetentionPolicy(),
   __private: {
@@ -2184,6 +2310,7 @@ module.exports = {
     buildFantasyReminderRecordKey,
     buildFantasyReminderSendIdempotencyKey,
     buildBbcNotificationIdempotencyKey,
+    buildOperationalMatchWriteLogKey,
     countKeysByPattern,
   },
 };

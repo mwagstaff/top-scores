@@ -10,8 +10,13 @@ const {
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
     getMatchDetailsStatePayload,
+    canonicalMatchDetailsToListPayload,
+    canonicalMatchDetailsRecordsToListPayloads,
+    canonicalMatchDetailsRecordsToPublicListPayloads,
+    buildCanonicalMatchWriteAuditEntry,
     transformBbcLiveMatchWithDetails,
     mergeConfirmedVarDisallowedGoalsIntoPayload,
+    mergeConfirmedVarDisallowedGoalsIntoPayloads,
     enrichMatchDetailsAggregateImmediately,
     enrichKnockoutAggregatesForListMatches,
     matchDetailsNeedsBackfill,
@@ -189,6 +194,129 @@ test("toMatchListPayload preserves explicit BBC-source flag without requiring ma
 
   assert.equal(payload.has_bbc_source, true);
   assert.equal(payload.match_details_id, undefined);
+});
+
+test("canonicalMatchDetailsToListPayload materializes a list row from canonical Redis state", () => {
+  const payload = canonicalMatchDetailsToListPayload({
+    ...detailsPayload({
+      score_status: "AET",
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+      tv_channels: ["TNT Sports 1"],
+      has_bbc_source: true,
+    }),
+    league_subcategory: "Quarter-finals",
+  });
+
+  assert.deepStrictEqual(payload, {
+    date: "2026-03-03",
+    time: "20:15",
+    league: "Premier League",
+    league_subcategory: "Quarter-finals",
+    home_team: "Wolverhampton Wanderers",
+    away_team: "Liverpool",
+    tv_channels: ["TNT Sports 1"],
+    match_details_id: DETAILS_ID,
+    home_score: 2,
+    away_score: 1,
+    score_status: "AET",
+    penalty_result: "Leeds United win 4 - 2 on penalties",
+    has_bbc_source: true,
+  });
+});
+
+test("canonicalMatchDetailsRecordsToListPayloads dedupes duplicate canonical records", () => {
+  const payloads = canonicalMatchDetailsRecordsToListPayloads({
+    [DETAILS_ID]: detailsPayload(),
+    duplicate: {
+      ...detailsPayload(),
+      id: "duplicate",
+      details_url: "https://www.bbc.co.uk/sport/football/live/duplicate",
+      updated_at: "2026-03-03T22:05:00.000Z",
+    },
+  });
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].home_team, "Wolverhampton Wanderers");
+  assert.equal(payloads[0].away_team, "Liverpool");
+});
+
+test("canonicalMatchDetailsRecordsToPublicListPayloads excludes competitions outside the allowlist", () => {
+  const payloads = canonicalMatchDetailsRecordsToPublicListPayloads({
+    allowed: detailsPayload({
+      league: "FA Cup",
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+    }),
+    womens: {
+      ...detailsPayload({
+        id: "womens001",
+        league: "Women's FA Cup",
+        home_team: "Arsenal Women",
+        away_team: "Brighton Women",
+      }),
+      details_url: "https://www.bbc.co.uk/sport/football/live/womens001",
+    },
+    wsl2: {
+      ...detailsPayload({
+        id: "wsl2001",
+        league: "WSL 2",
+        home_team: "Crystal Palace Women",
+        away_team: "Ipswich Women",
+      }),
+      details_url: "https://www.bbc.co.uk/sport/football/live/wsl2001",
+    },
+  });
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].league, "FA Cup");
+});
+
+test("buildCanonicalMatchWriteAuditEntry captures previous and next summaries", () => {
+  const entry = buildCanonicalMatchWriteAuditEntry(
+    DETAILS_ID,
+    detailsPayload({
+      home_score: 3,
+      away_score: 2,
+      score_status: "PENS",
+    }),
+    detailsPayload({
+      home_score: 2,
+      away_score: 2,
+      score_status: "AET",
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+    }),
+    {
+      source: "match_monitor_poll",
+      reason: "monitor_poll",
+      written_at: "2026-04-05T18:47:00.000Z",
+    }
+  );
+
+  assert.deepStrictEqual(entry, {
+    match_id: DETAILS_ID,
+    written_at: "2026-04-05T18:47:00.000Z",
+    source: "match_monitor_poll",
+    reason: "monitor_poll",
+    previous: {
+      home_team: "Wolverhampton Wanderers",
+      away_team: "Liverpool",
+      home_score: 3,
+      away_score: 2,
+      score_status: "FT",
+      penalty_result: null,
+      updated_at: "2026-03-03T22:00:00.000Z",
+    },
+    next: {
+      home_team: "Wolverhampton Wanderers",
+      away_team: "Liverpool",
+      home_score: 2,
+      away_score: 2,
+      score_status: "AET",
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+      updated_at: "2026-03-03T22:00:00.000Z",
+    },
+    metadata: null,
+  });
 });
 
 test("normalizeTeamName canonicalizes team aliases from shared identity config", () => {
@@ -1001,6 +1129,212 @@ test("mergeConfirmedVarDisallowedGoalsIntoPayload removes stale disallowed goals
     {
       player: "A. Traoré",
       assist_times: ["90+6'", "91'"],
+    },
+  ]);
+});
+
+test("mergeConfirmedVarDisallowedGoalsIntoPayload removes stale disallowed goals by minute when scorer name differs", async () => {
+  const merged = await mergeConfirmedVarDisallowedGoalsIntoPayload(
+    {
+      id: DETAILS_ID,
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      home_score: 3,
+      away_score: 2,
+      score_status: "AET",
+      home_goal_scorers: [
+        {
+          player: "Mateus Fernandes",
+          goal_times: ["90+3'"],
+          own_goal_times: [],
+        },
+        {
+          player: "A. Disasi",
+          goal_times: ["90+6'"],
+          own_goal_times: [],
+        },
+        {
+          player: "Valentin Castellanos",
+          goal_times: ["91'"],
+          own_goal_times: [],
+        },
+      ],
+      away_goal_scorers: [
+        {
+          player: "A. Tanaka",
+          goal_times: ["26'"],
+          own_goal_times: [],
+        },
+        {
+          player: "D. Calvert-Lewin",
+          goal_times: ["75' pen"],
+          own_goal_times: [],
+        },
+      ],
+      home_assists: [
+        {
+          player: "A. Traoré",
+          assist_times: ["90+6'", "91'"],
+        },
+      ],
+    },
+    {
+      loadHistory: async () => ({
+        matches: [
+          {
+            match_id: DETAILS_ID,
+            events: [
+              {
+                event_type: "goal",
+                disallowed_by_var: true,
+                team: "home",
+                scorer: "V. Castellanos",
+                assister: "A. Traoré",
+                goal_time: "91'",
+              },
+            ],
+          },
+        ],
+      }),
+    }
+  );
+
+  assert.equal(merged.home_score, 2);
+  assert.deepStrictEqual(merged.home_goal_scorers, [
+    {
+      player: "Mateus Fernandes",
+      goal_times: ["90+3'"],
+      own_goal_times: [],
+    },
+    {
+      player: "A. Disasi",
+      goal_times: ["90+6'"],
+      own_goal_times: [],
+    },
+    {
+      player: "Valentin Castellanos",
+      goal_times: [],
+      own_goal_times: [],
+      disallowed_goal_times: ["91'"],
+    },
+  ]);
+});
+
+test("mergeConfirmedVarDisallowedGoalsIntoPayloads corrects paged list payloads with shared history", async () => {
+  let loadHistoryCalls = 0;
+  const merged = await mergeConfirmedVarDisallowedGoalsIntoPayloads(
+    [
+      {
+        id: DETAILS_ID,
+        home_team: "West Ham United",
+        away_team: "Leeds United",
+        home_score: 3,
+        away_score: 2,
+        score_status: "AET",
+        home_goal_scorers: [
+          { player: "Mateus Fernandes", goal_times: ["90+3'"], own_goal_times: [] },
+          { player: "A. Disasi", goal_times: ["90+6'"], own_goal_times: [] },
+          { player: "Valentin Castellanos", goal_times: ["91'"], own_goal_times: [] },
+        ],
+        away_goal_scorers: [
+          { player: "A. Tanaka", goal_times: ["26'"], own_goal_times: [] },
+          { player: "D. Calvert-Lewin", goal_times: ["75' pen"], own_goal_times: [] },
+        ],
+      },
+      {
+        id: "cothermatch001",
+        home_team: "Arsenal",
+        away_team: "Chelsea",
+        home_score: 1,
+        away_score: 0,
+        score_status: "FT",
+        home_goal_scorers: [{ player: "B. Saka", goal_times: ["15'"], own_goal_times: [] }],
+        away_goal_scorers: [],
+      },
+    ],
+    {
+      loadHistory: async () => {
+        loadHistoryCalls += 1;
+        return {
+          matches: [
+            {
+              match_id: DETAILS_ID,
+              events: [
+                {
+                  event_type: "goal",
+                  disallowed_by_var: true,
+                  team: "home",
+                  scorer: "V. Castellanos",
+                  goal_time: "91'",
+                },
+              ],
+            },
+          ],
+        };
+      },
+    }
+  );
+
+  assert.equal(loadHistoryCalls, 1);
+  assert.equal(merged[0].home_score, 2);
+  assert.equal(merged[0].away_score, 2);
+  assert.equal(merged[1].home_score, 1);
+  assert.equal(merged[1].away_score, 0);
+});
+
+test("mergeConfirmedVarDisallowedGoalsIntoPayload corrects list payloads that only carry match_details_id", async () => {
+  const merged = await mergeConfirmedVarDisallowedGoalsIntoPayload(
+    {
+      match_details_id: DETAILS_ID,
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      home_score: 3,
+      away_score: 2,
+      score_status: "AET",
+      home_goal_scorers: [
+        { player: "Mateus Fernandes", goal_times: ["90+3'"], own_goal_times: [] },
+        { player: "A. Disasi", goal_times: ["90+6'"], own_goal_times: [] },
+        { player: "Valentin Castellanos", goal_times: ["91'"], own_goal_times: [] },
+      ],
+      away_goal_scorers: [
+        { player: "A. Tanaka", goal_times: ["26'"], own_goal_times: [] },
+        { player: "D. Calvert-Lewin", goal_times: ["75' pen"], own_goal_times: [] },
+      ],
+      home_assists: [
+        { player: "A. Traoré", assist_times: ["91'"] },
+      ],
+    },
+    {
+      loadHistory: async () => ({
+        matches: [
+          {
+            match_id: DETAILS_ID,
+            events: [
+              {
+                event_type: "goal",
+                disallowed_by_var: true,
+                team: "home",
+                scorer: "V. Castellanos",
+                assister: "A. Traoré",
+                goal_time: "91'",
+              },
+            ],
+          },
+        ],
+      }),
+    }
+  );
+
+  assert.equal(merged.home_score, 2);
+  assert.equal(merged.away_score, 2);
+  assert.deepStrictEqual(merged.home_goal_scorers, [
+    { player: "Mateus Fernandes", goal_times: ["90+3'"], own_goal_times: [] },
+    { player: "A. Disasi", goal_times: ["90+6'"], own_goal_times: [] },
+    {
+      player: "Valentin Castellanos",
+      goal_times: [],
+      own_goal_times: [],
+      disallowed_goal_times: ["91'"],
     },
   ]);
 });

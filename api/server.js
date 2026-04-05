@@ -502,6 +502,18 @@ const parsedMatchDetailsPollConcurrency = Number(
 const MATCH_DETAILS_POLL_CONCURRENCY = Number.isFinite(parsedMatchDetailsPollConcurrency)
   ? Math.max(1, Math.floor(parsedMatchDetailsPollConcurrency))
   : 20;
+const parsedCanonicalMatchWriteAuditTtlSeconds = Number(
+  process.env.CANONICAL_MATCH_WRITE_AUDIT_TTL_SECONDS || 6 * 24 * 60 * 60
+);
+const CANONICAL_MATCH_WRITE_AUDIT_TTL_SECONDS = Number.isFinite(parsedCanonicalMatchWriteAuditTtlSeconds)
+  ? Math.max(60, Math.min(6 * 24 * 60 * 60, Math.floor(parsedCanonicalMatchWriteAuditTtlSeconds)))
+  : 6 * 24 * 60 * 60;
+const parsedCanonicalMatchWriteAuditMaxEntries = Number(
+  process.env.CANONICAL_MATCH_WRITE_AUDIT_MAX_ENTRIES || 500
+);
+const CANONICAL_MATCH_WRITE_AUDIT_MAX_ENTRIES = Number.isFinite(parsedCanonicalMatchWriteAuditMaxEntries)
+  ? Math.max(10, Math.floor(parsedCanonicalMatchWriteAuditMaxEntries))
+  : 500;
 const parsedMatchDetailsBackfillBatchSize = Number(
   process.env.MATCH_DETAILS_BACKFILL_BATCH_SIZE || 50
 );
@@ -6817,8 +6829,9 @@ function resolveKnownAggregateScores(payload) {
 function normalizeMatchDetailsPayload(match, options = {}) {
   if (!match || typeof match !== "object") return null;
   const detailsUrl = String(match.details_url || "").trim();
-  if (!detailsUrl) return null;
-  const detailsId = matchDetailsIdFromUrl(detailsUrl);
+  const detailsId =
+    matchDetailsIdFromUrl(detailsUrl) ||
+    normalizeMatchDetailsId(match.match_details_id || match.id);
   if (!detailsId) return null;
 
   const homeTeam = String(match.home_team || "").trim();
@@ -6841,7 +6854,7 @@ function normalizeMatchDetailsPayload(match, options = {}) {
 
   const payload = {
     id: detailsId,
-    details_url: detailsUrl,
+    details_url: detailsUrl || null,
     date,
     time,
     league,
@@ -6854,7 +6867,12 @@ function normalizeMatchDetailsPayload(match, options = {}) {
     aggregate_away_score: aggregateAwayScore,
     score_status: scoreStatus,
     in_progress: isInProgressMatchStatus(scoreStatus),
+    tv_channels: uniqueChannels(match.tv_channels),
   };
+
+  if (match.has_bbc_source === true) {
+    payload.has_bbc_source = true;
+  }
 
   MATCH_DETAILS_EVENT_FIELDS.forEach((field) => {
     payload[field] = Array.isArray(match[field]) ? match[field] : [];
@@ -6882,7 +6900,12 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     ...(existing || {}),
     ...incoming,
     id: incoming.id,
-    details_url: incoming.details_url || (existing ? existing.details_url : null),
+    details_url:
+      incoming.details_url !== undefined && incoming.details_url !== null
+        ? incoming.details_url
+        : existing
+          ? existing.details_url
+          : null,
     date: incoming.date || (existing ? existing.date : null),
     time: incoming.time || (existing ? existing.time : null),
     league: incoming.league || (existing ? existing.league : null),
@@ -6892,6 +6915,15 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     away_team: incoming.away_team || (existing ? existing.away_team : null),
     updated_at: updatedAtIso,
   };
+
+  const mergedChannels = uniqueChannels([
+    ...(Array.isArray(existing && existing.tv_channels) ? existing.tv_channels : []),
+    ...(Array.isArray(incoming && incoming.tv_channels) ? incoming.tv_channels : []),
+  ]);
+  merged.tv_channels = mergedChannels;
+  merged.has_bbc_source = Boolean(
+    (existing && existing.has_bbc_source === true) || incoming.has_bbc_source === true
+  );
 
   if (incomingClearsScoreState || incomingPostponedNoScoreState) {
     merged.home_score = null;
@@ -7017,6 +7049,220 @@ function upsertMatchDetailsFromMatch(match, updatedAtIso = new Date().toISOStrin
   const merged = mergeMatchDetailsPayload(existing, incoming, updatedAtIso);
   matchDetailsById.set(incoming.id, merged);
   return incoming.id;
+}
+
+function canonicalMatchComparablePayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const comparable = toOperationalAdminMatchPayload(payload);
+  if (!comparable) return null;
+  return {
+    ...comparable,
+    tv_channels: uniqueChannels(payload.tv_channels),
+    has_bbc_source: payload.has_bbc_source === true,
+  };
+}
+
+function buildCanonicalMatchAuditSummary(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  return {
+    home_team: payload.home_team || null,
+    away_team: payload.away_team || null,
+    home_score: parseNumericScore(payload.home_score),
+    away_score: parseNumericScore(payload.away_score),
+    score_status: resolveStableMatchScoreStatus(payload),
+    penalty_result: String(payload.penalty_result || "").trim() || null,
+    updated_at: payload.updated_at || null,
+  };
+}
+
+function buildCanonicalMatchWriteAuditEntry(matchId, previousPayload, nextPayload, options = {}) {
+  const normalizedMatchId = normalizeMatchDetailsId(matchId);
+  if (!normalizedMatchId || !nextPayload) return null;
+
+  return {
+    match_id: normalizedMatchId,
+    written_at:
+      typeof options.written_at === "string" && options.written_at.trim()
+        ? options.written_at.trim()
+        : nextPayload.updated_at || new Date().toISOString(),
+    source:
+      typeof options.source === "string" && options.source.trim() ? options.source.trim() : null,
+    reason:
+      typeof options.reason === "string" && options.reason.trim() ? options.reason.trim() : null,
+    previous: buildCanonicalMatchAuditSummary(previousPayload),
+    next: buildCanonicalMatchAuditSummary(nextPayload),
+    metadata:
+      options.metadata && typeof options.metadata === "object" ? options.metadata : null,
+  };
+}
+
+async function persistCanonicalMatchDetailsSubsetSafe(recordsById, options = {}) {
+  const entries = Object.entries(recordsById && typeof recordsById === "object" ? recordsById : {});
+  if (entries.length === 0) {
+    return {
+      updated_at: options.updated_at || null,
+      source: options.source || null,
+      upserted: 0,
+      audited: 0,
+    };
+  }
+
+  const auditEntriesByMatchId = {};
+  const changedRecordsById = {};
+  entries.forEach(([matchId, payload]) => {
+    const normalizedMatchId = normalizeMatchDetailsId(matchId || (payload && payload.id));
+    if (!normalizedMatchId || !payload) return;
+    const previousPayload =
+      options.previousById && typeof options.previousById === "object"
+        ? options.previousById[normalizedMatchId] || null
+        : null;
+    const nextComparable = canonicalMatchComparablePayload(payload);
+    const previousComparable = canonicalMatchComparablePayload(previousPayload);
+    if (
+      previousComparable &&
+      nextComparable &&
+      hashComparablePayload(previousComparable) === hashComparablePayload(nextComparable)
+    ) {
+      return;
+    }
+
+    changedRecordsById[normalizedMatchId] = payload;
+
+    const auditEntry = buildCanonicalMatchWriteAuditEntry(
+      normalizedMatchId,
+      previousPayload,
+      payload,
+      {
+        source: options.source,
+        reason: options.reason,
+        written_at: options.updated_at,
+        metadata: options.audit_metadata,
+      }
+    );
+    if (auditEntry) {
+      auditEntriesByMatchId[normalizedMatchId] = [auditEntry];
+    }
+  });
+
+  if (!options.replace && Object.keys(changedRecordsById).length === 0) {
+    return {
+      updated_at: options.updated_at || null,
+      source: options.source || null,
+      upserted: 0,
+      audited: 0,
+      total: null,
+      replace: Boolean(options.replace),
+    };
+  }
+
+  const persistMatchDetailsFn =
+    typeof options.persistOperationalMatchDetailsSafe === "function"
+      ? options.persistOperationalMatchDetailsSafe
+      : persistOperationalMatchDetailsSafe;
+  const persistTimelineFn =
+    typeof options.persistLiveActivityMatchTimelineSnapshotsSafe === "function"
+      ? options.persistLiveActivityMatchTimelineSnapshotsSafe
+      : persistLiveActivityMatchTimelineSnapshotsSafe;
+  const saveAuditFn =
+    typeof options.saveOperationalMatchWriteLogEntries === "function"
+      ? options.saveOperationalMatchWriteLogEntries
+      : saveOperationalMatchWriteLogEntries;
+
+  const persistRecordsById = options.replace ? recordsById : changedRecordsById;
+  const persistResult = await persistMatchDetailsFn(persistRecordsById, options);
+  await persistTimelineFn(persistRecordsById, {
+    updated_at: options.updated_at,
+    observed_at_ms: Date.parse(String(options.updated_at || "").trim()),
+    source: options.source,
+  });
+
+  let auditResult = null;
+  if (Object.keys(auditEntriesByMatchId).length > 0) {
+    try {
+      auditResult = await saveAuditFn(auditEntriesByMatchId, {
+        ttl_seconds: CANONICAL_MATCH_WRITE_AUDIT_TTL_SECONDS,
+        max_entries_per_match: CANONICAL_MATCH_WRITE_AUDIT_MAX_ENTRIES,
+      });
+    } catch (error) {
+      console.warn(
+        "[OperationalState] Failed to persist canonical match write audit log:",
+        error.message || error
+      );
+    }
+  }
+
+  return {
+    ...(persistResult && typeof persistResult === "object" ? persistResult : {}),
+    audited: auditResult && Number.isFinite(auditResult.written) ? auditResult.written : 0,
+  };
+}
+
+async function applyCanonicalMatchWriteCorrections(payload, options = {}) {
+  if (!payload || typeof payload !== "object") return payload;
+  const stablePayload = withStableMatchDetailsState(payload) || payload;
+  if (options.skipVarCorrections) {
+    return stablePayload;
+  }
+  return mergeConfirmedVarDisallowedGoalsIntoPayload(stablePayload, options);
+}
+
+async function upsertCanonicalMatchDetailsFromMatch(match, options = {}) {
+  const incoming = normalizeMatchDetailsPayload(match, options);
+  if (!incoming) return null;
+
+  const updatedAtIso =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+  const existing = matchDetailsById.get(incoming.id) || null;
+  const merged = mergeMatchDetailsPayload(existing, incoming, updatedAtIso);
+  const corrected = await applyCanonicalMatchWriteCorrections(merged, options);
+  const normalizedCorrected = {
+    ...corrected,
+    id: incoming.id,
+    updated_at: updatedAtIso,
+    in_progress: isInProgressMatchStatus(resolveStableMatchScoreStatus(corrected)),
+    tv_channels: uniqueChannels(corrected && corrected.tv_channels),
+  };
+
+  const previousComparable = canonicalMatchComparablePayload(existing);
+  const nextComparable = canonicalMatchComparablePayload(normalizedCorrected);
+  if (
+    existing &&
+    previousComparable &&
+    nextComparable &&
+    hashComparablePayload(previousComparable) === hashComparablePayload(nextComparable)
+  ) {
+    return {
+      match_id: incoming.id,
+      changed: false,
+      payload: existing,
+    };
+  }
+
+  matchDetailsById.set(incoming.id, normalizedCorrected);
+  matchDetailsLastUpdated = updatedAtIso;
+  await persistCanonicalMatchDetailsSubsetSafe(
+    { [incoming.id]: normalizedCorrected },
+    {
+      replace: false,
+      updated_at: updatedAtIso,
+      source: options.source || null,
+      reason: options.reason || null,
+      previousById: { [incoming.id]: existing },
+      audit_metadata: options.audit_metadata || null,
+      persistOperationalMatchDetailsSafe: options.persistOperationalMatchDetailsSafe,
+      persistLiveActivityMatchTimelineSnapshotsSafe:
+        options.persistLiveActivityMatchTimelineSnapshotsSafe,
+      saveOperationalMatchWriteLogEntries: options.saveOperationalMatchWriteLogEntries,
+    }
+  );
+
+  return {
+    match_id: incoming.id,
+    changed: true,
+    payload: normalizedCorrected,
+  };
 }
 
 function countGoalsFromScorers(goalScorers) {
@@ -7180,26 +7426,15 @@ async function enrichMatchDetailsAggregateImmediately(seedPayload, options = {})
     if (!fetched) return payload;
 
     const combined = buildMergedMatchDetailsCandidate(payload, fetched, detailsUrl);
-    const upsertedMatchId = upsertMatchDetailsFromMatch(combined, nowIso);
-    const updatedPayload = upsertedMatchId ? matchDetailsById.get(upsertedMatchId) || null : null;
-    if (upsertedMatchId && updatedPayload) {
-      await persistFn(
-        { [upsertedMatchId]: updatedPayload },
-        {
-          replace: false,
-          updated_at: nowIso,
-          source: persistSource,
-        }
-      );
-      await persistLiveActivityMatchTimelineSnapshotsSafe(
-        { [upsertedMatchId]: updatedPayload },
-        {
-          updated_at: nowIso,
-          observed_at_ms: Date.parse(nowIso),
-          source: persistSource,
-        }
-      );
-      return updatedPayload;
+    const result = await upsertCanonicalMatchDetailsFromMatch(combined, {
+      updated_at: nowIso,
+      source: persistSource,
+      reason: "knockout_aggregate_enrichment",
+      persistOperationalMatchDetailsSafe: persistFn,
+      persistLiveActivityMatchTimelineSnapshotsSafe,
+    });
+    if (result && result.payload) {
+      return result.payload;
     }
   } catch (error) {
     console.warn(
@@ -7313,30 +7548,12 @@ function scheduleMatchDetailsBackfill(payload, options = {}) {
         fetched,
         payload.details_url
       );
-      const upsertedMatchId = upsertMatchDetailsFromMatch(combined, nowIso);
-      const updatedPayload = upsertedMatchId ? matchDetailsById.get(upsertedMatchId) : null;
-      if (upsertedMatchId && updatedPayload) {
-        await persistOperationalMatchDetailsSafe(
-          {
-            [upsertedMatchId]: updatedPayload,
-          },
-          {
-            replace: false,
-            updated_at: nowIso,
-            source: `async_match_details_backfill:${trigger}`,
-          }
-        );
-        await persistLiveActivityMatchTimelineSnapshotsSafe(
-          {
-            [upsertedMatchId]: updatedPayload,
-          },
-          {
-            updated_at: nowIso,
-            observed_at_ms: Date.parse(nowIso),
-            source: `async_match_details_backfill:${trigger}`,
-          }
-        );
-      }
+      const result = await upsertCanonicalMatchDetailsFromMatch(combined, {
+        updated_at: nowIso,
+        source: `async_match_details_backfill:${trigger}`,
+        reason: "async_match_details_backfill",
+      });
+      const updatedPayload = result && result.payload ? result.payload : null;
 
       if (updatedPayload && matchDetailsNeedsBackfill(updatedPayload)) {
         matchDetailsBackfillNextAttemptAt.set(
@@ -7538,8 +7755,14 @@ async function refreshInProgressMatchDetails(options = {}) {
             fetched,
             target.details_url
           );
-          const detailsId = upsertMatchDetailsFromMatch(combined, nowIso);
-          if (detailsId) refreshedDetailsIds.add(detailsId);
+          const result = await upsertCanonicalMatchDetailsFromMatch(combined, {
+            updated_at: nowIso,
+            source: SOURCE_BBC_MATCH_DETAILS,
+            reason: "scheduled_match_details_refresh",
+          });
+          if (result && result.payload && result.match_id) {
+            refreshedDetailsIds.add(result.match_id);
+          }
         } catch (err) {
           console.warn(
             `Failed to refresh match details for ${target.details_url}:`,
@@ -7553,25 +7776,6 @@ async function refreshInProgressMatchDetails(options = {}) {
     success = true;
     matchDetailsLastUpdated = nowIso;
     setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, matchDetailsById.size);
-    const updatedDetailsSubset = {};
-    refreshedDetailsIds.forEach((detailsId) => {
-      const payload = matchDetailsById.get(detailsId);
-      if (payload && typeof payload === "object") {
-        updatedDetailsSubset[detailsId] = payload;
-      }
-    });
-    if (Object.keys(updatedDetailsSubset).length > 0) {
-      await persistOperationalMatchDetailsSafe(updatedDetailsSubset, {
-        replace: false,
-        updated_at: nowIso,
-        source: SOURCE_BBC_MATCH_DETAILS,
-      });
-      await persistLiveActivityMatchTimelineSnapshotsSafe(updatedDetailsSubset, {
-        updated_at: nowIso,
-        observed_at_ms: Date.parse(nowIso),
-        source: SOURCE_BBC_MATCH_DETAILS,
-      });
-    }
     logPollSuccess("bbc_match_details", {
       source: SOURCE_BBC_MATCH_DETAILS,
       trigger,
@@ -8605,6 +8809,7 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
     liveMatchesForMerge,
     preferredMatchesForMerge
   );
+  const previousById = Object.fromEntries(matchDetailsById);
   indexMatchDetailsFromMatches(cachedMergedMatches);
   refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
   refreshFootballDatabaseUnmatchedTeamMetric(
@@ -8621,10 +8826,12 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
       updated_at: updatedAt,
       source,
     }),
-    persistOperationalMatchDetailsSafe(Object.fromEntries(matchDetailsById), {
+    persistCanonicalMatchDetailsSubsetSafe(Object.fromEntries(matchDetailsById), {
       replace: true,
       updated_at: matchDetailsLastUpdated || updatedAt,
       source,
+      reason: "merged_matches_rebuild",
+      previousById,
     }),
   ]);
 }
@@ -11522,7 +11729,12 @@ function getMatchDetailsStatePayload(payload) {
     penalty_result: payload.penalty_result || null,
     in_progress: isInProgressMatchStatus(scoreStatus),
     updated_at: payload.updated_at || null,
+    tv_channels: uniqueChannels(payload.tv_channels),
   };
+
+  if (payload.has_bbc_source === true) {
+    statePayload.has_bbc_source = true;
+  }
 
   const teamLineups = normalizeTeamLineupsPayload(payload.team_lineups);
   if (teamLineups) {
@@ -11712,6 +11924,8 @@ function toOperationalAdminMatchPayload(payload) {
     score_status: payload.score_status || null,
     in_progress: Boolean(payload.in_progress),
     penalty_result: payload.penalty_result || null,
+    tv_channels: uniqueChannels(payload.tv_channels),
+    has_bbc_source: payload.has_bbc_source === true,
     home_goal_scorers: Array.isArray(payload.home_goal_scorers) ? payload.home_goal_scorers : [],
     away_goal_scorers: Array.isArray(payload.away_goal_scorers) ? payload.away_goal_scorers : [],
     home_assists: Array.isArray(payload.home_assists) ? payload.home_assists : [],
@@ -11723,6 +11937,76 @@ function toOperationalAdminMatchPayload(payload) {
     team_lineups: normalizeTeamLineupsPayload(payload.team_lineups),
     updated_at: payload.updated_at || null,
   };
+}
+
+function canonicalMatchDetailsToListPayload(payload) {
+  const statePayload = getMatchDetailsStatePayload(payload);
+  if (!statePayload) return null;
+
+  const listPayload = {
+    date: statePayload.date,
+    time: statePayload.time,
+    league: statePayload.league,
+    home_team: statePayload.home_team,
+    away_team: statePayload.away_team,
+    tv_channels: uniqueChannels(statePayload.tv_channels),
+    match_details_id: statePayload.id,
+  };
+
+  if (payload && payload.league_subcategory) {
+    listPayload.league_subcategory = payload.league_subcategory;
+  }
+  if (payload && payload.has_bbc_source === true) {
+    listPayload.has_bbc_source = true;
+  }
+  if (statePayload.home_score !== null && statePayload.away_score !== null) {
+    listPayload.home_score = statePayload.home_score;
+    listPayload.away_score = statePayload.away_score;
+  }
+  if (
+    statePayload.aggregate_home_score !== null &&
+    statePayload.aggregate_away_score !== null
+  ) {
+    listPayload.aggregate_home_score = statePayload.aggregate_home_score;
+    listPayload.aggregate_away_score = statePayload.aggregate_away_score;
+  }
+  if (statePayload.score_status) {
+    listPayload.score_status = statePayload.score_status;
+  }
+  if (statePayload.penalty_result) {
+    listPayload.penalty_result = statePayload.penalty_result;
+  }
+
+  return listPayload;
+}
+
+function canonicalMatchDetailsRecordsToListPayloads(recordsById) {
+  return dedupeMatchListPayloads(
+    Object.values(recordsById && typeof recordsById === "object" ? recordsById : {})
+      .map((payload) => canonicalMatchDetailsToListPayload(payload))
+      .filter(Boolean)
+  );
+}
+
+function canonicalMatchDetailsRecordsToPublicListPayloads(recordsById) {
+  return canonicalMatchDetailsRecordsToListPayloads(recordsById).filter((payload) =>
+    isAllowedCompetition(payload && payload.league)
+  );
+}
+
+function canonicalLiveActivityMatchesFromDetailsRecords(recordsById) {
+  return Object.values(recordsById && typeof recordsById === "object" ? recordsById : {})
+    .map((payload) => {
+      const statePayload = getMatchDetailsStatePayload(payload);
+      if (!statePayload) return null;
+      return {
+        ...payload,
+        ...statePayload,
+        match_details_id: statePayload.id,
+        tv_channels: uniqueChannels(payload.tv_channels),
+      };
+    })
+    .filter(Boolean);
 }
 
 function operationalMatchSortDesc(lhs, rhs) {
@@ -12885,27 +13169,35 @@ function buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord) {
 }
 
 async function mergeConfirmedVarDisallowedGoalsIntoPayload(payload, options = {}) {
-  const matchId = normalizeMatchDetailsId(payload && payload.id);
+  const matchId = normalizeMatchDetailsId(
+    payload && (payload.id || payload.match_details_id)
+  );
   if (!matchId || !payload) {
     return payload;
   }
 
-  const nowMs = Date.now();
-  const loadHistory =
-    options && typeof options.loadHistory === "function"
-      ? options.loadHistory
-      : getBbcMatchHistoryGrouped;
-  const history = await loadHistory({
-    match_id: matchId,
-    start_ms: nowMs - 24 * 60 * 60 * 1000,
-    end_ms: nowMs + 60 * 60 * 1000,
-  });
-  if (!history || history.error || !Array.isArray(history.matches)) {
-    return payload;
+  const providedHistoryMatchesById =
+    options && options.historyMatchesById instanceof Map ? options.historyMatchesById : null;
+  let historyMatch = providedHistoryMatchesById ? providedHistoryMatchesById.get(matchId) || null : null;
+  if (!historyMatch && !providedHistoryMatchesById) {
+    const nowMs = Date.now();
+    const loadHistory =
+      options && typeof options.loadHistory === "function"
+        ? options.loadHistory
+        : getBbcMatchHistoryGrouped;
+    const history = await loadHistory({
+      match_id: matchId,
+      start_ms: nowMs - 24 * 60 * 60 * 1000,
+      end_ms: nowMs + 60 * 60 * 1000,
+    });
+    if (!history || history.error || !Array.isArray(history.matches)) {
+      return payload;
+    }
+
+    historyMatch =
+      history.matches.find((entry) => normalizeMatchDetailsId(entry && entry.match_id) === matchId) || null;
   }
 
-  const historyMatch =
-    history.matches.find((entry) => normalizeMatchDetailsId(entry && entry.match_id) === matchId) || null;
   const disallowedEvents = Array.isArray(historyMatch && historyMatch.events)
     ? historyMatch.events.filter(
       (event) => event && event.event_type === "goal" && event.disallowed_by_var
@@ -12940,15 +13232,40 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayload(payload, options = {}
     away: 0,
   };
 
+  const timelineEntryMatchesGoalTime = (entry, goalTime) => {
+    if (!entry || !goalTime) return false;
+    const normalizedGoalTime = String(goalTime).trim();
+    if (!normalizedGoalTime) return false;
+
+    const matchesTimeLabel = (candidate) => {
+      const normalizedCandidate = String(candidate || "").trim();
+      if (!normalizedCandidate) return false;
+      if (normalizedCandidate === normalizedGoalTime) return true;
+
+      const candidateMinute = parseStatusMinuteValue(normalizedCandidate);
+      const goalMinute = parseStatusMinuteValue(normalizedGoalTime);
+      return Number.isFinite(candidateMinute) && Number.isFinite(goalMinute) && candidateMinute === goalMinute;
+    };
+
+    return (
+      (Array.isArray(entry.goal_times) && entry.goal_times.some(matchesTimeLabel)) ||
+      (Array.isArray(entry.own_goal_times) && entry.own_goal_times.some(matchesTimeLabel))
+    );
+  };
+
   const mergeEvent = (targetList, event) => {
     const playerName = String(event && (event.scorer || event.player) ? (event.scorer || event.player) : "").trim();
     const goalTime = String(event && event.goal_time ? event.goal_time : "").trim();
-    if (!playerName || !goalTime) return false;
+    if (!goalTime) return false;
 
-    let target = targetList.find((entry) => String(entry && entry.player ? entry.player : "").trim() === playerName);
+    let target =
+      targetList.find((entry) => String(entry && entry.player ? entry.player : "").trim() === playerName) || null;
+    if (!target) {
+      target = targetList.find((entry) => timelineEntryMatchesGoalTime(entry, goalTime)) || null;
+    }
     if (!target) {
       target = {
-        player: playerName,
+        player: playerName || "Unknown",
         goal_times: [],
         own_goal_times: [],
         disallowed_goal_times: [],
@@ -13039,6 +13356,47 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayload(payload, options = {}
   );
 
   return merged;
+}
+
+async function mergeConfirmedVarDisallowedGoalsIntoPayloads(payloads, options = {}) {
+  const items = Array.isArray(payloads) ? payloads : [];
+  const matchIds = Array.from(
+    new Set(
+      items
+        .map((payload) => normalizeMatchDetailsId(payload && (payload.id || payload.match_details_id)))
+        .filter(Boolean)
+    )
+  );
+  if (matchIds.length === 0) {
+    return items;
+  }
+
+  const loadHistory =
+    options && typeof options.loadHistory === "function"
+      ? options.loadHistory
+      : getBbcMatchHistoryGrouped;
+  const nowMs = Date.now();
+  const history = await loadHistory({
+    start_ms: nowMs - 24 * 60 * 60 * 1000,
+    end_ms: nowMs + 60 * 60 * 1000,
+  });
+  const historyMatchesById = new Map();
+  if (history && !history.error && Array.isArray(history.matches)) {
+    history.matches.forEach((entry) => {
+      const matchId = normalizeMatchDetailsId(entry && entry.match_id);
+      if (!matchId || !matchIds.includes(matchId)) return;
+      historyMatchesById.set(matchId, entry);
+    });
+  }
+
+  return Promise.all(
+    items.map((payload) =>
+      mergeConfirmedVarDisallowedGoalsIntoPayload(payload, {
+        ...options,
+        historyMatchesById,
+      })
+    )
+  );
 }
 
 function scheduleMatchDetailsWarm(matchId, options = {}) {
@@ -13289,12 +13647,25 @@ async function updateBbcMatches(options = {}) {
       source: SOURCE_BBC_LIVE,
     });
     await updateRecentCache(SOURCE_BBC_LIVE);
+    const previousById = {};
+    filteredMatches.forEach((match) => {
+      const detailsId =
+        matchDetailsIdFromUrl(match && match.details_url) ||
+        normalizeMatchDetailsId(match && match.match_details_id);
+      if (!detailsId) return;
+      const existing = matchDetailsById.get(detailsId);
+      if (existing && typeof existing === "object") {
+        previousById[detailsId] = existing;
+      }
+    });
     indexMatchDetailsFromMatches(filteredMatches, bbcLastUpdated);
     const detailsSubset = collectMatchDetailsSubsetByMatches(filteredMatches);
-    await persistOperationalMatchDetailsSafe(detailsSubset, {
+    await persistCanonicalMatchDetailsSubsetSafe(detailsSubset, {
       replace: false,
       updated_at: bbcLastUpdated,
       source: SOURCE_BBC_LIVE,
+      reason: "bbc_live_poll",
+      previousById,
     });
     success = true;
     logPollSuccess("bbc_live_matches", {
@@ -16389,6 +16760,14 @@ app.get("/admin/redis", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_redis_ui.html"));
 });
 
+app.get("/admin/redis/matches", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_redis_matches_ui.html"));
+});
+
+app.get("/admin/redis/matches/:matchId", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_redis_matches_ui.html"));
+});
+
 app.get("/admin/devices", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_devices_ui.html"));
 });
@@ -16618,26 +16997,18 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       return;
     }
 
-    const mergedDataset = currentMergedMatchesDatasetSnapshot();
+    const canonicalSnapshot = await getOperationalMatchDetailsSnapshotSafe();
     const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
-    const matchDetailsSnapshot = currentFastMatchDetailsLookupSnapshot("matches_list_request");
-
-    const latestUpdated = newestIsoTimestamp([
-      mergedDataset.updated_at,
-      bbcRangeLastUpdated,
-      lastUpdated,
-      bbcLastUpdated,
-    ]);
+    const latestUpdated = newestIsoTimestamp([canonicalSnapshot.updated_at]);
     if (latestUpdated) {
       res.set("X-Last-Updated", latestUpdated);
     }
-    res.set("X-Operational-Source", mergedDataset.source || "unknown");
+    res.set("X-Operational-Source", canonicalSnapshot.source || "unknown");
     res.set(
       "X-Operational-Match-Details-Source",
-      matchDetailsSnapshot.source || "unknown"
+      canonicalSnapshot.source || "unknown"
     );
 
-    const mergedMatches = Array.isArray(mergedDataset.items) ? mergedDataset.items : [];
     const leagues = normalizeListParam(req.query.league).map(normalizeLeagueName);
     const teams = normalizeListParam(req.query.team);
     const channels = normalizeListParam(req.query.channel);
@@ -16653,7 +17024,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const homeNations = isTruthyParam(req.query.home_nations);
     const majorTournaments = isTruthyParam(req.query.major_tournaments);
 
-    let filtered = mergedMatches.filter((match) =>
+    let filtered = canonicalMatchDetailsRecordsToPublicListPayloads(canonicalSnapshot.records || {}).filter((match) =>
       matchesFilters(match, {
         leagues,
         teams,
@@ -16712,42 +17083,22 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       }
     }
 
-    // mergedMatchesForResponse() is stored in ascending kickoff order already.
+    // Canonical payloads are materialized in ascending kickoff order already.
     // Filtering preserves order, so only reverse for descending responses.
     if (sortOrder === "desc") {
       filtered = filtered.slice().reverse();
     }
-
-    let matchDetailsLookup = matchDetailsSnapshot.lookup || {};
-    const aggregateEnrichment = await enrichKnockoutAggregatesForListMatches(
-      filtered,
-      matchDetailsLookup
-    );
-    matchDetailsLookup = aggregateEnrichment.lookup || matchDetailsLookup;
-    const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(matchDetailsLookup);
-
-    let payload = dedupeMatchListPayloads(
-      filtered
-        .map((match) =>
-          toMatchListPayload(match, {
-            matchDetailsLookup,
-            matchDetailsIdentityIndex,
-          })
-        )
-        .filter(Boolean)
-    );
+    let payload = filtered;
     if (listMode) {
       payload = payload.filter((item) => isListPayloadVisibleForMode(item, listMode));
-    }
-    if (sortOrder === "desc") {
-      payload = payload.slice().reverse();
     }
 
     const totalCount = payload.length;
     const totalPages = totalCount > 0 ? Math.ceil(totalCount / pageSize) : 0;
     const pageStart = (page - 1) * pageSize;
     const pageEnd = pageStart + pageSize;
-    const paged = pageStart >= totalCount ? [] : payload.slice(pageStart, pageEnd);
+    const pagedRaw = pageStart >= totalCount ? [] : payload.slice(pageStart, pageEnd);
+    const paged = await mergeConfirmedVarDisallowedGoalsIntoPayloads(pagedRaw);
     const hasMore = page < totalPages;
 
     res.set("X-Total-Count", String(totalCount));
@@ -16855,7 +17206,8 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     return;
   }
 
-  const payload = matchDetailsById.get(matchId) || null;
+  const detailsLookup = await getOperationalMatchDetailsByIdSafe(matchId);
+  const payload = detailsLookup && detailsLookup.payload ? detailsLookup.payload : null;
   const fallbackMatchRecord = findInMemoryMatchRecordByMatchId(matchId);
   const responsePayload = await enrichMatchDetailsAggregateImmediately(
     payload || buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord),
@@ -16883,7 +17235,10 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     });
   }
 
-  res.set("X-Operational-Source", payload ? "memory" : "memory_fallback");
+  res.set(
+    "X-Operational-Source",
+    payload ? detailsLookup.source || "unknown" : "memory_fallback"
+  );
   if (stableResponsePayload.updated_at) {
     res.set("X-Last-Updated", stableResponsePayload.updated_at);
   } else if (matchDetailsLastUpdated) {
@@ -18070,7 +18425,8 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
   }
   markMatchDetailsActive(detailsId);
 
-  const payload = matchDetailsById.get(detailsId) || null;
+  const detailsLookup = await getOperationalMatchDetailsByIdSafe(detailsId);
+  const payload = detailsLookup && detailsLookup.payload ? detailsLookup.payload : null;
   const fallbackMatchRecord = findInMemoryMatchRecordByMatchId(detailsId);
   const responsePayload = await enrichMatchDetailsAggregateImmediately(
     payload || buildFallbackMatchDetailsPayload(detailsId, fallbackMatchRecord),
@@ -18098,7 +18454,10 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
     });
   }
 
-  res.set("X-Operational-Source", payload ? "memory" : "memory_fallback");
+  res.set(
+    "X-Operational-Source",
+    payload ? detailsLookup.source || "unknown" : "memory_fallback"
+  );
   if (stableResponsePayload.updated_at) {
     res.set("X-Last-Updated", stableResponsePayload.updated_at);
   } else if (matchDetailsLastUpdated) {
@@ -18145,9 +18504,13 @@ app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
             fetched,
             candidate.payload.details_url
           );
-          const upsertedMatchId = upsertMatchDetailsFromMatch(combined, nowIso);
-          if (upsertedMatchId) {
-            enriched.push(upsertedMatchId);
+          const result = await upsertCanonicalMatchDetailsFromMatch(combined, {
+            updated_at: nowIso,
+            source: "admin_backfill_matches",
+            reason: "admin_backfill_matches",
+          });
+          if (result && result.match_id) {
+            enriched.push(result.match_id);
           } else {
             failed.push(candidate.matchId);
           }
@@ -18167,23 +18530,6 @@ app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
   console.log(
     `Batch backfilled ${enriched.length} matches, ${failed.length} failed, ${skipped} skipped at ${nowIso}`
   );
-
-  if (enriched.length > 0) {
-    const updatedSubset = {};
-    enriched.forEach((matchId) => {
-      const payload = matchDetailsById.get(matchId);
-      if (payload && typeof payload === "object") {
-        updatedSubset[matchId] = payload;
-      }
-    });
-    if (Object.keys(updatedSubset).length > 0) {
-      await persistOperationalMatchDetailsSafe(updatedSubset, {
-        replace: false,
-        updated_at: nowIso,
-        source: "admin_backfill_matches",
-      });
-    }
-  }
 
   res.json({
     enriched_count: enriched.length,
@@ -18481,6 +18827,8 @@ const {
   getOperationalMatchDetails,
   getAllOperationalMatchDetails,
   getOperationalMatchDetailsSummary,
+  saveOperationalMatchWriteLogEntries,
+  getOperationalMatchWriteLog,
   __historyConfig: bbcHistoryConfig,
 } = require("./redis_client");
 
@@ -19167,6 +19515,11 @@ function summarizeAdminLiveActivityState(record, nowMs = Date.now()) {
   };
 }
 
+async function resolveCanonicalLiveActivityOperationalMatches() {
+  const snapshot = await getOperationalMatchDetailsSnapshotSafe();
+  return canonicalLiveActivityMatchesFromDetailsRecords(snapshot.records || {});
+}
+
 async function buildAdminLiveActivityPreview(record, nowMs = Date.now()) {
   const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
   if (
@@ -19174,31 +19527,12 @@ async function buildAdminLiveActivityPreview(record, nowMs = Date.now()) {
     typeof hooks.monitoredMatchStatesSnapshot !== "function" ||
     typeof hooks.buildLiveActivityEntriesForUser !== "function" ||
     typeof hooks.buildLiveActivityPresentationForUser !== "function" ||
-    typeof hooks.buildLiveActivityContentState !== "function" ||
-    typeof hooks.combineLiveActivityOperationalMatches !== "function" ||
-    typeof hooks.enrichLiveActivityOperationalMatches !== "function"
+    typeof hooks.buildLiveActivityContentState !== "function"
   ) {
     return null;
   }
 
-  const [mergedDataset, recentDataset] = await Promise.all([
-    getOperationalDataset("merged_matches"),
-    getOperationalDataset("recent_matches"),
-  ]);
-  const matchDetailsSnapshot = currentFastMatchDetailsLookupSnapshot("admin_live_activity_preview");
-  const detailsRecords = matchDetailsSnapshot && matchDetailsSnapshot.lookup
-    ? matchDetailsSnapshot.lookup
-    : {};
-  const operationalMatches = hooks.combineLiveActivityOperationalMatches(
-    hooks.enrichLiveActivityOperationalMatches(
-      mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
-      detailsRecords
-    ),
-    hooks.enrichLiveActivityOperationalMatches(
-      recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : [],
-      detailsRecords
-    )
-  );
+  const operationalMatches = await resolveCanonicalLiveActivityOperationalMatches();
   const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
   const entries = hooks.buildLiveActivityEntriesForUser(
     record,
@@ -19688,6 +20022,91 @@ app.get(`${API_PREFIX}/admin/results/:matchId`, async (req, res) => {
     res.status(500).json({
       error: "Failed to retrieve admin result details",
       message: error.message,
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/admin/redis/matches`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const pageSize = parsePositiveInt(req.query.page_size, 100, 1, 100);
+  const page = parsePositiveInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
+
+  try {
+    const snapshot = await getOperationalMatchDetailsSnapshotSafe();
+    const matches = Object.values(snapshot.records || {})
+      .map((payload) => toOperationalAdminMatchPayload(payload))
+      .filter(Boolean)
+      .sort(operationalMatchSortDesc);
+
+    const totalCount = matches.length;
+    const totalPages = totalCount > 0 ? Math.ceil(totalCount / pageSize) : 0;
+    const pageStart = (page - 1) * pageSize;
+    const items = pageStart >= totalCount ? [] : matches.slice(pageStart, pageStart + pageSize);
+
+    res.status(200).json({
+      success: true,
+      generated_at: new Date().toISOString(),
+      page,
+      page_size: pageSize,
+      total_count: totalCount,
+      total_pages: totalPages,
+      has_more: page < totalPages,
+      source: snapshot.source || "unknown",
+      updated_at: snapshot.updated_at || null,
+      matches: items,
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving canonical Redis matches:", error);
+    res.status(500).json({
+      error: "Failed to retrieve canonical Redis matches",
+      message: error.message || String(error),
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/admin/redis/matches/:matchId`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const matchId = normalizeMatchDetailsId(req.params.matchId);
+  if (!matchId) {
+    res.status(400).json({
+      error: "Invalid match id. Expected BBC details id (e.g. c043pne0q3kt).",
+    });
+    return;
+  }
+
+  const logPageSize = parsePositiveInt(req.query.log_page_size, 500, 1, 1000);
+  const logPage = parsePositiveInt(req.query.log_page, 1, 1, Number.MAX_SAFE_INTEGER);
+
+  try {
+    const [detailsLookup, writeLog] = await Promise.all([
+      getOperationalMatchDetailsByIdSafe(matchId),
+      getOperationalMatchWriteLog(matchId, {
+        page: logPage,
+        page_size: logPageSize,
+      }),
+    ]);
+
+    if (!detailsLookup || !detailsLookup.payload) {
+      res.status(404).json({
+        error: "No canonical Redis match payload found for match id.",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      generated_at: new Date().toISOString(),
+      match_id: matchId,
+      source: detailsLookup.source || "unknown",
+      match: toOperationalAdminMatchPayload(detailsLookup.payload),
+      match_timeline: buildMatchEventTimeline(detailsLookup.payload),
+      write_log: writeLog,
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving canonical Redis match detail:", error);
+    res.status(500).json({
+      error: "Failed to retrieve canonical Redis match detail",
+      message: error.message || String(error),
     });
   }
 });
@@ -20794,33 +21213,14 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
     let serverPresentation = null;
     try {
       const nowMs = Date.now();
-      const [mergedDataset, recentDataset] = await Promise.all([
-        getOperationalDataset("merged_matches"),
-        getOperationalDataset("recent_matches"),
-      ]);
       const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
       if (
         hooks &&
         typeof hooks.monitoredMatchStatesSnapshot === "function" &&
         typeof hooks.buildLiveActivityEntriesForUser === "function" &&
-        typeof hooks.buildLiveActivityPresentationForUser === "function" &&
-        typeof hooks.combineLiveActivityOperationalMatches === "function" &&
-        typeof hooks.enrichLiveActivityOperationalMatches === "function"
+        typeof hooks.buildLiveActivityPresentationForUser === "function"
       ) {
-        const matchDetailsSnapshot = currentFastMatchDetailsLookupSnapshot("live_activity_test_state");
-        const detailsRecords = matchDetailsSnapshot && matchDetailsSnapshot.lookup
-          ? matchDetailsSnapshot.lookup
-          : {};
-        const operationalMatches = hooks.combineLiveActivityOperationalMatches(
-          hooks.enrichLiveActivityOperationalMatches(
-            mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
-            detailsRecords
-          ),
-          hooks.enrichLiveActivityOperationalMatches(
-            recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : [],
-            detailsRecords
-          )
-        );
+        const operationalMatches = await resolveCanonicalLiveActivityOperationalMatches();
         const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
         const entries = hooks.buildLiveActivityEntriesForUser(
           record,
@@ -21871,9 +22271,25 @@ if (shouldRunRuntime) {
   matchMonitor.initialize(SERVER_BASE_URL);
 }
 matchMonitor.setLiveActivityMatchDetailsProvider(() => {
-  const snapshot = currentFastMatchDetailsLookupSnapshot("live_activity_eval");
-  return snapshot && snapshot.lookup ? snapshot.lookup : {};
+  return getOperationalMatchDetailsSnapshotSafe().then((snapshot) =>
+    snapshot && snapshot.records ? snapshot.records : {}
+  );
 });
+if (typeof matchMonitor.setCanonicalMatchStateWriter === "function") {
+  matchMonitor.setCanonicalMatchStateWriter((match, metadata = {}) =>
+    upsertCanonicalMatchDetailsFromMatch(match, {
+      source:
+        metadata && typeof metadata.source === "string" && metadata.source.trim()
+          ? metadata.source.trim()
+          : "match_monitor",
+      reason:
+        metadata && typeof metadata.reason === "string" && metadata.reason.trim()
+          ? metadata.reason.trim()
+          : "match_monitor_poll",
+      audit_metadata: metadata && typeof metadata === "object" ? metadata : null,
+    })
+  );
+}
 
 // Status endpoint for monitoring
 app.get(`${API_PREFIX}/monitor/status`, (req, res) => {
@@ -21936,30 +22352,11 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
             typeof hooks.buildLiveActivityPresentationForUser === "function" &&
             typeof hooks.buildLiveActivityContentState === "function" &&
             typeof hooks.collectLiveActivityTimelineCandidateMatchIds === "function" &&
-            typeof hooks.combineLiveActivityOperationalMatches === "function" &&
-            typeof hooks.enrichLiveActivityOperationalMatches === "function" &&
             typeof hooks.loadRedisDelayedSnapshotsByMatchId === "function"
           ) {
             const nowMs = Date.now();
-            const [mergedDataset, recentDataset] = await Promise.all([
-              getOperationalDataset("merged_matches"),
-              getOperationalDataset("recent_matches"),
-            ]);
             const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
-            const matchDetailsSnapshot = currentFastMatchDetailsLookupSnapshot("live_activity_reconcile");
-            const detailsRecords = matchDetailsSnapshot && matchDetailsSnapshot.lookup
-              ? matchDetailsSnapshot.lookup
-              : {};
-            const operationalMatches = hooks.combineLiveActivityOperationalMatches(
-              hooks.enrichLiveActivityOperationalMatches(
-                mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
-                detailsRecords
-              ),
-              hooks.enrichLiveActivityOperationalMatches(
-                recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : [],
-                detailsRecords
-              )
-            );
+            const operationalMatches = await resolveCanonicalLiveActivityOperationalMatches();
             const entries = hooks.buildLiveActivityEntriesForUser(
               record,
               monitoredEntries,
@@ -22073,8 +22470,13 @@ module.exports = {
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
     getMatchDetailsStatePayload,
+    canonicalMatchDetailsToListPayload,
+    canonicalMatchDetailsRecordsToListPayloads,
+    canonicalMatchDetailsRecordsToPublicListPayloads,
+    buildCanonicalMatchWriteAuditEntry,
     transformBbcLiveMatchWithDetails,
     mergeConfirmedVarDisallowedGoalsIntoPayload,
+    mergeConfirmedVarDisallowedGoalsIntoPayloads,
     enrichMatchDetailsAggregateImmediately,
     enrichKnockoutAggregatesForListMatches,
     buildPrometheusMetricsText,

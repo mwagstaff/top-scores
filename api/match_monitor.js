@@ -1,6 +1,5 @@
 const {
   getAllUserPreferences,
-  getOperationalDataset,
   getAllOperationalMatchDetails,
   updateUserLiveActivityState,
   saveLiveActivityDebugRecord,
@@ -60,8 +59,6 @@ const LIVE_ACTIVITY_FINISHED_RETENTION_MS = 8 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_DELAY_SNAPSHOT_STALE_TOLERANCE_MS = Math.max(POLL_INTERVAL_MS * 3, 60 * 1000);
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
-const LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES = "merged_matches";
-const LIVE_ACTIVITY_OPERATIONAL_DATASET_RECENT_MATCHES = "recent_matches";
 const FANTASY_DEADLINE_REMINDER_EVAL_INTERVAL_MS = 60 * 1000;
 const FANTASY_DEADLINE_REMINDER_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
 const FANTASY_DEADLINE_REMINDER_DEFAULT_TIMEZONE = "Europe/London";
@@ -102,6 +99,7 @@ let liveActivityTeamRatingLastAttemptAtMs = 0;
 let liveActivityTeamRatingRefreshPromise = null;
 let liveActivityPremierLeagueTeamLookup = null;
 let liveActivityMatchDetailsProvider = null;
+let canonicalMatchStateWriter = null;
 
 // Match status helpers - mirrors server.js MATCH_STATUS_* constants
 const MATCH_STATUS_MINUTE_PATTERN = /^(\d{1,3})(?:\+(\d{1,2}))?'?$/;
@@ -2020,6 +2018,10 @@ function setLiveActivityMatchDetailsProvider(provider) {
   liveActivityMatchDetailsProvider = typeof provider === "function" ? provider : null;
 }
 
+function setCanonicalMatchStateWriter(writer) {
+  canonicalMatchStateWriter = typeof writer === "function" ? writer : null;
+}
+
 /**
  * Start monitoring for match events
  */
@@ -2553,6 +2555,21 @@ async function pollMatchDetails(matchId) {
 
     // Detect changes and trigger notifications
     await detectAndNotifyChanges(matchId, monitorState, monitorState.lastState, currentMatch);
+
+    if (typeof canonicalMatchStateWriter === "function") {
+      try {
+        await canonicalMatchStateWriter(currentMatch, {
+          matchId,
+          source: "match_monitor_poll",
+          reason: "monitor_poll",
+        });
+      } catch (error) {
+        console.warn(
+          `[MatchMonitor] Failed to persist canonical match state for ${matchId}:`,
+          error && error.message ? error.message : error
+        );
+      }
+    }
 
     // Update state
     monitorState.lastState = currentMatch;
@@ -3260,6 +3277,27 @@ function enrichLiveActivityOperationalMatches(matches, detailsRecords) {
     .filter(Boolean);
 }
 
+function canonicalLiveActivityMatchesFromDetailsRecords(detailsRecords) {
+  const records = detailsRecords instanceof Map
+    ? Array.from(detailsRecords.values())
+    : detailsRecords && typeof detailsRecords === "object"
+      ? Object.values(detailsRecords)
+      : [];
+
+  return records
+    .filter((payload) => payload && typeof payload === "object")
+    .map((payload) => {
+      const matchId = String(payload.id || payload.match_details_id || "").trim();
+      if (!matchId) return null;
+      return {
+        ...payload,
+        match_details_id: matchId,
+        tv_channels: Array.isArray(payload.tv_channels) ? payload.tv_channels : [],
+      };
+    })
+    .filter(Boolean);
+}
+
 async function resolveLiveActivityMatchDetailsRecords(options = {}) {
   const explicitRecords =
     options && options.matchDetailsRecords && typeof options.matchDetailsRecords === "object"
@@ -3445,44 +3483,7 @@ function mergeCanonicalLiveActivityMatch(canonicalMatch, liveStateMatch) {
     };
   }
 
-  const merged = mergeSnapshotWithFallback(canonical, liveState);
-  const preferredCurrentState =
-    compareLiveActivitySnapshotFreshness(canonical, liveState) > 0 ? canonical : liveState;
-  const liveStateFields = [
-    "home_score",
-    "away_score",
-    "aggregate_home_score",
-    "aggregate_away_score",
-    "score_status",
-    "home_goal_scorers",
-    "away_goal_scorers",
-    "home_assists",
-    "away_assists",
-    "home_red_cards",
-    "away_red_cards",
-    "home_yellow_cards",
-    "away_yellow_cards",
-    "penalty_result",
-    "updated_at",
-  ];
-  liveStateFields.forEach((field) => {
-    if (Object.prototype.hasOwnProperty.call(preferredCurrentState, field)) {
-      merged[field] = preferredCurrentState[field];
-    }
-  });
-
-  const canonicalIsTerminal =
-    isFinishedMatchStatus(canonical.score_status) ||
-    isPenaltyShootoutStatus(canonical.score_status);
-  const canonicalIsAtLeastAsFreshAsLiveState =
-    compareLiveActivitySnapshotFreshness(canonical, liveState) >= 0;
-  if (canonicalIsTerminal && canonicalIsAtLeastAsFreshAsLiveState) {
-    merged.score_status = canonical.score_status;
-    merged.home_score = canonical.home_score;
-    merged.away_score = canonical.away_score;
-    merged.aggregate_home_score = canonical.aggregate_home_score;
-    merged.aggregate_away_score = canonical.aggregate_away_score;
-  }
+  const merged = mergeSnapshotWithFallback(liveState, canonical);
 
   const canonicalChannels = canonicalLiveActivityChannelsForMatch(canonical);
   const liveStateChannels = canonicalLiveActivityChannelsForMatch(liveState);
@@ -5400,21 +5401,8 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
   try {
     await ensureLiveActivityTeamRatingCache(nowMs);
     const monitoredEntries = monitoredMatchStatesSnapshot(nowMs);
-    const [mergedDataset, recentDataset, detailsRecords] = await Promise.all([
-      getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_MERGED_MATCHES),
-      getOperationalDataset(LIVE_ACTIVITY_OPERATIONAL_DATASET_RECENT_MATCHES),
-      resolveLiveActivityMatchDetailsRecords(options),
-    ]);
-    const operationalMatches = combineLiveActivityOperationalMatches(
-      enrichLiveActivityOperationalMatches(
-        mergedDataset && Array.isArray(mergedDataset.payload) ? mergedDataset.payload : [],
-        detailsRecords
-      ),
-      enrichLiveActivityOperationalMatches(
-        recentDataset && Array.isArray(recentDataset.payload) ? recentDataset.payload : [],
-        detailsRecords
-      )
-    );
+    const detailsRecords = await resolveLiveActivityMatchDetailsRecords(options);
+    const operationalMatches = canonicalLiveActivityMatchesFromDetailsRecords(detailsRecords);
     const users = await getAllUserPreferences();
     if (!Array.isArray(users) || users.length === 0) return;
 
@@ -6227,6 +6215,7 @@ function getStatus(options = {}) {
 module.exports = {
   initialize,
   setLiveActivityMatchDetailsProvider,
+  setCanonicalMatchStateWriter,
   startMonitoring,
   stopMonitoring,
   getStatus,
@@ -6269,6 +6258,7 @@ module.exports = {
     compareLiveActivityMatches,
     compareUpcomingLiveActivityMatches,
     buildLiveActivityEntriesForUser,
+    canonicalLiveActivityMatchesFromDetailsRecords,
     collectLiveActivityTimelineCandidateMatchIds,
     combineLiveActivityOperationalMatches,
     dedupeLiveActivityMatches,

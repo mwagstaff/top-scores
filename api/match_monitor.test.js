@@ -1299,7 +1299,7 @@ test("buildLiveActivityEntriesForUser collapses duplicate live activity fixtures
   assert.equal(entries[0].state.history.length, 1);
 });
 
-test("mergeCanonicalLiveActivityMatch keeps fresher live state for active matches", () => {
+test("mergeCanonicalLiveActivityMatch keeps canonical state for active matches", () => {
   const merged = __testHooks.mergeCanonicalLiveActivityMatch(
     {
       match_details_id: "clive123",
@@ -1327,8 +1327,8 @@ test("mergeCanonicalLiveActivityMatch keeps fresher live state for active matche
     }
   );
 
-  assert.equal(merged.score_status, "13");
-  assert.equal(merged.home_score, 1);
+  assert.equal(merged.score_status, "12");
+  assert.equal(merged.home_score, 0);
   assert.equal(merged.away_score, 0);
 });
 
@@ -1384,7 +1384,7 @@ test("mergeCanonicalLiveActivityMatch prefers more advanced canonical state when
   ]);
 });
 
-test("mergeCanonicalLiveActivityMatch prefers newer finished snapshot when canonical result is stale", () => {
+test("mergeCanonicalLiveActivityMatch keeps canonical finished snapshot even when monitor differs", () => {
   const merged = __testHooks.mergeCanonicalLiveActivityMatch(
     {
       match_details_id: "c8r1zve354lt",
@@ -1415,7 +1415,7 @@ test("mergeCanonicalLiveActivityMatch prefers newer finished snapshot when canon
   );
 
   assert.equal(merged.score_status, "FT");
-  assert.equal(merged.home_score, 1);
+  assert.equal(merged.home_score, 2);
   assert.equal(merged.away_score, 0);
 });
 

@@ -1248,9 +1248,7 @@ final class MatchesStore: ObservableObject {
     ) -> [Match] {
         let filtered = Self.applyPreferenceFilters(to: matches, snapshot: snapshot, mode: mode)
         let deduplicated = Self.deduplicatedMatches(filtered)
-        let sorted = Self.sortedMatches(deduplicated, descendingDates: mode == .results)
-        guard mode == .fixtures, !cachedBbcLiveMatches.isEmpty else { return sorted }
-        return MatchScoreResolver.applyScores(to: sorted, using: cachedBbcLiveMatches)
+        return Self.sortedMatches(deduplicated, descendingDates: mode == .results)
     }
 
     private func fixtureLazyLoadRanges(for matches: [Match]) -> [ClosedRange<Date>] {
