@@ -101,15 +101,15 @@ struct MatchesView: View {
     private static let searchDebounceNanoseconds: UInt64 = 250_000_000
     private static let searchFilterQueue = DispatchQueue(label: "TopScores.match-search", qos: .userInitiated)
 
-    private enum CompactFixturesSpacing {
-        static let dayHeaderTopFirst: CGFloat = 4
-        static let dayHeaderTop: CGFloat = 8
-        static let dayHeaderBottom: CGFloat = 1
-        static let leagueHeadingTop: CGFloat = 2
-        static let leagueHeadingBottom: CGFloat = 1
-        static let rowTop: CGFloat = 1
-        static let rowBottom: CGFloat = 3
-        static let minListRowHeight: CGFloat = 18
+    private struct CompactFixturesSpacingProfile {
+        let dayHeaderTopFirst: CGFloat
+        let dayHeaderTop: CGFloat
+        let dayHeaderBottom: CGFloat
+        let leagueHeadingTop: CGFloat
+        let leagueHeadingBottom: CGFloat
+        let rowTop: CGFloat
+        let rowBottom: CGFloat
+        let minListRowHeight: CGFloat
     }
 
     private let groupedSideEffectsDelayNanos: UInt64 = 1_500_000_000
@@ -119,7 +119,56 @@ struct MatchesView: View {
     }
 
     private var usesCompactFixtureRows: Bool {
-        mode == .fixtures && preferences.compactFixturesViewEnabled
+        mode == .fixtures && preferences.fixturesViewDensity != .extended
+    }
+
+    private var compactFixturesSpacing: CompactFixturesSpacingProfile {
+        switch preferences.fixturesViewDensity {
+        case .extended:
+            return CompactFixturesSpacingProfile(
+                dayHeaderTopFirst: 6,
+                dayHeaderTop: 10,
+                dayHeaderBottom: 2,
+                leagueHeadingTop: 3,
+                leagueHeadingBottom: 2,
+                rowTop: 2,
+                rowBottom: 5,
+                minListRowHeight: 24
+            )
+        case .compact:
+            return CompactFixturesSpacingProfile(
+                dayHeaderTopFirst: 6,
+                dayHeaderTop: 10,
+                dayHeaderBottom: 2,
+                leagueHeadingTop: 3,
+                leagueHeadingBottom: 2,
+                rowTop: 2,
+                rowBottom: 5,
+                minListRowHeight: 24
+            )
+        case .ultraCompact:
+            return CompactFixturesSpacingProfile(
+                dayHeaderTopFirst: 4,
+                dayHeaderTop: 8,
+                dayHeaderBottom: 1,
+                leagueHeadingTop: 2,
+                leagueHeadingBottom: 1,
+                rowTop: 1,
+                rowBottom: 3,
+                minListRowHeight: 18
+            )
+        }
+    }
+
+    private var compactDayHeaderFont: Font {
+        switch preferences.fixturesViewDensity {
+        case .extended:
+            return .headline
+        case .compact:
+            return .headline
+        case .ultraCompact:
+            return .subheadline
+        }
     }
 
     private var normalizedDebouncedQuery: String {
@@ -315,10 +364,10 @@ struct MatchesView: View {
                         .listRowInsets(
                             EdgeInsets(
                                 top: index == 0
-                                    ? CompactFixturesSpacing.dayHeaderTopFirst
-                                    : CompactFixturesSpacing.dayHeaderTop,
+                                    ? compactFixturesSpacing.dayHeaderTopFirst
+                                    : compactFixturesSpacing.dayHeaderTop,
                                 leading: 16,
-                                bottom: CompactFixturesSpacing.dayHeaderBottom,
+                                bottom: compactFixturesSpacing.dayHeaderBottom,
                                 trailing: 16
                             )
                         )
@@ -341,7 +390,7 @@ struct MatchesView: View {
         .scrollContentBackground(.hidden)
         .environment(
             \.defaultMinListRowHeight,
-            usesCompactFixtureRows ? CompactFixturesSpacing.minListRowHeight : 44
+            usesCompactFixtureRows ? compactFixturesSpacing.minListRowHeight : 44
         )
         .safeAreaPadding(.bottom, 80)
         .refreshable {
@@ -353,7 +402,7 @@ struct MatchesView: View {
     private func sectionHeader(for day: MatchDay) -> some View {
         HStack(spacing: 12) {
             Text(day.displayDate)
-                .font(usesCompactFixtureRows ? .subheadline : .title3)
+                .font(usesCompactFixtureRows ? compactDayHeaderFont : .title3)
                 .fontWeight(.semibold)
 
             Spacer()
@@ -395,9 +444,9 @@ struct MatchesView: View {
             .textCase(nil)
             .listRowInsets(
                 EdgeInsets(
-                    top: usesCompactFixtureRows ? CompactFixturesSpacing.leagueHeadingTop : 8,
+                    top: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingTop : 8,
                     leading: 16,
-                    bottom: usesCompactFixtureRows ? CompactFixturesSpacing.leagueHeadingBottom : 2,
+                    bottom: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingBottom : 2,
                     trailing: 16
                 )
             )
@@ -421,6 +470,7 @@ struct MatchesView: View {
                 showFantasyPlayerContributions: mode == .fixtures,
                 teamLogoScale: 1.1,
                 layoutStyle: usesCompactFixtureRows ? .compactFixture : .standard,
+                compactDensity: preferences.fixturesViewDensity,
                 // Only enable this if needing to debug elo scores
                 // centerFooterText: matchDebugFooterText(for: match)
                 fantasyContext: fantasyViewModel.matchRowContext
@@ -440,9 +490,9 @@ struct MatchesView: View {
         .buttonStyle(.plain)
         .listRowInsets(
             EdgeInsets(
-                top: usesCompactFixtureRows ? CompactFixturesSpacing.rowTop : 4,
+                top: usesCompactFixtureRows ? compactFixturesSpacing.rowTop : 4,
                 leading: 16,
-                bottom: usesCompactFixtureRows ? CompactFixturesSpacing.rowBottom : 8,
+                bottom: usesCompactFixtureRows ? compactFixturesSpacing.rowBottom : 8,
                 trailing: 16
             )
         )

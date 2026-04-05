@@ -23,6 +23,7 @@ struct MatchRow: View {
     var isLargePresentation: Bool = false
     var teamLogoScale: CGFloat = 1.0
     var layoutStyle: MatchRowLayoutStyle = .standard
+    var compactDensity: FixturesViewDensity = .compact
     var fantasyContext: FantasyMatchRowContext = .empty
 
     var body: some View {
@@ -133,7 +134,7 @@ struct MatchRow: View {
     }
 
     private var compactFixtureMatchCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: compactFixtureVerticalSpacing) {
             if showLeague {
                 Text(match.displayLeague)
                     .font(.caption2)
@@ -141,7 +142,7 @@ struct MatchRow: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(alignment: .center, spacing: 6) {
+            HStack(alignment: .center, spacing: compactFixtureHorizontalSpacing) {
                 TeamLogo(name: match.homeTeam, size: logoSize)
 
                 Text(match.homeTeam)
@@ -384,7 +385,7 @@ struct MatchRow: View {
         case .standard:
             return .subheadline
         case .compactFixture:
-            return .footnote
+            return compactDensity == .compact ? .subheadline : .footnote
         }
     }
 
@@ -400,7 +401,7 @@ struct MatchRow: View {
         case .standard:
             return .headline
         case .compactFixture:
-            return .subheadline
+            return compactDensity == .compact ? .headline : .subheadline
         }
     }
 
@@ -412,7 +413,7 @@ struct MatchRow: View {
         case .standard:
             return .caption
         case .compactFixture:
-            return .caption2
+            return compactDensity == .compact ? .caption : .caption2
         }
     }
 
@@ -425,7 +426,7 @@ struct MatchRow: View {
             case .standard:
                 baseSize = 22
             case .compactFixture:
-                baseSize = 18
+                baseSize = compactDensity == .compact ? 20 : 18
             }
         }
         return baseSize * teamLogoScale
@@ -439,7 +440,7 @@ struct MatchRow: View {
         case .standard:
             return 12
         case .compactFixture:
-            return 8
+            return compactDensity == .compact ? 10 : 8
         }
     }
 
@@ -457,6 +458,14 @@ struct MatchRow: View {
 
     private var compactBroadcastLogoWidth: CGFloat {
         isLargePresentation ? 26 : 22
+    }
+
+    private var compactFixtureVerticalSpacing: CGFloat {
+        compactDensity == .compact ? 10 : 8
+    }
+
+    private var compactFixtureHorizontalSpacing: CGFloat {
+        compactDensity == .compact ? 8 : 6
     }
 
     private var homeTeamEvents: [MatchTeamTimelineEvent] {

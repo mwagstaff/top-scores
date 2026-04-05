@@ -55,8 +55,14 @@ struct PreferencesView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
-                        Toggle("Compact view", isOn: compactFixturesViewEnabledBinding)
-                        Text("Shows Fixtures in a denser single-line layout with the primary TV logo to fit more matches on screen.")
+                        Picker("Fixtures view", selection: fixturesViewDensityBinding) {
+                            ForEach(FixturesViewDensity.allCases) { density in
+                                Text(density.title).tag(density)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("Extended shows the original two-row layout. Compact loosens the single-line layout slightly. Ultra compact matches the tighter previous setting.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -455,10 +461,10 @@ struct PreferencesView: View {
         )
     }
 
-    private var compactFixturesViewEnabledBinding: Binding<Bool> {
+    private var fixturesViewDensityBinding: Binding<FixturesViewDensity> {
         Binding(
-            get: { preferences.compactFixturesViewEnabled },
-            set: { preferences.compactFixturesViewEnabled = $0 }
+            get: { preferences.fixturesViewDensity },
+            set: { preferences.fixturesViewDensity = $0 }
         )
     }
 

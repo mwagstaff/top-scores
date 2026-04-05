@@ -28,7 +28,7 @@ struct Top_ScoresTests {
         #expect(store.fantasyDeadlineRemindersEnabled)
         #expect(store.matchGroupSortOrder == .kickoffThenTeamScore)
         #expect(!store.showTodayUnfinishedFixturesBadge)
-        #expect(!store.compactFixturesViewEnabled)
+        #expect(store.fixturesViewDensity == .compact)
         #expect(!store.showFantasyFixtureLogos)
         #expect(!store.showFantasyExpectedPoints)
         #expect(!store.showFantasyRealTimePoints)
@@ -36,15 +36,24 @@ struct Top_ScoresTests {
         #expect(!store.channelFilterEnabled)
     }
 
-    @Test @MainActor func preferencesStore_persistsCompactFixturesViewSetting() async throws {
+    @Test @MainActor func preferencesStore_persistsFixturesViewDensitySetting() async throws {
         let defaults = UserDefaults(suiteName: #function)!
         defaults.removePersistentDomain(forName: #function)
 
         let store = PreferencesStore(userDefaults: defaults)
-        store.compactFixturesViewEnabled = true
+        store.fixturesViewDensity = .ultraCompact
 
         let reloaded = PreferencesStore(userDefaults: defaults)
-        #expect(reloaded.compactFixturesViewEnabled)
+        #expect(reloaded.fixturesViewDensity == .ultraCompact)
+    }
+
+    @Test @MainActor func preferencesStore_migratesLegacyCompactFixturesToggleToUltraCompact() async throws {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        defaults.set(true, forKey: "preferences.compactFixturesViewEnabled")
+
+        let store = PreferencesStore(userDefaults: defaults)
+        #expect(store.fixturesViewDensity == .ultraCompact)
     }
 
     @Test @MainActor func preferencesStore_migratesLegacyFixturesFantasyToggle() async throws {
