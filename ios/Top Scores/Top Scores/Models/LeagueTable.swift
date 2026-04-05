@@ -1,6 +1,6 @@
 import Foundation
 
-struct LeagueTablesEnvelope: Codable, Hashable {
+struct LeagueTablesEnvelope: Codable, Hashable, Sendable {
     let updatedAt: String?
     let count: Int?
     let leagues: [LeagueTable]
@@ -10,9 +10,29 @@ struct LeagueTablesEnvelope: Codable, Hashable {
         case count
         case leagues
     }
+
+    nonisolated init(updatedAt: String?, count: Int?, leagues: [LeagueTable]) {
+        self.updatedAt = updatedAt
+        self.count = count
+        self.leagues = leagues
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        count = try container.decodeIfPresent(Int.self, forKey: .count)
+        leagues = try container.decodeIfPresent([LeagueTable].self, forKey: .leagues) ?? []
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(count, forKey: .count)
+        try container.encode(leagues, forKey: .leagues)
+    }
 }
 
-struct LeagueTable: Identifiable, Codable, Hashable {
+struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
     let leagueID: String
     let leagueName: String
     let stageName: String?
@@ -20,7 +40,7 @@ struct LeagueTable: Identifiable, Codable, Hashable {
     let updatedAt: String?
     let rows: [LeagueTableRow]
 
-    var id: String {
+    nonisolated var id: String {
         leagueID
     }
 
@@ -32,9 +52,45 @@ struct LeagueTable: Identifiable, Codable, Hashable {
         case updatedAt = "updated_at"
         case rows
     }
+
+    nonisolated init(
+        leagueID: String,
+        leagueName: String,
+        stageName: String?,
+        sourceURL: String?,
+        updatedAt: String?,
+        rows: [LeagueTableRow]
+    ) {
+        self.leagueID = leagueID
+        self.leagueName = leagueName
+        self.stageName = stageName
+        self.sourceURL = sourceURL
+        self.updatedAt = updatedAt
+        self.rows = rows
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        leagueID = try container.decode(String.self, forKey: .leagueID)
+        leagueName = try container.decode(String.self, forKey: .leagueName)
+        stageName = try container.decodeIfPresent(String.self, forKey: .stageName)
+        sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        rows = try container.decodeIfPresent([LeagueTableRow].self, forKey: .rows) ?? []
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(leagueID, forKey: .leagueID)
+        try container.encode(leagueName, forKey: .leagueName)
+        try container.encodeIfPresent(stageName, forKey: .stageName)
+        try container.encodeIfPresent(sourceURL, forKey: .sourceURL)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try container.encode(rows, forKey: .rows)
+    }
 }
 
-struct LeagueTableRow: Identifiable, Codable, Hashable {
+struct LeagueTableRow: Identifiable, Codable, Hashable, Sendable {
     let position: Int
     let team: String
     let played: Int
@@ -48,7 +104,7 @@ struct LeagueTableRow: Identifiable, Codable, Hashable {
     let form: [String]
     let rankStatus: String?
 
-    var id: String {
+    nonisolated var id: String {
         "\(position)-\(team)"
     }
 
@@ -66,15 +122,92 @@ struct LeagueTableRow: Identifiable, Codable, Hashable {
         case form
         case rankStatus = "rank_status"
     }
+
+    nonisolated init(
+        position: Int,
+        team: String,
+        played: Int,
+        won: Int,
+        drawn: Int,
+        lost: Int,
+        goalsFor: Int,
+        goalsAgainst: Int,
+        goalDifference: Int,
+        points: Int,
+        form: [String],
+        rankStatus: String?
+    ) {
+        self.position = position
+        self.team = team
+        self.played = played
+        self.won = won
+        self.drawn = drawn
+        self.lost = lost
+        self.goalsFor = goalsFor
+        self.goalsAgainst = goalsAgainst
+        self.goalDifference = goalDifference
+        self.points = points
+        self.form = form
+        self.rankStatus = rankStatus
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        position = try container.decode(Int.self, forKey: .position)
+        team = try container.decode(String.self, forKey: .team)
+        played = try container.decode(Int.self, forKey: .played)
+        won = try container.decode(Int.self, forKey: .won)
+        drawn = try container.decode(Int.self, forKey: .drawn)
+        lost = try container.decode(Int.self, forKey: .lost)
+        goalsFor = try container.decode(Int.self, forKey: .goalsFor)
+        goalsAgainst = try container.decode(Int.self, forKey: .goalsAgainst)
+        goalDifference = try container.decode(Int.self, forKey: .goalDifference)
+        points = try container.decode(Int.self, forKey: .points)
+        form = try container.decodeIfPresent([String].self, forKey: .form) ?? []
+        rankStatus = try container.decodeIfPresent(String.self, forKey: .rankStatus)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(position, forKey: .position)
+        try container.encode(team, forKey: .team)
+        try container.encode(played, forKey: .played)
+        try container.encode(won, forKey: .won)
+        try container.encode(drawn, forKey: .drawn)
+        try container.encode(lost, forKey: .lost)
+        try container.encode(goalsFor, forKey: .goalsFor)
+        try container.encode(goalsAgainst, forKey: .goalsAgainst)
+        try container.encode(goalDifference, forKey: .goalDifference)
+        try container.encode(points, forKey: .points)
+        try container.encode(form, forKey: .form)
+        try container.encodeIfPresent(rankStatus, forKey: .rankStatus)
+    }
 }
 
 struct LeagueTablesCachePayload: Codable, Sendable {
     let fetchedAt: Date
     let response: LeagueTablesResponse
 
+    private enum CodingKeys: String, CodingKey {
+        case fetchedAt
+        case response
+    }
+
     nonisolated init(fetchedAt: Date, response: LeagueTablesResponse) {
         self.fetchedAt = fetchedAt
         self.response = response
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        response = try container.decode(LeagueTablesResponse.self, forKey: .response)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fetchedAt, forKey: .fetchedAt)
+        try container.encode(response, forKey: .response)
     }
 }
 

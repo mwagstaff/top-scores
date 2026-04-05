@@ -1,28 +1,28 @@
 import Foundation
 
 enum CompetitionWeightConfig {
-    private static let fileName = "competition_weights"
-    private static let fileExtension = "json"
-    private static let weightsByName: [String: Double] = loadWeights()
-    private static let fifaWorldCupQualifyingPattern = try! NSRegularExpression(
+    private nonisolated static let fileName = "competition_weights"
+    private nonisolated static let fileExtension = "json"
+    private nonisolated static let weightsByName: [String: Double] = loadWeights()
+    private nonisolated static let fifaWorldCupQualifyingPattern = try! NSRegularExpression(
         pattern: #"^fifa world cup(?:\s+2026)? qualifying\b"#,
         options: [.caseInsensitive]
     )
 
-    static func weight(for competitionName: String) -> Double? {
+    nonisolated static func weight(for competitionName: String) -> Double? {
         let normalized = normalizeCompetitionName(competitionName)
         guard !normalized.isEmpty else { return nil }
         return weightsByName[normalized]
     }
 
-    static func normalizeCompetitionName(_ competitionName: String) -> String {
+    nonisolated static func normalizeCompetitionName(_ competitionName: String) -> String {
         competitionName
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
     }
 
-    static func canonicalFilterName(_ competitionName: String) -> String {
+    nonisolated static func canonicalFilterName(_ competitionName: String) -> String {
         let normalized = normalizeCompetitionName(competitionName)
         guard !normalized.isEmpty else { return "" }
 
@@ -34,7 +34,7 @@ enum CompetitionWeightConfig {
         return normalized
     }
 
-    private static func loadWeights() -> [String: Double] {
+    private nonisolated static func loadWeights() -> [String: Double] {
         guard let fileURL = Bundle.main.url(forResource: fileName, withExtension: fileExtension) else {
             NSLog("Competition weight config not found in app bundle (%@.%@).", fileName, fileExtension)
             return [:]

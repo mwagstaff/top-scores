@@ -1,6 +1,6 @@
 import Foundation
 
-private struct FantasySyncPlayerPayload: Codable, Sendable {
+private struct FantasySyncPlayerPayload: Encodable, Sendable {
     let elementID: Int
     let pickPosition: Int
     let positionType: Int
@@ -18,6 +18,26 @@ private struct FantasySyncPlayerPayload: Codable, Sendable {
     let hasUpcomingFixtureThisGameweek: Bool
     let hasActiveFixtureThisGameweek: Bool
     let minutesPlayed: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case elementID
+        case pickPosition
+        case positionType
+        case displayName
+        case fullName
+        case teamName
+        case rawPoints
+        case appliedPoints
+        case displayPoints
+        case multiplier
+        case isCaptain
+        case isViceCaptain
+        case isStarter
+        case hasAnyFixtureThisGameweek
+        case hasUpcomingFixtureThisGameweek
+        case hasActiveFixtureThisGameweek
+        case minutesPlayed
+    }
 
     nonisolated init(player: FantasyDisplayPlayer) {
         elementID = player.elementID
@@ -38,14 +58,43 @@ private struct FantasySyncPlayerPayload: Codable, Sendable {
         hasActiveFixtureThisGameweek = player.hasActiveFixtureThisGameweek
         minutesPlayed = player.minutesPlayed
     }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(elementID, forKey: .elementID)
+        try container.encode(pickPosition, forKey: .pickPosition)
+        try container.encode(positionType, forKey: .positionType)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encode(fullName, forKey: .fullName)
+        try container.encode(teamName, forKey: .teamName)
+        try container.encode(rawPoints, forKey: .rawPoints)
+        try container.encode(appliedPoints, forKey: .appliedPoints)
+        try container.encode(displayPoints, forKey: .displayPoints)
+        try container.encode(multiplier, forKey: .multiplier)
+        try container.encode(isCaptain, forKey: .isCaptain)
+        try container.encode(isViceCaptain, forKey: .isViceCaptain)
+        try container.encode(isStarter, forKey: .isStarter)
+        try container.encode(hasAnyFixtureThisGameweek, forKey: .hasAnyFixtureThisGameweek)
+        try container.encode(hasUpcomingFixtureThisGameweek, forKey: .hasUpcomingFixtureThisGameweek)
+        try container.encode(hasActiveFixtureThisGameweek, forKey: .hasActiveFixtureThisGameweek)
+        try container.encode(minutesPlayed, forKey: .minutesPlayed)
+    }
 }
 
-private struct FantasySyncContributionPayload: Codable, Sendable {
+private struct FantasySyncContributionPayload: Encodable, Sendable {
     let elementID: Int
     let displayName: String
     let fullName: String
     let teamName: String
     let points: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case elementID
+        case displayName
+        case fullName
+        case teamName
+        case points
+    }
 
     nonisolated init(contribution: FantasyEffectivePlayerContribution) {
         elementID = contribution.elementID
@@ -54,9 +103,18 @@ private struct FantasySyncContributionPayload: Codable, Sendable {
         teamName = contribution.teamName
         points = contribution.points
     }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(elementID, forKey: .elementID)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encode(fullName, forKey: .fullName)
+        try container.encode(teamName, forKey: .teamName)
+        try container.encode(points, forKey: .points)
+    }
 }
 
-private struct FantasySyncSquadPayload: Codable, Sendable {
+private struct FantasySyncSquadPayload: Encodable, Sendable {
     let managerEntryID: Int
     let syncedAt: String
     let gameweekID: Int
@@ -69,6 +127,21 @@ private struct FantasySyncSquadPayload: Codable, Sendable {
     let activeChipCodes: [String]
     let players: [FantasySyncPlayerPayload]
     let effectiveContributions: [FantasySyncContributionPayload]
+
+    private enum CodingKeys: String, CodingKey {
+        case managerEntryID
+        case syncedAt
+        case gameweekID
+        case gameweekTitle
+        case totalPoints
+        case estimatedCurrentScore
+        case resolvedCurrentScore
+        case isEstimatedScore
+        case hasActiveFixtures
+        case activeChipCodes
+        case players
+        case effectiveContributions
+    }
 
     nonisolated init(managerEntryID: Int, squad: FantasySquadDisplayData, now: Date = Date()) {
         self.managerEntryID = managerEntryID
@@ -86,15 +159,42 @@ private struct FantasySyncSquadPayload: Codable, Sendable {
             FantasySyncContributionPayload.init(contribution:)
         )
     }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(managerEntryID, forKey: .managerEntryID)
+        try container.encode(syncedAt, forKey: .syncedAt)
+        try container.encode(gameweekID, forKey: .gameweekID)
+        try container.encode(gameweekTitle, forKey: .gameweekTitle)
+        try container.encode(totalPoints, forKey: .totalPoints)
+        try container.encode(estimatedCurrentScore, forKey: .estimatedCurrentScore)
+        try container.encode(resolvedCurrentScore, forKey: .resolvedCurrentScore)
+        try container.encode(isEstimatedScore, forKey: .isEstimatedScore)
+        try container.encode(hasActiveFixtures, forKey: .hasActiveFixtures)
+        try container.encode(activeChipCodes, forKey: .activeChipCodes)
+        try container.encode(players, forKey: .players)
+        try container.encode(effectiveContributions, forKey: .effectiveContributions)
+    }
 }
 
-private struct FantasySyncStatePayload: Codable, Sendable {
+private struct FantasySyncStatePayload: Encodable, Sendable {
     let managerEntryID: Int?
     let squad: FantasySyncSquadPayload?
+
+    private enum CodingKeys: String, CodingKey {
+        case managerEntryID
+        case squad
+    }
 
     nonisolated init(managerEntryID: Int?, squad: FantasySyncSquadPayload?) {
         self.managerEntryID = managerEntryID
         self.squad = squad
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(managerEntryID, forKey: .managerEntryID)
+        try container.encodeIfPresent(squad, forKey: .squad)
     }
 }
 

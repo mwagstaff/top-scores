@@ -258,12 +258,14 @@ struct MatchLeague: Identifiable, Hashable, Sendable {
 }
 
 private enum MatchGroupingEngine {
-    private final class GroupingMemo {
-        private var teamRatings: [String: Double] = [:]
-        private var matchRatings: [String: Double] = [:]
-        private var matchDates: [String: Date] = [:]
+    private final class GroupingMemo: @unchecked Sendable {
+        private nonisolated(unsafe) var teamRatings: [String: Double] = [:]
+        private nonisolated(unsafe) var matchRatings: [String: Double] = [:]
+        private nonisolated(unsafe) var matchDates: [String: Date] = [:]
 
-        func matchSortDate(for match: Match) -> Date {
+        nonisolated init() {}
+
+        nonisolated func matchSortDate(for match: Match) -> Date {
             if let cached = matchDates[match.id] {
                 return cached
             }
@@ -274,7 +276,7 @@ private enum MatchGroupingEngine {
             return resolved
         }
 
-        func totalTeamRating(for match: Match, ratingLookup: TeamRatingLookup) -> Double {
+        nonisolated func totalTeamRating(for match: Match, ratingLookup: TeamRatingLookup) -> Double {
             if let cached = matchRatings[match.id] {
                 return cached
             }
@@ -285,13 +287,13 @@ private enum MatchGroupingEngine {
             return resolved
         }
 
-        func totalTeamRating(for matches: [Match], ratingLookup: TeamRatingLookup) -> Double {
+        nonisolated func totalTeamRating(for matches: [Match], ratingLookup: TeamRatingLookup) -> Double {
             matches.reduce(0) { partialResult, match in
                 partialResult + totalTeamRating(for: match, ratingLookup: ratingLookup)
             }
         }
 
-        private func teamRating(for teamName: String, ratingLookup: TeamRatingLookup) -> Double {
+        private nonisolated func teamRating(for teamName: String, ratingLookup: TeamRatingLookup) -> Double {
             if let cached = teamRatings[teamName] {
                 return cached
             }
@@ -301,7 +303,7 @@ private enum MatchGroupingEngine {
         }
     }
 
-    static func groupMatches(
+    nonisolated static func groupMatches(
         _ matches: [Match],
         descendingDates: Bool = false,
         sortOrder: MatchGroupSortOrder,
@@ -410,22 +412,22 @@ private enum MatchGroupingEngine {
         return dateDays
     }
 
-    static func matchSortDate(for match: Match) -> Date {
+    nonisolated static func matchSortDate(for match: Match) -> Date {
         match.dateTime ?? MatchDateParser.parse(date: match.date, time: "00:00") ?? .distantFuture
     }
 
-    static func competitionWeight(for match: Match) -> Double {
+    nonisolated static func competitionWeight(for match: Match) -> Double {
         if let displayWeight = CompetitionWeightConfig.weight(for: match.displayLeague) {
             return displayWeight
         }
         return CompetitionWeightConfig.weight(for: match.league) ?? 0
     }
 
-    static func competitionWeight(forCompetitionName competitionName: String) -> Double {
+    nonisolated static func competitionWeight(forCompetitionName competitionName: String) -> Double {
         CompetitionWeightConfig.weight(for: competitionName) ?? 0
     }
 
-    private static func sortMatchesWithinLeague(
+    private nonisolated static func sortMatchesWithinLeague(
         _ matches: [Match],
         sortOrder: MatchGroupSortOrder,
         ratingLookup: TeamRatingLookup,
@@ -494,12 +496,12 @@ private enum MatchGroupingEngine {
         }
     }
 
-    static func totalTeamRating(for matches: [Match], ratingLookup: TeamRatingLookup) -> Double {
+    nonisolated static func totalTeamRating(for matches: [Match], ratingLookup: TeamRatingLookup) -> Double {
         let memo = GroupingMemo()
         return memo.totalTeamRating(for: matches, ratingLookup: ratingLookup)
     }
 
-    static func totalTeamRating(for match: Match, ratingLookup: TeamRatingLookup) -> Double {
+    nonisolated static func totalTeamRating(for match: Match, ratingLookup: TeamRatingLookup) -> Double {
         let memo = GroupingMemo()
         return memo.totalTeamRating(for: match, ratingLookup: ratingLookup)
     }
@@ -1501,7 +1503,7 @@ final class MatchesStore: ObservableObject {
 
             let cachedSettings = await TeamRankingSettingsCatalog.shared.settings()
             let cachedEntries = await TeamRankingsCatalog.shared.cachedEntries()
-            await self?.applyTeamRatingSnapshot(
+            self?.applyTeamRatingSnapshot(
                 entries: cachedEntries,
                 defaultElo: cachedSettings.defaultElo
             )
@@ -1517,7 +1519,7 @@ final class MatchesStore: ObservableObject {
 
             let refreshedSettings = await TeamRankingSettingsCatalog.shared.settings()
             let refreshedEntries = await TeamRankingsCatalog.shared.cachedEntries()
-            await self?.applyTeamRatingSnapshot(
+            self?.applyTeamRatingSnapshot(
                 entries: refreshedEntries,
                 defaultElo: refreshedSettings.defaultElo
             )

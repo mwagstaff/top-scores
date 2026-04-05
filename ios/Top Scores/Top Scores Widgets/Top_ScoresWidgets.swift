@@ -2847,14 +2847,16 @@ private struct KickoffCountdownLabel: View {
         Group {
             if let kickoffDate {
                 if kickoffDate > Date() {
-                    (Text("Kick off in ")
-                        + Text(
+                    HStack(spacing: 0) {
+                        Text("Kick off in ")
+                        Text(
                             timerInterval: Date()...kickoffDate,
                             pauseTime: nil,
                             countsDown: true,
                             showsHours: false
                         )
-                        .monospacedDigit())
+                        .monospacedDigit()
+                    }
                 } else {
                     Text("Kick off now")
                 }

@@ -323,7 +323,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let penaltyResult: String?
     let isTestMatch: Bool?
 
-    init(
+    nonisolated init(
         date: String,
         time: String,
         homeTeam: String,
@@ -383,11 +383,11 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.isTestMatch = isTestMatch
     }
 
-    var id: String {
+    nonisolated var id: String {
         "\(date)|\(time)|\(league)|\(homeTeam)|\(awayTeam)"
     }
 
-    var dateTime: Date? {
+    nonisolated var dateTime: Date? {
         MatchDateParser.parse(date: date, time: time)
     }
 
@@ -474,7 +474,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return MatchStatusFormatter.isFinished(scoreStatus)
     }
 
-    var isPostponed: Bool {
+    nonisolated var isPostponed: Bool {
         MatchStatusFormatter.isPostponed(scoreStatus)
     }
 
@@ -492,7 +492,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         )
     }
 
-    var displayLeague: String {
+    nonisolated var displayLeague: String {
         if let subcategory = leagueSubcategory, !subcategory.isEmpty {
             return "\(league): \(subcategory)"
         }
@@ -740,7 +740,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return id.lowercased()
     }
 
-    private static func normalizedMatchDetailsID(_ value: String?) -> String? {
+    private nonisolated static func normalizedMatchDetailsID(_ value: String?) -> String? {
         guard let value else { return nil }
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalized.isEmpty else { return nil }
@@ -885,11 +885,11 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
 }
 
 enum MatchStatusFormatter {
-    private static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
-    private static let completeTokens: Set<String> = ["FT", "AET"]
-    private static let postponedTokens: Set<String> = ["POSTPONED", "MATCH POSTPONED"]
-    private static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
-    private static let maximumLiveWindow: TimeInterval = 3.5 * 60 * 60
+    private nonisolated static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
+    private nonisolated static let completeTokens: Set<String> = ["FT", "AET"]
+    private nonisolated static let postponedTokens: Set<String> = ["POSTPONED", "MATCH POSTPONED"]
+    private nonisolated static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
+    private nonisolated static let maximumLiveWindow: TimeInterval = 3.5 * 60 * 60
 
     static func displayValue(for rawStatus: String) -> String {
         let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
@@ -921,7 +921,7 @@ enum MatchStatusFormatter {
         return completeTokens.contains(token)
     }
 
-    static func isPostponed(_ rawStatus: String?) -> Bool {
+    nonisolated static func isPostponed(_ rawStatus: String?) -> Bool {
         canonicalStatus(rawStatus) == "POSTPONED"
     }
 
@@ -1026,7 +1026,7 @@ enum MatchStatusFormatter {
         return "FT"
     }
 
-    static func parseMatchTimeMinutes(_ matchTime: String?) -> Int? {
+    nonisolated static func parseMatchTimeMinutes(_ matchTime: String?) -> Int? {
         guard let matchTime = matchTime?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
 
         if let match = matchTime.range(of: #"^(\d+)(?:\+(\d+))?[']?$"#, options: .regularExpression) {
@@ -1045,37 +1045,37 @@ enum MatchStatusFormatter {
         return nil
     }
 
-    private static func normalized(_ rawStatus: String) -> String {
+    private nonisolated static func normalized(_ rawStatus: String) -> String {
         rawStatus.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func isMinuteStatus(_ status: String) -> Bool {
+    private nonisolated static func isMinuteStatus(_ status: String) -> Bool {
         status.range(of: minutePattern, options: .regularExpression) != nil
     }
 
-    static func normalizedStatus(_ value: String?) -> String? {
+    nonisolated static func normalizedStatus(_ value: String?) -> String? {
         canonicalStatus(value)
     }
 
-    private static func isFirstHalfMinuteStatus(_ status: String) -> Bool {
+    private nonisolated static func isFirstHalfMinuteStatus(_ status: String) -> Bool {
         guard let minute = parseMatchTimeMinutes(status) else { return false }
         let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isMinuteStatus(trimmed) else { return false }
         return minute <= 45
     }
 
-    private static func isPenaltyShootoutStatus(_ status: String) -> Bool {
+    private nonisolated static func isPenaltyShootoutStatus(_ status: String) -> Bool {
         status == "PENS" || status == "PEN" || status == "PEN."
     }
 
-    private static func trimmedStatus(_ value: String?) -> String? {
+    private nonisolated static func trimmedStatus(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
             return nil
         }
         return value
     }
 
-    private static func canonicalStatus(_ value: String?) -> String? {
+    private nonisolated static func canonicalStatus(_ value: String?) -> String? {
         guard let value = trimmedStatus(value) else {
             return nil
         }
@@ -1086,7 +1086,7 @@ enum MatchStatusFormatter {
         return uppercased
     }
 
-    private static func statusState(for status: String) -> StatusState {
+    private nonisolated static func statusState(for status: String) -> StatusState {
         if status == "POSTPONED" {
             return .postponed
         }
@@ -1108,7 +1108,7 @@ enum MatchStatusFormatter {
 }
 
 enum MatchDateParser {
-    private static func makeDateTimeFormatter() -> DateFormatter {
+    private nonisolated static func makeDateTimeFormatter() -> DateFormatter {
         let dateTimeFormatter = DateFormatter()
         dateTimeFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateTimeFormatter.timeZone = TimeZone.current
@@ -1116,7 +1116,7 @@ enum MatchDateParser {
         return dateTimeFormatter
     }
 
-    private static func makeDisplayDateFormatter() -> DateFormatter {
+    private nonisolated static func makeDisplayDateFormatter() -> DateFormatter {
         let dateFormatter = DateFormatter()
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.timeZone = TimeZone.current
@@ -1124,15 +1124,15 @@ enum MatchDateParser {
         return dateFormatter
     }
 
-    static func parse(date: String, time: String) -> Date? {
+    nonisolated static func parse(date: String, time: String) -> Date? {
         makeDateTimeFormatter().date(from: "\(date) \(time)")
     }
 
-    static func displayDate(_ date: Date) -> String {
+    nonisolated static func displayDate(_ date: Date) -> String {
         makeDisplayDateFormatter().string(from: date)
     }
 
-    static func displayDateWithRelative(_ date: Date) -> String {
+    nonisolated static func displayDateWithRelative(_ date: Date) -> String {
         let base = displayDate(date)
         let calendar = Calendar.current
         if calendar.isDateInToday(date) {

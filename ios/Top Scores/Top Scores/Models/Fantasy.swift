@@ -132,20 +132,20 @@ struct FantasyBootstrapElementType: Codable, Hashable {
     }
 }
 
-struct FantasyChip: Hashable {
+struct FantasyChip: Hashable, Sendable {
     let code: String
 
-    init(code: String) {
+    nonisolated init(code: String) {
         self.code = code
     }
 
-    private var normalizedCode: String {
+    private nonisolated var normalizedCode: String {
         code
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
     }
 
-    var displayName: String {
+    nonisolated var displayName: String {
         switch normalizedCode {
         case "bboost":
             return "Bench Boost"
@@ -178,7 +178,7 @@ struct FantasyChip: Hashable {
         }
     }
 
-    var isBenchBoost: Bool {
+    nonisolated var isBenchBoost: Bool {
         normalizedCode == "bboost"
     }
 }
@@ -1398,19 +1398,19 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
     let yellowCards: Int
     let redCards: Int
 
-    var id: Int {
+    nonisolated var id: Int {
         elementID
     }
 
-    var isStarter: Bool {
+    nonisolated var isStarter: Bool {
         pickPosition <= 11
     }
 
-    var hasRemainingFixtureThisGameweek: Bool {
+    nonisolated var hasRemainingFixtureThisGameweek: Bool {
         hasUpcomingFixtureThisGameweek || hasActiveFixtureThisGameweek
     }
 
-    var hasFinishedScoringForGameweek: Bool {
+    nonisolated var hasFinishedScoringForGameweek: Bool {
         !hasRemainingFixtureThisGameweek
     }
 
@@ -1427,11 +1427,11 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
         return .noFixture
     }
 
-    var didNotPlay: Bool {
+    nonisolated var didNotPlay: Bool {
         minutesPlayed == 0
     }
 
-    var shouldAutoSubAsNonParticipant: Bool {
+    nonisolated var shouldAutoSubAsNonParticipant: Bool {
         guard minutesPlayed == 0 else { return false }
         if hasActiveFixtureThisGameweek { return true }
         if isDefinitelyUnavailable { return true }
@@ -1439,7 +1439,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
         return !hasUpcomingFixtureThisGameweek && !hasActiveFixtureThisGameweek
     }
 
-    var isEligibleAutoSubReplacement: Bool {
+    nonisolated var isEligibleAutoSubReplacement: Bool {
         minutesPlayed > 0
     }
 
@@ -1499,7 +1499,7 @@ struct FantasyEffectivePlayerContribution: Hashable, Sendable {
     let points: Int
 }
 
-struct FantasySquadDisplayData: Hashable {
+struct FantasySquadDisplayData: Hashable, Sendable {
     let gameweekID: Int
     let gameweekTitle: String
     let deadlineGameweekID: Int?
@@ -1522,48 +1522,48 @@ struct FantasySquadDisplayData: Hashable {
     let forwards: [FantasyDisplayPlayer]
     let bench: [FantasyDisplayPlayer]
 
-    var starters: [FantasyDisplayPlayer] {
+    nonisolated var starters: [FantasyDisplayPlayer] {
         (goalkeepers + defenders + midfielders + forwards)
             .sorted { $0.pickPosition < $1.pickPosition }
     }
 
-    var computedAppliedPointsTotal: Int {
+    nonisolated var computedAppliedPointsTotal: Int {
         starters.reduce(0) { $0 + $1.appliedPoints }
     }
 
-    var allPlayers: [FantasyDisplayPlayer] {
+    nonisolated var allPlayers: [FantasyDisplayPlayer] {
         (starters + bench).sorted { $0.pickPosition < $1.pickPosition }
     }
 
-    var resolvedCurrentScore: Int {
+    nonisolated var resolvedCurrentScore: Int {
         isEstimatedScore
             ? estimatedCurrentScore
             : totalPoints
     }
 
-    var hasActiveChip: Bool {
+    nonisolated var hasActiveChip: Bool {
         !activeChips.isEmpty
     }
 
-    var hasBenchBoostActive: Bool {
+    nonisolated var hasBenchBoostActive: Bool {
         activeChips.contains(where: \.isBenchBoost)
     }
 
-    var activeChipDisplayNames: [String] {
+    nonisolated var activeChipDisplayNames: [String] {
         activeChips.map(\.displayName)
     }
 
-    var activeChipSummaryText: String? {
+    nonisolated var activeChipSummaryText: String? {
         guard !activeChipDisplayNames.isEmpty else { return nil }
         let label = activeChipDisplayNames.count == 1 ? "Active chip" : "Active chips"
         return "\(label): \(activeChipDisplayNames.joined(separator: ", "))"
     }
 
-    var shouldShowCurrentScoreAsterisk: Bool {
+    nonisolated var shouldShowCurrentScoreAsterisk: Bool {
         isEstimatedScore || hasActiveChip
     }
 
-    var resolvedCurrentScoreDisplay: String {
+    nonisolated var resolvedCurrentScoreDisplay: String {
         "\(resolvedCurrentScore)\(shouldShowCurrentScoreAsterisk ? "*" : "")"
     }
 
@@ -1706,7 +1706,7 @@ struct FantasySquadDisplayData: Hashable {
         )
     }
 
-    var effectivePlayerContributions: [FantasyEffectivePlayerContribution] {
+    nonisolated var effectivePlayerContributions: [FantasyEffectivePlayerContribution] {
         var contributionsByElementID: [Int: Int] = [:]
 
         for starter in starters {

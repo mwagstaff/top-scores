@@ -1388,11 +1388,11 @@ private struct ScorelineEstimate: Sendable {
 }
 
 private enum EloScorePredictor {
-    private static let homeAdvantageElo = 64.0
-    private static let baselineTotalGoals = 2.55
-    private static let maxGoalsForDistribution = 8
+    private nonisolated static let homeAdvantageElo = 64.0
+    private nonisolated static let baselineTotalGoals = 2.55
+    private nonisolated static let maxGoalsForDistribution = 8
 
-    static func predict(homeElo: Double, awayElo: Double) -> ScorelineEstimate {
+    nonisolated static func predict(homeElo: Double, awayElo: Double) -> ScorelineEstimate {
         let delta = (homeElo + homeAdvantageElo) - awayElo
 
         let totalGoals = clamp(
@@ -1438,11 +1438,11 @@ private enum EloScorePredictor {
         )
     }
 
-    private static func clamp(_ value: Double, min lower: Double, max upper: Double) -> Double {
+    private nonisolated static func clamp(_ value: Double, min lower: Double, max upper: Double) -> Double {
         Swift.max(lower, Swift.min(value, upper))
     }
 
-    private static func samplePoisson(lambda: Double) -> Int {
+    private nonisolated static func samplePoisson(lambda: Double) -> Int {
         guard lambda > 0 else { return 0 }
         let threshold = exp(-lambda)
         var product = 1.0
@@ -1456,7 +1456,10 @@ private enum EloScorePredictor {
         return max(0, count - 1)
     }
 
-    private static func outcomeProbabilities(lambdaHome: Double, lambdaAway: Double) -> (Double, Double, Double) {
+    private nonisolated static func outcomeProbabilities(
+        lambdaHome: Double,
+        lambdaAway: Double
+    ) -> (Double, Double, Double) {
         var home = 0.0
         var draw = 0.0
         var away = 0.0
@@ -1480,7 +1483,7 @@ private enum EloScorePredictor {
         return (home / total, draw / total, away / total)
     }
 
-    private static func poissonPMF(k: Int, lambda: Double) -> Double {
+    private nonisolated static func poissonPMF(k: Int, lambda: Double) -> Double {
         guard lambda > 0 else { return k == 0 ? 1 : 0 }
         var value = exp(-lambda)
         guard k > 0 else { return value }

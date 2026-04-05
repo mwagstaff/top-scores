@@ -8,7 +8,7 @@ struct APIClient {
     private static let maxLoggedBodyLength = 240
     private static let retryDelayNanos: UInt64 = 350_000_000
     private static let retryableStatusCodes: Set<Int> = [408, 429, 500, 502, 503, 504]
-    private static func makeNoCacheSession() -> URLSession {
+    private nonisolated static func makeNoCacheSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
@@ -851,6 +851,28 @@ private struct CacheStateDomainResponse: Decodable {
 struct LeagueTablesResponse: Codable, Hashable, Sendable {
     let leagues: [LeagueTable]
     let lastUpdated: Date?
+
+    private enum CodingKeys: String, CodingKey {
+        case leagues
+        case lastUpdated
+    }
+
+    nonisolated init(leagues: [LeagueTable], lastUpdated: Date?) {
+        self.leagues = leagues
+        self.lastUpdated = lastUpdated
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        leagues = try container.decodeIfPresent([LeagueTable].self, forKey: .leagues) ?? []
+        lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(leagues, forKey: .leagues)
+        try container.encodeIfPresent(lastUpdated, forKey: .lastUpdated)
+    }
 }
 
 struct TeamRankingEntry: Codable, Hashable, Sendable {

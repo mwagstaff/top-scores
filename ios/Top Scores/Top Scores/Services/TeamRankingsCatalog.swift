@@ -15,10 +15,10 @@ struct TeamRatingLookup: Sendable {
     private let exactByKey: [String: Double]
     private let candidates: [Candidate]
     private let defaultPoints: Double
-    private static let stopWords: Set<String> = [
+    private nonisolated static let stopWords: Set<String> = [
         "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk", "club", "de", "the", "and"
     ]
-    init(entries: [TeamRankingEntry], defaultPoints: Double = TeamRankingSettings.defaultDefaultElo) {
+    nonisolated init(entries: [TeamRankingEntry], defaultPoints: Double = TeamRankingSettings.defaultDefaultElo) {
         var exact: [String: Double] = [:]
         var candidateList: [Candidate] = []
         candidateList.reserveCapacity(entries.count * 2)
@@ -46,7 +46,7 @@ struct TeamRatingLookup: Sendable {
         candidates = candidateList
     }
 
-    func rating(for teamName: String) -> Double? {
+    nonisolated func rating(for teamName: String) -> Double? {
         var bestRating: Double?
         var bestConfidence = 0.0
 
@@ -77,18 +77,18 @@ struct TeamRatingLookup: Sendable {
         return bestRating
     }
 
-    func resolvedRating(for teamName: String) -> Double {
+    nonisolated func resolvedRating(for teamName: String) -> Double {
         resolveRating(for: teamName).rating
     }
 
-    func resolveRating(for teamName: String) -> TeamRatingResolution {
+    nonisolated func resolveRating(for teamName: String) -> TeamRatingResolution {
         if let exactRating = rating(for: teamName) {
             return TeamRatingResolution(rating: exactRating, usedDefault: false)
         }
         return TeamRatingResolution(rating: defaultPoints, usedDefault: true)
     }
 
-    private static func normalizedTokens(_ value: String) -> [String] {
+    private nonisolated static func normalizedTokens(_ value: String) -> [String] {
         let normalized = value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .lowercased()
@@ -104,7 +104,7 @@ struct TeamRatingLookup: Sendable {
             .filter { !stopWords.contains($0) }
     }
 
-    private static func normalizedKey(_ value: String) -> String {
+    private nonisolated static func normalizedKey(_ value: String) -> String {
         let tokens = normalizedTokens(value)
         if !tokens.isEmpty {
             return tokens.joined()
@@ -115,20 +115,25 @@ struct TeamRatingLookup: Sendable {
             .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
     }
 
-    private static func similarity(lhsKey: String, rhsKey: String, lhsTokens: [String], rhsTokens: [String]) -> Double {
+    private nonisolated static func similarity(
+        lhsKey: String,
+        rhsKey: String,
+        lhsTokens: [String],
+        rhsTokens: [String]
+    ) -> Double {
         let base = normalizedEditSimilarity(lhsKey, rhsKey)
         let dice = diceCoefficient(lhsTokens, rhsTokens)
         let prefix = prefixSimilarity(lhsKey, rhsKey, lhsTokens, rhsTokens)
         return max(base, dice, prefix)
     }
 
-    private static func normalizedEditSimilarity(_ lhs: String, _ rhs: String) -> Double {
+    private nonisolated static func normalizedEditSimilarity(_ lhs: String, _ rhs: String) -> Double {
         let maxLength = max(lhs.count, rhs.count)
         guard maxLength > 0 else { return 1 }
         return 1 - (Double(levenshtein(lhs, rhs)) / Double(maxLength))
     }
 
-    private static func diceCoefficient(_ lhs: [String], _ rhs: [String]) -> Double {
+    private nonisolated static func diceCoefficient(_ lhs: [String], _ rhs: [String]) -> Double {
         guard !lhs.isEmpty || !rhs.isEmpty else { return 1 }
         let left = Set(lhs)
         let right = Set(rhs)
@@ -136,7 +141,7 @@ struct TeamRatingLookup: Sendable {
         return (2 * Double(overlap)) / Double(lhs.count + rhs.count)
     }
 
-    private static func prefixSimilarity(
+    private nonisolated static func prefixSimilarity(
         _ lhsKey: String,
         _ rhsKey: String,
         _ lhsTokens: [String],
@@ -152,7 +157,7 @@ struct TeamRatingLookup: Sendable {
         return 0
     }
 
-    private static func levenshtein(_ lhs: String, _ rhs: String) -> Int {
+    private nonisolated static func levenshtein(_ lhs: String, _ rhs: String) -> Int {
         let lhsChars = Array(lhs)
         let rhsChars = Array(rhs)
         var previous = Array(0...rhsChars.count)
@@ -523,11 +528,11 @@ private struct FantasyTeamShortNameMappingsCachePayload: Codable, Sendable {
     }
 }
 
-final class FantasyTeamShortNameMappingsStore {
-    nonisolated(unsafe) static let shared = FantasyTeamShortNameMappingsStore()
+final class FantasyTeamShortNameMappingsStore: @unchecked Sendable {
+    nonisolated static let shared = FantasyTeamShortNameMappingsStore()
 
     private let lock = NSLock()
-    private var mappings: [String: String] = [:]
+    private nonisolated(unsafe) var mappings: [String: String] = [:]
 
     private init() {}
 

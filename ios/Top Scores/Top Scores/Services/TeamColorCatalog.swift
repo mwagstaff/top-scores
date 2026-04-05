@@ -316,13 +316,13 @@ private struct TeamColorEntry: Sendable {
     let isFallback: Bool
 }
 
-final class TeamIdentityStore {
-    nonisolated(unsafe) static let shared = TeamIdentityStore()
+final class TeamIdentityStore: @unchecked Sendable {
+    nonisolated static let shared = TeamIdentityStore()
 
     private let lock = NSLock()
-    private var canonicalNameByKey: [String: String] = [:]
-    private var namesByCanonicalKey: [String: [String]] = [:]
-    private var exactToCanonicalKey: [String: String] = [:]
+    private nonisolated(unsafe) var canonicalNameByKey: [String: String] = [:]
+    private nonisolated(unsafe) var namesByCanonicalKey: [String: [String]] = [:]
+    private nonisolated(unsafe) var exactToCanonicalKey: [String: String] = [:]
 
     private init() {}
 
