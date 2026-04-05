@@ -143,6 +143,8 @@ struct MatchRow: View {
             }
 
             HStack(alignment: .center, spacing: compactFixtureHorizontalSpacing) {
+                compactFantasyAccessorySlot
+
                 TeamLogo(name: match.homeTeam, size: logoSize)
 
                 Text(match.homeTeam)
@@ -165,15 +167,7 @@ struct MatchRow: View {
 
                 TeamLogo(name: match.awayTeam, size: logoSize)
 
-                if let primaryBroadcastLogo {
-                    Image(uiImage: primaryBroadcastLogo)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: compactBroadcastLogoWidth, height: compactBroadcastLogoHeight)
-                        .layoutPriority(2)
-                        .fixedSize()
-                        .accessibilityHidden(true)
-                }
+                compactBroadcastAccessorySlot
             }
         }
         .padding(cardPadding)
@@ -223,7 +217,7 @@ struct MatchRow: View {
         guard showFantasyBadge,
               !match.isPostponed,
               !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              preferences.showFantasyFixtureLogos,
+              isFantasyBadgeEnabledForLayout,
               fantasyContext.isEligibleFixture(match),
               let lookup = fantasyContext.lookup
         else {
@@ -460,6 +454,66 @@ struct MatchRow: View {
         isLargePresentation ? 26 : 22
     }
 
+    private var compactAccessorySlotWidth: CGFloat {
+        compactDensity == .compact ? 24 : 22
+    }
+
+    private var compactAccessorySlotHeight: CGFloat {
+        compactDensity == .compact ? 20 : 18
+    }
+
+    private var compactFantasyBadgeDiameter: CGFloat {
+        compactDensity == .compact ? 16 : 14
+    }
+
+    private var compactFantasyBadgeIconSize: CGFloat {
+        compactDensity == .compact ? 9 : 8
+    }
+
+    private var isFantasyBadgeEnabledForLayout: Bool {
+        switch layoutStyle {
+        case .standard:
+            return preferences.showFantasyFixtureLogos
+        case .compactFixture:
+            return preferences.showCompactFixtureFantasyLogo
+        }
+    }
+
+    private var compactFantasyAccessorySlot: some View {
+        ZStack {
+            if shouldShowFantasyParticipationBadge {
+                FantasyMatchParticipationBadge(
+                    diameter: compactFantasyBadgeDiameter,
+                    iconSize: compactFantasyBadgeIconSize,
+                    iconScale: 1.0,
+                    shadowOpacity: 0
+                )
+            }
+        }
+        .frame(width: compactAccessorySlotWidth, height: compactAccessorySlotHeight, alignment: .center)
+        .accessibilityHidden(!shouldShowFantasyParticipationBadge)
+    }
+
+    private var compactBroadcastAccessorySlot: some View {
+        ZStack {
+            if let compactPrimaryBroadcastLogo {
+                Image(uiImage: compactPrimaryBroadcastLogo)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: compactBroadcastLogoWidth, height: compactBroadcastLogoHeight)
+                    .layoutPriority(2)
+                    .fixedSize()
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(width: compactAccessorySlotWidth, height: compactAccessorySlotHeight, alignment: .center)
+    }
+
+    private var compactPrimaryBroadcastLogo: UIImage? {
+        guard preferences.showCompactFixtureTvLogo else { return nil }
+        return primaryBroadcastLogo
+    }
+
     private var compactFixtureVerticalSpacing: CGFloat {
         compactDensity == .compact ? 10 : 8
     }
@@ -501,6 +555,11 @@ struct MatchRow: View {
 }
 
 private struct FantasyMatchParticipationBadge: View {
+    var diameter: CGFloat = 28
+    var iconSize: CGFloat = 14
+    var iconScale: CGFloat = 1.10
+    var shadowOpacity: Double = 0.18
+
     var body: some View {
         ZStack {
             Circle()
@@ -517,11 +576,11 @@ private struct FantasyMatchParticipationBadge: View {
             Circle()
                 .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
 
-            FantasyLionIconView(size: 14, scale: 1.10)
+            FantasyLionIconView(size: iconSize, scale: iconScale)
                 .foregroundStyle(.white)
         }
-            .frame(width: 28, height: 28)
-            .shadow(color: Color.red.opacity(0.18), radius: 3, x: 0, y: 1)
+            .frame(width: diameter, height: diameter)
+            .shadow(color: Color.red.opacity(shadowOpacity), radius: 3, x: 0, y: 1)
             .accessibilityLabel("Fantasy players involved")
     }
 }

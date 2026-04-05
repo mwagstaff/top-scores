@@ -73,6 +73,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let notificationPremierLeagueTeamsOnly: Bool
     let fantasyDeadlineRemindersEnabled: Bool
     let showTodayUnfinishedFixturesBadge: Bool
+    let fixturesViewDensity: FixturesViewDensity
+    let showCompactFixtureTvLogo: Bool
+    let showCompactFixtureFantasyLogo: Bool
     let showFantasyFixtureLogos: Bool
     let showFantasyExpectedPoints: Bool
     let showFantasyRealTimePoints: Bool
@@ -119,6 +122,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         notificationPremierLeagueTeamsOnly: Bool = PreferencesStore.defaultNotificationPremierLeagueTeamsOnly,
         fantasyDeadlineRemindersEnabled: Bool = PreferencesStore.defaultFantasyDeadlineRemindersEnabled,
         showTodayUnfinishedFixturesBadge: Bool = PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
+        fixturesViewDensity: FixturesViewDensity = PreferencesStore.defaultFixturesViewDensity,
+        showCompactFixtureTvLogo: Bool = PreferencesStore.defaultShowCompactFixtureTvLogo,
+        showCompactFixtureFantasyLogo: Bool = PreferencesStore.defaultShowCompactFixtureFantasyLogo,
         showFantasyFixtureLogos: Bool = PreferencesStore.defaultShowFantasyFixtureLogos,
         showFantasyExpectedPoints: Bool = PreferencesStore.defaultShowFantasyExpectedPoints,
         showFantasyRealTimePoints: Bool = PreferencesStore.defaultShowFantasyRealTimePoints
@@ -144,6 +150,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.notificationPremierLeagueTeamsOnly = notificationPremierLeagueTeamsOnly
         self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
+        self.fixturesViewDensity = fixturesViewDensity
+        self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
+        self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
         self.showFantasyExpectedPoints = showFantasyExpectedPoints
         self.showFantasyRealTimePoints = showFantasyRealTimePoints
@@ -171,6 +180,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case notificationPremierLeagueTeamsOnly
         case fantasyDeadlineRemindersEnabled
         case showTodayUnfinishedFixturesBadge
+        case fixturesViewDensity
+        case showCompactFixtureTvLogo
+        case showCompactFixtureFantasyLogo
         case showFantasyFixtureLogos
         case showFantasyExpectedPoints
         case showFantasyRealTimePoints
@@ -206,6 +218,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         notificationPremierLeagueTeamsOnly = try container.decodeIfPresent(Bool.self, forKey: .notificationPremierLeagueTeamsOnly) ?? PreferencesStore.defaultNotificationPremierLeagueTeamsOnly
         fantasyDeadlineRemindersEnabled = try container.decodeIfPresent(Bool.self, forKey: .fantasyDeadlineRemindersEnabled) ?? PreferencesStore.defaultFantasyDeadlineRemindersEnabled
         showTodayUnfinishedFixturesBadge = try container.decodeIfPresent(Bool.self, forKey: .showTodayUnfinishedFixturesBadge) ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
+        fixturesViewDensity = try container.decodeIfPresent(FixturesViewDensity.self, forKey: .fixturesViewDensity) ?? PreferencesStore.defaultFixturesViewDensity
+        showCompactFixtureTvLogo = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureTvLogo) ?? PreferencesStore.defaultShowCompactFixtureTvLogo
+        showCompactFixtureFantasyLogo = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureFantasyLogo) ?? PreferencesStore.defaultShowCompactFixtureFantasyLogo
         let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
         let legacyShowFantasyMatchPills =
             try legacyContainer.decodeIfPresent(Bool.self, forKey: .showFantasyMatchPills)
@@ -249,6 +264,8 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultFantasyDeadlineRemindersEnabled = true
     nonisolated static let defaultShowTodayUnfinishedFixturesBadge = false
     nonisolated static let defaultFixturesViewDensity: FixturesViewDensity = .compact
+    nonisolated static let defaultShowCompactFixtureTvLogo = true
+    nonisolated static let defaultShowCompactFixtureFantasyLogo = true
     nonisolated static let defaultShowFantasyFixtureLogos = false
     nonisolated static let defaultShowFantasyExpectedPoints = false
     nonisolated static let defaultShowFantasyRealTimePoints = false
@@ -345,6 +362,14 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var showCompactFixtureTvLogo: Bool {
+        didSet { persist() }
+    }
+
+    @Published var showCompactFixtureFantasyLogo: Bool {
+        didSet { persist() }
+    }
+
     @Published var showFantasyFixtureLogos: Bool {
         didSet { persist() }
     }
@@ -409,6 +434,10 @@ final class PreferencesStore: ObservableObject {
         let fixturesViewDensity = userDefaults.string(forKey: Keys.fixturesViewDensity)
             .flatMap(FixturesViewDensity.init(rawValue:))
             ?? (legacyCompactFixturesViewEnabled == true ? .ultraCompact : Self.defaultFixturesViewDensity)
+        let showCompactFixtureTvLogo = userDefaults.object(forKey: Keys.showCompactFixtureTvLogo) as? Bool
+            ?? Self.defaultShowCompactFixtureTvLogo
+        let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
+            ?? Self.defaultShowCompactFixtureFantasyLogo
         let legacyShowFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
             ?? Self.defaultShowFantasyMatchPills
         let showFantasyFixtureLogos = userDefaults.object(forKey: Keys.showFantasyFixtureLogos) as? Bool
@@ -444,6 +473,8 @@ final class PreferencesStore: ObservableObject {
         self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.fixturesViewDensity = fixturesViewDensity
+        self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
+        self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
         self.showFantasyExpectedPoints = showFantasyExpectedPoints
         self.showFantasyRealTimePoints = showFantasyRealTimePoints
@@ -481,6 +512,9 @@ final class PreferencesStore: ObservableObject {
             notificationPremierLeagueTeamsOnly: notificationPremierLeagueTeamsOnly,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
+            fixturesViewDensity: fixturesViewDensity,
+            showCompactFixtureTvLogo: showCompactFixtureTvLogo,
+            showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
             showFantasyExpectedPoints: showFantasyExpectedPoints,
             showFantasyRealTimePoints: showFantasyRealTimePoints
@@ -514,6 +548,9 @@ final class PreferencesStore: ObservableObject {
             notificationPremierLeagueTeamsOnly: notificationPremierLeagueTeamsOnly,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
+            fixturesViewDensity: fixturesViewDensity,
+            showCompactFixtureTvLogo: showCompactFixtureTvLogo,
+            showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
             showFantasyExpectedPoints: showFantasyExpectedPoints,
             showFantasyRealTimePoints: showFantasyRealTimePoints
@@ -544,6 +581,8 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(showTodayUnfinishedFixturesBadge, forKey: Keys.showTodayUnfinishedFixturesBadge)
         userDefaults.set(fixturesViewDensity.rawValue, forKey: Keys.fixturesViewDensity)
         userDefaults.set(fixturesViewDensity == .ultraCompact, forKey: Keys.compactFixturesViewEnabled)
+        userDefaults.set(showCompactFixtureTvLogo, forKey: Keys.showCompactFixtureTvLogo)
+        userDefaults.set(showCompactFixtureFantasyLogo, forKey: Keys.showCompactFixtureFantasyLogo)
         userDefaults.set(showFantasyFixtureLogos, forKey: Keys.showFantasyFixtureLogos)
         userDefaults.set(showFantasyExpectedPoints, forKey: Keys.showFantasyExpectedPoints)
         userDefaults.set(showFantasyRealTimePoints, forKey: Keys.showFantasyRealTimePoints)
@@ -607,6 +646,14 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultFantasyDeadlineRemindersEnabled
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
+        let legacyCompactFixturesViewEnabled = userDefaults.object(forKey: Keys.compactFixturesViewEnabled) as? Bool
+        let fixturesViewDensity = userDefaults.string(forKey: Keys.fixturesViewDensity)
+            .flatMap(FixturesViewDensity.init(rawValue:))
+            ?? (legacyCompactFixturesViewEnabled == true ? .ultraCompact : Self.defaultFixturesViewDensity)
+        let showCompactFixtureTvLogo = userDefaults.object(forKey: Keys.showCompactFixtureTvLogo) as? Bool
+            ?? Self.defaultShowCompactFixtureTvLogo
+        let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
+            ?? Self.defaultShowCompactFixtureFantasyLogo
         let legacyShowFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
             ?? Self.defaultShowFantasyMatchPills
         let showFantasyFixtureLogos = userDefaults.object(forKey: Keys.showFantasyFixtureLogos) as? Bool
@@ -638,6 +685,9 @@ final class PreferencesStore: ObservableObject {
             notificationPremierLeagueTeamsOnly: notificationPremierLeagueTeamsOnly,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
+            fixturesViewDensity: fixturesViewDensity,
+            showCompactFixtureTvLogo: showCompactFixtureTvLogo,
+            showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
             showFantasyExpectedPoints: showFantasyExpectedPoints,
             showFantasyRealTimePoints: showFantasyRealTimePoints
@@ -668,6 +718,8 @@ final class PreferencesStore: ObservableObject {
         static let showTodayUnfinishedFixturesBadge = "preferences.showTodayUnfinishedFixturesBadge"
         static let fixturesViewDensity = "preferences.fixturesViewDensity"
         static let compactFixturesViewEnabled = "preferences.compactFixturesViewEnabled"
+        static let showCompactFixtureTvLogo = "preferences.showCompactFixtureTvLogo"
+        static let showCompactFixtureFantasyLogo = "preferences.showCompactFixtureFantasyLogo"
         static let showFantasyFixtureLogos = "preferences.showFantasyFixtureLogos"
         static let showFantasyExpectedPoints = "preferences.showFantasyExpectedPoints"
         static let showFantasyRealTimePoints = "preferences.showFantasyRealTimePoints"

@@ -29,6 +29,8 @@ struct Top_ScoresTests {
         #expect(store.matchGroupSortOrder == .kickoffThenTeamScore)
         #expect(!store.showTodayUnfinishedFixturesBadge)
         #expect(store.fixturesViewDensity == .compact)
+        #expect(store.showCompactFixtureTvLogo)
+        #expect(store.showCompactFixtureFantasyLogo)
         #expect(!store.showFantasyFixtureLogos)
         #expect(!store.showFantasyExpectedPoints)
         #expect(!store.showFantasyRealTimePoints)
@@ -42,9 +44,13 @@ struct Top_ScoresTests {
 
         let store = PreferencesStore(userDefaults: defaults)
         store.fixturesViewDensity = .ultraCompact
+        store.showCompactFixtureTvLogo = false
+        store.showCompactFixtureFantasyLogo = false
 
         let reloaded = PreferencesStore(userDefaults: defaults)
         #expect(reloaded.fixturesViewDensity == .ultraCompact)
+        #expect(!reloaded.showCompactFixtureTvLogo)
+        #expect(!reloaded.showCompactFixtureFantasyLogo)
     }
 
     @Test @MainActor func preferencesStore_migratesLegacyCompactFixturesToggleToUltraCompact() async throws {

@@ -65,6 +65,18 @@ struct PreferencesView: View {
                         Text("Extended shows the original two-row layout. Compact loosens the single-line layout slightly. Ultra compact matches the tighter previous setting.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+
+                        if preferences.fixturesViewDensity != .extended {
+                            Toggle("TV channel logo", isOn: showCompactFixtureTvLogoBinding)
+                            Text("Shows the primary TV channel logo on the right side of compact fixture lozenges.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
+                            Toggle("Fantasy football logo", isOn: showCompactFixtureFantasyLogoBinding)
+                            Text("Shows the fantasy logo on the left side of compact fixture lozenges when your squad has one or more players involved in the match.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Section("Competitions") {
@@ -465,6 +477,20 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.fixturesViewDensity },
             set: { preferences.fixturesViewDensity = $0 }
+        )
+    }
+
+    private var showCompactFixtureTvLogoBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showCompactFixtureTvLogo },
+            set: { preferences.showCompactFixtureTvLogo = $0 }
+        )
+    }
+
+    private var showCompactFixtureFantasyLogoBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showCompactFixtureFantasyLogo },
+            set: { preferences.showCompactFixtureFantasyLogo = $0 }
         )
     }
 

@@ -335,6 +335,9 @@ actor PreferencesSyncService {
                 "notificationPremierLeagueTeamsOnly": snapshot.notificationPremierLeagueTeamsOnly,
                 "fantasyDeadlineRemindersEnabled": snapshot.fantasyDeadlineRemindersEnabled,
                 "showTodayUnfinishedFixturesBadge": snapshot.showTodayUnfinishedFixturesBadge,
+                "fixturesViewDensity": snapshot.fixturesViewDensity.rawValue,
+                "showCompactFixtureTvLogo": snapshot.showCompactFixtureTvLogo,
+                "showCompactFixtureFantasyLogo": snapshot.showCompactFixtureFantasyLogo,
                 "showFantasyFixtureLogos": snapshot.showFantasyFixtureLogos,
                 "showFantasyExpectedPoints": snapshot.showFantasyExpectedPoints,
                 "showFantasyRealTimePoints": snapshot.showFantasyRealTimePoints,
@@ -470,6 +473,9 @@ actor PreferencesSyncService {
 
             let notificationEventTypesArray = preferences["notificationEventTypes"] as? [String]
             let notificationEventTypes = notificationEventTypesArray.map { Set($0) } ?? PreferencesStore.defaultNotificationEventTypes
+            let fixturesViewDensity = (preferences["fixturesViewDensity"] as? String)
+                .flatMap(FixturesViewDensity.init(rawValue:))
+                ?? PreferencesStore.defaultFixturesViewDensity
             let legacyShowFantasyMatchPills = preferences["showFantasyMatchPills"] as? Bool ?? PreferencesStore.defaultShowFantasyMatchPills
             let snapshot = PreferencesSnapshot(
                 selectedLeagues: preferences["selectedLeagues"] as? [String] ?? PreferencesStore.defaultSelectedLeagues,
@@ -495,6 +501,9 @@ actor PreferencesSyncService {
                 notificationPremierLeagueTeamsOnly: preferences["notificationPremierLeagueTeamsOnly"] as? Bool ?? PreferencesStore.defaultNotificationPremierLeagueTeamsOnly,
                 fantasyDeadlineRemindersEnabled: preferences["fantasyDeadlineRemindersEnabled"] as? Bool ?? PreferencesStore.defaultFantasyDeadlineRemindersEnabled,
                 showTodayUnfinishedFixturesBadge: preferences["showTodayUnfinishedFixturesBadge"] as? Bool ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
+                fixturesViewDensity: fixturesViewDensity,
+                showCompactFixtureTvLogo: preferences["showCompactFixtureTvLogo"] as? Bool ?? PreferencesStore.defaultShowCompactFixtureTvLogo,
+                showCompactFixtureFantasyLogo: preferences["showCompactFixtureFantasyLogo"] as? Bool ?? PreferencesStore.defaultShowCompactFixtureFantasyLogo,
                 showFantasyFixtureLogos: preferences["showFantasyFixtureLogos"] as? Bool ?? legacyShowFantasyMatchPills,
                 showFantasyExpectedPoints: preferences["showFantasyExpectedPoints"] as? Bool ?? legacyShowFantasyMatchPills,
                 showFantasyRealTimePoints: preferences["showFantasyRealTimePoints"] as? Bool ?? legacyShowFantasyMatchPills
