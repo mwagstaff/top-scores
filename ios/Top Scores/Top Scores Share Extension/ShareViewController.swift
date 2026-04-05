@@ -43,7 +43,6 @@ final class ShareViewController: UIViewController {
 
     private func configureUI() {
         logoButton.translatesAutoresizingMaskIntoConstraints = false
-        logoButton.adjustsImageWhenHighlighted = true
         logoButton.clipsToBounds = true
         logoButton.layer.cornerRadius = 16
         logoButton.isEnabled = false
@@ -203,7 +202,7 @@ final class ShareViewController: UIViewController {
     private func loadItem(provider: NSItemProvider, typeIdentifier: String) async -> NSSecureCoding? {
         await withCheckedContinuation { continuation in
             provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                continuation.resume(returning: item as? NSSecureCoding)
+                continuation.resume(returning: item)
             }
         }
     }

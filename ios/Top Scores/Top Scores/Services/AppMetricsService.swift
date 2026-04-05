@@ -19,7 +19,7 @@ actor AppMetricsService {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         DeviceIdentity.applyHeader(to: &request)
 
-        let payload = buildPayload()
+        let payload = await buildPayload()
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -39,28 +39,30 @@ actor AppMetricsService {
         }
     }
 
-    private func buildPayload() -> [String: Any] {
-        let device = UIDevice.current
-        let bundle = Bundle.main
-        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+    private func buildPayload() async -> [String: Any] {
+        await MainActor.run {
+            let device = UIDevice.current
+            let bundle = Bundle.main
+            let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+            let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
 
-        return [
-            "event": "app_open",
-            "platform": device.systemName,
-            "osVersion": device.systemVersion,
-            "deviceType": idiomName(device.userInterfaceIdiom),
-            "deviceModel": device.model,
-            "appVersion": version,
-            "buildNumber": build,
-            "locale": Locale.current.identifier,
-            "timezone": TimeZone.current.identifier,
-            "isLowPowerModeEnabled": ProcessInfo.processInfo.isLowPowerModeEnabled,
-            "recordedAt": ISO8601DateFormatter().string(from: Date()),
-        ]
+            return [
+                "event": "app_open",
+                "platform": device.systemName,
+                "osVersion": device.systemVersion,
+                "deviceType": Self.idiomName(device.userInterfaceIdiom),
+                "deviceModel": device.model,
+                "appVersion": version,
+                "buildNumber": build,
+                "locale": Locale.current.identifier,
+                "timezone": TimeZone.current.identifier,
+                "isLowPowerModeEnabled": ProcessInfo.processInfo.isLowPowerModeEnabled,
+                "recordedAt": ISO8601DateFormatter().string(from: Date()),
+            ]
+        }
     }
 
-    private func idiomName(_ idiom: UIUserInterfaceIdiom) -> String {
+    private static func idiomName(_ idiom: UIUserInterfaceIdiom) -> String {
         switch idiom {
         case .phone:
             return "phone"

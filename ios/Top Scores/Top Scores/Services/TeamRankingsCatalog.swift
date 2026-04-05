@@ -175,21 +175,43 @@ struct TeamRatingLookup: Sendable {
     }
 }
 
-struct TeamRankingSettings: Codable, Hashable {
-    static let defaultDefaultElo = 1000.0
+struct TeamRankingSettings: Codable, Hashable, Sendable {
+    nonisolated static let defaultDefaultElo = 1000.0
 
     let defaultElo: Double
     let updatedAt: Date?
 
-    init(defaultElo: Double = TeamRankingSettings.defaultDefaultElo, updatedAt: Date? = nil) {
+    nonisolated init(defaultElo: Double = TeamRankingSettings.defaultDefaultElo, updatedAt: Date? = nil) {
         self.defaultElo = defaultElo
         self.updatedAt = updatedAt
     }
 }
 
-private struct TeamRankingSettingsCachePayload: Codable {
+private struct TeamRankingSettingsCachePayload: Codable, Sendable {
     let fetchedAt: Date
     let settings: TeamRankingSettings
+
+    private enum CodingKeys: String, CodingKey {
+        case fetchedAt
+        case settings
+    }
+
+    nonisolated init(fetchedAt: Date, settings: TeamRankingSettings) {
+        self.fetchedAt = fetchedAt
+        self.settings = settings
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        settings = try container.decode(TeamRankingSettings.self, forKey: .settings)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fetchedAt, forKey: .fetchedAt)
+        try container.encode(settings, forKey: .settings)
+    }
 }
 
 actor TeamRankingSettingsCatalog {
@@ -300,9 +322,31 @@ actor TeamRankingSettingsCatalog {
     }
 }
 
-private struct TeamRankingsCachePayload: Codable {
+private struct TeamRankingsCachePayload: Codable, Sendable {
     let fetchedAt: Date
     let entries: [TeamRankingEntry]
+
+    private enum CodingKeys: String, CodingKey {
+        case fetchedAt
+        case entries
+    }
+
+    nonisolated init(fetchedAt: Date, entries: [TeamRankingEntry]) {
+        self.fetchedAt = fetchedAt
+        self.entries = entries
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        entries = try container.decode([TeamRankingEntry].self, forKey: .entries)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fetchedAt, forKey: .fetchedAt)
+        try container.encode(entries, forKey: .entries)
+    }
 }
 
 actor TeamRankingsCatalog {
@@ -402,7 +446,7 @@ actor TeamRankingsCatalog {
         try? data.write(to: cacheURL, options: [.atomic])
     }
 
-    private func normalize(entries: [TeamRankingEntry]) -> [TeamRankingEntry] {
+    private nonisolated func normalize(entries: [TeamRankingEntry]) -> [TeamRankingEntry] {
         var seen = Set<String>()
         var normalized: [TeamRankingEntry] = []
         normalized.reserveCapacity(entries.count)
@@ -432,7 +476,7 @@ actor TeamRankingsCatalog {
         return normalized
     }
 
-    private func normalizedKey(_ value: String) -> String {
+    private nonisolated func normalizedKey(_ value: String) -> String {
         value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .lowercased()
@@ -452,26 +496,48 @@ actor TeamRankingsCatalog {
     }
 }
 
-private struct FantasyTeamShortNameMappingsCachePayload: Codable {
+private struct FantasyTeamShortNameMappingsCachePayload: Codable, Sendable {
     let fetchedAt: Date
     let mappings: [String: String]
+
+    private enum CodingKeys: String, CodingKey {
+        case fetchedAt
+        case mappings
+    }
+
+    nonisolated init(fetchedAt: Date, mappings: [String: String]) {
+        self.fetchedAt = fetchedAt
+        self.mappings = mappings
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        mappings = try container.decode([String: String].self, forKey: .mappings)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fetchedAt, forKey: .fetchedAt)
+        try container.encode(mappings, forKey: .mappings)
+    }
 }
 
 final class FantasyTeamShortNameMappingsStore {
-    static let shared = FantasyTeamShortNameMappingsStore()
+    nonisolated(unsafe) static let shared = FantasyTeamShortNameMappingsStore()
 
     private let lock = NSLock()
     private var mappings: [String: String] = [:]
 
     private init() {}
 
-    func updateMappings(_ nextMappings: [String: String]) {
+    nonisolated func updateMappings(_ nextMappings: [String: String]) {
         lock.lock()
         mappings = nextMappings
         lock.unlock()
     }
 
-    func resolveTeamName(for rawValue: String) -> String {
+    nonisolated func resolveTeamName(for rawValue: String) -> String {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
 

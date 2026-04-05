@@ -383,7 +383,20 @@ struct AboutView: View {
             let grouped = Dictionary(grouping: squad.allPlayers) {
                 FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: $0.teamName)
             }
-            .map { (teamName: $0.key, players: $0.value.sorted(by: playerOrder)) }
+            .map {
+                (
+                    teamName: $0.key,
+                    players: $0.value.sorted { lhs, rhs in
+                        if lhs.isStarter != rhs.isStarter {
+                            return lhs.isStarter && !rhs.isStarter
+                        }
+                        if lhs.pickPosition != rhs.pickPosition {
+                            return lhs.pickPosition < rhs.pickPosition
+                        }
+                        return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                    }
+                )
+            }
             .sorted {
                 if $0.players.count != $1.players.count {
                     return $0.players.count > $1.players.count
@@ -511,7 +524,17 @@ struct AboutView: View {
                 grouping: fantasyPlayers,
                 by: \.positionType
             )
-            .mapValues { $0.sorted(by: playerOrder) }
+            .mapValues {
+                $0.sorted { lhs, rhs in
+                    if lhs.isStarter != rhs.isStarter {
+                        return lhs.isStarter && !rhs.isStarter
+                    }
+                    if lhs.pickPosition != rhs.pickPosition {
+                        return lhs.pickPosition < rhs.pickPosition
+                    }
+                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                }
+            }
 
             let numberSeed = Int(abs(teamName.hashValue % 40)) + 1
             var nextFillerNumber = 1
@@ -621,16 +644,6 @@ struct AboutView: View {
             case .forward:
                 return "attacker"
             }
-        }
-
-        private static func playerOrder(_ lhs: FantasyDisplayPlayer, _ rhs: FantasyDisplayPlayer) -> Bool {
-            if lhs.isStarter != rhs.isStarter {
-                return lhs.isStarter && !rhs.isStarter
-            }
-            if lhs.pickPosition != rhs.pickPosition {
-                return lhs.pickPosition < rhs.pickPosition
-            }
-            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
         }
     }
 

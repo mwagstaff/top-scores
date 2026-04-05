@@ -966,14 +966,14 @@ private struct MatchSearchBar: UIViewRepresentable {
     }
 }
 
-private struct PredictionJob: Identifiable {
+private struct PredictionJob: Identifiable, Sendable {
     let id = UUID()
     let dateKey: String
     let displayDate: String
     let matches: [Match]
 }
 
-private struct DailyFixturePredictions: Codable, Identifiable {
+private struct DailyFixturePredictions: Codable, Identifiable, Sendable {
     let dateKey: String
     let displayDate: String
     let generatedAt: Date
@@ -1020,7 +1020,7 @@ private struct DailyFixturePredictions: Codable, Identifiable {
     }
 }
 
-private struct PredictedFixture: Codable, Identifiable {
+private struct PredictedFixture: Codable, Identifiable, Sendable {
     let id: String
     let date: String
     let time: String
@@ -1254,18 +1254,29 @@ private enum FixturePredictionGenerator {
 
         let computedRows = await withTaskGroup(of: PredictionComputationResult.self) { group in
             for (index, match) in sortedMatches.enumerated() {
+                let matchID = match.id
+                let matchDate = match.date
+                let matchTime = match.time
+                let matchLeague = match.league
+                let matchLeagueSubcategory = match.leagueSubcategory
+                let matchHomeTeam = match.homeTeam
+                let matchAwayTeam = match.awayTeam
+                let matchTVChannels = match.tvChannels
+                let kickoff = match.dateTime
+                let isPostponed = match.isPostponed
+                let isInProgress = match.isInProgress
+
                 group.addTask {
-                    let homeElo = ratingsByTeamName[match.homeTeam]
-                    let awayElo = ratingsByTeamName[match.awayTeam]
-                    let kickoff = match.dateTime
+                    let homeElo = ratingsByTeamName[matchHomeTeam]
+                    let awayElo = ratingsByTeamName[matchAwayTeam]
 
                     let unavailableReason: String?
                     if kickoff == nil {
                         unavailableReason = "Kick-off time unavailable"
-                    } else if match.isPostponed {
+                    } else if isPostponed {
                         unavailableReason = "Match postponed"
                     } else if kickoff! <= now {
-                        unavailableReason = match.isInProgress ? "Already in progress" : "Already kicked off"
+                        unavailableReason = isInProgress ? "Already in progress" : "Already kicked off"
                     } else {
                         unavailableReason = nil
                     }
@@ -1274,14 +1285,14 @@ private enum FixturePredictionGenerator {
                         return PredictionComputationResult(
                             index: index,
                             fixture: PredictedFixture(
-                                id: match.id,
-                                date: match.date,
-                                time: match.time,
-                                league: match.league,
-                                leagueSubcategory: match.leagueSubcategory,
-                                homeTeam: match.homeTeam,
-                                awayTeam: match.awayTeam,
-                                tvChannels: match.tvChannels,
+                                id: matchID,
+                                date: matchDate,
+                                time: matchTime,
+                                league: matchLeague,
+                                leagueSubcategory: matchLeagueSubcategory,
+                                homeTeam: matchHomeTeam,
+                                awayTeam: matchAwayTeam,
+                                tvChannels: matchTVChannels,
                                 homeGoals: nil,
                                 awayGoals: nil,
                                 expectedHomeGoals: nil,
@@ -1292,9 +1303,9 @@ private enum FixturePredictionGenerator {
                                 homeElo: homeElo,
                                 awayElo: awayElo,
                                 unavailableReason: unavailableReason,
-                                isPostponed: match.isPostponed
+                                isPostponed: isPostponed
                             ),
-                            skippedKickedOff: kickoff != nil && kickoff! <= now && !match.isPostponed,
+                            skippedKickedOff: kickoff != nil && kickoff! <= now && !isPostponed,
                             skippedMissingElo: false,
                             skippedUnknown: kickoff == nil
                         )
@@ -1304,14 +1315,14 @@ private enum FixturePredictionGenerator {
                     return PredictionComputationResult(
                         index: index,
                         fixture: PredictedFixture(
-                            id: match.id,
-                            date: match.date,
-                            time: match.time,
-                            league: match.league,
-                            leagueSubcategory: match.leagueSubcategory,
-                            homeTeam: match.homeTeam,
-                            awayTeam: match.awayTeam,
-                            tvChannels: match.tvChannels,
+                            id: matchID,
+                            date: matchDate,
+                            time: matchTime,
+                            league: matchLeague,
+                            leagueSubcategory: matchLeagueSubcategory,
+                            homeTeam: matchHomeTeam,
+                            awayTeam: matchAwayTeam,
+                            tvChannels: matchTVChannels,
                             homeGoals: estimate.homeGoals,
                             awayGoals: estimate.awayGoals,
                             expectedHomeGoals: estimate.expectedHomeGoals,
@@ -1358,7 +1369,7 @@ private enum FixturePredictionGenerator {
     }
 }
 
-private struct PredictionComputationResult {
+private struct PredictionComputationResult: Sendable {
     let index: Int
     let fixture: PredictedFixture
     let skippedKickedOff: Bool
@@ -1366,7 +1377,7 @@ private struct PredictionComputationResult {
     let skippedUnknown: Bool
 }
 
-private struct ScorelineEstimate {
+private struct ScorelineEstimate: Sendable {
     let homeGoals: Int
     let awayGoals: Int
     let expectedHomeGoals: Double
@@ -1590,8 +1601,8 @@ private struct DayPredictionsView: View {
         return grouped.map { entry in
             let (league, fixtures) = entry
             let sorted = fixtures.sorted { lhs, rhs in
-                let leftDate = MatchDateParser.shared.parse(date: lhs.date, time: lhs.time) ?? .distantFuture
-                let rightDate = MatchDateParser.shared.parse(date: rhs.date, time: rhs.time) ?? .distantFuture
+                let leftDate = MatchDateParser.parse(date: lhs.date, time: lhs.time) ?? .distantFuture
+                let rightDate = MatchDateParser.parse(date: rhs.date, time: rhs.time) ?? .distantFuture
                 if leftDate != rightDate {
                     return leftDate < rightDate
                 }
@@ -1608,8 +1619,8 @@ private struct DayPredictionsView: View {
             )
         }
         .sorted { lhs, rhs in
-            let lhsKickoff = lhs.fixtures.first.flatMap { MatchDateParser.shared.parse(date: $0.date, time: $0.time) } ?? .distantFuture
-            let rhsKickoff = rhs.fixtures.first.flatMap { MatchDateParser.shared.parse(date: $0.date, time: $0.time) } ?? .distantFuture
+            let lhsKickoff = lhs.fixtures.first.flatMap { MatchDateParser.parse(date: $0.date, time: $0.time) } ?? .distantFuture
+            let rhsKickoff = rhs.fixtures.first.flatMap { MatchDateParser.parse(date: $0.date, time: $0.time) } ?? .distantFuture
             if lhsKickoff != rhsKickoff {
                 return lhsKickoff < rhsKickoff
             }

@@ -8,9 +8,31 @@ struct TeamLineupNumberColors {
     let outline: Color?
 }
 
-private struct TeamColorsCachePayload: Codable {
+private struct TeamColorsCachePayload: Codable, Sendable {
     let fetchedAt: Date
     let catalog: TeamColorsCatalogResponse
+
+    private enum CodingKeys: String, CodingKey {
+        case fetchedAt
+        case catalog
+    }
+
+    nonisolated init(fetchedAt: Date, catalog: TeamColorsCatalogResponse) {
+        self.fetchedAt = fetchedAt
+        self.catalog = catalog
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        catalog = try container.decode(TeamColorsCatalogResponse.self, forKey: .catalog)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fetchedAt, forKey: .fetchedAt)
+        try container.encode(catalog, forKey: .catalog)
+    }
 }
 
 @MainActor
@@ -113,7 +135,7 @@ final class TeamColorCatalog: ObservableObject {
                 isFallback: false
             )
             for candidate in [entry.name] + entry.aliases {
-                let key = Self.normalizedKey(candidate)
+                let key = TeamIdentityStore.normalizedKey(candidate)
                 guard !key.isEmpty else { continue }
                 if lookup[key] == nil {
                     lookup[key] = entry
@@ -130,13 +152,13 @@ final class TeamColorCatalog: ObservableObject {
     }
 
     private func resolve(_ teamName: String) -> TeamColorEntry? {
-        let key = Self.normalizedKey(teamName)
+        let key = TeamIdentityStore.normalizedKey(teamName)
         guard !key.isEmpty else { return nil }
         if let direct = exactByKey[key] {
             return direct
         }
         let canonical = TeamIdentityStore.shared.canonicalName(for: teamName)
-        let canonicalKey = Self.normalizedKey(canonical)
+        let canonicalKey = TeamIdentityStore.normalizedKey(canonical)
         guard !canonicalKey.isEmpty else { return nil }
         return exactByKey[canonicalKey]
     }
@@ -191,19 +213,6 @@ final class TeamColorCatalog: ObservableObject {
         let directory = root.appendingPathComponent("TopScores", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent(Self.cacheFileName)
-    }
-
-    private static func normalizedKey(_ value: String) -> String {
-        value
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .replacingOccurrences(of: "&", with: " and ")
-            .replacingOccurrences(of: "'", with: "")
-            .replacingOccurrences(of: ".", with: " ")
-            .replacingOccurrences(of: "-", with: " ")
-            .replacingOccurrences(of: "_", with: " ")
-            .split { !$0.isLetter && !$0.isNumber }
-            .map { String($0) }
-            .joined()
     }
 
     private func log(_ message: String) {
@@ -298,7 +307,7 @@ final class TeamColorCatalog: ObservableObject {
     }
 }
 
-private struct TeamColorEntry {
+private struct TeamColorEntry: Sendable {
     let name: String
     let aliases: [String]
     let primary: String
@@ -308,7 +317,7 @@ private struct TeamColorEntry {
 }
 
 final class TeamIdentityStore {
-    static let shared = TeamIdentityStore()
+    nonisolated(unsafe) static let shared = TeamIdentityStore()
 
     private let lock = NSLock()
     private var canonicalNameByKey: [String: String] = [:]
@@ -317,7 +326,7 @@ final class TeamIdentityStore {
 
     private init() {}
 
-    func update(from catalog: TeamColorsCatalogResponse) {
+    nonisolated func update(from catalog: TeamColorsCatalogResponse) {
         var nextCanonicalNameByKey: [String: String] = [:]
         var nextNamesByCanonicalKey: [String: [String]] = [:]
         var nextExactToCanonicalKey: [String: String] = [:]
@@ -353,7 +362,7 @@ final class TeamIdentityStore {
         lock.unlock()
     }
 
-    func canonicalName(for rawValue: String) -> String {
+    nonisolated func canonicalName(for rawValue: String) -> String {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
         let key = Self.normalizedKey(trimmed)
@@ -364,7 +373,7 @@ final class TeamIdentityStore {
         return canonicalName ?? trimmed
     }
 
-    func names(for rawValue: String) -> [String] {
+    nonisolated func names(for rawValue: String) -> [String] {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         let key = Self.normalizedKey(trimmed)
@@ -378,17 +387,17 @@ final class TeamIdentityStore {
         return Array(Set(([canonicalName, trimmed] + knownNames).compactMap { $0 }))
     }
 
-    func normalizedKeys(for rawValue: String) -> Set<String> {
+    nonisolated func normalizedKeys(for rawValue: String) -> Set<String> {
         Set(names(for: rawValue).map(Self.normalizedKey).filter { !$0.isEmpty })
     }
 
-    func matches(_ lhs: String, _ rhs: String) -> Bool {
+    nonisolated func matches(_ lhs: String, _ rhs: String) -> Bool {
         let leftKeys = normalizedKeys(for: lhs)
         let rightKeys = normalizedKeys(for: rhs)
         return !leftKeys.isDisjoint(with: rightKeys)
     }
 
-    static func normalizedKey(_ value: String) -> String {
+    nonisolated static func normalizedKey(_ value: String) -> String {
         value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .replacingOccurrences(of: "&", with: " and ")

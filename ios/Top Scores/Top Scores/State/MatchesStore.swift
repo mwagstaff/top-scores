@@ -268,7 +268,7 @@ private enum MatchGroupingEngine {
                 return cached
             }
             let resolved = match.dateTime
-                ?? MatchDateParser.shared.parse(date: match.date, time: "00:00")
+                ?? MatchDateParser.parse(date: match.date, time: "00:00")
                 ?? .distantFuture
             matchDates[match.id] = resolved
             return resolved
@@ -318,11 +318,11 @@ private enum MatchGroupingEngine {
         let dateDays: [MatchDay] = dateKeys.compactMap { dateKey -> MatchDay? in
             guard let matchesForDate = groupedByDate[dateKey] else { return nil }
             let displayDate: String
-            let parsedDate = MatchDateParser.shared.parse(date: dateKey, time: "00:00")
+            let parsedDate = MatchDateParser.parse(date: dateKey, time: "00:00")
             let isToday = parsedDate.map { calendar.isDateInToday($0) } ?? false
             let isTomorrow = parsedDate.map { calendar.isDateInTomorrow($0) } ?? false
             if let parsedDate {
-                displayDate = MatchDateParser.shared.displayDateWithRelative(parsedDate)
+                displayDate = MatchDateParser.displayDateWithRelative(parsedDate)
             } else {
                 displayDate = dateKey
             }
@@ -411,7 +411,7 @@ private enum MatchGroupingEngine {
     }
 
     static func matchSortDate(for match: Match) -> Date {
-        match.dateTime ?? MatchDateParser.shared.parse(date: match.date, time: "00:00") ?? .distantFuture
+        match.dateTime ?? MatchDateParser.parse(date: match.date, time: "00:00") ?? .distantFuture
     }
 
     static func competitionWeight(for match: Match) -> Double {

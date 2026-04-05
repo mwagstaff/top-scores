@@ -388,7 +388,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     var dateTime: Date? {
-        MatchDateParser.shared.parse(date: date, time: time)
+        MatchDateParser.parse(date: date, time: time)
     }
 
     var matchDetailsID: String? {
@@ -405,7 +405,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     var dateOnly: Date? {
-        MatchDateParser.shared.parse(date: date, time: "00:00")
+        MatchDateParser.parse(date: date, time: "00:00")
     }
 
     var hasScore: Bool {
@@ -711,7 +711,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         }
 
         if let detailsTime = Self.normalizedLookupTime(details.time),
-           !Self.areComparableLookupTimes(detailsTime, Self.normalizedLookupTime(time) ?? "00:00") {
+           !lookupTimesAreComparable(detailsTime, Self.normalizedLookupTime(time) ?? "00:00") {
             return false
         }
 
@@ -765,18 +765,6 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return Self.timeOnlyPattern.firstMatch(in: normalized, options: [], range: NSRange(location: 0, length: normalized.utf16.count)) != nil
             ? normalized
             : nil
-    }
-
-    private static func areComparableLookupTimes(_ lhs: String, _ rhs: String) -> Bool {
-        if lhs == rhs || lhs == "00:00" || rhs == "00:00" {
-            return true
-        }
-
-        guard let leftMinutes = lookupTimeMinutes(lhs), let rightMinutes = lookupTimeMinutes(rhs) else {
-            return false
-        }
-
-        return abs(leftMinutes - rightMinutes) <= 120
     }
 
     private static func lookupTimeMinutes(_ value: String) -> Int? {
@@ -866,7 +854,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             }
         }
 
-        guard let kickoff = MatchDateParser.shared.parse(date: date, time: time) else {
+        guard let kickoff = MatchDateParser.parse(date: date, time: time) else {
             return normalizedStatus == nil || normalizedStatus?.isEmpty == true
         }
         return kickoff.timeIntervalSince(now) > -(15 * 60)
@@ -1119,35 +1107,32 @@ enum MatchStatusFormatter {
     }
 }
 
-final class MatchDateParser {
-    static let shared = MatchDateParser()
-
-    private let dateTimeFormatter: DateFormatter
-    private let dateFormatter: DateFormatter
-
-    private init() {
+enum MatchDateParser {
+    private static func makeDateTimeFormatter() -> DateFormatter {
         let dateTimeFormatter = DateFormatter()
         dateTimeFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateTimeFormatter.timeZone = TimeZone.current
         dateTimeFormatter.dateFormat = "yyyy-MM-dd HH:mm"
-        self.dateTimeFormatter = dateTimeFormatter
+        return dateTimeFormatter
+    }
 
+    private static func makeDisplayDateFormatter() -> DateFormatter {
         let dateFormatter = DateFormatter()
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.timeZone = TimeZone.current
         dateFormatter.dateFormat = "EEE, MMM d, yyyy"
-        self.dateFormatter = dateFormatter
+        return dateFormatter
     }
 
-    func parse(date: String, time: String) -> Date? {
-        dateTimeFormatter.date(from: "\(date) \(time)")
+    static func parse(date: String, time: String) -> Date? {
+        makeDateTimeFormatter().date(from: "\(date) \(time)")
     }
 
-    func displayDate(_ date: Date) -> String {
-        dateFormatter.string(from: date)
+    static func displayDate(_ date: Date) -> String {
+        makeDisplayDateFormatter().string(from: date)
     }
 
-    func displayDateWithRelative(_ date: Date) -> String {
+    static func displayDateWithRelative(_ date: Date) -> String {
         let base = displayDate(date)
         let calendar = Calendar.current
         if calendar.isDateInToday(date) {
@@ -1158,4 +1143,33 @@ final class MatchDateParser {
         }
         return base
     }
+}
+
+private func lookupTimesAreComparable(_ lhs: String, _ rhs: String) -> Bool {
+    if lhs == rhs || lhs == "00:00" || rhs == "00:00" {
+        return true
+    }
+
+    guard let leftMinutes = lookupTimeMinutes(lhs), let rightMinutes = lookupTimeMinutes(rhs) else {
+        return false
+    }
+
+    let minuteDelta = leftMinutes >= rightMinutes
+        ? leftMinutes - rightMinutes
+        : rightMinutes - leftMinutes
+    return minuteDelta <= 120
+}
+
+private func lookupTimeMinutes(_ value: String) -> Int? {
+    let components = value.split(separator: ":")
+    guard components.count == 2,
+          let hours = Int(components[0]),
+          let minutes = Int(components[1]),
+          (0 ... 23).contains(hours),
+          (0 ... 59).contains(minutes)
+    else {
+        return nil
+    }
+
+    return (hours * 60) + minutes
 }

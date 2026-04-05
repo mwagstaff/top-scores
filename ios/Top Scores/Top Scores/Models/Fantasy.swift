@@ -1348,8 +1348,8 @@ enum FantasyPositionType: Int, CaseIterable, Hashable {
     }
 }
 
-struct FantasyDisplayPlayer: Identifiable, Hashable {
-    enum GameweekScoreState: Hashable {
+struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
+    enum GameweekScoreState: Hashable, Sendable {
         case live
         case upcoming
         case completed
@@ -1477,7 +1477,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable {
     }
 }
 
-struct FantasyMatchTeamSquadSection: Identifiable, Hashable {
+struct FantasyMatchTeamSquadSection: Identifiable, Hashable, Sendable {
     let teamName: String
     let starters: [FantasyDisplayPlayer]
     let bench: [FantasyDisplayPlayer]
@@ -1491,7 +1491,7 @@ struct FantasyMatchTeamSquadSection: Identifiable, Hashable {
     }
 }
 
-struct FantasyEffectivePlayerContribution: Hashable {
+struct FantasyEffectivePlayerContribution: Hashable, Sendable {
     let elementID: Int
     let displayName: String
     let fullName: String
@@ -1788,7 +1788,15 @@ struct FantasySquadDisplayData: Hashable {
         let normalizedTeamName = Self.normalizedMatchSquadTeamName(teamName)
         let matchedPlayers = allPlayers
             .filter { Self.normalizedMatchSquadTeamName($0.teamName) == normalizedTeamName }
-            .sorted(by: Self.matchSquadPlayerSortOrder)
+            .sorted { lhs, rhs in
+                if lhs.isStarter != rhs.isStarter {
+                    return lhs.isStarter && !rhs.isStarter
+                }
+                if lhs.pickPosition != rhs.pickPosition {
+                    return lhs.pickPosition < rhs.pickPosition
+                }
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
 
         guard !matchedPlayers.isEmpty else { return nil }
 
@@ -1801,19 +1809,6 @@ struct FantasySquadDisplayData: Hashable {
 
     private static func normalizedMatchSquadTeamName(_ value: String) -> String {
         TeamIdentityStore.normalizedKey(TeamIdentityStore.shared.canonicalName(for: value))
-    }
-
-    private static func matchSquadPlayerSortOrder(
-        _ lhs: FantasyDisplayPlayer,
-        _ rhs: FantasyDisplayPlayer
-    ) -> Bool {
-        if lhs.isStarter != rhs.isStarter {
-            return lhs.isStarter && !rhs.isStarter
-        }
-        if lhs.pickPosition != rhs.pickPosition {
-            return lhs.pickPosition < rhs.pickPosition
-        }
-        return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
     }
 }
 

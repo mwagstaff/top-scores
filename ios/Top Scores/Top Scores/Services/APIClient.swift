@@ -8,20 +8,19 @@ struct APIClient {
     private static let maxLoggedBodyLength = 240
     private static let retryDelayNanos: UInt64 = 350_000_000
     private static let retryableStatusCodes: Set<Int> = [408, 429, 500, 502, 503, 504]
-    private static let sharedNoCacheSession: URLSession = {
-        URLCache.shared.removeAllCachedResponses()
-        let config = URLSessionConfiguration.default
+    private static func makeNoCacheSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         return URLSession(configuration: config)
-    }()
+    }
 
-    init(baseURL: URL, session: URLSession? = nil) {
+    nonisolated init(baseURL: URL, session: URLSession? = nil) {
         self.baseURL = baseURL
         if let session = session {
             self.session = session
         } else {
-            self.session = Self.sharedNoCacheSession
+            self.session = Self.makeNoCacheSession()
         }
     }
 
@@ -44,8 +43,8 @@ struct APIClient {
         }
 
         let sorted = merged.sorted {
-            let leftDate = $0.dateTime ?? MatchDateParser.shared.parse(date: $0.date, time: "00:00") ?? .distantFuture
-            let rightDate = $1.dateTime ?? MatchDateParser.shared.parse(date: $1.date, time: "00:00") ?? .distantFuture
+            let leftDate = $0.dateTime ?? MatchDateParser.parse(date: $0.date, time: "00:00") ?? .distantFuture
+            let rightDate = $1.dateTime ?? MatchDateParser.parse(date: $1.date, time: "00:00") ?? .distantFuture
             if leftDate != rightDate {
                 return leftDate < rightDate
             }
@@ -849,12 +848,12 @@ private struct CacheStateDomainResponse: Decodable {
     let generation: Int
 }
 
-struct LeagueTablesResponse: Codable, Hashable {
+struct LeagueTablesResponse: Codable, Hashable, Sendable {
     let leagues: [LeagueTable]
     let lastUpdated: Date?
 }
 
-struct TeamRankingEntry: Codable, Hashable {
+struct TeamRankingEntry: Codable, Hashable, Sendable {
     let name: String
     let points: Double?
     let aliases: [String]
@@ -870,13 +869,13 @@ struct TeamRankingEntry: Codable, Hashable {
         case aliasesUpper = "Aliases"
     }
 
-    init(name: String, points: Double?, aliases: [String]) {
+    nonisolated init(name: String, points: Double?, aliases: [String]) {
         self.name = name
         self.points = points
         self.aliases = aliases
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
         if let primaryName = try container.decodeIfPresent(String.self, forKey: .name) {
@@ -920,7 +919,7 @@ struct TeamRankingEntry: Codable, Hashable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    nonisolated func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encodeIfPresent(points, forKey: .points)
@@ -928,7 +927,7 @@ struct TeamRankingEntry: Codable, Hashable {
     }
 }
 
-struct TeamRankingSettingsResponse: Codable, Hashable {
+struct TeamRankingSettingsResponse: Codable, Hashable, Sendable {
     let defaultElo: Double
     let updatedAt: Date?
 
@@ -962,7 +961,7 @@ struct TeamRankingSettingsResponse: Codable, Hashable {
     }
 }
 
-struct TeamColorsCatalogResponse: Codable, Hashable {
+struct TeamColorsCatalogResponse: Codable, Hashable, Sendable {
     let updatedAt: String?
     let defaultStyle: TeamColorStyleResponse
     let teams: [TeamColorRecordResponse]
@@ -996,13 +995,13 @@ struct TeamColorsCatalogResponse: Codable, Hashable {
     }
 }
 
-struct TeamColorStyleResponse: Codable, Hashable {
+struct TeamColorStyleResponse: Codable, Hashable, Sendable {
     let primary: String
     let secondary: String
     let scheme: String?
 }
 
-struct TeamColorRecordResponse: Codable, Hashable {
+struct TeamColorRecordResponse: Codable, Hashable, Sendable {
     let name: String
     let aliases: [String]
     let primary: String
@@ -1010,7 +1009,7 @@ struct TeamColorRecordResponse: Codable, Hashable {
     let scheme: String?
 }
 
-struct TeamIdentityGroupResponse: Codable, Hashable {
+struct TeamIdentityGroupResponse: Codable, Hashable, Sendable {
     let name: String
     let aliases: [String]
 }

@@ -1,8 +1,30 @@
 import Foundation
 
-private struct FantasyLoadingMessagesCachePayload: Codable {
+private struct FantasyLoadingMessagesCachePayload: Codable, Sendable {
     let fetchedAt: Date
     let messages: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case fetchedAt
+        case messages
+    }
+
+    nonisolated init(fetchedAt: Date, messages: [String]) {
+        self.fetchedAt = fetchedAt
+        self.messages = messages
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        messages = try container.decode([String].self, forKey: .messages)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fetchedAt, forKey: .fetchedAt)
+        try container.encode(messages, forKey: .messages)
+    }
 }
 
 actor FantasyLoadingMessagesCatalog {

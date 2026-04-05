@@ -3,17 +3,17 @@ import Foundation
 struct FantasyPublicAPIClient {
     private static let gameUpdatingNeedle = "the game is being updated"
 
-    private static let noCacheSession: URLSession = {
-        let config = URLSessionConfiguration.default
+    private static func makeNoCacheSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         return URLSession(configuration: config)
-    }()
+    }
 
     let session: URLSession
 
-    init(session: URLSession = FantasyPublicAPIClient.noCacheSession) {
-        self.session = session
+    init(session: URLSession? = nil) {
+        self.session = session ?? Self.makeNoCacheSession()
     }
 
     func fetchPicks(entryID: Int, eventID: Int) async throws -> FantasyPicksResponse {

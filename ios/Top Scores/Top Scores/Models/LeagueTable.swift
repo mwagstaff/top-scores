@@ -68,13 +68,18 @@ struct LeagueTableRow: Identifiable, Codable, Hashable {
     }
 }
 
-struct LeagueTablesCachePayload: Codable {
+struct LeagueTablesCachePayload: Codable, Sendable {
     let fetchedAt: Date
     let response: LeagueTablesResponse
+
+    nonisolated init(fetchedAt: Date, response: LeagueTablesResponse) {
+        self.fetchedAt = fetchedAt
+        self.response = response
+    }
 }
 
 enum LeagueTablesCache {
-    static func load(for apiBaseURL: String) -> LeagueTablesCachePayload? {
+    nonisolated static func load(for apiBaseURL: String) -> LeagueTablesCachePayload? {
         guard let data = try? Data(contentsOf: cacheURL(for: apiBaseURL)) else { return nil }
 
         let decoder = JSONDecoder()
@@ -82,7 +87,7 @@ enum LeagueTablesCache {
         return try? decoder.decode(LeagueTablesCachePayload.self, from: data)
     }
 
-    static func save(response: LeagueTablesResponse, fetchedAt: Date, apiBaseURL: String) {
+    nonisolated static func save(response: LeagueTablesResponse, fetchedAt: Date, apiBaseURL: String) {
         let payload = LeagueTablesCachePayload(
             fetchedAt: fetchedAt,
             response: response
@@ -96,7 +101,7 @@ enum LeagueTablesCache {
         try? data.write(to: cacheURL(for: apiBaseURL), options: [.atomic])
     }
 
-    private static func cacheURL(for apiBaseURL: String) -> URL {
+    private nonisolated static func cacheURL(for apiBaseURL: String) -> URL {
         let fileManager = FileManager.default
         let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let directory = root.appendingPathComponent("TopScores", isDirectory: true)
@@ -104,7 +109,7 @@ enum LeagueTablesCache {
         return directory.appendingPathComponent(cacheFileName(for: apiBaseURL))
     }
 
-    private static func cacheFileName(for apiBaseURL: String) -> String {
+    private nonisolated static func cacheFileName(for apiBaseURL: String) -> String {
         let slug = apiBaseURL
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .lowercased()
@@ -168,23 +173,23 @@ actor LeagueTablesCatalog {
 
         let task = Task<LeagueTablesResponse, Error> {
             let client = APIClient(baseURL: baseURL)
-            let response = try await client.fetchLeagueTables()
-            guard !response.leagues.isEmpty else {
-                if let cached = await self.cachedResponse(apiBaseURL: apiBaseURL) {
-                    await self.log("League tables refresh returned an empty payload; keeping cached tables.")
-                    return cached
-                }
-                return response
-            }
-
-            await self.store(response: response, fetchedAt: Date(), apiBaseURL: apiBaseURL)
-            return response
+            return try await client.fetchLeagueTables()
         }
 
         refreshTasks[apiBaseURL] = task
         defer { refreshTasks[apiBaseURL] = nil }
 
-        return try await task.value
+        let response = try await task.value
+        guard !response.leagues.isEmpty else {
+            if let cached = cachedResponses[apiBaseURL] {
+                log("League tables refresh returned an empty payload; keeping cached tables.")
+                return cached
+            }
+            return response
+        }
+
+        store(response: response, fetchedAt: Date(), apiBaseURL: apiBaseURL)
+        return response
     }
 
     private func shouldRefresh(now: Date, apiBaseURL: String) -> Bool {

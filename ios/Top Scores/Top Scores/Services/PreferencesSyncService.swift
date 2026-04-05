@@ -1,6 +1,6 @@
 import Foundation
 
-private struct FantasySyncPlayerPayload: Codable {
+private struct FantasySyncPlayerPayload: Codable, Sendable {
     let elementID: Int
     let pickPosition: Int
     let positionType: Int
@@ -19,7 +19,7 @@ private struct FantasySyncPlayerPayload: Codable {
     let hasActiveFixtureThisGameweek: Bool
     let minutesPlayed: Int
 
-    init(player: FantasyDisplayPlayer) {
+    nonisolated init(player: FantasyDisplayPlayer) {
         elementID = player.elementID
         pickPosition = player.pickPosition
         positionType = player.positionType.rawValue
@@ -40,14 +40,14 @@ private struct FantasySyncPlayerPayload: Codable {
     }
 }
 
-private struct FantasySyncContributionPayload: Codable {
+private struct FantasySyncContributionPayload: Codable, Sendable {
     let elementID: Int
     let displayName: String
     let fullName: String
     let teamName: String
     let points: Int
 
-    init(contribution: FantasyEffectivePlayerContribution) {
+    nonisolated init(contribution: FantasyEffectivePlayerContribution) {
         elementID = contribution.elementID
         displayName = contribution.displayName
         fullName = contribution.fullName
@@ -56,7 +56,7 @@ private struct FantasySyncContributionPayload: Codable {
     }
 }
 
-private struct FantasySyncSquadPayload: Codable {
+private struct FantasySyncSquadPayload: Codable, Sendable {
     let managerEntryID: Int
     let syncedAt: String
     let gameweekID: Int
@@ -70,7 +70,7 @@ private struct FantasySyncSquadPayload: Codable {
     let players: [FantasySyncPlayerPayload]
     let effectiveContributions: [FantasySyncContributionPayload]
 
-    init(managerEntryID: Int, squad: FantasySquadDisplayData, now: Date = Date()) {
+    nonisolated init(managerEntryID: Int, squad: FantasySquadDisplayData, now: Date = Date()) {
         self.managerEntryID = managerEntryID
         syncedAt = ISO8601DateFormatter().string(from: now)
         gameweekID = squad.gameweekID
@@ -88,15 +88,20 @@ private struct FantasySyncSquadPayload: Codable {
     }
 }
 
-private struct FantasySyncStatePayload: Codable {
+private struct FantasySyncStatePayload: Codable, Sendable {
     let managerEntryID: Int?
     let squad: FantasySyncSquadPayload?
+
+    nonisolated init(managerEntryID: Int?, squad: FantasySyncSquadPayload?) {
+        self.managerEntryID = managerEntryID
+        self.squad = squad
+    }
 }
 
 enum FantasySyncStore {
-    private static let userDefaultsKey = "fantasy.syncedSquadState"
+    private nonisolated static let userDefaultsKey = "fantasy.syncedSquadState"
 
-    static func persist(managerEntryID: String, squad: FantasySquadDisplayData?) {
+    nonisolated static func persist(managerEntryID: String, squad: FantasySquadDisplayData?) {
         let defaults = UserDefaults.standard
         let trimmedManagerID = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsedManagerEntryID = Int(trimmedManagerID)
@@ -114,7 +119,7 @@ enum FantasySyncStore {
         defaults.set(data, forKey: userDefaultsKey)
     }
 
-    static func jsonObject() -> Any? {
+    nonisolated static func jsonObject() -> Any? {
         guard let data = UserDefaults.standard.data(forKey: userDefaultsKey) else {
             return nil
         }

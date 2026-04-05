@@ -91,7 +91,7 @@ final class LiveActivitySyncService {
                     // shows two widgets, even when the app never comes to the foreground.
                     let current = Activity<TopScoresLiveActivityAttributes>.activities
                     if current.count > 1 {
-                        await self.enforceSingleActiveActivity(among: current)
+                        _ = await self.enforceSingleActiveActivity(among: current)
                     }
                 }
             }
@@ -134,7 +134,7 @@ final class LiveActivitySyncService {
             "[LiveActivitySync] Begin observing activity %@ state=%@ %@",
             activityID,
             String(describing: activity.activityState),
-            Self.contentStateSummary(activity.contentState)
+            Self.contentStateSummary(Self.currentContentState(for: activity))
         )
 
         if let tokenData = activity.pushToken {
@@ -233,7 +233,7 @@ final class LiveActivitySyncService {
                     activity.id,
                     String(describing: activity.activityState),
                     activity.pushToken == nil ? 0 : 1,
-                    Self.contentStateSummary(activity.contentState)
+                    Self.contentStateSummary(Self.currentContentState(for: activity))
                 )
                 if let tokenData = activity.pushToken {
                     await uploadActivityPushToken(activityID: activity.id, tokenData: tokenData)
@@ -259,8 +259,10 @@ final class LiveActivitySyncService {
         guard activities.count > 1 else { return activities }
 
         let sortedActivities = activities.sorted { lhs, rhs in
-            if lhs.contentState.generatedAtEpochSeconds != rhs.contentState.generatedAtEpochSeconds {
-                return lhs.contentState.generatedAtEpochSeconds > rhs.contentState.generatedAtEpochSeconds
+            let leftState = Self.currentContentState(for: lhs)
+            let rightState = Self.currentContentState(for: rhs)
+            if leftState.generatedAtEpochSeconds != rightState.generatedAtEpochSeconds {
+                return leftState.generatedAtEpochSeconds > rightState.generatedAtEpochSeconds
             }
             return lhs.id > rhs.id
         }
@@ -397,7 +399,7 @@ final class LiveActivitySyncService {
     }
 
     private func endpointURL(path: String) async -> URL? {
-        let snapshot = await PreferencesStore.loadSnapshot()
+        let snapshot = PreferencesStore.loadSnapshot()
         guard let baseURL = URL(string: snapshot.apiBaseURL) else {
             NSLog("[LiveActivitySync] Invalid API base URL: %@", snapshot.apiBaseURL)
             return nil
@@ -464,6 +466,13 @@ final class LiveActivitySyncService {
 
     private static func shortHex(_ data: Data) -> String {
         String(hexString(from: data).prefix(16))
+    }
+
+    @available(iOS 16.1, *)
+    private static func currentContentState(
+        for activity: Activity<TopScoresLiveActivityAttributes>
+    ) -> TopScoresLiveActivityAttributes.ContentState {
+        activity.content.state
     }
 
     private static func contentStateSummary(_ state: TopScoresLiveActivityAttributes.ContentState) -> String {

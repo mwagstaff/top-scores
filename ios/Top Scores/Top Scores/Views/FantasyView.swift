@@ -1317,9 +1317,6 @@ struct FantasyView: View {
     }
 
     private var assistantManagerSection: some View {
-        let assistantScore = fantasyViewModel.assistantManagerPreview?.idealSquad?.displayedTotalPoints
-        let userScore = fantasyViewModel.data?.resolvedCurrentScore ?? 0
-
         return VStack(alignment: .leading, spacing: 10) {
             Text("Assistant Manager Matt")
                 .font(.headline)
@@ -5404,8 +5401,6 @@ private struct FantasyAssistantManagerSheet: View {
     private func assistantManagerHeroSection(
         _ response: FantasyAssistantManagerResponse
     ) -> some View {
-        let assistantScore = response.idealSquad?.displayedTotalPoints
-
         return HStack(alignment: .top, spacing: 12) {
             AssistantManagerPortraitView(
                 size: .large,

@@ -32,7 +32,7 @@ enum BackgroundRefreshManager {
 
     static func handleAppRefresh(task: BGAppRefreshTask) {
         let operation = Task {
-            let snapshot = await PreferencesStore.loadSnapshot()
+            let snapshot = PreferencesStore.loadSnapshot()
             scheduleNextRefresh(intervalMinutes: snapshot.refreshIntervalMinutes)
 
             guard let baseURL = URL(string: snapshot.apiBaseURL) else {
@@ -53,12 +53,12 @@ enum BackgroundRefreshManager {
                     }
                 }
                 let response = try await client.fetchMatches(preferences: snapshot)
-                let visibleFixtures = await MatchesStore.applyPreferenceFilters(
+                let visibleFixtures = MatchesStore.applyPreferenceFilters(
                     to: response.matches,
                     snapshot: snapshot,
                     mode: .fixtures
                 )
-                let visibleResults = await MatchesStore.applyPreferenceFilters(
+                let visibleResults = MatchesStore.applyPreferenceFilters(
                     to: response.matches,
                     snapshot: snapshot,
                     mode: .results
@@ -104,8 +104,8 @@ enum BackgroundRefreshManager {
 
     private static func sortedMatches(_ matches: [Match]) -> [Match] {
         matches.sorted {
-            let leftDate = $0.dateTime ?? MatchDateParser.shared.parse(date: $0.date, time: "00:00") ?? .distantFuture
-            let rightDate = $1.dateTime ?? MatchDateParser.shared.parse(date: $1.date, time: "00:00") ?? .distantFuture
+            let leftDate = $0.dateTime ?? MatchDateParser.parse(date: $0.date, time: "00:00") ?? .distantFuture
+            let rightDate = $1.dateTime ?? MatchDateParser.parse(date: $1.date, time: "00:00") ?? .distantFuture
             if leftDate != rightDate {
                 return leftDate < rightDate
             }

@@ -1,5 +1,4 @@
 import Foundation
-import UIKit
 import UserNotifications
 
 enum AppIconBadgeManager {
@@ -44,17 +43,10 @@ enum AppIconBadgeManager {
             return
         }
 
-        if #available(iOS 16.0, *) {
-            do {
-                try await UNUserNotificationCenter.current().setBadgeCount(count)
-            } catch {
-                NSLog("[AppIconBadge] Failed to set badge count to %d: %@", count, error.localizedDescription)
-            }
-            return
-        }
-
-        await MainActor.run {
-            UIApplication.shared.applicationIconBadgeNumber = count
+        do {
+            try await UNUserNotificationCenter.current().setBadgeCount(count)
+        } catch {
+            NSLog("[AppIconBadge] Failed to set badge count to %d: %@", count, error.localizedDescription)
         }
     }
 }

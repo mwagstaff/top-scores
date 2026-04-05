@@ -58,23 +58,23 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let showFantasyExpectedPoints: Bool
     let showFantasyRealTimePoints: Bool
 
-    var showsFantasyDataInFixtures: Bool {
+    nonisolated var showsFantasyDataInFixtures: Bool {
         showFantasyFixtureLogos || showFantasyExpectedPoints || showFantasyRealTimePoints
     }
 
-    var effectiveEnglishPremierLeagueTeamsOnly: Bool {
+    nonisolated var effectiveEnglishPremierLeagueTeamsOnly: Bool {
         englishPremierLeagueTeamsOnly
     }
 
-    var effectiveMajorUEFAClubGamesEnabled: Bool {
+    nonisolated var effectiveMajorUEFAClubGamesEnabled: Bool {
         majorUEFAClubGamesEnabled
     }
 
-    var effectiveHomeNationsFilterEnabled: Bool {
+    nonisolated var effectiveHomeNationsFilterEnabled: Bool {
         homeNationsFilterEnabled
     }
 
-    var effectiveMajorTournamentsFilterEnabled: Bool {
+    nonisolated var effectiveMajorTournamentsFilterEnabled: Bool {
         majorTournamentsFilterEnabled
     }
 
