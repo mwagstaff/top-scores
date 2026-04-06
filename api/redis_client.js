@@ -1826,6 +1826,80 @@ async function getOperationalMatchDetailsSummary() {
   }
 }
 
+async function deleteOperationalMatchDetailsRecords(matchIds, options = {}) {
+  const normalizedIds = sanitizeMatchIdList(matchIds).map((matchId) =>
+    String(matchId || "").trim().toLowerCase()
+  );
+  if (normalizedIds.length === 0) {
+    return {
+      requested: 0,
+      deleted: 0,
+      deleted_ids: [],
+      missing_ids: [],
+      total: null,
+      updated_at: null,
+      source: options.source || null,
+      delete_write_logs: Boolean(options.delete_write_logs),
+    };
+  }
+
+  try {
+    const redisClient = await getClient();
+    const keys = normalizedIds.map((matchId) => buildOperationalMatchDetailsKey(matchId));
+    const existingValues = await redisClient.mGet(keys);
+    const deletedIds = [];
+    const missingIds = [];
+
+    normalizedIds.forEach((matchId, index) => {
+      if (existingValues[index]) {
+        deletedIds.push(matchId);
+      } else {
+        missingIds.push(matchId);
+      }
+    });
+
+    if (deletedIds.length > 0) {
+      const transaction = redisClient.multi();
+      deletedIds.forEach((matchId) => {
+        transaction.del(buildOperationalMatchDetailsKey(matchId));
+        transaction.sRem(OPERATIONAL_MATCH_DETAILS_INDEX_KEY, matchId);
+        if (options.delete_write_logs) {
+          transaction.del(buildOperationalMatchWriteLogKey(matchId));
+        }
+      });
+      await transaction.exec();
+    }
+
+    const total = await redisClient.sCard(OPERATIONAL_MATCH_DETAILS_INDEX_KEY);
+    const updatedAt =
+      typeof options.updated_at === "string" && options.updated_at.trim()
+        ? options.updated_at.trim()
+        : new Date().toISOString();
+    await redisClient.set(
+      OPERATIONAL_MATCH_DETAILS_META_KEY,
+      JSON.stringify({
+        updated_at: updatedAt,
+        source: options.source || null,
+        total: Number(total || 0),
+      })
+    );
+
+    return {
+      requested: normalizedIds.length,
+      deleted: deletedIds.length,
+      deleted_ids: deletedIds,
+      missing_ids: missingIds,
+      total: Number(total || 0),
+      updated_at: updatedAt,
+      source: options.source || null,
+      delete_write_logs: Boolean(options.delete_write_logs),
+    };
+  } catch (error) {
+    console.error("[Redis] Error deleting operational match details:", error);
+    throw error;
+  }
+}
+
 async function saveOperationalMatchWriteLogEntries(entriesByMatchId, options = {}) {
   const records = normalizeOperationalRecordsInput(entriesByMatchId)
     .map(([matchId, entries]) => [
@@ -2295,6 +2369,7 @@ module.exports = {
   getOperationalMatchDetails,
   getAllOperationalMatchDetails,
   getOperationalMatchDetailsSummary,
+  deleteOperationalMatchDetailsRecords,
   saveOperationalMatchWriteLogEntries,
   getOperationalMatchWriteLog,
   closeRedisConnection,

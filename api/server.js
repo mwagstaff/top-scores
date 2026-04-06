@@ -6222,7 +6222,6 @@ function mergeClubEloFixtureMetadata(payload, fixture, matchResult, nowIso, sour
     : {};
   return {
     ...payload,
-    updated_at: nowIso,
     metadata: {
       ...metadata,
       club_elo_fixture_probabilities: {
@@ -6997,7 +6996,6 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
       incoming && incoming.score_status !== undefined ? incoming.score_status : null,
       {
         preferIncomingOnTie: true,
-        allowTerminalRegression: true,
       }
     );
 
@@ -7035,6 +7033,10 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
   if (merged.penalty_result && (merged.score_status === "Pens" || merged.score_status === "PEN" || merged.score_status === "PEN.")) {
     merged.score_status = "AET";
   }
+
+  const reconciledPenaltyState = reconcilePenaltyShootoutDrawState(merged);
+  merged.home_score = reconciledPenaltyState.home_score;
+  merged.away_score = reconciledPenaltyState.away_score;
 
   merged.in_progress = isInProgressMatchStatus(merged.score_status);
 
@@ -7620,7 +7622,6 @@ function buildMergedMatchDetailsCandidate(seedMatch, fetchedMatch, detailsUrl) {
     fetched.score_status || fetched.match_time,
     {
       preferIncomingOnTie: true,
-      allowTerminalRegression: true,
     }
   );
   if (preferredStatus) {
@@ -11904,6 +11905,81 @@ async function getOperationalMatchDetailsSnapshotSafe() {
   };
 }
 
+function mergePreferredOperationalMatchDetailsSnapshots(memorySnapshot, redisSnapshot) {
+  const normalizedMemory =
+    memorySnapshot && typeof memorySnapshot === "object" ? memorySnapshot : {};
+  const normalizedRedis =
+    redisSnapshot && typeof redisSnapshot === "object" ? redisSnapshot : {};
+  const memoryRecords =
+    normalizedMemory.records && typeof normalizedMemory.records === "object"
+      ? normalizedMemory.records
+      : {};
+  const redisRecords =
+    normalizedRedis.records && typeof normalizedRedis.records === "object"
+      ? normalizedRedis.records
+      : {};
+
+  const mergedRecords = { ...redisRecords };
+  Object.entries(memoryRecords).forEach(([matchId, payload]) => {
+    const normalizedMatchId = normalizeMatchDetailsId(matchId || (payload && payload.id));
+    if (!normalizedMatchId || !payload || typeof payload !== "object") return;
+
+    const existing = mergedRecords[normalizedMatchId];
+    if (!existing || typeof existing !== "object") {
+      mergedRecords[normalizedMatchId] = payload;
+      return;
+    }
+
+    const memoryUpdatedMs = Date.parse(String(payload.updated_at || "").trim());
+    const redisUpdatedMs = Date.parse(String(existing.updated_at || "").trim());
+    const memoryComparable = canonicalMatchComparablePayload(payload);
+    const redisComparable = canonicalMatchComparablePayload(existing);
+    const hashesDiffer =
+      hashComparablePayload(memoryComparable) !== hashComparablePayload(redisComparable);
+
+    if (!Number.isFinite(redisUpdatedMs) || (Number.isFinite(memoryUpdatedMs) && memoryUpdatedMs >= redisUpdatedMs)) {
+      mergedRecords[normalizedMatchId] = payload;
+      return;
+    }
+
+    if (hashesDiffer && !Number.isFinite(memoryUpdatedMs)) {
+      mergedRecords[normalizedMatchId] = payload;
+    }
+  });
+
+  const updatedAt = newestIsoTimestamp([
+    normalizedMemory.updated_at || null,
+    normalizedRedis.updated_at || null,
+  ]);
+  const memoryCount = Object.keys(memoryRecords).length;
+  const redisCount = Object.keys(redisRecords).length;
+  const mergedCount = Object.keys(mergedRecords).length;
+  let source = "redis";
+  if (memoryCount > 0 && redisCount > 0) {
+    source = "memory+redis_preferred";
+  } else if (memoryCount > 0) {
+    source = "memory";
+  } else if (normalizedRedis.source) {
+    source = normalizedRedis.source;
+  }
+
+  return {
+    updated_at: updatedAt || null,
+    total: mergedCount,
+    records: mergedRecords,
+    source,
+    memory_total: memoryCount,
+    redis_total: redisCount,
+    redis_error: normalizedRedis.error || null,
+  };
+}
+
+async function getPreferredOperationalMatchDetailsSnapshotSafe() {
+  const memorySnapshot = currentOperationalMatchDetailsMemorySnapshot();
+  const redisSnapshot = await getOperationalMatchDetailsSnapshotSafe();
+  return mergePreferredOperationalMatchDetailsSnapshots(memorySnapshot, redisSnapshot);
+}
+
 const ADMIN_OPERATIONAL_DATASET_NAMES = [
   OP_DATASET_MERGED_MATCHES,
   OP_DATASET_LIVE_MATCHES,
@@ -11920,32 +11996,27 @@ const ADMIN_OPERATIONAL_DATASET_NAMES = [
 
 function toOperationalAdminMatchPayload(payload) {
   if (!payload || typeof payload !== "object") return null;
-  const matchId = normalizeMatchDetailsId(payload.id) || null;
-  if (!matchId) return null;
+  const statePayload = getMatchDetailsStatePayload(payload);
+  const matchId = statePayload ? normalizeMatchDetailsId(statePayload.id) || null : null;
+  if (!matchId || !statePayload) return null;
+  const kickoffMs = kickoffTimestampMs(statePayload);
   return {
     match_id: matchId,
     id: matchId,
-    details_url: payload.details_url || null,
-    date: payload.date || null,
-    time: payload.time || null,
-    league: payload.league || null,
-    home_team: payload.home_team || null,
-    away_team: payload.away_team || null,
-    home_score:
-      payload.home_score !== undefined && payload.home_score !== null ? payload.home_score : null,
-    away_score:
-      payload.away_score !== undefined && payload.away_score !== null ? payload.away_score : null,
-    aggregate_home_score:
-      payload.aggregate_home_score !== undefined && payload.aggregate_home_score !== null
-        ? payload.aggregate_home_score
-        : null,
-    aggregate_away_score:
-      payload.aggregate_away_score !== undefined && payload.aggregate_away_score !== null
-        ? payload.aggregate_away_score
-        : null,
-    score_status: payload.score_status || null,
-    in_progress: Boolean(payload.in_progress),
-    penalty_result: payload.penalty_result || null,
+    details_url: statePayload.details_url || null,
+    date: statePayload.date || null,
+    time: statePayload.time || null,
+    league: statePayload.league || null,
+    league_subcategory: payload.league_subcategory || null,
+    home_team: statePayload.home_team || null,
+    away_team: statePayload.away_team || null,
+    home_score: statePayload.home_score,
+    away_score: statePayload.away_score,
+    aggregate_home_score: statePayload.aggregate_home_score,
+    aggregate_away_score: statePayload.aggregate_away_score,
+    score_status: statePayload.score_status || null,
+    in_progress: Boolean(statePayload.in_progress),
+    penalty_result: statePayload.penalty_result || null,
     tv_channels: uniqueChannels(payload.tv_channels),
     has_bbc_source: payload.has_bbc_source === true,
     home_goal_scorers: Array.isArray(payload.home_goal_scorers) ? payload.home_goal_scorers : [],
@@ -11957,7 +12028,159 @@ function toOperationalAdminMatchPayload(payload) {
     home_red_cards: Array.isArray(payload.home_red_cards) ? payload.home_red_cards : [],
     away_red_cards: Array.isArray(payload.away_red_cards) ? payload.away_red_cards : [],
     team_lineups: normalizeTeamLineupsPayload(payload.team_lineups),
+    kickoff_ts_ms: Number.isFinite(kickoffMs) ? kickoffMs : null,
     updated_at: payload.updated_at || null,
+  };
+}
+
+function normalizeAdminRedisMatchIds(payload) {
+  const rawValues = [];
+  const source = payload && typeof payload === "object" ? payload : {};
+
+  if (source.match_id !== undefined && source.match_id !== null) {
+    rawValues.push(source.match_id);
+  }
+  if (Array.isArray(source.match_ids)) {
+    source.match_ids.forEach((value) => rawValues.push(value));
+  }
+
+  const normalizedIds = [];
+  const seen = new Set();
+  rawValues.forEach((value) => {
+    const normalized = normalizeMatchDetailsId(value);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    normalizedIds.push(normalized);
+  });
+  return normalizedIds;
+}
+
+async function deleteCanonicalMatchDetailsByIds(matchIds, options = {}) {
+  const normalizedIds = Array.isArray(matchIds) ? matchIds : [];
+  if (normalizedIds.length === 0) {
+    return {
+      requested: 0,
+      deleted: 0,
+      deleted_ids: [],
+      missing_ids: [],
+    };
+  }
+
+  const updatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+  const source =
+    typeof options.source === "string" && options.source.trim()
+      ? options.source.trim()
+      : "admin_redis_matches";
+
+  const result = await deleteOperationalMatchDetailsRecords(normalizedIds, {
+    updated_at: updatedAt,
+    source,
+    delete_write_logs: true,
+  });
+
+  (Array.isArray(result && result.deleted_ids) ? result.deleted_ids : []).forEach((matchId) => {
+    matchDetailsById.delete(matchId);
+    matchDetailsActiveRefreshUntilById.delete(matchId);
+    matchDetailsBackfillNextAttemptAt.delete(matchId);
+    matchDetailsBackfillTasks.delete(matchId);
+  });
+
+  if (result && result.deleted > 0) {
+    matchDetailsLastUpdated = updatedAt;
+    invalidateCacheDomains(["matches", "match_details"], {
+      updated_at: updatedAt,
+      reason: "admin_redis_match_delete",
+      source,
+    });
+  }
+
+  return result;
+}
+
+async function rescrapeCanonicalMatchDetailsByIds(matchIds, options = {}) {
+  const normalizedIds = Array.isArray(matchIds) ? matchIds : [];
+  if (normalizedIds.length === 0) {
+    return {
+      requested: 0,
+      refreshed_count: 0,
+      refreshed_ids: [],
+      failed_count: 0,
+      failed: [],
+    };
+  }
+
+  const updatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+  const source =
+    typeof options.source === "string" && options.source.trim()
+      ? options.source.trim()
+      : "admin_redis_matches";
+  const refreshedIds = [];
+  const failed = [];
+
+  await mapWithConcurrency(
+    normalizedIds,
+    Math.min(MATCH_DETAILS_POLL_CONCURRENCY, 8),
+    async (matchId) => {
+      try {
+        const existingLookup = await getOperationalMatchDetailsByIdSafe(matchId);
+        const existingPayload =
+          existingLookup && existingLookup.payload && typeof existingLookup.payload === "object"
+            ? existingLookup.payload
+            : null;
+        const detailsUrl =
+          String((existingPayload && existingPayload.details_url) || "").trim() ||
+          `https://www.bbc.co.uk/sport/football/${matchId}`;
+        const fetched = await fetchBbcMatchByDetailsUrl(detailsUrl);
+        if (!fetched) {
+          failed.push({ match_id: matchId, error: "No BBC match payload returned." });
+          return;
+        }
+
+        const combined = buildMergedMatchDetailsCandidate(
+          existingPayload || { id: matchId, details_url: detailsUrl, match_details_id: matchId },
+          fetched,
+          detailsUrl
+        );
+        const result = await upsertCanonicalMatchDetailsFromMatch(combined, {
+          updated_at: updatedAt,
+          source,
+          reason: "admin_redis_match_rescrape",
+        });
+        if (result && result.payload) {
+          refreshedIds.push(matchId);
+          return;
+        }
+
+        failed.push({ match_id: matchId, error: "Canonical upsert returned no payload." });
+      } catch (error) {
+        failed.push({
+          match_id: matchId,
+          error: error && error.message ? error.message : String(error),
+        });
+      }
+    }
+  );
+
+  if (refreshedIds.length > 0) {
+    invalidateCacheDomains(["matches", "match_details"], {
+      updated_at: updatedAt,
+      reason: "admin_redis_match_rescrape",
+      source,
+    });
+  }
+
+  return {
+    requested: normalizedIds.length,
+    refreshed_count: refreshedIds.length,
+    refreshed_ids: refreshedIds,
+    failed_count: failed.length,
+    failed,
   };
 }
 
@@ -12032,6 +12255,9 @@ function canonicalLiveActivityMatchesFromDetailsRecords(recordsById) {
 }
 
 function operationalMatchSortDesc(lhs, rhs) {
+  const kickoffCompare = sortAdminMatchesByKickoff(lhs, rhs, "desc");
+  if (kickoffCompare !== 0) return kickoffCompare;
+
   const lhsUpdated = Date.parse(lhs && lhs.updated_at ? lhs.updated_at : "");
   const rhsUpdated = Date.parse(rhs && rhs.updated_at ? rhs.updated_at : "");
   if (Number.isFinite(lhsUpdated) || Number.isFinite(rhsUpdated)) {
@@ -12039,21 +12265,7 @@ function operationalMatchSortDesc(lhs, rhs) {
     const rightValue = Number.isFinite(rhsUpdated) ? rhsUpdated : 0;
     if (rightValue !== leftValue) return rightValue - leftValue;
   }
-  const lhsKickoff = Date.parse(
-    `${String(lhs && lhs.date ? lhs.date : "").trim()}T${String(
-      lhs && lhs.time ? lhs.time : "00:00"
-    ).trim()}:00Z`
-  );
-  const rhsKickoff = Date.parse(
-    `${String(rhs && rhs.date ? rhs.date : "").trim()}T${String(
-      rhs && rhs.time ? rhs.time : "00:00"
-    ).trim()}:00Z`
-  );
-  if (Number.isFinite(lhsKickoff) || Number.isFinite(rhsKickoff)) {
-    const leftValue = Number.isFinite(lhsKickoff) ? lhsKickoff : 0;
-    const rightValue = Number.isFinite(rhsKickoff) ? rhsKickoff : 0;
-    if (rightValue !== leftValue) return rightValue - leftValue;
-  }
+
   const lhsId = String(lhs && lhs.match_id ? lhs.match_id : "");
   const rhsId = String(rhs && rhs.match_id ? rhs.match_id : "");
   return lhsId.localeCompare(rhsId);
@@ -13669,26 +13881,17 @@ async function updateBbcMatches(options = {}) {
       source: SOURCE_BBC_LIVE,
     });
     await updateRecentCache(SOURCE_BBC_LIVE);
-    const previousById = {};
-    filteredMatches.forEach((match) => {
-      const detailsId =
-        matchDetailsIdFromUrl(match && match.details_url) ||
-        normalizeMatchDetailsId(match && match.match_details_id);
-      if (!detailsId) return;
-      const existing = matchDetailsById.get(detailsId);
-      if (existing && typeof existing === "object") {
-        previousById[detailsId] = existing;
+    await mapWithConcurrency(
+      filteredMatches,
+      Math.min(MATCH_DETAILS_POLL_CONCURRENCY, 8),
+      async (match) => {
+        await upsertCanonicalMatchDetailsFromMatch(match, {
+          updated_at: bbcLastUpdated,
+          source: SOURCE_BBC_LIVE,
+          reason: "bbc_live_poll",
+        });
       }
-    });
-    indexMatchDetailsFromMatches(filteredMatches, bbcLastUpdated);
-    const detailsSubset = collectMatchDetailsSubsetByMatches(filteredMatches);
-    await persistCanonicalMatchDetailsSubsetSafe(detailsSubset, {
-      replace: false,
-      updated_at: bbcLastUpdated,
-      source: SOURCE_BBC_LIVE,
-      reason: "bbc_live_poll",
-      previousById,
-    });
+    );
     success = true;
     logPollSuccess("bbc_live_matches", {
       source: SOURCE_BBC_LIVE,
@@ -17019,7 +17222,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       return;
     }
 
-    const canonicalSnapshot = await getOperationalMatchDetailsSnapshotSafe();
+    const canonicalSnapshot = await getPreferredOperationalMatchDetailsSnapshotSafe();
     const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
     const latestUpdated = newestIsoTimestamp([canonicalSnapshot.updated_at]);
     if (latestUpdated) {
@@ -17105,8 +17308,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       }
     }
 
-    // Canonical payloads are materialized in ascending kickoff order already.
-    // Filtering preserves order, so only reverse for descending responses.
+    filtered = filtered.slice().sort((lhs, rhs) => sortAdminMatchesByKickoff(lhs, rhs, "asc"));
     if (sortOrder === "desc") {
       filtered = filtered.slice().reverse();
     }
@@ -18849,6 +19051,7 @@ const {
   getOperationalMatchDetails,
   getAllOperationalMatchDetails,
   getOperationalMatchDetailsSummary,
+  deleteOperationalMatchDetailsRecords,
   saveOperationalMatchWriteLogEntries,
   getOperationalMatchWriteLog,
   __historyConfig: bbcHistoryConfig,
@@ -19897,7 +20100,7 @@ app.get(`${API_PREFIX}/admin/fixtures`, async (req, res) => {
   try {
     const [mergedDataset, matchDetailsSnapshot] = await Promise.all([
       getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
-      getOperationalMatchDetailsSnapshotSafe(),
+      getPreferredOperationalMatchDetailsSnapshotSafe(),
     ]);
 
     const matches = filterAdminMatches(mergedDataset.items, {
@@ -19933,7 +20136,7 @@ app.get(`${API_PREFIX}/admin/results`, async (req, res) => {
   try {
     const [mergedDataset, matchDetailsSnapshot] = await Promise.all([
       getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
-      getOperationalMatchDetailsSnapshotSafe(),
+      getPreferredOperationalMatchDetailsSnapshotSafe(),
     ]);
 
     const matches = filterAdminMatches(mergedDataset.items, {
@@ -20054,7 +20257,7 @@ app.get(`${API_PREFIX}/admin/redis/matches`, async (req, res) => {
   const page = parsePositiveInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
 
   try {
-    const snapshot = await getOperationalMatchDetailsSnapshotSafe();
+    const snapshot = await getPreferredOperationalMatchDetailsSnapshotSafe();
     const matches = Object.values(snapshot.records || {})
       .map((payload) => toOperationalAdminMatchPayload(payload))
       .filter(Boolean)
@@ -20064,6 +20267,17 @@ app.get(`${API_PREFIX}/admin/redis/matches`, async (req, res) => {
     const totalPages = totalCount > 0 ? Math.ceil(totalCount / pageSize) : 0;
     const pageStart = (page - 1) * pageSize;
     const items = pageStart >= totalCount ? [] : matches.slice(pageStart, pageStart + pageSize);
+
+    items.forEach((match) => {
+      if (!match || typeof match !== "object") return;
+      const matchId = normalizeMatchDetailsId(match.match_id || match.id);
+      if (!matchId) return;
+      const payload = snapshot.records && snapshot.records[matchId];
+      if (!payload || typeof payload !== "object") return;
+      if (!matchDetailsNeedsBackfill(payload)) return;
+      markMatchDetailsActive(matchId);
+      scheduleMatchDetailsBackfill(payload, { trigger: "admin_redis_matches_list" });
+    });
 
     res.status(200).json({
       success: true,
@@ -20081,6 +20295,62 @@ app.get(`${API_PREFIX}/admin/redis/matches`, async (req, res) => {
     console.error("[API] Error retrieving canonical Redis matches:", error);
     res.status(500).json({
       error: "Failed to retrieve canonical Redis matches",
+      message: error.message || String(error),
+    });
+  }
+});
+
+app.post(`${API_PREFIX}/admin/redis/matches/actions`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const payload =
+    req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? req.body
+      : {};
+  const action = String(payload.action || "").trim().toLowerCase();
+  const matchIds = normalizeAdminRedisMatchIds(payload);
+
+  if (matchIds.length === 0) {
+    res.status(400).json({
+      error: "Provide one or more valid match_ids.",
+    });
+    return;
+  }
+
+  if (!["delete", "rescrape"].includes(action)) {
+    res.status(400).json({
+      error: "Unsupported action. Expected 'delete' or 'rescrape'.",
+    });
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const source = "admin_redis_matches";
+
+  try {
+    const result =
+      action === "delete"
+        ? await deleteCanonicalMatchDetailsByIds(matchIds, {
+          updated_at: nowIso,
+          source,
+        })
+        : await rescrapeCanonicalMatchDetailsByIds(matchIds, {
+          updated_at: nowIso,
+          source,
+        });
+
+    res.status(200).json({
+      success: true,
+      action,
+      match_ids: matchIds,
+      requested: matchIds.length,
+      executed_at: nowIso,
+      result,
+    });
+  } catch (error) {
+    console.error(`[API] Error running admin redis match action ${action}:`, error);
+    res.status(500).json({
+      error: `Failed to ${action} selected Redis matches`,
       message: error.message || String(error),
     });
   }
@@ -20115,11 +20385,26 @@ app.get(`${API_PREFIX}/admin/redis/matches/:matchId`, async (req, res) => {
       return;
     }
 
+    markMatchDetailsActive(matchId);
+    scheduleMatchDetailsBackfill(detailsLookup.payload, {
+      trigger: "admin_redis_match_detail",
+    });
+
+    const latestWriteAt =
+      writeLog &&
+      Array.isArray(writeLog.entries) &&
+      writeLog.entries[0] &&
+      typeof writeLog.entries[0].written_at === "string" &&
+      writeLog.entries[0].written_at.trim()
+        ? writeLog.entries[0].written_at.trim()
+        : null;
+
     res.status(200).json({
       success: true,
       generated_at: new Date().toISOString(),
       match_id: matchId,
       source: detailsLookup.source || "unknown",
+      latest_write_at: latestWriteAt,
       match: toOperationalAdminMatchPayload(detailsLookup.payload),
       match_timeline: buildMatchEventTimeline(detailsLookup.payload),
       write_log: writeLog,
@@ -22293,7 +22578,7 @@ if (shouldRunRuntime) {
   matchMonitor.initialize(SERVER_BASE_URL);
 }
 matchMonitor.setLiveActivityMatchDetailsProvider(() => {
-  return getOperationalMatchDetailsSnapshotSafe().then((snapshot) =>
+  return getPreferredOperationalMatchDetailsSnapshotSafe().then((snapshot) =>
     snapshot && snapshot.records ? snapshot.records : {}
   );
 });
@@ -22492,6 +22777,9 @@ module.exports = {
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
     getMatchDetailsStatePayload,
+    mergePreferredOperationalMatchDetailsSnapshots,
+    toOperationalAdminMatchPayload,
+    normalizeAdminRedisMatchIds,
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
@@ -22521,6 +22809,7 @@ module.exports = {
     matchIsMajorTournament,
     matchPassesCategoryFilters,
     isListPayloadVisibleForMode,
+    mergeClubEloFixtureMetadata,
     matchDetailsIdFromUrl,
     filterStaleBbcMatches,
     buildDefaultOperationalCacheState,
@@ -22530,5 +22819,6 @@ module.exports = {
     buildLiveActivityTestContentState,
     buildLiveActivityTestPresets,
     resolveLiveActivityTestPreset,
+    operationalMatchSortDesc,
   },
 };

@@ -10,6 +10,9 @@ const {
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
     getMatchDetailsStatePayload,
+    mergePreferredOperationalMatchDetailsSnapshots,
+    toOperationalAdminMatchPayload,
+    normalizeAdminRedisMatchIds,
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
@@ -42,6 +45,8 @@ const {
     matchIsMajorTournament,
     matchPassesCategoryFilters,
     isListPayloadVisibleForMode,
+    mergeClubEloFixtureMetadata,
+    operationalMatchSortDesc,
   },
 } = require("./server");
 
@@ -334,6 +339,161 @@ test("getMatchDetailsStatePayload normalizes settled penalty shootouts back to a
   assert.equal(payload.home_score, 2);
   assert.equal(payload.away_score, 2);
   assert.equal(payload.penalty_result, "Leeds United win 4 - 2 on penalties");
+});
+
+test("mergeMatchDetailsPayload normalizes settled penalty shootouts back to a draw scoreline", () => {
+  const merged = mergeMatchDetailsPayload(
+    detailsPayload({
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      home_score: 2,
+      away_score: 2,
+      score_status: "AET",
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+    }),
+    normalizeMatchDetailsPayload({
+      details_url: "https://www.bbc.co.uk/sport/football/live/c75k3rv779xt",
+      date: "2026-04-05",
+      time: "15:30",
+      league: "FA Cup",
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      home_score: 3,
+      away_score: 2,
+      score_status: "AET",
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+    }),
+    "2026-04-05T22:29:00.161Z"
+  );
+
+  assert.equal(merged.home_score, 2);
+  assert.equal(merged.away_score, 2);
+  assert.equal(merged.penalty_result, "Leeds United win 4 - 2 on penalties");
+});
+
+test("toOperationalAdminMatchPayload exposes normalized penalty score and competition fields", () => {
+  const payload = toOperationalAdminMatchPayload({
+    ...detailsPayload({
+      home_team: "West Ham United",
+      away_team: "Leeds United",
+      league: "FA Cup",
+      league_subcategory: "Quarter-finals",
+      home_score: 3,
+      away_score: 2,
+      score_status: "AET",
+      penalty_result: "Leeds United win 4 - 2 on penalties",
+    }),
+    league_subcategory: "Quarter-finals",
+  });
+
+  assert.equal(payload.home_score, 2);
+  assert.equal(payload.away_score, 2);
+  assert.equal(payload.league, "FA Cup");
+  assert.equal(payload.league_subcategory, "Quarter-finals");
+});
+
+test("normalizeAdminRedisMatchIds accepts singular and plural ids and removes invalid entries", () => {
+  assert.deepEqual(
+    normalizeAdminRedisMatchIds({
+      match_id: "C75K3RV779XT",
+      match_ids: ["c75k3rv779xt", "not-valid!", "cdxzkljkjxkt"],
+    }),
+    ["c75k3rv779xt", "cdxzkljkjxkt"]
+  );
+});
+
+test("operationalMatchSortDesc sorts admin Redis rows by kickoff latest to oldest", () => {
+  const rows = [
+    {
+      match_id: "older",
+      date: "2026-04-05",
+      time: "15:30",
+      updated_at: "2026-04-05T23:50:00.000Z",
+    },
+    {
+      match_id: "latest",
+      date: "2026-04-06",
+      time: "20:00",
+      updated_at: "2026-04-05T01:00:00.000Z",
+    },
+    {
+      match_id: "middle",
+      date: "2026-04-06",
+      time: "12:30",
+      updated_at: "2026-04-05T22:00:00.000Z",
+    },
+  ];
+
+  const sortedIds = rows.sort(operationalMatchSortDesc).map((row) => row.match_id);
+  assert.deepEqual(sortedIds, ["latest", "middle", "older"]);
+});
+
+test("mergePreferredOperationalMatchDetailsSnapshots prefers fresher memory match state over stale Redis state", () => {
+  const merged = mergePreferredOperationalMatchDetailsSnapshots(
+    {
+      updated_at: "2026-04-05T22:59:06.585Z",
+      records: {
+        cn43ql18lg8t: {
+          id: "cn43ql18lg8t",
+          date: "2026-04-05",
+          time: "19:45",
+          league: "Serie A",
+          home_team: "Inter Milan",
+          away_team: "Roma",
+          home_score: 5,
+          away_score: 2,
+          score_status: "FT",
+          updated_at: "2026-04-05T22:59:06.585Z",
+        },
+      },
+    },
+    {
+      updated_at: "2026-04-05T22:57:38.360Z",
+      records: {
+        cn43ql18lg8t: {
+          id: "cn43ql18lg8t",
+          date: "2026-04-05",
+          time: "19:45",
+          league: "Serie A",
+          home_team: "Inter Milan",
+          away_team: "Roma",
+          home_score: 5,
+          away_score: 2,
+          score_status: "90+5",
+          updated_at: "2026-04-05T22:57:38.360Z",
+        },
+      },
+    }
+  );
+
+  assert.equal(merged.records.cn43ql18lg8t.score_status, "FT");
+  assert.equal(merged.source, "memory+redis_preferred");
+});
+
+test("mergePreferredOperationalMatchDetailsSnapshots includes future fixtures that only exist in memory", () => {
+  const merged = mergePreferredOperationalMatchDetailsSnapshots(
+    {
+      updated_at: "2026-04-06T07:00:00.000Z",
+      records: {
+        abcdef123456: {
+          id: "abcdef123456",
+          date: "2026-04-06",
+          time: "15:00",
+          league: "Championship",
+          home_team: "Millwall",
+          away_team: "Norwich City",
+          updated_at: "2026-04-06T07:00:00.000Z",
+        },
+      },
+    },
+    {
+      updated_at: "2026-04-06T06:30:00.000Z",
+      records: {},
+    }
+  );
+
+  assert.ok(merged.records.abcdef123456);
+  assert.equal(merged.total, 1);
 });
 
 test("normalizeTeamName canonicalizes team aliases from shared identity config", () => {
@@ -886,6 +1046,11 @@ test("pickPreferredMatchStatus keeps AET over FT for finished matches", () => {
   assert.equal(pickPreferredMatchStatus("FT", "AET"), "AET");
 });
 
+test("pickPreferredMatchStatus keeps FT over stale added-time live statuses by default", () => {
+  assert.equal(pickPreferredMatchStatus("FT", "90+8"), "FT");
+  assert.equal(pickPreferredMatchStatus("FT", "LIVE"), "FT");
+});
+
 test("pickPreferredMatchStatus prefers HT over first-half stoppage-time minutes", () => {
   assert.equal(pickPreferredMatchStatus("45+5", "HT"), "HT");
   assert.equal(pickPreferredMatchStatus("45+4", "HT"), "HT");
@@ -935,6 +1100,35 @@ test("mergeMatchDetailsPayload preserves AET when refreshed data downgrades to F
 
   const merged = mergeMatchDetailsPayload(existing, incoming, "2026-03-10T09:53:35.974Z");
   assert.equal(merged.score_status, "AET");
+});
+
+test("mergeMatchDetailsPayload preserves FT when refreshed live poll regresses to added time", () => {
+  const existing = normalizeMatchDetailsPayload({
+    details_url: "https://www.bbc.co.uk/sport/football/live/c87wj3l13zzt",
+    date: "2026-04-05",
+    time: "20:00",
+    league: "Spanish La Liga",
+    home_team: "Alaves",
+    away_team: "Osasuna",
+    home_score: 2,
+    away_score: 2,
+    score_status: "FT",
+  });
+
+  const incoming = normalizeMatchDetailsPayload({
+    details_url: "https://www.bbc.co.uk/sport/football/live/c87wj3l13zzt",
+    date: "2026-04-05",
+    time: "20:00",
+    league: "Spanish La Liga",
+    home_team: "Alaves",
+    away_team: "Osasuna",
+    home_score: 2,
+    away_score: 2,
+    score_status: "90+8",
+  });
+
+  const merged = mergeMatchDetailsPayload(existing, incoming, "2026-04-05T22:59:35.396Z");
+  assert.equal(merged.score_status, "FT");
 });
 
 test("mergeMatchDetailsPayload upgrades first-half stoppage time to HT", () => {
@@ -1466,6 +1660,37 @@ test("normalizeOperationalCacheState backfills missing domains", () => {
   assert.equal(normalized.domains.match_details.generation, 1);
   assert.equal(normalized.domains.bbc_live.generation, 1);
   assert.equal(normalized.updated_at, "2026-03-08T09:10:00.000Z");
+});
+
+test("mergeClubEloFixtureMetadata keeps canonical match updated_at unchanged", () => {
+  const payload = detailsPayload({
+    updated_at: "2026-04-05T22:59:35.396Z",
+    metadata: {
+      existing: true,
+    },
+  });
+
+  const merged = mergeClubEloFixtureMetadata(
+    payload,
+    {
+      date: "2026-04-06",
+      country: "Spain",
+      home_team: "Alaves",
+      away_team: "Osasuna",
+    },
+    {
+      confidence: 0.93,
+      minTeamConfidence: 0.88,
+    },
+    "2026-04-05T23:15:31.552Z",
+    "https://clubelo.example/fixtures"
+  );
+
+  assert.equal(merged.updated_at, "2026-04-05T22:59:35.396Z");
+  assert.equal(
+    merged.metadata.club_elo_fixture_probabilities.updated_at,
+    "2026-04-05T23:15:31.552Z"
+  );
 });
 
 test("toMatchListPayload resolves match_details_id from details lookup when list row lacks details_url", () => {

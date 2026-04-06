@@ -1836,9 +1836,6 @@ final class MatchesStore: ObservableObject {
         let calendar = Calendar.current
         let today = startOfToday()
         return matches.filter { match in
-            if mode == .fixtures, !match.hasBbcMatchEntry {
-                return false
-            }
             guard let date = match.dateOnly else {
                 return mode == .fixtures
             }
@@ -1878,8 +1875,9 @@ final class MatchesStore: ObservableObject {
         snapshot: PreferencesSnapshot,
         mode: MatchesViewMode
     ) -> [Match] {
+        let safeguarded = applyCompetitionScrapeSafeguards(to: matches)
         let competitionFiltered = applyCompetitionFilters(
-            to: matches,
+            to: safeguarded,
             selectedLeagues: snapshot.selectedLeagues,
             isEnabled: snapshot.competitionFilterEnabled,
             englishPremierLeagueTeamsOnly: snapshot.effectiveEnglishPremierLeagueTeamsOnly,
@@ -1890,6 +1888,12 @@ final class MatchesStore: ObservableObject {
         let dateFiltered = filterMatches(competitionFiltered, for: mode)
         guard mode == .fixtures, snapshot.channelFilterEnabled else { return dateFiltered }
         return applyChannelFilters(to: dateFiltered, selectedChannels: snapshot.selectedChannels)
+    }
+
+    private static func applyCompetitionScrapeSafeguards(to matches: [Match]) -> [Match] {
+        matches.filter { match in
+            CompetitionWeightConfig.isAllowedCompetitionForPublicDisplay(match.league)
+        }
     }
 
     private static func sortedMatches(_ matches: [Match], descendingDates: Bool = false) -> [Match] {
