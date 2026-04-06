@@ -2062,7 +2062,8 @@ final class MatchesStore: ObservableObject {
     }
 
     private static func matchIsMajorUEFAClubKnockoutFixture(_ match: Match) -> Bool {
-        let league = CompetitionWeightConfig.normalizeCompetitionName(match.league)
+        let league = CompetitionWeightConfig.canonicalFilterName(match.league)
+        let normalizedLeague = CompetitionWeightConfig.normalizeCompetitionName(match.league)
         let subcategory = CompetitionWeightConfig.normalizeCompetitionName(match.leagueSubcategory ?? "")
 
         let majorUEFAClubCompetitions: Set<String> = [
@@ -2072,9 +2073,12 @@ final class MatchesStore: ObservableObject {
         ]
 
         guard majorUEFAClubCompetitions.contains(league) else { return false }
-        guard !subcategory.isEmpty else { return false }
+        let descriptor = [normalizedLeague, subcategory]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !descriptor.isEmpty else { return false }
 
-        return subcategory.range(
+        return descriptor.range(
             of: #"\b(?:quarter(?:\s|-)?finals?|semi(?:\s|-)?finals?|final)\b"#,
             options: .regularExpression
         ) != nil

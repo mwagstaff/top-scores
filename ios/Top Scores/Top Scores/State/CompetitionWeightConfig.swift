@@ -4,6 +4,33 @@ enum CompetitionWeightConfig {
     private nonisolated static let fileName = "competition_weights"
     private nonisolated static let fileExtension = "json"
     private nonisolated static let weightsByName: [String: Double] = loadWeights()
+    private nonisolated static let stagePatterns: [NSRegularExpression] = [
+        try! NSRegularExpression(pattern: #"\s*[-:–]\s*Round\s+\w+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+\w+\s+Round$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Round\s+\w+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Round\s+\d+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Round\s+of\s+\d+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Last\s+\d+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Group\s+Stage$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Group\s+[A-Z]$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Quarter[- ]Finals?$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Semi[- ]Finals?$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Finals?$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Third[- ]Place\s+Play-?Off$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Play-?Offs?$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Qualifying$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Qualification$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Preliminary\s+Round$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+First\s+Leg$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Second\s+Leg$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+1st\s+Leg$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+2nd\s+Leg$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Leg\s+\d+$"#, options: [.caseInsensitive]),
+    ]
+    private nonisolated static let trailingStageSeparatorPattern = try! NSRegularExpression(
+        pattern: #"[-:–]\s*$"#,
+        options: [.caseInsensitive]
+    )
     private nonisolated static let publicDisplayAllowlist: Set<String> = [
         "Bundesliga",
         "Championship",
@@ -51,12 +78,13 @@ enum CompetitionWeightConfig {
         let normalized = normalizeCompetitionName(competitionName)
         guard !normalized.isEmpty else { return "" }
 
+        let stripped = stripStageDescriptors(from: normalized)
         let fullRange = NSRange(location: 0, length: normalized.utf16.count)
         if fifaWorldCupQualifyingPattern.firstMatch(in: normalized, options: [], range: fullRange) != nil {
             return normalizeCompetitionName("FIFA World Cup 2026")
         }
 
-        return normalized
+        return stripped.isEmpty ? normalized : stripped
     }
 
     nonisolated static func isAllowedCompetitionForPublicDisplay(_ competitionName: String) -> Bool {
@@ -92,5 +120,32 @@ enum CompetitionWeightConfig {
             NSLog("Failed to load competition weights config: %@", String(describing: error))
             return [:]
         }
+    }
+
+    private nonisolated static func stripStageDescriptors(from competitionName: String) -> String {
+        var normalized = competitionName
+        var changed = true
+
+        while changed {
+            changed = false
+            for pattern in stagePatterns {
+                let range = NSRange(location: 0, length: normalized.utf16.count)
+                guard pattern.firstMatch(in: normalized, options: [], range: range) != nil else {
+                    continue
+                }
+
+                normalized = pattern
+                    .stringByReplacingMatches(in: normalized, options: [], range: range, withTemplate: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let separatorRange = NSRange(location: 0, length: normalized.utf16.count)
+                normalized = trailingStageSeparatorPattern
+                    .stringByReplacingMatches(in: normalized, options: [], range: separatorRange, withTemplate: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                changed = true
+            }
+        }
+
+        return normalized
     }
 }

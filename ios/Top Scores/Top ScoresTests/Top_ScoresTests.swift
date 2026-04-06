@@ -325,6 +325,109 @@ struct Top_ScoresTests {
         #expect(filtered.map(\.id) == ["prem-team"])
     }
 
+    @Test func competitionWeightConfig_canonicalFilterName_stripsUefaStageSuffixes() async throws {
+        #expect(
+            CompetitionWeightConfig.canonicalFilterName("UEFA Champions League Quarter-Final 2nd Leg") ==
+                CompetitionWeightConfig.normalizeCompetitionName("UEFA Champions League")
+        )
+        #expect(
+            CompetitionWeightConfig.canonicalFilterName("UEFA Europa League Semi-Final 1st Leg") ==
+                CompetitionWeightConfig.normalizeCompetitionName("UEFA Europa League")
+        )
+    }
+
+    @Test func applyPreferenceFilters_fixtures_keepsStagedMajorUefaClubMatchesVisible() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: [],
+            selectedChannels: [],
+            competitionFilterEnabled: false,
+            channelFilterEnabled: false,
+            englishPremierLeagueTeamsOnly: true,
+            majorUEFAClubGamesEnabled: true,
+            homeNationsFilterEnabled: false,
+            majorTournamentsFilterEnabled: false,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+        let matches = [
+            Match(
+                date: formattedDate(offsetDays: 9),
+                time: "20:00",
+                homeTeam: "Arsenal",
+                awayTeam: "Sporting CP",
+                league: "UEFA Champions League Quarter-Final 2nd Leg",
+                leagueSubcategory: "Quarter-finals",
+                matchDetailsID: "arsenal-ucl",
+                hasBbcSource: true,
+                tvChannels: []
+            ),
+            Match(
+                date: formattedDate(offsetDays: 9),
+                time: "19:45",
+                homeTeam: "AFC Wimbledon",
+                awayTeam: "Stockport County",
+                league: "League One",
+                matchDetailsID: "league-one",
+                hasBbcSource: true,
+                tvChannels: []
+            )
+        ]
+
+        let filtered = MatchesStore.applyPreferenceFilters(
+            to: matches,
+            snapshot: snapshot,
+            mode: .fixtures
+        )
+
+        #expect(filtered.map(\.id) == ["arsenal-ucl"])
+    }
+
+    @Test func applyPreferenceFilters_fixtures_supportLeagueSelectionForStagedUefaClubCompetitions() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: ["UEFA Champions League"],
+            selectedChannels: [],
+            competitionFilterEnabled: true,
+            channelFilterEnabled: false,
+            englishPremierLeagueTeamsOnly: false,
+            majorUEFAClubGamesEnabled: false,
+            homeNationsFilterEnabled: false,
+            majorTournamentsFilterEnabled: false,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+        let matches = [
+            Match(
+                date: formattedDate(offsetDays: 9),
+                time: "20:00",
+                homeTeam: "Arsenal",
+                awayTeam: "Sporting CP",
+                league: "UEFA Champions League Quarter-Final 2nd Leg",
+                leagueSubcategory: "Quarter-finals",
+                matchDetailsID: "arsenal-ucl",
+                hasBbcSource: true,
+                tvChannels: []
+            ),
+            Match(
+                date: formattedDate(offsetDays: 9),
+                time: "20:00",
+                homeTeam: "Sevilla",
+                awayTeam: "Valencia",
+                league: "La Liga",
+                matchDetailsID: "laliga",
+                hasBbcSource: true,
+                tvChannels: []
+            )
+        ]
+
+        let filtered = MatchesStore.applyPreferenceFilters(
+            to: matches,
+            snapshot: snapshot,
+            mode: .fixtures
+        )
+
+        #expect(filtered.map(\.id) == ["arsenal-ucl"])
+    }
+
     @Test func applyPreferenceFilters_fixtures_supportLocalMajorTournamentFiltering() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: [],
