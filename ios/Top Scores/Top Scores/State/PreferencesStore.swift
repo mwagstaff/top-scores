@@ -85,19 +85,19 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     }
 
     nonisolated var effectiveEnglishPremierLeagueTeamsOnly: Bool {
-        englishPremierLeagueTeamsOnly
+        competitionFilterEnabled && englishPremierLeagueTeamsOnly
     }
 
     nonisolated var effectiveMajorUEFAClubGamesEnabled: Bool {
-        majorUEFAClubGamesEnabled
+        competitionFilterEnabled && majorUEFAClubGamesEnabled
     }
 
     nonisolated var effectiveHomeNationsFilterEnabled: Bool {
-        homeNationsFilterEnabled
+        competitionFilterEnabled && homeNationsFilterEnabled
     }
 
     nonisolated var effectiveMajorTournamentsFilterEnabled: Bool {
-        majorTournamentsFilterEnabled
+        competitionFilterEnabled && majorTournamentsFilterEnabled
     }
 
     nonisolated init(

@@ -947,7 +947,10 @@ final class MatchesStore: ObservableObject {
                     preferences: preferences,
                     mode: mode,
                     page: requestedPage,
-                    pageSize: pageSize
+                    pageSize: pageSize,
+                    // Keep results broad and apply the viewing filters locally so
+                    // server-side competition heuristics cannot blank the tab.
+                    includePreferenceFilters: mode == .fixtures
                 )
 
                 var incoming = pageResponse.matches

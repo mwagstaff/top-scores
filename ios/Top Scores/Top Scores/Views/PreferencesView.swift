@@ -27,11 +27,11 @@ struct PreferencesView: View {
 
                     Section("Club games") {
                         Toggle("Premier League teams only", isOn: englishPremierLeagueTeamsOnlyBinding)
-                        Text("Show club matches involving at least one English Premier League team.")
+                        Text("Only show club games involving at least one English Premier League team.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
-                        Toggle("All major UEFA games", isOn: majorUEFAClubGamesEnabledBinding)
+                        Toggle("Major UEFA games", isOn: majorUEFAClubGamesEnabledBinding)
                         Text("Always show UEFA Champions League, Europa League, and Conference League quarter-finals, semi-finals, and finals, even when no Premier League team is involved.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -39,7 +39,7 @@ struct PreferencesView: View {
 
                     Section("International games") {
                         Toggle("Home nations", isOn: homeNationsFilterEnabledBinding)
-                        Text("Show international matches involving England, Northern Ireland, Scotland, or Wales, including friendlies.")
+                        Text("Show international matches involving England, Northern Ireland, Scotland, or Wales (including friendlies).")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -62,7 +62,7 @@ struct PreferencesView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        Text("Extended shows the original two-row layout. Compact loosens the single-line layout slightly. Ultra compact matches the tighter previous setting.")
+                        Text("Extended shows a roomy 2-row layout, including TV channel information. Compact is a more compact single-line layout. Choose Ultra Compact for the tightest view.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -72,8 +72,8 @@ struct PreferencesView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
 
-                            Toggle("Fantasy football logo", isOn: showCompactFixtureFantasyLogoBinding)
-                            Text("Shows the fantasy logo on the left side of compact fixture lozenges when your squad has one or more players involved in the match.")
+                            Toggle("Fantasy Premier League logo", isOn: showCompactFixtureFantasyLogoBinding)
+                            Text("Shows the Fantasy Premier League logo on the left side of compact fixture lozenges when your squad has one or more players involved in the match.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }

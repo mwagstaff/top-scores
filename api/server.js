@@ -1208,7 +1208,9 @@ function matchPassesCompetitionTableValidation(match, leagueName = null, tables 
       .map((row) => normalizedCompetitionTableTeamKey(row && row.team))
       .filter(Boolean)
   );
-  return tableTeams.has(homeKey) && tableTeams.has(awayKey);
+  const homeKnown = tableTeams.has(homeKey);
+  const awayKnown = tableTeams.has(awayKey);
+  return homeKnown || awayKnown;
 }
 
 function isAllowedCompetitionMatch(match, options = {}) {

@@ -53,9 +53,9 @@ enum MatchesViewMode: String {
     var emptyStateSubtitle: String {
         switch self {
         case .fixtures:
-            return "Fixtures appear here from today onwards."
+            return "Fixtures appear here..."
         case .results:
-            return "Results appear here from today backwards."
+            return "Results appear here..."
         }
     }
 

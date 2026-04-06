@@ -588,7 +588,7 @@ test("normalizeCompetitionFilterName maps World Cup qualifying competitions to t
   assert.equal(isAllowedCompetition("Scottish Championship"), true);
 });
 
-test("matchPassesCompetitionTableValidation only accepts generic English league labels when both teams are in the BBC table", () => {
+test("matchPassesCompetitionTableValidation only rejects generic English league labels when both teams are absent from the BBC table", () => {
   const tables = [
     {
       league_id: "premier-league",
@@ -601,6 +601,7 @@ test("matchPassesCompetitionTableValidation only accepts generic English league 
       rows: [
         { team: "Blackburn Rovers" },
         { team: "West Bromwich Albion" },
+        { team: "Millwall" },
         { team: "Preston North End" },
         { team: "Queens Park Rangers" },
       ],
@@ -626,6 +627,14 @@ test("matchPassesCompetitionTableValidation only accepts generic English league 
   assert.equal(
     matchPassesCompetitionTableValidation(
       { league: "Championship", home_team: "Blackburn Rovers", away_team: "West Brom" },
+      null,
+      tables
+    ),
+    true
+  );
+  assert.equal(
+    matchPassesCompetitionTableValidation(
+      { league: "Championship", home_team: "Millwall", away_team: "Leicester City" },
       null,
       tables
     ),
