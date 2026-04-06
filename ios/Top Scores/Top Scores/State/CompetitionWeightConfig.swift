@@ -1,9 +1,7 @@
 import Foundation
 
 enum CompetitionWeightConfig {
-    private nonisolated static let fileName = "competition_weights"
-    private nonisolated static let fileExtension = "json"
-    private nonisolated static let weightsByName: [String: Double] = loadWeights()
+    private nonisolated static let refreshInterval: TimeInterval = 6 * 60 * 60
     private nonisolated static let stagePatterns: [NSRegularExpression] = [
         try! NSRegularExpression(pattern: #"\s*[-:–]\s*Round\s+\w+$"#, options: [.caseInsensitive]),
         try! NSRegularExpression(pattern: #"\s+\w+\s+Round$"#, options: [.caseInsensitive]),
@@ -31,40 +29,16 @@ enum CompetitionWeightConfig {
         pattern: #"[-:–]\s*$"#,
         options: [.caseInsensitive]
     )
-    private nonisolated static let publicDisplayAllowlist: Set<String> = [
-        "Bundesliga",
-        "Championship",
-        "Copa del Rey",
-        "English League Cup",
-        "FA Cup",
-        "FIFA World Cup 2026",
-        "International Friendly",
-        "La Liga",
-        "League One",
-        "League Two",
-        "Premier League",
-        "Scottish Premiership",
-        "Scottish Championship",
-        "Scottish League One",
-        "Scottish League Two",
-        "Serie A",
-        "UEFA Champions League",
-        "UEFA Conference League",
-        "UEFA Europa League",
-        "UEFA Nations League",
-        "UEFA Super Cup"
-    ].reduce(into: Set<String>()) { result, name in
-        result.insert(normalizeCompetitionName(name))
-    }
-    private nonisolated static let fifaWorldCupQualifyingPattern = try! NSRegularExpression(
-        pattern: #"^fifa world cup(?:\s+2026)? qualifying\b"#,
-        options: [.caseInsensitive]
-    )
+    private nonisolated static let aliases: [String: String] = [
+        "efl cup": "english league cup",
+        "carabao cup": "english league cup",
+        "uefa europa conference league": "uefa conference league",
+    ]
 
     nonisolated static func weight(for competitionName: String) -> Double? {
-        let normalized = normalizeCompetitionName(competitionName)
-        guard !normalized.isEmpty else { return nil }
-        return weightsByName[normalized]
+        let canonical = canonicalFilterName(competitionName)
+        guard !canonical.isEmpty else { return nil }
+        return cachedWeightsByName()[canonical]
     }
 
     nonisolated static func normalizeCompetitionName(_ competitionName: String) -> String {
@@ -77,48 +51,124 @@ enum CompetitionWeightConfig {
     nonisolated static func canonicalFilterName(_ competitionName: String) -> String {
         let normalized = normalizeCompetitionName(competitionName)
         guard !normalized.isEmpty else { return "" }
-
         let stripped = stripStageDescriptors(from: normalized)
-        let fullRange = NSRange(location: 0, length: normalized.utf16.count)
-        if fifaWorldCupQualifyingPattern.firstMatch(in: normalized, options: [], range: fullRange) != nil {
-            return normalizeCompetitionName("FIFA World Cup 2026")
-        }
-
-        return stripped.isEmpty ? normalized : stripped
+        let canonical = stripped.isEmpty ? normalized : stripped
+        return aliases[canonical] ?? canonical
     }
 
     nonisolated static func isAllowedCompetitionForPublicDisplay(_ competitionName: String) -> Bool {
-        let normalized = canonicalFilterName(competitionName)
-        guard !normalized.isEmpty else { return true }
-        guard !publicDisplayAllowlist.isEmpty else { return true }
-        return publicDisplayAllowlist.contains(normalized)
+        let canonical = canonicalFilterName(competitionName)
+        guard !canonical.isEmpty else { return true }
+        let allowed = Set(cachedWeightsByName().keys)
+        guard !allowed.isEmpty else { return true }
+        return allowed.contains(canonical)
     }
 
-    private nonisolated static func loadWeights() -> [String: Double] {
-        guard let fileURL = Bundle.main.url(forResource: fileName, withExtension: fileExtension) else {
-            NSLog("Competition weight config not found in app bundle (%@.%@).", fileName, fileExtension)
-            return [:]
-        }
+    static func refreshIfNeeded(apiBaseURL: String, force: Bool = false) async -> Bool {
+        guard force || shouldRefresh() else { return false }
+        guard let url = URL(string: apiBaseURL) else { return false }
 
         do {
-            let data = try Data(contentsOf: fileURL)
-            let json = try JSONSerialization.jsonObject(with: data, options: [])
-            guard let rawWeights = json as? [String: Any] else {
-                NSLog("Competition weight config has invalid format; expected object map.")
-                return [:]
-            }
-
-            var normalizedWeights: [String: Double] = [:]
-            for (competitionName, rawValue) in rawWeights {
-                guard let number = rawValue as? NSNumber else { continue }
-                let normalized = normalizeCompetitionName(competitionName)
-                guard !normalized.isEmpty else { continue }
-                normalizedWeights[normalized] = number.doubleValue
-            }
-            return normalizedWeights
+            let catalog = try await APIClient(baseURL: url).fetchCompetitionCatalog()
+            return applyCatalog(catalog)
         } catch {
-            NSLog("Failed to load competition weights config: %@", String(describing: error))
-            return [:]
+            NSLog("Competition catalog refresh failed: %@", String(describing: error))
+            return false
+        }
+    }
+
+    @discardableResult
+    static func applyCatalog(_ catalog: CompetitionCatalogResponse, fetchedAt: Date = Date()) -> Bool {
+        let normalizedWeights = normalizedWeights(from: catalog.competitions)
+        guard !normalizedWeights.isEmpty else { return false }
+
+        let currentWeights = cachedWeightsByName()
+        let currentUpdatedAt = cachedUpdatedAt()
+        let nextUpdatedAt = catalog.updatedAt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        persist(weightsByName: normalizedWeights, updatedAt: nextUpdatedAt, fetchedAt: fetchedAt)
+        return currentWeights != normalizedWeights || currentUpdatedAt != nextUpdatedAt
+    }
+
+    private nonisolated static func shouldRefresh(now: Date = Date()) -> Bool {
+        guard let fetchedAt = cachedFetchedAt() else { return true }
+        return now.timeIntervalSince(fetchedAt) >= refreshInterval
+    }
+
+    private nonisolated static func normalizedWeights(
+        from competitions: [CompetitionCatalogEntry]
+    ) -> [String: Double] {
+        competitions.reduce(into: [String: Double]()) { result, competition in
+            let canonical = canonicalFilterName(competition.name)
+            guard !canonical.isEmpty else { return }
+            result[canonical] = competition.weight
+        }
+    }
+
+    private nonisolated static func cachedWeightsByName() -> [String: Double] {
+        let defaultsSequence = [
+            UserDefaults.standard,
+            UserDefaults(suiteName: AppGroupConfig.identifier),
+        ]
+
+        for defaults in defaultsSequence {
+            guard let defaults,
+                  let data = defaults.data(forKey: AppGroupConfig.competitionCatalogWeightsDataKey),
+                  let decoded = try? JSONDecoder().decode([String: Double].self, from: data),
+                  !decoded.isEmpty else {
+                continue
+            }
+            return decoded
+        }
+
+        return [:]
+    }
+
+    private nonisolated static func cachedUpdatedAt() -> String? {
+        let defaultsSequence = [
+            UserDefaults.standard,
+            UserDefaults(suiteName: AppGroupConfig.identifier),
+        ]
+        for defaults in defaultsSequence {
+            guard let defaults else { continue }
+            let value = defaults.string(forKey: AppGroupConfig.competitionCatalogUpdatedAtKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value, !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private nonisolated static func cachedFetchedAt() -> Date? {
+        let defaultsSequence = [
+            UserDefaults.standard,
+            UserDefaults(suiteName: AppGroupConfig.identifier),
+        ]
+        for defaults in defaultsSequence {
+            guard let defaults else { continue }
+            let value = defaults.double(forKey: AppGroupConfig.competitionCatalogFetchedAtKey)
+            guard value > 0 else { continue }
+            return Date(timeIntervalSince1970: value)
+        }
+        return nil
+    }
+
+    private static func persist(weightsByName: [String: Double], updatedAt: String?, fetchedAt: Date) {
+        guard let data = try? JSONEncoder().encode(weightsByName) else { return }
+        let defaultsSequence = [
+            UserDefaults.standard,
+            UserDefaults(suiteName: AppGroupConfig.identifier),
+        ]
+
+        defaultsSequence.forEach { defaults in
+            guard let defaults else { return }
+            defaults.set(data, forKey: AppGroupConfig.competitionCatalogWeightsDataKey)
+            if let updatedAt, !updatedAt.isEmpty {
+                defaults.set(updatedAt, forKey: AppGroupConfig.competitionCatalogUpdatedAtKey)
+            } else {
+                defaults.removeObject(forKey: AppGroupConfig.competitionCatalogUpdatedAtKey)
+            }
+            defaults.set(fetchedAt.timeIntervalSince1970, forKey: AppGroupConfig.competitionCatalogFetchedAtKey)
         }
     }
 

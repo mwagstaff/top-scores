@@ -664,6 +664,15 @@ final class MatchesStore: ObservableObject {
         }
     }
 
+    func refreshCompetitionCatalog(using snapshot: PreferencesSnapshot, publishVisibleState: Bool) {
+        currentSnapshot = snapshot
+        reapplyLocalFilters(using: snapshot)
+        persistCombinedCacheAndSync(snapshot: snapshot)
+        if publishVisibleState {
+            publishState(for: activeMode)
+        }
+    }
+
     func setModeVisibility(_ mode: MatchesViewMode, isVisible: Bool) {
         let wasVisible = visibleModes.contains(mode)
         if isVisible {

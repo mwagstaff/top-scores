@@ -25,6 +25,9 @@ enum AppGroupConfig {
     static let showFantasyExpectedPointsKey = "preferences.showFantasyExpectedPoints"
     static let showFantasyRealTimePointsKey = "preferences.showFantasyRealTimePoints"
     static let showFantasyMatchPillsKey = "preferences.showFantasyMatchPills"
+    static let competitionCatalogWeightsDataKey = "catalog.competitionWeightsData"
+    static let competitionCatalogUpdatedAtKey = "catalog.competitionWeightsUpdatedAt"
+    static let competitionCatalogFetchedAtKey = "catalog.competitionWeightsFetchedAt"
 }
 
 struct SharedMatchesPayload: Codable, Equatable {

@@ -8,6 +8,7 @@
     "fetch:tables": "node fetch_bbc_league_tables.js",
     "fetch:footballdatabase": "node fetch_football_database_rankings.js",
     "fetch:national-elo": "node fetch_national_elo_rankings.js",
+    "cleanup:invalid-redis-matches": "node scripts/cleanup_invalid_redis_matches.js",
     "test:bbc-details": "node test_bbc_match_details.js",
     "start": "node server.js",
     "test-harness": "node -e \"console.log('Start the main API server with npm start, then open http://localhost:3000/admin/harness')\"",

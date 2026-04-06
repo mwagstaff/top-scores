@@ -96,9 +96,15 @@ struct ContentView: View {
                     await refreshFantasySummaryIfNeeded(force: selectedTab == 3)
                 }
             }
+            .task(id: preferences.apiBaseURL) {
+                await refreshCompetitionCatalogIfNeeded(force: true)
+            }
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else { return }
                 deferredFantasyRefreshTask?.cancel()
+                Task {
+                    await refreshCompetitionCatalogIfNeeded(force: false)
+                }
                 deferredFantasyRefreshTask = Task {
                     if selectedTab != 3 {
                         try? await Task.sleep(nanoseconds: fantasyStartupDelayNanos)
@@ -175,6 +181,18 @@ struct ContentView: View {
             rivalManagers: [],
             trackedLeagues: []
         )
+    }
+
+    private func refreshCompetitionCatalogIfNeeded(force: Bool) async {
+        let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+        let didRefresh = await CompetitionWeightConfig.refreshIfNeeded(
+            apiBaseURL: snapshot.apiBaseURL,
+            force: force
+        )
+        guard didRefresh else { return }
+        await MainActor.run {
+            matchesStore.refreshCompetitionCatalog(using: snapshot, publishVisibleState: true)
+        }
     }
 
     private func syncFantasyState(

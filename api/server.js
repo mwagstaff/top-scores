@@ -12,6 +12,8 @@ const express = require("express");
 const liveActivityMetrics = require("./live_activity_metrics");
 const {
   SERVER_CONFIG,
+  DEFAULT_COMPETITION_WEIGHTS,
+  COMPETITION_WEIGHTS_UPDATED_AT,
   TEAM_RANKING_SOURCE_MERGED,
   TEAM_RANKING_SOURCE_CLUBELO,
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
@@ -1040,13 +1042,13 @@ function normalizeLeagueName(name) {
 function normalizeCompetitionFilterName(name) {
   const normalized = normalizeLeagueName(name || "");
   if (!normalized) return "";
-
   const lowered = normalized.toLowerCase();
-  if (/^fifa world cup(?:\s+2026)? qualifying\b/.test(lowered)) {
-    return "fifa world cup 2026";
-  }
-
-  return lowered;
+  const aliases = {
+    "efl cup": "english league cup",
+    "carabao cup": "english league cup",
+    "uefa europa conference league": "uefa conference league",
+  };
+  return aliases[lowered] || lowered;
 }
 
 const LEAGUE_TABLE_ID_ALIASES = {
@@ -9030,6 +9032,25 @@ function buildLeagueList(matches) {
     if (normalized) set.add(normalized);
   });
   return Array.from(set).sort(compareInsensitive);
+}
+
+function buildCompetitionCatalog() {
+  return Object.entries(DEFAULT_COMPETITION_WEIGHTS || {})
+    .map(([name, weight]) => ({
+      name,
+      weight: Number(weight),
+    }))
+    .filter((entry) => entry.name && Number.isFinite(entry.weight))
+    .sort((left, right) => {
+      if (left.weight !== right.weight) return right.weight - left.weight;
+      return compareInsensitive(left.name, right.name);
+    });
+}
+
+function buildCompetitionListFromConfig() {
+  return buildCompetitionCatalog()
+    .map((entry) => entry.name)
+    .sort(compareInsensitive);
 }
 
 function buildTeamList(matches, leagueFilter) {
@@ -17589,14 +17610,26 @@ app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
   }
 });
 
+app.get(`${API_PREFIX}/competitions/catalog`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  if (COMPETITION_WEIGHTS_UPDATED_AT) {
+    res.set("X-Last-Updated", COMPETITION_WEIGHTS_UPDATED_AT);
+  }
+  res.set("X-Operational-Source", "server_config");
+  res.json({
+    competitions: buildCompetitionCatalog(),
+    updated_at: COMPETITION_WEIGHTS_UPDATED_AT,
+    source: "server_config",
+  });
+});
+
 app.get(`${API_PREFIX}/competitions`, async (_req, res) => {
   setCacheOnlyHeaders(res);
-  const dataset = await getOperationalArrayDataset(
-    OP_DATASET_MERGED_MATCHES,
-    mergedMatchesForResponse()
-  );
-  res.set("X-Operational-Source", dataset.source || "unknown");
-  res.json(buildLeagueList(dataset.items));
+  if (COMPETITION_WEIGHTS_UPDATED_AT) {
+    res.set("X-Last-Updated", COMPETITION_WEIGHTS_UPDATED_AT);
+  }
+  res.set("X-Operational-Source", "server_config");
+  res.json(buildCompetitionListFromConfig());
 });
 
 app.get(`${API_PREFIX}/teams`, async (req, res) => {

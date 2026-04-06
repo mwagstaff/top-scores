@@ -197,10 +197,22 @@ struct APIClient {
     }
 
     func fetchCompetitions() async throws -> [String] {
-        let request = try buildRequest(path: "competitions", queryItems: [])
-        let (data, http) = try await performRequest(request, operation: "competitions")
-        try validateSuccess(http, data: data, operation: "competitions")
-        return try JSONDecoder().decode([String].self, from: data)
+        do {
+            let catalog = try await fetchCompetitionCatalog()
+            return catalog.competitions.map(\.name)
+        } catch {
+            let request = try buildRequest(path: "competitions", queryItems: [])
+            let (data, http) = try await performRequest(request, operation: "competitions")
+            try validateSuccess(http, data: data, operation: "competitions")
+            return try JSONDecoder().decode([String].self, from: data)
+        }
+    }
+
+    func fetchCompetitionCatalog() async throws -> CompetitionCatalogResponse {
+        let request = try buildRequest(path: "competitions/catalog", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "competition_catalog")
+        try validateSuccess(http, data: data, operation: "competition_catalog")
+        return try JSONDecoder().decode(CompetitionCatalogResponse.self, from: data)
     }
 
     func fetchCacheState() async throws -> CacheGenerationSnapshot {
@@ -818,6 +830,23 @@ enum APIClientError: LocalizedError {
 struct MatchResponse {
     let matches: [Match]
     let lastUpdated: Date?
+}
+
+struct CompetitionCatalogEntry: Codable, Hashable, Sendable {
+    let name: String
+    let weight: Double
+}
+
+struct CompetitionCatalogResponse: Codable, Hashable, Sendable {
+    let competitions: [CompetitionCatalogEntry]
+    let updatedAt: String?
+    let source: String?
+
+    enum CodingKeys: String, CodingKey {
+        case competitions
+        case updatedAt = "updated_at"
+        case source
+    }
 }
 
 struct MatchPageResponse {

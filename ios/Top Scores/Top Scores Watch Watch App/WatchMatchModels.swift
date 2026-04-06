@@ -361,14 +361,43 @@ enum WatchMatchGrouping {
 }
 
 private enum WatchCompetitionWeightConfig {
-    private static let fileName = "competition_weights"
-    private static let fileExtension = "json"
-    private static let weightsByName: [String: Double] = loadWeights()
+    private static let stagePatterns: [NSRegularExpression] = [
+        try! NSRegularExpression(pattern: #"\s*[-:–]\s*Round\s+\w+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+\w+\s+Round$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Round\s+\w+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Round\s+\d+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Round\s+of\s+\d+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Last\s+\d+$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Group\s+Stage$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Group\s+[A-Z]$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Quarter[- ]Finals?$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Semi[- ]Finals?$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Finals?$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Third[- ]Place\s+Play-?Off$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Play-?Offs?$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Qualifying$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Qualification$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Preliminary\s+Round$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+First\s+Leg$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Second\s+Leg$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+1st\s+Leg$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+2nd\s+Leg$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"\s+Leg\s+\d+$"#, options: [.caseInsensitive]),
+    ]
+    private static let trailingStageSeparatorPattern = try! NSRegularExpression(
+        pattern: #"[-:–]\s*$"#,
+        options: [.caseInsensitive]
+    )
+    private static let aliases: [String: String] = [
+        "efl cup": "english league cup",
+        "carabao cup": "english league cup",
+        "uefa europa conference league": "uefa conference league",
+    ]
 
     static func weight(for competitionName: String) -> Double? {
-        let normalized = normalizeCompetitionName(competitionName)
-        guard !normalized.isEmpty else { return nil }
-        return weightsByName[normalized]
+        let canonical = canonicalCompetitionName(competitionName)
+        guard !canonical.isEmpty else { return nil }
+        return loadWeights()[canonical]
     }
 
     private static func normalizeCompetitionName(_ competitionName: String) -> String {
@@ -378,29 +407,48 @@ private enum WatchCompetitionWeightConfig {
             .lowercased()
     }
 
+    private static func canonicalCompetitionName(_ competitionName: String) -> String {
+        let normalized = normalizeCompetitionName(competitionName)
+        guard !normalized.isEmpty else { return "" }
+        let stripped = stripStageDescriptors(from: normalized)
+        let canonical = stripped.isEmpty ? normalized : stripped
+        return aliases[canonical] ?? canonical
+    }
+
     private static func loadWeights() -> [String: Double] {
-        guard let fileURL = Bundle.main.url(forResource: fileName, withExtension: fileExtension) else {
+        guard let defaults = UserDefaults(suiteName: WatchAppGroupConfig.identifier),
+              let data = defaults.data(forKey: WatchAppGroupConfig.competitionCatalogWeightsDataKey),
+              let weights = try? JSONDecoder().decode([String: Double].self, from: data) else {
             return [:]
         }
+        return weights
+    }
 
-        do {
-            let data = try Data(contentsOf: fileURL)
-            let json = try JSONSerialization.jsonObject(with: data, options: [])
-            guard let rawWeights = json as? [String: Any] else {
-                return [:]
-            }
+    private static func stripStageDescriptors(from competitionName: String) -> String {
+        var normalized = competitionName
+        var changed = true
 
-            var normalizedWeights: [String: Double] = [:]
-            for (competitionName, rawValue) in rawWeights {
-                guard let number = rawValue as? NSNumber else { continue }
-                let normalized = normalizeCompetitionName(competitionName)
-                guard !normalized.isEmpty else { continue }
-                normalizedWeights[normalized] = number.doubleValue
+        while changed {
+            changed = false
+            for pattern in stagePatterns {
+                let range = NSRange(location: 0, length: normalized.utf16.count)
+                guard pattern.firstMatch(in: normalized, options: [], range: range) != nil else {
+                    continue
+                }
+
+                normalized = pattern
+                    .stringByReplacingMatches(in: normalized, options: [], range: range, withTemplate: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let separatorRange = NSRange(location: 0, length: normalized.utf16.count)
+                normalized = trailingStageSeparatorPattern
+                    .stringByReplacingMatches(in: normalized, options: [], range: separatorRange, withTemplate: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                changed = true
             }
-            return normalizedWeights
-        } catch {
-            return [:]
         }
+
+        return normalized
     }
 }
 
