@@ -705,6 +705,56 @@ test("mergeBbcAndLiveMatches prefers BBC competition metadata for duplicate fixt
   assert.deepStrictEqual(merged[0].tv_channels, ["BBC Three"]);
 });
 
+test("mergeBbcAndLiveMatches ignores unmatched live-football rows", () => {
+  const merged = mergeBbcAndLiveMatches(
+    [
+      {
+        date: "2026-04-06",
+        time: "20:00",
+        league: "Championship",
+        home_team: "Blackburn Rovers",
+        away_team: "West Brom",
+        tv_channels: ["Sky Sports Football"],
+      },
+    ],
+    []
+  );
+
+  assert.deepStrictEqual(merged, []);
+});
+
+test("mergeBbcAndLiveMatches keeps BBC team names while merging live TV metadata", () => {
+  const merged = mergeBbcAndLiveMatches(
+    [
+      {
+        date: "2026-04-06",
+        time: "15:00",
+        league: "Championship",
+        home_team: "Preston North End",
+        away_team: "QPR",
+        tv_channels: ["Sky Sports Football"],
+      },
+    ],
+    [
+      {
+        date: "2026-04-06",
+        time: "15:00",
+        league: "Championship",
+        home_team: "Preston North End",
+        away_team: "Queens Park Rangers",
+        tv_channels: [],
+        has_bbc_source: true,
+      },
+    ]
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].home_team, "Preston North End");
+  assert.equal(merged[0].away_team, "Queens Park Rangers");
+  assert.equal(merged[0].has_bbc_source, true);
+  assert.deepStrictEqual(merged[0].tv_channels, ["Sky Sports Football"]);
+});
+
 test("toMatchListPayload includes score fields from resolved match state", () => {
   const payload = toMatchListPayload(baseMatch(), {
     matchDetailsLookup: {

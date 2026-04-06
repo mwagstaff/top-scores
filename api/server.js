@@ -7921,6 +7921,9 @@ function normalizeMatchRecord(match) {
   if (match.has_bbc_source === true) {
     record.has_bbc_source = true;
   }
+  if (match.is_test_match === true) {
+    record.is_test_match = true;
+  }
 
   [
     "home_goal_scorers",
@@ -8612,6 +8615,10 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
 
   if (preferIncoming && incoming.league) merged.league = incoming.league;
   if (!merged.league && incoming.league) merged.league = incoming.league;
+  if (preferIncoming && incoming.home_team) merged.home_team = incoming.home_team;
+  if (!merged.home_team && incoming.home_team) merged.home_team = incoming.home_team;
+  if (preferIncoming && incoming.away_team) merged.away_team = incoming.away_team;
+  if (!merged.away_team && incoming.away_team) merged.away_team = incoming.away_team;
 
   // Merge league_subcategory field
   if (preferIncoming && incoming.league_subcategory) {
@@ -8797,11 +8804,7 @@ function mergeBbcAndLiveMatches(liveMatches, bbcMatches) {
   const byPrimaryKey = new Map();
   const keyToPrimary = new Map();
 
-  function upsert(rawMatch, preferIncoming) {
-    const normalized = normalizeMatchRecord(rawMatch);
-    if (!normalized) return;
-    if (!isAllowedCompetition(normalized.league)) return;
-
+  function resolvePrimaryKey(normalized) {
     const identityKeys = identityKeysForMatch(normalized);
     let primaryKey = null;
     identityKeys.forEach((key) => {
@@ -8812,9 +8815,35 @@ function mergeBbcAndLiveMatches(liveMatches, bbcMatches) {
     if (!primaryKey) {
       primaryKey = findFuzzyDuplicatePrimaryKey(normalized, byPrimaryKey);
     }
-    if (!primaryKey) primaryKey = identityKeys[0];
+    return {
+      primaryKey,
+      identityKeys,
+    };
+  }
+
+  function upsert(rawMatch, preferIncoming, options = {}) {
+    const normalized = normalizeMatchRecord(rawMatch);
+    if (!normalized) return;
+
+    const { primaryKey: resolvedPrimaryKey, identityKeys } = resolvePrimaryKey(normalized);
+    const allowInsert = options.allowInsert !== false;
+    const allowDisallowedMerge = options.allowDisallowedMerge === true;
+    const markAsBbcSource = options.markAsBbcSource === true;
+    const competitionAllowed = isAllowedCompetition(normalized.league);
+    const canMergeExisting = Boolean(resolvedPrimaryKey && byPrimaryKey.has(resolvedPrimaryKey));
+    if (!competitionAllowed && !(allowDisallowedMerge && canMergeExisting)) return;
+
+    if (markAsBbcSource && normalized.is_test_match !== true) {
+      normalized.has_bbc_source = true;
+    }
+
+    let primaryKey = resolvedPrimaryKey;
+    if (!primaryKey && allowInsert) primaryKey = identityKeys[0];
+    if (!primaryKey) return;
 
     const existing = byPrimaryKey.get(primaryKey);
+    if (!existing && !allowInsert) return;
+
     const merged = existing
       ? mergePreferredMatch(existing, normalized, preferIncoming)
       : normalized;
@@ -8822,10 +8851,22 @@ function mergeBbcAndLiveMatches(liveMatches, bbcMatches) {
     identityKeys.forEach((key) => keyToPrimary.set(key, primaryKey));
   }
 
-  (Array.isArray(liveMatches) ? liveMatches : []).forEach((match) => upsert(match, false));
-  (Array.isArray(bbcMatches) ? bbcMatches : []).forEach((match) => upsert(match, true));
+  (Array.isArray(liveMatches) ? liveMatches : []).forEach((match) =>
+    upsert(match, false, {
+      allowInsert: true,
+    })
+  );
+  (Array.isArray(bbcMatches) ? bbcMatches : []).forEach((match) =>
+    upsert(match, true, {
+      allowInsert: true,
+      allowDisallowedMerge: true,
+      markAsBbcSource: true,
+    })
+  );
 
-  return Array.from(byPrimaryKey.values()).sort(compareMatches);
+  return Array.from(byPrimaryKey.values())
+    .filter((match) => match && (match.has_bbc_source === true || match.is_test_match === true))
+    .sort(compareMatches);
 }
 
 async function rebuildMergedMatchesCache(source = "cache_rebuild") {
