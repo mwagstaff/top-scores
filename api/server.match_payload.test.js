@@ -13,6 +13,8 @@ const {
     mergePreferredOperationalMatchDetailsSnapshots,
     toOperationalAdminMatchPayload,
     normalizeAdminRedisMatchIds,
+    normalizeAdminRogueMatchSelectors,
+    collectAdminRogueMatchTargets,
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
@@ -753,6 +755,89 @@ test("mergeBbcAndLiveMatches keeps BBC team names while merging live TV metadata
   assert.equal(merged[0].away_team, "Queens Park Rangers");
   assert.equal(merged[0].has_bbc_source, true);
   assert.deepStrictEqual(merged[0].tv_channels, ["Sky Sports Football"]);
+});
+
+test("collectAdminRogueMatchTargets only selects the exact rogue short-name row", () => {
+  const { selectors, invalid } = normalizeAdminRogueMatchSelectors({
+    matches: [
+      {
+        date: "2026-04-06",
+        time: "15:00",
+        league: "Championship",
+        home_team: "Preston North End",
+        away_team: "QPR",
+      },
+    ],
+  });
+
+  assert.deepStrictEqual(invalid, []);
+
+  const rogueId = buildSyntheticMatchDetailsId({
+    date: "2026-04-06",
+    time: "15:00",
+    league: "Championship",
+    home_team: "Preston North End",
+    away_team: "QPR",
+  });
+  const bbcId = buildSyntheticMatchDetailsId({
+    date: "2026-04-06",
+    time: "15:00",
+    league: "Championship",
+    home_team: "Preston North End",
+    away_team: "Queens Park Rangers",
+  });
+
+  const targets = collectAdminRogueMatchTargets(
+    selectors,
+    [
+      {
+        date: "2026-04-06",
+        time: "15:00",
+        league: "Championship",
+        home_team: "Preston North End",
+        away_team: "QPR",
+        match_details_id: rogueId,
+      },
+      {
+        date: "2026-04-06",
+        time: "15:00",
+        league: "Championship",
+        home_team: "Preston North End",
+        away_team: "Queens Park Rangers",
+        match_details_id: bbcId,
+        has_bbc_source: true,
+      },
+    ],
+    new Map([
+      [
+        rogueId,
+        {
+          id: rogueId,
+          date: "2026-04-06",
+          time: "15:00",
+          league: "Championship",
+          home_team: "Preston North End",
+          away_team: "QPR",
+        },
+      ],
+      [
+        bbcId,
+        {
+          id: bbcId,
+          date: "2026-04-06",
+          time: "15:00",
+          league: "Championship",
+          home_team: "Preston North End",
+          away_team: "Queens Park Rangers",
+          has_bbc_source: true,
+        },
+      ],
+    ])
+  );
+
+  assert.equal(targets.matchedMergedMatches.length, 1);
+  assert.equal(targets.matchedMergedMatches[0].away_team, "QPR");
+  assert.deepStrictEqual(targets.matchedCanonicalMatchIds, [rogueId]);
 });
 
 test("toMatchListPayload includes score fields from resolved match state", () => {

@@ -12152,6 +12152,226 @@ function normalizeAdminRedisMatchIds(payload) {
   return normalizedIds;
 }
 
+function normalizeStrictAdminMatchText(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function normalizeAdminRogueMatchSelectors(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const rawSelectors = Array.isArray(source.matches)
+    ? source.matches
+    : source.match && typeof source.match === "object"
+      ? [source.match]
+      : [];
+  const selectors = [];
+  const invalid = [];
+
+  rawSelectors.forEach((rawSelector, index) => {
+    if (!rawSelector || typeof rawSelector !== "object" || Array.isArray(rawSelector)) {
+      invalid.push({ index, reason: "Expected each selector to be an object." });
+      return;
+    }
+
+    const matchId = normalizeMatchDetailsId(rawSelector.match_id || rawSelector.id);
+    const date = isDateOnly(rawSelector.date) ? String(rawSelector.date).trim() : null;
+    const rawTime = String(rawSelector.time || "").trim();
+    const time = TIME_ONLY_PATTERN.test(rawTime) ? normalizeTimeValue(rawTime) : null;
+    const league = String(rawSelector.league || "").trim() || null;
+    const homeTeam = String(rawSelector.home_team || rawSelector.homeTeam || "").trim();
+    const awayTeam = String(rawSelector.away_team || rawSelector.awayTeam || "").trim();
+
+    if (!matchId && (!date || !homeTeam || !awayTeam)) {
+      invalid.push({
+        index,
+        reason: "Provide match_id, or provide date plus exact home_team and away_team.",
+      });
+      return;
+    }
+
+    selectors.push({
+      match_id: matchId,
+      date,
+      time,
+      league,
+      home_team: homeTeam || null,
+      away_team: awayTeam || null,
+    });
+  });
+
+  return { selectors, invalid };
+}
+
+function selectorMatchesNormalizedAdminMatch(selector, normalizedMatch) {
+  if (!selector || !normalizedMatch) return false;
+
+  const candidateId =
+    matchDetailsIdFromUrl(normalizedMatch.details_url) ||
+    normalizeMatchDetailsId(normalizedMatch.match_details_id) ||
+    buildSyntheticMatchDetailsId(normalizedMatch);
+
+  if (selector.match_id && candidateId !== selector.match_id) {
+    return false;
+  }
+  if (selector.date && normalizedMatch.date !== selector.date) {
+    return false;
+  }
+  if (selector.time && normalizeTimeValue(normalizedMatch.time) !== selector.time) {
+    return false;
+  }
+  if (
+    selector.league &&
+    compareInsensitive(
+      normalizeLeagueName(normalizedMatch.league || ""),
+      normalizeLeagueName(selector.league || "")
+    ) !== 0
+  ) {
+    return false;
+  }
+  if (
+    selector.home_team &&
+    normalizeStrictAdminMatchText(normalizedMatch.home_team) !==
+      normalizeStrictAdminMatchText(selector.home_team)
+  ) {
+    return false;
+  }
+  if (
+    selector.away_team &&
+    normalizeStrictAdminMatchText(normalizedMatch.away_team) !==
+      normalizeStrictAdminMatchText(selector.away_team)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function selectorMatchesCanonicalAdminMatch(selector, payload) {
+  if (!selector || !payload || typeof payload !== "object") return false;
+  const statePayload = getMatchDetailsStatePayload(payload);
+  if (!statePayload) return false;
+
+  const normalized = normalizeMatchRecord({
+    id: statePayload.id,
+    match_details_id: statePayload.id,
+    details_url: statePayload.details_url,
+    date: statePayload.date,
+    time: statePayload.time,
+    league: statePayload.league,
+    home_team: statePayload.home_team,
+    away_team: statePayload.away_team,
+  });
+  if (!normalized) return false;
+
+  return selectorMatchesNormalizedAdminMatch(selector, normalized);
+}
+
+function collectAdminRogueMatchTargets(
+  selectors,
+  mergedMatches = cachedMergedMatches,
+  detailsLookup = matchDetailsById
+) {
+  const normalizedSelectors = Array.isArray(selectors) ? selectors : [];
+  const matchedMergedMatches = [];
+  const matchedCanonicalMatchIds = new Set();
+
+  (Array.isArray(mergedMatches) ? mergedMatches : []).forEach((match) => {
+    const normalized = normalizeMatchRecord(match);
+    if (!normalized) return;
+    if (!normalizedSelectors.some((selector) => selectorMatchesNormalizedAdminMatch(selector, normalized))) {
+      return;
+    }
+
+    matchedMergedMatches.push(match);
+    const matchId =
+      matchDetailsIdFromUrl(normalized.details_url) ||
+      normalizeMatchDetailsId(normalized.match_details_id) ||
+      buildSyntheticMatchDetailsId(normalized);
+    if (matchId) {
+      matchedCanonicalMatchIds.add(matchId);
+    }
+  });
+
+  const detailEntries =
+    detailsLookup instanceof Map
+      ? Array.from(detailsLookup.entries())
+      : Object.entries(detailsLookup && typeof detailsLookup === "object" ? detailsLookup : {});
+  detailEntries.forEach(([matchId, payload]) => {
+    const normalizedMatchId = normalizeMatchDetailsId(matchId || (payload && payload.id));
+    if (!normalizedMatchId || !payload) return;
+    if (!normalizedSelectors.some((selector) => selectorMatchesCanonicalAdminMatch(selector, payload))) {
+      return;
+    }
+    matchedCanonicalMatchIds.add(normalizedMatchId);
+  });
+
+  return {
+    matchedMergedMatches,
+    matchedCanonicalMatchIds: Array.from(matchedCanonicalMatchIds).sort(),
+  };
+}
+
+async function deleteAdminRogueMatches(selectors, options = {}) {
+  const normalizedSelectors = Array.isArray(selectors) ? selectors : [];
+  const updatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+  const source =
+    typeof options.source === "string" && options.source.trim()
+      ? options.source.trim()
+      : "admin_rogue_matches";
+
+  const targets = collectAdminRogueMatchTargets(normalizedSelectors, cachedMergedMatches, matchDetailsById);
+  const matchedMergedSet = new Set(targets.matchedMergedMatches);
+  const nextMergedMatches = (Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []).filter(
+    (match) => !matchedMergedSet.has(match)
+  );
+
+  cachedMergedMatches = nextMergedMatches;
+  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
+  refreshFootballDatabaseUnmatchedTeamMetric(
+    cachedMergedMatches,
+    cachedFootballDatabaseTeams
+  );
+  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+
+  await persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
+    updated_at: updatedAt,
+    source,
+  });
+
+  let canonicalDeleteResult = null;
+  if (targets.matchedCanonicalMatchIds.length > 0) {
+    canonicalDeleteResult = await deleteCanonicalMatchDetailsByIds(
+      targets.matchedCanonicalMatchIds,
+      {
+        updated_at: updatedAt,
+        source,
+      }
+    );
+  } else {
+    invalidateCacheDomains(["matches", "match_details"], {
+      updated_at: updatedAt,
+      reason: "admin_rogue_match_delete",
+      source,
+    });
+  }
+
+  return {
+    deleted_merged_matches: targets.matchedMergedMatches.length,
+    deleted_canonical_match_ids: targets.matchedCanonicalMatchIds,
+    deleted_canonical_matches:
+      canonicalDeleteResult && Number.isFinite(canonicalDeleteResult.deleted)
+        ? canonicalDeleteResult.deleted
+        : 0,
+    merged_matches_remaining: cachedMergedMatches.length,
+    canonical_delete_result: canonicalDeleteResult,
+  };
+}
+
 async function deleteCanonicalMatchDetailsByIds(matchIds, options = {}) {
   const normalizedIds = Array.isArray(matchIds) ? matchIds : [];
   if (normalizedIds.length === 0) {
@@ -20502,6 +20722,50 @@ app.post(`${API_PREFIX}/admin/redis/matches/actions`, async (req, res) => {
   }
 });
 
+app.delete(`${API_PREFIX}/admin/rogue-matches`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const payload =
+    req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? req.body
+      : {};
+  const { selectors, invalid } = normalizeAdminRogueMatchSelectors(payload);
+
+  if (selectors.length === 0) {
+    res.status(400).json({
+      error: "Provide one or more valid match selectors in body.matches.",
+      invalid,
+    });
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const source = "admin_rogue_matches";
+
+  try {
+    const result = await deleteAdminRogueMatches(selectors, {
+      updated_at: nowIso,
+      source,
+    });
+
+    res.status(200).json({
+      success: true,
+      executed_at: nowIso,
+      source,
+      requested: selectors.length,
+      selectors,
+      invalid,
+      result,
+    });
+  } catch (error) {
+    console.error("[API] Error deleting rogue matches:", error);
+    res.status(500).json({
+      error: "Failed to delete rogue matches",
+      message: error.message || String(error),
+    });
+  }
+});
+
 app.get(`${API_PREFIX}/admin/redis/matches/:matchId`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const matchId = normalizeMatchDetailsId(req.params.matchId);
@@ -22926,6 +23190,8 @@ module.exports = {
     mergePreferredOperationalMatchDetailsSnapshots,
     toOperationalAdminMatchPayload,
     normalizeAdminRedisMatchIds,
+    normalizeAdminRogueMatchSelectors,
+    collectAdminRogueMatchTargets,
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
