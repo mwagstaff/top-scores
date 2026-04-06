@@ -678,6 +678,29 @@ private enum WidgetMatchPipeline {
 }
 
 private enum WidgetCompetitionWeightConfig {
+    private static let bootstrapWeightsByName: [String: Double] = [
+        "premier league": 100,
+        "uefa champions league": 90,
+        "fifa world cup 2026": 85,
+        "uefa europa league": 80,
+        "uefa conference league": 70,
+        "uefa nations league": 69,
+        "uefa super cup": 68,
+        "fa cup": 65,
+        "english league cup": 60,
+        "copa del rey": 58,
+        "la liga": 50,
+        "bundesliga": 48,
+        "serie a": 48,
+        "championship": 40,
+        "scottish premiership": 30,
+        "scottish championship": 25,
+        "scottish league one": 20,
+        "scottish league two": 15,
+        "league one": 14,
+        "league two": 12,
+        "international friendly": 10,
+    ]
     private static let stagePatterns: [NSRegularExpression] = [
         try! NSRegularExpression(pattern: #"\s*[-:–]\s*Round\s+\w+$"#, options: [.caseInsensitive]),
         try! NSRegularExpression(pattern: #"\s+\w+\s+Round$"#, options: [.caseInsensitive]),
@@ -736,9 +759,9 @@ private enum WidgetCompetitionWeightConfig {
         guard let defaults = UserDefaults(suiteName: WidgetAppGroupConfig.identifier),
               let data = defaults.data(forKey: WidgetAppGroupConfig.competitionCatalogWeightsDataKey),
               let weights = try? JSONDecoder().decode([String: Double].self, from: data) else {
-            return [:]
+            return bootstrapWeightsByName
         }
-        return weights
+        return weights.isEmpty ? bootstrapWeightsByName : weights
     }
 
     private static func stripStageDescriptors(from competitionName: String) -> String {

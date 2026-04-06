@@ -493,10 +493,11 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     nonisolated var displayLeague: String {
+        let baseLeague = CompetitionWeightConfig.displayBaseCompetitionName(league)
         if let subcategory = leagueSubcategory, !subcategory.isEmpty {
-            return "\(league): \(subcategory)"
+            return "\(baseLeague): \(subcategory)"
         }
-        return league
+        return baseLeague
     }
 
     func withScore(

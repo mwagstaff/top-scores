@@ -1095,10 +1095,11 @@ private struct PredictedFixture: Codable, Identifiable, Sendable {
     }
 
     var displayLeague: String {
+        let baseLeague = CompetitionWeightConfig.displayBaseCompetitionName(league)
         if let leagueSubcategory, !leagueSubcategory.isEmpty {
-            return "\(league): \(leagueSubcategory)"
+            return "\(baseLeague): \(leagueSubcategory)"
         }
-        return league
+        return baseLeague
     }
 
     var asMatch: Match {

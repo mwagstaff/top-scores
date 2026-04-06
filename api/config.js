@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const COMPETITION_WEIGHTS_PATH = path.resolve(__dirname, "../shared/competition_weights.json");
+const COMPETITION_WEIGHTS_PATH = path.resolve(__dirname, "./competition_weights.json");
 
 function loadCompetitionWeightsConfig() {
   try {

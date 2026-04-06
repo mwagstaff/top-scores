@@ -23,9 +23,13 @@ final class PreferencesViewModel: ObservableObject {
             async let leagues = APIClient(baseURL: url).fetchCompetitions()
             async let channels = APIClient(baseURL: url).fetchChannels()
             let (loadedLeagues, loadedChannels) = try await (leagues, channels)
-            availableLeagues = loadedLeagues.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            let resolvedLeagues = loadedLeagues.isEmpty
+                ? CompetitionWeightConfig.availableCompetitionNames()
+                : loadedLeagues
+            availableLeagues = resolvedLeagues.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
             availableChannels = loadedChannels.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         } catch {
+            availableLeagues = CompetitionWeightConfig.availableCompetitionNames()
             errorMessage = "Unable to load competitions or channels from the API."
         }
 

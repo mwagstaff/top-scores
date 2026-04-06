@@ -2,6 +2,29 @@ import Foundation
 
 enum CompetitionWeightConfig {
     private nonisolated static let refreshInterval: TimeInterval = 6 * 60 * 60
+    private nonisolated static let bootstrapWeightsByName: [String: Double] = [
+        "premier league": 100,
+        "uefa champions league": 90,
+        "fifa world cup 2026": 85,
+        "uefa europa league": 80,
+        "uefa conference league": 70,
+        "uefa nations league": 69,
+        "uefa super cup": 68,
+        "fa cup": 65,
+        "english league cup": 60,
+        "copa del rey": 58,
+        "la liga": 50,
+        "bundesliga": 48,
+        "serie a": 48,
+        "championship": 40,
+        "scottish premiership": 30,
+        "scottish championship": 25,
+        "scottish league one": 20,
+        "scottish league two": 15,
+        "league one": 14,
+        "league two": 12,
+        "international friendly": 10,
+    ]
     private nonisolated static let stagePatterns: [NSRegularExpression] = [
         try! NSRegularExpression(pattern: #"\s*[-:–]\s*Round\s+\w+$"#, options: [.caseInsensitive]),
         try! NSRegularExpression(pattern: #"\s+\w+\s+Round$"#, options: [.caseInsensitive]),
@@ -34,6 +57,10 @@ enum CompetitionWeightConfig {
         "carabao cup": "english league cup",
         "uefa europa conference league": "uefa conference league",
     ]
+    private nonisolated static let displayAliases: [String: String] = [
+        "english league cup": "English League Cup",
+        "uefa conference league": "UEFA Conference League",
+    ]
 
     nonisolated static func weight(for competitionName: String) -> Double? {
         let canonical = canonicalFilterName(competitionName)
@@ -59,9 +86,27 @@ enum CompetitionWeightConfig {
     nonisolated static func isAllowedCompetitionForPublicDisplay(_ competitionName: String) -> Bool {
         let canonical = canonicalFilterName(competitionName)
         guard !canonical.isEmpty else { return true }
-        let allowed = Set(cachedWeightsByName().keys)
+        let allowed = Set(activeWeightsByName().keys)
         guard !allowed.isEmpty else { return true }
         return allowed.contains(canonical)
+    }
+
+    nonisolated static func availableCompetitionNames() -> [String] {
+        activeWeightsByName()
+            .keys
+            .map(displayCompetitionName)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    nonisolated static func displayBaseCompetitionName(_ competitionName: String) -> String {
+        let trimmed = competitionName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let canonical = canonicalFilterName(trimmed)
+        if let aliased = displayAliases[canonical] {
+            return aliased
+        }
+        let stripped = stripStageDescriptorsPreservingCase(from: trimmed)
+        return stripped.isEmpty ? trimmed : stripped
     }
 
     static func refreshIfNeeded(apiBaseURL: String, force: Bool = false) async -> Bool {
@@ -121,6 +166,11 @@ enum CompetitionWeightConfig {
         }
 
         return [:]
+    }
+
+    private nonisolated static func activeWeightsByName() -> [String: Double] {
+        let cached = cachedWeightsByName()
+        return cached.isEmpty ? bootstrapWeightsByName : cached
     }
 
     private nonisolated static func cachedUpdatedAt() -> String? {
@@ -197,5 +247,46 @@ enum CompetitionWeightConfig {
         }
 
         return normalized
+    }
+
+    private nonisolated static func stripStageDescriptorsPreservingCase(from competitionName: String) -> String {
+        var normalized = competitionName
+        var changed = true
+
+        while changed {
+            changed = false
+            for pattern in stagePatterns {
+                let range = NSRange(location: 0, length: normalized.utf16.count)
+                guard pattern.firstMatch(in: normalized, options: [], range: range) != nil else {
+                    continue
+                }
+
+                normalized = pattern
+                    .stringByReplacingMatches(in: normalized, options: [], range: range, withTemplate: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let separatorRange = NSRange(location: 0, length: normalized.utf16.count)
+                normalized = trailingStageSeparatorPattern
+                    .stringByReplacingMatches(in: normalized, options: [], range: separatorRange, withTemplate: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                changed = true
+            }
+        }
+
+        return normalized
+    }
+
+    private nonisolated static func displayCompetitionName(_ canonicalName: String) -> String {
+        canonicalName
+            .split(separator: " ")
+            .map { token in
+                switch token {
+                case "uefa", "fifa", "fa":
+                    return token.uppercased()
+                default:
+                    return token.prefix(1).uppercased() + token.dropFirst()
+                }
+            }
+            .joined(separator: " ")
     }
 }

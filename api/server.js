@@ -6899,8 +6899,11 @@ function normalizeMatchDetailsPayload(match, options = {}) {
   const time = TIME_ONLY_PATTERN.test(String(match.time || "").trim())
     ? String(match.time).trim()
     : null;
-  const league = String(match.league || "").trim() || null;
   const leagueSubcategory = String(match.league_subcategory || "").trim() || null;
+  const rawLeague = String(match.league || "").trim();
+  const normalizedLeague = normalizeLeagueName(rawLeague);
+  const league =
+    (leagueSubcategory ? normalizedLeague || rawLeague : rawLeague) || null;
   const homeScore = parseNumericScore(match.home_score);
   const awayScore = parseNumericScore(match.away_score);
   const aggregateHomeScore = parseNumericScore(match.aggregate_home_score);

@@ -230,6 +230,23 @@ test("canonicalMatchDetailsToListPayload materializes a list row from canonical 
   });
 });
 
+test("normalizeMatchDetailsPayload strips staged knockout suffixes from league when subcategory is present", () => {
+  const payload = normalizeMatchDetailsPayload({
+    id: "ucl-quarter-1",
+    date: "2026-04-07",
+    time: "20:00",
+    league: "UEFA Champions League Quarter-Final 1st Leg",
+    league_subcategory: "Quarter-finals",
+    home_team: "Sporting CP",
+    away_team: "Arsenal",
+    details_url: "https://www.bbc.co.uk/sport/football/live/uc1quarter1",
+    tv_channels: ["TNT Sports 1"],
+  });
+
+  assert.equal(payload.league, "UEFA Champions League");
+  assert.equal(payload.league_subcategory, "Quarter-finals");
+});
+
 test("canonicalMatchDetailsRecordsToListPayloads dedupes duplicate canonical records", () => {
   const payloads = canonicalMatchDetailsRecordsToListPayloads({
     [DETAILS_ID]: detailsPayload(),

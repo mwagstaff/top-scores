@@ -11,7 +11,7 @@ const {
 
 const COMPETITION_WEIGHTS_PATH = path.resolve(
   __dirname,
-  "../../shared/competition_weights.json"
+  "../competition_weights.json"
 );
 
 const STAGE_PATTERNS = [
