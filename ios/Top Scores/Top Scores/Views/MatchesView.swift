@@ -295,7 +295,6 @@ struct MatchesView: View {
         }
         .onDisappear {
             matchesStore.setModeVisibility(mode, isVisible: false)
-            matchesStore.stopAutoRefresh()
             predictionTask?.cancel()
             predictorAvailabilityTask?.cancel()
             searchDebounceTask?.cancel()

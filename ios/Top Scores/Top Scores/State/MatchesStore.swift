@@ -547,6 +547,7 @@ final class MatchesStore: ObservableObject {
     private var fixturesDeferredVisibleUpdatePending = false
     private var teamRankingsRefreshTask: Task<Void, Never>?
     private var groupingTask: Task<Void, Never>?
+    private var groupingTaskID: UUID?
     private var lastAppliedTeamRankingEntries: [TeamRankingEntry] = []
     private var lastAppliedTeamRatingDefaultElo = TeamRankingSettings.defaultDefaultElo
     private var teamRatingLookup = TeamRatingLookup(
@@ -559,11 +560,11 @@ final class MatchesStore: ObservableObject {
     private let cacheStateRefreshInterval: TimeInterval = 30
     private let configureRefreshInterval: TimeInterval = 30
     private let pageSize = 120
-    private let fixturesInitialLoadDays = 5
+    private let fixturesInitialLoadDays = 90
     private let fixturesFutureLoadDays = 90
     private let fixturesLazyBatchDays = 14
     private let fixturesLazyParallelRequests = 1
-    private let fixturesLazyPageSize = 500
+    private let fixturesLazyPageSize = 2000
     private let fixturesLazyStartDelayNanos: UInt64 = 30_000_000_000
     private let fixturesLazyInterBatchDelayNanos: UInt64 = 5_000_000_000
     private let teamRankingsRefreshDelayNanos: UInt64 = 4_000_000_000
@@ -632,6 +633,7 @@ final class MatchesStore: ObservableObject {
         cancelRefreshTasks(reason: "stop_auto_refresh")
         groupingTask?.cancel()
         groupingTask = nil
+        groupingTaskID = nil
         bbcLiveRefreshTask?.cancel()
         bbcLiveRefreshTask = nil
         fixturesBackgroundLoadTask?.cancel()
@@ -810,7 +812,7 @@ final class MatchesStore: ObservableObject {
                 endDate: initialEnd,
                 pageSize: fixturesLazyPageSize,
                 includePreferenceFilters: false,
-                hydrateStates: true
+                hydrateStates: false
             )
 
             var incoming = response.matches
@@ -1585,11 +1587,14 @@ final class MatchesStore: ObservableObject {
 
         // Cancel any previous grouping task so stale results can't overwrite newer ones.
         groupingTask?.cancel()
+        groupingTaskID = nil
         guard visibleModes.contains(mode) else { return }
         let matchesToGroup = current.matches
         let descendingDates = (mode == .results)
         let sortOrder = currentSnapshot?.matchGroupSortOrder ?? PreferencesStore.defaultMatchGroupSortOrder
         let ratingLookup = teamRatingLookup
+        let taskID = UUID()
+        groupingTaskID = taskID
         groupingTask = Task.detached(priority: .userInitiated) { [weak self] in
             let startedAt = Date()
             let grouped = MatchGroupingEngine.groupMatches(
@@ -1601,12 +1606,16 @@ final class MatchesStore: ObservableObject {
             let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
+                guard let self,
+                      self.groupingTaskID == taskID,
+                      self.activeMode == mode,
+                      self.visibleModes.contains(mode) else { return }
                 if durationMs >= 100 {
                     MatchesStore.log(
                         "grouping_complete mode=\(mode.rawValue) matches=\(matchesToGroup.count) days=\(grouped.count) duration_ms=\(durationMs)"
                     )
                 }
-                self?.groupedMatches = grouped
+                self.groupedMatches = grouped
             }
         }
 

@@ -6331,6 +6331,7 @@ const MATCH_STATUS_COMPLETE_TOKENS = new Set(["FT", "AET"]);
 const MATCH_STATUS_POSTPONED_TOKENS = new Set(["POSTPONED", "MATCH POSTPONED"]);
 const MATCH_STATUS_MINUTE_PATTERN = /^\d{1,3}(?:\+\d{1,2})?'?$/;
 const MATCH_DETAILS_ID_PATTERN = /^[a-z0-9]+$/i;
+const SYNTHETIC_MATCH_ID_PREFIX = "syn";
 const MATCH_DETAILS_EVENT_FIELDS = [
   "home_goal_scorers",
   "away_goal_scorers",
@@ -6646,6 +6647,39 @@ function matchDetailsIdFromUrl(detailsUrl) {
   }
 }
 
+function syntheticMatchIdToken(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+function buildSyntheticMatchDetailsId(match) {
+  if (!match || typeof match !== "object") return null;
+  const date = isDateOnly(match.date) ? String(match.date).trim() : "";
+  const time = TIME_ONLY_PATTERN.test(String(match.time || "").trim())
+    ? String(match.time).trim()
+    : "";
+  const league = syntheticMatchIdToken(normalizeLeagueName(match.league || ""));
+  const homeTeam = syntheticMatchIdToken(match.home_team || "");
+  const awayTeam = syntheticMatchIdToken(match.away_team || "");
+
+  if (!date || !time || !league || !homeTeam || !awayTeam) {
+    return null;
+  }
+
+  const digest = crypto
+    .createHash("sha1")
+    .update([date, time, league, homeTeam, awayTeam].join("|"))
+    .digest("hex")
+    .slice(0, 16);
+
+  return `${SYNTHETIC_MATCH_ID_PREFIX}${digest}`;
+}
+
 function normalizeMatchDetailsId(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!MATCH_DETAILS_ID_PATTERN.test(normalized)) return null;
@@ -6851,7 +6885,8 @@ function normalizeMatchDetailsPayload(match, options = {}) {
   const detailsUrl = String(match.details_url || "").trim();
   const detailsId =
     matchDetailsIdFromUrl(detailsUrl) ||
-    normalizeMatchDetailsId(match.match_details_id || match.id);
+    normalizeMatchDetailsId(match.match_details_id || match.id) ||
+    buildSyntheticMatchDetailsId(match);
   if (!detailsId) return null;
 
   const homeTeam = String(match.home_team || "").trim();
@@ -8349,9 +8384,6 @@ function listPayloadHasBbcMatchEntry(payload) {
 
 function isListPayloadVisibleForMode(payload, mode, now = new Date()) {
   if (!payload || typeof payload !== "object") return false;
-  if (mode === "fixtures" && !listPayloadHasBbcMatchEntry(payload)) {
-    return false;
-  }
 
   const day = parseMatchDayLocal(payload.date);
   if (!day) {
@@ -17241,8 +17273,9 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const filterMode = req.query.filter_mode ? String(req.query.filter_mode) : "union";
     const listMode = normalizeMatchesListMode(req.query.mode);
     const sortOrder = String(req.query.sort || "asc").toLowerCase() === "desc" ? "desc" : "asc";
-    const pageSize = parsePositiveInt(req.query.page_size, 100, 1, 500);
+    const pageSize = parsePositiveInt(req.query.page_size, 500, 1, 2000);
     const page = parsePositiveInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
+    const includeMeta = isTruthyParam(req.query.include_meta);
     const dateFrom = range.start;
     const dateTo = range.end;
     const eplOnly = isTruthyParam(req.query.epl_only);
@@ -17331,6 +17364,22 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     res.set("X-Total-Pages", String(totalPages));
     res.set("X-Has-More", hasMore ? "true" : "false");
     res.set("X-Sort-Order", sortOrder);
+    if (includeMeta) {
+      res.json({
+        matches: paged,
+        pagination: {
+          page,
+          page_size: pageSize,
+          total_count: totalCount,
+          total_pages: totalPages,
+          has_more: hasMore,
+          sort_order: sortOrder,
+        },
+        updated_at: latestUpdated || null,
+        source: canonicalSnapshot.source || "unknown",
+      });
+      return;
+    }
     res.json(paged);
   } catch (err) {
     console.warn("Failed to serve /matches from cache:", err.message || err);
@@ -20255,13 +20304,31 @@ app.get(`${API_PREFIX}/admin/redis/matches`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const pageSize = parsePositiveInt(req.query.page_size, 100, 1, 100);
   const page = parsePositiveInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
+  const competitionFilter = String(req.query.competition || "").trim();
+  const normalizedCompetitionFilter = competitionFilter
+    ? normalizeCompetitionFilterName(competitionFilter)
+    : "";
 
   try {
     const snapshot = await getPreferredOperationalMatchDetailsSnapshotSafe();
-    const matches = Object.values(snapshot.records || {})
+    const allMatches = Object.values(snapshot.records || {})
       .map((payload) => toOperationalAdminMatchPayload(payload))
       .filter(Boolean)
       .sort(operationalMatchSortDesc);
+    const competitionOptions = Array.from(
+      new Set(
+        allMatches
+          .map((match) => String(match && match.league ? match.league : "").trim())
+          .filter(Boolean)
+      )
+    ).sort((lhs, rhs) => lhs.localeCompare(rhs));
+    const matches = normalizedCompetitionFilter
+      ? allMatches.filter(
+        (match) =>
+          normalizeCompetitionFilterName(String(match && match.league ? match.league : "").trim()) ===
+            normalizedCompetitionFilter
+      )
+      : allMatches;
 
     const totalCount = matches.length;
     const totalPages = totalCount > 0 ? Math.ceil(totalCount / pageSize) : 0;
@@ -20289,6 +20356,8 @@ app.get(`${API_PREFIX}/admin/redis/matches`, async (req, res) => {
       has_more: page < totalPages,
       source: snapshot.source || "unknown",
       updated_at: snapshot.updated_at || null,
+      competition_filter: competitionFilter || null,
+      competition_options: competitionOptions,
       matches: items,
     });
   } catch (error) {
@@ -22799,6 +22868,7 @@ module.exports = {
     withStableMatchDetailsState,
     pickPreferredMatchStatus,
     normalizeMatchStatusValue,
+    buildSyntheticMatchDetailsId,
     parseMatchStatusMinute,
     normalizeTeamName,
     normalizeCompetitionFilterName,

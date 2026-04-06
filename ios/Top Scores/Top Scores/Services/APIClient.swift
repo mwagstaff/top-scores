@@ -5,6 +5,7 @@ struct APIClient {
     let session: URLSession
     private static let defaultPastDays = 30
     private static let defaultFutureDays = 90
+    private static let matchStatesBatchLimit = 500
     private static let maxLoggedBodyLength = 240
     private static let retryDelayNanos: UInt64 = 350_000_000
     private static let retryableStatusCodes: Set<Int> = [408, 429, 500, 502, 503, 504]
@@ -361,18 +362,26 @@ struct APIClient {
         ).sorted()
         guard !normalizedIDs.isEmpty else { return [:] }
 
-        var request = try buildRequest(path: "matches/states", queryItems: [])
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(MatchStatesRequestBody(ids: normalizedIDs))
-
-        let (data, http) = try await performRequest(request, operation: "match_states")
-        try validateSuccess(http, data: data, operation: "match_states")
-        let payloads = try JSONDecoder().decode([MatchDetailsPayload].self, from: data)
-
         var byID: [String: MatchDetailsPayload] = [:]
-        payloads.forEach { payload in
-            byID[payload.id] = payload
+
+        var startIndex = 0
+        while startIndex < normalizedIDs.count {
+            let endIndex = min(startIndex + Self.matchStatesBatchLimit, normalizedIDs.count)
+            let batch = Array(normalizedIDs[startIndex..<endIndex])
+
+            var request = try buildRequest(path: "matches/states", queryItems: [])
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(MatchStatesRequestBody(ids: batch))
+
+            let (data, http) = try await performRequest(request, operation: "match_states")
+            try validateSuccess(http, data: data, operation: "match_states")
+            let payloads = try JSONDecoder().decode([MatchDetailsPayload].self, from: data)
+            payloads.forEach { payload in
+                byID[payload.id] = payload
+            }
+
+            startIndex = endIndex
         }
         return byID
     }
@@ -689,17 +698,28 @@ struct APIClient {
         do {
             return try JSONDecoder().decode([Match].self, from: data)
         } catch {
-            Self.log("WARN", "decode_failed op=\(operation) strategy=lossy error=\(error)")
-            return try decodeMatchesLossy(from: data, operation: operation)
+            do {
+                return try JSONDecoder().decode(MatchesEnvelope.self, from: data).matches
+            } catch {
+                Self.log("WARN", "decode_failed op=\(operation) strategy=lossy error=\(error)")
+                return try decodeMatchesLossy(from: data, operation: operation)
+            }
         }
     }
 
     private func decodeMatchesLossy(from data: Data, operation: String) throws -> [Match] {
         let root = try JSONSerialization.jsonObject(with: data)
-        guard let items = root as? [Any] else {
+        let items: [Any]
+        if let arrayRoot = root as? [Any] {
+            items = arrayRoot
+        } else if
+            let objectRoot = root as? [String: Any],
+            let nested = objectRoot["matches"] as? [Any] {
+            items = nested
+        } else {
             throw APIClientError.invalidMatchesPayload(
                 operation: operation,
-                reason: "Expected top-level JSON array"
+                reason: "Expected top-level JSON array or object with matches"
             )
         }
 
@@ -811,6 +831,10 @@ struct MatchPageResponse {
 
 private struct MatchStatesRequestBody: Encodable {
     let ids: [String]
+}
+
+private struct MatchesEnvelope: Decodable {
+    let matches: [Match]
 }
 
 private struct CacheStateResponse: Decodable {

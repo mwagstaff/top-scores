@@ -58,6 +58,26 @@
       gap: 8px;
       align-items: center;
     }
+    .filter-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .filter-group label {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .filter-group select {
+      min-width: 220px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+    }
     .chip, button {
       display: inline-flex;
       align-items: center;
@@ -218,6 +238,12 @@
           <button id="next-page">Next</button>
         </div>
         <div class="actions">
+          <div class="filter-group">
+            <label for="competition-filter">Competition</label>
+            <select id="competition-filter">
+              <option value="">All competitions</option>
+            </select>
+          </div>
           <button id="select-page">Select Page</button>
           <button id="clear-selection">Clear</button>
           <button id="delete-selected" disabled>Delete Selected</button>
@@ -261,6 +287,7 @@
     const clearSelectionButton = document.getElementById("clear-selection");
     const deleteSelectedButton = document.getElementById("delete-selected");
     const rescrapeSelectedButton = document.getElementById("rescrape-selected");
+    const competitionFilterSelect = document.getElementById("competition-filter");
     const selectionSummaryEl = document.getElementById("selection-summary");
     const appBasePath = window.location.pathname.replace(/\/admin\/redis\/matches(?:\/.*)?$/, "");
     const selectedMatchIds = new Set();
@@ -392,18 +419,51 @@
 
       const params = new URLSearchParams(window.location.search);
       const page = Math.max(1, Number(params.get("page") || 1));
-      const payload = await fetchJson(withBasePath(`/api/v1/admin/redis/matches?page=${page}&page_size=100`));
+      const competitionFilter = params.get("competition") || "";
+      const query = new URLSearchParams({
+        page: String(page),
+        page_size: "100",
+      });
+      if (competitionFilter) {
+        query.set("competition", competitionFilter);
+      }
+      const payload = await fetchJson(withBasePath(`/api/v1/admin/redis/matches?${query.toString()}`));
       currentListMatches = Array.isArray(payload.matches) ? payload.matches : [];
 
       statusEl.textContent = `Redis source: ${payload.source || "unknown"} | Updated: ${payload.updated_at || "n/a"}`;
-      listSummaryEl.textContent = `Showing page ${payload.page} of ${payload.total_pages || 1} | ${payload.total_count} matches`;
+      listSummaryEl.textContent =
+        `Showing page ${payload.page} of ${payload.total_pages || 1} | ${payload.total_count} matches` +
+        (payload.competition_filter ? ` | Competition: ${payload.competition_filter}` : "");
+      competitionFilterSelect.innerHTML = [
+        '<option value="">All competitions</option>',
+        ...(Array.isArray(payload.competition_options) ? payload.competition_options : []).map((competition) => {
+          const selected = competition === competitionFilter ? " selected" : "";
+          return `<option value="${escapeHtml(competition)}"${selected}>${escapeHtml(competition)}</option>`;
+        }),
+      ].join("");
+      competitionFilterSelect.onchange = () => {
+        const nextParams = new URLSearchParams(window.location.search);
+        const nextCompetition = competitionFilterSelect.value || "";
+        nextParams.delete("page");
+        if (nextCompetition) {
+          nextParams.set("competition", nextCompetition);
+        } else {
+          nextParams.delete("competition");
+        }
+        const queryString = nextParams.toString();
+        window.location.search = queryString ? `?${queryString}` : "";
+      };
       prevPageButton.disabled = payload.page <= 1;
       nextPageButton.disabled = !payload.has_more;
       prevPageButton.onclick = () => {
-        window.location.search = `?page=${Math.max(1, payload.page - 1)}`;
+        const nextParams = new URLSearchParams(window.location.search);
+        nextParams.set("page", String(Math.max(1, payload.page - 1)));
+        window.location.search = `?${nextParams.toString()}`;
       };
       nextPageButton.onclick = () => {
-        window.location.search = `?page=${payload.page + 1}`;
+        const nextParams = new URLSearchParams(window.location.search);
+        nextParams.set("page", String(payload.page + 1));
+        window.location.search = `?${nextParams.toString()}`;
       };
       selectPageButton.onclick = () => {
         currentListMatches.forEach((match) => {

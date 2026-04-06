@@ -27,6 +27,7 @@ const {
     isMatchDetailsActive,
     normalizeMatchDetailsPayload,
     mergeMatchDetailsPayload,
+    buildSyntheticMatchDetailsId,
     pickPreferredMatchStatus,
     resolveStableMatchScoreStatus,
     withStableMatchDetailsState,
@@ -390,6 +391,44 @@ test("toOperationalAdminMatchPayload exposes normalized penalty score and compet
   assert.equal(payload.away_score, 2);
   assert.equal(payload.league, "FA Cup");
   assert.equal(payload.league_subcategory, "Quarter-finals");
+});
+
+test("buildSyntheticMatchDetailsId creates a stable canonical id for future fixtures without BBC ids", () => {
+  const fixture = {
+    date: "2026-04-11",
+    time: "11:30",
+    league: "Premier League",
+    home_team: "Arsenal",
+    away_team: "AFC Bournemouth",
+  };
+
+  const first = buildSyntheticMatchDetailsId(fixture);
+  const second = buildSyntheticMatchDetailsId({
+    ...fixture,
+    home_team: "Arsenal",
+    away_team: "AFC Bournemouth",
+  });
+
+  assert.ok(first);
+  assert.match(first, /^syn[a-z0-9]{16}$/);
+  assert.equal(first, second);
+});
+
+test("normalizeMatchDetailsPayload falls back to a synthetic canonical id for future fixtures", () => {
+  const payload = normalizeMatchDetailsPayload({
+    date: "2026-04-11",
+    time: "11:30",
+    league: "Premier League",
+    home_team: "Arsenal",
+    away_team: "AFC Bournemouth",
+    tv_channels: ["Sky Sports"],
+  });
+
+  assert.ok(payload);
+  assert.match(payload.id, /^syn[a-z0-9]{16}$/);
+  assert.equal(payload.league, "Premier League");
+  assert.equal(payload.home_team, "Arsenal");
+  assert.equal(payload.away_team, "AFC Bournemouth");
 });
 
 test("normalizeAdminRedisMatchIds accepts singular and plural ids and removes invalid entries", () => {
@@ -772,6 +811,26 @@ test("isListPayloadVisibleForMode excludes future same-day fixtures from results
         score_status: "72",
       },
       "results",
+      now
+    ),
+    true
+  );
+});
+
+test("isListPayloadVisibleForMode keeps future fixtures visible without legacy BBC markers", () => {
+  const now = new Date("2026-04-04T17:45:00Z");
+  assert.equal(
+    isListPayloadVisibleForMode(
+      {
+        date: "2026-04-05",
+        time: "15:00",
+        league: "Premier League",
+        home_team: "West Ham United",
+        away_team: "Wolves",
+        score_status: null,
+        match_details_id: "cn43ql18lg8t",
+      },
+      "fixtures",
       now
     ),
     true
