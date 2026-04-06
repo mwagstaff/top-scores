@@ -15,6 +15,8 @@ const {
     normalizeAdminRedisMatchIds,
     normalizeAdminRogueMatchSelectors,
     collectAdminRogueMatchTargets,
+    collectLiveSourceDuplicateTargets,
+    collectCanonicalDuplicateTargets,
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
@@ -43,6 +45,9 @@ const {
     normalizeCompetitionFilterName,
     normalizeMatchesListMode,
     isAllowedCompetition,
+    isAllowedMatchDetailsPayload,
+    matchPassesCompetitionTableValidation,
+    collectDisallowedCompetitionTargets,
     mergeBbcAndLiveMatches,
     matchIncludesHomeNation,
     matchIsMajorTournament,
@@ -558,6 +563,10 @@ test("normalizeTeamName canonicalizes team aliases from shared identity config",
   assert.equal(normalizeTeamName("Man City"), "manchester city");
   assert.equal(normalizeTeamName("MCI"), "manchester city");
   assert.equal(normalizeTeamName("AFC Bournemouth"), "bournemouth");
+  assert.equal(normalizeTeamName("QPR"), "queens park rangers");
+  assert.equal(normalizeTeamName("West Brom"), "west bromwich albion");
+  assert.equal(normalizeTeamName("AZ"), "az alkmaar");
+  assert.equal(normalizeTeamName("Mainz"), "fsv mainz 05");
 });
 
 test("normalizeMatchStatusValue canonicalizes postponed status", () => {
@@ -575,6 +584,229 @@ test("normalizeCompetitionFilterName maps World Cup qualifying competitions to t
     "fifa world cup 2026"
   );
   assert.equal(isAllowedCompetition("FIFA World Cup Qualifying - European"), true);
+  assert.equal(isAllowedCompetition("Ukraine Premier League"), false);
+  assert.equal(isAllowedCompetition("Scottish Championship"), true);
+});
+
+test("matchPassesCompetitionTableValidation only accepts generic English league labels when both teams are in the BBC table", () => {
+  const tables = [
+    {
+      league_id: "premier-league",
+      league_name: "Premier League",
+      rows: [{ team: "Arsenal" }, { team: "Chelsea" }],
+    },
+    {
+      league_id: "championship",
+      league_name: "Championship",
+      rows: [
+        { team: "Blackburn Rovers" },
+        { team: "West Bromwich Albion" },
+        { team: "Preston North End" },
+        { team: "Queens Park Rangers" },
+      ],
+    },
+  ];
+
+  assert.equal(
+    matchPassesCompetitionTableValidation(
+      { league: "Premier League", home_team: "Arsenal", away_team: "Chelsea" },
+      null,
+      tables
+    ),
+    true
+  );
+  assert.equal(
+    matchPassesCompetitionTableValidation(
+      { league: "Premier League", home_team: "Epitsentr", away_team: "Kudrivka" },
+      null,
+      tables
+    ),
+    false
+  );
+  assert.equal(
+    matchPassesCompetitionTableValidation(
+      { league: "Championship", home_team: "Blackburn Rovers", away_team: "West Brom" },
+      null,
+      tables
+    ),
+    true
+  );
+  assert.equal(
+    matchPassesCompetitionTableValidation(
+      { league: "Championship", home_team: "Queen's Park", away_team: "Ross County" },
+      null,
+      tables
+    ),
+    false
+  );
+  assert.equal(
+    matchPassesCompetitionTableValidation(
+      { league: "Scottish Championship", home_team: "Queen's Park", away_team: "Ross County" },
+      null,
+      tables
+    ),
+    true
+  );
+});
+
+test("isAllowedMatchDetailsPayload rejects generic competition labels when table membership disagrees", () => {
+  const tables = [
+    {
+      league_id: "premier-league",
+      league_name: "Premier League",
+      rows: [{ team: "Arsenal" }, { team: "Chelsea" }],
+    },
+    {
+      league_id: "championship",
+      league_name: "Championship",
+      rows: [{ team: "Blackburn Rovers" }, { team: "West Bromwich Albion" }],
+    },
+  ];
+
+  assert.equal(
+    isAllowedMatchDetailsPayload(
+      {
+        id: "c98m9778p3lt",
+        date: "2026-04-06",
+        time: "16:00",
+        league: "Premier League",
+        home_team: "Epitsentr",
+        away_team: "Kudrivka",
+      },
+      null,
+      { tables }
+    ),
+    false
+  );
+  assert.equal(
+    isAllowedMatchDetailsPayload(
+      {
+        id: "cblackburn1",
+        date: "2026-04-06",
+        time: "15:00",
+        league: "Championship",
+        home_team: "Blackburn Rovers",
+        away_team: "West Brom",
+      },
+      null,
+      { tables }
+    ),
+    true
+  );
+  assert.equal(
+    isAllowedMatchDetailsPayload(
+      {
+        id: "cscot1",
+        date: "2026-04-06",
+        time: "19:45",
+        league: "Scottish Championship",
+        home_team: "Queen's Park",
+        away_team: "Ross County",
+      },
+      null,
+      { tables }
+    ),
+    true
+  );
+});
+
+test("collectDisallowedCompetitionTargets includes generic competition rows that fail table validation", () => {
+  const tables = [
+    {
+      league_id: "premier-league",
+      league_name: "Premier League",
+      rows: [{ team: "Arsenal" }, { team: "Chelsea" }],
+    },
+    {
+      league_id: "championship",
+      league_name: "Championship",
+      rows: [{ team: "Blackburn Rovers" }, { team: "West Bromwich Albion" }],
+    },
+  ];
+
+  const rogueId = "c98m9778p3lt";
+  const targets = collectDisallowedCompetitionTargets(
+    {
+      mergedMatches: [
+        {
+          match_details_id: rogueId,
+          date: "2026-04-06",
+          time: "16:00",
+          league: "Premier League",
+          home_team: "Epitsentr",
+          away_team: "Kudrivka",
+        },
+        {
+          match_details_id: "cgood1",
+          date: "2026-04-06",
+          time: "15:00",
+          league: "Championship",
+          home_team: "Blackburn Rovers",
+          away_team: "West Brom",
+        },
+      ],
+    },
+    new Map([
+      [
+        rogueId,
+        {
+          id: rogueId,
+          date: "2026-04-06",
+          time: "16:00",
+          league: "Premier League",
+          home_team: "Epitsentr",
+          away_team: "Kudrivka",
+        },
+      ],
+    ]),
+    { tables }
+  );
+
+  assert.equal(targets.disallowedMergedMatches.length, 1);
+  assert.equal(targets.disallowedMergedMatches[0].home_team, "Epitsentr");
+  assert.deepStrictEqual(targets.matchedCanonicalMatchIds, [rogueId]);
+  assert.deepStrictEqual(targets.disallowedCompetitions, ["Premier League"]);
+});
+
+test("mergeMatchDetailsPayload preserves a more specific competition name over a generic refresh", () => {
+  const premierMerged = mergeMatchDetailsPayload(
+    detailsPayload({
+      league: "Ukraine Premier League",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+    }),
+    detailsPayload({
+      league: "Premier League",
+      home_score: 1,
+      away_score: 0,
+      score_status: "FT",
+    }),
+    "2026-04-06T20:30:00.000Z"
+  );
+
+  const championshipMerged = mergeMatchDetailsPayload(
+    detailsPayload({
+      league: "Scottish Championship",
+      home_team: "Arbroath",
+      away_team: "Queen's Park",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+    }),
+    detailsPayload({
+      league: "Championship",
+      home_team: "Arbroath",
+      away_team: "Queen's Park",
+      home_score: 2,
+      away_score: 1,
+      score_status: "FT",
+    }),
+    "2026-04-06T20:31:00.000Z"
+  );
+
+  assert.equal(premierMerged.league, "Ukraine Premier League");
+  assert.equal(championshipMerged.league, "Scottish Championship");
 });
 
 test("normalizeMatchesListMode only accepts fixtures and results", () => {
@@ -838,6 +1070,264 @@ test("collectAdminRogueMatchTargets only selects the exact rogue short-name row"
   assert.equal(targets.matchedMergedMatches.length, 1);
   assert.equal(targets.matchedMergedMatches[0].away_team, "QPR");
   assert.deepStrictEqual(targets.matchedCanonicalMatchIds, [rogueId]);
+});
+
+test("collectLiveSourceDuplicateTargets finds live-only duplicates of BBC-backed fixtures", () => {
+  const mainzLiveId = buildSyntheticMatchDetailsId({
+    date: "2026-04-09",
+    time: "20:00",
+    league: "UEFA Conference League",
+    home_team: "Mainz",
+    away_team: "Strasbourg",
+  });
+  const mainzBbcId = "cmainzbbc1";
+  const azLiveId = buildSyntheticMatchDetailsId({
+    date: "2026-04-09",
+    time: "20:00",
+    league: "UEFA Conference League",
+    home_team: "Shakhtar Donetsk",
+    away_team: "AZ",
+  });
+  const azBbcId = "cshakhtar1";
+
+  const detailsLookup = new Map([
+    [
+      mainzLiveId,
+      {
+        id: mainzLiveId,
+        date: "2026-04-09",
+        time: "20:00",
+        league: "UEFA Conference League",
+        home_team: "Mainz",
+        away_team: "Strasbourg",
+      },
+    ],
+    [
+      mainzBbcId,
+      {
+        id: mainzBbcId,
+        date: "2026-04-09",
+        time: "20:00",
+        league: "UEFA Conference League Quarter-Final 1st Leg",
+        home_team: "Mainz 05",
+        away_team: "Strasbourg",
+        details_url: `https://www.bbc.co.uk/sport/football/live/${mainzBbcId}`,
+        has_bbc_source: true,
+      },
+    ],
+    [
+      azLiveId,
+      {
+        id: azLiveId,
+        date: "2026-04-09",
+        time: "20:00",
+        league: "UEFA Conference League",
+        home_team: "Shakhtar Donetsk",
+        away_team: "AZ",
+      },
+    ],
+    [
+      azBbcId,
+      {
+        id: azBbcId,
+        date: "2026-04-09",
+        time: "20:00",
+        league: "UEFA Conference League Quarter-Final 1st Leg",
+        home_team: "Shakhtar Donetsk",
+        away_team: "AZ Alkmaar",
+        details_url: `https://www.bbc.co.uk/sport/football/live/${azBbcId}`,
+        has_bbc_source: true,
+      },
+    ],
+  ]);
+
+  const targets = collectLiveSourceDuplicateTargets(
+    {
+      liveMatches: [
+        {
+          date: "2026-04-09",
+          time: "20:00",
+          league: "UEFA Conference League",
+          home_team: "Mainz",
+          away_team: "Strasbourg",
+        },
+        {
+          date: "2026-04-09",
+          time: "20:00",
+          league: "UEFA Conference League",
+          home_team: "Shakhtar Donetsk",
+          away_team: "AZ",
+        },
+      ],
+      recentMatches: [],
+      mergedMatches: [],
+    },
+    detailsLookup
+  );
+
+  assert.deepStrictEqual(
+    targets.duplicate_canonical_match_ids.sort(),
+    [azLiveId, mainzLiveId].sort()
+  );
+  assert.equal(targets.duplicate_live_matches.length, 2);
+  assert.equal(targets.duplicate_live_matches[0].home_team, "Mainz");
+  assert.equal(targets.duplicate_live_matches[1].away_team, "AZ");
+});
+
+test("collectCanonicalDuplicateTargets finds weaker canonical alias duplicates", () => {
+  const mainzAliasId = buildSyntheticMatchDetailsId({
+    date: "2026-04-09",
+    time: "20:00",
+    league: "UEFA Conference League",
+    home_team: "Mainz",
+    away_team: "Strasbourg",
+  });
+  const mainzBbcId = "cmainzbbc1";
+  const azAliasId = buildSyntheticMatchDetailsId({
+    date: "2026-04-09",
+    time: "20:00",
+    league: "UEFA Conference League",
+    home_team: "Shakhtar Donetsk",
+    away_team: "AZ",
+  });
+  const azBbcId = "cshakhtar1";
+
+  const detailsLookup = new Map([
+    [
+      mainzAliasId,
+      {
+        id: mainzAliasId,
+        date: "2026-04-09",
+        time: "20:00",
+        league: "UEFA Conference League",
+        home_team: "Mainz",
+        away_team: "Strasbourg",
+        updated_at: "2026-04-09T18:00:00.000Z",
+      },
+    ],
+    [
+      mainzBbcId,
+      {
+        id: mainzBbcId,
+        date: "2026-04-09",
+        time: "20:00",
+        league: "UEFA Conference League Quarter-Final 1st Leg",
+        home_team: "Mainz 05",
+        away_team: "Strasbourg",
+        details_url: `https://www.bbc.co.uk/sport/football/live/${mainzBbcId}`,
+        has_bbc_source: true,
+        updated_at: "2026-04-09T18:01:00.000Z",
+      },
+    ],
+    [
+      azAliasId,
+      {
+        id: azAliasId,
+        date: "2026-04-09",
+        time: "20:00",
+        league: "UEFA Conference League",
+        home_team: "Shakhtar Donetsk",
+        away_team: "AZ",
+        updated_at: "2026-04-09T18:00:00.000Z",
+      },
+    ],
+    [
+      azBbcId,
+      {
+        id: azBbcId,
+        date: "2026-04-09",
+        time: "20:00",
+        league: "UEFA Conference League Quarter-Final 1st Leg",
+        home_team: "Shakhtar Donetsk",
+        away_team: "AZ Alkmaar",
+        details_url: `https://www.bbc.co.uk/sport/football/live/${azBbcId}`,
+        has_bbc_source: true,
+        updated_at: "2026-04-09T18:01:00.000Z",
+      },
+    ],
+  ]);
+
+  const targets = collectCanonicalDuplicateTargets(
+    {
+      mergedMatches: [
+        {
+          date: "2026-04-09",
+          time: "20:00",
+          league: "UEFA Conference League",
+          home_team: "Mainz",
+          away_team: "Strasbourg",
+          match_details_id: mainzAliasId,
+        },
+        {
+          date: "2026-04-09",
+          time: "20:00",
+          league: "UEFA Conference League Quarter-Final 1st Leg",
+          home_team: "Mainz 05",
+          away_team: "Strasbourg",
+          match_details_id: mainzBbcId,
+        },
+        {
+          date: "2026-04-09",
+          time: "20:00",
+          league: "UEFA Conference League",
+          home_team: "Shakhtar Donetsk",
+          away_team: "AZ",
+          match_details_id: azAliasId,
+        },
+        {
+          date: "2026-04-09",
+          time: "20:00",
+          league: "UEFA Conference League Quarter-Final 1st Leg",
+          home_team: "Shakhtar Donetsk",
+          away_team: "AZ Alkmaar",
+          match_details_id: azBbcId,
+        },
+      ],
+    },
+    detailsLookup
+  );
+
+  assert.deepStrictEqual(
+    targets.duplicate_canonical_match_ids.sort(),
+    [azAliasId, mainzAliasId].sort()
+  );
+  assert.equal(targets.duplicate_merged_matches.length, 2);
+  assert.equal(targets.duplicate_merged_matches[0].home_team, "Mainz");
+  assert.equal(targets.duplicate_merged_matches[1].away_team, "AZ");
+});
+
+test("mergePreferredOperationalMatchDetailsSnapshots filters disallowed competitions", () => {
+  const snapshot = mergePreferredOperationalMatchDetailsSnapshots(
+    {
+      updated_at: "2026-04-06T17:00:00.000Z",
+      records: {
+        allowed1: {
+          id: "allowed1",
+          date: "2026-04-06",
+          time: "15:00",
+          league: "Championship",
+          home_team: "Preston North End",
+          away_team: "Queens Park Rangers",
+        },
+      },
+    },
+    {
+      updated_at: "2026-04-06T16:00:00.000Z",
+      records: {
+        mls1: {
+          id: "mls1",
+          date: "2026-04-06",
+          time: "19:00",
+          league: "MLS",
+          home_team: "FC Dallas",
+          away_team: "Colorado Rapids",
+        },
+      },
+    }
+  );
+
+  assert.deepStrictEqual(Object.keys(snapshot.records).sort(), ["allowed1"]);
+  assert.equal(snapshot.total, 1);
 });
 
 test("toMatchListPayload includes score fields from resolved match state", () => {

@@ -1043,12 +1043,55 @@ function normalizeCompetitionFilterName(name) {
   const normalized = normalizeLeagueName(name || "");
   if (!normalized) return "";
   const lowered = normalized.toLowerCase();
+  if (/^fifa world cup(?: 2026)? qualifying\b/.test(lowered)) {
+    return "fifa world cup 2026";
+  }
   const aliases = {
     "efl cup": "english league cup",
     "carabao cup": "english league cup",
     "uefa europa conference league": "uefa conference league",
   };
   return aliases[lowered] || lowered;
+}
+
+function ambiguousCompetitionFamily(name) {
+  const normalized = normalizeLeagueName(name || "");
+  if (!normalized) return "";
+  const lowered = normalized.toLowerCase();
+  if (lowered === "premier league" || lowered.endsWith(" premier league")) {
+    return "premier league";
+  }
+  if (lowered === "championship" || lowered.endsWith(" championship")) {
+    return "championship";
+  }
+  return "";
+}
+
+function competitionSpecificityScore(name) {
+  const family = ambiguousCompetitionFamily(name);
+  if (!family) return 0;
+  const normalized = normalizeLeagueName(name || "").toLowerCase();
+  return normalized === family ? 0 : 1;
+}
+
+function choosePreferredCompetitionName(existingLeague, incomingLeague) {
+  const existing = String(existingLeague || "").trim();
+  const incoming = String(incomingLeague || "").trim();
+  if (!incoming) return existing || null;
+  if (!existing) return incoming;
+
+  const existingFamily = ambiguousCompetitionFamily(existing);
+  const incomingFamily = ambiguousCompetitionFamily(incoming);
+  if (!existingFamily || !incomingFamily || existingFamily !== incomingFamily) {
+    return incoming;
+  }
+
+  const existingSpecificity = competitionSpecificityScore(existing);
+  const incomingSpecificity = competitionSpecificityScore(incoming);
+  if (existingSpecificity > incomingSpecificity) {
+    return existing;
+  }
+  return incoming;
 }
 
 const LEAGUE_TABLE_ID_ALIASES = {
@@ -1121,8 +1164,295 @@ function isAllowedCompetition(leagueName) {
   return ALLOWED_COMPETITION_SET.has(normalized);
 }
 
-function filterMatchesByCompetition(matches) {
-  return matches.filter((match) => isAllowedCompetition(match && match.league));
+function competitionRequiresKnownTableValidation(leagueName) {
+  const normalized = normalizeCompetitionFilterName(leagueName || "");
+  return normalized === "premier league" || normalized === "championship";
+}
+
+function findCompetitionValidationTable(leagueName, tables = cachedLeagueTables) {
+  if (!competitionRequiresKnownTableValidation(leagueName)) return null;
+  const normalizedLeague = normalizeCompetitionFilterName(leagueName || "");
+  if (!normalizedLeague || !Array.isArray(tables)) return null;
+  return (
+    tables.find((table) => {
+      if (!table || !Array.isArray(table.rows) || table.rows.length === 0) return false;
+      const tableLeague = normalizeCompetitionFilterName(
+        String((table && table.league_name) || "").trim()
+      );
+      return tableLeague === normalizedLeague;
+    }) || null
+  );
+}
+
+function normalizedCompetitionTableTeamKey(teamName) {
+  return normalizeTeamName(teamName).replace(/\s+/g, " ").trim();
+}
+
+function matchPassesCompetitionTableValidation(match, leagueName = null, tables = cachedLeagueTables) {
+  const league = String(leagueName || (match && match.league) || "").trim();
+  if (!competitionRequiresKnownTableValidation(league)) return true;
+
+  const table = findCompetitionValidationTable(league, tables);
+  if (!table) return true;
+
+  const homeTeam = String((match && match.home_team) || "").trim();
+  const awayTeam = String((match && match.away_team) || "").trim();
+  if (!homeTeam || !awayTeam) return true;
+
+  const homeKey = normalizedCompetitionTableTeamKey(homeTeam);
+  const awayKey = normalizedCompetitionTableTeamKey(awayTeam);
+  if (!homeKey || !awayKey) return true;
+
+  const tableTeams = new Set(
+    table.rows
+      .map((row) => normalizedCompetitionTableTeamKey(row && row.team))
+      .filter(Boolean)
+  );
+  return tableTeams.has(homeKey) && tableTeams.has(awayKey);
+}
+
+function isAllowedCompetitionMatch(match, options = {}) {
+  const league = String((match && match.league) || "").trim();
+  if (!league) return true;
+  if (!isAllowedCompetition(league)) return false;
+  return matchPassesCompetitionTableValidation(
+    match,
+    league,
+    options && Array.isArray(options.tables) ? options.tables : cachedLeagueTables
+  );
+}
+
+function isAllowedNormalizedMatchRecord(normalizedMatch, options = {}) {
+  if (!normalizedMatch || typeof normalizedMatch !== "object") return false;
+  return isAllowedCompetitionMatch(normalizedMatch, options);
+}
+
+function filterMatchesByCompetition(matches, options = {}) {
+  return matches.filter((match) => isAllowedCompetitionMatch(match, options));
+}
+
+function matchDetailsLeagueName(payload, fallbackLeague = null) {
+  const statePayload = getMatchDetailsStatePayload(payload);
+  const league = String(
+    (statePayload && statePayload.league) ||
+      (payload && payload.league) ||
+      fallbackLeague ||
+      ""
+  ).trim();
+  return league || null;
+}
+
+function isAllowedMatchDetailsPayload(payload, fallbackLeague = null, options = {}) {
+  const league = matchDetailsLeagueName(payload, fallbackLeague);
+  if (!league) return true;
+  if (!isAllowedCompetition(league)) return false;
+  const statePayload = getMatchDetailsStatePayload(payload);
+  return matchPassesCompetitionTableValidation(
+    {
+      league,
+      home_team:
+        (statePayload && statePayload.home_team) || (payload && payload.home_team) || null,
+      away_team:
+        (statePayload && statePayload.away_team) || (payload && payload.away_team) || null,
+    },
+    league,
+    options && Array.isArray(options.tables) ? options.tables : cachedLeagueTables
+  );
+}
+
+function filterMatchDetailsRecordsByCompetition(records) {
+  const entries =
+    records instanceof Map
+      ? Array.from(records.entries())
+      : Object.entries(records && typeof records === "object" ? records : {});
+  const filteredEntries = entries.filter(([_matchId, payload]) =>
+    payload && typeof payload === "object" && isAllowedMatchDetailsPayload(payload)
+  );
+
+  if (records instanceof Map) {
+    return new Map(filteredEntries);
+  }
+  return Object.fromEntries(filteredEntries);
+}
+
+function hasBbcMatchBacking(match) {
+  if (!match || typeof match !== "object") return false;
+  if (match.has_bbc_source === true) return true;
+  const detailsUrl = String(match.details_url || "").trim().toLowerCase();
+  return detailsUrl.includes("bbc.co.uk/sport/football");
+}
+
+function buildCanonicalDuplicateComparisonRecord(matchId, payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const statePayload = getMatchDetailsStatePayload(payload);
+  if (!statePayload) return null;
+
+  const normalized = normalizeMatchRecord({
+    id: statePayload.id || matchId,
+    match_details_id: statePayload.id || matchId,
+    details_url: statePayload.details_url,
+    date: statePayload.date,
+    time: statePayload.time,
+    league: statePayload.league,
+    home_team: statePayload.home_team,
+    away_team: statePayload.away_team,
+    has_bbc_source: payload.has_bbc_source === true,
+  });
+  if (!normalized) return null;
+
+  return {
+    match_id: normalizeMatchDetailsId(matchId || (payload && payload.id)) || null,
+    normalized,
+    payload,
+    has_bbc_backing: hasBbcMatchBacking({
+      details_url: statePayload.details_url,
+      has_bbc_source: payload.has_bbc_source === true,
+    }),
+  };
+}
+
+function canonicalDuplicatePriority(record) {
+  if (!record || !record.normalized) return { score: -Infinity, updatedAtMs: -Infinity };
+  const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+  const normalized = record.normalized;
+  let score = 0;
+
+  if (record.has_bbc_backing) score += 100;
+  if (normalized.details_url && String(normalized.details_url).includes("bbc.co.uk/sport/football")) {
+    score += 80;
+  }
+  if (
+    record.match_id &&
+    !String(record.match_id).toLowerCase().startsWith(SYNTHETIC_MATCH_ID_PREFIX)
+  ) {
+    score += 50;
+  }
+  if (payload.has_bbc_source === true) score += 20;
+  if (payload.team_lineups) score += 10;
+
+  [
+    "home_goal_scorers",
+    "away_goal_scorers",
+    "home_assists",
+    "away_assists",
+    "home_yellow_cards",
+    "away_yellow_cards",
+    "home_red_cards",
+    "away_red_cards",
+  ].forEach((field) => {
+    if (Array.isArray(payload[field])) {
+      score += Math.min(3, payload[field].length) * 0.5;
+    }
+  });
+
+  score += (String(normalized.home_team || "").length + String(normalized.away_team || "").length) / 100;
+
+  const updatedAtMs = Date.parse(String(payload.updated_at || "").trim());
+  return {
+    score,
+    updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : -Infinity,
+  };
+}
+
+function sameCompetitionFamily(lhsLeague, rhsLeague) {
+  return normalizeCompetitionFilterName(lhsLeague || "") ===
+    normalizeCompetitionFilterName(rhsLeague || "");
+}
+
+function findBbcBackedDuplicateRecord(normalizedMatch, preferredRecords) {
+  if (!normalizedMatch || !Array.isArray(preferredRecords) || preferredRecords.length === 0) {
+    return null;
+  }
+
+  let best = null;
+  preferredRecords.forEach((record) => {
+    if (!record || !record.normalized) return;
+    if (String(record.normalized.date || "") !== String(normalizedMatch.date || "")) return;
+    if (!isComparableKickoffTime(record.normalized, normalizedMatch)) return;
+    if (!sameCompetitionFamily(record.normalized.league, normalizedMatch.league)) return;
+
+    const direct = scoreTeams(
+      normalizedMatch.home_team,
+      normalizedMatch.away_team,
+      record.normalized.home_team,
+      record.normalized.away_team,
+      0
+    );
+    if (direct.confidence < LIVE_SOURCE_DUPLICATE_MIN_COMBINED_CONFIDENCE) return;
+    if (direct.minTeamConfidence < LIVE_SOURCE_DUPLICATE_MIN_TEAM_CONFIDENCE) return;
+
+    const swapped = scoreTeams(
+      normalizedMatch.home_team,
+      normalizedMatch.away_team,
+      record.normalized.away_team,
+      record.normalized.home_team,
+      0
+    );
+    if (swapped.confidence >= direct.confidence - LIVE_SOURCE_DUPLICATE_SWAPPED_MARGIN) return;
+
+    if (!best || direct.confidence > best.confidence) {
+      best = {
+        record,
+        confidence: direct.confidence,
+      };
+    }
+  });
+
+  return best ? best.record : null;
+}
+
+function findPreferredCanonicalDuplicateRecord(record, allRecords) {
+  if (!record || !record.normalized || !record.match_id) return null;
+  const currentPriority = canonicalDuplicatePriority(record);
+  let best = null;
+
+  allRecords.forEach((candidate) => {
+    if (!candidate || !candidate.normalized || !candidate.match_id) return;
+    if (candidate.match_id === record.match_id) return;
+    if (String(candidate.normalized.date || "") !== String(record.normalized.date || "")) return;
+    if (!isComparableKickoffTime(candidate.normalized, record.normalized)) return;
+    if (!sameCompetitionFamily(candidate.normalized.league, record.normalized.league)) return;
+
+    const direct = scoreTeams(
+      record.normalized.home_team,
+      record.normalized.away_team,
+      candidate.normalized.home_team,
+      candidate.normalized.away_team,
+      0
+    );
+    if (direct.confidence < LIVE_SOURCE_DUPLICATE_MIN_COMBINED_CONFIDENCE) return;
+    if (direct.minTeamConfidence < LIVE_SOURCE_DUPLICATE_MIN_TEAM_CONFIDENCE) return;
+
+    const swapped = scoreTeams(
+      record.normalized.home_team,
+      record.normalized.away_team,
+      candidate.normalized.away_team,
+      candidate.normalized.home_team,
+      0
+    );
+    if (swapped.confidence >= direct.confidence - LIVE_SOURCE_DUPLICATE_SWAPPED_MARGIN) return;
+
+    const candidatePriority = canonicalDuplicatePriority(candidate);
+    const candidateIsBetter =
+      candidatePriority.score > currentPriority.score ||
+      (candidatePriority.score === currentPriority.score &&
+        candidatePriority.updatedAtMs > currentPriority.updatedAtMs);
+    if (!candidateIsBetter) return;
+
+    if (
+      !best ||
+      candidatePriority.score > best.priority.score ||
+      (candidatePriority.score === best.priority.score &&
+        candidatePriority.updatedAtMs > best.priority.updatedAtMs)
+    ) {
+      best = {
+        record: candidate,
+        priority: candidatePriority,
+      };
+    }
+  });
+
+  return best ? best.record : null;
 }
 
 function compareInsensitive(a, b) {
@@ -5400,6 +5730,9 @@ const TEAM_IDENTITY_STOP_WORDS = new Set([
 ]);
 const DEDUPE_MIN_COMBINED_CONFIDENCE = 0.9;
 const DEDUPE_MIN_TEAM_CONFIDENCE = 0.84;
+const LIVE_SOURCE_DUPLICATE_MIN_COMBINED_CONFIDENCE = 0.82;
+const LIVE_SOURCE_DUPLICATE_MIN_TEAM_CONFIDENCE = 0.57;
+const LIVE_SOURCE_DUPLICATE_SWAPPED_MARGIN = 0.03;
 const parsedClubEloFixturesMatchMinConfidence = Number(
   process.env.CLUB_ELO_FIXTURES_MATCH_MIN_CONFIDENCE || 0.84
 );
@@ -6968,7 +7301,10 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
           : null,
     date: incoming.date || (existing ? existing.date : null),
     time: incoming.time || (existing ? existing.time : null),
-    league: incoming.league || (existing ? existing.league : null),
+    league: choosePreferredCompetitionName(
+      existing ? existing.league : null,
+      incoming ? incoming.league : null
+    ),
     league_subcategory:
       incoming.league_subcategory || (existing ? existing.league_subcategory : null),
     home_team: incoming.home_team || (existing ? existing.home_team : null),
@@ -7109,6 +7445,21 @@ function upsertMatchDetailsFromMatch(match, updatedAtIso = new Date().toISOStrin
   const incoming = normalizeMatchDetailsPayload(match);
   if (!incoming) return null;
   const existing = matchDetailsById.get(incoming.id);
+  if (!isAllowedMatchDetailsPayload(incoming, existing && existing.league)) {
+    return null;
+  }
+  if (incoming.has_bbc_source !== true) {
+    const normalizedIncoming = normalizeMatchRecord(incoming);
+    const preferredRecords = Array.from(matchDetailsById.entries())
+      .map(([matchId, payload]) => buildCanonicalDuplicateComparisonRecord(matchId, payload))
+      .filter((record) => record && record.has_bbc_backing === true);
+    if (
+      normalizedIncoming &&
+      findBbcBackedDuplicateRecord(normalizedIncoming, preferredRecords)
+    ) {
+      return null;
+    }
+  }
   const merged = mergeMatchDetailsPayload(existing, incoming, updatedAtIso);
   matchDetailsById.set(incoming.id, merged);
   return incoming.id;
@@ -7278,6 +7629,23 @@ async function upsertCanonicalMatchDetailsFromMatch(match, options = {}) {
       ? options.updated_at.trim()
       : new Date().toISOString();
   const existing = matchDetailsById.get(incoming.id) || null;
+  if (!isAllowedMatchDetailsPayload(incoming, existing && existing.league)) {
+    const incomingFamily = ambiguousCompetitionFamily(incoming.league);
+    const existingFamily = ambiguousCompetitionFamily(existing && existing.league);
+    const revealsDisallowedSpecificCompetition =
+      existing &&
+      incomingFamily &&
+      existingFamily &&
+      incomingFamily === existingFamily &&
+      competitionSpecificityScore(incoming.league) > competitionSpecificityScore(existing.league);
+    if (revealsDisallowedSpecificCompetition) {
+      await deleteCanonicalMatchDetailsByIds([incoming.id], {
+        updated_at: updatedAtIso,
+        source: options.source || null,
+      });
+    }
+    return null;
+  }
   const merged = mergeMatchDetailsPayload(existing, incoming, updatedAtIso);
   const corrected = await applyCanonicalMatchWriteCorrections(merged, options);
   const normalizedCorrected = {
@@ -7656,6 +8024,8 @@ function buildMergedMatchDetailsCandidate(seedMatch, fetchedMatch, detailsUrl) {
   if (detailsUrl) {
     combined.details_url = detailsUrl;
   }
+
+  combined.league = choosePreferredCompetitionName(seed.league, fetched.league);
 
   const preferredStatus = pickPreferredMatchStatus(
     seed.score_status || seed.match_time,
@@ -8180,6 +8550,7 @@ function resolveMatchDetailsIdFromLookup(normalizedMatch, options = {}) {
 function toMatchListPayload(match, options = {}) {
   const normalized = normalizeMatchRecord(match);
   if (!normalized) return null;
+  if (!isAllowedNormalizedMatchRecord(normalized)) return null;
 
   const matchDetailsLookup =
     options && options.matchDetailsLookup ? options.matchDetailsLookup : null;
@@ -8829,7 +9200,7 @@ function mergeBbcAndLiveMatches(liveMatches, bbcMatches) {
     const allowInsert = options.allowInsert !== false;
     const allowDisallowedMerge = options.allowDisallowedMerge === true;
     const markAsBbcSource = options.markAsBbcSource === true;
-    const competitionAllowed = isAllowedCompetition(normalized.league);
+    const competitionAllowed = isAllowedNormalizedMatchRecord(normalized);
     const canMergeExisting = Boolean(resolvedPrimaryKey && byPrimaryKey.has(resolvedPrimaryKey));
     if (!competitionAllowed && !(allowDisallowedMerge && canMergeExisting)) return;
 
@@ -11006,7 +11377,7 @@ function loadBbcFromDisk() {
     const raw = fs.readFileSync(BBC_OUTPUT_PATH, "utf8");
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      cachedBbcMatches = parsed;
+      cachedBbcMatches = filterMatchesByCompetition(parsed);
       setSourceCacheSize(SOURCE_BBC_LIVE, cachedBbcMatches.length);
       const stat = fs.statSync(BBC_OUTPUT_PATH);
       bbcLastUpdated = stat.mtime.toISOString();
@@ -11577,7 +11948,7 @@ async function hydrateOperationalStateFromRedis() {
 
     const bbcLiveRecord = datasetRecords[OP_DATASET_BBC_LIVE_MATCHES];
     if (bbcLiveRecord && Array.isArray(bbcLiveRecord.payload)) {
-      cachedBbcMatches = bbcLiveRecord.payload;
+      cachedBbcMatches = filterMatchesByCompetition(bbcLiveRecord.payload);
       bbcLastUpdated = bbcLiveRecord.updated_at || bbcLastUpdated;
       setSourceCacheSize(SOURCE_BBC_LIVE, cachedBbcMatches.length);
     }
@@ -11682,7 +12053,8 @@ async function hydrateOperationalStateFromRedis() {
     }
 
     if (matchDetailsSnapshot && matchDetailsSnapshot.records) {
-      const entries = Object.entries(matchDetailsSnapshot.records);
+      const filteredRecords = filterMatchDetailsRecordsByCompetition(matchDetailsSnapshot.records);
+      const entries = Object.entries(filteredRecords);
       matchDetailsById = new Map(entries);
       if (matchDetailsSnapshot.updated_at) {
         matchDetailsLastUpdated = matchDetailsSnapshot.updated_at;
@@ -11804,8 +12176,18 @@ async function persistStartupOperationalStateFromDisk() {
 async function getOperationalArrayDataset(name, fallback = []) {
   const record = await loadOperationalDatasetSafe(name);
   if (record && Array.isArray(record.payload)) {
+    const payload =
+      [
+        OP_DATASET_MERGED_MATCHES,
+        OP_DATASET_LIVE_MATCHES,
+        OP_DATASET_BBC_LIVE_MATCHES,
+        OP_DATASET_BBC_RANGE_MATCHES,
+        OP_DATASET_RECENT_MATCHES,
+      ].includes(name)
+        ? filterMatchesByCompetition(record.payload)
+        : record.payload;
     return {
-      items: record.payload,
+      items: payload,
       updated_at: record.updated_at || null,
       source: "redis",
     };
@@ -11925,12 +12307,12 @@ async function getOperationalMatchDetailsByIdSafe(matchId) {
   }
 
   const cached = matchDetailsById.get(normalized);
-  if (cached && typeof cached === "object") {
+  if (cached && typeof cached === "object" && isAllowedMatchDetailsPayload(cached)) {
     return { payload: cached, source: "memory" };
   }
 
   const payload = await getOperationalMatchDetails(normalized);
-  if (payload && typeof payload === "object") {
+  if (payload && typeof payload === "object" && isAllowedMatchDetailsPayload(payload)) {
     matchDetailsById.set(normalized, payload);
     if (payload.updated_at && (!matchDetailsLastUpdated || payload.updated_at > matchDetailsLastUpdated)) {
       matchDetailsLastUpdated = payload.updated_at;
@@ -11958,7 +12340,7 @@ async function getOperationalMatchDetailsBatchSafe(matchIds) {
 
   uniqueIds.forEach((matchId) => {
     const cached = matchDetailsById.get(matchId);
-    if (cached && typeof cached === "object") {
+    if (cached && typeof cached === "object" && isAllowedMatchDetailsPayload(cached)) {
       payloadsById.set(matchId, cached);
     } else {
       missingIds.push(matchId);
@@ -11969,7 +12351,9 @@ async function getOperationalMatchDetailsBatchSafe(matchIds) {
     await Promise.all(
       missingIds.map(async (matchId) => {
         const payload = await getOperationalMatchDetails(matchId);
-        if (!payload || typeof payload !== "object") return;
+        if (!payload || typeof payload !== "object" || !isAllowedMatchDetailsPayload(payload)) {
+          return;
+        }
         matchDetailsById.set(matchId, payload);
         payloadsById.set(matchId, payload);
         if (payload.updated_at && (!matchDetailsLastUpdated || payload.updated_at > matchDetailsLastUpdated)) {
@@ -11988,8 +12372,11 @@ async function getOperationalMatchDetailsBatchSafe(matchIds) {
 async function getOperationalMatchDetailsSnapshotSafe() {
   const snapshot = await getAllOperationalMatchDetails();
   if (snapshot && snapshot.records && typeof snapshot.records === "object") {
+    const filteredRecords = filterMatchDetailsRecordsByCompetition(snapshot.records);
     return {
       ...snapshot,
+      total: Object.keys(filteredRecords).length,
+      records: filteredRecords,
       source: "redis",
     };
   }
@@ -12007,14 +12394,16 @@ function mergePreferredOperationalMatchDetailsSnapshots(memorySnapshot, redisSna
     memorySnapshot && typeof memorySnapshot === "object" ? memorySnapshot : {};
   const normalizedRedis =
     redisSnapshot && typeof redisSnapshot === "object" ? redisSnapshot : {};
-  const memoryRecords =
+  const memoryRecords = filterMatchDetailsRecordsByCompetition(
     normalizedMemory.records && typeof normalizedMemory.records === "object"
       ? normalizedMemory.records
-      : {};
-  const redisRecords =
+      : {}
+  );
+  const redisRecords = filterMatchDetailsRecordsByCompetition(
     normalizedRedis.records && typeof normalizedRedis.records === "object"
       ? normalizedRedis.records
-      : {};
+      : {}
+  );
 
   const mergedRecords = { ...redisRecords };
   Object.entries(memoryRecords).forEach(([matchId, payload]) => {
@@ -12313,6 +12702,436 @@ function collectAdminRogueMatchTargets(
   };
 }
 
+function collectDisallowedCompetitionTargets(
+  sourceMatches = {},
+  detailsLookup = matchDetailsById,
+  options = {}
+) {
+  const validationOptions = options && typeof options === "object" ? options : {};
+  const mergedMatches = Array.isArray(sourceMatches.mergedMatches)
+    ? sourceMatches.mergedMatches
+    : cachedMergedMatches;
+  const disallowedMergedMatches = [];
+  const disallowedCompetitions = new Set();
+  const matchedCanonicalMatchIds = new Set();
+
+  mergedMatches.forEach((match) => {
+    const normalized = normalizeMatchRecord(match);
+    if (!normalized || isAllowedNormalizedMatchRecord(normalized, validationOptions)) return;
+    disallowedMergedMatches.push(match);
+    if (normalized.league) {
+      disallowedCompetitions.add(normalized.league);
+    }
+    const matchId =
+      matchDetailsIdFromUrl(normalized.details_url) ||
+      normalizeMatchDetailsId(normalized.match_details_id) ||
+      buildSyntheticMatchDetailsId(normalized);
+    if (matchId) {
+      matchedCanonicalMatchIds.add(matchId);
+    }
+  });
+
+  const detailEntries =
+    detailsLookup instanceof Map
+      ? Array.from(detailsLookup.entries())
+      : Object.entries(detailsLookup && typeof detailsLookup === "object" ? detailsLookup : {});
+  detailEntries.forEach(([matchId, payload]) => {
+    const normalizedMatchId = normalizeMatchDetailsId(matchId || (payload && payload.id));
+    if (!normalizedMatchId || !payload) return;
+    if (isAllowedMatchDetailsPayload(payload, null, validationOptions)) return;
+    const league = matchDetailsLeagueName(payload);
+    if (league) {
+      disallowedCompetitions.add(league);
+    }
+    matchedCanonicalMatchIds.add(normalizedMatchId);
+  });
+
+  return {
+    disallowedMergedMatches,
+    disallowedCompetitions: Array.from(disallowedCompetitions).sort(compareInsensitive),
+    matchedCanonicalMatchIds: Array.from(matchedCanonicalMatchIds).sort(),
+  };
+}
+
+function collectLiveSourceDuplicateTargets(sourceMatches = {}, detailsLookup = matchDetailsById) {
+  const detailEntries =
+    detailsLookup instanceof Map
+      ? Array.from(detailsLookup.entries())
+      : Object.entries(detailsLookup && typeof detailsLookup === "object" ? detailsLookup : {});
+  const preferredRecords = detailEntries
+    .map(([matchId, payload]) => buildCanonicalDuplicateComparisonRecord(matchId, payload))
+    .filter((record) => record && record.has_bbc_backing === true);
+
+  const duplicateCanonicalMatchIds = new Set();
+  detailEntries.forEach(([matchId, payload]) => {
+    const record = buildCanonicalDuplicateComparisonRecord(matchId, payload);
+    if (!record || record.has_bbc_backing) return;
+    if (!record.match_id) return;
+    if (!findBbcBackedDuplicateRecord(record.normalized, preferredRecords)) return;
+    duplicateCanonicalMatchIds.add(record.match_id);
+  });
+
+  const collectDatasetDuplicates = (matches) => {
+    const duplicates = [];
+    (Array.isArray(matches) ? matches : []).forEach((match) => {
+      if (!match || typeof match !== "object") return;
+      if (hasBbcMatchBacking(match)) return;
+      const normalized = normalizeMatchRecord(match);
+      if (!normalized) return;
+      if (!findBbcBackedDuplicateRecord(normalized, preferredRecords)) return;
+      duplicates.push(match);
+    });
+    return duplicates;
+  };
+
+  return {
+    duplicate_live_matches: collectDatasetDuplicates(
+      Array.isArray(sourceMatches.liveMatches) ? sourceMatches.liveMatches : cachedMatches
+    ),
+    duplicate_recent_matches: collectDatasetDuplicates(
+      Array.isArray(sourceMatches.recentMatches) ? sourceMatches.recentMatches : cachedRecentMatches
+    ),
+    duplicate_merged_matches: collectDatasetDuplicates(
+      Array.isArray(sourceMatches.mergedMatches) ? sourceMatches.mergedMatches : cachedMergedMatches
+    ),
+    duplicate_canonical_match_ids: Array.from(duplicateCanonicalMatchIds).sort(),
+  };
+}
+
+function collectCanonicalDuplicateTargets(sourceMatches = {}, detailsLookup = matchDetailsById) {
+  const detailEntries =
+    detailsLookup instanceof Map
+      ? Array.from(detailsLookup.entries())
+      : Object.entries(detailsLookup && typeof detailsLookup === "object" ? detailsLookup : {});
+  const records = detailEntries
+    .map(([matchId, payload]) => buildCanonicalDuplicateComparisonRecord(matchId, payload))
+    .filter((record) => record && record.match_id && record.normalized);
+
+  const duplicateCanonicalMatchIds = new Set();
+  records.forEach((record) => {
+    const preferred = findPreferredCanonicalDuplicateRecord(record, records);
+    if (!preferred || preferred.match_id === record.match_id) return;
+    duplicateCanonicalMatchIds.add(record.match_id);
+  });
+
+  const duplicateCanonicalIds = Array.from(duplicateCanonicalMatchIds).sort();
+  const duplicateCanonicalIdSet = new Set(duplicateCanonicalIds);
+  const duplicateRecords = records.filter((record) => duplicateCanonicalIdSet.has(record.match_id));
+
+  const duplicateMergedMatches = (Array.isArray(sourceMatches.mergedMatches)
+    ? sourceMatches.mergedMatches
+    : cachedMergedMatches
+  ).filter((match) => {
+    if (!match || typeof match !== "object") return false;
+    const matchDetailsId = normalizeMatchDetailsId(match.match_details_id || match.id);
+    if (matchDetailsId && duplicateCanonicalIdSet.has(matchDetailsId)) return true;
+    if (matchDetailsId) return false;
+    const normalized = normalizeMatchRecord(match);
+    if (!normalized) return false;
+    return duplicateRecords.some((record) => {
+      if (String(record.normalized.date || "") !== String(normalized.date || "")) return false;
+      if (!isComparableKickoffTime(record.normalized, normalized)) return false;
+      if (!sameCompetitionFamily(record.normalized.league, normalized.league)) return false;
+
+      const direct = scoreTeams(
+        normalized.home_team,
+        normalized.away_team,
+        record.normalized.home_team,
+        record.normalized.away_team,
+        0
+      );
+      if (direct.confidence < LIVE_SOURCE_DUPLICATE_MIN_COMBINED_CONFIDENCE) return false;
+      if (direct.minTeamConfidence < LIVE_SOURCE_DUPLICATE_MIN_TEAM_CONFIDENCE) return false;
+
+      const swapped = scoreTeams(
+        normalized.home_team,
+        normalized.away_team,
+        record.normalized.away_team,
+        record.normalized.home_team,
+        0
+      );
+      return swapped.confidence < direct.confidence - LIVE_SOURCE_DUPLICATE_SWAPPED_MARGIN;
+    });
+  });
+
+  return {
+    duplicate_canonical_match_ids: duplicateCanonicalIds,
+    duplicate_merged_matches: duplicateMergedMatches,
+  };
+}
+
+async function purgeLiveSourceDuplicateData(options = {}) {
+  const updatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+  const source =
+    typeof options.source === "string" && options.source.trim()
+      ? options.source.trim()
+      : "admin_live_source_duplicate_purge";
+
+  const liveBefore = Array.isArray(cachedMatches) ? cachedMatches.length : 0;
+  const recentBefore = Array.isArray(cachedRecentMatches) ? cachedRecentMatches.length : 0;
+  const mergedBefore = Array.isArray(cachedMergedMatches) ? cachedMergedMatches.length : 0;
+
+  const targets = collectLiveSourceDuplicateTargets(
+    {
+      liveMatches: cachedMatches,
+      recentMatches: cachedRecentMatches,
+      mergedMatches: cachedMergedMatches,
+    },
+    matchDetailsById
+  );
+
+  const duplicateLiveSet = new Set(targets.duplicate_live_matches);
+  const duplicateRecentSet = new Set(targets.duplicate_recent_matches);
+  const duplicateMergedSet = new Set(targets.duplicate_merged_matches);
+
+  cachedMatches = (Array.isArray(cachedMatches) ? cachedMatches : []).filter(
+    (match) => !duplicateLiveSet.has(match)
+  );
+  cachedRecentMatches = (Array.isArray(cachedRecentMatches) ? cachedRecentMatches : []).filter(
+    (match) => !duplicateRecentSet.has(match)
+  );
+  cachedMergedMatches = (Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []).filter(
+    (match) => !duplicateMergedSet.has(match)
+  );
+
+  setSourceCacheSize(SOURCE_LIVE_FOOTBALL, cachedMatches.length);
+  setSourceCacheSize(SOURCE_RECENT_CACHE, cachedRecentMatches.length);
+
+  writeMatches(OUTPUT_PATH, cachedMatches);
+  writeRecentMatches(RECENT_OUTPUT_PATH, cachedRecentMatches);
+
+  await Promise.all([
+    persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, cachedMatches, {
+      updated_at: updatedAt,
+      source,
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_RECENT_MATCHES, cachedRecentMatches, {
+      updated_at: updatedAt,
+      source,
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
+      updated_at: updatedAt,
+      source,
+    }),
+  ]);
+
+  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
+  refreshFootballDatabaseUnmatchedTeamMetric(
+    cachedMergedMatches,
+    cachedFootballDatabaseTeams
+  );
+  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+
+  let canonicalDeleteResult = null;
+  if (targets.duplicate_canonical_match_ids.length > 0) {
+    canonicalDeleteResult = await deleteCanonicalMatchDetailsByIds(
+      targets.duplicate_canonical_match_ids,
+      {
+        updated_at: updatedAt,
+        source,
+      }
+    );
+  } else {
+    invalidateCacheDomains(["matches", "match_details"], {
+      updated_at: updatedAt,
+      reason: "admin_live_source_duplicate_purge",
+      source,
+    });
+  }
+
+  return {
+    deleted_canonical_match_ids: targets.duplicate_canonical_match_ids,
+    deleted_canonical_matches:
+      canonicalDeleteResult && Number.isFinite(canonicalDeleteResult.deleted)
+        ? canonicalDeleteResult.deleted
+        : 0,
+    live_matches_removed: liveBefore - cachedMatches.length,
+    recent_matches_removed: recentBefore - cachedRecentMatches.length,
+    merged_matches_removed: mergedBefore - cachedMergedMatches.length,
+    merged_matches_remaining: cachedMergedMatches.length,
+    canonical_delete_result: canonicalDeleteResult,
+  };
+}
+
+async function purgeCanonicalDuplicateData(options = {}) {
+  const updatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+  const source =
+    typeof options.source === "string" && options.source.trim()
+      ? options.source.trim()
+      : "admin_canonical_duplicate_purge";
+
+  const mergedBefore = Array.isArray(cachedMergedMatches) ? cachedMergedMatches.length : 0;
+  const targets = collectCanonicalDuplicateTargets(
+    { mergedMatches: cachedMergedMatches },
+    matchDetailsById
+  );
+  const duplicateCanonicalIdSet = new Set(targets.duplicate_canonical_match_ids);
+  const duplicateMergedSet = new Set(targets.duplicate_merged_matches);
+
+  cachedMergedMatches = (Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []).filter(
+    (match) => {
+      if (duplicateMergedSet.has(match)) return false;
+      const matchDetailsId = normalizeMatchDetailsId(match && (match.match_details_id || match.id));
+      return !matchDetailsId || !duplicateCanonicalIdSet.has(matchDetailsId);
+    }
+  );
+
+  await persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
+    updated_at: updatedAt,
+    source,
+  });
+
+  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
+  refreshFootballDatabaseUnmatchedTeamMetric(
+    cachedMergedMatches,
+    cachedFootballDatabaseTeams
+  );
+  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+
+  let canonicalDeleteResult = null;
+  if (targets.duplicate_canonical_match_ids.length > 0) {
+    canonicalDeleteResult = await deleteCanonicalMatchDetailsByIds(
+      targets.duplicate_canonical_match_ids,
+      {
+        updated_at: updatedAt,
+        source,
+      }
+    );
+  } else {
+    invalidateCacheDomains(["matches", "match_details"], {
+      updated_at: updatedAt,
+      reason: "admin_canonical_duplicate_purge",
+      source,
+    });
+  }
+
+  return {
+    deleted_canonical_match_ids: targets.duplicate_canonical_match_ids,
+    deleted_canonical_matches:
+      canonicalDeleteResult && Number.isFinite(canonicalDeleteResult.deleted)
+        ? canonicalDeleteResult.deleted
+        : 0,
+    merged_matches_removed: mergedBefore - cachedMergedMatches.length,
+    merged_matches_remaining: cachedMergedMatches.length,
+    canonical_delete_result: canonicalDeleteResult,
+  };
+}
+
+async function purgeDisallowedCompetitionData(options = {}) {
+  const updatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+  const source =
+    typeof options.source === "string" && options.source.trim()
+      ? options.source.trim()
+      : "admin_disallowed_competition_purge";
+
+  const liveBefore = Array.isArray(cachedMatches) ? cachedMatches.length : 0;
+  const bbcLiveBefore = Array.isArray(cachedBbcMatches) ? cachedBbcMatches.length : 0;
+  const bbcRangeBefore = Array.isArray(cachedBbcRangeMatches) ? cachedBbcRangeMatches.length : 0;
+  const recentBefore = Array.isArray(cachedRecentMatches) ? cachedRecentMatches.length : 0;
+  const mergedBefore = Array.isArray(cachedMergedMatches) ? cachedMergedMatches.length : 0;
+
+  const disallowedTargets = collectDisallowedCompetitionTargets(
+    { mergedMatches: cachedMergedMatches },
+    matchDetailsById
+  );
+
+  cachedMatches = filterMatchesByCompetition(Array.isArray(cachedMatches) ? cachedMatches : []);
+  cachedBbcMatches = filterMatchesByCompetition(
+    Array.isArray(cachedBbcMatches) ? cachedBbcMatches : []
+  );
+  cachedBbcRangeMatches = filterMatchesByCompetition(
+    Array.isArray(cachedBbcRangeMatches) ? cachedBbcRangeMatches : []
+  );
+  cachedRecentMatches = filterMatchesByCompetition(
+    Array.isArray(cachedRecentMatches) ? cachedRecentMatches : []
+  );
+  cachedMergedMatches = filterMatchesByCompetition(
+    Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []
+  );
+
+  setSourceCacheSize(SOURCE_LIVE_FOOTBALL, cachedMatches.length);
+  setSourceCacheSize(SOURCE_BBC_LIVE, cachedBbcMatches.length);
+  setSourceCacheSize(SOURCE_BBC_RANGE, cachedBbcRangeMatches.length);
+  setSourceCacheSize(SOURCE_RECENT_CACHE, cachedRecentMatches.length);
+
+  writeMatches(OUTPUT_PATH, cachedMatches);
+  writeBbcFixtures(BBC_OUTPUT_PATH, cachedBbcMatches);
+  writeBbcRangeMatches(BBC_RANGE_OUTPUT_PATH, cachedBbcRangeMatches);
+  writeRecentMatches(RECENT_OUTPUT_PATH, cachedRecentMatches);
+
+  await Promise.all([
+    persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, cachedMatches, {
+      updated_at: updatedAt,
+      source,
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_BBC_LIVE_MATCHES, cachedBbcMatches, {
+      updated_at: updatedAt,
+      source,
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches, {
+      updated_at: updatedAt,
+      source,
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_RECENT_MATCHES, cachedRecentMatches, {
+      updated_at: updatedAt,
+      source,
+    }),
+    persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
+      updated_at: updatedAt,
+      source,
+    }),
+  ]);
+
+  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
+  refreshFootballDatabaseUnmatchedTeamMetric(
+    cachedMergedMatches,
+    cachedFootballDatabaseTeams
+  );
+  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+
+  let canonicalDeleteResult = null;
+  if (disallowedTargets.matchedCanonicalMatchIds.length > 0) {
+    canonicalDeleteResult = await deleteCanonicalMatchDetailsByIds(
+      disallowedTargets.matchedCanonicalMatchIds,
+      {
+        updated_at: updatedAt,
+        source,
+      }
+    );
+  } else {
+    invalidateCacheDomains(["matches", "match_details"], {
+      updated_at: updatedAt,
+      reason: "admin_disallowed_competition_purge",
+      source,
+    });
+  }
+
+  return {
+    disallowed_competitions: disallowedTargets.disallowedCompetitions,
+    deleted_canonical_match_ids: disallowedTargets.matchedCanonicalMatchIds,
+    deleted_canonical_matches:
+      canonicalDeleteResult && Number.isFinite(canonicalDeleteResult.deleted)
+        ? canonicalDeleteResult.deleted
+        : 0,
+    live_matches_removed: liveBefore - cachedMatches.length,
+    bbc_live_matches_removed: bbcLiveBefore - cachedBbcMatches.length,
+    bbc_range_matches_removed: bbcRangeBefore - cachedBbcRangeMatches.length,
+    recent_matches_removed: recentBefore - cachedRecentMatches.length,
+    merged_matches_removed: mergedBefore - cachedMergedMatches.length,
+    merged_matches_remaining: cachedMergedMatches.length,
+    canonical_delete_result: canonicalDeleteResult,
+  };
+}
+
 async function deleteAdminRogueMatches(selectors, options = {}) {
   const normalizedSelectors = Array.isArray(selectors) ? selectors : [];
   const updatedAt =
@@ -12398,14 +13217,17 @@ async function deleteCanonicalMatchDetailsByIds(matchIds, options = {}) {
     delete_write_logs: true,
   });
 
-  (Array.isArray(result && result.deleted_ids) ? result.deleted_ids : []).forEach((matchId) => {
-    matchDetailsById.delete(matchId);
+  let removedFromMemory = 0;
+  normalizedIds.forEach((matchId) => {
+    if (matchDetailsById.delete(matchId)) {
+      removedFromMemory += 1;
+    }
     matchDetailsActiveRefreshUntilById.delete(matchId);
     matchDetailsBackfillNextAttemptAt.delete(matchId);
     matchDetailsBackfillTasks.delete(matchId);
   });
 
-  if (result && result.deleted > 0) {
+  if ((result && result.deleted > 0) || removedFromMemory > 0) {
     matchDetailsLastUpdated = updatedAt;
     invalidateCacheDomains(["matches", "match_details"], {
       updated_at: updatedAt,
@@ -13966,7 +14788,7 @@ function scheduleMatchDetailsWarm(matchId, options = {}) {
   const task = (async () => {
     try {
       const payload = await getOperationalMatchDetails(normalizedMatchId);
-      if (payload && typeof payload === "object") {
+      if (payload && typeof payload === "object" && isAllowedMatchDetailsPayload(payload)) {
         matchDetailsById.set(normalizedMatchId, payload);
         if (
           payload.updated_at &&
@@ -14186,7 +15008,7 @@ async function updateBbcMatches(options = {}) {
     interval_ms: BBC_INTERVAL_MS,
   });
   try {
-    const matches = await fetchBbcFixtures(BBC_SOURCE_URL);
+    const matches = filterMatchesByCompetition(await fetchBbcFixtures(BBC_SOURCE_URL));
     const filteredMatches = filterStaleBbcMatches(matches, cachedBbcMatches);
     cachedBbcMatches = filteredMatches;
     recordsFetched = filteredMatches.length;
@@ -20729,11 +21551,26 @@ app.delete(`${API_PREFIX}/admin/rogue-matches`, async (req, res) => {
     req.body && typeof req.body === "object" && !Array.isArray(req.body)
       ? req.body
       : {};
+  const deleteDisallowedCompetitions =
+    payload.delete_disallowed_competitions === true ||
+    payload.deleteDisallowedCompetitions === true;
+  const deleteLiveSourceDuplicates =
+    payload.delete_live_source_duplicates === true ||
+    payload.deleteLiveSourceDuplicates === true;
+  const deleteCanonicalDuplicates =
+    payload.delete_canonical_duplicates === true ||
+    payload.deleteCanonicalDuplicates === true;
   const { selectors, invalid } = normalizeAdminRogueMatchSelectors(payload);
 
-  if (selectors.length === 0) {
+  if (
+    !deleteDisallowedCompetitions &&
+    !deleteLiveSourceDuplicates &&
+    !deleteCanonicalDuplicates &&
+    selectors.length === 0
+  ) {
     res.status(400).json({
-      error: "Provide one or more valid match selectors in body.matches.",
+      error:
+        "Provide one or more valid match selectors in body.matches, or set delete_disallowed_competitions=true, delete_live_source_duplicates=true, and/or delete_canonical_duplicates=true.",
       invalid,
     });
     return;
@@ -20743,19 +21580,47 @@ app.delete(`${API_PREFIX}/admin/rogue-matches`, async (req, res) => {
   const source = "admin_rogue_matches";
 
   try {
-    const result = await deleteAdminRogueMatches(selectors, {
-      updated_at: nowIso,
-      source,
-    });
+    const disallowedCompetitionResult = deleteDisallowedCompetitions
+      ? await purgeDisallowedCompetitionData({
+        updated_at: nowIso,
+        source,
+      })
+      : null;
+    const liveSourceDuplicateResult = deleteLiveSourceDuplicates
+      ? await purgeLiveSourceDuplicateData({
+        updated_at: nowIso,
+        source,
+      })
+      : null;
+    const canonicalDuplicateResult = deleteCanonicalDuplicates
+      ? await purgeCanonicalDuplicateData({
+        updated_at: nowIso,
+        source,
+      })
+      : null;
+    const selectorDeleteResult = selectors.length > 0
+      ? await deleteAdminRogueMatches(selectors, {
+        updated_at: nowIso,
+        source,
+      })
+      : null;
 
     res.status(200).json({
       success: true,
       executed_at: nowIso,
       source,
+      delete_disallowed_competitions: deleteDisallowedCompetitions,
+      delete_live_source_duplicates: deleteLiveSourceDuplicates,
+      delete_canonical_duplicates: deleteCanonicalDuplicates,
       requested: selectors.length,
       selectors,
       invalid,
-      result,
+      result: {
+        disallowed_competitions: disallowedCompetitionResult,
+        live_source_duplicates: liveSourceDuplicateResult,
+        canonical_duplicates: canonicalDuplicateResult,
+        selectors: selectorDeleteResult,
+      },
     });
   } catch (error) {
     console.error("[API] Error deleting rogue matches:", error);
@@ -23192,6 +24057,8 @@ module.exports = {
     normalizeAdminRedisMatchIds,
     normalizeAdminRogueMatchSelectors,
     collectAdminRogueMatchTargets,
+    collectLiveSourceDuplicateTargets,
+    collectCanonicalDuplicateTargets,
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
@@ -23217,6 +24084,9 @@ module.exports = {
     normalizeCompetitionFilterName,
     normalizeMatchesListMode,
     isAllowedCompetition,
+    isAllowedMatchDetailsPayload,
+    matchPassesCompetitionTableValidation,
+    collectDisallowedCompetitionTargets,
     mergeBbcAndLiveMatches,
     matchIncludesHomeNation,
     matchIsMajorTournament,

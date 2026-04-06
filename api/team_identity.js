@@ -3,6 +3,8 @@ const path = require("path");
 
 const TEAM_COLORS_CONFIG_PATH =
   process.env.TEAM_COLORS_CONFIG_PATH || path.join(__dirname, "team_colors.json");
+const TEAM_ALIASES_CONFIG_PATH =
+  process.env.TEAM_ALIASES_CONFIG_PATH || path.join(__dirname, "team_aliases.json");
 const CONFIG_STAT_TTL_MS = 5 * 1000;
 
 let cachedConfig = Object.freeze({
@@ -16,8 +18,108 @@ let cachedConfig = Object.freeze({
   identityGroups: Object.freeze([]),
 });
 let cachedIndex = buildIdentityIndex(cachedConfig);
-let cachedMtimeMs = null;
+let cachedTeamColorsMtimeMs = null;
+let cachedTeamAliasesMtimeMs = null;
 let lastStatCheckAtMs = 0;
+
+function safeStatMtimeMs(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    const mtimeMs = Number(stat && stat.mtimeMs);
+    return Number.isFinite(mtimeMs) ? mtimeMs : null;
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return null;
+    }
+    return null;
+  }
+}
+
+function readJsonObject(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function mergedIdentityEntries(entries) {
+  const byCanonicalKey = new Map();
+
+  entries.forEach((entry) => {
+    const normalized = normalizeIdentityEntry(entry, null);
+    if (!normalized) return;
+
+    const canonicalKey = normalizeTeamIdentityKey(normalized.name);
+    if (!canonicalKey) return;
+
+    const existing = byCanonicalKey.get(canonicalKey);
+    if (!existing) {
+      byCanonicalKey.set(canonicalKey, {
+        name: normalized.name,
+        aliases: [...normalized.aliases],
+      });
+      return;
+    }
+
+    normalized.aliases.forEach((alias) => {
+      if (!existing.aliases.includes(alias)) {
+        existing.aliases.push(alias);
+      }
+    });
+  });
+
+  return Object.freeze(
+    Array.from(byCanonicalKey.values()).map((entry) =>
+      Object.freeze({
+        name: entry.name,
+        aliases: Object.freeze(entry.aliases),
+        primary: null,
+        secondary: null,
+        scheme: null,
+      })
+    )
+  );
+}
+
+function aliasConfigIdentityEntries(parsed) {
+  const entries = [];
+
+  if (Array.isArray(parsed.identity_groups)) {
+    entries.push(...parsed.identity_groups);
+  }
+
+  if (parsed.aliases && typeof parsed.aliases === "object" && !Array.isArray(parsed.aliases)) {
+    const grouped = new Map();
+
+    Object.entries(parsed.aliases).forEach(([alias, canonicalName]) => {
+      const trimmedAlias = String(alias || "").trim();
+      const trimmedCanonicalName = String(canonicalName || "").trim();
+      if (!trimmedAlias || !trimmedCanonicalName) return;
+
+      const canonicalKey = normalizeTeamIdentityKey(trimmedCanonicalName);
+      if (!canonicalKey) return;
+
+      const existing = grouped.get(canonicalKey) || {
+        name: trimmedCanonicalName,
+        aliases: [],
+      };
+      if (
+        normalizeTeamIdentityKey(trimmedAlias) !== canonicalKey &&
+        !existing.aliases.includes(trimmedAlias)
+      ) {
+        existing.aliases.push(trimmedAlias);
+      }
+      grouped.set(canonicalKey, existing);
+    });
+
+    entries.push(...grouped.values());
+  }
+
+  return entries;
+}
 
 function loadTeamIdentityConfig() {
   const nowMs = Date.now();
@@ -26,35 +128,18 @@ function loadTeamIdentityConfig() {
   }
   lastStatCheckAtMs = nowMs;
 
-  let stat = null;
-  try {
-    stat = fs.statSync(TEAM_COLORS_CONFIG_PATH);
-  } catch (error) {
-    if (error && error.code === "ENOENT") {
-      cachedConfig = Object.freeze({
-        updatedAt: new Date().toISOString(),
-        default: cachedConfig.default,
-        teams: Object.freeze([]),
-        identityGroups: Object.freeze([]),
-      });
-      cachedIndex = buildIdentityIndex(cachedConfig);
-      cachedMtimeMs = null;
-      return cachedConfig;
-    }
-    return cachedConfig;
-  }
-
-  const mtimeMs = Number(stat && stat.mtimeMs);
-  if (Number.isFinite(mtimeMs) && cachedMtimeMs === mtimeMs) {
+  const teamColorsMtimeMs = safeStatMtimeMs(TEAM_COLORS_CONFIG_PATH);
+  const teamAliasesMtimeMs = safeStatMtimeMs(TEAM_ALIASES_CONFIG_PATH);
+  if (
+    cachedTeamColorsMtimeMs === teamColorsMtimeMs &&
+    cachedTeamAliasesMtimeMs === teamAliasesMtimeMs
+  ) {
     return cachedConfig;
   }
 
   try {
-    const raw = fs.readFileSync(TEAM_COLORS_CONFIG_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Team colors config must be a JSON object.");
-    }
+    const parsed = readJsonObject(TEAM_COLORS_CONFIG_PATH);
+    const parsedAliases = readJsonObject(TEAM_ALIASES_CONFIG_PATH);
 
     const fallbackDefault = {
       primary: "#111111",
@@ -77,23 +162,35 @@ function loadTeamIdentityConfig() {
         .map((entry) => normalizeIdentityEntry(entry, defaultStyle))
         .filter(Boolean)
     );
-    const identityGroups = Object.freeze(
-      (Array.isArray(parsed.identity_groups) ? parsed.identity_groups : [])
-        .map((entry) => normalizeIdentityEntry(entry, null))
-        .filter(Boolean)
-    );
+    const identityGroups = mergedIdentityEntries([
+      ...(Array.isArray(parsed.identity_groups) ? parsed.identity_groups : []),
+      ...aliasConfigIdentityEntries(parsedAliases),
+    ]);
+    const latestMtimeMs = Math.max(teamColorsMtimeMs || 0, teamAliasesMtimeMs || 0);
     cachedConfig = Object.freeze({
       updatedAt:
-        String(parsed.updatedAt || "").trim() ||
-        (Number.isFinite(mtimeMs) ? new Date(mtimeMs).toISOString() : new Date().toISOString()),
+        String(parsedAliases.updatedAt || parsed.updatedAt || "").trim() ||
+        (latestMtimeMs > 0 ? new Date(latestMtimeMs).toISOString() : new Date().toISOString()),
       default: defaultStyle,
       teams,
       identityGroups,
     });
     cachedIndex = buildIdentityIndex(cachedConfig);
-    cachedMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+    cachedTeamColorsMtimeMs = teamColorsMtimeMs;
+    cachedTeamAliasesMtimeMs = teamAliasesMtimeMs;
   } catch (_error) {
-    cachedMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+    cachedTeamColorsMtimeMs = teamColorsMtimeMs;
+    cachedTeamAliasesMtimeMs = teamAliasesMtimeMs;
+  }
+
+  if (!cachedConfig || !cachedIndex) {
+    cachedConfig = Object.freeze({
+      updatedAt: new Date().toISOString(),
+      default: cachedConfig.default,
+      teams: Object.freeze([]),
+      identityGroups: Object.freeze([]),
+    });
+    cachedIndex = buildIdentityIndex(cachedConfig);
   }
 
   return cachedConfig;

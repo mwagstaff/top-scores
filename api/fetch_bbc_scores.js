@@ -1057,27 +1057,41 @@ function splitCompetitionAndSubcategory(text) {
 }
 
 function extractCompetitionMetadata($, html) {
+  const disambiguateCompetition = (competition) => {
+    if (!competition || !competition.league) return competition;
+    const normalizedLeague = String(competition.league || "").toLowerCase();
+    if (!["premier league", "championship"].includes(normalizedLeague)) {
+      return competition;
+    }
+    const inferred = inferCompetitionNameFromHtml(html, competition.league);
+    if (!inferred) return competition;
+    return {
+      ...competition,
+      league: inferred,
+    };
+  };
+
   const formatterParts = $(BBC_COMPETITION_FORMATTER_SELECTOR)
     .map((_, el) => normalizeText($(el).text()))
     .get()
     .filter(Boolean);
 
   if (formatterParts.length > 0) {
-    return splitCompetitionAndSubcategory(formatterParts.join(" "));
+    return disambiguateCompetition(splitCompetitionAndSubcategory(formatterParts.join(" ")));
   }
 
   const tournamentDescriptionMatch = html.match(/"tournamentDescriptionLabel":"([^"]+)"/i);
   if (tournamentDescriptionMatch) {
-    return splitCompetitionAndSubcategory(tournamentDescriptionMatch[1]);
+    return disambiguateCompetition(splitCompetitionAndSubcategory(tournamentDescriptionMatch[1]));
   }
 
-  return {
+  return disambiguateCompetition({
     league:
       extractLeagueFromText($("title").first().text())
       || extractLeagueFromText(extractMetaContent($, "name", "description"))
       || extractLeagueFromText(extractMetaContent($, "property", "og:description")),
     league_subcategory: null,
-  };
+  });
 }
 
 function extractDetailsPageMetadata($, html) {
@@ -2302,6 +2316,48 @@ function toTitleCaseWords(value) {
     .join(" ");
 }
 
+function inferCompetitionNameFromHintStrings(hints, genericName) {
+  const generic = normalizeText(genericName).toLowerCase();
+  if (!generic) return null;
+
+  for (const rawHint of hints) {
+    const hint = String(rawHint || "").trim().toLowerCase();
+    if (!hint) continue;
+
+    if (generic === "premier league") {
+      if (/\bukrain(?:e|ian)\b/.test(hint)) {
+        return "Ukraine Premier League";
+      }
+
+      const slugMatch = hint.match(/(?:^|\/)([a-z0-9-]+)-premier-league(?:\/|$)/);
+      if (!slugMatch) continue;
+      const prefix = String(slugMatch[1] || "").trim();
+      if (!prefix || ["premier", "english", "england"].includes(prefix)) continue;
+      if (prefix === "ukrainian") return "Ukraine Premier League";
+      const titled = toTitleCaseWords(prefix);
+      if (!titled) continue;
+      return `${titled} Premier League`;
+    }
+
+    if (generic === "championship") {
+      if (/\bscott(?:ish|land)\b/.test(hint)) {
+        return "Scottish Championship";
+      }
+
+      const slugMatch = hint.match(/(?:^|\/)([a-z0-9-]+)-championship(?:\/|$)/);
+      if (!slugMatch) continue;
+      const prefix = String(slugMatch[1] || "").trim();
+      if (!prefix || ["english", "england"].includes(prefix)) continue;
+      if (prefix === "scottish") return "Scottish Championship";
+      const titled = toTitleCaseWords(prefix);
+      if (!titled) continue;
+      return `${titled} Championship`;
+    }
+  }
+
+  return null;
+}
+
 function collectCompetitionHints(value, output, depth = 0) {
   if (!value || depth > 4) return;
   if (typeof value === "string" || typeof value === "number") {
@@ -2326,27 +2382,17 @@ function collectCompetitionHints(value, output, depth = 0) {
   });
 }
 
-function inferPremierLeagueName(node, fallback = null) {
+function inferCompetitionName(node, fallback = null, genericName = null) {
   const hints = [];
   collectCompetitionHints(node, hints);
   if (fallback) hints.push(normalizeText(String(fallback)).toLowerCase());
+  return inferCompetitionNameFromHintStrings(hints, genericName || fallback);
+}
 
-  for (const hint of hints) {
-    if (!hint) continue;
-    if (/\bukrain(?:e|ian)\b/.test(hint)) {
-      return "Ukraine Premier League";
-    }
-
-    const slugMatch = hint.match(/(?:^|\/)([a-z0-9-]+)-premier-league(?:\/|$)/);
-    if (!slugMatch) continue;
-    const prefix = String(slugMatch[1] || "").trim();
-    if (!prefix || ["premier", "english", "england"].includes(prefix)) continue;
-    const titled = toTitleCaseWords(prefix);
-    if (!titled) continue;
-    return `${titled} Premier League`;
-  }
-
-  return null;
+function inferCompetitionNameFromHtml(html, genericName = null) {
+  const normalizedHtml = String(html || "").toLowerCase();
+  if (!normalizedHtml || !genericName) return null;
+  return inferCompetitionNameFromHintStrings([normalizedHtml], genericName);
 }
 
 function pickCompetitionName(node, fallback = null) {
@@ -2372,8 +2418,8 @@ function pickCompetitionName(node, fallback = null) {
   for (const candidate of candidates) {
     const normalized = candidate.toLowerCase();
     if (!GENERIC_COMPETITION_LABELS.has(normalized)) {
-      if (normalized === "premier league") {
-        const inferred = inferPremierLeagueName(node, fallback);
+      if (normalized === "premier league" || normalized === "championship") {
+        const inferred = inferCompetitionName(node, candidate, candidate);
         if (inferred) return inferred;
       }
       return candidate;
@@ -2381,8 +2427,12 @@ function pickCompetitionName(node, fallback = null) {
   }
 
   const fallbackCandidate = candidates[0] || null;
-  if (String(fallbackCandidate || "").toLowerCase() === "premier league") {
-    return inferPremierLeagueName(node, fallback) || fallbackCandidate;
+  if (
+    ["premier league", "championship"].includes(
+      String(fallbackCandidate || "").toLowerCase()
+    )
+  ) {
+    return inferCompetitionName(node, fallbackCandidate, fallbackCandidate) || fallbackCandidate;
   }
   return fallbackCandidate;
 }

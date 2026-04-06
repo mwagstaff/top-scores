@@ -942,6 +942,53 @@ test("pickCompetitionName disambiguates non-English Premier League competitions"
   assert.equal(league, "Ukraine Premier League");
 });
 
+test("pickCompetitionName disambiguates Scottish Championship competitions", () => {
+  const node = {
+    competitionName: "Championship",
+    tournament: {
+      urn: "urn:bbc:sportsdata:football:tournament:scottish-championship",
+    },
+    url: "/sport/football/scottish-championship/scores-fixtures",
+  };
+
+  const league = __private.pickCompetitionName(node, null);
+  assert.equal(league, "Scottish Championship");
+});
+
+test("parseMatchDetailsFromHtml disambiguates generic Premier League metadata from page hints", () => {
+  const html = `
+    <title>Epitsentr vs Kudrivka: Premier League stats &amp; head-to-head - BBC Sport</title>
+    <meta name="description" content="Follow live text commentary, score updates and match stats from Epitsentr vs Kudrivka in the Premier League" />
+    <script>
+      window.__HINTS__ = {
+        competitionPath: "/sport/football/ukrainian-premier-league/scores-fixtures",
+        tablePath: "/sport/football/ukrainian-premier-league/table"
+      };
+    </script>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html, "Epitsentr", "Kudrivka");
+  assert.ok(parsed);
+  assert.equal(parsed.league, "Ukraine Premier League");
+});
+
+test("parseMatchDetailsFromHtml disambiguates generic Championship metadata from page hints", () => {
+  const html = `
+    <title>Arbroath vs Queen's Park: Championship stats &amp; head-to-head - BBC Sport</title>
+    <meta name="description" content="Follow live text commentary, score updates and match stats from Arbroath vs Queen's Park in the Championship" />
+    <script>
+      window.__HINTS__ = {
+        competitionPath: "/sport/football/scottish-championship/scores-fixtures",
+        tablePath: "/sport/football/scottish-championship/table"
+      };
+    </script>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html, "Arbroath", "Queen's Park");
+  assert.ok(parsed);
+  assert.equal(parsed.league, "Scottish Championship");
+});
+
 test("normalizeDetailsUrl rejects non-football BBC URLs", () => {
   const valid = __private.normalizeDetailsUrl("https://www.bbc.co.uk/sport/football/live/cm247jz3p05t");
   const invalid = __private.normalizeDetailsUrl("https://www.bbc.co.uk/64bxxwu2mv2qqlv0monbkj1om");
