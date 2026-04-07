@@ -61,11 +61,6 @@ struct ContentView: View {
                         Label("Preferences", systemImage: "slider.horizontal.3")
                     }
                     .tag(4)
-                AboutView()
-                    .tabItem {
-                        Label("About", systemImage: "info.circle")
-                    }
-                    .tag(5)
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .background(Color(.systemBackground))

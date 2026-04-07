@@ -559,7 +559,6 @@ final class MatchesStore: ObservableObject {
     private let bbcLiveRefreshInterval: TimeInterval = 90
     private let cacheStateRefreshInterval: TimeInterval = 30
     private let configureRefreshInterval: TimeInterval = 30
-    private let pageSize = 120
     private let fixturesInitialLoadDays = 90
     private let fixturesFutureLoadDays = 90
     private let fixturesLazyBatchDays = 14
@@ -567,10 +566,9 @@ final class MatchesStore: ObservableObject {
     private let fixturesLazyPageSize = 2000
     private let fixturesLazyStartDelayNanos: UInt64 = 30_000_000_000
     private let fixturesLazyInterBatchDelayNanos: UInt64 = 5_000_000_000
+    private let resultsHistoryLoadDays = 90
+    private let resultsHistoryPageSize = 500
     private let teamRankingsRefreshDelayNanos: UInt64 = 4_000_000_000
-    // Results are filtered client-side after paging; advance a few pages to avoid empty-first-page windows.
-    private let resultsAutoAdvancePageLimit = 8
-    private let prefetchThreshold = 20
 
     var hasInProgressMatches: Bool {
         modeStates.values.contains { state in
@@ -614,6 +612,17 @@ final class MatchesStore: ObservableObject {
             startRefreshTask(preferences: snapshot, mode: mode, reason: "configure")
         } else if mode == .fixtures {
             scheduleRemainingFixtureLoadingIfNeeded(preferences: snapshot)
+        }
+
+        let currentResultsState = state(for: .results)
+        if mode != .results &&
+            (
+                dataSourceChanged ||
+                previousSnapshot == nil ||
+                currentResultsState.unfilteredMatches.isEmpty ||
+                currentResultsState.isUsingCache
+            ) {
+            startRefreshTask(preferences: snapshot, mode: .results, reason: "startup_results_prefetch")
         }
 
         publishState(for: mode)
@@ -703,7 +712,7 @@ final class MatchesStore: ObservableObject {
         if mode == .fixtures {
             await refreshFixtures(preferences: preferences)
         } else {
-            await fetchPage(preferences: preferences, mode: mode, reset: true)
+            await refreshResults(preferences: preferences)
         }
     }
 
@@ -714,12 +723,9 @@ final class MatchesStore: ObservableObject {
     ) async {
         guard mode == activeMode else { return }
         guard mode == .results else { return }
-        let currentState = state(for: mode)
-        guard !currentState.isLoading, currentState.hasMore else { return }
-        guard let index = currentState.matches.firstIndex(where: { $0.id == currentMatch.id }) else { return }
-        let triggerIndex = max(0, currentState.matches.count - prefetchThreshold)
-        guard index >= triggerIndex else { return }
-        await fetchPage(preferences: preferences, mode: mode, reset: false)
+        _ = currentMatch
+        _ = preferences
+        // Results are fully hydrated up front; there is no scroll-driven paging anymore.
     }
 
     private func startRefreshTask(
@@ -897,146 +903,114 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private func fetchPage(preferences: PreferencesSnapshot, mode: MatchesViewMode, reset: Bool) async {
+    private func refreshResults(preferences: PreferencesSnapshot) async {
         guard let baseURL = URL(string: preferences.apiBaseURL) else {
-            setError("Invalid API base URL.", for: mode)
+            setError("Invalid API base URL.", for: .results)
             return
         }
 
         let client = APIClient(baseURL: baseURL)
-        if reset {
-            await reconcileServerCacheStateIfNeeded(client: client)
-        }
+        await reconcileServerCacheStateIfNeeded(client: client)
 
-        var current = state(for: mode)
-        if current.isLoading {
+        var resultState = state(for: .results)
+        if resultState.isLoading {
             Self.log(
-                "paged_refresh_skip mode=\(mode.rawValue) reset=\(reset) reason=already_loading visible=\(current.matches.count) " +
-                "stored=\(current.unfilteredMatches.count) page=\(current.page)"
+                "results_refresh_skip reason=already_loading visible=\(resultState.matches.count) " +
+                "stored=\(resultState.unfilteredMatches.count)"
             )
             return
         }
-        if !reset && !current.hasMore { return }
+
+        let today = Self.startOfToday()
+        let historyStart = Self.dayOffset(-(resultsHistoryLoadDays - 1), from: today)
+        let shouldReloadHistory =
+            resultState.unfilteredMatches.isEmpty ||
+            resultState.lastUpdated == nil ||
+            resultState.isUsingCache
+        let loadRange = shouldReloadHistory ? (historyStart...today) : (today...today)
 
         Self.log(
-            "paged_refresh_begin mode=\(mode.rawValue) reset=\(reset) snapshot=\(Self.snapshotDebugSummary(preferences)) " +
-            "visible=\(current.matches.count) stored=\(current.unfilteredMatches.count) page=\(current.page)"
+            "results_refresh_begin snapshot=\(Self.snapshotDebugSummary(preferences)) " +
+            "visible=\(resultState.matches.count) stored=\(resultState.unfilteredMatches.count) " +
+            "range=\(Self.formatDateForLog(loadRange.lowerBound))...\(Self.formatDateForLog(loadRange.upperBound)) " +
+            "full_reload=\(shouldReloadHistory)"
         )
+        let requestStartedAt = Date()
 
-        current.isLoading = true
-        current.errorMessage = nil
-        if reset {
-            current.page = 0
-            current.hasMore = true
-        }
-        modeStates[mode] = current
-        if mode == activeMode {
-            publishState(for: mode)
+        resultState.isLoading = true
+        resultState.errorMessage = nil
+        resultState.isUsingCache = resultState.isUsingCache && !resultState.matches.isEmpty
+        modeStates[.results] = resultState
+        if activeMode == .results {
+            publishState(for: .results)
         }
 
         do {
-            var requestedPage = reset ? 1 : max(1, current.page + 1)
-            var pagesFetched = 0
-            var nextHasMore = false
-            var newestLastUpdated: Date?
-            var mergedIncoming: [Match] = []
-            var mergedModeFiltered: [Match] = []
-
-            repeat {
-                let pageResponse = try await client.fetchMatchesPage(
-                    preferences: preferences,
-                    mode: mode,
-                    page: requestedPage,
-                    pageSize: pageSize,
-                    // Keep results broad and apply the viewing filters locally so
-                    // server-side competition heuristics cannot blank the tab.
-                    includePreferenceFilters: mode == .fixtures
-                )
-
-                var incoming = pageResponse.matches
-
-                // Filter out test matches in non-DEBUG builds
-                #if !DEBUG
-                incoming = incoming.filter { $0.isTestMatch != true }
-                #endif
-
-                let modeFiltered = Self.applyPreferenceFilters(
-                    to: incoming,
-                    snapshot: preferences,
-                    mode: mode
-                )
-                mergedIncoming = Self.mergePages(existing: mergedIncoming, incoming: incoming)
-                mergedModeFiltered = Self.mergePages(existing: mergedModeFiltered, incoming: modeFiltered)
-
-                if let updated = pageResponse.lastUpdated {
-                    if let currentNewest = newestLastUpdated {
-                        newestLastUpdated = max(currentNewest, updated)
-                    } else {
-                        newestLastUpdated = updated
-                    }
-                }
-
-                requestedPage = pageResponse.page + 1
-                nextHasMore = pageResponse.hasMore
-                pagesFetched += 1
-            } while (
-                reset &&
-                mode == .results &&
-                mergedModeFiltered.isEmpty &&
-                nextHasMore &&
-                pagesFetched < resultsAutoAdvancePageLimit
+            let response = try await client.fetchMatchesInRange(
+                preferences: preferences,
+                mode: .results,
+                startDate: loadRange.lowerBound,
+                endDate: loadRange.upperBound,
+                pageSize: resultsHistoryPageSize,
+                includePreferenceFilters: false,
+                hydrateStates: !shouldReloadHistory
             )
 
-            var nextState = state(for: mode)
-            let mergedUnfilteredMatches = reset
-                ? Self.mergeRefreshedMatches(existing: nextState.unfilteredMatches, incoming: mergedIncoming)
-                : Self.mergePages(existing: nextState.unfilteredMatches, incoming: mergedIncoming)
+            var incoming = response.matches
+
+            #if !DEBUG
+            incoming = incoming.filter { $0.isTestMatch != true }
+            #endif
 
             let effectiveSnapshot = resolvedSnapshot(for: preferences)
+            var nextState = state(for: .results)
             nextState.unfilteredMatches = Self.sortedMatches(
-                mergedUnfilteredMatches,
-                descendingDates: mode == .results
+                Self.replacingMatches(
+                    in: nextState.unfilteredMatches,
+                    with: incoming,
+                    within: loadRange
+                ),
+                descendingDates: true
             )
             nextState.matches = visibleMatches(
                 from: nextState.unfilteredMatches,
                 snapshot: effectiveSnapshot,
-                mode: mode
+                mode: .results
             )
-            nextState.page = max(0, requestedPage - 1)
-            nextState.hasMore = nextHasMore
-            if let updated = newestLastUpdated {
-                nextState.lastUpdated = updated
-            }
+            nextState.page = 0
+            nextState.hasMore = false
+            nextState.lastUpdated = Self.maxDate(nextState.lastUpdated, response.lastUpdated)
             nextState.isLoading = false
             nextState.isUsingCache = false
             nextState.errorMessage = nil
 
-            modeStates[mode] = nextState
+            modeStates[.results] = nextState
             Self.log(
-                "paged_refresh_complete mode=\(mode.rawValue) visible=\(nextState.matches.count) stored=\(nextState.unfilteredMatches.count) " +
-                "page=\(nextState.page) has_more=\(nextState.hasMore) sample=\(Self.matchSample(nextState.matches))"
+                "results_refresh_complete visible=\(nextState.matches.count) stored=\(nextState.unfilteredMatches.count) " +
+                "range=\(Self.formatDateForLog(loadRange.lowerBound))...\(Self.formatDateForLog(loadRange.upperBound)) " +
+                "duration_ms=\(Int(Date().timeIntervalSince(requestStartedAt) * 1000)) sample=\(Self.matchSample(nextState.matches))"
             )
             persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
 
-            if mode == activeMode {
-                publishState(for: mode)
+            if activeMode == .results {
+                publishState(for: .results)
             }
             refreshTeamRatingLookup(apiBaseURL: effectiveSnapshot.apiBaseURL)
             updateRefreshTimer(using: effectiveSnapshot, matches: combinedLoadedMatches())
         } catch {
             if Self.isCancellationError(error) {
-                var cancelledState = state(for: mode)
+                var cancelledState = state(for: .results)
                 cancelledState.isLoading = false
                 cancelledState.errorMessage = nil
-                modeStates[mode] = cancelledState
-                if mode == activeMode {
-                    publishState(for: mode)
+                modeStates[.results] = cancelledState
+                if activeMode == .results {
+                    publishState(for: .results)
                 }
-                NSLog("Matches refresh cancelled for mode=%@", mode.rawValue)
+                NSLog("Matches refresh cancelled for mode=%@", MatchesViewMode.results.rawValue)
                 return
             }
-            NSLog("Matches refresh failed for mode=%@ error=%@", mode.rawValue, String(describing: error))
-            setError("Unable to load matches. Check your API URL or connection.", for: mode)
+            NSLog("Matches refresh failed for mode=%@ error=%@", MatchesViewMode.results.rawValue, String(describing: error))
+            setError("Unable to load matches. Check your API URL or connection.", for: .results)
         }
     }
 
@@ -1661,6 +1635,9 @@ final class MatchesStore: ObservableObject {
             Task { @MainActor in
                 guard let self, let snapshot = self.currentSnapshot else { return }
                 await self.refresh(preferences: snapshot, mode: self.activeMode)
+                if self.activeMode != .results {
+                    await self.refresh(preferences: snapshot, mode: .results)
+                }
             }
         }
         RunLoop.main.add(timer, forMode: .common)

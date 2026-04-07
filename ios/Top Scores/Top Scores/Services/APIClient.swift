@@ -3,7 +3,7 @@ import Foundation
 struct APIClient {
     let baseURL: URL
     let session: URLSession
-    private static let defaultPastDays = 30
+    private static let defaultPastDays = 90
     private static let defaultFutureDays = 90
     private static let matchStatesBatchLimit = 500
     private static let maxLoggedBodyLength = 240
@@ -32,7 +32,12 @@ struct APIClient {
             includePreferenceFilters: false,
             hydrateStates: false
         )
-        async let resultsTask = fetchAllMatches(preferences: preferences, mode: .results)
+        async let resultsTask = fetchAllMatches(
+            preferences: preferences,
+            mode: .results,
+            includePreferenceFilters: false,
+            hydrateStates: false
+        )
         let fixtures = try await fixturesTask
         let results = try await resultsTask
 

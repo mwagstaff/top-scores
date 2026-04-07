@@ -18,6 +18,7 @@ struct PreferencesView: View {
     @State private var testNotificationStatusIsError = false
     @State private var predictionDebugStatusMessage: String?
     @State private var deviceIDDebugStatusMessage: String?
+    @State private var isAboutPresented = false
 
     var body: some View {
         NavigationStack {
@@ -260,6 +261,14 @@ struct PreferencesView: View {
                         }
                     }
 
+                    Section("App") {
+                        Button {
+                            isAboutPresented = true
+                        } label: {
+                            Label("About Top Scores", systemImage: "info.circle")
+                        }
+                    }
+
                     #if DEBUG
                     Section("Debug") {
                         Text("These settings are available in debug builds only and will not appear in production.")
@@ -394,6 +403,9 @@ struct PreferencesView: View {
                 .background(Color(.systemGroupedBackground))
             }
             .background(Color(.systemGroupedBackground))
+        }
+        .sheet(isPresented: $isAboutPresented) {
+            AboutView()
         }
         .task {
             await viewModel.reload(baseURL: preferences.apiBaseURL)
