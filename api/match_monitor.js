@@ -1,6 +1,7 @@
 const {
   getAllUserPreferences,
   getAllOperationalMatchDetails,
+  getOperationalDatasets,
   updateUserLiveActivityState,
   saveLiveActivityDebugRecord,
   saveFantasyReminderRecord,
@@ -99,6 +100,7 @@ let liveActivityTeamRatingLastAttemptAtMs = 0;
 let liveActivityTeamRatingRefreshPromise = null;
 let liveActivityPremierLeagueTeamLookup = null;
 let liveActivityMatchDetailsProvider = null;
+let liveActivityOperationalMatchesProvider = null;
 let canonicalMatchStateWriter = null;
 
 // Match status helpers - mirrors server.js MATCH_STATUS_* constants
@@ -2018,8 +2020,18 @@ function setLiveActivityMatchDetailsProvider(provider) {
   liveActivityMatchDetailsProvider = typeof provider === "function" ? provider : null;
 }
 
+function setLiveActivityOperationalMatchesProvider(provider) {
+  liveActivityOperationalMatchesProvider = typeof provider === "function" ? provider : null;
+}
+
 function setCanonicalMatchStateWriter(writer) {
   canonicalMatchStateWriter = typeof writer === "function" ? writer : null;
+}
+
+function shouldAllowInactiveLiveActivityEvaluation(options = {}) {
+  if (!options || typeof options !== "object") return false;
+  if (options.forceDispatch) return true;
+  return Boolean(String(options.userDeviceToken || "").trim());
 }
 
 /**
@@ -2804,7 +2816,7 @@ function evaluateUserNotificationDecision(user, match, event) {
   const useViewingFilter = prefs.notificationUseViewingFilter !== false;
   if (useViewingFilter) {
     if (prefs.competitionFilterEnabled && prefs.selectedLeagues && prefs.selectedLeagues.length > 0) {
-      if (!prefs.selectedLeagues.includes(match.league)) {
+      if (!liveActivityPreferenceLeagueMatchesSelectedLeagues(prefs.selectedLeagues, match.league)) {
         return {
           shouldNotify: false,
           reason: "league_filtered_by_viewing_preferences",
@@ -2817,7 +2829,12 @@ function evaluateUserNotificationDecision(user, match, event) {
     prefs.notificationSelectedLeagues &&
     prefs.notificationSelectedLeagues.length > 0
   ) {
-    if (!prefs.notificationSelectedLeagues.includes(match.league)) {
+    if (
+      !liveActivityPreferenceLeagueMatchesSelectedLeagues(
+        prefs.notificationSelectedLeagues,
+        match.league
+      )
+    ) {
       return {
         shouldNotify: false,
         reason: "league_filtered_by_notification_preferences",
@@ -3298,6 +3315,104 @@ function canonicalLiveActivityMatchesFromDetailsRecords(detailsRecords) {
     .filter(Boolean);
 }
 
+function normalizeLiveActivityCompetitionName(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+const LIVE_ACTIVITY_COMPETITION_STAGE_PATTERNS = [
+  /\s*[-:–]\s*Round\s+\w+$/i,
+  /\s+\w+\s+Round$/i,
+  /\s+Round\s+\w+$/i,
+  /\s+Round\s+\d+$/i,
+  /\s+Round\s+of\s+\d+$/i,
+  /\s+Last\s+\d+$/i,
+  /\s+Group\s+Stage$/i,
+  /\s+Group\s+[A-Z]$/i,
+  /\s+Quarter[- ]Finals?$/i,
+  /\s+Semi[- ]Finals?$/i,
+  /\s+Finals?$/i,
+  /\s+Third[- ]Place\s+Play-?Off$/i,
+  /\s+Play-?Offs?$/i,
+  /\s+Qualifying$/i,
+  /\s+Qualification$/i,
+  /\s+Preliminary\s+Round$/i,
+  /\s+First\s+Leg$/i,
+  /\s+Second\s+Leg$/i,
+  /\s+1st\s+Leg$/i,
+  /\s+2nd\s+Leg$/i,
+  /\s+Leg\s+\d+$/i,
+];
+
+function normalizeLiveActivityCompetitionFilterName(value) {
+  let normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const pattern of LIVE_ACTIVITY_COMPETITION_STAGE_PATTERNS) {
+      if (pattern.test(normalized)) {
+        normalized = normalized.replace(pattern, "").trim();
+        normalized = normalized.replace(/[-:–]\s*$/, "").trim();
+        changed = true;
+      }
+    }
+  }
+
+  normalized = normalizeLiveActivityCompetitionName(normalized);
+  if (!normalized) return "";
+  if (/^fifa world cup(?: 2026)? qualifying\b/.test(normalized)) {
+    return "fifa world cup 2026";
+  }
+
+  const aliases = {
+    "efl cup": "english league cup",
+    "carabao cup": "english league cup",
+    "uefa europa conference league": "uefa conference league",
+  };
+
+  return aliases[normalized] || normalized;
+}
+
+function liveActivityPreferenceLeagueMatchesSelectedLeagues(selectedLeagues, leagueName) {
+  const normalizedLeague = normalizeLiveActivityCompetitionFilterName(leagueName);
+  if (!normalizedLeague) return false;
+  return (Array.isArray(selectedLeagues) ? selectedLeagues : []).some(
+    (selectedLeague) =>
+      normalizeLiveActivityCompetitionFilterName(selectedLeague) === normalizedLeague
+  );
+}
+
+function liveActivityMatchIsMajorUEFAClubKnockoutFixture(match) {
+  const descriptor = [
+    normalizeLiveActivityCompetitionName(match && match.league),
+    normalizeLiveActivityCompetitionName(match && match.league_subcategory),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (!descriptor) return false;
+  if (
+    !/\buefa champions league\b|\buefa europa league\b|\buefa conference league\b/.test(descriptor)
+  ) {
+    return false;
+  }
+
+  return /\b(?:quarter(?:\s|-)?finals?|semi(?:\s|-)?finals?|final)\b/.test(descriptor);
+}
+
+function buildLiveActivityOperationalMatches(detailsRecords, fallbackMatches = []) {
+  const canonicalMatches = canonicalLiveActivityMatchesFromDetailsRecords(detailsRecords);
+  const enrichedFallbackMatches = enrichLiveActivityOperationalMatches(fallbackMatches, detailsRecords);
+  return combineLiveActivityOperationalMatches(canonicalMatches, enrichedFallbackMatches);
+}
+
 async function resolveLiveActivityMatchDetailsRecords(options = {}) {
   const explicitRecords =
     options && options.matchDetailsRecords && typeof options.matchDetailsRecords === "object"
@@ -3324,6 +3439,45 @@ async function resolveLiveActivityMatchDetailsRecords(options = {}) {
     : {};
 }
 
+async function resolveLiveActivityOperationalMatches(detailsRecords, options = {}) {
+  if (Array.isArray(options && options.operationalMatches)) {
+    return buildLiveActivityOperationalMatches(detailsRecords, options.operationalMatches);
+  }
+
+  if (typeof liveActivityOperationalMatchesProvider === "function") {
+    try {
+      const provided = await liveActivityOperationalMatchesProvider();
+      if (Array.isArray(provided)) {
+        return buildLiveActivityOperationalMatches(detailsRecords, provided);
+      }
+    } catch (error) {
+      console.warn(
+        "[MatchMonitor] Failed resolving live activity operational matches from provider:",
+        error.message || error
+      );
+    }
+  }
+
+  const datasetRecords = await getOperationalDatasets([
+    "merged_matches",
+    "bbc_range_matches",
+    "recent_matches",
+  ]);
+  const fallbackMatches = [
+    ...(Array.isArray(datasetRecords.merged_matches && datasetRecords.merged_matches.payload)
+      ? datasetRecords.merged_matches.payload
+      : []),
+    ...(Array.isArray(datasetRecords.bbc_range_matches && datasetRecords.bbc_range_matches.payload)
+      ? datasetRecords.bbc_range_matches.payload.map((match) => ({ ...match, has_bbc_source: true }))
+      : []),
+    ...(Array.isArray(datasetRecords.recent_matches && datasetRecords.recent_matches.payload)
+      ? datasetRecords.recent_matches.payload
+      : []),
+  ];
+
+  return buildLiveActivityOperationalMatches(detailsRecords, fallbackMatches);
+}
+
 function currentLondonDateKey(nowMs = Date.now()) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/London",
@@ -3345,6 +3499,8 @@ function canonicalLiveActivityChannelsForMatch(match) {
 
 function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.now()) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
+  const englishPremierLeagueTeamsOnly = prefs.englishPremierLeagueTeamsOnly === true;
+  const majorUEFAClubGamesEnabled = prefs.majorUEFAClubGamesEnabled === true;
 
   return (Array.isArray(matches) ? matches : [])
     .filter((match) => match && typeof match === "object")
@@ -3356,7 +3512,10 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
         Array.isArray(prefs.selectedLeagues) &&
         prefs.selectedLeagues.length > 0
       ) {
-        return prefs.selectedLeagues.includes(match.league);
+        return liveActivityPreferenceLeagueMatchesSelectedLeagues(
+          prefs.selectedLeagues,
+          match.league
+        );
       }
       return true;
     })
@@ -3386,11 +3545,14 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
     })
     .filter(Boolean)
     .filter((match) => {
-      if (!prefs.englishPremierLeagueTeamsOnly) return true;
-      return (
+      if (!englishPremierLeagueTeamsOnly) return true;
+      if (
         isEnglishPremierLeagueTeam(match && match.home_team) ||
         isEnglishPremierLeagueTeam(match && match.away_team)
-      );
+      ) {
+        return true;
+      }
+      return majorUEFAClubGamesEnabled && liveActivityMatchIsMajorUEFAClubKnockoutFixture(match);
     });
 }
 
@@ -3742,7 +3904,7 @@ function isEligibleForLiveActivityByPreferences(user, match) {
   }
 
   if (prefs.competitionFilterEnabled && Array.isArray(prefs.selectedLeagues) && prefs.selectedLeagues.length > 0) {
-    if (!prefs.selectedLeagues.includes(match.league)) {
+    if (!liveActivityPreferenceLeagueMatchesSelectedLeagues(prefs.selectedLeagues, match.league)) {
       return {
         eligible: false,
         reason: "league_filtered_out",
@@ -3766,7 +3928,11 @@ function isEligibleForLiveActivityByPreferences(user, match) {
   if (prefs.englishPremierLeagueTeamsOnly) {
     const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
     const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
-    if (!homeInPremierLeague && !awayInPremierLeague) {
+    if (
+      !homeInPremierLeague &&
+      !awayInPremierLeague &&
+      !(prefs.majorUEFAClubGamesEnabled && liveActivityMatchIsMajorUEFAClubKnockoutFixture(match))
+    ) {
       return {
         eligible: false,
         reason: "premier_league_team_filter",
@@ -5372,7 +5538,7 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
 }
 
 async function evaluateAndDispatchLiveActivities(options = {}) {
-  if (!isMonitoring) return;
+  if (!isMonitoring && !shouldAllowInactiveLiveActivityEvaluation(options)) return;
   const evalStartMs = Date.now();
   if (liveActivityEvalInFlight) {
     if (
@@ -5402,7 +5568,7 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
     await ensureLiveActivityTeamRatingCache(nowMs);
     const monitoredEntries = monitoredMatchStatesSnapshot(nowMs);
     const detailsRecords = await resolveLiveActivityMatchDetailsRecords(options);
-    const operationalMatches = canonicalLiveActivityMatchesFromDetailsRecords(detailsRecords);
+    const operationalMatches = await resolveLiveActivityOperationalMatches(detailsRecords, options);
     const users = await getAllUserPreferences();
     if (!Array.isArray(users) || users.length === 0) return;
 
@@ -6215,6 +6381,7 @@ function getStatus(options = {}) {
 module.exports = {
   initialize,
   setLiveActivityMatchDetailsProvider,
+  setLiveActivityOperationalMatchesProvider,
   setCanonicalMatchStateWriter,
   startMonitoring,
   stopMonitoring,
@@ -6258,6 +6425,7 @@ module.exports = {
     compareLiveActivityMatches,
     compareUpcomingLiveActivityMatches,
     buildLiveActivityEntriesForUser,
+    buildLiveActivityOperationalMatches,
     canonicalLiveActivityMatchesFromDetailsRecords,
     collectLiveActivityTimelineCandidateMatchIds,
     combineLiveActivityOperationalMatches,
@@ -6270,6 +6438,8 @@ module.exports = {
     monitoredMatchStatesSnapshot,
     evaluateUserNotificationDecision,
     filterCanonicalLiveActivityMatchesForUser,
+    isEligibleForLiveActivityByPreferences,
+    shouldAllowInactiveLiveActivityEvaluation,
     firstFixtureSectionMatches,
     isFantasyDeadlineReminderDue,
     isEnglishPremierLeagueTeam,

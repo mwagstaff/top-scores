@@ -56,9 +56,9 @@ struct ContentView: View {
                     }
                     .badge(fantasyTabBadge)
                     .tag(3)
-                PreferencesView()
+                ProfileView()
                     .tabItem {
-                        Label("Preferences", systemImage: "slider.horizontal.3")
+                        Label("Profile", systemImage: "person.crop.circle")
                     }
                     .tag(4)
             }

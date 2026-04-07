@@ -229,7 +229,7 @@ test("canonicalMatchDetailsToListPayload materializes a list row from canonical 
     away_team: "Liverpool",
     tv_channels: ["TNT Sports 1"],
     match_details_id: DETAILS_ID,
-    home_score: 2,
+    home_score: 1,
     away_score: 1,
     score_status: "AET",
     penalty_result: "Leeds United win 4 - 2 on penalties",
@@ -299,6 +299,33 @@ test("canonicalMatchDetailsRecordsToPublicListPayloads excludes competitions out
 
   assert.equal(payloads.length, 1);
   assert.equal(payloads[0].league, "FA Cup");
+});
+
+test("canonicalMatchDetailsRecordsToPublicListPayloads supplements missing canonical fixtures from fallback matches", () => {
+  const payloads = canonicalMatchDetailsRecordsToPublicListPayloads(
+    {},
+    {
+      fallbackMatches: [
+        {
+          date: "2026-04-07",
+          time: "19:00",
+          league: "UEFA Champions League",
+          league_subcategory: "Quarter-finals",
+          home_team: "Real Madrid",
+          away_team: "Bayern Munich",
+          has_bbc_source: true,
+          tv_channels: [],
+        },
+      ],
+    }
+  );
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].home_team, "Real Madrid");
+  assert.equal(payloads[0].away_team, "Bayern Munich");
+  assert.equal(payloads[0].league, "UEFA Champions League");
+  assert.equal(payloads[0].league_subcategory, "Quarter-finals");
+  assert.equal(payloads[0].has_bbc_source, true);
 });
 
 test("buildCanonicalMatchWriteAuditEntry captures previous and next summaries", () => {

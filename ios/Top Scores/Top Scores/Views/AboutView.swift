@@ -4,6 +4,8 @@ import UserNotifications
 #endif
 
 struct AboutView: View {
+    var embeddedInNavigation: Bool = false
+
     @EnvironmentObject private var preferences: PreferencesStore
     #if DEBUG
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
@@ -14,9 +16,25 @@ struct AboutView: View {
     #endif
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
+        Group {
+            if embeddedInNavigation {
+                content
+                    .navigationTitle("About")
+                    .navigationBarTitleDisplayMode(.inline)
+            } else {
+                NavigationStack {
+                    content
+                }
+            }
+        }
+    }
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            if !embeddedInNavigation {
                 headerView
+            }
+            VStack(spacing: 0) {
                 List {
                     Section("Version") {
                         Text("\(appVersion)")
@@ -164,12 +182,12 @@ struct AboutView: View {
                 .scrollContentBackground(.hidden)
                 .background(Color(.systemGroupedBackground))
             }
-            #if DEBUG
-            .task {
-                await refreshDiagnostics()
-            }
-            #endif
         }
+        #if DEBUG
+        .task {
+            await refreshDiagnostics()
+        }
+        #endif
     }
 
     private var headerView: some View {

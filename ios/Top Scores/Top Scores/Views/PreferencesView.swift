@@ -4,6 +4,8 @@ import UIKit
 #endif
 
 struct PreferencesView: View {
+    var embeddedInNavigation: Bool = false
+
     @EnvironmentObject private var preferences: PreferencesStore
     @StateObject private var viewModel = PreferencesViewModel()
     #if DEBUG
@@ -18,12 +20,38 @@ struct PreferencesView: View {
     @State private var testNotificationStatusIsError = false
     @State private var predictionDebugStatusMessage: String?
     @State private var deviceIDDebugStatusMessage: String?
-    @State private var isAboutPresented = false
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
+        Group {
+            if embeddedInNavigation {
+                content
+                    .navigationTitle("Preferences")
+                    .navigationBarTitleDisplayMode(.inline)
+            } else {
+                NavigationStack {
+                    content
+                }
+            }
+        }
+        .task {
+            await viewModel.reload(baseURL: preferences.apiBaseURL)
+        }
+        .onChange(of: preferences.apiBaseURL) { _, newValue in
+            reloadTask?.cancel()
+            reloadTask = Task {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                guard !Task.isCancelled else { return }
+                await viewModel.reload(baseURL: newValue)
+            }
+        }
+    }
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            if !embeddedInNavigation {
                 headerView
+            }
+            VStack(spacing: 0) {
                 Form {
 
                     Section("Club games") {
@@ -261,14 +289,6 @@ struct PreferencesView: View {
                         }
                     }
 
-                    Section("App") {
-                        Button {
-                            isAboutPresented = true
-                        } label: {
-                            Label("About Top Scores", systemImage: "info.circle")
-                        }
-                    }
-
                     #if DEBUG
                     Section("Debug") {
                         Text("These settings are available in debug builds only and will not appear in production.")
@@ -403,20 +423,6 @@ struct PreferencesView: View {
                 .background(Color(.systemGroupedBackground))
             }
             .background(Color(.systemGroupedBackground))
-        }
-        .sheet(isPresented: $isAboutPresented) {
-            AboutView()
-        }
-        .task {
-            await viewModel.reload(baseURL: preferences.apiBaseURL)
-        }
-        .onChange(of: preferences.apiBaseURL) { _, newValue in
-            reloadTask?.cancel()
-            reloadTask = Task {
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                guard !Task.isCancelled else { return }
-                await viewModel.reload(baseURL: newValue)
-            }
         }
     }
 

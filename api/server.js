@@ -1054,6 +1054,37 @@ function normalizeCompetitionFilterName(name) {
   return aliases[lowered] || lowered;
 }
 
+function londonDateKey(nowMs = Date.now()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(nowMs));
+}
+
+function londonDateKeyWithDayOffset(nowMs = Date.now(), dayOffset = 0) {
+  const offsetDays = Number.isFinite(Number(dayOffset)) ? Number(dayOffset) : 0;
+  return londonDateKey(nowMs + offsetDays * 24 * 60 * 60 * 1000);
+}
+
+function summarizeLiveActivityDebugMatch(match) {
+  return {
+    matchId: match && match.match_details_id ? String(match.match_details_id) : "",
+    homeTeam: match && match.home_team ? String(match.home_team) : "",
+    awayTeam: match && match.away_team ? String(match.away_team) : "",
+    league: match && match.league ? String(match.league) : "",
+    leagueSubcategory: match && match.league_subcategory ? String(match.league_subcategory) : "",
+    date: match && match.date ? String(match.date) : "",
+    time: match && match.time ? String(match.time) : "",
+    matchTime: match && match.score_status ? String(match.score_status) : null,
+    tvChannels:
+      match && Array.isArray(match.tv_channels)
+        ? match.tv_channels.map((channel) => String(channel))
+        : [],
+  };
+}
+
 function ambiguousCompetitionFamily(name) {
   const normalized = normalizeLeagueName(name || "");
   if (!normalized) return "";
@@ -13366,16 +13397,35 @@ function canonicalMatchDetailsToListPayload(payload) {
   return listPayload;
 }
 
-function canonicalMatchDetailsRecordsToListPayloads(recordsById) {
-  return dedupeMatchListPayloads(
-    Object.values(recordsById && typeof recordsById === "object" ? recordsById : {})
-      .map((payload) => canonicalMatchDetailsToListPayload(payload))
-      .filter(Boolean)
-  );
+function canonicalMatchDetailsRecordsToListPayloads(recordsById, options = {}) {
+  const normalizedRecords =
+    recordsById && typeof recordsById === "object" ? recordsById : {};
+  const primaryPayloads = Object.values(normalizedRecords)
+    .map((payload) => canonicalMatchDetailsToListPayload(payload))
+    .filter(Boolean);
+
+  const fallbackMatches = Array.isArray(options.fallbackMatches)
+    ? options.fallbackMatches
+    : [];
+  if (fallbackMatches.length === 0) {
+    return dedupeMatchListPayloads(primaryPayloads);
+  }
+
+  const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(normalizedRecords);
+  const supplementalPayloads = fallbackMatches
+    .map((match) =>
+      toMatchListPayload(match, {
+        matchDetailsLookup: normalizedRecords,
+        matchDetailsIdentityIndex,
+      })
+    )
+    .filter(Boolean);
+
+  return dedupeMatchListPayloads([...primaryPayloads, ...supplementalPayloads]);
 }
 
-function canonicalMatchDetailsRecordsToPublicListPayloads(recordsById) {
-  return canonicalMatchDetailsRecordsToListPayloads(recordsById).filter((payload) =>
+function canonicalMatchDetailsRecordsToPublicListPayloads(recordsById, options = {}) {
+  return canonicalMatchDetailsRecordsToListPayloads(recordsById, options).filter((payload) =>
     isAllowedCompetition(payload && payload.league)
   );
 }
@@ -13544,6 +13594,46 @@ async function updateRecentCache(source = "recent_cache_refresh") {
 
 function mergedMatchesForResponse() {
   return Array.isArray(cachedMergedMatches) ? cachedMergedMatches : [];
+}
+
+function liveActivityOperationalMatchesForResponse() {
+  return [
+    ...mergedMatchesForResponse(),
+    ...(Array.isArray(cachedBbcRangeMatches)
+      ? cachedBbcRangeMatches.map((match) => ({ ...match, has_bbc_source: true }))
+      : []),
+  ];
+}
+
+async function resolveLiveActivityOperationalFallbackMatches() {
+  const memoryMatches = liveActivityOperationalMatchesForResponse();
+
+  try {
+    const datasetRecords = await getOperationalDatasets([
+      "merged_matches",
+      "bbc_range_matches",
+      "recent_matches",
+    ]);
+
+    return [
+      ...memoryMatches,
+      ...(Array.isArray(datasetRecords.merged_matches && datasetRecords.merged_matches.payload)
+        ? datasetRecords.merged_matches.payload
+        : []),
+      ...(Array.isArray(datasetRecords.bbc_range_matches && datasetRecords.bbc_range_matches.payload)
+        ? datasetRecords.bbc_range_matches.payload.map((match) => ({ ...match, has_bbc_source: true }))
+        : []),
+      ...(Array.isArray(datasetRecords.recent_matches && datasetRecords.recent_matches.payload)
+        ? datasetRecords.recent_matches.payload
+        : []),
+    ];
+  } catch (error) {
+    console.warn(
+      "[API] Failed resolving live activity operational fallback matches from Redis:",
+      error.message || error
+    );
+    return memoryMatches;
+  }
 }
 
 function currentMergedMatchesDatasetSnapshot() {
@@ -18363,7 +18453,15 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       return;
     }
 
-    const canonicalSnapshot = await getPreferredOperationalMatchDetailsSnapshotSafe();
+    const [
+      canonicalSnapshot,
+      mergedDataset,
+      bbcRangeDataset,
+    ] = await Promise.all([
+      getPreferredOperationalMatchDetailsSnapshotSafe(),
+      getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
+      getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
+    ]);
     const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
     const latestUpdated = newestIsoTimestamp([canonicalSnapshot.updated_at]);
     if (latestUpdated) {
@@ -18391,7 +18489,17 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const homeNations = isTruthyParam(req.query.home_nations);
     const majorTournaments = isTruthyParam(req.query.major_tournaments);
 
-    let filtered = canonicalMatchDetailsRecordsToPublicListPayloads(canonicalSnapshot.records || {}).filter((match) =>
+    const fallbackMatches = [
+      ...(Array.isArray(mergedDataset.items) ? mergedDataset.items : []),
+      ...(Array.isArray(bbcRangeDataset.items)
+        ? bbcRangeDataset.items.map((match) => ({ ...match, has_bbc_source: true }))
+        : []),
+    ];
+
+    let filtered = canonicalMatchDetailsRecordsToPublicListPayloads(
+      canonicalSnapshot.records || {},
+      { fallbackMatches }
+    ).filter((match) =>
       matchesFilters(match, {
         leagues,
         teams,
@@ -20912,7 +21020,17 @@ function summarizeAdminLiveActivityState(record, nowMs = Date.now()) {
 
 async function resolveCanonicalLiveActivityOperationalMatches() {
   const snapshot = await getOperationalMatchDetailsSnapshotSafe();
-  return canonicalLiveActivityMatchesFromDetailsRecords(snapshot.records || {});
+  const detailsRecords = snapshot && snapshot.records && typeof snapshot.records === "object"
+    ? snapshot.records
+    : {};
+  const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
+  if (hooks && typeof hooks.buildLiveActivityOperationalMatches === "function") {
+    return hooks.buildLiveActivityOperationalMatches(
+      detailsRecords,
+      await resolveLiveActivityOperationalFallbackMatches()
+    );
+  }
+  return canonicalLiveActivityMatchesFromDetailsRecords(detailsRecords);
 }
 
 async function buildAdminLiveActivityPreview(record, nowMs = Date.now()) {
@@ -22795,6 +22913,7 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
     }
 
     let serverPresentation = null;
+    let liveActivityDispatchDebug = null;
     try {
       const nowMs = Date.now();
       const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
@@ -22806,6 +22925,10 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
       ) {
         const operationalMatches = await resolveCanonicalLiveActivityOperationalMatches();
         const monitoredEntries = hooks.monitoredMatchStatesSnapshot(nowMs);
+        const filteredCanonicalMatches =
+          typeof hooks.filterCanonicalLiveActivityMatchesForUser === "function"
+            ? hooks.filterCanonicalLiveActivityMatchesForUser(operationalMatches, record, nowMs)
+            : [];
         const entries = hooks.buildLiveActivityEntriesForUser(
           record,
           monitoredEntries,
@@ -22813,6 +22936,108 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
           nowMs
         );
         const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs);
+        const selectedLeagueNames =
+          record &&
+          record.preferences &&
+          Array.isArray(record.preferences.selectedLeagues)
+            ? record.preferences.selectedLeagues
+            : [];
+        const nearbyDateKeys = [
+          londonDateKeyWithDayOffset(nowMs, -1),
+          londonDateKey(nowMs),
+          londonDateKeyWithDayOffset(nowMs, 1),
+        ];
+        const nearbySelectedLeagueMatches = Array.isArray(operationalMatches)
+          ? operationalMatches
+            .filter((match) => {
+              const dateKey = String(match && match.date ? match.date : "").trim();
+              if (!dateKey || !nearbyDateKeys.includes(dateKey)) return false;
+              return selectedLeagueNames.length === 0
+                ? true
+                : selectedLeagueNames.some(
+                  (selectedLeague) =>
+                    normalizeCompetitionFilterName(selectedLeague) ===
+                    normalizeCompetitionFilterName(match && match.league ? match.league : "")
+                );
+            })
+            .map((match) => summarizeLiveActivityDebugMatch(match))
+          : [];
+        const currentDateOperationalMatches = Array.isArray(operationalMatches)
+          ? operationalMatches
+            .filter(
+              (match) =>
+                String(match && match.date ? match.date : "").trim() === londonDateKey(nowMs)
+            )
+            .map((match) => summarizeLiveActivityDebugMatch(match))
+          : [];
+        const entryDiagnostics = Array.isArray(entries)
+          ? entries.map((entry) => {
+            const match = entry && entry.match ? entry.match : null;
+            const eligibility =
+              hooks && typeof hooks.isEligibleForLiveActivityByPreferences === "function"
+                ? hooks.isEligibleForLiveActivityByPreferences(record, match)
+                : { eligible: null, reason: "eligibility_hook_unavailable" };
+            return {
+              matchId:
+                match && match.match_details_id ? String(match.match_details_id) : String(entry?.matchId || ""),
+              homeTeam: match && match.home_team ? String(match.home_team) : "",
+              awayTeam: match && match.away_team ? String(match.away_team) : "",
+              league: match && match.league ? String(match.league) : "",
+              leagueSubcategory:
+                match && match.league_subcategory ? String(match.league_subcategory) : "",
+              date: match && match.date ? String(match.date) : "",
+              time: match && match.time ? String(match.time) : "",
+              homeScore:
+                match && match.home_score !== undefined && match.home_score !== null
+                  ? Number(match.home_score)
+                  : null,
+              awayScore:
+                match && match.away_score !== undefined && match.away_score !== null
+                  ? Number(match.away_score)
+                  : null,
+              matchTime: match && match.score_status ? String(match.score_status) : null,
+              tvChannels:
+                match && Array.isArray(match.tv_channels)
+                  ? match.tv_channels.map((channel) => String(channel))
+                  : [],
+              eligible: eligibility && typeof eligibility.eligible === "boolean"
+                ? eligibility.eligible
+                : null,
+              eligibilityReason:
+                eligibility && eligibility.reason ? String(eligibility.reason) : null,
+            };
+          })
+          : [];
+        const contentState =
+          presentation &&
+          presentation.mode &&
+          hooks &&
+          typeof hooks.buildLiveActivityContentState === "function"
+            ? hooks.buildLiveActivityContentState(
+              presentation.mode,
+              presentation.matches,
+              presentation.delayMinutes,
+              nowMs,
+              presentation.fantasyCurrentScore
+            )
+            : null;
+        const liveActivityDebugRecords = await getLiveActivityDebugRecords({
+          device_token: resolvedDeviceToken,
+          limit: 10,
+          order: "desc",
+        });
+        const normalizedLiveActivityDebug = Array.isArray(liveActivityDebugRecords)
+          ? liveActivityDebugRecords.map((entry) => buildAdminLiveActivityDebugEntry(entry, nowMs))
+          : [];
+        liveActivityDispatchDebug = {
+          summaryCounts: buildAdminLiveActivityDebugSummary(normalizedLiveActivityDebug),
+          recentPushes: normalizedLiveActivityDebug
+            .filter((entry) => entry.record_type === "push")
+            .slice(0, 5),
+          recentDecisions: normalizedLiveActivityDebug
+            .filter((entry) => entry.record_type !== "push")
+            .slice(0, 5),
+        };
         serverPresentation = {
           mode: presentation && presentation.mode ? presentation.mode : null,
           delayMinutes:
@@ -22839,6 +23064,22 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
               matchTime: match && match.score_status ? String(match.score_status) : null,
             }))
             : [],
+          debug: {
+            currentDateKey: londonDateKey(nowMs),
+            operationalMatchCount: Array.isArray(operationalMatches) ? operationalMatches.length : 0,
+            monitoredEntryCount: Array.isArray(monitoredEntries) ? monitoredEntries.length : 0,
+            filteredCanonicalMatchCount: Array.isArray(filteredCanonicalMatches)
+              ? filteredCanonicalMatches.length
+              : 0,
+            builtEntryCount: Array.isArray(entries) ? entries.length : 0,
+            filteredCanonicalMatches: Array.isArray(filteredCanonicalMatches)
+              ? filteredCanonicalMatches.map((match) => summarizeLiveActivityDebugMatch(match))
+              : [],
+            contentState,
+            currentDateOperationalMatches,
+            nearbySelectedLeagueMatches,
+            entryDiagnostics,
+          },
         };
       }
     } catch (presentationError) {
@@ -22855,8 +23096,12 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
       userDeviceToken: resolvedDeviceToken,
       apnsTokenPresent: Boolean(record.apnsToken),
       isDevelopmentBuild: Boolean(record.isDevelopmentBuild),
+      preferences: record && record.preferences && typeof record.preferences === "object"
+        ? record.preferences
+        : {},
       liveActivity: record.liveActivity || null,
       serverPresentation,
+      liveActivityDispatchDebug,
     });
   } catch (error) {
     res.status(500).json({
@@ -23859,6 +24104,11 @@ matchMonitor.setLiveActivityMatchDetailsProvider(() => {
     snapshot && snapshot.records ? snapshot.records : {}
   );
 });
+if (typeof matchMonitor.setLiveActivityOperationalMatchesProvider === "function") {
+  matchMonitor.setLiveActivityOperationalMatchesProvider(() =>
+    resolveLiveActivityOperationalFallbackMatches()
+  );
+}
 if (typeof matchMonitor.setCanonicalMatchStateWriter === "function") {
   matchMonitor.setCanonicalMatchStateWriter((match, metadata = {}) =>
     upsertCanonicalMatchDetailsFromMatch(match, {

@@ -655,6 +655,230 @@ test("buildLiveActivityPresentationForUser excludes non-Premier League matches w
   assert.deepStrictEqual(presentation.matches, []);
 });
 
+test("shouldAllowInactiveLiveActivityEvaluation allows forced or targeted reconcile runs", () => {
+  assert.equal(__testHooks.shouldAllowInactiveLiveActivityEvaluation({}), false);
+  assert.equal(
+    __testHooks.shouldAllowInactiveLiveActivityEvaluation({ forceDispatch: true }),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldAllowInactiveLiveActivityEvaluation({
+      userDeviceToken: "BF4D495F-E69A-4E7D-B47D-09930684A323",
+    }),
+    true
+  );
+});
+
+test("filterCanonicalLiveActivityMatchesForUser keeps major UEFA knockout fixtures when EPL-only is expanded", () => {
+  const nowMs = Date.parse("2026-04-07T19:05:00Z");
+
+  const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+    [
+      {
+        date: "2026-04-07",
+        time: "19:00",
+        league: "UEFA Champions League",
+        league_subcategory: "Quarter-finals",
+        home_team: "Real Madrid",
+        away_team: "Bayern Munich",
+        tv_channels: [],
+      },
+      {
+        date: "2026-04-07",
+        time: "19:00",
+        league: "La Liga",
+        home_team: "Real Sociedad",
+        away_team: "Valencia",
+        tv_channels: [],
+      },
+    ],
+    liveActivityUser(0, {
+      competitionFilterEnabled: true,
+      englishPremierLeagueTeamsOnly: true,
+      majorUEFAClubGamesEnabled: true,
+    }),
+    nowMs
+  );
+
+  assert.deepEqual(
+    filtered.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Real Madrid|Bayern Munich"]
+  );
+});
+
+test("filterCanonicalLiveActivityMatchesForUser keeps major UEFA knockout fixtures with spaced dash subcategory", () => {
+  const nowMs = Date.parse("2026-04-07T19:05:00Z");
+
+  const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+    [
+      {
+        date: "2026-04-07",
+        time: "20:00",
+        league: "UEFA Champions League",
+        league_subcategory: "Quarter - finals",
+        home_team: "Real Madrid",
+        away_team: "Bayern Munich",
+        tv_channels: ["TNT Sports"],
+      },
+    ],
+    liveActivityUser(0, {
+      competitionFilterEnabled: true,
+      englishPremierLeagueTeamsOnly: true,
+      majorUEFAClubGamesEnabled: true,
+    }),
+    nowMs
+  );
+
+  assert.deepEqual(
+    filtered.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Real Madrid|Bayern Munich"]
+  );
+});
+
+test("filterCanonicalLiveActivityMatchesForUser canonicalizes selected league names for fallback fixtures", () => {
+  const nowMs = Date.parse("2026-04-07T19:05:00Z");
+
+  const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+    [
+      {
+        date: "2026-04-07",
+        time: "20:00",
+        league: "UEFA Champions League Quarter-Final 1st Leg",
+        league_subcategory: "Quarter-finals",
+        home_team: "Real Madrid",
+        away_team: "Bayern Munich",
+        tv_channels: ["TNT Sports TBC"],
+      },
+    ],
+    liveActivityUser(0, {
+      competitionFilterEnabled: true,
+      selectedLeagues: ["UEFA Champions League"],
+      englishPremierLeagueTeamsOnly: true,
+      majorUEFAClubGamesEnabled: true,
+    }),
+    nowMs
+  );
+
+  assert.deepEqual(
+    filtered.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Real Madrid|Bayern Munich"]
+  );
+});
+
+test("buildLiveActivityPresentationForUser keeps major UEFA knockout fixtures when EPL-only is expanded", () => {
+  const nowMs = Date.parse("2026-04-07T18:05:00Z");
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(0, {
+      englishPremierLeagueTeamsOnly: true,
+      majorUEFAClubGamesEnabled: true,
+    }),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "c9d4g9g3vzyt",
+          date: "2026-04-07",
+          time: "19:00",
+          league: "UEFA Champions League",
+          league_subcategory: "Quarter-finals",
+          home_team: "Real Madrid",
+          away_team: "Bayern Munich",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          tv_channels: [],
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_upcoming");
+  assert.deepEqual(
+    presentation.matches.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Real Madrid|Bayern Munich"]
+  );
+});
+
+test("buildLiveActivityPresentationForUser keeps fallback UEFA fixtures when selected leagues use canonical names", () => {
+  const nowMs = Date.parse("2026-04-07T20:18:00+01:00");
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(2, {
+      competitionFilterEnabled: true,
+      selectedLeagues: ["UEFA Champions League"],
+      englishPremierLeagueTeamsOnly: true,
+      majorUEFAClubGamesEnabled: true,
+    }),
+    [
+      {
+        state: {
+          finishedAtMs: nowMs - 60 * 1000,
+        },
+        match: {
+          match_details_id: "clyx8k8pn8dt",
+          date: "2026-04-07",
+          time: "19:00",
+          league: "UEFA Champions League",
+          league_subcategory: "Quarter-finals",
+          home_team: "Sporting CP",
+          away_team: "Arsenal",
+          home_score: 0,
+          away_score: 1,
+          score_status: "FT",
+          tv_channels: ["Amazon Prime Video"],
+        },
+      },
+      {
+        state: null,
+        match: {
+          match_details_id: null,
+          date: "2026-04-07",
+          time: "20:00",
+          league: "UEFA Champions League Quarter-Final 1st Leg",
+          league_subcategory: "Quarter-finals",
+          home_team: "Real Madrid",
+          away_team: "Bayern Munich",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          tv_channels: ["TNT Sports TBC"],
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_upcoming");
+  assert.deepEqual(
+    presentation.matches.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Real Madrid|Bayern Munich"]
+  );
+});
+
+test("buildLiveActivityOperationalMatches supplements canonical gaps with fallback fixtures", () => {
+  const matches = __testHooks.buildLiveActivityOperationalMatches(
+    {},
+    [
+      {
+        date: "2026-04-07",
+        time: "19:00",
+        league: "UEFA Champions League",
+        league_subcategory: "Quarter-finals",
+        home_team: "Real Madrid",
+        away_team: "Bayern Munich",
+        tv_channels: [],
+      },
+    ]
+  );
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].home_team, "Real Madrid");
+  assert.equal(matches[0].away_team, "Bayern Munich");
+  assert.equal(matches[0].league_subcategory, "Quarter-finals");
+});
+
 test("buildLiveActivityPresentationForUser excludes matches without matching TV channels when channel filtering is enabled", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 12 * 60 * 1000;
