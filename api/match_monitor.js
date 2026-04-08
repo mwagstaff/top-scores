@@ -19,7 +19,7 @@ const liveActivityMetrics = require("./live_activity_metrics");
 const fantasyScore = require("./fantasy_score");
 const crypto = require("crypto");
 const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.json");
-const { teamIdentityNames } = require("./team_identity");
+const { teamIdentityNames, teamIdentityKeys } = require("./team_identity");
 
 // Configuration
 const POLL_INTERVAL_MS = 10 * 1000; // Poll every 10 seconds for monitored matches
@@ -3033,6 +3033,19 @@ function liveActivityMatchDedupKeys(match, extraIdentity = null) {
     keys.add([date, time, league, homeTeam, awayTeam].join("|"));
   }
 
+  const leagueKeys = liveActivityCompetitionDedupTokens(league);
+  const homeTeamKeys = liveActivityTeamDedupTokens(homeTeam);
+  const awayTeamKeys = liveActivityTeamDedupTokens(awayTeam);
+  if (date && time && homeTeamKeys.length > 0 && awayTeamKeys.length > 0) {
+    homeTeamKeys.forEach((normalizedHomeTeam) => {
+      awayTeamKeys.forEach((normalizedAwayTeam) => {
+        leagueKeys.forEach((normalizedLeague) => {
+          keys.add([date, time, normalizedLeague, normalizedHomeTeam, normalizedAwayTeam].join("|"));
+        });
+      });
+    });
+  }
+
   return Array.from(keys);
 }
 
@@ -3052,20 +3065,61 @@ function normalizeLiveActivityFixtureToken(value) {
   return tokens.length > 0 ? tokens.join(" ") : normalized;
 }
 
+function liveActivityTeamDedupTokens(value) {
+  const keys = new Set();
+
+  const addToken = (candidate) => {
+    const normalized = normalizeLiveActivityFixtureToken(candidate);
+    if (normalized) {
+      keys.add(normalized);
+    }
+  };
+
+  addToken(value);
+  teamIdentityNames(value).forEach((candidate) => addToken(candidate));
+  teamIdentityKeys(value).forEach((candidate) => {
+    const normalized = String(candidate || "").trim().toLowerCase();
+    if (normalized) {
+      keys.add(normalized);
+    }
+  });
+
+  return Array.from(keys);
+}
+
+function liveActivityCompetitionDedupTokens(value) {
+  const keys = new Set();
+  const normalizedFilterName = normalizeLiveActivityCompetitionFilterName(value);
+  if (normalizedFilterName) {
+    keys.add(normalizedFilterName);
+  }
+
+  const normalizedFixtureToken = normalizeLiveActivityFixtureToken(value);
+  if (normalizedFixtureToken) {
+    keys.add(normalizedFixtureToken);
+  }
+
+  return Array.from(keys);
+}
+
 function liveActivityFixtureDedupKeys(match) {
   const keys = new Set();
   if (!match || typeof match !== "object") return [];
 
   const date = String(match.date || "").trim();
-  const league = normalizeLiveActivityFixtureToken(match.league || "");
-  const homeTeam = normalizeLiveActivityFixtureToken(match.home_team || match.homeTeam || "");
-  const awayTeam = normalizeLiveActivityFixtureToken(match.away_team || match.awayTeam || "");
+  const leagueKeys = liveActivityCompetitionDedupTokens(match.league || "");
+  const homeTeamKeys = liveActivityTeamDedupTokens(match.home_team || match.homeTeam || "");
+  const awayTeamKeys = liveActivityTeamDedupTokens(match.away_team || match.awayTeam || "");
 
-  if (date && homeTeam && awayTeam) {
-    keys.add(`fixture|${date}|${homeTeam}|${awayTeam}`);
-    if (league) {
-      keys.add(`fixture|${date}|${league}|${homeTeam}|${awayTeam}`);
-    }
+  if (date && homeTeamKeys.length > 0 && awayTeamKeys.length > 0) {
+    homeTeamKeys.forEach((homeTeam) => {
+      awayTeamKeys.forEach((awayTeam) => {
+        keys.add(`fixture|${date}|${homeTeam}|${awayTeam}`);
+        leagueKeys.forEach((league) => {
+          keys.add(`fixture|${date}|${league}|${homeTeam}|${awayTeam}`);
+        });
+      });
+    });
   }
 
   return Array.from(keys);

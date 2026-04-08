@@ -879,6 +879,63 @@ test("buildLiveActivityOperationalMatches supplements canonical gaps with fallba
   assert.equal(matches[0].league_subcategory, "Quarter-finals");
 });
 
+test("buildLiveActivityOperationalMatches collapses alias fallback fixtures onto canonical BBC matches", () => {
+  const matches = __testHooks.buildLiveActivityOperationalMatches(
+    {
+      cn782mn6edyt: {
+        id: "cn782mn6edyt",
+        date: "2026-04-08",
+        time: "17:45",
+        league: "UEFA Europa League",
+        league_subcategory: "Quarter-finals",
+        home_team: "Sporting Braga",
+        away_team: "Real Betis",
+        tv_channels: ["TNT Sports", "HBO Max"],
+      },
+      cx2d3yr7l1jt: {
+        id: "cx2d3yr7l1jt",
+        date: "2026-04-08",
+        time: "20:00",
+        league: "UEFA Champions League",
+        league_subcategory: "Quarter-finals",
+        home_team: "Paris Saint-Germain",
+        away_team: "Liverpool",
+        tv_channels: ["TNT Sports", "HBO Max"],
+      },
+    },
+    [
+      {
+        date: "2026-04-08",
+        time: "17:45",
+        league: "UEFA Europa League Quarter-Final 1st Leg",
+        home_team: "SC Braga",
+        away_team: "Real Betis",
+        tv_channels: ["TNT Sports 4", "HBO Max"],
+      },
+      {
+        date: "2026-04-08",
+        time: "20:00",
+        league: "UEFA Champions League Quarter-Final 1st Leg",
+        home_team: "PSG",
+        away_team: "Liverpool",
+        tv_channels: ["TNT Sports 1", "HBO Max"],
+      },
+    ]
+  );
+
+  assert.equal(matches.length, 2);
+
+  const bragaMatch = matches.find((match) => match.match_details_id === "cn782mn6edyt");
+  assert.ok(bragaMatch);
+  assert.equal(bragaMatch.home_team, "Sporting Braga");
+  assert.equal(bragaMatch.away_team, "Real Betis");
+
+  const psgMatch = matches.find((match) => match.match_details_id === "cx2d3yr7l1jt");
+  assert.ok(psgMatch);
+  assert.equal(psgMatch.home_team, "Paris Saint-Germain");
+  assert.equal(psgMatch.away_team, "Liverpool");
+});
+
 test("buildLiveActivityPresentationForUser excludes matches without matching TV channels when channel filtering is enabled", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 12 * 60 * 1000;
