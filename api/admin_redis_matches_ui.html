@@ -45,6 +45,9 @@
       gap: 8px;
       margin-top: 10px;
     }
+    .pager {
+      align-items: center;
+    }
     .toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -69,7 +72,8 @@
       font-weight: 600;
       color: var(--muted);
     }
-    .filter-group select {
+    .filter-group select,
+    .filter-group input {
       min-width: 220px;
       padding: 8px 10px;
       border: 1px solid var(--line);
@@ -204,6 +208,9 @@
       word-break: break-word;
     }
     .hidden { display: none; }
+    .sticky-target {
+      scroll-margin-top: 20px;
+    }
     @media (max-width: 900px) {
       .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -234,8 +241,9 @@
     <section id="list-view" class="panel hidden">
       <div class="toolbar">
         <div class="pager">
-          <button id="prev-page">Previous</button>
-          <button id="next-page">Next</button>
+          <button id="prev-page-top">Previous</button>
+          <button id="jump-today-top">Jump to today</button>
+          <button id="next-page-top">Next</button>
         </div>
         <div class="actions">
           <div class="filter-group">
@@ -243,6 +251,10 @@
             <select id="competition-filter">
               <option value="">All competitions</option>
             </select>
+          </div>
+          <div class="filter-group">
+            <label for="search-filter">Search</label>
+            <input id="search-filter" type="text" placeholder="team, date, competition" autocomplete="off">
           </div>
           <button id="select-page">Select Page</button>
           <button id="clear-selection">Clear</button>
@@ -253,6 +265,10 @@
       <div id="list-summary" class="muted"></div>
       <div id="selection-summary" class="muted"></div>
       <div id="match-list" class="match-list"></div>
+      <div class="pager">
+        <button id="prev-page-bottom">Previous</button>
+        <button id="next-page-bottom">Next</button>
+      </div>
     </section>
 
     <section id="detail-view" class="panel hidden">
@@ -281,17 +297,35 @@
     const logSummaryEl = document.getElementById("log-summary");
     const titleEl = document.getElementById("title");
     const subtitleEl = document.getElementById("subtitle");
-    const prevPageButton = document.getElementById("prev-page");
-    const nextPageButton = document.getElementById("next-page");
+    const prevPageTopButton = document.getElementById("prev-page-top");
+    const nextPageTopButton = document.getElementById("next-page-top");
+    const prevPageBottomButton = document.getElementById("prev-page-bottom");
+    const nextPageBottomButton = document.getElementById("next-page-bottom");
+    const jumpTodayTopButton = document.getElementById("jump-today-top");
     const selectPageButton = document.getElementById("select-page");
     const clearSelectionButton = document.getElementById("clear-selection");
     const deleteSelectedButton = document.getElementById("delete-selected");
     const rescrapeSelectedButton = document.getElementById("rescrape-selected");
     const competitionFilterSelect = document.getElementById("competition-filter");
+    const searchFilterInput = document.getElementById("search-filter");
     const selectionSummaryEl = document.getElementById("selection-summary");
     const appBasePath = window.location.pathname.replace(/\/admin\/redis\/matches(?:\/.*)?$/, "");
     const selectedMatchIds = new Set();
+    const LIST_PAGE_SIZE = 100;
+    const LIST_FETCH_SIZE = 5000;
     let currentListMatches = [];
+    let allListMatches = [];
+    let filteredListMatches = [];
+    let currentPage = 1;
+    let currentCompetitionFilter = "";
+    let currentSearchTerm = "";
+    let competitionOptions = [];
+    let latestListPayloadMeta = {
+      source: "unknown",
+      updated_at: null,
+      total_count: 0,
+    };
+    let searchDebounceTimer = null;
 
     function withBasePath(path) {
       const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -337,6 +371,57 @@
       return "Kickoff unknown";
     }
 
+    function todayDateKey() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    }
+
+    function updateListUrl() {
+      const params = new URLSearchParams(window.location.search);
+      if (currentPage > 1) {
+        params.set("page", String(currentPage));
+      } else {
+        params.delete("page");
+      }
+      if (currentCompetitionFilter) {
+        params.set("competition", currentCompetitionFilter);
+      } else {
+        params.delete("competition");
+      }
+      if (currentSearchTerm) {
+        params.set("q", currentSearchTerm);
+      } else {
+        params.delete("q");
+      }
+      const queryString = params.toString();
+      const nextUrl = `${window.location.pathname}${queryString ? `?${queryString}` : ""}`;
+      window.history.replaceState({}, "", nextUrl);
+    }
+
+    function listSearchHaystack(match) {
+      return [
+        match && match.home_team,
+        match && match.away_team,
+        match && match.league,
+        match && match.league_subcategory,
+        match && match.date,
+        match && match.time,
+        formatKickoff(match),
+        match && match.score_status,
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+    }
+
+    function pageSlice(matches, page) {
+      const safePage = Math.max(1, page);
+      const start = (safePage - 1) * LIST_PAGE_SIZE;
+      return matches.slice(start, start + LIST_PAGE_SIZE);
+    }
+
     async function fetchJson(url, options = {}) {
       const response = await fetch(url, {
         cache: "no-store",
@@ -370,6 +455,137 @@
           updateSelectionControls();
         });
       });
+    }
+
+    function updatePagerControls(totalPages, hasToday) {
+      const disablePrevious = currentPage <= 1;
+      const disableNext = currentPage >= totalPages;
+      prevPageTopButton.disabled = disablePrevious;
+      prevPageBottomButton.disabled = disablePrevious;
+      nextPageTopButton.disabled = disableNext;
+      nextPageBottomButton.disabled = disableNext;
+      jumpTodayTopButton.disabled = !hasToday;
+    }
+
+    function renderListMatches() {
+      const todayKey = todayDateKey();
+      let todayAnchorAssigned = false;
+      matchListEl.innerHTML = currentListMatches.map((match) => {
+        const matchId = String(match && match.match_id ? match.match_id : "");
+        const isToday = String(match && match.date ? match.date : "") === todayKey;
+        const cardId = isToday && !todayAnchorAssigned ? ' id="today-match-card"' : "";
+        if (isToday && !todayAnchorAssigned) {
+          todayAnchorAssigned = true;
+        }
+
+        return `
+          <div class="match-card sticky-target"${cardId}>
+            <div class="match-card-head">
+              <div>
+                <div class="competition">${escapeHtml(match.league || "Unknown competition")}</div>
+                <div class="subcategory">${escapeHtml(match.league_subcategory || "")}</div>
+                <div class="kickoff">${escapeHtml(formatKickoff(match))}</div>
+              </div>
+              <label class="select-control">
+                <input
+                  type="checkbox"
+                  data-match-id="${escapeHtml(matchId)}"
+                  ${selectedMatchIds.has(matchId) ? "checked" : ""}
+                />
+                Select
+              </label>
+            </div>
+            <a class="match-link" href="${withBasePath(`/admin/redis/matches/${encodeURIComponent(matchId)}`)}">
+              <div class="score-row">
+                <div class="team home">${escapeHtml(match.home_team)}</div>
+                <div class="score">${escapeHtml(match.home_score ?? "-")}</div>
+                <div class="time">${escapeHtml(match.score_status || match.time || "—")}</div>
+                <div class="score">${escapeHtml(match.away_score ?? "-")}</div>
+                <div class="team away">${escapeHtml(match.away_team || "")}</div>
+              </div>
+            </a>
+          </div>
+        `;
+      }).join("");
+
+      bindSelectionControls();
+      updateSelectionControls();
+    }
+
+    function scrollToTodayCard() {
+      const todayCard = document.getElementById("today-match-card");
+      if (!todayCard) return;
+      window.requestAnimationFrame(() => {
+        todayCard.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+
+    function applyListFilters(options = {}) {
+      const jumpToToday = options.jumpToToday === true;
+      const trimmedSearch = currentSearchTerm.trim().toLowerCase();
+      filteredListMatches = trimmedSearch
+        ? allListMatches.filter((match) => listSearchHaystack(match).includes(trimmedSearch))
+        : allListMatches.slice();
+
+      const totalPages = filteredListMatches.length > 0
+        ? Math.ceil(filteredListMatches.length / LIST_PAGE_SIZE)
+        : 0;
+      const todayIndex = filteredListMatches.findIndex(
+        (match) => String(match && match.date ? match.date : "") === todayDateKey()
+      );
+      const hasToday = todayIndex >= 0;
+
+      if (jumpToToday && hasToday) {
+        currentPage = Math.floor(todayIndex / LIST_PAGE_SIZE) + 1;
+      }
+
+      currentPage = totalPages > 0 ? Math.min(Math.max(currentPage, 1), totalPages) : 1;
+      currentListMatches = totalPages > 0 ? pageSlice(filteredListMatches, currentPage) : [];
+
+      competitionFilterSelect.innerHTML = [
+        '<option value="">All competitions</option>',
+        ...competitionOptions.map((competition) => {
+          const selected = competition === currentCompetitionFilter ? " selected" : "";
+          return `<option value="${escapeHtml(competition)}"${selected}>${escapeHtml(competition)}</option>`;
+        }),
+      ].join("");
+      competitionFilterSelect.value = currentCompetitionFilter;
+      searchFilterInput.value = currentSearchTerm;
+
+      const rangeStart = currentListMatches.length > 0 ? ((currentPage - 1) * LIST_PAGE_SIZE) + 1 : 0;
+      const rangeEnd = currentListMatches.length > 0
+        ? ((currentPage - 1) * LIST_PAGE_SIZE) + currentListMatches.length
+        : 0;
+
+      listSummaryEl.textContent =
+        `Showing page ${totalPages > 0 ? currentPage : 0} of ${totalPages} | ` +
+        `${rangeStart}-${rangeEnd} of ${filteredListMatches.length} filtered matches | ` +
+        `${latestListPayloadMeta.total_count} total matches` +
+        (currentCompetitionFilter ? ` | Competition: ${currentCompetitionFilter}` : "") +
+        (currentSearchTerm ? ` | Search: ${currentSearchTerm}` : "");
+
+      updatePagerControls(totalPages, hasToday);
+      updateListUrl();
+      renderListMatches();
+
+      if (jumpToToday && hasToday) {
+        scrollToTodayCard();
+      }
+    }
+
+    async function fetchAllMatches(competitionFilter) {
+      const query = new URLSearchParams({
+        page: "1",
+        page_size: String(LIST_FETCH_SIZE),
+      });
+      if (competitionFilter) {
+        query.set("competition", competitionFilter);
+      }
+      const payload = await fetchJson(withBasePath(`/api/v1/admin/redis/matches?${query.toString()}`));
+      return {
+        matches: Array.isArray(payload.matches) ? payload.matches : [],
+        meta: payload || {},
+      };
     }
 
     async function performBulkAction(action) {
@@ -412,58 +628,60 @@
       }
     }
 
-    async function renderListView() {
+    async function renderListView(options = {}) {
       listView.classList.remove("hidden");
       detailView.classList.add("hidden");
       detailLogView.classList.add("hidden");
 
-      const params = new URLSearchParams(window.location.search);
-      const page = Math.max(1, Number(params.get("page") || 1));
-      const competitionFilter = params.get("competition") || "";
-      const query = new URLSearchParams({
-        page: String(page),
-        page_size: "100",
-      });
-      if (competitionFilter) {
-        query.set("competition", competitionFilter);
+      if (options.readFromUrl !== false) {
+        const params = new URLSearchParams(window.location.search);
+        currentPage = Math.max(1, Number(params.get("page") || 1));
+        currentCompetitionFilter = params.get("competition") || "";
+        currentSearchTerm = params.get("q") || "";
       }
-      const payload = await fetchJson(withBasePath(`/api/v1/admin/redis/matches?${query.toString()}`));
-      currentListMatches = Array.isArray(payload.matches) ? payload.matches : [];
 
-      statusEl.textContent = `Redis source: ${payload.source || "unknown"} | Updated: ${payload.updated_at || "n/a"}`;
-      listSummaryEl.textContent =
-        `Showing page ${payload.page} of ${payload.total_pages || 1} | ${payload.total_count} matches` +
-        (payload.competition_filter ? ` | Competition: ${payload.competition_filter}` : "");
-      competitionFilterSelect.innerHTML = [
-        '<option value="">All competitions</option>',
-        ...(Array.isArray(payload.competition_options) ? payload.competition_options : []).map((competition) => {
-          const selected = competition === competitionFilter ? " selected" : "";
-          return `<option value="${escapeHtml(competition)}"${selected}>${escapeHtml(competition)}</option>`;
-        }),
-      ].join("");
-      competitionFilterSelect.onchange = () => {
-        const nextParams = new URLSearchParams(window.location.search);
-        const nextCompetition = competitionFilterSelect.value || "";
-        nextParams.delete("page");
-        if (nextCompetition) {
-          nextParams.set("competition", nextCompetition);
-        } else {
-          nextParams.delete("competition");
-        }
-        const queryString = nextParams.toString();
-        window.location.search = queryString ? `?${queryString}` : "";
+      statusEl.className = "status";
+      statusEl.textContent = `Loading Redis matches${currentCompetitionFilter ? ` for ${currentCompetitionFilter}` : ""}...`;
+
+      const result = await fetchAllMatches(currentCompetitionFilter);
+      allListMatches = result.matches;
+      competitionOptions = Array.isArray(result.meta.competition_options) ? result.meta.competition_options : [];
+      latestListPayloadMeta = {
+        source: result.meta.source || "unknown",
+        updated_at: result.meta.updated_at || null,
+        total_count: Number.isFinite(Number(result.meta.total_count)) ? Number(result.meta.total_count) : allListMatches.length,
       };
-      prevPageButton.disabled = payload.page <= 1;
-      nextPageButton.disabled = !payload.has_more;
-      prevPageButton.onclick = () => {
-        const nextParams = new URLSearchParams(window.location.search);
-        nextParams.set("page", String(Math.max(1, payload.page - 1)));
-        window.location.search = `?${nextParams.toString()}`;
+
+      statusEl.textContent =
+        `Redis source: ${latestListPayloadMeta.source} | Updated: ${latestListPayloadMeta.updated_at || "n/a"}`;
+
+      competitionFilterSelect.onchange = async () => {
+        currentCompetitionFilter = competitionFilterSelect.value || "";
+        currentPage = 1;
+        await renderListView({ readFromUrl: false });
       };
-      nextPageButton.onclick = () => {
-        const nextParams = new URLSearchParams(window.location.search);
-        nextParams.set("page", String(payload.page + 1));
-        window.location.search = `?${nextParams.toString()}`;
+      prevPageTopButton.onclick = () => {
+        currentPage = Math.max(1, currentPage - 1);
+        applyListFilters();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+      prevPageBottomButton.onclick = () => {
+        currentPage = Math.max(1, currentPage - 1);
+        applyListFilters();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+      nextPageTopButton.onclick = () => {
+        currentPage += 1;
+        applyListFilters();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+      nextPageBottomButton.onclick = () => {
+        currentPage += 1;
+        applyListFilters();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+      jumpTodayTopButton.onclick = () => {
+        applyListFilters({ jumpToToday: true });
       };
       selectPageButton.onclick = () => {
         currentListMatches.forEach((match) => {
@@ -471,45 +689,15 @@
             selectedMatchIds.add(match.match_id);
           }
         });
-        renderListView();
+        renderListMatches();
       };
       clearSelectionButton.onclick = () => {
         selectedMatchIds.clear();
-        renderListView();
+        renderListMatches();
       };
       deleteSelectedButton.onclick = () => performBulkAction("delete");
       rescrapeSelectedButton.onclick = () => performBulkAction("rescrape");
-
-      matchListEl.innerHTML = (payload.matches || []).map((match) => `
-        <div class="match-card">
-          <div class="match-card-head">
-            <div>
-              <div class="competition">${escapeHtml(match.league || "Unknown competition")}</div>
-              <div class="subcategory">${escapeHtml(match.league_subcategory || "")}</div>
-              <div class="kickoff">${escapeHtml(formatKickoff(match))}</div>
-            </div>
-            <label class="select-control">
-              <input
-                type="checkbox"
-                data-match-id="${escapeHtml(match.match_id)}"
-                ${selectedMatchIds.has(match.match_id) ? "checked" : ""}
-              />
-              Select
-            </label>
-          </div>
-          <a class="match-link" href="${withBasePath(`/admin/redis/matches/${encodeURIComponent(match.match_id)}`)}">
-            <div class="score-row">
-              <div class="team home">${escapeHtml(match.home_team)}</div>
-              <div class="score">${escapeHtml(match.home_score ?? "-")}</div>
-              <div class="time">${escapeHtml(match.score_status || match.time || "—")}</div>
-              <div class="score">${escapeHtml(match.away_score ?? "-")}</div>
-              <div class="team away">${escapeHtml(match.away_team || "")}</div>
-            </div>
-          </a>
-        </div>
-      `).join("");
-      bindSelectionControls();
-      updateSelectionControls();
+      applyListFilters();
     }
 
     async function renderDetailView(matchId) {
@@ -567,6 +755,17 @@
         statusEl.textContent = error.message || String(error);
       }
     }
+
+    searchFilterInput.addEventListener("input", () => {
+      if (searchDebounceTimer) {
+        window.clearTimeout(searchDebounceTimer);
+      }
+      searchDebounceTimer = window.setTimeout(() => {
+        currentSearchTerm = searchFilterInput.value || "";
+        currentPage = 1;
+        applyListFilters();
+      }, 500);
+    });
 
     main();
   </script>

@@ -88,7 +88,7 @@
 
     .row {
       display: grid;
-      grid-template-columns: 180px 1fr auto;
+      grid-template-columns: 180px 180px 1fr auto;
       gap: 10px;
       align-items: end;
     }
@@ -131,6 +131,18 @@
       filter: brightness(0.95);
     }
 
+    button.secondary-button {
+      background: #fff;
+      color: var(--accent);
+      border: 1px solid var(--line);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+      filter: none;
+    }
+
     .status {
       font-size: 0.92rem;
       color: var(--muted);
@@ -170,6 +182,37 @@
     .list-stack {
       display: grid;
       gap: 14px;
+    }
+
+    .list-toolbar,
+    .pager-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .list-toolbar {
+      margin-bottom: 12px;
+    }
+
+    .pager-controls {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .pager-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pager-meta {
+      font-size: 0.88rem;
+      color: var(--muted);
     }
 
     .day-group {
@@ -350,8 +393,12 @@
             <input id="limit" type="number" min="1" max="5000" step="1" value="500">
           </div>
           <div>
-            <label for="client-filter">Client filter</label>
-            <input id="client-filter" type="text" placeholder="team, competition, channel, status">
+            <label for="page-size">Rows per page</label>
+            <input id="page-size" type="number" min="1" max="500" step="1" value="50">
+          </div>
+          <div>
+            <label for="client-filter">Search</label>
+            <input id="client-filter" type="text" placeholder="team, date, competition">
           </div>
           <div>
             <button type="submit">Reload</button>
@@ -369,8 +416,25 @@
     </section>
 
     <section class="panel">
-      <h2 id="list-heading"></h2>
+      <div class="list-toolbar">
+        <div>
+          <h2 id="list-heading"></h2>
+          <div id="pager-meta-top" class="pager-meta"></div>
+        </div>
+        <div class="pager-actions">
+          <button id="previous-top" class="secondary-button" type="button">Previous</button>
+          <button id="jump-today" class="secondary-button" type="button">Jump to today</button>
+          <button id="next-top" type="button">Next</button>
+        </div>
+      </div>
       <div id="results" class="list-stack"></div>
+      <div class="pager-controls">
+        <div id="pager-meta-bottom" class="pager-meta"></div>
+        <div class="pager-actions">
+          <button id="previous-bottom" class="secondary-button" type="button">Previous</button>
+          <button id="next-bottom" type="button">Next</button>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -402,13 +466,30 @@
     const resultsNode = document.getElementById("results");
     const queryForm = document.getElementById("query-form");
     const limitInput = document.getElementById("limit");
+    const pageSizeInput = document.getElementById("page-size");
     const clientFilterInput = document.getElementById("client-filter");
+    const pagerMetaTop = document.getElementById("pager-meta-top");
+    const pagerMetaBottom = document.getElementById("pager-meta-bottom");
+    const previousTopButton = document.getElementById("previous-top");
+    const nextTopButton = document.getElementById("next-top");
+    const previousBottomButton = document.getElementById("previous-bottom");
+    const nextBottomButton = document.getElementById("next-bottom");
+    const jumpTodayButton = document.getElementById("jump-today");
 
     const tabFixtures = document.getElementById("tab-fixtures");
     const tabResults = document.getElementById("tab-results");
 
     let latestPayload = null;
     let filterTimer = null;
+    let currentPage = 1;
+
+    function todayDateKey() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    }
 
     function escapeHtml(value) {
       return String(value || "")
@@ -550,19 +631,23 @@
       return grouped;
     }
 
-    function renderSummary(matches, payload) {
+    function parsePageSize() {
+      return Math.min(500, Math.max(1, Number(pageSizeInput.value || 50)));
+    }
+
+    function renderSummary(summaryMatches, payload, filteredCount, pageInfo) {
       const competitions = new Set();
       const channels = new Set();
       let liveCount = 0;
 
-      (Array.isArray(matches) ? matches : []).forEach((match) => {
+      (Array.isArray(summaryMatches) ? summaryMatches : []).forEach((match) => {
         if (match && match.league) competitions.add(String(match.league));
         if (match && match.in_progress) liveCount += 1;
         (Array.isArray(match && match.tv_channels) ? match.tv_channels : []).forEach((channel) => channels.add(String(channel)));
       });
 
       summaryNode.innerHTML = [
-        { label: mode === "fixtures" ? "Fixtures" : "Results", value: String(matches.length) },
+        { label: mode === "fixtures" ? "Fixtures" : "Results", value: String(filteredCount) },
         { label: "Competitions", value: String(competitions.size) },
         { label: "Channels", value: String(channels.size) },
         { label: "Live Matches", value: String(liveCount) },
@@ -579,15 +664,38 @@
       const source = payload && payload.source ? payload.source : "unknown";
       const totalAvailable = payload && Number.isFinite(Number(payload.total_available))
         ? Number(payload.total_available)
-        : matches.length;
+        : filteredCount;
+
+      const rangeText = pageInfo.totalPages > 0
+        ? `Showing ${pageInfo.startIndex + 1}-${pageInfo.endIndex} of ${filteredCount} filtered row(s). `
+        : `Showing 0 of ${filteredCount} filtered row(s). `;
 
       statusNode.textContent =
-        `Loaded ${matches.length} row(s) (${totalAvailable} total). ` +
+        rangeText +
+        `Loaded ${payload && Array.isArray(payload.matches) ? payload.matches.length : filteredCount} row(s) (${totalAvailable} total available). ` +
         `Updated: ${updatedText}. Source: ${source}.`;
     }
 
-    function renderMatches(matches, payload) {
-      renderSummary(matches, payload);
+    function renderPaginationMeta(pageInfo, hasToday) {
+      const text = pageInfo.totalPages > 0
+        ? `Page ${pageInfo.page} of ${pageInfo.totalPages}`
+        : "Page 0 of 0";
+
+      pagerMetaTop.textContent = text;
+      pagerMetaBottom.textContent = text;
+
+      const disablePrevious = pageInfo.page <= 1;
+      const disableNext = pageInfo.page >= pageInfo.totalPages;
+      previousTopButton.disabled = disablePrevious;
+      previousBottomButton.disabled = disablePrevious;
+      nextTopButton.disabled = disableNext;
+      nextBottomButton.disabled = disableNext;
+      jumpTodayButton.disabled = mode !== "fixtures" || !hasToday;
+    }
+
+    function renderMatches(matches, payload, summaryMatches, filteredCount, pageInfo, hasTodayInFilteredResults) {
+      renderSummary(summaryMatches, payload, filteredCount, pageInfo);
+      renderPaginationMeta(pageInfo, hasTodayInFilteredResults);
 
       if (!Array.isArray(matches) || matches.length === 0) {
         resultsNode.innerHTML = `<div class="empty">No ${mode} rows for this filter.</div>`;
@@ -600,8 +708,11 @@
 
       resultsNode.innerHTML = orderedKeys.map((dateKey) => {
         const rows = grouped.get(dateKey) || [];
+        const todayAnchor = mode === "fixtures" && dateKey === todayDateKey()
+          ? ' id="today-fixtures"'
+          : "";
         return `
-          <section class="day-group">
+          <section class="day-group"${todayAnchor}>
             <h3 class="day-heading">${escapeHtml(formatDateHeading(dateKey))}</h3>
             ${rows.map(matchCard).join("")}
           </section>
@@ -619,9 +730,9 @@
           match && match.home_team,
           match && match.away_team,
           match && match.league,
-          match && match.score_status,
-          match && match.display_score_status,
-          match && match.penalty_result,
+          match && match.date,
+          formatDateHeading(match && match.date),
+          match && match.time,
           channels,
         ]
           .map((value) => String(value || "").toLowerCase())
@@ -630,18 +741,71 @@
       });
     }
 
-    function renderFiltered() {
+    function scrollToTodaySection() {
+      const todaySection = document.getElementById("today-fixtures");
+      if (!todaySection) return;
+      window.requestAnimationFrame(() => {
+        todaySection.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
+    }
+
+    function filteredMatches() {
       if (!latestPayload || !Array.isArray(latestPayload.matches)) {
-        renderMatches([], latestPayload);
+        return [];
+      }
+      return localFilter(latestPayload.matches);
+    }
+
+    function renderFiltered(options = {}) {
+      const jumpToToday = options.jumpToToday === true;
+      if (!latestPayload || !Array.isArray(latestPayload.matches)) {
+        renderMatches([], latestPayload, [], 0, {
+          page: 1,
+          totalPages: 0,
+          startIndex: 0,
+          endIndex: 0,
+        }, false);
         return;
       }
-      renderMatches(localFilter(latestPayload.matches), latestPayload);
+
+      const matches = filteredMatches();
+      const pageSize = parsePageSize();
+      const totalPages = matches.length > 0 ? Math.ceil(matches.length / pageSize) : 0;
+      const hasTodayInFilteredResults = mode === "fixtures" &&
+        matches.some((match) => String(match && match.date || "") === todayDateKey());
+
+      if (jumpToToday && mode === "fixtures") {
+        const todayIndex = matches.findIndex((match) => String(match && match.date || "") === todayDateKey());
+        if (todayIndex >= 0) {
+          currentPage = Math.floor(todayIndex / pageSize) + 1;
+        }
+      }
+
+      currentPage = totalPages > 0 ? Math.min(Math.max(currentPage, 1), totalPages) : 1;
+      const startIndex = totalPages > 0 ? (currentPage - 1) * pageSize : 0;
+      const pageMatches = totalPages > 0 ? matches.slice(startIndex, startIndex + pageSize) : [];
+      const endIndex = totalPages > 0 ? Math.min(startIndex + pageMatches.length, matches.length) : 0;
+
+      renderMatches(pageMatches, latestPayload, matches, matches.length, {
+        page: currentPage,
+        totalPages,
+        startIndex,
+        endIndex,
+      }, hasTodayInFilteredResults);
+
+      if (jumpToToday) {
+        scrollToTodaySection();
+      }
     }
 
     async function loadMatches(event) {
       if (event) event.preventDefault();
 
       const limit = Math.min(5000, Math.max(1, Number(limitInput.value || 500)));
+      currentPage = 1;
       const params = new URLSearchParams();
       params.set("limit", String(limit));
 
@@ -668,6 +832,8 @@
         latestPayload = null;
         summaryNode.innerHTML = "";
         resultsNode.innerHTML = "<div class=\"empty\">No data loaded.</div>";
+        pagerMetaTop.textContent = "";
+        pagerMetaBottom.textContent = "";
         statusNode.textContent = `Error loading ${mode}: ${error.message || String(error)}`;
         statusNode.classList.add("error");
       }
@@ -690,7 +856,35 @@
     queryForm.addEventListener("submit", loadMatches);
     clientFilterInput.addEventListener("input", () => {
       if (filterTimer) window.clearTimeout(filterTimer);
-      filterTimer = window.setTimeout(renderFiltered, 250);
+      currentPage = 1;
+      filterTimer = window.setTimeout(() => renderFiltered(), 500);
+    });
+    pageSizeInput.addEventListener("change", () => {
+      currentPage = 1;
+      renderFiltered();
+    });
+    previousTopButton.addEventListener("click", () => {
+      currentPage -= 1;
+      renderFiltered();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    previousBottomButton.addEventListener("click", () => {
+      currentPage -= 1;
+      renderFiltered();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    nextTopButton.addEventListener("click", () => {
+      currentPage += 1;
+      renderFiltered();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    nextBottomButton.addEventListener("click", () => {
+      currentPage += 1;
+      renderFiltered();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    jumpTodayButton.addEventListener("click", () => {
+      renderFiltered({ jumpToToday: true });
     });
 
     initializePage();

@@ -21541,7 +21541,7 @@ app.get(`${API_PREFIX}/admin/results/:matchId`, async (req, res) => {
 
 app.get(`${API_PREFIX}/admin/redis/matches`, async (req, res) => {
   setCacheOnlyHeaders(res);
-  const pageSize = parsePositiveInt(req.query.page_size, 100, 1, 100);
+  const pageSize = parsePositiveInt(req.query.page_size, 100, 1, 5000);
   const page = parsePositiveInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
   const competitionFilter = String(req.query.competition || "").trim();
   const normalizedCompetitionFilter = competitionFilter
