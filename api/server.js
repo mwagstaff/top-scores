@@ -24257,6 +24257,41 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
   }
 });
 
+// Force an immediate Live Activity evaluation cycle for every known device.
+app.post(`${API_PREFIX}/live-activity/reconcile-all`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    const force = String(_req.query.force || _req.body?.force || "true").trim().toLowerCase();
+    const forceDispatch = !(force === "0" || force === "false" || force === "no");
+    const allowEndRaw = String(_req.query.allowEnd || _req.body?.allowEnd || "").trim().toLowerCase();
+    const allowEnd = allowEndRaw === "1" || allowEndRaw === "true" || allowEndRaw === "yes";
+    const trigger =
+      typeof _req.body?.trigger === "string" && _req.body.trigger.trim()
+        ? _req.body.trigger.trim()
+        : "manual_reconcile_all";
+
+    const result = await matchMonitor.runLiveActivityEvaluationNow({
+      trigger,
+      forceDispatch,
+      preserveExistingOnEmpty: forceDispatch && !allowEnd,
+    });
+
+    res.status(200).json({
+      success: true,
+      allDevices: true,
+      forceDispatch,
+      preserveExistingOnEmpty: forceDispatch && !allowEnd,
+      ...result,
+    });
+  } catch (error) {
+    console.error("[API] Error reconciling all live activities:", error);
+    res.status(500).json({
+      error: "Failed to reconcile all live activities",
+      message: error.message,
+    });
+  }
+});
+
 if (shouldRunRuntime) {
   app.listen(PORT, () => {
     console.log(`Server listening on http://localhost:${PORT}`);

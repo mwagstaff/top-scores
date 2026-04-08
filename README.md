@@ -39,6 +39,8 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
   - [CACHE_INVALIDATION_RUNBOOK.md](/Users/mwagstaff/dev/top-scores/CACHE_INVALIDATION_RUNBOOK.md)
 - Push notification notes:
   - [PUSH_NOTIFICATIONS_README.md](/Users/mwagstaff/dev/top-scores/PUSH_NOTIFICATIONS_README.md)
+- Live Activity troubleshooting runbook:
+  - [LIVE_ACTIVITY_TROUBLESHOOTING.md](/Users/mwagstaff/dev/top-scores/LIVE_ACTIVITY_TROUBLESHOOTING.md)
 - Redis preference sync notes:
   - [REDIS_PREFERENCES_SYNC.md](/Users/mwagstaff/dev/top-scores/REDIS_PREFERENCES_SYNC.md)
 - Widget implementation notes:
