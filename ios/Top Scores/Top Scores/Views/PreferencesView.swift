@@ -79,8 +79,8 @@ struct PreferencesView: View {
                     }
 
                     Section("Display") {
-                        Toggle("Show unfinished fixtures badge", isOn: showTodayUnfinishedFixturesBadgeBinding)
-                        Text("Shows the number of today's fixtures that have not started or are still in play on the app icon.")
+                        Toggle("App icon badge", isOn: showTodayUnfinishedFixturesBadgeBinding)
+                        Text("Shows an app icon badge with the number of today's fixtures (either yet to kick off or in play).")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -146,6 +146,24 @@ struct PreferencesView: View {
                         Toggle("Premier League teams only", isOn: notificationPremierLeagueTeamsOnlyBinding)
                             .disabled(!preferences.notificationsEnabled)
                         Text("Only receive notifications for matches where at least one team is in the English Premier League.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Domestic: Major UEFA games", isOn: notificationMajorUEFAClubGamesEnabledBinding)
+                            .disabled(!preferences.notificationsEnabled)
+                        Text("Always receive notifications for UEFA Champions League, Europa League, and Conference League quarter-finals, semi-finals, and finals, even when no Premier League team is involved.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("International: Home nations", isOn: notificationHomeNationsFilterEnabledBinding)
+                            .disabled(!preferences.notificationsEnabled)
+                        Text("Receive notifications for international matches involving England, Northern Ireland, Scotland, or Wales, including friendlies.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("International: Major tournaments", isOn: notificationMajorTournamentsFilterEnabledBinding)
+                            .disabled(!preferences.notificationsEnabled)
+                        Text("Receive notifications for FIFA World Cup and UEFA European Championship matches, excluding qualifying games.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -600,6 +618,27 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.notificationPremierLeagueTeamsOnly },
             set: { preferences.notificationPremierLeagueTeamsOnly = $0 }
+        )
+    }
+
+    private var notificationMajorUEFAClubGamesEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.notificationMajorUEFAClubGamesEnabled },
+            set: { preferences.notificationMajorUEFAClubGamesEnabled = $0 }
+        )
+    }
+
+    private var notificationHomeNationsFilterEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.notificationHomeNationsFilterEnabled },
+            set: { preferences.notificationHomeNationsFilterEnabled = $0 }
+        )
+    }
+
+    private var notificationMajorTournamentsFilterEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.notificationMajorTournamentsFilterEnabled },
+            set: { preferences.notificationMajorTournamentsFilterEnabled = $0 }
         )
     }
 
