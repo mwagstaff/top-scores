@@ -114,13 +114,11 @@ private struct ContentLifecycleCoordinator: View {
             }
             .task(id: fantasyManagerEntryID) {
                 updateFantasyTabPresentation()
+                guard selectedTab == 3 else { return }
                 deferredFantasyRefreshTask?.cancel()
                 deferredFantasyRefreshTask = Task {
-                    if selectedTab != 3 {
-                        try? await Task.sleep(nanoseconds: fantasyStartupDelayNanos)
-                    }
                     guard !Task.isCancelled else { return }
-                    await refreshFantasySummaryIfNeeded(force: selectedTab == 3)
+                    await refreshFantasySummaryIfNeeded(force: true)
                 }
             }
             .task(id: preferences.apiBaseURL) {
@@ -132,8 +130,9 @@ private struct ContentLifecycleCoordinator: View {
                 Task {
                     await refreshCompetitionCatalogIfNeeded(force: false)
                 }
+                guard selectedTab == 3 else { return }
                 deferredFantasyRefreshTask = Task {
-                    if selectedTab != 3 {
+                    if fantasyStartupDelayNanos > 0 {
                         try? await Task.sleep(nanoseconds: fantasyStartupDelayNanos)
                     }
                     guard !Task.isCancelled else { return }

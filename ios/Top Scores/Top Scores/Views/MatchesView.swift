@@ -96,6 +96,7 @@ struct MatchesView: View {
     @State private var indexedMatchDays: [IndexedMatchDay] = []
     @State private var reportedMissingLogoNames: Set<String> = []
     @State private var lastPredictorCandidateDateKeys: Set<String> = []
+    @State private var didRunActivationForVisibleCycle = false
 
     private static let minimumSearchCharacters = 3
     private static let searchDebounceNanoseconds: UInt64 = 250_000_000
@@ -247,23 +248,15 @@ struct MatchesView: View {
         }
         .onAppear {
             guard isSelected else { return }
-            matchesStore.setModeVisibility(mode, isVisible: true)
-            let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-            NSLog("[MatchesView] onAppear mode=%@ selected=%d snapshot=%@", mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
-            matchesStore.configure(with: snapshot, mode: mode)
-            let days = matchesStore.groupedMatches
-            scheduleGroupedSideEffects(for: days, immediate: false)
-            predictionDateKeys = FixturePredictionStore.storedDateKeys()
+            runActivationIfNeeded(logEvent: "onAppear")
         }
         .onChange(of: isSelected) { _, selected in
             matchesStore.setModeVisibility(mode, isVisible: selected)
-            guard selected else { return }
-            let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-            NSLog("[MatchesView] isSelected mode=%@ selected=%d snapshot=%@", mode.rawValue, selected, debugSnapshotSummary(snapshot))
-            matchesStore.configure(with: snapshot, mode: mode)
-            let days = matchesStore.groupedMatches
-            scheduleGroupedSideEffects(for: days, immediate: false)
-            predictionDateKeys = FixturePredictionStore.storedDateKeys()
+            guard selected else {
+                didRunActivationForVisibleCycle = false
+                return
+            }
+            runActivationIfNeeded(logEvent: "isSelected")
         }
         .onChange(of: preferences.snapshot) { _, _ in
             guard isSelected else { return }
@@ -695,6 +688,18 @@ struct MatchesView: View {
             reportMissingTeamLogosIfNeeded(days: days)
             refreshPredictorAvailability(days: days)
         }
+    }
+
+    private func runActivationIfNeeded(logEvent: String) {
+        guard !didRunActivationForVisibleCycle else { return }
+        didRunActivationForVisibleCycle = true
+        matchesStore.setModeVisibility(mode, isVisible: true)
+        let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+        NSLog("[MatchesView] %@ mode=%@ selected=%d snapshot=%@", logEvent, mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
+        matchesStore.configure(with: snapshot, mode: mode)
+        let days = matchesStore.groupedMatches
+        scheduleGroupedSideEffects(for: days, immediate: false)
+        predictionDateKeys = FixturePredictionStore.storedDateKeys()
     }
 
     private func rebuildSearchIndex(from days: [MatchDay]) {

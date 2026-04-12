@@ -639,7 +639,11 @@ final class MatchesStore: ObservableObject {
     private func shouldRefreshOnConfigure(_ state: ModeState, now: Date = Date()) -> Bool {
         if state.isUsingCache { return true }
         guard let lastUpdated = state.lastUpdated else { return true }
-        return now.timeIntervalSince(lastUpdated) >= configureRefreshInterval
+        guard now.timeIntervalSince(lastUpdated) >= configureRefreshInterval else { return false }
+
+        // Don’t turn simple tab switches into refreshes when nothing is live.
+        // Automatic timer refresh and explicit pull-to-refresh still cover freshness.
+        return state.matches.contains(where: \.isInProgress)
     }
 
     func stopAutoRefresh() {
@@ -1599,6 +1603,8 @@ final class MatchesStore: ObservableObject {
     private func publishState(for mode: MatchesViewMode) {
         activeMode = mode
         let current = state(for: mode)
+        guard visibleModes.contains(mode) else { return }
+
         matches = current.matches
         isLoading = current.isLoading
         errorMessage = current.errorMessage
@@ -1608,7 +1614,6 @@ final class MatchesStore: ObservableObject {
         // Cancel any previous grouping task so stale results can't overwrite newer ones.
         groupingTask?.cancel()
         groupingTaskID = nil
-        guard visibleModes.contains(mode) else { return }
         if current.groupedMatchesRevision == groupingRevision {
             groupedMatches = current.groupedMatches
             return

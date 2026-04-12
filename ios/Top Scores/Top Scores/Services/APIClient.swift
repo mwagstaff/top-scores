@@ -342,9 +342,11 @@ struct APIClient {
             queryItems: []
         )
         request.httpMethod = "POST"
+        request.timeoutInterval = 12
         let (data, http) = try await performRequest(
             request,
-            operation: "fantasy_assistant_manager_sync"
+            operation: "fantasy_assistant_manager_sync",
+            maxAttempts: 1
         )
         try validateSuccess(http, data: data, operation: "fantasy_assistant_manager_sync")
         return try JSONDecoder().decode(FantasyAssistantManagerResponse.self, from: data)
@@ -632,12 +634,12 @@ struct APIClient {
 
     private func performRequest(
         _ request: URLRequest,
-        operation: String
+        operation: String,
+        maxAttempts: Int = 2
     ) async throws -> (Data, HTTPURLResponse) {
         let requestID = String(UUID().uuidString.prefix(8))
         let method = request.httpMethod ?? "GET"
         let urlString = request.url?.absoluteString ?? "<unknown>"
-        let maxAttempts = 2
 
         for attempt in 1...maxAttempts {
             let startedAt = Date()
