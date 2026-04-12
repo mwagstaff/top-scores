@@ -3106,11 +3106,26 @@ private func fantasyPointsHeatmapColor(_ points: Int) -> Color {
 }
 
 func fantasyTeamLookupKeys(_ value: String) -> Set<String> {
+    let cacheKey = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
+    if let cached = FantasyTeamLookupKeyCache.cache.object(forKey: cacheKey) {
+        return Set(cached.allObjects.compactMap { $0 as? String })
+    }
+
     let candidates = TeamIdentityStore.shared.names(for: value) + BundledTeamIdentityCatalog.shared.names(for: value)
-    return Set(candidates.compactMap { candidate in
+    let resolved = Set(candidates.compactMap { candidate in
         let normalized = normalizeFantasyLookupName(candidate)
         return normalized.isEmpty ? nil : normalized
     })
+    FantasyTeamLookupKeyCache.cache.setObject(resolved as NSSet, forKey: cacheKey)
+    return resolved
+}
+
+private enum FantasyTeamLookupKeyCache {
+    static let cache: NSCache<NSString, NSSet> = {
+        let cache = NSCache<NSString, NSSet>()
+        cache.countLimit = 256
+        return cache
+    }()
 }
 
 private func normalizeFantasyLookupName(_ value: String) -> String {

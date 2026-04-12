@@ -6,6 +6,8 @@ final class TvLogoResolver {
 
     private let fallbackName = "_noLogo"
     private var normalizedLookup: [String: URL] = [:]
+    private var resolvedURLCache: [String: URL] = [:]
+    private var unresolvedChannelKeys: Set<String> = []
     private let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 64
@@ -73,17 +75,31 @@ final class TvLogoResolver {
         let normalized = Self.normalizedKey(channelName)
         guard !normalized.isEmpty else { return nil }
 
+        if let cached = resolvedURLCache[normalized] {
+            return cached
+        }
+        if unresolvedChannelKeys.contains(normalized) {
+            return nil
+        }
+
         if let direct = normalizedLookup[normalized] {
+            resolvedURLCache[normalized] = direct
             return direct
         }
 
         for (keyword, logoKey) in aliasKeywords {
             if normalized.contains(keyword), let url = normalizedLookup[logoKey] {
+                resolvedURLCache[normalized] = url
                 return url
             }
         }
+        if let fuzzyMatch = fuzzyMatch(normalizedChannel: normalized) {
+            resolvedURLCache[normalized] = fuzzyMatch
+            return fuzzyMatch
+        }
 
-        return fuzzyMatch(normalizedChannel: normalized)
+        unresolvedChannelKeys.insert(normalized)
+        return nil
     }
 
     private func fuzzyMatch(normalizedChannel: String) -> URL? {

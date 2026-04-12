@@ -31,6 +31,8 @@ final class LogoResolver {
     private var normalizedLookup: [String: ImageSource] = [:]
     private var coreLookup: [String: [ImageSource]] = [:]
     private var originalLookup: [String: ImageSource] = [:]
+    private var resolvedSourceCache: [String: ImageSource] = [:]
+    private var unresolvedSourceKeys: Set<String> = []
     private let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 300
@@ -136,40 +138,60 @@ final class LogoResolver {
     private func resolveSource(for teamName: String) -> ImageSource? {
         let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        let cacheKey = trimmed.lowercased()
+
+        if let cached = resolvedSourceCache[cacheKey] {
+            return cached
+        }
+        if unresolvedSourceKeys.contains(cacheKey) {
+            return nil
+        }
 
         let lower = trimmed.lowercased()
         if let direct = originalLookup[lower] {
+            resolvedSourceCache[cacheKey] = direct
             return direct
         }
 
         if let directAsset = directAssetSource(for: trimmed) {
+            resolvedSourceCache[cacheKey] = directAsset
             return directAsset
         }
 
         for alias in Self.aliases(for: trimmed) {
             if let directAlias = originalLookup[alias] {
+                resolvedSourceCache[cacheKey] = directAlias
                 return directAlias
             }
             let aliasKey = Self.normalizedKey(alias)
             if let match = normalizedLookup[aliasKey] {
+                resolvedSourceCache[cacheKey] = match
                 return match
             }
             if let directAsset = directAssetSource(for: alias) {
+                resolvedSourceCache[cacheKey] = directAsset
                 return directAsset
             }
         }
 
         let normalized = Self.normalizedKey(trimmed)
         if let match = normalizedLookup[normalized] {
+            resolvedSourceCache[cacheKey] = match
             return match
         }
 
         let core = Self.normalizedCoreKey(trimmed)
         if let uniqueCoreMatch = uniqueCoreMatch(for: core) {
+            resolvedSourceCache[cacheKey] = uniqueCoreMatch
             return uniqueCoreMatch
         }
+        if let fuzzyMatch = fuzzyMatch(normalizedTeam: normalized) {
+            resolvedSourceCache[cacheKey] = fuzzyMatch
+            return fuzzyMatch
+        }
 
-        return fuzzyMatch(normalizedTeam: normalized)
+        unresolvedSourceKeys.insert(cacheKey)
+        return nil
     }
 
     private func directAssetSource(for name: String) -> ImageSource? {
