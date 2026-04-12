@@ -122,6 +122,13 @@ struct MatchesView: View {
         mode == .fixtures && preferences.fixturesViewDensity != .extended
     }
 
+    private var matchRowPreferences: MatchRowPreferences {
+        MatchRowPreferences(
+            preferences: preferences,
+            hasFantasyManagerEntry: !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
+    }
+
     private var compactFixturesSpacing: CompactFixturesSpacingProfile {
         switch preferences.fixturesViewDensity {
         case .extended:
@@ -284,9 +291,11 @@ struct MatchesView: View {
             }
         }
         .onChange(of: matchesStore.groupedMatches) { _, days in
+            guard isSelected else { return }
             scheduleGroupedSideEffects(for: days, immediate: false)
         }
         .onReceive(NotificationCenter.default.publisher(for: FixturePredictionStore.didChangeNotification)) { _ in
+            guard isSelected else { return }
             predictionDateKeys = FixturePredictionStore.storedDateKeys()
             scheduleGroupedSideEffects(for: matchesStore.groupedMatches, immediate: false)
         }
@@ -461,31 +470,18 @@ struct MatchesView: View {
                 showFantasyBadge: mode == .fixtures
             )
         } label: {
-            MatchRow(
+            MatchesListRowLabel(
                 match: match,
+                isFixtureMode: mode == .fixtures,
                 highlightToday: day.isToday,
-                showLeague: false,
-                showFantasyBadge: mode == .fixtures,
-                showFantasyPlayerContributions: mode == .fixtures,
-                teamLogoScale: 1.1,
-                layoutStyle: usesCompactFixtureRows ? .compactFixture : .standard,
+                usesCompactFixtureRows: usesCompactFixtureRows,
                 compactDensity: preferences.fixturesViewDensity,
-                // Only enable this if needing to debug elo scores
-                // centerFooterText: matchDebugFooterText(for: match)
+                rowPreferences: matchRowPreferences,
                 fantasyContext: fantasyViewModel.matchRowContext
             )
+            .equatable()
         }
         .disabled(match.isPostponed)
-        .onAppear {
-            Task {
-                let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-                await matchesStore.prefetchIfNeeded(
-                    currentMatch: match,
-                    preferences: snapshot,
-                    mode: mode
-                )
-            }
-        }
         .buttonStyle(.plain)
         .listRowInsets(
             EdgeInsets(
@@ -1012,6 +1008,31 @@ private struct MatchSearchBar: UIViewRepresentable {
         func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
             searchBar.resignFirstResponder()
         }
+    }
+}
+
+private struct MatchesListRowLabel: View, Equatable {
+    let match: Match
+    let isFixtureMode: Bool
+    let highlightToday: Bool
+    let usesCompactFixtureRows: Bool
+    let compactDensity: FixturesViewDensity
+    let rowPreferences: MatchRowPreferences
+    let fantasyContext: FantasyMatchRowContext
+
+    var body: some View {
+        MatchRow(
+            match: match,
+            highlightToday: highlightToday,
+            showLeague: false,
+            showFantasyBadge: isFixtureMode,
+            showFantasyPlayerContributions: isFixtureMode,
+            teamLogoScale: 1.1,
+            layoutStyle: usesCompactFixtureRows ? .compactFixture : .standard,
+            compactDensity: compactDensity,
+            fantasyContext: fantasyContext,
+            rowPreferences: rowPreferences
+        )
     }
 }
 

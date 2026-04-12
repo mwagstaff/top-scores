@@ -15,6 +15,15 @@ struct AboutView: View {
     @State private var isLoadingHarnessMatches = false
     #endif
 
+    #if DEBUG
+    private var matchRowPreferences: MatchRowPreferences {
+        MatchRowPreferences(
+            preferences: preferences,
+            hasFantasyManagerEntry: !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
+    }
+    #endif
+
     var body: some View {
         Group {
             if embeddedInNavigation {
@@ -666,8 +675,17 @@ struct AboutView: View {
     }
 
     private struct DebugFantasyHarnessMatchesView: View {
+        @EnvironmentObject private var preferences: PreferencesStore
         @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+        @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
         let matches: [DebugFantasyHarnessMatch]
+
+        private var matchRowPreferences: MatchRowPreferences {
+            MatchRowPreferences(
+                preferences: preferences,
+                hasFantasyManagerEntry: !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
+        }
 
         var body: some View {
             List {
@@ -697,7 +715,8 @@ struct AboutView: View {
                                 match: harnessMatch.match,
                                 highlightToday: false,
                                 showLeague: false,
-                                fantasyContext: fantasyViewModel.matchRowContext
+                                fantasyContext: fantasyViewModel.matchRowContext,
+                                rowPreferences: matchRowPreferences
                             )
                         }
                         .buttonStyle(.plain)

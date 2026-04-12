@@ -7,10 +7,50 @@ enum MatchRowLayoutStyle {
     case compactFixture
 }
 
-struct MatchRow: View {
-    @EnvironmentObject private var preferences: PreferencesStore
-    @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
+struct MatchRowPreferences: Equatable {
+    let hasFantasyManagerEntry: Bool
+    let showFantasyExpectedPoints: Bool
+    let showFantasyRealTimePoints: Bool
+    let showFantasyFixtureLogos: Bool
+    let showCompactFixtureFantasyLogo: Bool
+    let showCompactFixtureTvLogo: Bool
 
+    init(preferences: PreferencesStore, hasFantasyManagerEntry: Bool) {
+        self.hasFantasyManagerEntry = hasFantasyManagerEntry
+        showFantasyExpectedPoints = preferences.showFantasyExpectedPoints
+        showFantasyRealTimePoints = preferences.showFantasyRealTimePoints
+        showFantasyFixtureLogos = preferences.showFantasyFixtureLogos
+        showCompactFixtureFantasyLogo = preferences.showCompactFixtureFantasyLogo
+        showCompactFixtureTvLogo = preferences.showCompactFixtureTvLogo
+    }
+
+    static let disabledFantasy = MatchRowPreferences(
+        hasFantasyManagerEntry: false,
+        showFantasyExpectedPoints: false,
+        showFantasyRealTimePoints: false,
+        showFantasyFixtureLogos: false,
+        showCompactFixtureFantasyLogo: false,
+        showCompactFixtureTvLogo: false
+    )
+
+    private init(
+        hasFantasyManagerEntry: Bool,
+        showFantasyExpectedPoints: Bool,
+        showFantasyRealTimePoints: Bool,
+        showFantasyFixtureLogos: Bool,
+        showCompactFixtureFantasyLogo: Bool,
+        showCompactFixtureTvLogo: Bool
+    ) {
+        self.hasFantasyManagerEntry = hasFantasyManagerEntry
+        self.showFantasyExpectedPoints = showFantasyExpectedPoints
+        self.showFantasyRealTimePoints = showFantasyRealTimePoints
+        self.showFantasyFixtureLogos = showFantasyFixtureLogos
+        self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
+        self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
+    }
+}
+
+struct MatchRow: View {
     let match: Match
     var highlightToday: Bool = false
     var showTeamEvents: Bool = false
@@ -25,6 +65,7 @@ struct MatchRow: View {
     var layoutStyle: MatchRowLayoutStyle = .standard
     var compactDensity: FixturesViewDensity = .compact
     var fantasyContext: FantasyMatchRowContext = .empty
+    var rowPreferences: MatchRowPreferences = .disabledFantasy
 
     var body: some View {
         matchCard
@@ -216,7 +257,7 @@ struct MatchRow: View {
     private var shouldShowFantasyParticipationBadge: Bool {
         guard showFantasyBadge,
               !match.isPostponed,
-              !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              rowPreferences.hasFantasyManagerEntry,
               isFantasyBadgeEnabledForLayout,
               fantasyContext.isEligibleFixture(match),
               let lookup = fantasyContext.lookup
@@ -231,7 +272,7 @@ struct MatchRow: View {
     private var fantasyPlayerContributions: [FantasyMatchContributionDisplay] {
         guard showFantasyPlayerContributions,
               !match.isPostponed,
-              !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              rowPreferences.hasFantasyManagerEntry,
               fantasyContext.isEligibleFixture(match),
               let lookup = fantasyContext.lookup
         else {
@@ -239,9 +280,9 @@ struct MatchRow: View {
         }
 
         let shouldShowExpectedPoints = match.isUpcomingScorelessFixture &&
-            preferences.showFantasyExpectedPoints &&
+            rowPreferences.showFantasyExpectedPoints &&
             lookup.hasExpectedPoints
-        let shouldShowRealTimePoints = match.isInProgress && preferences.showFantasyRealTimePoints
+        let shouldShowRealTimePoints = match.isInProgress && rowPreferences.showFantasyRealTimePoints
 
         guard shouldShowExpectedPoints || shouldShowRealTimePoints else {
             return []
@@ -473,9 +514,9 @@ struct MatchRow: View {
     private var isFantasyBadgeEnabledForLayout: Bool {
         switch layoutStyle {
         case .standard:
-            return preferences.showFantasyFixtureLogos
+            return rowPreferences.showFantasyFixtureLogos
         case .compactFixture:
-            return preferences.showCompactFixtureFantasyLogo
+            return rowPreferences.showCompactFixtureFantasyLogo
         }
     }
 
@@ -510,7 +551,7 @@ struct MatchRow: View {
     }
 
     private var compactPrimaryBroadcastLogo: UIImage? {
-        guard preferences.showCompactFixtureTvLogo else { return nil }
+        guard rowPreferences.showCompactFixtureTvLogo else { return nil }
         return primaryBroadcastLogo
     }
 
@@ -819,6 +860,13 @@ struct MatchDetailView: View {
         !shouldShowLineupPitch && !fantasySquadSections.isEmpty
     }
 
+    private var matchRowPreferences: MatchRowPreferences {
+        MatchRowPreferences(
+            preferences: preferences,
+            hasFantasyManagerEntry: !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
+    }
+
     private var tvChannelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if sortedChannels.isEmpty {
@@ -858,7 +906,8 @@ struct MatchDetailView: View {
                     highlightToday: highlightToday,
                     showTeamEvents: true,
                     showFantasyBadge: showFantasyBadge,
-                    fantasyContext: fantasyViewModel.matchRowContext
+                    fantasyContext: fantasyViewModel.matchRowContext,
+                    rowPreferences: matchRowPreferences
                 )
                     .padding(.horizontal)
 

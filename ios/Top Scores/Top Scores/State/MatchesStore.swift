@@ -519,6 +519,8 @@ final class MatchesStore: ObservableObject {
     private struct ModeState {
         var matches: [Match] = []
         var unfilteredMatches: [Match] = []
+        var groupedMatches: [MatchDay] = []
+        var groupedMatchesRevision: Int?
         var page: Int = 0
         var hasMore: Bool = true
         var isLoading: Bool = false
@@ -554,6 +556,7 @@ final class MatchesStore: ObservableObject {
         entries: [],
         defaultPoints: TeamRankingSettings.defaultDefaultElo
     )
+    private var groupingRevision = 0
 
     private let liveRefreshInterval: TimeInterval = 30
     private let bbcLiveRefreshInterval: TimeInterval = 90
@@ -585,6 +588,10 @@ final class MatchesStore: ObservableObject {
         let modeChanged = activeMode != mode
         let snapshotChanged = previousSnapshot != snapshot
         let dataSourceChanged = previousSnapshot?.apiBaseURL != snapshot.apiBaseURL
+        let sortOrderChanged = previousSnapshot?.matchGroupSortOrder != snapshot.matchGroupSortOrder
+        if sortOrderChanged {
+            groupingRevision &+= 1
+        }
         currentSnapshot = snapshot
         activeMode = mode
 
@@ -607,7 +614,6 @@ final class MatchesStore: ObservableObject {
         let currentModeState = state(for: mode)
         if dataSourceChanged ||
             currentModeState.matches.isEmpty ||
-            modeChanged ||
             shouldRefreshOnConfigure(currentModeState) {
             startRefreshTask(preferences: snapshot, mode: mode, reason: "configure")
         } else if mode == .fixtures {
@@ -675,6 +681,7 @@ final class MatchesStore: ObservableObject {
 
     func refreshCompetitionCatalog(using snapshot: PreferencesSnapshot, publishVisibleState: Bool) {
         currentSnapshot = snapshot
+        groupingRevision &+= 1
         reapplyLocalFilters(using: snapshot)
         persistCombinedCacheAndSync(snapshot: snapshot)
         if publishVisibleState {
@@ -848,6 +855,8 @@ final class MatchesStore: ObservableObject {
                 snapshot: effectiveSnapshot,
                 mode: .fixtures
             )
+            nextState.groupedMatches = []
+            nextState.groupedMatchesRevision = nil
             nextState.lastUpdated = Self.maxDate(nextState.lastUpdated, response.lastUpdated)
             nextState.fixtureCoverageEnd = Self.maxDate(nextState.fixtureCoverageEnd, initialEnd)
             nextState.page = 0
@@ -977,6 +986,8 @@ final class MatchesStore: ObservableObject {
                 snapshot: effectiveSnapshot,
                 mode: .results
             )
+            nextState.groupedMatches = []
+            nextState.groupedMatchesRevision = nil
             nextState.page = 0
             nextState.hasMore = false
             nextState.lastUpdated = Self.maxDate(nextState.lastUpdated, response.lastUpdated)
@@ -1130,6 +1141,8 @@ final class MatchesStore: ObservableObject {
                 snapshot: effectiveSnapshot,
                 mode: .fixtures
             )
+            fixtureState.groupedMatches = []
+            fixtureState.groupedMatchesRevision = nil
             fixturesDeferredVisibleUpdatePending = false
         } else {
             fixturesDeferredVisibleUpdatePending = true
@@ -1165,6 +1178,8 @@ final class MatchesStore: ObservableObject {
             snapshot: snapshot,
             mode: .fixtures
         )
+        fixtureState.groupedMatches = []
+        fixtureState.groupedMatchesRevision = nil
         fixtureState.isUsingCache = false
         modeStates[.fixtures] = fixtureState
         fixturesDeferredVisibleUpdatePending = false
@@ -1192,6 +1207,8 @@ final class MatchesStore: ObservableObject {
             snapshot: snapshot,
             mode: .fixtures
         )
+        fixtureState.groupedMatches = []
+        fixtureState.groupedMatchesRevision = nil
         fixtureState.isUsingCache = false
         modeStates[.fixtures] = fixtureState
         fixturesDeferredVisibleUpdatePending = false
@@ -1221,6 +1238,8 @@ final class MatchesStore: ObservableObject {
                 snapshot: snapshot,
                 mode: mode
             )
+            current.groupedMatches = []
+            current.groupedMatchesRevision = nil
             modeStates[mode] = current
             Self.log(
                 "reapply_local_filters mode=\(mode.rawValue) snapshot=\(Self.snapshotDebugSummary(snapshot)) " +
@@ -1408,6 +1427,8 @@ final class MatchesStore: ObservableObject {
             snapshot: snapshot,
             mode: .fixtures
         )
+        fixtureState.groupedMatches = []
+        fixtureState.groupedMatchesRevision = nil
         modeStates[.fixtures] = fixtureState
         if activeMode == .fixtures {
             publishState(for: .fixtures)
@@ -1433,6 +1454,8 @@ final class MatchesStore: ObservableObject {
             snapshot: snapshot,
             mode: .fixtures
         )
+        fixtureState.groupedMatches = []
+        fixtureState.groupedMatchesRevision = nil
         fixtureState.lastUpdated = payload.lastUpdated
         fixtureState.fixtureCoverageEnd = payload.fixtureCoverageEnd
         fixtureState.isUsingCache = true
@@ -1444,6 +1467,8 @@ final class MatchesStore: ObservableObject {
             snapshot: snapshot,
             mode: .results
         )
+        resultState.groupedMatches = []
+        resultState.groupedMatchesRevision = nil
         resultState.lastUpdated = payload.lastUpdated
         resultState.isUsingCache = true
 
@@ -1521,6 +1546,7 @@ final class MatchesStore: ObservableObject {
         lastAppliedTeamRatingDefaultElo = defaultElo
         let nextLookup = TeamRatingLookup(entries: entries, defaultPoints: defaultElo)
         teamRatingLookup = nextLookup
+        groupingRevision &+= 1
         publishState(for: activeMode)
     }
 
@@ -1575,10 +1601,25 @@ final class MatchesStore: ObservableObject {
         groupingTask?.cancel()
         groupingTaskID = nil
         guard visibleModes.contains(mode) else { return }
+        if current.groupedMatchesRevision == groupingRevision {
+            groupedMatches = current.groupedMatches
+            return
+        }
+
         let matchesToGroup = current.matches
+        if matchesToGroup.isEmpty {
+            groupedMatches = []
+            var emptyState = current
+            emptyState.groupedMatches = []
+            emptyState.groupedMatchesRevision = groupingRevision
+            modeStates[mode] = emptyState
+            return
+        }
+
         let descendingDates = (mode == .results)
         let sortOrder = currentSnapshot?.matchGroupSortOrder ?? PreferencesStore.defaultMatchGroupSortOrder
         let ratingLookup = teamRatingLookup
+        let groupingRevisionAtStart = groupingRevision
         let taskID = UUID()
         groupingTaskID = taskID
         groupingTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -1594,6 +1635,7 @@ final class MatchesStore: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self,
                       self.groupingTaskID == taskID,
+                      self.groupingRevision == groupingRevisionAtStart,
                       self.activeMode == mode,
                       self.visibleModes.contains(mode) else { return }
                 if durationMs >= 100 {
@@ -1601,6 +1643,10 @@ final class MatchesStore: ObservableObject {
                         "grouping_complete mode=\(mode.rawValue) matches=\(matchesToGroup.count) days=\(grouped.count) duration_ms=\(durationMs)"
                     )
                 }
+                var cachedState = self.state(for: mode)
+                cachedState.groupedMatches = grouped
+                cachedState.groupedMatchesRevision = groupingRevisionAtStart
+                self.modeStates[mode] = cachedState
                 self.groupedMatches = grouped
             }
         }
