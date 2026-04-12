@@ -79,23 +79,10 @@ private struct ContentLifecycleCoordinator: View {
     @Binding var fantasyTabBadge: String?
     @Binding var fantasyTabShouldPulse: Bool
 
-    @State private var deferredFantasyRefreshTask: Task<Void, Never>?
-
-    private let fantasyLiveRefreshInterval: TimeInterval = 30
-    private let fantasyIdleRefreshInterval: TimeInterval = 5 * 60
-    private let fantasyStartupDelayNanos: UInt64 = 10_000_000_000
-
     var body: some View {
         Color.clear
             .onAppear {
                 updateFantasyTabPresentation()
-            }
-            .onChange(of: selectedTab) { _, newValue in
-                guard newValue == 3 else { return }
-                deferredFantasyRefreshTask?.cancel()
-                deferredFantasyRefreshTask = Task {
-                    await refreshFantasySummaryIfNeeded(force: false)
-                }
             }
             .onChange(of: fantasyManagerEntryID) { _, newValue in
                 updateFantasyTabPresentation()
@@ -114,29 +101,14 @@ private struct ContentLifecycleCoordinator: View {
             }
             .task(id: fantasyManagerEntryID) {
                 updateFantasyTabPresentation()
-                guard selectedTab == 3 else { return }
-                deferredFantasyRefreshTask?.cancel()
-                deferredFantasyRefreshTask = Task {
-                    guard !Task.isCancelled else { return }
-                    await refreshFantasySummaryIfNeeded(force: true)
-                }
             }
             .task(id: preferences.apiBaseURL) {
                 await refreshCompetitionCatalogIfNeeded(force: true)
             }
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else { return }
-                deferredFantasyRefreshTask?.cancel()
                 Task {
                     await refreshCompetitionCatalogIfNeeded(force: false)
-                }
-                guard selectedTab == 3 else { return }
-                deferredFantasyRefreshTask = Task {
-                    if fantasyStartupDelayNanos > 0 {
-                        try? await Task.sleep(nanoseconds: fantasyStartupDelayNanos)
-                    }
-                    guard !Task.isCancelled else { return }
-                    await refreshFantasySummaryIfNeeded(force: false)
                 }
             }
             .onChange(of: preferences.snapshot) { _, _ in
@@ -153,12 +125,6 @@ private struct ContentLifecycleCoordinator: View {
 
     private var trimmedFantasyManagerEntryID: String {
         fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var fantasySummaryRefreshInterval: TimeInterval {
-        fantasyViewModel.data?.hasActiveFixtures == true
-            ? fantasyLiveRefreshInterval
-            : fantasyIdleRefreshInterval
     }
 
     private func updateFantasyTabPresentation() {
@@ -189,26 +155,6 @@ private struct ContentLifecycleCoordinator: View {
     private func isPremierLeagueMatch(_ match: Match) -> Bool {
         match.league.trimmingCharacters(in: .whitespacesAndNewlines)
             .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
-    }
-
-    private func refreshFantasySummaryIfNeeded(force: Bool) async {
-        let managerEntryID = trimmedFantasyManagerEntryID
-        guard !managerEntryID.isEmpty else { return }
-        guard !fantasyViewModel.isLoading, !fantasyViewModel.isRefreshing else { return }
-
-        if !force,
-           let lastUpdated = fantasyViewModel.lastUpdated,
-           fantasyViewModel.data != nil,
-           Date().timeIntervalSince(lastUpdated) < fantasySummaryRefreshInterval {
-            return
-        }
-
-        await fantasyViewModel.refresh(
-            managerEntryID: managerEntryID,
-            apiBaseURL: preferences.apiBaseURL,
-            rivalManagers: [],
-            trackedLeagues: []
-        )
     }
 
     private func refreshCompetitionCatalogIfNeeded(force: Bool) async {

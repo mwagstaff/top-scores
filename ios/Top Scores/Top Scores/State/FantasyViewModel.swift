@@ -3,6 +3,10 @@ import Combine
 
 @MainActor
 final class FantasyViewModel: ObservableObject {
+    private struct DetachedBox<T>: @unchecked Sendable {
+        let value: T
+    }
+
     private static let gameUpdatingUserMessage = "Fantasy Premier League data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
 
     @Published private(set) var isLoading = false
@@ -40,6 +44,9 @@ final class FantasyViewModel: ObservableObject {
     private let seasonFixturesCacheTTL: TimeInterval = 30 * 60
     private var rivalRefreshToken = UUID()
     private var leagueRefreshToken = UUID()
+    private var rivalRefreshTask: Task<Void, Never>?
+    private var leagueRefreshTask: Task<Void, Never>?
+    private var assistantManagerPrewarmTask: Task<Void, Never>?
     private let trackedLeaguePageWindowRadius = 1
     private let setupRivalPageWindowRadius = 1
     private let leagueStandingsPageSize = 50
@@ -95,6 +102,7 @@ final class FantasyViewModel: ObservableObject {
     }
 
     func reset() {
+        cancelBackgroundRefreshWork()
         isLoading = false
         isRefreshing = false
         data = nil
@@ -115,6 +123,17 @@ final class FantasyViewModel: ObservableObject {
         cachedSeasonFixtures = []
         cachedSeasonFixturesFetchedAt = nil
         rebuildMatchRowContext()
+    }
+
+    func cancelBackgroundRefreshWork() {
+        rivalRefreshToken = UUID()
+        leagueRefreshToken = UUID()
+        rivalRefreshTask?.cancel()
+        rivalRefreshTask = nil
+        leagueRefreshTask?.cancel()
+        leagueRefreshTask = nil
+        assistantManagerPrewarmTask?.cancel()
+        assistantManagerPrewarmTask = nil
     }
 
     /// Rebuilds the pre-computed FantasyMatchRowContext published to MatchRow.
@@ -253,6 +272,7 @@ final class FantasyViewModel: ObservableObject {
         }
 
         do {
+            cancelBackgroundRefreshWork()
             let serverClient = APIClient(baseURL: baseURL)
             logPerf("refresh_start entry_id=\(entryID) rivals=\(rivalManagers.count) leagues=\(trackedLeagues.count)")
 
@@ -298,7 +318,7 @@ final class FantasyViewModel: ObservableObject {
                 labelPrefix: "my"
             )
 
-            data = FantasySquadBuilder.build(
+            data = await buildSquadDisplayData(
                 gameweek: squadSnapshot.gameweek,
                 picksResponse: squadSnapshot.picksResponse,
                 liveResponse: squadSnapshot.liveResponse,
@@ -317,7 +337,8 @@ final class FantasyViewModel: ObservableObject {
             } else {
                 let refreshToken = UUID()
                 rivalRefreshToken = refreshToken
-                Task {
+                rivalRefreshTask = Task(priority: .utility) { [weak self] in
+                    guard let self else { return }
                     let refreshedRivals = await self.fetchRivalSquads(
                         rivals: normalizedRivals,
                         gameweek: squadSnapshot.gameweek,
@@ -342,7 +363,8 @@ final class FantasyViewModel: ObservableObject {
             } else {
                 let refreshToken = UUID()
                 leagueRefreshToken = refreshToken
-                Task {
+                leagueRefreshTask = Task(priority: .utility) { [weak self] in
+                    guard let self else { return }
                     let refreshedLeagues = await self.fetchTrackedLeagueStandings(
                         trackedLeagues: normalizedTrackedLeagues,
                         managerEntryID: entryID,
@@ -355,15 +377,13 @@ final class FantasyViewModel: ObservableObject {
             }
             lastUpdated = Date()
             errorMessage = nil
-            Task {
-                await self.prewarmAssistantManagerCache(
-                    entryID: entryID,
-                    apiBaseURL: apiBaseURL
-                )
-            }
             let totalDurationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
             logPerf("refresh_complete entry_id=\(entryID) rivals_loaded=\(rivalSquads.count) duration_ms=\(Int(totalDurationMs))")
         } catch {
+            if Self.isCancellationError(error) {
+                logPerf("refresh_cancelled entry_id=\(entryID)")
+                return
+            }
             let totalDurationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
             logPerf("refresh_failed entry_id=\(entryID) duration_ms=\(Int(totalDurationMs)) error=\"\(error.localizedDescription)\"")
             errorMessage = userFriendlyErrorMessage(for: error)
@@ -760,15 +780,18 @@ final class FantasyViewModel: ObservableObject {
         var refreshedRivals: [FantasyRivalSquad] = []
 
         for rival in rivals {
+            if Task.isCancelled { break }
             do {
                 let rivalProfile = await fetchMyProfile(entryID: rival.entryID)
+                if Task.isCancelled { break }
                 let rivalPicks = try await timed("rival_picks entry_id=\(rival.entryID)") {
                     try await fantasyPublicClient.fetchPicks(
                         entryID: rival.entryID,
                         eventID: gameweek.id
                     )
                 }
-                let rivalSquad = FantasySquadBuilder.build(
+                if Task.isCancelled { break }
+                let rivalSquad = await buildSquadDisplayData(
                     gameweek: gameweek,
                     picksResponse: rivalPicks,
                     liveResponse: liveResponse,
@@ -811,6 +834,7 @@ final class FantasyViewModel: ObservableObject {
         let rivalsSnapshot = rivalSquads
 
         for rival in rivalsSnapshot {
+            if Task.isCancelled { return }
             guard rivalRefreshToken == refreshToken else { return }
 
             let response: FantasyAssistantManagerResponse?
@@ -833,6 +857,7 @@ final class FantasyViewModel: ObservableObject {
                 response = nil
             }
 
+            if Task.isCancelled { return }
             guard rivalRefreshToken == refreshToken else { return }
             guard let index = rivalSquads.firstIndex(where: { $0.entryID == rival.entryID }) else { continue }
 
@@ -865,6 +890,7 @@ final class FantasyViewModel: ObservableObject {
         )
 
         for trackedLeague in trackedLeagues {
+            if Task.isCancelled { break }
             guard let leagueMetadata = leagueMetadataByID[trackedLeague.leagueID] else {
                 continue
             }
@@ -1042,6 +1068,44 @@ final class FantasyViewModel: ObservableObject {
         }
     }
 
+    private func buildSquadDisplayData(
+        gameweek: FantasyGameweek,
+        picksResponse: FantasyPicksResponse,
+        liveResponse: FantasyEventLiveResponse,
+        fixtures: [FantasyFixture],
+        seasonFixtures: [FantasyFixture],
+        bootstrap: FantasyBootstrapLookup
+    ) async -> FantasySquadDisplayData {
+        let input = DetachedBox(
+            value: (
+                gameweek,
+                picksResponse,
+                liveResponse,
+                fixtures,
+                seasonFixtures,
+                bootstrap
+            )
+        )
+        return await Task.detached(priority: .utility) {
+            let (
+                gameweek,
+                picksResponse,
+                liveResponse,
+                fixtures,
+                seasonFixtures,
+                bootstrap
+            ) = input.value
+            return FantasySquadBuilder.build(
+                gameweek: gameweek,
+                picksResponse: picksResponse,
+                liveResponse: liveResponse,
+                fixtures: fixtures,
+                seasonFixtures: seasonFixtures,
+                bootstrap: bootstrap
+            )
+        }.value
+    }
+
     private func page(forRank rank: Int?) -> Int {
         guard let rank, rank > 0 else { return 1 }
         return max(1, Int(ceil(Double(rank) / Double(leagueStandingsPageSize))))
@@ -1214,6 +1278,16 @@ final class FantasyViewModel: ObservableObject {
         #if DEBUG
         print("[FantasyPerf] \(message)")
         #endif
+    }
+
+    private static func isCancellationError(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+        if let urlError = error as? URLError, urlError.code == .cancelled {
+            return true
+        }
+        return false
     }
 }
 

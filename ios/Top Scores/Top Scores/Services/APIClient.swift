@@ -279,8 +279,13 @@ struct APIClient {
     }
 
     func fetchFantasyCurrentGameweek() async throws -> FantasyGameweek {
-        let request = try buildRequest(path: "fantasy/gameweek/current", queryItems: [])
-        let (data, http) = try await performRequest(request, operation: "fantasy_gameweek_current")
+        var request = try buildRequest(path: "fantasy/gameweek/current", queryItems: [])
+        request.timeoutInterval = 4
+        let (data, http) = try await performRequest(
+            request,
+            operation: "fantasy_gameweek_current",
+            maxAttempts: 1
+        )
         try validateSuccess(http, data: data, operation: "fantasy_gameweek_current")
         return try JSONDecoder().decode(FantasyGameweek.self, from: data)
     }

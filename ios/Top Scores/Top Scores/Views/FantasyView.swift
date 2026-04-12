@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 struct FantasyView: View {
     private static let currentInitialSetupVersion = 1
 
-    private struct PendingFantasyRefreshRequest {
+    private struct PendingFantasyRefreshRequest: Equatable {
         let force: Bool
         let rivalManagers: [FantasyRivalManager]
         let trackedLeagues: [FantasyTrackedLeague]
@@ -91,6 +91,11 @@ struct FantasyView: View {
     @State private var isFantasyLoadingInterstitialMinimumDurationMet = false
     @State private var fantasyLoadingInterstitialSessionID = UUID()
     @State private var pendingFantasyRefreshRequest: PendingFantasyRefreshRequest?
+    @State private var inFlightFantasyRefreshRequest: PendingFantasyRefreshRequest?
+    @State private var fantasyRefreshTask: Task<Void, Never>?
+    @State private var lastStartedFantasyRefreshRequest: PendingFantasyRefreshRequest?
+    @State private var lastStartedFantasyRefreshAt: Date?
+    @State private var hasLoadedFantasyStorageState = false
     private let rivalsSectionScrollID = "fantasy-rivals-section"
     private let fantasyLoadingInterstitialMinimumDurationNanoseconds: UInt64 = 3_000_000_000
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
@@ -247,6 +252,7 @@ struct FantasyView: View {
             .onAppear {
                 let storedRivals = loadRivalManagersFromStorage()
                 let storedLeagues = loadTrackedLeaguesFromStorage()
+                hasLoadedFantasyStorageState = true
                 syncManagerEntryIDToSharedDefaults()
                 if managerEntryID.isEmpty {
                     managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
@@ -266,7 +272,14 @@ struct FantasyView: View {
                 consumeSharedFantasyEntryURLIfNeeded()
             }
             .onChange(of: isSelected) { _, selected in
-                guard selected else { return }
+                guard selected else {
+                    fantasyRefreshTask?.cancel()
+                    fantasyRefreshTask = nil
+                    inFlightFantasyRefreshRequest = nil
+                    pendingFantasyRefreshRequest = nil
+                    fantasyViewModel.cancelBackgroundRefreshWork()
+                    return
+                }
                 if isFantasySetupReadyForRefresh {
                     triggerFantasyRefresh(
                         force: fantasyViewModel.data == nil,
@@ -280,7 +293,14 @@ struct FantasyView: View {
                 consumeSharedFantasyEntryURLIfNeeded()
             }
             .onChange(of: scenePhase) { _, newValue in
-                guard newValue == .active else { return }
+                guard newValue == .active else {
+                    fantasyRefreshTask?.cancel()
+                    fantasyRefreshTask = nil
+                    inFlightFantasyRefreshRequest = nil
+                    pendingFantasyRefreshRequest = nil
+                    fantasyViewModel.cancelBackgroundRefreshWork()
+                    return
+                }
                 if isSelected, isFantasySetupReadyForRefresh {
                     triggerFantasyRefresh(
                         force: false,
@@ -320,6 +340,7 @@ struct FantasyView: View {
                     isRunningInitialSetup = false
                 } else {
                     managerValidationErrorMessage = nil
+                    guard hasLoadedFantasyStorageState else { return }
                     if initialSetupVersion < Self.currentInitialSetupVersion {
                         beginInitialSetup()
                     } else {
@@ -2787,16 +2808,27 @@ struct FantasyView: View {
         guard isFantasySetupReadyForRefresh else { return }
         guard isSelected else { return }
         guard scenePhase == .active else { return }
+        guard hasLoadedFantasyStorageState || rivalManagersOverride != nil || trackedLeaguesOverride != nil else { return }
 
         let rivalManagersSnapshot = rivalManagersOverride ?? rivalManagers
         let trackedLeaguesSnapshot = trackedLeaguesOverride ?? trackedLeagues
+        let request = PendingFantasyRefreshRequest(
+            force: force,
+            rivalManagers: rivalManagersSnapshot,
+            trackedLeagues: trackedLeaguesSnapshot
+        )
+        if !force,
+           let lastStartedFantasyRefreshRequest,
+           let lastStartedFantasyRefreshAt,
+           lastStartedFantasyRefreshRequest == request,
+           Date().timeIntervalSince(lastStartedFantasyRefreshAt) < fantasyAutomaticRefreshMinimumInterval {
+            return
+        }
 
-        if fantasyViewModel.isLoading || fantasyViewModel.isRefreshing {
-            pendingFantasyRefreshRequest = PendingFantasyRefreshRequest(
-                force: force,
-                rivalManagers: rivalManagersSnapshot,
-                trackedLeagues: trackedLeaguesSnapshot
-            )
+        if fantasyRefreshTask != nil || fantasyViewModel.isLoading || fantasyViewModel.isRefreshing {
+            if inFlightFantasyRefreshRequest != request {
+                pendingFantasyRefreshRequest = request
+            }
             #if DEBUG
             print(
                 "[FantasyUI] queue_refresh force=\(force) rivals=\(rivalManagersSnapshot.count) leagues=\(trackedLeaguesSnapshot.count)"
@@ -2811,14 +2843,24 @@ struct FantasyView: View {
         )
         #endif
 
-        Task {
+        inFlightFantasyRefreshRequest = request
+        lastStartedFantasyRefreshRequest = request
+        lastStartedFantasyRefreshAt = Date()
+        let task = Task {
             await fantasyViewModel.refresh(
                 managerEntryID: managerEntryID,
                 apiBaseURL: preferences.apiBaseURL,
                 rivalManagers: rivalManagersSnapshot,
                 trackedLeagues: trackedLeaguesSnapshot
             )
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                fantasyRefreshTask = nil
+                inFlightFantasyRefreshRequest = nil
+                drainPendingFantasyRefreshIfNeeded()
+            }
         }
+        fantasyRefreshTask = task
     }
 
     private func migrateLegacyInitialSetupIfNeeded() {
@@ -2928,6 +2970,7 @@ struct FantasyView: View {
 
     private func drainPendingFantasyRefreshIfNeeded() {
         guard let pendingRequest = pendingFantasyRefreshRequest else { return }
+        guard fantasyRefreshTask == nil else { return }
         guard !fantasyViewModel.isLoading, !fantasyViewModel.isRefreshing else { return }
 
         self.pendingFantasyRefreshRequest = nil
@@ -2936,6 +2979,10 @@ struct FantasyView: View {
             rivalManagers: pendingRequest.rivalManagers,
             trackedLeagues: pendingRequest.trackedLeagues
         )
+    }
+
+    private var fantasyAutomaticRefreshMinimumInterval: TimeInterval {
+        fantasyViewModel.data?.hasActiveFixtures == true ? 30 : 15 * 60
     }
 
     private func prepareRivalEntrySheet() {
