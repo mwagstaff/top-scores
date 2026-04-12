@@ -248,7 +248,6 @@ struct MatchesView: View {
         .onAppear {
             guard isSelected else { return }
             matchesStore.setModeVisibility(mode, isVisible: true)
-            LiveActivitySyncService.shared.reconcileOnForeground()
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             NSLog("[MatchesView] onAppear mode=%@ selected=%d snapshot=%@", mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
@@ -259,7 +258,6 @@ struct MatchesView: View {
         .onChange(of: isSelected) { _, selected in
             matchesStore.setModeVisibility(mode, isVisible: selected)
             guard selected else { return }
-            LiveActivitySyncService.shared.reconcileOnForeground()
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             NSLog("[MatchesView] isSelected mode=%@ selected=%d snapshot=%@", mode.rawValue, selected, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)

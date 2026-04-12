@@ -836,6 +836,7 @@ final class MatchesStore: ObservableObject {
                 includePreferenceFilters: false,
                 hydrateStates: false
             )
+            let refreshCompletedAt = Date()
 
             var incoming = response.matches
 
@@ -857,7 +858,10 @@ final class MatchesStore: ObservableObject {
             )
             nextState.groupedMatches = []
             nextState.groupedMatchesRevision = nil
-            nextState.lastUpdated = Self.maxDate(nextState.lastUpdated, response.lastUpdated)
+            nextState.lastUpdated = Self.maxDate(
+                nextState.lastUpdated,
+                response.lastUpdated ?? refreshCompletedAt
+            )
             nextState.fixtureCoverageEnd = Self.maxDate(nextState.fixtureCoverageEnd, initialEnd)
             nextState.page = 0
             nextState.hasMore = false
@@ -964,6 +968,7 @@ final class MatchesStore: ObservableObject {
                 includePreferenceFilters: false,
                 hydrateStates: !shouldReloadHistory
             )
+            let refreshCompletedAt = Date()
 
             var incoming = response.matches
 
@@ -990,7 +995,10 @@ final class MatchesStore: ObservableObject {
             nextState.groupedMatchesRevision = nil
             nextState.page = 0
             nextState.hasMore = false
-            nextState.lastUpdated = Self.maxDate(nextState.lastUpdated, response.lastUpdated)
+            nextState.lastUpdated = Self.maxDate(
+                nextState.lastUpdated,
+                response.lastUpdated ?? refreshCompletedAt
+            )
             nextState.isLoading = false
             nextState.isUsingCache = false
             nextState.errorMessage = nil
@@ -1319,7 +1327,7 @@ final class MatchesStore: ObservableObject {
         return FixtureRangeLoadResult(
             range: range,
             matches: matches,
-            lastUpdated: response.lastUpdated,
+            lastUpdated: response.lastUpdated ?? Date(),
             durationMs: Int(Date().timeIntervalSince(startedAt) * 1000)
         )
     }

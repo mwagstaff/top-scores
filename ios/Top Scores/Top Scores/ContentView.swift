@@ -8,12 +8,77 @@
 import SwiftUI
 
 struct ContentView: View {
+    @AppStorage("fantasy.managerEntryID") private var fantasyManagerEntryID = ""
+    @State private var selectedTab = 0
+    @State private var fantasyTabBadge: String?
+    @State private var fantasyTabShouldPulse = false
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            MatchesView(mode: .fixtures, isSelected: selectedTab == 0)
+                .tabItem {
+                    Label("Fixtures", systemImage: "calendar")
+                }
+                .tag(0)
+            MatchesView(mode: .results, isSelected: selectedTab == 1)
+                .tabItem {
+                    Label("Results", systemImage: "clock.arrow.circlepath")
+                }
+                .tag(1)
+            TablesView()
+                .tabItem {
+                    Label("Tables", systemImage: "tablecells")
+                }
+                .tag(2)
+            FantasyView(isSelected: selectedTab == 3)
+                .tabItem {
+                    Label {
+                        Text("FPL")
+                    } icon: {
+                        Image("FantasyPremierLeagueLionTab")
+                            .renderingMode(.original)
+                            .scaleEffect(fantasyTabShouldPulse ? 1.08 : 1.0)
+                            .animation(
+                                fantasyTabShouldPulse
+                                    ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                                    : .default,
+                                value: fantasyTabShouldPulse
+                            )
+                    }
+                }
+                .badge(fantasyTabBadge)
+                .tag(3)
+            ProfileView()
+                .tabItem {
+                    Label("Profile", systemImage: "person.crop.circle")
+                }
+                .tag(4)
+        }
+        .background(Color(.systemBackground))
+        .overlay {
+            ContentLifecycleCoordinator(
+                selectedTab: $selectedTab,
+                fantasyManagerEntryID: fantasyManagerEntryID,
+                fantasyTabBadge: $fantasyTabBadge,
+                fantasyTabShouldPulse: $fantasyTabShouldPulse
+            )
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+        }
+    }
+}
+
+private struct ContentLifecycleCoordinator: View {
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var matchesStore: MatchesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
-    @AppStorage("fantasy.managerEntryID") private var fantasyManagerEntryID = ""
-    @State private var selectedTab = 0
+
+    @Binding var selectedTab: Int
+    let fantasyManagerEntryID: String
+    @Binding var fantasyTabBadge: String?
+    @Binding var fantasyTabShouldPulse: Bool
+
     @State private var deferredFantasyRefreshTask: Task<Void, Never>?
 
     private let fantasyLiveRefreshInterval: TimeInterval = 30
@@ -21,49 +86,10 @@ struct ContentView: View {
     private let fantasyStartupDelayNanos: UInt64 = 10_000_000_000
 
     var body: some View {
-        GeometryReader { proxy in
-            TabView(selection: $selectedTab) {
-                MatchesView(mode: .fixtures, isSelected: selectedTab == 0)
-                    .tabItem {
-                        Label("Fixtures", systemImage: "calendar")
-                    }
-                    .tag(0)
-                MatchesView(mode: .results, isSelected: selectedTab == 1)
-                    .tabItem {
-                        Label("Results", systemImage: "clock.arrow.circlepath")
-                    }
-                    .tag(1)
-                TablesView()
-                    .tabItem {
-                        Label("Tables", systemImage: "tablecells")
-                    }
-                    .tag(2)
-                FantasyView(isSelected: selectedTab == 3)
-                    .tabItem {
-                        Label {
-                            Text("FPL")
-                        } icon: {
-                            Image("FantasyPremierLeagueLionTab")
-                                .renderingMode(.original)
-                                .scaleEffect(fantasyTabShouldPulse ? 1.08 : 1.0)
-                                .animation(
-                                    fantasyTabShouldPulse
-                                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
-                                        : .default,
-                                    value: fantasyTabShouldPulse
-                                )
-                        }
-                    }
-                    .badge(fantasyTabBadge)
-                    .tag(3)
-                ProfileView()
-                    .tabItem {
-                        Label("Profile", systemImage: "person.crop.circle")
-                    }
-                    .tag(4)
+        Color.clear
+            .onAppear {
+                updateFantasyTabPresentation()
             }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
-            .background(Color(.systemBackground))
             .onChange(of: selectedTab) { _, newValue in
                 guard newValue == 3 else { return }
                 deferredFantasyRefreshTask?.cancel()
@@ -72,16 +98,22 @@ struct ContentView: View {
                 }
             }
             .onChange(of: fantasyManagerEntryID) { _, newValue in
+                updateFantasyTabPresentation()
                 Task {
                     await syncFantasyState(managerEntryID: newValue, squad: nil)
                 }
             }
             .onChange(of: fantasyViewModel.data) { _, newValue in
+                updateFantasyTabPresentation()
                 Task {
                     await syncFantasyState(managerEntryID: fantasyManagerEntryID, squad: newValue)
                 }
             }
+            .onChange(of: matchesStore.matches) { _, _ in
+                updateFantasyTabPresentation()
+            }
             .task(id: fantasyManagerEntryID) {
+                updateFantasyTabPresentation()
                 deferredFantasyRefreshTask?.cancel()
                 deferredFantasyRefreshTask = Task {
                     if selectedTab != 3 {
@@ -118,44 +150,46 @@ struct ContentView: View {
                 let snapshot = newValue ? preferences.unfilteredSnapshot : preferences.snapshot
                 matchesStore.prepareForPreferencesChange(snapshot, publishVisibleState: false)
             }
-        }
     }
 
     private var trimmedFantasyManagerEntryID: String {
         fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var fantasyTabBadge: String? {
-        guard !trimmedFantasyManagerEntryID.isEmpty,
-              let score = fantasyViewModel.data?.resolvedCurrentScore else {
-            return nil
-        }
-
-        return "\(score)"
+    private var fantasySummaryRefreshInterval: TimeInterval {
+        fantasyViewModel.data?.hasActiveFixtures == true
+            ? fantasyLiveRefreshInterval
+            : fantasyIdleRefreshInterval
     }
 
-    private var fantasyTabShouldPulse: Bool {
-        guard !trimmedFantasyManagerEntryID.isEmpty,
-              let squad = fantasyViewModel.data else {
-            return false
+    private func updateFantasyTabPresentation() {
+        let nextBadge: String?
+        let nextShouldPulse: Bool
+
+        if !trimmedFantasyManagerEntryID.isEmpty,
+           let squad = fantasyViewModel.data {
+            nextBadge = "\(squad.resolvedCurrentScore)"
+            nextShouldPulse = matchesStore.matches.contains { match in
+                guard isPremierLeagueMatch(match), match.isInProgress else { return false }
+                return squad.matchSquadSection(forTeamName: match.homeTeam)?.hasPlayers == true ||
+                    squad.matchSquadSection(forTeamName: match.awayTeam)?.hasPlayers == true
+            }
+        } else {
+            nextBadge = nil
+            nextShouldPulse = false
         }
 
-        return matchesStore.matches.contains { match in
-            guard isPremierLeagueMatch(match), match.isInProgress else { return false }
-            return squad.matchSquadSection(forTeamName: match.homeTeam)?.hasPlayers == true ||
-                squad.matchSquadSection(forTeamName: match.awayTeam)?.hasPlayers == true
+        if fantasyTabBadge != nextBadge {
+            fantasyTabBadge = nextBadge
+        }
+        if fantasyTabShouldPulse != nextShouldPulse {
+            fantasyTabShouldPulse = nextShouldPulse
         }
     }
 
     private func isPremierLeagueMatch(_ match: Match) -> Bool {
         match.league.trimmingCharacters(in: .whitespacesAndNewlines)
             .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
-    }
-
-    private var fantasySummaryRefreshInterval: TimeInterval {
-        fantasyViewModel.data?.hasActiveFixtures == true
-            ? fantasyLiveRefreshInterval
-            : fantasyIdleRefreshInterval
     }
 
     private func refreshFantasySummaryIfNeeded(force: Bool) async {

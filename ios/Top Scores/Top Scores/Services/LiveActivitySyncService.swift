@@ -52,6 +52,8 @@ final class LiveActivitySyncService {
     private var activityPushTokenTasks: [String: Task<Void, Never>] = [:]
     private var activityContentTasks: [String: Task<Void, Never>] = [:]
     private var activityStateTasks: [String: Task<Void, Never>] = [:]
+    private var lastUploadedPushToStartTokenHex: String?
+    private var lastUploadedActivityPushTokenHexByActivityID: [String: String] = [:]
 
     private init() {}
 
@@ -207,6 +209,7 @@ final class LiveActivitySyncService {
         let pushTask = activityPushTokenTasks.removeValue(forKey: activityID)
         let contentTask = activityContentTasks.removeValue(forKey: activityID)
         let stateTask = activityStateTasks.removeValue(forKey: activityID)
+        lastUploadedActivityPushTokenHexByActivityID.removeValue(forKey: activityID)
         observedActivityIDs.remove(activityID)
         lock.unlock()
 
@@ -241,6 +244,14 @@ final class LiveActivitySyncService {
                 }
             }
         }
+
+        guard activeActivities.isEmpty else {
+            #if DEBUG
+            await fetchServerDebugState()
+            #endif
+            return
+        }
+
         let reconcileResponse = await requestLiveActivityReconcile()
         // If no active activity and the server has live content, start one directly
         // so push-to-start (which requires background) is not the only path.
@@ -250,7 +261,9 @@ final class LiveActivitySyncService {
         if currentActivities.isEmpty, let contentState = reconcileResponse {
             await startForegroundActivityIfNeeded(contentState: contentState)
         }
+        #if DEBUG
         await fetchServerDebugState()
+        #endif
     }
 
     @available(iOS 16.1, *)
@@ -287,21 +300,39 @@ final class LiveActivitySyncService {
     }
 
     private func uploadPushToStartToken(_ tokenData: Data) async {
+        let tokenHex = Self.hexString(from: tokenData)
+        lock.lock()
+        let shouldUpload = lastUploadedPushToStartTokenHex != tokenHex
+        if shouldUpload {
+            lastUploadedPushToStartTokenHex = tokenHex
+        }
+        lock.unlock()
+        guard shouldUpload else { return }
+
         guard let endpoint = await endpointURL(path: "live-activity/push-to-start-token") else { return }
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
-            "pushToStartToken": Self.hexString(from: tokenData),
+            "pushToStartToken": tokenHex,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
         ]
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "push-to-start")
     }
 
     private func uploadActivityPushToken(activityID: String, tokenData: Data) async {
+        let tokenHex = Self.hexString(from: tokenData)
+        lock.lock()
+        let shouldUpload = lastUploadedActivityPushTokenHexByActivityID[activityID] != tokenHex
+        if shouldUpload {
+            lastUploadedActivityPushTokenHexByActivityID[activityID] = tokenHex
+        }
+        lock.unlock()
+        guard shouldUpload else { return }
+
         guard let endpoint = await endpointURL(path: "live-activity/activity-token") else { return }
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "activityId": activityID,
-            "activityPushToken": Self.hexString(from: tokenData),
+            "activityPushToken": tokenHex,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
         ]
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "activity-token")
