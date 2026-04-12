@@ -337,6 +337,59 @@ test("confirmScoreCorrection waits for longer stable reversion when live text ha
   assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
 });
 
+test("confirmScoreCorrection falls back when BBC only shows generic VAR context", async () => {
+  const reversionState = {
+    baseline: {
+      home_score: 1,
+      away_score: 0,
+      score_status: "16",
+    },
+    reverted: {
+      home_score: 0,
+      away_score: 0,
+      score_status: "17",
+    },
+    affectedTeam: "home",
+    consecutivePolls: 5,
+    removedGoal: {
+      team: "home",
+      player: "Marc Cucurella",
+      goalTime: "16'",
+      assister: null,
+      minute: 16,
+    },
+  };
+
+  const confirmation = await __testHooks.confirmScoreCorrection(
+    "cwyxndndp4pt",
+    {
+      home_team: "Chelsea",
+      away_team: "Manchester City",
+      details_url: "https://www.bbc.co.uk/sport/football/live/cwyxndndp4pt",
+    },
+    reversionState,
+    {
+      fetchLiveText: async () => ({
+        entries: [
+          {
+            minute: "17'",
+            minute_value: 17,
+            text: "Delay in match because of VAR check.",
+          },
+        ],
+      }),
+    }
+  );
+
+  assert.deepStrictEqual(confirmation, {
+    team: "home",
+    scorer: "Marc Cucurella",
+    goalMinuteLabel: "16'",
+    correctionMinuteLabel: null,
+  });
+  assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
+});
+
 test("buildVarDisallowedGoalEvent uses goal notification semantics and reverted scoreline", () => {
   const event = __testHooks.buildVarDisallowedGoalEvent(
     "cr5lln18q4lt",

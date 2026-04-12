@@ -1479,12 +1479,11 @@ async function resolveScoreReversion(matchId, newMatch, reversionState, options 
   if (nearbyVarEntry) {
     logDecision("score_correction_confirmation", {
       match_id: matchId,
-      result: "awaiting_var_resolution",
+      result: "fallback_after_unresolved_var_context",
       consecutive_polls: Number(reversionState.consecutivePolls || 0),
       var_minute: nearbyVarEntry.minute || null,
       expected_scorer: expectedScorer || null,
     });
-    return null;
   }
 
   const goalMinuteLabel =
