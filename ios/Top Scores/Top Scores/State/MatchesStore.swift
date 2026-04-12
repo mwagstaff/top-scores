@@ -528,6 +528,7 @@ final class MatchesStore: ObservableObject {
         var fixtureCoverageEnd: Date?
         var isUsingCache: Bool = false
         var errorMessage: String?
+        var lastValidatedSnapshot: PreferencesSnapshot?
     }
 
     private var refreshTimer: Timer?
@@ -562,7 +563,7 @@ final class MatchesStore: ObservableObject {
     private let bbcLiveRefreshInterval: TimeInterval = 90
     private let cacheStateRefreshInterval: TimeInterval = 30
     private let configureRefreshInterval: TimeInterval = 30
-    private let fixturesInitialLoadDays = 90
+    private let fixturesInitialLoadDays = 14
     private let fixturesFutureLoadDays = 90
     private let fixturesLazyBatchDays = 14
     private let fixturesLazyParallelRequests = 1
@@ -719,6 +720,14 @@ final class MatchesStore: ObservableObject {
         await refresh(preferences: preferences, mode: activeMode)
     }
 
+    func queueRefresh(
+        preferences: PreferencesSnapshot,
+        mode: MatchesViewMode,
+        reason: String = "manual_refresh"
+    ) {
+        startRefreshTask(preferences: preferences, mode: mode, reason: reason)
+    }
+
     func refresh(preferences: PreferencesSnapshot, mode: MatchesViewMode) async {
         if mode == .fixtures {
             await refreshFixtures(preferences: preferences)
@@ -814,7 +823,7 @@ final class MatchesStore: ObservableObject {
             title: "Initial fixtures start",
             summary:
                 "window=\(Self.formatDateForLog(Self.startOfToday()))...\(Self.formatDateForLog(Self.dayOffset(fixturesInitialLoadDays - 1, from: Self.startOfToday()))) " +
-                "page_size=\(fixturesLazyPageSize) hydrate_states=true stored_before=\(fixtureState.unfilteredMatches.count)"
+                "page_size=\(fixturesLazyPageSize) hydrate_states=false stored_before=\(fixtureState.unfilteredMatches.count)"
         )
 
         fixturesBackgroundLoadTask?.cancel()
@@ -831,6 +840,9 @@ final class MatchesStore: ObservableObject {
         do {
             let today = Self.startOfToday()
             let initialEnd = Self.dayOffset(fixturesInitialLoadDays - 1, from: today)
+            let ifModifiedSince = fixtureState.lastValidatedSnapshot == preferences
+                ? fixtureState.lastUpdated
+                : nil
             let response = try await client.fetchMatchesInRange(
                 preferences: preferences,
                 mode: .fixtures,
@@ -838,9 +850,40 @@ final class MatchesStore: ObservableObject {
                 endDate: initialEnd,
                 pageSize: fixturesLazyPageSize,
                 includePreferenceFilters: false,
-                hydrateStates: false
+                hydrateStates: false,
+                ifModifiedSince: ifModifiedSince
             )
             let refreshCompletedAt = Date()
+
+            if response.isNotModified {
+                var nextState = state(for: .fixtures)
+                nextState.lastUpdated = Self.maxDate(
+                    nextState.lastUpdated,
+                    response.lastUpdated ?? refreshCompletedAt
+                )
+                nextState.isLoading = false
+                nextState.isUsingCache = false
+                nextState.errorMessage = nil
+                nextState.lastValidatedSnapshot = preferences
+                modeStates[.fixtures] = nextState
+
+                Self.log(
+                    "fixtures_refresh_not_modified visible=\(nextState.matches.count) stored=\(nextState.unfilteredMatches.count) " +
+                    "last_updated=\(Self.formatDateForLog(nextState.lastUpdated)) coverage_end=\(Self.formatDateForLog(nextState.fixtureCoverageEnd))"
+                )
+                FixtureLoadDiagnosticsStore.shared.record(
+                    title: "Initial fixtures unchanged",
+                    summary:
+                        "window=\(Self.formatDateForLog(today))...\(Self.formatDateForLog(initialEnd)) " +
+                        "duration_ms=\(Int(Date().timeIntervalSince(requestStartedAt) * 1000))"
+                )
+
+                if activeMode == .fixtures {
+                    publishState(for: .fixtures)
+                }
+                scheduleRemainingFixtureLoadingIfNeeded(preferences: resolvedSnapshot(for: preferences))
+                return
+            }
 
             var incoming = response.matches
 
@@ -866,12 +909,15 @@ final class MatchesStore: ObservableObject {
                 nextState.lastUpdated,
                 response.lastUpdated ?? refreshCompletedAt
             )
-            nextState.fixtureCoverageEnd = Self.maxDate(nextState.fixtureCoverageEnd, initialEnd)
+            // Keep the interactive refresh window small so pull-to-refresh returns quickly.
+            // Longer-range future fixtures are refreshed separately in background batches.
+            nextState.fixtureCoverageEnd = initialEnd
             nextState.page = 0
             nextState.hasMore = false
             nextState.isLoading = false
             nextState.isUsingCache = false
             nextState.errorMessage = nil
+            nextState.lastValidatedSnapshot = preferences
             modeStates[.fixtures] = nextState
             let durationMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
 
@@ -886,7 +932,7 @@ final class MatchesStore: ObservableObject {
                 summary:
                     "window=\(Self.formatDateForLog(today))...\(Self.formatDateForLog(initialEnd)) " +
                     "duration_ms=\(durationMs) returned=\(incoming.count) visible=\(nextState.matches.count) stored=\(nextState.unfilteredMatches.count) " +
-                    "page_size=\(fixturesLazyPageSize) hydrate_states=true"
+                    "page_size=\(fixturesLazyPageSize) hydrate_states=false"
             )
 
             persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
@@ -963,6 +1009,9 @@ final class MatchesStore: ObservableObject {
         }
 
         do {
+            let ifModifiedSince = resultState.lastValidatedSnapshot == preferences
+                ? resultState.lastUpdated
+                : nil
             let response = try await client.fetchMatchesInRange(
                 preferences: preferences,
                 mode: .results,
@@ -970,9 +1019,33 @@ final class MatchesStore: ObservableObject {
                 endDate: loadRange.upperBound,
                 pageSize: resultsHistoryPageSize,
                 includePreferenceFilters: false,
-                hydrateStates: !shouldReloadHistory
+                hydrateStates: !shouldReloadHistory,
+                ifModifiedSince: ifModifiedSince
             )
             let refreshCompletedAt = Date()
+
+            if response.isNotModified {
+                var nextState = state(for: .results)
+                nextState.lastUpdated = Self.maxDate(
+                    nextState.lastUpdated,
+                    response.lastUpdated ?? refreshCompletedAt
+                )
+                nextState.isLoading = false
+                nextState.isUsingCache = false
+                nextState.errorMessage = nil
+                nextState.lastValidatedSnapshot = preferences
+                modeStates[.results] = nextState
+                Self.log(
+                    "results_refresh_not_modified visible=\(nextState.matches.count) stored=\(nextState.unfilteredMatches.count) " +
+                    "range=\(Self.formatDateForLog(loadRange.lowerBound))...\(Self.formatDateForLog(loadRange.upperBound)) " +
+                    "duration_ms=\(Int(Date().timeIntervalSince(requestStartedAt) * 1000))"
+                )
+                if activeMode == .results {
+                    publishState(for: .results)
+                }
+                updateRefreshTimer(using: resolvedSnapshot(for: preferences), matches: combinedLoadedMatches())
+                return
+            }
 
             var incoming = response.matches
 
@@ -1006,6 +1079,7 @@ final class MatchesStore: ObservableObject {
             nextState.isLoading = false
             nextState.isUsingCache = false
             nextState.errorMessage = nil
+            nextState.lastValidatedSnapshot = preferences
 
             modeStates[.results] = nextState
             Self.log(

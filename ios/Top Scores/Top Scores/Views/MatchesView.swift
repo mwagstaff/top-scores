@@ -394,7 +394,12 @@ struct MatchesView: View {
         .safeAreaPadding(.bottom, 80)
         .refreshable {
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-            await matchesStore.refresh(preferences: snapshot, mode: mode)
+            matchesStore.queueRefresh(
+                preferences: snapshot,
+                mode: mode,
+                reason: "pull_to_refresh"
+            )
+            await Task.yield()
         }
     }
 

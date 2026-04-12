@@ -9353,6 +9353,26 @@ function newestIsoTimestamp(values) {
   return best ? best.value : null;
 }
 
+function setLastModifiedHeaders(res, latestUpdated) {
+  if (!latestUpdated) return;
+  res.set("X-Last-Updated", latestUpdated);
+  const latestDate = new Date(latestUpdated);
+  if (Number.isFinite(latestDate.getTime())) {
+    res.set("Last-Modified", latestDate.toUTCString());
+  }
+}
+
+function isNotModifiedRequest(req, latestUpdated) {
+  if (!latestUpdated) return false;
+  const latestTimestamp = Date.parse(latestUpdated);
+  if (!Number.isFinite(latestTimestamp)) return false;
+  const ifModifiedSince = req.get("If-Modified-Since");
+  if (!ifModifiedSince) return false;
+  const clientTimestamp = Date.parse(ifModifiedSince);
+  if (!Number.isFinite(clientTimestamp)) return false;
+  return Math.floor(latestTimestamp / 1000) <= Math.floor(clientTimestamp / 1000);
+}
+
 function parseKickoff(match) {
   if (!match || !match.date || !match.time) return null;
   const dateParts = String(match.date).split("-").map((part) => Number(part));
@@ -18463,15 +18483,21 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
     ]);
     const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
-    const latestUpdated = newestIsoTimestamp([canonicalSnapshot.updated_at]);
-    if (latestUpdated) {
-      res.set("X-Last-Updated", latestUpdated);
-    }
+    const latestUpdated = newestIsoTimestamp([
+      canonicalSnapshot.updated_at,
+      mergedDataset.updated_at,
+      bbcRangeDataset.updated_at,
+    ]);
+    setLastModifiedHeaders(res, latestUpdated);
     res.set("X-Operational-Source", canonicalSnapshot.source || "unknown");
     res.set(
       "X-Operational-Match-Details-Source",
       canonicalSnapshot.source || "unknown"
     );
+    if (isNotModifiedRequest(req, latestUpdated)) {
+      res.status(304).end();
+      return;
+    }
 
     const leagues = normalizeListParam(req.query.league).map(normalizeLeagueName);
     const teams = normalizeListParam(req.query.team);

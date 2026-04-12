@@ -72,7 +72,11 @@ struct APIClient {
             lastUpdated = fixtures.lastUpdated ?? results.lastUpdated
         }
 
-        return MatchResponse(matches: sorted, lastUpdated: lastUpdated)
+        return MatchResponse(
+            matches: sorted,
+            lastUpdated: lastUpdated,
+            isNotModified: false
+        )
     }
 
     func fetchMatchesPage(
@@ -82,7 +86,8 @@ struct APIClient {
         pageSize: Int = 120,
         dateRangeQueryItems: [URLQueryItem]? = nil,
         includePreferenceFilters: Bool = true,
-        hydrateStates: Bool = true
+        hydrateStates: Bool = true,
+        ifModifiedSince: Date? = nil
     ) async throws -> MatchPageResponse {
         let queryItems = Self.matchesPageQueryItems(
             preferences: preferences,
@@ -93,17 +98,32 @@ struct APIClient {
             includePreferenceFilters: includePreferenceFilters
         )
 
-        let request = try buildRequest(path: "matches", queryItems: queryItems)
+        var request = try buildRequest(path: "matches", queryItems: queryItems)
+        if let ifModifiedSince {
+            request.setValue(
+                Self.httpDateFormatter.string(from: ifModifiedSince),
+                forHTTPHeaderField: "If-Modified-Since"
+            )
+        }
         let (data, http) = try await performRequest(request, operation: "matches_page")
         try validateSuccess(http, data: data, operation: "matches_page")
+        let lastUpdated = Self.lastUpdated(from: http) ?? ifModifiedSince
+        if http.statusCode == 304 {
+            return MatchPageResponse(
+                matches: [],
+                lastUpdated: lastUpdated,
+                page: max(1, page),
+                pageSize: max(1, pageSize),
+                totalCount: 0,
+                hasMore: false,
+                isNotModified: true
+            )
+        }
         let decodedMatches = try decodeMatches(from: data, operation: "matches_page")
         let matches = hydrateStates
             ? try await hydrateMatchStates(decodedMatches)
             : decodedMatches
 
-        let lastUpdated = http
-            .value(forHTTPHeaderField: "X-Last-Updated")
-            .flatMap { ISO8601DateFormatter().date(from: $0) }
         let totalCount = http
             .value(forHTTPHeaderField: "X-Total-Count")
             .flatMap(Int.init) ?? matches.count
@@ -124,7 +144,8 @@ struct APIClient {
             page: resolvedPage,
             pageSize: resolvedPageSize,
             totalCount: totalCount,
-            hasMore: hasMore
+            hasMore: hasMore,
+            isNotModified: false
         )
     }
 
@@ -169,7 +190,8 @@ struct APIClient {
         endDate: Date,
         pageSize: Int = 500,
         includePreferenceFilters: Bool = true,
-        hydrateStates: Bool = true
+        hydrateStates: Bool = true,
+        ifModifiedSince: Date? = nil
     ) async throws -> MatchResponse {
         try await fetchAllMatches(
             preferences: preferences,
@@ -177,7 +199,8 @@ struct APIClient {
             pageSize: pageSize,
             dateRangeQueryItems: Self.dateRangeQueryItems(startDate: startDate, endDate: endDate),
             includePreferenceFilters: includePreferenceFilters,
-            hydrateStates: hydrateStates
+            hydrateStates: hydrateStates,
+            ifModifiedSince: ifModifiedSince
         )
     }
 
@@ -544,7 +567,8 @@ struct APIClient {
         pageSize: Int = 120,
         dateRangeQueryItems: [URLQueryItem]? = nil,
         includePreferenceFilters: Bool = true,
-        hydrateStates: Bool = true
+        hydrateStates: Bool = true,
+        ifModifiedSince: Date? = nil
     ) async throws -> MatchResponse {
         var page = 1
         var allMatches: [Match] = []
@@ -559,8 +583,16 @@ struct APIClient {
                 pageSize: pageSize,
                 dateRangeQueryItems: dateRangeQueryItems,
                 includePreferenceFilters: includePreferenceFilters,
-                hydrateStates: hydrateStates
+                hydrateStates: hydrateStates,
+                ifModifiedSince: page == 1 ? ifModifiedSince : nil
             )
+            if response.isNotModified {
+                return MatchResponse(
+                    matches: [],
+                    lastUpdated: response.lastUpdated,
+                    isNotModified: true
+                )
+            }
             response.matches.forEach { match in
                 if !seen.contains(match.id) {
                     seen.insert(match.id)
@@ -582,7 +614,11 @@ struct APIClient {
             page += 1
         }
 
-        return MatchResponse(matches: allMatches, lastUpdated: lastUpdated)
+        return MatchResponse(
+            matches: allMatches,
+            lastUpdated: lastUpdated,
+            isNotModified: false
+        )
     }
 
     private func hydrateMatchStates(_ matches: [Match]) async throws -> [Match] {
@@ -608,6 +644,20 @@ struct APIClient {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
+
+    private static let httpDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss 'GMT'"
+        return formatter
+    }()
+
+    private static func lastUpdated(from response: HTTPURLResponse) -> Date? {
+        response
+            .value(forHTTPHeaderField: "X-Last-Updated")
+            .flatMap { ISO8601DateFormatter().date(from: $0) }
+    }
 
     private func buildRequest(path: String, queryItems: [URLQueryItem]) throws -> URLRequest {
         let resolvedURL = path
@@ -690,11 +740,13 @@ struct APIClient {
         data: Data,
         operation: String
     ) throws {
-        if response.statusCode == 304, !data.isEmpty {
-            Self.log(
-                "WARN",
-                "not_modified_with_body op=\(operation) status=304 bytes=\(data.count) proceeding_with_cached_body"
-            )
+        if response.statusCode == 304 {
+            if !data.isEmpty {
+                Self.log(
+                    "WARN",
+                    "not_modified_with_body op=\(operation) status=304 bytes=\(data.count) proceeding_with_cached_body"
+                )
+            }
             return
         }
         guard (200...299).contains(response.statusCode) else {
@@ -837,6 +889,7 @@ enum APIClientError: LocalizedError {
 struct MatchResponse {
     let matches: [Match]
     let lastUpdated: Date?
+    let isNotModified: Bool
 }
 
 struct CompetitionCatalogEntry: Codable, Hashable, Sendable {
@@ -863,6 +916,7 @@ struct MatchPageResponse {
     let pageSize: Int
     let totalCount: Int
     let hasMore: Bool
+    let isNotModified: Bool
 }
 
 private struct MatchStatesRequestBody: Encodable {
