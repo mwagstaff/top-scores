@@ -221,7 +221,7 @@ struct FantasyPicksResponse: Codable, Hashable {
         }
     }
 
-    var activeChips: [FantasyChip] {
+    nonisolated var activeChips: [FantasyChip] {
         activeChipCodes.map(FantasyChip.init(code:))
     }
 }
@@ -2303,7 +2303,7 @@ enum FantasyPlayerDetailsBuilder {
 }
 
 enum FantasySquadBuilder {
-    static func build(
+    nonisolated static func build(
         gameweek: FantasyGameweek,
         picksResponse: FantasyPicksResponse,
         liveResponse: FantasyEventLiveResponse,
@@ -2828,7 +2828,7 @@ enum FantasySquadBuilder {
         )
     }
 
-    private static func resolveDisplayedDeadline(
+    private nonisolated static func resolveDisplayedDeadline(
         currentGameweek: FantasyGameweek,
         events: [FantasyGameweek],
         now: Date
@@ -2855,24 +2855,24 @@ enum FantasySquadBuilder {
         return currentGameweek
     }
 
-    private static func parseDeadline(_ rawValue: String?) -> Date? {
+    private nonisolated static func parseDeadline(_ rawValue: String?) -> Date? {
         let trimmed = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if let date = deadlineFormatterWithFractionalSeconds.date(from: trimmed) {
+        if let date = makeDeadlineFormatterWithFractionalSeconds().date(from: trimmed) {
             return date
         }
-        return deadlineFormatter.date(from: trimmed)
+        return makeDeadlineFormatter().date(from: trimmed)
     }
 
-    private static let deadlineFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+    private nonisolated static func makeDeadlineFormatterWithFractionalSeconds() -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
-    }()
+    }
 
-    private static let deadlineFormatter: ISO8601DateFormatter = {
+    private nonisolated static func makeDeadlineFormatter() -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
-    }()
+    }
 }

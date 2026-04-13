@@ -24,7 +24,7 @@ struct MatchGoalScorer: Codable, Hashable, Sendable {
         case playerName = "player_name"
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if let decodedPlayer = try container.decodeIfPresent(String.self, forKey: .player) {
             player = decodedPlayer
@@ -35,6 +35,13 @@ struct MatchGoalScorer: Codable, Hashable, Sendable {
         goalTimes = try container.decodeIfPresent([String].self, forKey: .goalTimes) ?? []
         ownGoalTimes = try container.decodeIfPresent([String].self, forKey: .ownGoalTimes) ?? []
         disallowedGoalTimes = try container.decodeIfPresent([String].self, forKey: .disallowedGoalTimes) ?? []
+    }
+
+    nonisolated static func == (lhs: MatchGoalScorer, rhs: MatchGoalScorer) -> Bool {
+        lhs.player == rhs.player &&
+        lhs.goalTimes == rhs.goalTimes &&
+        lhs.ownGoalTimes == rhs.ownGoalTimes &&
+        lhs.disallowedGoalTimes == rhs.disallowedGoalTimes
     }
 }
 
@@ -66,6 +73,11 @@ struct MatchAssistProvider: Codable, Hashable, Sendable {
         }
         assistTimes = try container.decodeIfPresent([String].self, forKey: .assistTimes) ?? []
     }
+
+    nonisolated static func == (lhs: MatchAssistProvider, rhs: MatchAssistProvider) -> Bool {
+        lhs.player == rhs.player &&
+        lhs.assistTimes == rhs.assistTimes
+    }
 }
 
 struct MatchRedCardEvent: Codable, Hashable, Sendable {
@@ -96,6 +108,11 @@ struct MatchRedCardEvent: Codable, Hashable, Sendable {
         }
         redCardTimes = try container.decodeIfPresent([String].self, forKey: .redCardTimes) ?? []
     }
+
+    nonisolated static func == (lhs: MatchRedCardEvent, rhs: MatchRedCardEvent) -> Bool {
+        lhs.player == rhs.player &&
+        lhs.redCardTimes == rhs.redCardTimes
+    }
 }
 
 struct MatchYellowCardEvent: Codable, Hashable, Sendable {
@@ -125,6 +142,11 @@ struct MatchYellowCardEvent: Codable, Hashable, Sendable {
             player = try alternate.decodeIfPresent(String.self, forKey: .playerName) ?? ""
         }
         yellowCardTimes = try container.decodeIfPresent([String].self, forKey: .yellowCardTimes) ?? []
+    }
+
+    nonisolated static func == (lhs: MatchYellowCardEvent, rhs: MatchYellowCardEvent) -> Bool {
+        lhs.player == rhs.player &&
+        lhs.yellowCardTimes == rhs.yellowCardTimes
     }
 }
 
@@ -164,6 +186,15 @@ struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
             .map(String.init)
             .joined(separator: " ")
     }
+
+    nonisolated static func == (lhs: MatchLineupPlayer, rhs: MatchLineupPlayer) -> Bool {
+        lhs.number == rhs.number &&
+        lhs.name == rhs.name &&
+        lhs.positionCategory == rhs.positionCategory &&
+        lhs.formationRowIndex == rhs.formationRowIndex &&
+        lhs.formationSlotIndex == rhs.formationSlotIndex &&
+        lhs.formationRowSize == rhs.formationRowSize
+    }
 }
 
 struct MatchLineupSubstitution: Codable, Hashable, Identifiable, Sendable {
@@ -179,6 +210,12 @@ struct MatchLineupSubstitution: Codable, Hashable, Identifiable, Sendable {
         case minute
         case playerOff = "player_off"
         case playerOn = "player_on"
+    }
+
+    nonisolated static func == (lhs: MatchLineupSubstitution, rhs: MatchLineupSubstitution) -> Bool {
+        lhs.minute == rhs.minute &&
+        lhs.playerOff == rhs.playerOff &&
+        lhs.playerOn == rhs.playerOn
     }
 }
 
@@ -198,11 +235,25 @@ struct MatchTeamLineup: Codable, Hashable, Sendable {
         case substitutes
         case substitutions
     }
+
+    nonisolated static func == (lhs: MatchTeamLineup, rhs: MatchTeamLineup) -> Bool {
+        lhs.team == rhs.team &&
+        lhs.manager == rhs.manager &&
+        lhs.formation == rhs.formation &&
+        lhs.startingLineup == rhs.startingLineup &&
+        lhs.substitutes == rhs.substitutes &&
+        lhs.substitutions == rhs.substitutions
+    }
 }
 
 struct MatchTeamLineups: Codable, Hashable, Sendable {
     let home: MatchTeamLineup?
     let away: MatchTeamLineup?
+
+    nonisolated static func == (lhs: MatchTeamLineups, rhs: MatchTeamLineups) -> Bool {
+        lhs.home == rhs.home &&
+        lhs.away == rhs.away
+    }
 }
 
 struct MatchDetailsPayload: Codable, Hashable, Sendable {
@@ -641,6 +692,69 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case isTestMatch = "is_test_match"
     }
 
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(date, forKey: .date)
+        try container.encode(time, forKey: .time)
+        try container.encode(homeTeam, forKey: .homeTeam)
+        try container.encode(awayTeam, forKey: .awayTeam)
+        try container.encode(league, forKey: .league)
+        try container.encodeIfPresent(leagueSubcategory, forKey: .leagueSubcategory)
+        try container.encodeIfPresent(detailsURL, forKey: .detailsURL)
+        try container.encodeIfPresent(matchDetailsIDValue, forKey: .matchDetailsIDValue)
+        try container.encodeIfPresent(hasBbcSourceValue, forKey: .hasBbcSourceValue)
+        try container.encode(tvChannels, forKey: .tvChannels)
+        try container.encodeIfPresent(homeScore, forKey: .homeScore)
+        try container.encodeIfPresent(awayScore, forKey: .awayScore)
+        try container.encodeIfPresent(aggregateHomeScore, forKey: .aggregateHomeScore)
+        try container.encodeIfPresent(aggregateAwayScore, forKey: .aggregateAwayScore)
+        try container.encodeIfPresent(firstLegHomeScore, forKey: .firstLegHomeScore)
+        try container.encodeIfPresent(firstLegAwayScore, forKey: .firstLegAwayScore)
+        try container.encodeIfPresent(scoreStatus, forKey: .scoreStatus)
+        try container.encode(homeGoalScorers, forKey: .homeGoalScorers)
+        try container.encode(awayGoalScorers, forKey: .awayGoalScorers)
+        try container.encode(homeAssists, forKey: .homeAssists)
+        try container.encode(awayAssists, forKey: .awayAssists)
+        try container.encode(homeYellowCards, forKey: .homeYellowCards)
+        try container.encode(awayYellowCards, forKey: .awayYellowCards)
+        try container.encode(homeRedCards, forKey: .homeRedCards)
+        try container.encode(awayRedCards, forKey: .awayRedCards)
+        try container.encodeIfPresent(teamLineups, forKey: .teamLineups)
+        try container.encodeIfPresent(penaltyResult, forKey: .penaltyResult)
+        try container.encodeIfPresent(isTestMatch, forKey: .isTestMatch)
+    }
+
+    nonisolated static func == (lhs: Match, rhs: Match) -> Bool {
+        lhs.date == rhs.date &&
+        lhs.time == rhs.time &&
+        lhs.homeTeam == rhs.homeTeam &&
+        lhs.awayTeam == rhs.awayTeam &&
+        lhs.league == rhs.league &&
+        lhs.leagueSubcategory == rhs.leagueSubcategory &&
+        lhs.detailsURL == rhs.detailsURL &&
+        lhs.matchDetailsIDValue == rhs.matchDetailsIDValue &&
+        lhs.hasBbcSourceValue == rhs.hasBbcSourceValue &&
+        lhs.tvChannels == rhs.tvChannels &&
+        lhs.homeScore == rhs.homeScore &&
+        lhs.awayScore == rhs.awayScore &&
+        lhs.aggregateHomeScore == rhs.aggregateHomeScore &&
+        lhs.aggregateAwayScore == rhs.aggregateAwayScore &&
+        lhs.firstLegHomeScore == rhs.firstLegHomeScore &&
+        lhs.firstLegAwayScore == rhs.firstLegAwayScore &&
+        lhs.scoreStatus == rhs.scoreStatus &&
+        lhs.homeGoalScorers == rhs.homeGoalScorers &&
+        lhs.awayGoalScorers == rhs.awayGoalScorers &&
+        lhs.homeAssists == rhs.homeAssists &&
+        lhs.awayAssists == rhs.awayAssists &&
+        lhs.homeYellowCards == rhs.homeYellowCards &&
+        lhs.awayYellowCards == rhs.awayYellowCards &&
+        lhs.homeRedCards == rhs.homeRedCards &&
+        lhs.awayRedCards == rhs.awayRedCards &&
+        lhs.teamLineups == rhs.teamLineups &&
+        lhs.penaltyResult == rhs.penaltyResult &&
+        lhs.isTestMatch == rhs.isTestMatch
+    }
+
     func withDetails(_ details: MatchDetailsPayload) -> Match {
         guard isCompatible(with: details) else {
             return self
@@ -936,29 +1050,18 @@ enum MatchStatusFormatter {
         let currentState = statusState(for: currentStatus)
         let incomingState = statusState(for: incomingStatus)
 
-        if currentState == .postponed && incomingState == .unknown {
+        switch (currentState, incomingState) {
+        case (.postponed, .unknown):
             return currentStatus
-        }
-        if incomingState == .postponed && currentState == .unknown {
+        case (.unknown, .postponed):
             return incomingStatus
-        }
-        if currentState == .postponed && incomingState == .postponed {
+        case (.postponed, .postponed):
             return incomingStatus
-        }
-        if currentState == .postponed && incomingState != .unknown {
+        case (.postponed, _):
             return incomingStatus
-        }
-        if incomingState == .postponed && currentState != .unknown {
+        case (_, .postponed):
             return currentStatus
-        }
-
-        if currentState == .finished && incomingState != .finished {
-            return currentStatus
-        }
-        if incomingState == .finished && currentState != .finished {
-            return incomingStatus
-        }
-        if currentState == .finished && incomingState == .finished {
+        case (.finished, .finished):
             if currentStatus == "AET" && incomingStatus == "FT" {
                 return currentStatus
             }
@@ -966,6 +1069,12 @@ enum MatchStatusFormatter {
                 return incomingStatus
             }
             return incomingStatus
+        case (.finished, _):
+            return currentStatus
+        case (_, .finished):
+            return incomingStatus
+        default:
+            break
         }
 
         let currentMinute = parseMatchTimeMinutes(currentStatus)
@@ -1100,7 +1209,7 @@ enum MatchStatusFormatter {
         return .unknown
     }
 
-    private enum StatusState {
+    private enum StatusState: Sendable {
         case postponed
         case finished
         case inProgress
@@ -1113,7 +1222,7 @@ enum MatchDateParser {
     private nonisolated static let displayFormatterLock = NSLock()
     private nonisolated(unsafe) static var parsedDatesByKey: [String: Date] = [:]
     private nonisolated(unsafe) static var invalidParseKeys: Set<String> = []
-    private nonisolated(unsafe) static let displayDateFormatter: DateFormatter = {
+    private nonisolated static let displayDateFormatter: DateFormatter = {
         let dateFormatter = DateFormatter()
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.timeZone = TimeZone.current

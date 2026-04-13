@@ -13,9 +13,9 @@ enum PerformanceSignposter {
         #endif
     }
 
-    nonisolated(unsafe) static let startup = makeSignposter(category: "performance.startup")
-    nonisolated(unsafe) static let matches = makeSignposter(category: "performance.matches")
-    nonisolated(unsafe) static let fantasy = makeSignposter(category: "performance.fantasy")
-    nonisolated(unsafe) static let liveActivity = makeSignposter(category: "performance.liveActivity")
-    nonisolated(unsafe) static let preferences = makeSignposter(category: "performance.preferences")
+    nonisolated static let startup = makeSignposter(category: "performance.startup")
+    nonisolated static let matches = makeSignposter(category: "performance.matches")
+    nonisolated static let fantasy = makeSignposter(category: "performance.fantasy")
+    nonisolated static let liveActivity = makeSignposter(category: "performance.liveActivity")
+    nonisolated static let preferences = makeSignposter(category: "performance.preferences")
 }

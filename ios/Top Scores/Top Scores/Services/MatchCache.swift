@@ -1,6 +1,6 @@
 import Foundation
 
-struct CacheGenerationSnapshot: Codable, Hashable {
+struct CacheGenerationSnapshot: Codable, Hashable, Sendable {
     let matches: Int
     let matchDetails: Int
     let bbcLive: Int
@@ -13,18 +13,18 @@ struct CacheGenerationSnapshot: Codable, Hashable {
         case updatedAt = "updated_at"
     }
 
-    init(matches: Int = 0, matchDetails: Int = 0, bbcLive: Int = 0, updatedAt: Date? = nil) {
+    nonisolated init(matches: Int = 0, matchDetails: Int = 0, bbcLive: Int = 0, updatedAt: Date? = nil) {
         self.matches = max(0, matches)
         self.matchDetails = max(0, matchDetails)
         self.bbcLive = max(0, bbcLive)
         self.updatedAt = updatedAt
     }
 
-    var hasAnyGeneration: Bool {
+    nonisolated var hasAnyGeneration: Bool {
         matches > 0 || matchDetails > 0 || bbcLive > 0
     }
 
-    func merged(with other: CacheGenerationSnapshot) -> CacheGenerationSnapshot {
+    nonisolated func merged(with other: CacheGenerationSnapshot) -> CacheGenerationSnapshot {
         CacheGenerationSnapshot(
             matches: max(matches, other.matches),
             matchDetails: max(matchDetails, other.matchDetails),
@@ -33,40 +33,63 @@ struct CacheGenerationSnapshot: Codable, Hashable {
         )
     }
 
-    func invalidationResult(comparedTo previous: CacheGenerationSnapshot) -> CacheInvalidationResult {
+    nonisolated func invalidationResult(comparedTo previous: CacheGenerationSnapshot) -> CacheInvalidationResult {
         CacheInvalidationResult(
             matchesChanged: matches > previous.matches,
             matchDetailsChanged: matchDetails > previous.matchDetails,
             bbcLiveChanged: bbcLive > previous.bbcLive
         )
     }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        matches = max(0, try container.decodeIfPresent(Int.self, forKey: .matches) ?? 0)
+        matchDetails = max(0, try container.decodeIfPresent(Int.self, forKey: .matchDetails) ?? 0)
+        bbcLive = max(0, try container.decodeIfPresent(Int.self, forKey: .bbcLive) ?? 0)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(matches, forKey: .matches)
+        try container.encode(matchDetails, forKey: .matchDetails)
+        try container.encode(bbcLive, forKey: .bbcLive)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+    }
+
+    nonisolated static func == (lhs: CacheGenerationSnapshot, rhs: CacheGenerationSnapshot) -> Bool {
+        lhs.matches == rhs.matches &&
+        lhs.matchDetails == rhs.matchDetails &&
+        lhs.bbcLive == rhs.bbcLive &&
+        lhs.updatedAt == rhs.updatedAt
+    }
 }
 
-struct CacheInvalidationResult: Hashable {
+struct CacheInvalidationResult: Hashable, Sendable {
     let matchesChanged: Bool
     let matchDetailsChanged: Bool
     let bbcLiveChanged: Bool
 
-    static let none = CacheInvalidationResult(
+    nonisolated static let none = CacheInvalidationResult(
         matchesChanged: false,
         matchDetailsChanged: false,
         bbcLiveChanged: false
     )
 
-    var hasChanges: Bool {
+    nonisolated var hasChanges: Bool {
         matchesChanged || matchDetailsChanged || bbcLiveChanged
     }
 
-    var shouldClearMatchCaches: Bool {
+    nonisolated var shouldClearMatchCaches: Bool {
         matchesChanged || matchDetailsChanged
     }
 
-    var shouldClearBbcLiveCache: Bool {
+    nonisolated var shouldClearBbcLiveCache: Bool {
         bbcLiveChanged
     }
 }
 
-struct MatchCachePayload: Codable {
+struct MatchCachePayload: Codable, Sendable {
     let cacheFormatVersion: Int?
     let snapshot: PreferencesSnapshot
     let matches: [Match]
@@ -83,7 +106,7 @@ struct MatchCachePayload: Codable {
         case cacheGenerations = "cache_generations"
     }
 
-    init(
+    nonisolated init(
         cacheFormatVersion: Int?,
         snapshot: PreferencesSnapshot,
         matches: [Match],
@@ -98,12 +121,32 @@ struct MatchCachePayload: Codable {
         self.fixtureCoverageEnd = fixtureCoverageEnd
         self.cacheGenerations = cacheGenerations
     }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cacheFormatVersion = try container.decodeIfPresent(Int.self, forKey: .cacheFormatVersion)
+        snapshot = try container.decode(PreferencesSnapshot.self, forKey: .snapshot)
+        matches = try container.decode([Match].self, forKey: .matches)
+        lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated)
+        fixtureCoverageEnd = try container.decodeIfPresent(Date.self, forKey: .fixtureCoverageEnd)
+        cacheGenerations = try container.decodeIfPresent(CacheGenerationSnapshot.self, forKey: .cacheGenerations)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(cacheFormatVersion, forKey: .cacheFormatVersion)
+        try container.encode(snapshot, forKey: .snapshot)
+        try container.encode(matches, forKey: .matches)
+        try container.encodeIfPresent(lastUpdated, forKey: .lastUpdated)
+        try container.encodeIfPresent(fixtureCoverageEnd, forKey: .fixtureCoverageEnd)
+        try container.encodeIfPresent(cacheGenerations, forKey: .cacheGenerations)
+    }
 }
 
 enum MatchCache {
-    private static let fileName = "matches-cache.json"
-    private static let knownGenerationsKey = "match_cache.known_server_generations"
-    private static let currentCacheFormatVersion = 3
+    private nonisolated static let fileName = "matches-cache.json"
+    private nonisolated static let knownGenerationsKey = "match_cache.known_server_generations"
+    private nonisolated static let currentCacheFormatVersion = 3
 
     nonisolated static func load(for snapshot: PreferencesSnapshot) -> MatchCachePayload? {
         guard let data = try? Data(contentsOf: cacheURL) else { return nil }

@@ -4,10 +4,6 @@ import os
 
 @MainActor
 final class FantasyViewModel: ObservableObject {
-    private struct DetachedBox<T>: @unchecked Sendable {
-        let value: T
-    }
-
     private static let gameUpdatingUserMessage = "Fantasy Premier League data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
 
     @Published private(set) var isLoading = false
@@ -1086,35 +1082,22 @@ final class FantasyViewModel: ObservableObject {
         seasonFixtures: [FantasyFixture],
         bootstrap: FantasyBootstrapLookup
     ) async -> FantasySquadDisplayData {
-        let input = DetachedBox(
-            value: (
-                gameweek,
-                picksResponse,
-                liveResponse,
-                fixtures,
-                seasonFixtures,
-                bootstrap
-            )
-        )
+        let gameweekCopy = gameweek
+        let picksResponseCopy = picksResponse
+        let liveResponseCopy = liveResponse
+        let fixturesCopy = fixtures
+        let seasonFixturesCopy = seasonFixtures
+        let bootstrapCopy = bootstrap
         return await Task.detached(priority: .utility) {
             let signpost = PerformanceSignposter.fantasy.beginInterval("FantasyBuildSquadDisplayData")
             defer { PerformanceSignposter.fantasy.endInterval("FantasyBuildSquadDisplayData", signpost) }
-
-            let (
-                gameweek,
-                picksResponse,
-                liveResponse,
-                fixtures,
-                seasonFixtures,
-                bootstrap
-            ) = input.value
             return FantasySquadBuilder.build(
-                gameweek: gameweek,
-                picksResponse: picksResponse,
-                liveResponse: liveResponse,
-                fixtures: fixtures,
-                seasonFixtures: seasonFixtures,
-                bootstrap: bootstrap
+                gameweek: gameweekCopy,
+                picksResponse: picksResponseCopy,
+                liveResponse: liveResponseCopy,
+                fixtures: fixturesCopy,
+                seasonFixtures: seasonFixturesCopy,
+                bootstrap: bootstrapCopy
             )
         }.value
     }

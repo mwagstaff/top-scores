@@ -30,26 +30,66 @@ enum AppGroupConfig {
     nonisolated static let competitionCatalogFetchedAtKey = "catalog.competitionWeightsFetchedAt"
 }
 
-struct SharedMatchesPayload: Codable, Equatable {
+struct SharedMatchesPayload: Codable, Equatable, Sendable {
     let snapshot: PreferencesSnapshot
     let matches: [Match]
     let unfilteredMatches: [Match]
     let lastUpdated: Date?
     let generatedAt: Date
 
-    static func == (lhs: SharedMatchesPayload, rhs: SharedMatchesPayload) -> Bool {
+    nonisolated static func == (lhs: SharedMatchesPayload, rhs: SharedMatchesPayload) -> Bool {
         lhs.snapshot == rhs.snapshot &&
         lhs.matches == rhs.matches &&
         lhs.unfilteredMatches == rhs.unfilteredMatches &&
         lhs.lastUpdated == rhs.lastUpdated
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case snapshot
+        case matches
+        case unfilteredMatches
+        case lastUpdated
+        case generatedAt
+    }
+
+    nonisolated init(
+        snapshot: PreferencesSnapshot,
+        matches: [Match],
+        unfilteredMatches: [Match],
+        lastUpdated: Date?,
+        generatedAt: Date
+    ) {
+        self.snapshot = snapshot
+        self.matches = matches
+        self.unfilteredMatches = unfilteredMatches
+        self.lastUpdated = lastUpdated
+        self.generatedAt = generatedAt
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        snapshot = try container.decode(PreferencesSnapshot.self, forKey: .snapshot)
+        matches = try container.decode([Match].self, forKey: .matches)
+        unfilteredMatches = try container.decode([Match].self, forKey: .unfilteredMatches)
+        lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(snapshot, forKey: .snapshot)
+        try container.encode(matches, forKey: .matches)
+        try container.encode(unfilteredMatches, forKey: .unfilteredMatches)
+        try container.encodeIfPresent(lastUpdated, forKey: .lastUpdated)
+        try container.encode(generatedAt, forKey: .generatedAt)
+    }
 }
 
-struct FantasySharedImportPayload: Codable, Equatable {
+struct FantasySharedImportPayload: Codable, Equatable, Sendable {
     let rawURL: String
     let updatedAt: TimeInterval
 
-    var trimmedRawURL: String {
+    nonisolated var trimmedRawURL: String {
         rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
@@ -114,8 +154,10 @@ enum SharedMatchesBridge {
         saveRawData(data)
         saveSnapshotToSharedDefaults(snapshot)
         WidgetCenter.shared.reloadAllTimelines()
-        PhoneWatchSyncService.shared.activate()
-        PhoneWatchSyncService.shared.sendLatestPayload(data)
+        Task { @MainActor in
+            PhoneWatchSyncService.shared.activate()
+            PhoneWatchSyncService.shared.sendLatestPayload(data)
+        }
     }
 
     nonisolated static func loadRawData() -> Data? {

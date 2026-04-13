@@ -311,12 +311,13 @@ final class LiveActivitySyncService {
 
     private func uploadPushToStartToken(_ tokenData: Data) async {
         let tokenHex = Self.hexString(from: tokenData)
-        lock.lock()
-        let shouldUpload = lastUploadedPushToStartTokenHex != tokenHex
-        if shouldUpload {
-            lastUploadedPushToStartTokenHex = tokenHex
+        let shouldUpload = lock.withLock {
+            let shouldUpload = lastUploadedPushToStartTokenHex != tokenHex
+            if shouldUpload {
+                lastUploadedPushToStartTokenHex = tokenHex
+            }
+            return shouldUpload
         }
-        lock.unlock()
         guard shouldUpload else { return }
 
         guard let endpoint = await endpointURL(path: "live-activity/push-to-start-token") else { return }
@@ -330,12 +331,13 @@ final class LiveActivitySyncService {
 
     private func uploadActivityPushToken(activityID: String, tokenData: Data) async {
         let tokenHex = Self.hexString(from: tokenData)
-        lock.lock()
-        let shouldUpload = lastUploadedActivityPushTokenHexByActivityID[activityID] != tokenHex
-        if shouldUpload {
-            lastUploadedActivityPushTokenHexByActivityID[activityID] = tokenHex
+        let shouldUpload = lock.withLock {
+            let shouldUpload = lastUploadedActivityPushTokenHexByActivityID[activityID] != tokenHex
+            if shouldUpload {
+                lastUploadedActivityPushTokenHexByActivityID[activityID] = tokenHex
+            }
+            return shouldUpload
         }
-        lock.unlock()
         guard shouldUpload else { return }
 
         guard let endpoint = await endpointURL(path: "live-activity/activity-token") else { return }

@@ -244,6 +244,73 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showFantasyExpectedPoints = try container.decodeIfPresent(Bool.self, forKey: .showFantasyExpectedPoints) ?? legacyShowFantasyMatchPills
         showFantasyRealTimePoints = try container.decodeIfPresent(Bool.self, forKey: .showFantasyRealTimePoints) ?? legacyShowFantasyMatchPills
     }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(selectedLeagues, forKey: .selectedLeagues)
+        try container.encode(selectedChannels, forKey: .selectedChannels)
+        try container.encode(competitionFilterEnabled, forKey: .competitionFilterEnabled)
+        try container.encode(channelFilterEnabled, forKey: .channelFilterEnabled)
+        try container.encode(englishPremierLeagueTeamsOnly, forKey: .englishPremierLeagueTeamsOnly)
+        try container.encode(majorUEFAClubGamesEnabled, forKey: .majorUEFAClubGamesEnabled)
+        try container.encode(homeNationsFilterEnabled, forKey: .homeNationsFilterEnabled)
+        try container.encode(majorTournamentsFilterEnabled, forKey: .majorTournamentsFilterEnabled)
+        try container.encode(apiBaseURL, forKey: .apiBaseURL)
+        try container.encode(refreshIntervalMinutes, forKey: .refreshIntervalMinutes)
+        try container.encode(showAllMatches, forKey: .showAllMatches)
+        try container.encode(matchGroupSortOrder, forKey: .matchGroupSortOrder)
+        try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
+        try container.encode(notificationDelayMinutes, forKey: .notificationDelayMinutes)
+        try container.encode(Array(notificationEventTypes).sorted(), forKey: .notificationEventTypes)
+        try container.encode(notificationUseViewingFilter, forKey: .notificationUseViewingFilter)
+        try container.encode(notificationCompetitionFilterEnabled, forKey: .notificationCompetitionFilterEnabled)
+        try container.encode(notificationSelectedLeagues, forKey: .notificationSelectedLeagues)
+        try container.encode(notificationPremierLeagueTeamsOnly, forKey: .notificationPremierLeagueTeamsOnly)
+        try container.encode(notificationMajorUEFAClubGamesEnabled, forKey: .notificationMajorUEFAClubGamesEnabled)
+        try container.encode(notificationHomeNationsFilterEnabled, forKey: .notificationHomeNationsFilterEnabled)
+        try container.encode(notificationMajorTournamentsFilterEnabled, forKey: .notificationMajorTournamentsFilterEnabled)
+        try container.encode(fantasyDeadlineRemindersEnabled, forKey: .fantasyDeadlineRemindersEnabled)
+        try container.encode(showTodayUnfinishedFixturesBadge, forKey: .showTodayUnfinishedFixturesBadge)
+        try container.encode(fixturesViewDensity, forKey: .fixturesViewDensity)
+        try container.encode(showCompactFixtureTvLogo, forKey: .showCompactFixtureTvLogo)
+        try container.encode(showCompactFixtureFantasyLogo, forKey: .showCompactFixtureFantasyLogo)
+        try container.encode(showFantasyFixtureLogos, forKey: .showFantasyFixtureLogos)
+        try container.encode(showFantasyExpectedPoints, forKey: .showFantasyExpectedPoints)
+        try container.encode(showFantasyRealTimePoints, forKey: .showFantasyRealTimePoints)
+    }
+
+    nonisolated static func == (lhs: PreferencesSnapshot, rhs: PreferencesSnapshot) -> Bool {
+        lhs.selectedLeagues == rhs.selectedLeagues &&
+        lhs.selectedChannels == rhs.selectedChannels &&
+        lhs.competitionFilterEnabled == rhs.competitionFilterEnabled &&
+        lhs.channelFilterEnabled == rhs.channelFilterEnabled &&
+        lhs.englishPremierLeagueTeamsOnly == rhs.englishPremierLeagueTeamsOnly &&
+        lhs.majorUEFAClubGamesEnabled == rhs.majorUEFAClubGamesEnabled &&
+        lhs.homeNationsFilterEnabled == rhs.homeNationsFilterEnabled &&
+        lhs.majorTournamentsFilterEnabled == rhs.majorTournamentsFilterEnabled &&
+        lhs.apiBaseURL == rhs.apiBaseURL &&
+        lhs.refreshIntervalMinutes == rhs.refreshIntervalMinutes &&
+        lhs.showAllMatches == rhs.showAllMatches &&
+        lhs.matchGroupSortOrder == rhs.matchGroupSortOrder &&
+        lhs.notificationsEnabled == rhs.notificationsEnabled &&
+        lhs.notificationDelayMinutes == rhs.notificationDelayMinutes &&
+        lhs.notificationEventTypes == rhs.notificationEventTypes &&
+        lhs.notificationUseViewingFilter == rhs.notificationUseViewingFilter &&
+        lhs.notificationCompetitionFilterEnabled == rhs.notificationCompetitionFilterEnabled &&
+        lhs.notificationSelectedLeagues == rhs.notificationSelectedLeagues &&
+        lhs.notificationPremierLeagueTeamsOnly == rhs.notificationPremierLeagueTeamsOnly &&
+        lhs.notificationMajorUEFAClubGamesEnabled == rhs.notificationMajorUEFAClubGamesEnabled &&
+        lhs.notificationHomeNationsFilterEnabled == rhs.notificationHomeNationsFilterEnabled &&
+        lhs.notificationMajorTournamentsFilterEnabled == rhs.notificationMajorTournamentsFilterEnabled &&
+        lhs.fantasyDeadlineRemindersEnabled == rhs.fantasyDeadlineRemindersEnabled &&
+        lhs.showTodayUnfinishedFixturesBadge == rhs.showTodayUnfinishedFixturesBadge &&
+        lhs.fixturesViewDensity == rhs.fixturesViewDensity &&
+        lhs.showCompactFixtureTvLogo == rhs.showCompactFixtureTvLogo &&
+        lhs.showCompactFixtureFantasyLogo == rhs.showCompactFixtureFantasyLogo &&
+        lhs.showFantasyFixtureLogos == rhs.showFantasyFixtureLogos &&
+        lhs.showFantasyExpectedPoints == rhs.showFantasyExpectedPoints &&
+        lhs.showFantasyRealTimePoints == rhs.showFantasyRealTimePoints
+    }
 }
 
 @MainActor
