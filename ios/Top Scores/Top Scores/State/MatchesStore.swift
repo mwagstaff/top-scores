@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import os
 
 struct MatchDay: Identifiable, Hashable, Sendable {
     let id: String
@@ -77,7 +78,7 @@ enum MatchScoreResolver {
         }
     }
 
-    static func preferredStatus(current: String?, incoming: String?) -> String? {
+    nonisolated static func preferredStatus(current: String?, incoming: String?) -> String? {
         MatchStatusFormatter.preferredStatus(current: current, incoming: incoming)
     }
 
@@ -551,6 +552,7 @@ final class MatchesStore: ObservableObject {
     private var teamRankingsRefreshTask: Task<Void, Never>?
     private var groupingTask: Task<Void, Never>?
     private var groupingTaskID: UUID?
+    private var cachePersistTask: Task<Void, Never>?
     private var lastAppliedTeamRankingEntries: [TeamRankingEntry] = []
     private var lastAppliedTeamRatingDefaultElo = TeamRankingSettings.defaultDefaultElo
     private var teamRatingLookup = TeamRatingLookup(
@@ -585,6 +587,9 @@ final class MatchesStore: ObservableObject {
     }
 
     func configure(with snapshot: PreferencesSnapshot, mode: MatchesViewMode) {
+        let signpost = PerformanceSignposter.matches.beginInterval("MatchesConfigure")
+        defer { PerformanceSignposter.matches.endInterval("MatchesConfigure", signpost) }
+
         let previousSnapshot = currentSnapshot
         let modeChanged = activeMode != mode
         let snapshotChanged = previousSnapshot != snapshot
@@ -658,6 +663,8 @@ final class MatchesStore: ObservableObject {
         bbcLiveRefreshTask = nil
         fixturesBackgroundLoadTask?.cancel()
         fixturesBackgroundLoadTask = nil
+        cachePersistTask?.cancel()
+        cachePersistTask = nil
         teamRankingsRefreshTask?.cancel()
         teamRankingsRefreshTask = nil
     }
@@ -796,6 +803,9 @@ final class MatchesStore: ObservableObject {
     }
 
     private func refreshFixtures(preferences: PreferencesSnapshot) async {
+        let signpost = PerformanceSignposter.matches.beginInterval("MatchesRefreshFixtures")
+        defer { PerformanceSignposter.matches.endInterval("MatchesRefreshFixtures", signpost) }
+
         guard let baseURL = URL(string: preferences.apiBaseURL) else {
             setError("Invalid API base URL.", for: .fixtures)
             return
@@ -967,6 +977,9 @@ final class MatchesStore: ObservableObject {
     }
 
     private func refreshResults(preferences: PreferencesSnapshot) async {
+        let signpost = PerformanceSignposter.matches.beginInterval("MatchesRefreshResults")
+        defer { PerformanceSignposter.matches.endInterval("MatchesRefreshResults", signpost) }
+
         guard let baseURL = URL(string: preferences.apiBaseURL) else {
             setError("Invalid API base URL.", for: .results)
             return
@@ -1202,6 +1215,9 @@ final class MatchesStore: ObservableObject {
         fallbackSnapshot: PreferencesSnapshot,
         publishImmediately: Bool
     ) {
+        let signpost = PerformanceSignposter.matches.beginInterval("MatchesApplyFixtureLazyBatch")
+        defer { PerformanceSignposter.matches.endInterval("MatchesApplyFixtureLazyBatch", signpost) }
+
         guard !loadedRanges.isEmpty else { return }
 
         var fixtureState = state(for: .fixtures)
@@ -1287,6 +1303,9 @@ final class MatchesStore: ObservableObject {
     }
 
     private func applyDeferredFixtureVisibilityUpdate(snapshot: PreferencesSnapshot) {
+        let signpost = PerformanceSignposter.matches.beginInterval("MatchesApplyDeferredFixtureVisibility")
+        defer { PerformanceSignposter.matches.endInterval("MatchesApplyDeferredFixtureVisibility", signpost) }
+
         var fixtureState = state(for: .fixtures)
         fixtureState.matches = visibleMatches(
             from: fixtureState.unfilteredMatches,
@@ -1305,13 +1324,16 @@ final class MatchesStore: ObservableObject {
     }
 
     private func persistDeferredFixtureCache(snapshot: PreferencesSnapshot) {
-        let unfilteredCombined = Self.sortedMatches(combinedUnfilteredMatches())
-        guard !unfilteredCombined.isEmpty else { return }
-        MatchCache.save(
-            matches: unfilteredCombined,
-            lastUpdated: latestLastUpdatedAcrossModes(),
-            fixtureCoverageEnd: state(for: .fixtures).fixtureCoverageEnd,
-            snapshot: snapshot
+        let unfilteredCollections = modeStates.values.map(\.unfilteredMatches)
+        let latestUpdated = latestLastUpdatedAcrossModes()
+        let fixtureCoverageEnd = state(for: .fixtures).fixtureCoverageEnd
+        scheduleCachePersistence(
+            visibleMatchCollections: [],
+            unfilteredMatchCollections: unfilteredCollections,
+            latestUpdated: latestUpdated,
+            fixtureCoverageEnd: fixtureCoverageEnd,
+            snapshot: snapshot,
+            syncSharedBridge: false
         )
     }
 
@@ -1412,6 +1434,8 @@ final class MatchesStore: ObservableObject {
 
     private func reconcileServerCacheStateIfNeeded(client: APIClient, force: Bool = false) async {
         guard shouldRefreshCacheState(force: force) else { return }
+        let signpost = PerformanceSignposter.matches.beginInterval("MatchesCacheStateRefresh")
+        defer { PerformanceSignposter.matches.endInterval("MatchesCacheStateRefresh", signpost) }
         do {
             let serverState = try await client.fetchCacheState()
             cacheStateLastFetchedAt = Date()
@@ -1561,32 +1585,28 @@ final class MatchesStore: ObservableObject {
         modeStates = [.fixtures: fixtureState, .results: resultState]
         bbcLiveLastFetchedAt = nil
         publishState(for: activeMode)
-
-        let combinedUnfiltered = Self.sortedMatches(deduplicatedCachedMatches)
-        SharedMatchesBridge.saveAndSync(
-            matches: Self.sortedMatches(combinedLoadedMatches()),
-            unfilteredMatches: combinedUnfiltered,
-            lastUpdated: payload.lastUpdated,
-            snapshot: snapshot
+        scheduleCachePersistence(
+            visibleMatchCollections: modeStates.values.map(\.matches),
+            unfilteredMatchCollections: modeStates.values.map(\.unfilteredMatches),
+            latestUpdated: payload.lastUpdated,
+            fixtureCoverageEnd: payload.fixtureCoverageEnd,
+            snapshot: snapshot,
+            syncSharedBridge: true
         )
     }
 
     private func persistCombinedCacheAndSync(snapshot: PreferencesSnapshot) {
-        let combined = Self.sortedMatches(combinedLoadedMatches())
-        let unfilteredCombined = Self.sortedMatches(combinedUnfilteredMatches())
-        guard !unfilteredCombined.isEmpty else { return }
+        let visibleCollections = modeStates.values.map(\.matches)
+        let unfilteredCollections = modeStates.values.map(\.unfilteredMatches)
         let latestUpdated = latestLastUpdatedAcrossModes()
-        MatchCache.save(
-            matches: unfilteredCombined,
-            lastUpdated: latestUpdated,
-            fixtureCoverageEnd: state(for: .fixtures).fixtureCoverageEnd,
-            snapshot: snapshot
-        )
-        SharedMatchesBridge.saveAndSync(
-            matches: combined,
-            unfilteredMatches: unfilteredCombined,
-            lastUpdated: latestUpdated,
-            snapshot: snapshot
+        let fixtureCoverageEnd = state(for: .fixtures).fixtureCoverageEnd
+        scheduleCachePersistence(
+            visibleMatchCollections: visibleCollections,
+            unfilteredMatchCollections: unfilteredCollections,
+            latestUpdated: latestUpdated,
+            fixtureCoverageEnd: fixtureCoverageEnd,
+            snapshot: snapshot,
+            syncSharedBridge: true
         )
     }
 
@@ -1675,6 +1695,9 @@ final class MatchesStore: ObservableObject {
     }
 
     private func publishState(for mode: MatchesViewMode) {
+        let signpost = PerformanceSignposter.matches.beginInterval("MatchesPublishState")
+        defer { PerformanceSignposter.matches.endInterval("MatchesPublishState", signpost) }
+
         activeMode = mode
         let current = state(for: mode)
         guard visibleModes.contains(mode) else { return }
@@ -1710,6 +1733,9 @@ final class MatchesStore: ObservableObject {
         let taskID = UUID()
         groupingTaskID = taskID
         groupingTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let signpost = PerformanceSignposter.matches.beginInterval("MatchesGroupMatches")
+            defer { PerformanceSignposter.matches.endInterval("MatchesGroupMatches", signpost) }
+
             let startedAt = Date()
             let grouped = MatchGroupingEngine.groupMatches(
                 matchesToGroup,
@@ -1777,7 +1803,7 @@ final class MatchesStore: ObservableObject {
         refreshTimer = timer
     }
 
-    private static func mergePages(existing: [Match], incoming: [Match]) -> [Match] {
+    private nonisolated static func mergePages(existing: [Match], incoming: [Match]) -> [Match] {
         var merged = existing
         var indicesByID: [String: Int] = [:]
         for (index, match) in merged.enumerated() {
@@ -1796,7 +1822,7 @@ final class MatchesStore: ObservableObject {
         return merged
     }
 
-    private static func deduplicatedMatches(_ matches: [Match]) -> [Match] {
+    private nonisolated static func deduplicatedMatches(_ matches: [Match]) -> [Match] {
         var deduplicated: [Match] = []
         var indicesByIdentity: [String: Int] = [:]
 
@@ -1822,7 +1848,7 @@ final class MatchesStore: ObservableObject {
         return deduplicated
     }
 
-    private static func matchIdentityKeys(for match: Match) -> [String] {
+    private nonisolated static func matchIdentityKeys(for match: Match) -> [String] {
         var keys: [String] = []
         if let matchDetailsID = match.matchDetailsID, !matchDetailsID.isEmpty {
             keys.append("match:\(matchDetailsID)")
@@ -1847,7 +1873,7 @@ final class MatchesStore: ObservableObject {
         return Array(Set(keys))
     }
 
-    static func mergeRefreshedMatches(existing: [Match], incoming: [Match]) -> [Match] {
+    nonisolated static func mergeRefreshedMatches(existing: [Match], incoming: [Match]) -> [Match] {
         guard !existing.isEmpty else { return incoming }
 
         let existingByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
@@ -1859,7 +1885,7 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static func preferredMatch(existing: Match, incoming: Match) -> Match {
+    private nonisolated static func preferredMatch(existing: Match, incoming: Match) -> Match {
         if hasRicherKnockoutMetadata(incoming, than: existing) {
             return incoming
         }
@@ -1895,7 +1921,7 @@ final class MatchesStore: ObservableObject {
         return incoming
     }
 
-    private static func hasRicherKnockoutMetadata(_ lhs: Match, than rhs: Match) -> Bool {
+    private nonisolated static func hasRicherKnockoutMetadata(_ lhs: Match, than rhs: Match) -> Bool {
         if lhs.penaltyResult != nil && rhs.penaltyResult == nil {
             return true
         }
@@ -1906,7 +1932,7 @@ final class MatchesStore: ObservableObject {
         return false
     }
 
-    private static func normalizedStatus(_ value: String?) -> String? {
+    private nonisolated static func normalizedStatus(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
             return nil
         }
@@ -1982,7 +2008,7 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static func storageMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
+    private nonisolated static func storageMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
         let calendar = Calendar.current
         let today = startOfToday()
         return matches.filter { match in
@@ -2027,16 +2053,42 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static func sortedMatches(_ matches: [Match], descendingDates: Bool = false) -> [Match] {
-        matches.sorted { lhs, rhs in
-            let leftDate = MatchGroupingEngine.matchSortDate(for: lhs)
-            let rightDate = MatchGroupingEngine.matchSortDate(for: rhs)
+    private final class MatchSortMemo: @unchecked Sendable {
+        private nonisolated(unsafe) var datesByMatchID: [String: Date] = [:]
+        private nonisolated(unsafe) var weightsByMatchID: [String: Double] = [:]
+
+        nonisolated init() {}
+
+        nonisolated func sortDate(for match: Match) -> Date {
+            if let cached = datesByMatchID[match.id] {
+                return cached
+            }
+            let resolved = MatchGroupingEngine.matchSortDate(for: match)
+            datesByMatchID[match.id] = resolved
+            return resolved
+        }
+
+        nonisolated func competitionWeight(for match: Match) -> Double {
+            if let cached = weightsByMatchID[match.id] {
+                return cached
+            }
+            let resolved = MatchGroupingEngine.competitionWeight(for: match)
+            weightsByMatchID[match.id] = resolved
+            return resolved
+        }
+    }
+
+    private nonisolated static func sortedMatches(_ matches: [Match], descendingDates: Bool = false) -> [Match] {
+        let memo = MatchSortMemo()
+        return matches.sorted { lhs, rhs in
+            let leftDate = memo.sortDate(for: lhs)
+            let rightDate = memo.sortDate(for: rhs)
             if leftDate != rightDate {
                 return descendingDates ? leftDate > rightDate : leftDate < rightDate
             }
 
-            let leftWeight = MatchGroupingEngine.competitionWeight(for: lhs)
-            let rightWeight = MatchGroupingEngine.competitionWeight(for: rhs)
+            let leftWeight = memo.competitionWeight(for: lhs)
+            let rightWeight = memo.competitionWeight(for: rhs)
             if leftWeight != rightWeight {
                 return leftWeight > rightWeight
             }
@@ -2206,7 +2258,7 @@ final class MatchesStore: ObservableObject {
         ) != nil
     }
 
-    private static func replacingMatches(
+    private nonisolated static func replacingMatches(
         in existing: [Match],
         with incoming: [Match],
         within range: ClosedRange<Date>
@@ -2215,14 +2267,14 @@ final class MatchesStore: ObservableObject {
         return mergePages(existing: preserved, incoming: incoming)
     }
 
-    private static func matchesDate(_ match: Match, within range: ClosedRange<Date>) -> Bool {
+    private nonisolated static func matchesDate(_ match: Match, within range: ClosedRange<Date>) -> Bool {
         guard let date = match.dateOnly.map({ Calendar.current.startOfDay(for: $0) }) else {
             return false
         }
         return range.contains(date)
     }
 
-    private static func loadedFixtureCoverageEnd(
+    private nonisolated static func loadedFixtureCoverageEnd(
         in matches: [Match],
         minimumDate: Date
     ) -> Date? {
@@ -2233,15 +2285,15 @@ final class MatchesStore: ObservableObject {
         return fixtureDates.max()
     }
 
-    private static func startOfToday(now: Date = Date()) -> Date {
+    private nonisolated static func startOfToday(now: Date = Date()) -> Date {
         Calendar.current.startOfDay(for: now)
     }
 
-    private static func dayOffset(_ value: Int, from date: Date) -> Date {
+    private nonisolated static func dayOffset(_ value: Int, from date: Date) -> Date {
         Calendar.current.date(byAdding: .day, value: value, to: date) ?? date
     }
 
-    private static func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {
+    private nonisolated static func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {
         switch (lhs, rhs) {
         case let (left?, right?):
             return max(left, right)
@@ -2271,17 +2323,59 @@ final class MatchesStore: ObservableObject {
         return sample.isEmpty ? "[]" : "[\(sample.joined(separator: " | "))]"
     }
 
-    private static func formatDateForLog(_ date: Date?) -> String {
+    private nonisolated static func formatDateForLog(_ date: Date?) -> String {
         guard let date else { return "nil" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone.current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        let components = Calendar.current.dateComponents(in: TimeZone.current, from: date)
+        guard let year = components.year, let month = components.month, let day = components.day else {
+            return "nil"
+        }
+        return String(format: "%04d-%02d-%02d", year, month, day)
     }
 
     nonisolated private static func log(_ message: String) {
         NSLog("[MatchesStore] %@", message)
+    }
+
+    private func scheduleCachePersistence(
+        visibleMatchCollections: [[Match]],
+        unfilteredMatchCollections: [[Match]],
+        latestUpdated: Date?,
+        fixtureCoverageEnd: Date?,
+        snapshot: PreferencesSnapshot,
+        syncSharedBridge: Bool
+    ) {
+        cachePersistTask?.cancel()
+        cachePersistTask = Task.detached(priority: .utility) {
+            let unfilteredCombined = Self.sortedMatches(
+                Self.deduplicatedMatches(
+                    Self.mergePages(existing: [], incoming: unfilteredMatchCollections.flatMap { $0 })
+                )
+            )
+            guard !Task.isCancelled, !unfilteredCombined.isEmpty else { return }
+
+            MatchCache.save(
+                matches: unfilteredCombined,
+                lastUpdated: latestUpdated,
+                fixtureCoverageEnd: fixtureCoverageEnd,
+                snapshot: snapshot
+            )
+
+            guard syncSharedBridge, !Task.isCancelled else { return }
+
+            let combined = Self.sortedMatches(
+                Self.deduplicatedMatches(
+                    Self.mergePages(existing: [], incoming: visibleMatchCollections.flatMap { $0 })
+                )
+            )
+
+            guard !Task.isCancelled else { return }
+            SharedMatchesBridge.saveAndSync(
+                matches: combined,
+                unfilteredMatches: unfilteredCombined,
+                lastUpdated: latestUpdated,
+                snapshot: snapshot
+            )
+        }
     }
 
 }

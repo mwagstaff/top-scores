@@ -98,7 +98,7 @@ enum FantasySharedImportStore {
 }
 
 enum SharedMatchesBridge {
-    static func saveAndSync(matches: [Match], unfilteredMatches: [Match], lastUpdated: Date?, snapshot: PreferencesSnapshot) {
+    nonisolated static func saveAndSync(matches: [Match], unfilteredMatches: [Match], lastUpdated: Date?, snapshot: PreferencesSnapshot) {
         let payload = SharedMatchesPayload(
             snapshot: snapshot,
             matches: matches,
@@ -118,29 +118,29 @@ enum SharedMatchesBridge {
         PhoneWatchSyncService.shared.sendLatestPayload(data)
     }
 
-    static func loadRawData() -> Data? {
+    nonisolated static func loadRawData() -> Data? {
         guard let url = sharedFileURL else { return nil }
         return try? Data(contentsOf: url)
     }
 
-    static func saveRawData(_ data: Data) {
+    nonisolated static func saveRawData(_ data: Data) {
         guard let url = sharedFileURL else { return }
         try? data.write(to: url, options: [.atomic])
     }
 
-    private static func shouldSync(_ payload: SharedMatchesPayload) -> Bool {
+    private nonisolated static func shouldSync(_ payload: SharedMatchesPayload) -> Bool {
         guard let existing = loadPayload() else { return true }
         return existing != payload
     }
 
-    private static func loadPayload() -> SharedMatchesPayload? {
+    private nonisolated static func loadPayload() -> SharedMatchesPayload? {
         guard let data = loadRawData() else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(SharedMatchesPayload.self, from: data)
     }
 
-    static func saveSnapshotToSharedDefaults(_ snapshot: PreferencesSnapshot) {
+    nonisolated static func saveSnapshotToSharedDefaults(_ snapshot: PreferencesSnapshot) {
         guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
         defaults.set(snapshot.selectedLeagues, forKey: AppGroupConfig.selectedLeaguesKey)
         defaults.set(snapshot.selectedChannels, forKey: AppGroupConfig.selectedChannelsKey)
@@ -158,7 +158,7 @@ enum SharedMatchesBridge {
         defaults.set(snapshot.showsFantasyDataInFixtures, forKey: AppGroupConfig.showFantasyMatchPillsKey)
     }
 
-    static func clear() {
+    nonisolated static func clear() {
         guard let url = sharedFileURL else { return }
         if FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: url)
@@ -166,7 +166,7 @@ enum SharedMatchesBridge {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
-    private static var sharedFileURL: URL? {
+    private nonisolated static var sharedFileURL: URL? {
         FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: AppGroupConfig.identifier)?
             .appendingPathComponent(AppGroupConfig.sharedMatchesFileName)

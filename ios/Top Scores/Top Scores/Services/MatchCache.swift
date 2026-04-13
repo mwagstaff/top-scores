@@ -105,7 +105,7 @@ enum MatchCache {
     private static let knownGenerationsKey = "match_cache.known_server_generations"
     private static let currentCacheFormatVersion = 3
 
-    static func load(for snapshot: PreferencesSnapshot) -> MatchCachePayload? {
+    nonisolated static func load(for snapshot: PreferencesSnapshot) -> MatchCachePayload? {
         guard let data = try? Data(contentsOf: cacheURL) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -123,7 +123,7 @@ enum MatchCache {
         return payload
     }
 
-    static func save(
+    nonisolated static func save(
         matches: [Match],
         lastUpdated: Date?,
         fixtureCoverageEnd: Date?,
@@ -145,11 +145,11 @@ enum MatchCache {
         try? data.write(to: cacheURL, options: [.atomic])
     }
 
-    static func clear() {
+    nonisolated static func clear() {
         try? FileManager.default.removeItem(at: cacheURL)
     }
 
-    static func knownServerGenerations() -> CacheGenerationSnapshot {
+    nonisolated static func knownServerGenerations() -> CacheGenerationSnapshot {
         guard let data = UserDefaults.standard.data(forKey: knownGenerationsKey) else {
             return CacheGenerationSnapshot()
         }
@@ -159,7 +159,7 @@ enum MatchCache {
     }
 
     @discardableResult
-    static func applyServerCacheState(_ incoming: CacheGenerationSnapshot) -> CacheInvalidationResult {
+    nonisolated static func applyServerCacheState(_ incoming: CacheGenerationSnapshot) -> CacheInvalidationResult {
         let previous = knownServerGenerations()
         let merged = previous.merged(with: incoming)
         guard merged != previous else { return .none }
@@ -167,12 +167,12 @@ enum MatchCache {
         return merged.invalidationResult(comparedTo: previous)
     }
 
-    private static var cacheURL: URL {
+    private nonisolated static var cacheURL: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(fileName)
     }
 
-    private static func isPayloadStale(
+    private nonisolated static func isPayloadStale(
         _ payload: MatchCachePayload,
         comparedTo knownGenerations: CacheGenerationSnapshot
     ) -> Bool {
@@ -181,7 +181,7 @@ enum MatchCache {
             payloadGenerations.matchDetails < knownGenerations.matchDetails
     }
 
-    private static func persistKnownServerGenerations(_ generations: CacheGenerationSnapshot) {
+    private nonisolated static func persistKnownServerGenerations(_ generations: CacheGenerationSnapshot) {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(generations) else { return }

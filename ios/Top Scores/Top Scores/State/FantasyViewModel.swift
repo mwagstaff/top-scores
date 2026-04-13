@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import os
 
 @MainActor
 final class FantasyViewModel: ObservableObject {
@@ -247,6 +248,9 @@ final class FantasyViewModel: ObservableObject {
         rivalManagers: [FantasyRivalManager],
         trackedLeagues: [FantasyTrackedLeague]
     ) async {
+        let signpost = PerformanceSignposter.fantasy.beginInterval("FantasyRefresh")
+        defer { PerformanceSignposter.fantasy.endInterval("FantasyRefresh", signpost) }
+
         let refreshStartedAt = Date()
         let trimmedManagerID = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let entryID = Int(trimmedManagerID), entryID > 0 else {
@@ -777,6 +781,9 @@ final class FantasyViewModel: ObservableObject {
         seasonFixtures: [FantasyFixture],
         bootstrapLookup: FantasyBootstrapLookup
     ) async -> [FantasyRivalSquad] {
+        let signpost = PerformanceSignposter.fantasy.beginInterval("FantasyFetchRivalSquads")
+        defer { PerformanceSignposter.fantasy.endInterval("FantasyFetchRivalSquads", signpost) }
+
         var refreshedRivals: [FantasyRivalSquad] = []
 
         for rival in rivals {
@@ -884,6 +891,9 @@ final class FantasyViewModel: ObservableObject {
         managerEntryID: Int,
         managerProfile: FantasyEntryProfile?
     ) async -> [FantasyTrackedLeagueStanding] {
+        let signpost = PerformanceSignposter.fantasy.beginInterval("FantasyFetchTrackedLeagues")
+        defer { PerformanceSignposter.fantasy.endInterval("FantasyFetchTrackedLeagues", signpost) }
+
         var snapshots: [FantasyTrackedLeagueStanding] = []
         let leagueMetadataByID = Dictionary(
             uniqueKeysWithValues: (managerProfile?.leagues?.classic ?? []).map { ($0.id, $0) }
@@ -1087,6 +1097,9 @@ final class FantasyViewModel: ObservableObject {
             )
         )
         return await Task.detached(priority: .utility) {
+            let signpost = PerformanceSignposter.fantasy.beginInterval("FantasyBuildSquadDisplayData")
+            defer { PerformanceSignposter.fantasy.endInterval("FantasyBuildSquadDisplayData", signpost) }
+
             let (
                 gameweek,
                 picksResponse,

@@ -61,6 +61,14 @@ enum CompetitionWeightConfig {
         "english league cup": "English League Cup",
         "uefa conference league": "UEFA Conference League",
     ]
+    private nonisolated static let cacheLock = NSLock()
+    private nonisolated(unsafe) static var normalizedNameCache: [String: String] = [:]
+    private nonisolated(unsafe) static var canonicalNameCache: [String: String] = [:]
+    private nonisolated(unsafe) static var displayBaseNameCache: [String: String] = [:]
+    private nonisolated(unsafe) static var weightsByNameCache: [String: Double]?
+    private nonisolated(unsafe) static var allowedCompetitionNamesCache: Set<String>?
+    private nonisolated(unsafe) static var updatedAtCache: String?
+    private nonisolated(unsafe) static var fetchedAtCache: Date?
 
     nonisolated static func weight(for competitionName: String) -> Double? {
         let canonical = canonicalFilterName(competitionName)
@@ -69,24 +77,46 @@ enum CompetitionWeightConfig {
     }
 
     nonisolated static func normalizeCompetitionName(_ competitionName: String) -> String {
-        competitionName
+        cacheLock.lock()
+        if let cached = normalizedNameCache[competitionName] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let normalized = competitionName
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+        cacheLock.lock()
+        normalizedNameCache[competitionName] = normalized
+        cacheLock.unlock()
+        return normalized
     }
 
     nonisolated static func canonicalFilterName(_ competitionName: String) -> String {
+        cacheLock.lock()
+        if let cached = canonicalNameCache[competitionName] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
         let normalized = normalizeCompetitionName(competitionName)
         guard !normalized.isEmpty else { return "" }
         let stripped = stripStageDescriptors(from: normalized)
         let canonical = stripped.isEmpty ? normalized : stripped
-        return aliases[canonical] ?? canonical
+        let resolved = aliases[canonical] ?? canonical
+        cacheLock.lock()
+        canonicalNameCache[competitionName] = resolved
+        cacheLock.unlock()
+        return resolved
     }
 
     nonisolated static func isAllowedCompetitionForPublicDisplay(_ competitionName: String) -> Bool {
         let canonical = canonicalFilterName(competitionName)
         guard !canonical.isEmpty else { return true }
-        let allowed = Set(activeWeightsByName().keys)
+        let allowed = activeCompetitionNameSet()
         guard !allowed.isEmpty else { return true }
         return allowed.contains(canonical)
     }
@@ -99,14 +129,28 @@ enum CompetitionWeightConfig {
     }
 
     nonisolated static func displayBaseCompetitionName(_ competitionName: String) -> String {
+        cacheLock.lock()
+        if let cached = displayBaseNameCache[competitionName] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
         let trimmed = competitionName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         let canonical = canonicalFilterName(trimmed)
         if let aliased = displayAliases[canonical] {
+            cacheLock.lock()
+            displayBaseNameCache[competitionName] = aliased
+            cacheLock.unlock()
             return aliased
         }
         let stripped = stripStageDescriptorsPreservingCase(from: trimmed)
-        return stripped.isEmpty ? trimmed : stripped
+        let resolved = stripped.isEmpty ? trimmed : stripped
+        cacheLock.lock()
+        displayBaseNameCache[competitionName] = resolved
+        cacheLock.unlock()
+        return resolved
     }
 
     static func refreshIfNeeded(apiBaseURL: String, force: Bool = false) async -> Bool {
@@ -150,6 +194,13 @@ enum CompetitionWeightConfig {
     }
 
     private nonisolated static func cachedWeightsByName() -> [String: Double] {
+        cacheLock.lock()
+        if let cached = weightsByNameCache {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
         let defaultsSequence = [
             UserDefaults.standard,
             UserDefaults(suiteName: AppGroupConfig.identifier),
@@ -162,6 +213,10 @@ enum CompetitionWeightConfig {
                   !decoded.isEmpty else {
                 continue
             }
+            cacheLock.lock()
+            weightsByNameCache = decoded
+            allowedCompetitionNamesCache = Set(decoded.keys)
+            cacheLock.unlock()
             return decoded
         }
 
@@ -173,7 +228,29 @@ enum CompetitionWeightConfig {
         return cached.isEmpty ? bootstrapWeightsByName : cached
     }
 
+    private nonisolated static func activeCompetitionNameSet() -> Set<String> {
+        cacheLock.lock()
+        if let cached = allowedCompetitionNamesCache {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let resolved = Set(activeWeightsByName().keys)
+        cacheLock.lock()
+        allowedCompetitionNamesCache = resolved
+        cacheLock.unlock()
+        return resolved
+    }
+
     private nonisolated static func cachedUpdatedAt() -> String? {
+        cacheLock.lock()
+        if let cached = updatedAtCache {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
         let defaultsSequence = [
             UserDefaults.standard,
             UserDefaults(suiteName: AppGroupConfig.identifier),
@@ -183,6 +260,9 @@ enum CompetitionWeightConfig {
             let value = defaults.string(forKey: AppGroupConfig.competitionCatalogUpdatedAtKey)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let value, !value.isEmpty {
+                cacheLock.lock()
+                updatedAtCache = value
+                cacheLock.unlock()
                 return value
             }
         }
@@ -190,6 +270,13 @@ enum CompetitionWeightConfig {
     }
 
     private nonisolated static func cachedFetchedAt() -> Date? {
+        cacheLock.lock()
+        if let cached = fetchedAtCache {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
         let defaultsSequence = [
             UserDefaults.standard,
             UserDefaults(suiteName: AppGroupConfig.identifier),
@@ -198,7 +285,11 @@ enum CompetitionWeightConfig {
             guard let defaults else { continue }
             let value = defaults.double(forKey: AppGroupConfig.competitionCatalogFetchedAtKey)
             guard value > 0 else { continue }
-            return Date(timeIntervalSince1970: value)
+            let resolved = Date(timeIntervalSince1970: value)
+            cacheLock.lock()
+            fetchedAtCache = resolved
+            cacheLock.unlock()
+            return resolved
         }
         return nil
     }
@@ -220,6 +311,13 @@ enum CompetitionWeightConfig {
             }
             defaults.set(fetchedAt.timeIntervalSince1970, forKey: AppGroupConfig.competitionCatalogFetchedAtKey)
         }
+
+        cacheLock.lock()
+        weightsByNameCache = weightsByName
+        allowedCompetitionNamesCache = Set(weightsByName.keys)
+        updatedAtCache = updatedAt?.isEmpty == false ? updatedAt : nil
+        fetchedAtCache = fetchedAt
+        cacheLock.unlock()
     }
 
     private nonisolated static func stripStageDescriptors(from competitionName: String) -> String {

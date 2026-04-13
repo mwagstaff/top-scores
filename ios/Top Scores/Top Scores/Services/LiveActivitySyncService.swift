@@ -1,4 +1,5 @@
 import Foundation
+import os
 #if canImport(ActivityKit)
 import ActivityKit
 
@@ -58,6 +59,9 @@ final class LiveActivitySyncService {
     private init() {}
 
     func start() {
+        let signpost = PerformanceSignposter.liveActivity.beginInterval("LiveActivityStart")
+        defer { PerformanceSignposter.liveActivity.endInterval("LiveActivityStart", signpost) }
+
         lock.lock()
         if started {
             lock.unlock()
@@ -222,6 +226,9 @@ final class LiveActivitySyncService {
 
     @available(iOS 16.1, *)
     private func reconcileLiveActivityStateOnForeground() async {
+        let signpost = PerformanceSignposter.liveActivity.beginInterval("LiveActivityForegroundReconcile")
+        defer { PerformanceSignposter.liveActivity.endInterval("LiveActivityForegroundReconcile", signpost) }
+
         if #available(iOS 17.2, *),
            let pushToStartToken = Activity<TopScoresLiveActivityAttributes>.pushToStartToken {
             await uploadPushToStartToken(pushToStartToken)
@@ -270,6 +277,9 @@ final class LiveActivitySyncService {
     private func enforceSingleActiveActivity(
         among activities: [Activity<TopScoresLiveActivityAttributes>]
     ) async -> [Activity<TopScoresLiveActivityAttributes>] {
+        let signpost = PerformanceSignposter.liveActivity.beginInterval("LiveActivityEnforceSingle")
+        defer { PerformanceSignposter.liveActivity.endInterval("LiveActivityEnforceSingle", signpost) }
+
         guard activities.count > 1 else { return activities }
 
         let sortedActivities = activities.sorted { lhs, rhs in

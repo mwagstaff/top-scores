@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-enum MatchesViewMode: String {
+enum MatchesViewMode: String, Sendable {
     case fixtures
     case results
 

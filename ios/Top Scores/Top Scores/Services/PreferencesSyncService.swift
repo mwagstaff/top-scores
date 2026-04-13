@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 private struct FantasySyncPlayerPayload: Encodable, Sendable {
     let elementID: Int
@@ -282,6 +283,9 @@ actor PreferencesSyncService {
     }
 
     private func performSync(_ snapshot: PreferencesSnapshot) async {
+        let signpost = PerformanceSignposter.preferences.beginInterval("PreferencesSync")
+        defer { PerformanceSignposter.preferences.endInterval("PreferencesSync", signpost) }
+
         let now = Date()
         lastSyncAttempt = now
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 import UIKit
 import Combine
 import UniformTypeIdentifiers
@@ -2829,6 +2830,7 @@ struct FantasyView: View {
             if inFlightFantasyRefreshRequest != request {
                 pendingFantasyRefreshRequest = request
             }
+            PerformanceSignposter.fantasy.emitEvent("FantasyRefreshQueued")
             #if DEBUG
             print(
                 "[FantasyUI] queue_refresh force=\(force) rivals=\(rivalManagersSnapshot.count) leagues=\(trackedLeaguesSnapshot.count)"
@@ -2837,6 +2839,7 @@ struct FantasyView: View {
             return
         }
 
+        PerformanceSignposter.fantasy.emitEvent("FantasyRefreshTriggered")
         #if DEBUG
         print(
             "[FantasyUI] trigger_refresh force=\(force) rivals=\(rivalManagersSnapshot.count) leagues=\(trackedLeaguesSnapshot.count)"

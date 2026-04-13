@@ -391,24 +391,24 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         MatchDateParser.parse(date: date, time: time)
     }
 
-    var matchDetailsID: String? {
+    nonisolated var matchDetailsID: String? {
         if let explicit = Self.normalizedMatchDetailsID(matchDetailsIDValue) {
             return explicit
         }
         return Self.matchDetailsID(from: detailsURL)
     }
 
-    var hasBbcMatchEntry: Bool {
+    nonisolated var hasBbcMatchEntry: Bool {
         hasBbcSourceValue == true ||
             matchDetailsID != nil ||
             tvChannels.contains { $0.caseInsensitiveCompare("BBC Sport Website") == .orderedSame }
     }
 
-    var dateOnly: Date? {
+    nonisolated var dateOnly: Date? {
         MatchDateParser.parse(date: date, time: "00:00")
     }
 
-    var hasScore: Bool {
+    nonisolated var hasScore: Bool {
         homeScore != nil && awayScore != nil
     }
 
@@ -464,12 +464,12 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return MatchStatusFormatter.displayValue(for: scoreStatus)
     }
 
-    var isInProgress: Bool {
+    nonisolated var isInProgress: Bool {
         guard let scoreStatus = stabilizedScoreStatus() else { return false }
         return MatchStatusFormatter.isInProgress(scoreStatus)
     }
 
-    var isFinished: Bool {
+    nonisolated var isFinished: Bool {
         guard let scoreStatus = stabilizedScoreStatus() else { return false }
         return MatchStatusFormatter.isFinished(scoreStatus)
     }
@@ -478,7 +478,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         MatchStatusFormatter.isPostponed(scoreStatus)
     }
 
-    var isUpcomingScorelessFixture: Bool {
+    nonisolated var isUpcomingScorelessFixture: Bool {
         if isPostponed {
             return false
         }
@@ -719,7 +719,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return true
     }
 
-    func stabilizedScoreStatus(now: Date = Date()) -> String? {
+    nonisolated func stabilizedScoreStatus(now: Date = Date()) -> String? {
         MatchStatusFormatter.stabilizedStatus(
             scoreStatus,
             kickoff: dateTime,
@@ -728,7 +728,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         )
     }
 
-    private static func matchDetailsID(from detailsURL: String?) -> String? {
+    private nonisolated static func matchDetailsID(from detailsURL: String?) -> String? {
         guard let detailsURL else { return nil }
         guard let parsed = URL(string: detailsURL) else { return nil }
         let path = parsed.path.lowercased()
@@ -750,7 +750,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return normalized
     }
 
-    private static func normalizedLookupDate(_ value: String?) -> String? {
+    private nonisolated static func normalizedLookupDate(_ value: String?) -> String? {
         guard let value else { return nil }
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return nil }
@@ -759,7 +759,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             : nil
     }
 
-    private static func normalizedLookupTime(_ value: String?) -> String? {
+    private nonisolated static func normalizedLookupTime(_ value: String?) -> String? {
         guard let value else { return nil }
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return nil }
@@ -768,7 +768,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             : nil
     }
 
-    private static func lookupTimeMinutes(_ value: String) -> Int? {
+    private nonisolated static func lookupTimeMinutes(_ value: String) -> Int? {
         let components = value.split(separator: ":")
         guard components.count == 2,
               let hours = Int(components[0]),
@@ -782,8 +782,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return (hours * 60) + minutes
     }
 
-    private static let dateOnlyPattern = try! NSRegularExpression(pattern: #"^\d{4}-\d{2}-\d{2}$"#)
-    private static let timeOnlyPattern = try! NSRegularExpression(pattern: #"^\d{2}:\d{2}$"#)
+    private nonisolated static let dateOnlyPattern = try! NSRegularExpression(pattern: #"^\d{4}-\d{2}-\d{2}$"#)
+    private nonisolated static let timeOnlyPattern = try! NSRegularExpression(pattern: #"^\d{2}:\d{2}$"#)
 
     private func adjustedAggregate(base: Int?, previousScore: Int?, nextScore: Int) -> Int? {
         guard let base else { return nil }
@@ -833,7 +833,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return "\(winner) win \(winnerScore) - \(loserScore) on aggregate"
     }
 
-    private static func isUpcomingScorelessFixture(
+    private nonisolated static func isUpcomingScorelessFixture(
         date: String,
         time: String,
         homeScore: Int?,
@@ -861,13 +861,13 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return kickoff.timeIntervalSince(now) > -(15 * 60)
     }
 
-    private static func containsTeamName(_ teamName: String, in text: String) -> Bool {
+    private nonisolated static func containsTeamName(_ teamName: String, in text: String) -> Bool {
         let normalizedTeam = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedTeam.isEmpty else { return false }
         return text.range(of: normalizedTeam, options: [.caseInsensitive, .diacriticInsensitive]) != nil
     }
 
-    private static func firstScorePair(in text: String) -> (Int, Int)? {
+    private nonisolated static func firstScorePair(in text: String) -> (Int, Int)? {
         guard let range = text.range(
             of: #"(\d+)\s*[-–]\s*(\d+)"#,
             options: .regularExpression
@@ -892,7 +892,7 @@ enum MatchStatusFormatter {
     private nonisolated static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
     private nonisolated static let maximumLiveWindow: TimeInterval = 3.5 * 60 * 60
 
-    static func displayValue(for rawStatus: String) -> String {
+    nonisolated static func displayValue(for rawStatus: String) -> String {
         let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return rawStatus }
         if isMinuteStatus(status) {
@@ -905,7 +905,7 @@ enum MatchStatusFormatter {
         return status
     }
 
-    static func isInProgress(_ rawStatus: String) -> Bool {
+    nonisolated static func isInProgress(_ rawStatus: String) -> Bool {
         let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return false }
         if isMinuteStatus(status) { return true }
@@ -915,7 +915,7 @@ enum MatchStatusFormatter {
         return inProgressTokens.contains(token)
     }
 
-    static func isFinished(_ rawStatus: String) -> Bool {
+    nonisolated static func isFinished(_ rawStatus: String) -> Bool {
         let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return false }
         let token = status.uppercased()
@@ -926,7 +926,7 @@ enum MatchStatusFormatter {
         canonicalStatus(rawStatus) == "POSTPONED"
     }
 
-    static func preferredStatus(current: String?, incoming: String?) -> String? {
+    nonisolated static func preferredStatus(current: String?, incoming: String?) -> String? {
         let currentStatus = normalizedStatus(current)
         let incomingStatus = normalizedStatus(incoming)
 
@@ -1002,12 +1002,12 @@ enum MatchStatusFormatter {
         return incomingStatus
     }
 
-    static func prefersIncomingStatus(current: String?, incoming: String?) -> Bool {
+    nonisolated static func prefersIncomingStatus(current: String?, incoming: String?) -> Bool {
         guard let incomingStatus = normalizedStatus(incoming) else { return false }
         return preferredStatus(current: current, incoming: incoming) == incomingStatus
     }
 
-    static func stabilizedStatus(
+    nonisolated static func stabilizedStatus(
         _ rawStatus: String?,
         kickoff: Date?,
         hasScore: Bool,
@@ -1109,28 +1109,64 @@ enum MatchStatusFormatter {
 }
 
 enum MatchDateParser {
-    private nonisolated static func makeDateTimeFormatter() -> DateFormatter {
-        let dateTimeFormatter = DateFormatter()
-        dateTimeFormatter.locale = Locale(identifier: "en_US_POSIX")
-        dateTimeFormatter.timeZone = TimeZone.current
-        dateTimeFormatter.dateFormat = "yyyy-MM-dd HH:mm"
-        return dateTimeFormatter
-    }
-
-    private nonisolated static func makeDisplayDateFormatter() -> DateFormatter {
+    private nonisolated static let parseCacheLock = NSLock()
+    private nonisolated static let displayFormatterLock = NSLock()
+    private nonisolated(unsafe) static var parsedDatesByKey: [String: Date] = [:]
+    private nonisolated(unsafe) static var invalidParseKeys: Set<String> = []
+    private nonisolated(unsafe) static let displayDateFormatter: DateFormatter = {
         let dateFormatter = DateFormatter()
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.timeZone = TimeZone.current
         dateFormatter.dateFormat = "EEE, MMM d, yyyy"
         return dateFormatter
-    }
+    }()
 
     nonisolated static func parse(date: String, time: String) -> Date? {
-        makeDateTimeFormatter().date(from: "\(date) \(time)")
+        let cacheKey = "\(date)|\(time)"
+        parseCacheLock.lock()
+        if let cached = parsedDatesByKey[cacheKey] {
+            parseCacheLock.unlock()
+            return cached
+        }
+        if invalidParseKeys.contains(cacheKey) {
+            parseCacheLock.unlock()
+            return nil
+        }
+        parseCacheLock.unlock()
+
+        guard let (year, month, day) = parseDateComponents(date),
+              let (hour, minute) = parseTimeComponents(time) else {
+            parseCacheLock.lock()
+            invalidParseKeys.insert(cacheKey)
+            parseCacheLock.unlock()
+            return nil
+        }
+
+        var components = DateComponents()
+        components.calendar = Calendar.current
+        components.timeZone = TimeZone.current
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        guard let resolved = components.date else {
+            parseCacheLock.lock()
+            invalidParseKeys.insert(cacheKey)
+            parseCacheLock.unlock()
+            return nil
+        }
+
+        parseCacheLock.lock()
+        parsedDatesByKey[cacheKey] = resolved
+        parseCacheLock.unlock()
+        return resolved
     }
 
     nonisolated static func displayDate(_ date: Date) -> String {
-        makeDisplayDateFormatter().string(from: date)
+        displayFormatterLock.lock()
+        defer { displayFormatterLock.unlock() }
+        return displayDateFormatter.string(from: date)
     }
 
     nonisolated static func displayDateWithRelative(_ date: Date) -> String {
@@ -1143,6 +1179,27 @@ enum MatchDateParser {
             return "\(base) (Tomorrow)"
         }
         return base
+    }
+
+    private nonisolated static func parseDateComponents(_ value: String) -> (Int, Int, Int)? {
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              let year = Int(parts[0]),
+              let month = Int(parts[1]),
+              let day = Int(parts[2]) else {
+            return nil
+        }
+        return (year, month, day)
+    }
+
+    private nonisolated static func parseTimeComponents(_ value: String) -> (Int, Int)? {
+        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count >= 2,
+              let hour = Int(parts[0]),
+              let minute = Int(parts[1]) else {
+            return nil
+        }
+        return (hour, minute)
     }
 }
 
