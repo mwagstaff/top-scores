@@ -62,6 +62,7 @@ struct MatchRow: View {
     var centerFooterColor: Color = .secondary
     var isLargePresentation: Bool = false
     var teamLogoScale: CGFloat = 1.0
+    var showsFinishedInlineAggregateBrackets: Bool = false
     var layoutStyle: MatchRowLayoutStyle = .standard
     var compactDensity: FixturesViewDensity = .compact
     var fantasyContext: FantasyMatchRowContext = .empty
@@ -121,13 +122,13 @@ struct MatchRow: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                if let winnerSummaryText = match.winnerSummaryText {
+                if !shouldShowInlineAggregateBrackets, let winnerSummaryText = match.winnerSummaryText {
                     Text(winnerSummaryText)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.top, 2)
-                } else if !match.shouldShowAggregateBracketScoresInline,
+                } else if !shouldShowInlineAggregateBrackets,
                           let aggregateSummaryText = match.aggregateSummaryText {
                     Text("(\(aggregateSummaryText))")
                         .font(.caption2)
@@ -397,7 +398,7 @@ struct MatchRow: View {
     }
 
     private var aggregateHomeBracketText: String? {
-        guard match.shouldShowAggregateBracketScoresInline,
+        guard shouldShowInlineAggregateBrackets,
               let aggregateHomeScore = match.resolvedAggregateHomeScore else {
             return nil
         }
@@ -405,11 +406,33 @@ struct MatchRow: View {
     }
 
     private var aggregateAwayBracketText: String? {
-        guard match.shouldShowAggregateBracketScoresInline,
+        guard shouldShowInlineAggregateBrackets,
               let aggregateAwayScore = match.resolvedAggregateAwayScore else {
             return nil
         }
         return "(\(aggregateAwayScore))"
+    }
+
+    static func shouldShowInlineAggregateBrackets(
+        match: Match,
+        layoutStyle: MatchRowLayoutStyle,
+        showsFinishedInlineAggregateBrackets: Bool
+    ) -> Bool {
+        if match.shouldShowAggregateBracketScoresInline {
+            return true
+        }
+
+        return (layoutStyle == .compactFixture || showsFinishedInlineAggregateBrackets) &&
+        match.isFinished &&
+        match.hasDisplayableAggregateScore
+    }
+
+    private var shouldShowInlineAggregateBrackets: Bool {
+        Self.shouldShowInlineAggregateBrackets(
+            match: match,
+            layoutStyle: layoutStyle,
+            showsFinishedInlineAggregateBrackets: showsFinishedInlineAggregateBrackets
+        )
     }
 
     private var teamNameFont: Font {

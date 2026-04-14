@@ -770,6 +770,81 @@ struct Top_ScoresTests {
         )
     }
 
+    @Test func compactFixture_showsInlineAggregateBracketsForFinishedMatches() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Atletico Madrid",
+            awayTeam: "Barcelona",
+            league: "UEFA Champions League",
+            leagueSubcategory: "Quarter-finals",
+            tvChannels: ["TNT Sports 1"],
+            homeScore: 1,
+            awayScore: 2,
+            aggregateHomeScore: 3,
+            aggregateAwayScore: 2,
+            scoreStatus: "FT"
+        )
+
+        #expect(
+            MatchRow.shouldShowInlineAggregateBrackets(
+                match: match,
+                layoutStyle: .compactFixture,
+                showsFinishedInlineAggregateBrackets: false
+            )
+        )
+    }
+
+    @Test func standardMatchRow_showsInlineAggregateBracketsWhenEnabledForResults() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Atletico Madrid",
+            awayTeam: "Barcelona",
+            league: "UEFA Champions League",
+            leagueSubcategory: "Quarter-finals",
+            tvChannels: ["TNT Sports 1"],
+            homeScore: 1,
+            awayScore: 2,
+            aggregateHomeScore: 3,
+            aggregateAwayScore: 2,
+            scoreStatus: "FT"
+        )
+
+        #expect(
+            MatchRow.shouldShowInlineAggregateBrackets(
+                match: match,
+                layoutStyle: .standard,
+                showsFinishedInlineAggregateBrackets: true
+            )
+        )
+    }
+
+    @Test func standardMatchRow_keepsFinishedAggregateOutOfInlineBracketsByDefault() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Atletico Madrid",
+            awayTeam: "Barcelona",
+            league: "UEFA Champions League",
+            leagueSubcategory: "Quarter-finals",
+            tvChannels: ["TNT Sports 1"],
+            homeScore: 1,
+            awayScore: 2,
+            aggregateHomeScore: 3,
+            aggregateAwayScore: 2,
+            scoreStatus: "FT"
+        )
+
+        #expect(
+            !MatchRow.shouldShowInlineAggregateBrackets(
+                match: match,
+                layoutStyle: .standard,
+                showsFinishedInlineAggregateBrackets: false
+            )
+        )
+    }
+
     @Test func withDetails_preservesAggregateForUpcomingScorelessFixture() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),
