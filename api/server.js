@@ -437,6 +437,27 @@ const FANTASY_ASSISTANT_MANAGER_PHRASES_PATH =
 const TEAM_COLORS_CONFIG_PATH =
   process.env.TEAM_COLORS_CONFIG_PATH ||
   path.join(__dirname, "team_colors.json");
+const TEAM_SHORT_NAMES_CONFIG_PATH =
+  process.env.TEAM_SHORT_NAMES_CONFIG_PATH ||
+  path.join(__dirname, "team_short_names.json");
+const parsedTeamShortNamesScrapeIntervalMs = Number(
+  process.env.TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS || 60 * 60 * 1000
+);
+const TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS = Number.isFinite(parsedTeamShortNamesScrapeIntervalMs)
+  ? Math.max(60 * 1000, Math.floor(parsedTeamShortNamesScrapeIntervalMs))
+  : 60 * 60 * 1000;
+const parsedTeamShortNamesScrapeConcurrency = Number(
+  process.env.TEAM_SHORT_NAMES_SCRAPE_CONCURRENCY || 4
+);
+const TEAM_SHORT_NAMES_SCRAPE_CONCURRENCY = Number.isFinite(parsedTeamShortNamesScrapeConcurrency)
+  ? Math.max(1, Math.floor(parsedTeamShortNamesScrapeConcurrency))
+  : 4;
+const parsedTeamShortNamesScrapeMaxMatches = Number(
+  process.env.TEAM_SHORT_NAMES_SCRAPE_MAX_MATCHES || 50
+);
+const TEAM_SHORT_NAMES_SCRAPE_MAX_MATCHES = Number.isFinite(parsedTeamShortNamesScrapeMaxMatches)
+  ? Math.max(1, Math.floor(parsedTeamShortNamesScrapeMaxMatches))
+  : 50;
 const DEFAULT_FPL_FIXTURES_SOURCE_URL = "https://fantasy.premierleague.com/api/fixtures/";
 const FPL_FIXTURES_SOURCE_URL =
   process.env.FPL_FIXTURES_SOURCE_URL || DEFAULT_FPL_FIXTURES_SOURCE_URL;
@@ -692,6 +713,7 @@ const OP_DATASET_CLUB_ELO_TEAMS = "club_elo_teams";
 const OP_DATASET_FOOTBALL_DATABASE_TEAMS = "football_database_teams";
 const OP_DATASET_NATIONAL_ELO_TEAMS = "national_elo_teams";
 const OP_DATASET_MISSING_TEAM_LOGOS = "missing_team_logos";
+const OP_DATASET_TEAM_SHORT_NAMES = "team_short_names";
 const OP_DATASET_CACHE_STATE = "cache_state";
 const CACHE_STATE_DOMAINS = Object.freeze(["matches", "match_details", "bbc_live"]);
 const CACHE_STATE_DOMAIN_ALIASES = Object.freeze({
@@ -907,6 +929,13 @@ let teamColorsConfig = Object.freeze({
 });
 let teamColorsLoadedAt = null;
 let teamColorsMtimeMs = null;
+let scrapedTeamShortNamesByKey = new Map();
+let scrapedTeamShortNamesLastUpdated = null;
+let teamShortNamesUpdating = false;
+let teamShortNameOverridesByKey = new Map();
+let teamShortNameOverridesLoadedAt = null;
+let teamShortNameOverridesMtimeMs = null;
+let teamShortNamesRedisSyncUpdating = false;
 const RUNTIME_COMPONENT_ERROR_LIMIT = 8;
 const runtimeComponentDiagnostics = Object.create(null);
 
@@ -6241,6 +6270,610 @@ function loadTeamColorsConfig() {
   return teamColorsConfig;
 }
 
+function normalizeTeamShortNameKey(value) {
+  const normalized = normalizeTeamIdentityName(value).replace(/\s+/g, " ").trim();
+  return normalized || null;
+}
+
+function normalizeTeamShortNameEntry(name, shortName, options = {}) {
+  const resolvedName = String(name || "").trim();
+  const resolvedShortName = String(shortName || "").trim();
+  const key = normalizeTeamShortNameKey(resolvedName);
+  const shortKey = normalizeTeamShortNameKey(resolvedShortName);
+  if (!key || !resolvedShortName || !shortKey || key === shortKey) {
+    return null;
+  }
+
+  return Object.freeze({
+    key,
+    name: resolvedName,
+    short_name: resolvedShortName,
+    updated_at:
+      typeof options.updated_at === "string" && options.updated_at.trim()
+        ? options.updated_at.trim()
+        : new Date().toISOString(),
+    source:
+      typeof options.source === "string" && options.source.trim() ? options.source.trim() : null,
+    details_url:
+      typeof options.details_url === "string" && options.details_url.trim()
+        ? options.details_url.trim()
+        : null,
+  });
+}
+
+function choosePreferredTeamShortNameEntry(existing, incoming) {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+
+  const existingShort = String(existing.short_name || "");
+  const incomingShort = String(incoming.short_name || "");
+  if (!existingShort) return incoming;
+  if (!incomingShort) return existing;
+
+  if (incomingShort.length < existingShort.length) return incoming;
+  if (existingShort.length < incomingShort.length) return existing;
+
+  const existingUpdatedAt = Date.parse(String(existing.updated_at || "").trim());
+  const incomingUpdatedAt = Date.parse(String(incoming.updated_at || "").trim());
+  if (Number.isFinite(incomingUpdatedAt) && Number.isFinite(existingUpdatedAt)) {
+    return incomingUpdatedAt >= existingUpdatedAt ? incoming : existing;
+  }
+
+  return incoming;
+}
+
+function extractTeamShortNameEntriesFromMatch(match, options = {}) {
+  if (!match || typeof match !== "object") return [];
+
+  const updatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+  const source =
+    typeof options.source === "string" && options.source.trim()
+      ? options.source.trim()
+      : null;
+  const detailsUrl = String(match.details_url || "").trim() || null;
+
+  return [
+    normalizeTeamShortNameEntry(match.home_team, match.home_short_name, {
+      updated_at: updatedAt,
+      source,
+      details_url: detailsUrl,
+    }),
+    normalizeTeamShortNameEntry(match.away_team, match.away_short_name, {
+      updated_at: updatedAt,
+      source,
+      details_url: detailsUrl,
+    }),
+  ].filter(Boolean);
+}
+
+function rememberScrapedTeamShortNameEntries(entries, options = {}) {
+  let added = 0;
+  let updated = 0;
+  const updatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+
+  (Array.isArray(entries) ? entries : []).forEach((entry) => {
+    if (!entry || !entry.key) return;
+    const existing = scrapedTeamShortNamesByKey.get(entry.key) || null;
+    const preferred = choosePreferredTeamShortNameEntry(existing, entry);
+    if (!existing) {
+      scrapedTeamShortNamesByKey.set(entry.key, preferred);
+      added += 1;
+      return;
+    }
+    if (
+      preferred &&
+      (preferred.name !== existing.name || preferred.short_name !== existing.short_name)
+    ) {
+      scrapedTeamShortNamesByKey.set(entry.key, preferred);
+      updated += 1;
+    }
+  });
+
+  if (added > 0 || updated > 0) {
+    scrapedTeamShortNamesLastUpdated = updatedAt;
+  }
+
+  return { added, updated };
+}
+
+function rememberTeamShortNamesFromMatch(match, options = {}) {
+  return rememberScrapedTeamShortNameEntries(
+    extractTeamShortNameEntriesFromMatch(match, options),
+    options
+  );
+}
+
+function loadTeamShortNameOverrides() {
+  let stat = null;
+  try {
+    stat = fs.statSync(TEAM_SHORT_NAMES_CONFIG_PATH);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      teamShortNameOverridesByKey = new Map();
+      teamShortNameOverridesLoadedAt = new Date().toISOString();
+      teamShortNameOverridesMtimeMs = null;
+      return teamShortNameOverridesByKey;
+    }
+    console.warn(
+      `[TeamShortNames] Failed to stat config file: ${error.message || error}`
+    );
+    return teamShortNameOverridesByKey;
+  }
+
+  const mtimeMs = Number(stat && stat.mtimeMs);
+  if (Number.isFinite(mtimeMs) && teamShortNameOverridesMtimeMs === mtimeMs) {
+    return teamShortNameOverridesByKey;
+  }
+
+  try {
+    const raw = fs.readFileSync(TEAM_SHORT_NAMES_CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    const updatedAt =
+      parsed &&
+      typeof parsed === "object" &&
+      typeof parsed.updatedAt === "string" &&
+      parsed.updatedAt.trim()
+        ? parsed.updatedAt.trim()
+        : stat.mtime.toISOString();
+    const next = new Map();
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const shortNames =
+        parsed.short_names && typeof parsed.short_names === "object" && !Array.isArray(parsed.short_names)
+          ? parsed.short_names
+          : {};
+      Object.entries(shortNames).forEach(([name, shortName]) => {
+        const entry = normalizeTeamShortNameEntry(name, shortName, {
+          updated_at: updatedAt,
+          source: "filesystem_override",
+        });
+        if (!entry) return;
+        next.set(entry.key, entry);
+      });
+    }
+
+    teamShortNameOverridesByKey = next;
+    teamShortNameOverridesLoadedAt = updatedAt;
+    teamShortNameOverridesMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+  } catch (error) {
+    console.warn(
+      `[TeamShortNames] Failed to load config file: ${error.message || error}`
+    );
+    teamShortNameOverridesMtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+  }
+
+  return teamShortNameOverridesByKey;
+}
+
+function buildTeamShortNamesPayloadFromMaps(scrapedMap = new Map(), overrideMap = new Map()) {
+  const combined = new Map();
+  if (scrapedMap && typeof scrapedMap.forEach === "function") {
+    scrapedMap.forEach((entry, key) => {
+      if (entry && key) combined.set(key, entry);
+    });
+  }
+  if (overrideMap && typeof overrideMap.forEach === "function") {
+    overrideMap.forEach((entry, key) => {
+      if (entry && key) combined.set(key, entry);
+    });
+  }
+
+  const shortNames = {};
+  Array.from(combined.values())
+    .filter((entry) => entry && entry.name && entry.short_name)
+    .sort((left, right) => compareInsensitive(left.name || "", right.name || ""))
+    .forEach((entry) => {
+      shortNames[entry.name] = entry.short_name;
+    });
+
+  const updatedCandidates = [
+    scrapedTeamShortNamesLastUpdated,
+    teamShortNameOverridesLoadedAt,
+  ].filter(Boolean);
+  const updatedAt = updatedCandidates
+    .map((value) => ({ value, timestamp: Date.parse(String(value).trim()) }))
+    .filter((entry) => Number.isFinite(entry.timestamp))
+    .sort((left, right) => right.timestamp - left.timestamp)[0]?.value || new Date().toISOString();
+
+  return Object.freeze({
+    updated_at: updatedAt,
+    short_names: Object.freeze(shortNames),
+  });
+}
+
+function buildResolvedTeamShortNameLookup(scrapedMap = new Map(), overrideMap = new Map()) {
+  const combined = new Map();
+  if (scrapedMap && typeof scrapedMap.forEach === "function") {
+    scrapedMap.forEach((entry, key) => {
+      if (entry && key) combined.set(key, entry);
+    });
+  }
+  if (overrideMap && typeof overrideMap.forEach === "function") {
+    overrideMap.forEach((entry, key) => {
+      if (entry && key) combined.set(key, entry);
+    });
+  }
+  return combined;
+}
+
+function buildPersistedTeamShortNamesDataset(scrapedMap = new Map(), updatedAt = null) {
+  const entries = Array.from(
+    scrapedMap && typeof scrapedMap.values === "function" ? scrapedMap.values() : []
+  )
+    .filter((entry) => entry && entry.key && entry.name && entry.short_name)
+    .sort((left, right) => compareInsensitive(left.name || "", right.name || ""));
+  const resolvedUpdatedAt =
+    newestIsoTimestamp([
+      updatedAt,
+      ...entries.map((entry) => String(entry.updated_at || "").trim()).filter(Boolean),
+    ]) || new Date().toISOString();
+
+  return Object.freeze({
+    updated_at: resolvedUpdatedAt,
+    entries: Object.freeze(entries.map((entry) => Object.freeze({ ...entry }))),
+  });
+}
+
+function restoreScrapedTeamShortNamesFromDataset(payload, options = {}) {
+  const sourcePayload = payload && typeof payload === "object" ? payload : {};
+  const fallbackUpdatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : null;
+  const source =
+    typeof options.source === "string" && options.source.trim()
+      ? options.source.trim()
+      : "redis_operational_dataset";
+  const nextMap = new Map();
+  let latestUpdatedAt = newestIsoTimestamp([sourcePayload.updated_at, fallbackUpdatedAt]);
+
+  const entryCandidates = Array.isArray(sourcePayload.entries)
+    ? sourcePayload.entries
+    : sourcePayload.short_names && typeof sourcePayload.short_names === "object"
+      ? Object.entries(sourcePayload.short_names).map(([name, shortName]) => ({
+        name,
+        short_name: shortName,
+        updated_at: sourcePayload.updated_at || fallbackUpdatedAt || null,
+        source,
+      }))
+      : [];
+
+  entryCandidates.forEach((candidate) => {
+    if (!candidate || typeof candidate !== "object") return;
+    const entry = normalizeTeamShortNameEntry(candidate.name, candidate.short_name, {
+      updated_at:
+        typeof candidate.updated_at === "string" && candidate.updated_at.trim()
+          ? candidate.updated_at.trim()
+          : latestUpdatedAt || new Date().toISOString(),
+      source:
+        typeof candidate.source === "string" && candidate.source.trim()
+          ? candidate.source.trim()
+          : source,
+      details_url:
+        typeof candidate.details_url === "string" && candidate.details_url.trim()
+          ? candidate.details_url.trim()
+          : null,
+    });
+    if (!entry) return;
+    const existing = nextMap.get(entry.key) || null;
+    nextMap.set(entry.key, choosePreferredTeamShortNameEntry(existing, entry));
+    latestUpdatedAt = newestIsoTimestamp([latestUpdatedAt, entry.updated_at]) || latestUpdatedAt;
+  });
+
+  return {
+    map: nextMap,
+    updated_at: latestUpdatedAt || new Date().toISOString(),
+  };
+}
+
+function resolveApiTeamShortName(rawValue, lookup = null) {
+  const resolvedLookup =
+    lookup && typeof lookup.get === "function"
+      ? lookup
+      : buildResolvedTeamShortNameLookup(scrapedTeamShortNamesByKey, teamShortNameOverridesByKey);
+  const trimmed = String(rawValue || "").trim();
+  if (!trimmed) return rawValue;
+  const key = normalizeTeamShortNameKey(trimmed);
+  if (!key) return rawValue;
+  const entry = resolvedLookup.get(key) || null;
+  if (!entry || !entry.short_name) return null;
+  return String(entry.short_name).trim() || null;
+}
+
+function applyTeamShortNamesToApiValue(value, lookup = null) {
+  const resolvedLookup =
+    lookup && typeof lookup.get === "function"
+      ? lookup
+      : buildResolvedTeamShortNameLookup(scrapedTeamShortNamesByKey, teamShortNameOverridesByKey);
+
+  if (Array.isArray(value)) {
+    return value.map((item) => applyTeamShortNamesToApiValue(item, resolvedLookup));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const output = {};
+  Object.entries(value).forEach(([key, entryValue]) => {
+    if (Array.isArray(entryValue) || (entryValue && typeof entryValue === "object")) {
+      output[key] = applyTeamShortNamesToApiValue(entryValue, resolvedLookup);
+      return;
+    }
+
+    output[key] = entryValue;
+  });
+
+  const snakeHomeTeam =
+    typeof output.home_team === "string" && output.home_team.trim() ? output.home_team.trim() : null;
+  const snakeAwayTeam =
+    typeof output.away_team === "string" && output.away_team.trim() ? output.away_team.trim() : null;
+  const camelHomeTeam =
+    typeof output.homeTeam === "string" && output.homeTeam.trim() ? output.homeTeam.trim() : null;
+  const camelAwayTeam =
+    typeof output.awayTeam === "string" && output.awayTeam.trim() ? output.awayTeam.trim() : null;
+
+  const homeShortName = resolveApiTeamShortName(snakeHomeTeam || camelHomeTeam, resolvedLookup);
+  const awayShortName = resolveApiTeamShortName(snakeAwayTeam || camelAwayTeam, resolvedLookup);
+
+  if (snakeHomeTeam) {
+    if (homeShortName && homeShortName !== snakeHomeTeam) {
+      output.home_short_name = homeShortName;
+    } else if (Object.prototype.hasOwnProperty.call(output, "home_short_name")) {
+      delete output.home_short_name;
+    }
+  }
+
+  if (snakeAwayTeam) {
+    if (awayShortName && awayShortName !== snakeAwayTeam) {
+      output.away_short_name = awayShortName;
+    } else if (Object.prototype.hasOwnProperty.call(output, "away_short_name")) {
+      delete output.away_short_name;
+    }
+  }
+
+  if (camelHomeTeam) {
+    if (homeShortName && homeShortName !== camelHomeTeam) {
+      output.homeShortName = homeShortName;
+    } else if (Object.prototype.hasOwnProperty.call(output, "homeShortName")) {
+      delete output.homeShortName;
+    }
+  }
+
+  if (camelAwayTeam) {
+    if (awayShortName && awayShortName !== camelAwayTeam) {
+      output.awayShortName = awayShortName;
+    } else if (Object.prototype.hasOwnProperty.call(output, "awayShortName")) {
+      delete output.awayShortName;
+    }
+  }
+
+  return output;
+}
+
+function loadTeamShortNamesPayload() {
+  loadTeamShortNameOverrides();
+  return buildTeamShortNamesPayloadFromMaps(
+    scrapedTeamShortNamesByKey,
+    teamShortNameOverridesByKey
+  );
+}
+
+function buildKnownTeamShortNameKeySet() {
+  loadTeamShortNameOverrides();
+  return new Set([
+    ...Array.from(scrapedTeamShortNamesByKey.keys()),
+    ...Array.from(teamShortNameOverridesByKey.keys()),
+  ]);
+}
+
+function collectTeamShortNameScrapeCandidates(matches, knownKeys = new Set()) {
+  const candidatesByDetailsUrl = new Map();
+
+  (Array.isArray(matches) ? matches : []).forEach((match) => {
+    if (!match || typeof match !== "object") return;
+    const detailsUrl = String(match.details_url || "").trim();
+    const homeTeam = String(match.home_team || "").trim();
+    const awayTeam = String(match.away_team || "").trim();
+    if (!detailsUrl || !homeTeam || !awayTeam) return;
+
+    const missingTeamNames = [homeTeam, awayTeam].filter((teamName) => {
+      const key = normalizeTeamShortNameKey(teamName);
+      return key && !knownKeys.has(key);
+    });
+    if (missingTeamNames.length === 0) return;
+
+    const candidate = {
+      details_url: detailsUrl,
+      home_team: homeTeam,
+      away_team: awayTeam,
+      date: String(match.date || "").trim() || null,
+      time: String(match.time || "").trim() || null,
+      score_status: String(match.score_status || match.match_time || "").trim() || null,
+      missing_team_names: missingTeamNames,
+      missing_count: missingTeamNames.length,
+    };
+    const existing = candidatesByDetailsUrl.get(detailsUrl);
+    if (!existing || candidate.missing_count > existing.missing_count) {
+      candidatesByDetailsUrl.set(detailsUrl, candidate);
+    }
+  });
+
+  return Array.from(candidatesByDetailsUrl.values()).sort((left, right) => {
+    if (right.missing_count !== left.missing_count) {
+      return right.missing_count - left.missing_count;
+    }
+    const leftStatus = isInProgressMatchStatus(left.score_status);
+    const rightStatus = isInProgressMatchStatus(right.score_status);
+    if (leftStatus !== rightStatus) {
+      return rightStatus ? 1 : -1;
+    }
+    const leftDateTime = `${left.date || ""} ${left.time || ""}`.trim();
+    const rightDateTime = `${right.date || ""} ${right.time || ""}`.trim();
+    const dateCompare = compareInsensitive(leftDateTime, rightDateTime);
+    if (dateCompare !== 0) return dateCompare;
+    return compareInsensitive(left.details_url || "", right.details_url || "");
+  });
+}
+
+function collectTeamShortNameDiscoveryMatches() {
+  return [
+    ...(Array.isArray(cachedBbcMatches) ? cachedBbcMatches : []),
+    ...(Array.isArray(cachedBbcRangeMatches) ? cachedBbcRangeMatches : []),
+    ...(Array.isArray(cachedRecentMatches) ? cachedRecentMatches : []),
+    ...(Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []),
+  ];
+}
+
+async function updateTeamShortNamesCache(options = {}) {
+  if (teamShortNamesUpdating) return null;
+  teamShortNamesUpdating = true;
+  const startedAtMs = Date.now();
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+
+  try {
+    const knownKeys = buildKnownTeamShortNameKeySet();
+    const candidates = collectTeamShortNameScrapeCandidates(
+      collectTeamShortNameDiscoveryMatches(),
+      knownKeys
+    );
+    const limitedCandidates = candidates.slice(0, TEAM_SHORT_NAMES_SCRAPE_MAX_MATCHES);
+    if (limitedCandidates.length === 0) {
+      return {
+        trigger,
+        candidates_considered: 0,
+        matches_scraped: 0,
+        discovered_total: scrapedTeamShortNamesByKey.size,
+      };
+    }
+
+    let matchesScraped = 0;
+    let entriesAdded = 0;
+    let entriesUpdated = 0;
+    const updatedAt = new Date().toISOString();
+
+    await mapWithConcurrency(
+      limitedCandidates,
+      TEAM_SHORT_NAMES_SCRAPE_CONCURRENCY,
+      async (candidate) => {
+        try {
+          const fetched = await fetchBbcMatchByDetailsUrl(candidate.details_url);
+          matchesScraped += 1;
+          const result = rememberTeamShortNamesFromMatch(fetched, {
+            updated_at: updatedAt,
+            source: "bbc_team_short_names_scrape",
+          });
+          entriesAdded += result.added;
+          entriesUpdated += result.updated;
+        } catch (error) {
+          console.warn(
+            `[TeamShortNames] Failed to scrape ${candidate.details_url}:`,
+            error.message || error
+          );
+        }
+      }
+    );
+
+    console.log(
+      `[TeamShortNames] trigger=${trigger} candidates=${limitedCandidates.length} scraped=${matchesScraped} added=${entriesAdded} updated=${entriesUpdated} total=${scrapedTeamShortNamesByKey.size} duration_ms=${Date.now() - startedAtMs}`
+    );
+
+    if (entriesAdded > 0 || entriesUpdated > 0) {
+      await syncTeamShortNamesCacheToRedis({
+        trigger: `${trigger}_scrape`,
+        updated_at: updatedAt,
+      });
+    }
+
+    return {
+      trigger,
+      candidates_considered: limitedCandidates.length,
+      matches_scraped: matchesScraped,
+      entries_added: entriesAdded,
+      entries_updated: entriesUpdated,
+      discovered_total: scrapedTeamShortNamesByKey.size,
+    };
+  } catch (error) {
+    console.warn("[TeamShortNames] Update failed:", error.message || error);
+    return null;
+  } finally {
+    teamShortNamesUpdating = false;
+  }
+}
+
+async function syncTeamShortNamesCacheToRedis(options = {}) {
+  if (teamShortNamesRedisSyncUpdating) return null;
+  teamShortNamesRedisSyncUpdating = true;
+  const trigger =
+    typeof options.trigger === "string" && options.trigger.trim()
+      ? options.trigger.trim()
+      : "scheduled";
+
+  try {
+    const payload = buildPersistedTeamShortNamesDataset(
+      scrapedTeamShortNamesByKey,
+      typeof options.updated_at === "string" && options.updated_at.trim()
+        ? options.updated_at.trim()
+        : scrapedTeamShortNamesLastUpdated
+    );
+    await persistOperationalDatasetSafe(
+      OP_DATASET_TEAM_SHORT_NAMES,
+      payload,
+      operationalPersistOptionsForDataset(
+        OP_DATASET_TEAM_SHORT_NAMES,
+        payload.updated_at,
+        `team_short_names_${trigger}`
+      )
+    );
+    return {
+      trigger,
+      updated_at: payload.updated_at,
+      count: Array.isArray(payload.entries) ? payload.entries.length : 0,
+    };
+  } catch (error) {
+    console.warn("[TeamShortNames] Redis sync failed:", error.message || error);
+    return null;
+  } finally {
+    teamShortNamesRedisSyncUpdating = false;
+  }
+}
+
+async function ensureTeamShortNamesCacheReady() {
+  loadTeamShortNameOverrides();
+  if (scrapedTeamShortNamesByKey.size > 0) {
+    return;
+  }
+
+  try {
+    await operationalBootstrapPromise;
+  } catch (_error) {
+    // Best-effort only; fall back to a direct Redis read below.
+  }
+
+  if (scrapedTeamShortNamesByKey.size > 0) {
+    return;
+  }
+
+  const record = await loadOperationalDatasetSafe(OP_DATASET_TEAM_SHORT_NAMES);
+  if (!record || !record.payload || typeof record.payload !== "object") {
+    return;
+  }
+
+  const restored = restoreScrapedTeamShortNamesFromDataset(record.payload, {
+    updated_at: record.updated_at || null,
+    source: record.source || "redis_operational_dataset_fallback",
+  });
+  if (restored.map.size > 0) {
+    scrapedTeamShortNamesByKey = restored.map;
+    scrapedTeamShortNamesLastUpdated = restored.updated_at || scrapedTeamShortNamesLastUpdated;
+  }
+}
+
 function resolveManualMappingCandidates(normalizedName, manualMappings) {
   const safeName = String(normalizedName || "").trim();
   const safeMappings =
@@ -7654,6 +8287,21 @@ async function applyCanonicalMatchWriteCorrections(payload, options = {}) {
 }
 
 async function upsertCanonicalMatchDetailsFromMatch(match, options = {}) {
+  const teamShortNamesUpdatedAt =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+  const teamShortNameResult = rememberTeamShortNamesFromMatch(match, {
+    updated_at: teamShortNamesUpdatedAt,
+    source: options.source || "match_details_ingest",
+  });
+  if (teamShortNameResult.added > 0 || teamShortNameResult.updated > 0) {
+    void syncTeamShortNamesCacheToRedis({
+      trigger: options.source || "match_details_ingest",
+      updated_at: teamShortNamesUpdatedAt,
+    });
+  }
+
   const incoming = normalizeMatchDetailsPayload(match, options);
   if (!incoming) return null;
 
@@ -11988,6 +12636,7 @@ async function hydrateOperationalStateFromRedis() {
       OP_DATASET_FOOTBALL_DATABASE_TEAMS,
       OP_DATASET_NATIONAL_ELO_TEAMS,
       OP_DATASET_MISSING_TEAM_LOGOS,
+      OP_DATASET_TEAM_SHORT_NAMES,
       OP_DATASET_CACHE_STATE,
     ]);
     const matchDetailsSnapshot = await getAllOperationalMatchDetails();
@@ -12097,6 +12746,16 @@ async function hydrateOperationalStateFromRedis() {
       }
     }
 
+    const teamShortNamesRecord = datasetRecords[OP_DATASET_TEAM_SHORT_NAMES];
+    if (teamShortNamesRecord && teamShortNamesRecord.payload && typeof teamShortNamesRecord.payload === "object") {
+      const restored = restoreScrapedTeamShortNamesFromDataset(teamShortNamesRecord.payload, {
+        updated_at: teamShortNamesRecord.updated_at || null,
+        source: teamShortNamesRecord.source || "redis_operational_dataset",
+      });
+      scrapedTeamShortNamesByKey = restored.map;
+      scrapedTeamShortNamesLastUpdated = restored.updated_at || scrapedTeamShortNamesLastUpdated;
+    }
+
     const cacheStateRecord = datasetRecords[OP_DATASET_CACHE_STATE];
     if (cacheStateRecord && cacheStateRecord.payload && typeof cacheStateRecord.payload === "object") {
       operationalCacheState = normalizeOperationalCacheState(
@@ -12134,6 +12793,7 @@ async function hydrateOperationalStateFromRedis() {
         club_elo_teams: cachedClubEloTeams.length,
         football_database_teams: cachedFootballDatabaseTeams.length,
         national_elo_teams: cachedNationalEloTeams.length,
+        team_short_names: scrapedTeamShortNamesByKey.size,
         match_details: matchDetailsById.size,
         cache_state_updated_at: operationalCacheState.updated_at,
       })
@@ -12208,6 +12868,17 @@ async function persistStartupOperationalStateFromDisk() {
       updated_at: missingTeamLogosLastUpdated || new Date().toISOString(),
       source: "startup_disk_seed",
     }),
+    persistOperationalDatasetSafe(
+      OP_DATASET_TEAM_SHORT_NAMES,
+      buildPersistedTeamShortNamesDataset(
+        scrapedTeamShortNamesByKey,
+        scrapedTeamShortNamesLastUpdated
+      ),
+      {
+        updated_at: scrapedTeamShortNamesLastUpdated || new Date().toISOString(),
+        source: "startup_disk_seed",
+      }
+    ),
     persistOperationalDatasetSafe(OP_DATASET_CACHE_STATE, currentCacheStateSnapshot(), {
       updated_at:
         (operationalCacheState && operationalCacheState.updated_at) || new Date().toISOString(),
@@ -12530,6 +13201,7 @@ const ADMIN_OPERATIONAL_DATASET_NAMES = [
   OP_DATASET_FOOTBALL_DATABASE_TEAMS,
   OP_DATASET_NATIONAL_ELO_TEAMS,
   OP_DATASET_LEAGUE_TABLES,
+  OP_DATASET_TEAM_SHORT_NAMES,
   OP_DATASET_CACHE_STATE,
 ];
 
@@ -13870,6 +14542,18 @@ function currentOperationalDatasetMemorySnapshot(name) {
         updated_at: leagueTablesLastUpdated || null,
         source: "memory",
       };
+    case OP_DATASET_TEAM_SHORT_NAMES:
+      {
+        const payload = buildPersistedTeamShortNamesDataset(
+          scrapedTeamShortNamesByKey,
+          scrapedTeamShortNamesLastUpdated
+        );
+        return {
+          payload,
+          updated_at: payload.updated_at || scrapedTeamShortNamesLastUpdated || null,
+          source: "memory",
+        };
+      }
     case OP_DATASET_CACHE_STATE:
       return {
         payload: currentCacheStateSnapshot(),
@@ -15158,6 +15842,7 @@ async function updateBbcMatches(options = {}) {
       count: filteredMatches.length,
       updated_at: bbcLastUpdated,
     });
+    void updateTeamShortNamesCache({ trigger: `${trigger}_bbc_live_refresh` });
   } catch (err) {
     recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_LIVE, err, {
       trigger,
@@ -15229,6 +15914,7 @@ async function updateBbcRangeMatches(options = {}) {
       past_days: BBC_RANGE_PAST_DAYS,
       future_days: BBC_RANGE_FUTURE_DAYS,
     });
+    void updateTeamShortNamesCache({ trigger: `${trigger}_bbc_range_refresh` });
   } catch (err) {
     recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_RANGE, err, {
       trigger,
@@ -18467,6 +19153,11 @@ app.get("/metrics", (_req, res) => {
 app.get(`${API_PREFIX}/matches`, async (req, res) => {
   setCacheOnlyHeaders(res);
   try {
+    await ensureTeamShortNamesCacheReady();
+    const teamShortNameLookup = buildResolvedTeamShortNameLookup(
+      scrapedTeamShortNamesByKey,
+      teamShortNameOverridesByKey
+    );
     const range = parseRequiredDateRange(req.query);
     if (range.error) {
       res.status(400).json({ error: range.error });
@@ -18609,7 +19300,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     res.set("X-Sort-Order", sortOrder);
     if (includeMeta) {
       res.json({
-        matches: paged,
+        matches: applyTeamShortNamesToApiValue(paged, teamShortNameLookup),
         pagination: {
           page,
           page_size: pageSize,
@@ -18623,7 +19314,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       });
       return;
     }
-    res.json(paged);
+    res.json(applyTeamShortNamesToApiValue(paged, teamShortNameLookup));
   } catch (err) {
     console.warn("Failed to serve /matches from cache:", err.message || err);
     res.status(500).json({ error: "Failed to serve matches from cache" });
@@ -18632,6 +19323,11 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
 
 app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
   setCacheOnlyHeaders(res);
+  await ensureTeamShortNamesCacheReady();
+  const teamShortNameLookup = buildResolvedTeamShortNameLookup(
+    scrapedTeamShortNamesByKey,
+    teamShortNameOverridesByKey
+  );
 
   const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
   const uniqueIds = [];
@@ -18676,11 +19372,16 @@ app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
     res.set("X-Last-Updated", latestUpdated);
   }
 
-  res.json(payload);
+  res.json(applyTeamShortNamesToApiValue(payload, teamShortNameLookup));
 });
 
 app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   setCacheOnlyHeaders(res);
+  await ensureTeamShortNamesCacheReady();
+  const teamShortNameLookup = buildResolvedTeamShortNameLookup(
+    scrapedTeamShortNamesByKey,
+    teamShortNameOverridesByKey
+  );
   const matchId = normalizeMatchDetailsId(req.params.matchId);
   if (!matchId) {
     res.status(400).json({ error: "Invalid match id. Expected BBC details id (e.g. c043pne0q3kt)." });
@@ -18718,7 +19419,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
       in_progress: testMatch.in_progress,
       updated_at: testMatch.updated_at,
     };
-    res.json(testMatchDetails);
+    res.json(applyTeamShortNamesToApiValue(testMatchDetails, teamShortNameLookup));
     return;
   }
 
@@ -18760,11 +19461,16 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   } else if (matchDetailsLastUpdated) {
     res.set("X-Last-Updated", matchDetailsLastUpdated);
   }
-  res.json(enrichedResponsePayload);
+  res.json(applyTeamShortNamesToApiValue(enrichedResponsePayload, teamShortNameLookup));
 });
 
 app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
   setCacheOnlyHeaders(res);
+  await ensureTeamShortNamesCacheReady();
+  const teamShortNameLookup = buildResolvedTeamShortNameLookup(
+    scrapedTeamShortNamesByKey,
+    teamShortNameOverridesByKey
+  );
   const date = req.query.date
     ? String(req.query.date).trim()
     : new Date().toISOString().split("T")[0];
@@ -18821,7 +19527,7 @@ app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
         match_details_updated_at:
           matchDetailsSnapshot && matchDetailsSnapshot.updated_at ? matchDetailsSnapshot.updated_at : null,
       },
-      candidates: allCandidates,
+      candidates: applyTeamShortNamesToApiValue(allCandidates, teamShortNameLookup),
     });
   } catch (error) {
     console.error("[API] Error retrieving monitor candidates:", error);
@@ -19289,6 +19995,17 @@ app.get(`${API_PREFIX}/team-colors`, (_req, res) => {
     res.set("X-Last-Updated", teamColorsLoadedAt);
   }
   res.set("X-Operational-Source", "filesystem_config");
+  res.json(payload);
+});
+
+app.get(`${API_PREFIX}/team-short-names`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  await ensureTeamShortNamesCacheReady();
+  const payload = loadTeamShortNamesPayload();
+  if (payload.updated_at) {
+    res.set("X-Last-Updated", payload.updated_at);
+  }
+  res.set("X-Operational-Source", "memory_cache+filesystem_override");
   res.json(payload);
 });
 
@@ -19906,6 +20623,11 @@ app.get(`${API_PREFIX}/audit/missing-team-logos`, (_req, res) => {
 
 app.get(`${API_PREFIX}/bbc/live`, async (_req, res) => {
   setCacheOnlyHeaders(res);
+  await ensureTeamShortNamesCacheReady();
+  const teamShortNameLookup = buildResolvedTeamShortNameLookup(
+    scrapedTeamShortNamesByKey,
+    teamShortNameOverridesByKey
+  );
   const [bbcLiveDataset, matchDetailsSnapshot] = await Promise.all([
     getOperationalArrayDataset(OP_DATASET_BBC_LIVE_MATCHES, cachedBbcMatches),
     getOperationalMatchDetailsSnapshotSafe(),
@@ -19935,11 +20657,16 @@ app.get(`${API_PREFIX}/bbc/live`, async (_req, res) => {
     return match;
   });
 
-  res.json(transformedMatches);
+  res.json(applyTeamShortNamesToApiValue(transformedMatches, teamShortNameLookup));
 });
 
 app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
   setCacheOnlyHeaders(res);
+  await ensureTeamShortNamesCacheReady();
+  const teamShortNameLookup = buildResolvedTeamShortNameLookup(
+    scrapedTeamShortNamesByKey,
+    teamShortNameOverridesByKey
+  );
   const detailsUrl = req.query.url ? String(req.query.url).trim() : "";
   if (!detailsUrl) {
     res.status(400).json({ error: "Missing required query parameter: url" });
@@ -19991,7 +20718,7 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
   } else if (matchDetailsLastUpdated) {
     res.set("X-Last-Updated", matchDetailsLastUpdated);
   }
-  res.json(enrichedResponsePayload);
+  res.json(applyTeamShortNamesToApiValue(enrichedResponsePayload, teamShortNameLookup));
 });
 
 app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
@@ -23835,6 +24562,8 @@ async function bootstrapOperationalState() {
   void updateFantasyBootstrapStatic({ trigger: "startup_bootstrap" });
   void updateFantasyFixtures({ trigger: "startup_bootstrap" });
   void updateFantasyEventLive({ trigger: "startup_bootstrap" });
+  void updateTeamShortNamesCache({ trigger: "startup_bootstrap" });
+  void syncTeamShortNamesCacheToRedis({ trigger: "startup_bootstrap" });
   recordRuntimeComponentSuccess(COMPONENT_BOOTSTRAP, {
     operation: "bootstrap_operational_state",
     seed_result: seedResult,
@@ -23931,6 +24660,12 @@ if (shouldRunRuntime) {
   setInterval(() => {
     void updateFantasyEventLive({ trigger: "interval" });
   }, fantasyEventLiveInterval);
+  setInterval(() => {
+    void updateTeamShortNamesCache({ trigger: "interval" });
+  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS);
+  setInterval(() => {
+    void syncTeamShortNamesCacheToRedis({ trigger: "interval" });
+  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS);
   setInterval(() => {
     pollFantasyAssistantManagerEntries();
   }, FANTASY_ASSISTANT_MANAGER_POLL_INTERVAL_MS);
@@ -24180,6 +24915,11 @@ app.get(`${API_PREFIX}/monitor/status`, (req, res) => {
 // Trigger an immediate Live Activity evaluation cycle.
 app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
   setCacheOnlyHeaders(res);
+  await ensureTeamShortNamesCacheReady();
+  const teamShortNameLookup = buildResolvedTeamShortNameLookup(
+    scrapedTeamShortNamesByKey,
+    teamShortNameOverridesByKey
+  );
   try {
     const force = String(_req.query.force || _req.body?.force || "").trim().toLowerCase();
     const forceDispatch = force === "1" || force === "true" || force === "yes";
@@ -24266,14 +25006,14 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
       }
     }
 
-    res.status(200).json({
+    res.status(200).json(applyTeamShortNamesToApiValue({
       success: true,
       userDeviceToken: userDeviceToken || null,
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
       foregroundStart,
       ...result,
-    });
+    }, teamShortNameLookup));
   } catch (error) {
     console.error("[API] Error reconciling live activities:", error);
     res.status(500).json({
@@ -24286,6 +25026,11 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
 // Force an immediate Live Activity evaluation cycle for every known device.
 app.post(`${API_PREFIX}/live-activity/reconcile-all`, async (_req, res) => {
   setCacheOnlyHeaders(res);
+  await ensureTeamShortNamesCacheReady();
+  const teamShortNameLookup = buildResolvedTeamShortNameLookup(
+    scrapedTeamShortNamesByKey,
+    teamShortNameOverridesByKey
+  );
   try {
     const force = String(_req.query.force || _req.body?.force || "true").trim().toLowerCase();
     const forceDispatch = !(force === "0" || force === "false" || force === "no");
@@ -24302,13 +25047,13 @@ app.post(`${API_PREFIX}/live-activity/reconcile-all`, async (_req, res) => {
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
     });
 
-    res.status(200).json({
+    res.status(200).json(applyTeamShortNamesToApiValue({
       success: true,
       allDevices: true,
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
       ...result,
-    });
+    }, teamShortNameLookup));
   } catch (error) {
     console.error("[API] Error reconciling all live activities:", error);
     res.status(500).json({
@@ -24394,6 +25139,15 @@ module.exports = {
     buildSyntheticMatchDetailsId,
     parseMatchStatusMinute,
     normalizeTeamName,
+    normalizeTeamShortNameEntry,
+    extractTeamShortNameEntriesFromMatch,
+    buildTeamShortNamesPayloadFromMaps,
+    buildPersistedTeamShortNamesDataset,
+    restoreScrapedTeamShortNamesFromDataset,
+    buildResolvedTeamShortNameLookup,
+    resolveApiTeamShortName,
+    applyTeamShortNamesToApiValue,
+    collectTeamShortNameScrapeCandidates,
     normalizeCompetitionFilterName,
     normalizeMatchesListMode,
     isAllowedCompetition,

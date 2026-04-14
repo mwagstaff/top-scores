@@ -498,6 +498,38 @@ test("parseMatchDetailsFromHtml extracts header metadata from BBC live match pag
   assert.equal(parsed.away_score, 1);
 });
 
+test("parseMatchDetailsFromHtml extracts BBC team short names from match header wrappers", () => {
+  const html = `
+    <html>
+      <body>
+        <article data-event-id="match-1">
+          <div data-participant-id="home">
+            <div class="ssrcss-1ff7ivz-TeamNameWrapper">
+              <span aria-hidden="true" class="ssrcss-c8w0oz-MobileValue">Paris SG</span>
+              <span aria-hidden="true" class="ssrcss-1p14tic-DesktopValue">Paris Saint-Germain</span>
+              <span class="visually-hidden ssrcss-i2z2ig-VisuallyHidden">Paris Saint-Germain</span>
+            </div>
+          </div>
+          <div data-participant-id="away">
+            <div class="ssrcss-1ff7ivz-TeamNameWrapper">
+              <span aria-hidden="true" class="ssrcss-c8w0oz-MobileValue">Man City</span>
+              <span aria-hidden="true" class="ssrcss-1p14tic-DesktopValue">Manchester City</span>
+              <span class="visually-hidden ssrcss-i2z2ig-VisuallyHidden">Manchester City</span>
+            </div>
+          </div>
+        </article>
+      </body>
+    </html>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.equal(parsed.home_team, "Paris Saint-Germain");
+  assert.equal(parsed.away_team, "Manchester City");
+  assert.equal(parsed.home_short_name, "Paris SG");
+  assert.equal(parsed.away_short_name, "Man City");
+});
+
 test("parseMatchDetailsFromHtml prefers kickoff time from the match header over coverage start time", () => {
   const html = `
     <html>

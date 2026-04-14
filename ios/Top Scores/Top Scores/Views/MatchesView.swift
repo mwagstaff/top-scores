@@ -1106,6 +1106,8 @@ private struct PredictedFixture: Codable, Identifiable, Sendable {
     let leagueSubcategory: String?
     let homeTeam: String
     let awayTeam: String
+    let homeShortName: String?
+    let awayShortName: String?
     let tvChannels: [String]
     let homeGoals: Int?
     let awayGoals: Int?
@@ -1131,12 +1133,24 @@ private struct PredictedFixture: Codable, Identifiable, Sendable {
         return baseLeague
     }
 
+    var displayHomeTeam: String {
+        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? homeTeam : trimmed
+    }
+
+    var displayAwayTeam: String {
+        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? awayTeam : trimmed
+    }
+
     var asMatch: Match {
         Match(
             date: date,
             time: time,
             homeTeam: homeTeam,
             awayTeam: awayTeam,
+            homeShortName: homeShortName,
+            awayShortName: awayShortName,
             league: league,
             leagueSubcategory: leagueSubcategory,
             tvChannels: [],
@@ -1170,6 +1184,8 @@ extension PredictedFixture {
         case leagueSubcategory
         case homeTeam
         case awayTeam
+        case homeShortName
+        case awayShortName
         case tvChannels
         case homeGoals
         case awayGoals
@@ -1193,6 +1209,8 @@ extension PredictedFixture {
         leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
         homeTeam = try container.decode(String.self, forKey: .homeTeam)
         awayTeam = try container.decode(String.self, forKey: .awayTeam)
+        homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
+        awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
         tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
         homeGoals = try container.decodeIfPresent(Int.self, forKey: .homeGoals)
         awayGoals = try container.decodeIfPresent(Int.self, forKey: .awayGoals)
@@ -1216,6 +1234,8 @@ extension PredictedFixture {
         try container.encodeIfPresent(leagueSubcategory, forKey: .leagueSubcategory)
         try container.encode(homeTeam, forKey: .homeTeam)
         try container.encode(awayTeam, forKey: .awayTeam)
+        try container.encodeIfPresent(homeShortName, forKey: .homeShortName)
+        try container.encodeIfPresent(awayShortName, forKey: .awayShortName)
         try container.encode(tvChannels, forKey: .tvChannels)
         try container.encodeIfPresent(homeGoals, forKey: .homeGoals)
         try container.encodeIfPresent(awayGoals, forKey: .awayGoals)
@@ -1340,6 +1360,8 @@ private enum FixturePredictionGenerator {
                 let matchLeagueSubcategory = match.leagueSubcategory
                 let matchHomeTeam = match.homeTeam
                 let matchAwayTeam = match.awayTeam
+                let matchHomeShortName = match.homeShortName
+                let matchAwayShortName = match.awayShortName
                 let matchTVChannels = match.tvChannels
                 let kickoff = match.dateTime
                 let isPostponed = match.isPostponed
@@ -1371,6 +1393,8 @@ private enum FixturePredictionGenerator {
                                 leagueSubcategory: matchLeagueSubcategory,
                                 homeTeam: matchHomeTeam,
                                 awayTeam: matchAwayTeam,
+                                homeShortName: matchHomeShortName,
+                                awayShortName: matchAwayShortName,
                                 tvChannels: matchTVChannels,
                                 homeGoals: nil,
                                 awayGoals: nil,
@@ -1401,6 +1425,8 @@ private enum FixturePredictionGenerator {
                             leagueSubcategory: matchLeagueSubcategory,
                             homeTeam: matchHomeTeam,
                             awayTeam: matchAwayTeam,
+                            homeShortName: matchHomeShortName,
+                            awayShortName: matchAwayShortName,
                             tvChannels: matchTVChannels,
                             homeGoals: estimate.homeGoals,
                             awayGoals: estimate.awayGoals,
@@ -1864,11 +1890,11 @@ private struct DayPredictionsView: View {
                 if fixture.isPredicted {
                     let home = fixture.homeGoals ?? 0
                     let away = fixture.awayGoals ?? 0
-                    lines.append("\(fixture.time)  \(fixture.homeTeam) \(home)-\(away) \(fixture.awayTeam)")
+                    lines.append("\(fixture.time)  \(fixture.displayHomeTeam) \(home)-\(away) \(fixture.displayAwayTeam)")
                 } else if fixture.isPostponed {
-                    lines.append("\(fixture.time)  \(fixture.homeTeam) P-P \(fixture.awayTeam)  [Match postponed]")
+                    lines.append("\(fixture.time)  \(fixture.displayHomeTeam) P-P \(fixture.displayAwayTeam)  [Match postponed]")
                 } else {
-                    lines.append("\(fixture.time)  \(fixture.homeTeam) vs \(fixture.awayTeam)  [\(fixture.statusLabelText)]")
+                    lines.append("\(fixture.time)  \(fixture.displayHomeTeam) vs \(fixture.displayAwayTeam)  [\(fixture.statusLabelText)]")
                 }
             }
             lines.append("")

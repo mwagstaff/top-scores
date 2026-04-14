@@ -72,6 +72,8 @@ struct WatchMatchDetailsPayload: Codable {
     let league: String?
     let homeTeam: String?
     let awayTeam: String?
+    let homeShortName: String?
+    let awayShortName: String?
     let homeScore: Int?
     let awayScore: Int?
     let scoreStatus: String?
@@ -90,6 +92,8 @@ struct WatchMatchDetailsPayload: Codable {
         case league
         case homeTeam = "home_team"
         case awayTeam = "away_team"
+        case homeShortName = "home_short_name"
+        case awayShortName = "away_short_name"
         case homeScore = "home_score"
         case awayScore = "away_score"
         case scoreStatus = "score_status"
@@ -111,6 +115,8 @@ extension WatchMatch {
             time: details.time ?? time,
             homeTeam: details.homeTeam ?? homeTeam,
             awayTeam: details.awayTeam ?? awayTeam,
+            homeShortName: details.homeShortName ?? homeShortName,
+            awayShortName: details.awayShortName ?? awayShortName,
             league: details.league ?? league,
             matchDetailsIDValue: matchDetailsIDValue,
             tvChannels: tvChannels,
@@ -135,6 +141,8 @@ private extension WatchMatch {
         time: String,
         homeTeam: String,
         awayTeam: String,
+        homeShortName: String?,
+        awayShortName: String?,
         league: String,
         matchDetailsIDValue: String?,
         tvChannels: [String],
@@ -185,6 +193,13 @@ private extension WatchMatch {
                 ["player": card.player, "red_card_times": card.redCardTimes]
             }
         ]
+
+        if let homeShortName {
+            dict["home_short_name"] = homeShortName
+        }
+        if let awayShortName {
+            dict["away_short_name"] = awayShortName
+        }
 
         if let matchDetailsIDValue = matchDetailsIDValue {
             dict["match_details_id"] = matchDetailsIDValue

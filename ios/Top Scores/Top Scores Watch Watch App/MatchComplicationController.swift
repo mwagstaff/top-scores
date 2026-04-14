@@ -340,8 +340,8 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
             .paragraphStyle: rightParagraph
         ]
 
-        (featuredMatch.homeTeam as NSString).draw(in: leftRect, withAttributes: leftAttrs)
-        (featuredMatch.awayTeam as NSString).draw(in: rightRect, withAttributes: rightAttrs)
+        (featuredMatch.displayHomeTeam as NSString).draw(in: leftRect, withAttributes: leftAttrs)
+        (featuredMatch.displayAwayTeam as NSString).draw(in: rightRect, withAttributes: rightAttrs)
     }
 
     private func drawBottomRow(featuredMatch: WatchMatch?, in bounds: CGRect) {

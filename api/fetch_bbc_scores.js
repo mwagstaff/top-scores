@@ -367,29 +367,86 @@ function extractTeams($node, $) {
   return names.slice(0, 2);
 }
 
-function extractTeamNameFromParticipant($participant, $) {
+function normalizeTeamLabelKey(value) {
+  return normalizeText(value).toLowerCase();
+}
+
+function pickShortestCandidate(candidates) {
+  const cleaned = [];
+  candidates.forEach((candidate) => {
+    const value = normalizeText(candidate);
+    if (!value) return;
+    if (!cleaned.includes(value)) cleaned.push(value);
+  });
+  if (!cleaned.length) return null;
+  cleaned.sort((a, b) => a.length - b.length || a.localeCompare(b));
+  return cleaned[0];
+}
+
+function extractTeamNameDescriptorFromParticipant($participant, $) {
   const wrapper = $participant.find(BBC_TEAM_NAME_WRAPPER_SELECTOR).first();
   const scope = wrapper.length ? wrapper : $participant;
-  const spanCandidates = [];
-  scope.find("span").each((_, el) => {
-    uniquePush(spanCandidates, normalizeText($(el).text()));
+  const hiddenCandidates = [];
+  scope.find(BBC_HIDDEN_TEXT_SELECTOR).each((_, el) => {
+    uniquePush(hiddenCandidates, normalizeText($(el).text()));
   });
-  const bestSpan = pickBestCandidate(spanCandidates);
-  if (bestSpan) return bestSpan;
-  return pickBestCandidate([
-    normalizeText(scope.attr("aria-label")),
-    normalizeText(scope.text()),
-  ]);
+
+  const visibleCandidates = [];
+  scope.find("span").each((_, el) => {
+    if ($(el).is(BBC_HIDDEN_TEXT_SELECTOR) || $(el).closest(BBC_HIDDEN_TEXT_SELECTOR).length) {
+      return;
+    }
+    uniquePush(visibleCandidates, normalizeText($(el).text()));
+  });
+
+  const resolvedName =
+    pickBestCandidate(hiddenCandidates) ||
+    pickBestCandidate(visibleCandidates) ||
+    pickBestCandidate([
+      normalizeText(scope.attr("aria-label")),
+      normalizeText(scope.text()),
+    ]);
+  if (!resolvedName) return null;
+
+  const resolvedNameKey = normalizeTeamLabelKey(resolvedName);
+  const shortName = pickShortestCandidate(
+    visibleCandidates.filter((candidate) => normalizeTeamLabelKey(candidate) !== resolvedNameKey)
+  );
+
+  return {
+    name: resolvedName,
+    short_name: shortName || null,
+  };
+}
+
+function extractTeamNameDescriptorsFromBbcNode($node, $) {
+  const participants = $node.find(BBC_PARTICIPANT_SELECTOR);
+  if (participants.length >= 2) {
+    const home = extractTeamNameDescriptorFromParticipant($(participants[0]), $);
+    const away = extractTeamNameDescriptorFromParticipant($(participants[1]), $);
+    if (home && away && home.name && away.name) return [home, away];
+  }
+  return [];
 }
 
 function extractTeamsFromBbcNode($node, $) {
-  const participants = $node.find(BBC_PARTICIPANT_SELECTOR);
-  if (participants.length >= 2) {
-    const home = extractTeamNameFromParticipant($(participants[0]), $);
-    const away = extractTeamNameFromParticipant($(participants[1]), $);
-    if (home && away) return [home, away];
+  const descriptors = extractTeamNameDescriptorsFromBbcNode($node, $);
+  if (descriptors.length >= 2) {
+    return [descriptors[0].name, descriptors[1].name];
   }
   return [];
+}
+
+function extractTeamShortNamesFromBbcNode($node, $) {
+  const descriptors = extractTeamNameDescriptorsFromBbcNode($node, $);
+  if (descriptors.length < 2) return null;
+
+  return {
+    home_team: descriptors[0].name,
+    away_team: descriptors[1].name,
+    home_short_name: descriptors[0].short_name || null,
+    away_short_name: descriptors[1].short_name || null,
+  };
 }
 
 function normalizeTeamMatchKey(value) {
@@ -1551,6 +1608,7 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   const kickoffTimeFromHeader = primaryMatchNode
     ? extractKickoffTimeFromBbcNode($primaryScope, $)
     : null;
+  const shortNamesFromHeader = extractTeamShortNamesFromBbcNode($primaryScope, $);
   const teamsFromHeader = extractTeamsFromBbcNode($primaryScope, $);
   const fallbackTeamsFromHeader = teamsFromHeader.length >= 2
     ? teamsFromHeader
@@ -1630,6 +1688,20 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   }
   if (resolvedAwayTeam) {
     result.away_team = resolvedAwayTeam;
+  }
+  if (
+    shortNamesFromHeader &&
+    shortNamesFromHeader.home_short_name &&
+    normalizeTeamLabelKey(shortNamesFromHeader.home_short_name) !== normalizeTeamLabelKey(resolvedHomeTeam)
+  ) {
+    result.home_short_name = shortNamesFromHeader.home_short_name;
+  }
+  if (
+    shortNamesFromHeader &&
+    shortNamesFromHeader.away_short_name &&
+    normalizeTeamLabelKey(shortNamesFromHeader.away_short_name) !== normalizeTeamLabelKey(resolvedAwayTeam)
+  ) {
+    result.away_short_name = shortNamesFromHeader.away_short_name;
   }
   if (scoresFromHeader && isScoreValue(scoresFromHeader[0]) && isScoreValue(scoresFromHeader[1])) {
     result.home_score = toScoreValue(scoresFromHeader[0]);

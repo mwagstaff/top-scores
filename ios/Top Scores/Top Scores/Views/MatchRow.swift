@@ -97,7 +97,7 @@ struct MatchRow: View {
                     TeamLogo(name: match.homeTeam, size: logoSize)
 
                     HStack(alignment: .center, spacing: 8) {
-                        Text(match.homeTeam)
+                        Text(match.displayHomeTeam)
                             .font(teamNameFont)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -107,7 +107,7 @@ struct MatchRow: View {
 
                         scoreAndStatusRow
 
-                        Text(match.awayTeam)
+                        Text(match.displayAwayTeam)
                             .font(teamNameFont)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -188,7 +188,7 @@ struct MatchRow: View {
 
                 TeamLogo(name: match.homeTeam, size: logoSize)
 
-                Text(match.homeTeam)
+                Text(match.displayHomeTeam)
                     .font(teamNameFont)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -198,7 +198,7 @@ struct MatchRow: View {
 
                 compactFixtureCenterContent
 
-                Text(match.awayTeam)
+                Text(match.displayAwayTeam)
                     .font(teamNameFont)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -553,7 +553,11 @@ struct MatchRow: View {
     @ViewBuilder
     private var compactFixtureCenterContent: some View {
         if shouldPlaceCompactKickoffInTrailingAccessory {
-            compactUpcomingCenterAccessory
+            if match.isPostponed {
+                compactPostponedCenterAccessory
+            } else {
+                compactUpcomingCenterAccessory
+            }
         } else {
             scoreAndStatusRow
         }
@@ -629,6 +633,29 @@ struct MatchRow: View {
             )
     }
 
+    private var compactPostponedCenterAccessory: some View {
+        HStack(spacing: 8) {
+            if let homeScoreText {
+                Text(homeScoreText)
+                    .font(scoreFont)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .frame(minWidth: 14, alignment: .trailing)
+            }
+
+            compactCenteredBroadcastAccessory
+
+            if let awayScoreText {
+                Text(awayScoreText)
+                    .font(scoreFont)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .frame(minWidth: 14, alignment: .leading)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
     private var compactPrimaryBroadcastLogo: UIImage? {
         guard rowPreferences.showCompactFixtureTvLogo else { return nil }
         return primaryBroadcastLogo
@@ -639,7 +666,7 @@ struct MatchRow: View {
         hasCompactBroadcastLogo: Bool
     ) -> Bool {
         let _ = hasCompactBroadcastLogo
-        return match.isUpcomingScorelessFixture
+        return match.isUpcomingScorelessFixture || match.isPostponed
     }
 
     private var shouldPlaceCompactKickoffInTrailingAccessory: Bool {

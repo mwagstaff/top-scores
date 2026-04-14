@@ -233,7 +233,7 @@ private struct WatchMatchLozengeTopRow: View {
     var body: some View {
         VStack(spacing: 4) {
             HStack(spacing: 6) {
-                Text(match.homeTeam)
+                Text(match.displayHomeTeam)
                     .font(.footnote)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
@@ -242,7 +242,7 @@ private struct WatchMatchLozengeTopRow: View {
                 WatchMatchStatusIndicatorView(text: topIndicatorText, isLive: match.isInProgress)
                     .fixedSize(horizontal: true, vertical: false)
 
-                Text(match.awayTeam)
+                Text(match.displayAwayTeam)
                     .font(.footnote)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
@@ -322,13 +322,13 @@ private struct WatchMatchTopRow: View {
     var body: some View {
         HStack(spacing: 6) {
             WatchTeamLogo(name: match.homeTeam)
-            Text(match.homeTeam)
+            Text(match.displayHomeTeam)
                 .font(.footnote)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             WatchMatchStatusIndicatorView(text: centerIndicatorText, isLive: match.isInProgress)
                 .fixedSize(horizontal: true, vertical: false)
-            Text(match.awayTeam)
+            Text(match.displayAwayTeam)
                 .font(.footnote)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -454,7 +454,7 @@ private struct WatchMatchDetailView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
-                        Text(activeMatch.homeTeam)
+                        Text(activeMatch.displayHomeTeam)
                             .font(.footnote)
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
@@ -463,7 +463,7 @@ private struct WatchMatchDetailView: View {
                         WatchMatchStatusIndicatorView(text: topIndicatorText, isLive: activeMatch.isInProgress)
                             .fixedSize(horizontal: true, vertical: false)
 
-                        Text(activeMatch.awayTeam)
+                        Text(activeMatch.displayAwayTeam)
                             .font(.footnote)
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)

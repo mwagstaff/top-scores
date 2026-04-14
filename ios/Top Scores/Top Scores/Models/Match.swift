@@ -264,6 +264,8 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
     let league: String?
     let homeTeam: String?
     let awayTeam: String?
+    let homeShortName: String?
+    let awayShortName: String?
     let homeScore: Int?
     let awayScore: Int?
     let aggregateHomeScore: Int?
@@ -292,6 +294,8 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
         case league
         case homeTeam = "home_team"
         case awayTeam = "away_team"
+        case homeShortName = "home_short_name"
+        case awayShortName = "away_short_name"
         case homeScore = "home_score"
         case awayScore = "away_score"
         case aggregateHomeScore = "aggregate_home_score"
@@ -322,6 +326,8 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
         league = try container.decodeIfPresent(String.self, forKey: .league)
         homeTeam = try container.decodeIfPresent(String.self, forKey: .homeTeam)
         awayTeam = try container.decodeIfPresent(String.self, forKey: .awayTeam)
+        homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
+        awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
         homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
         awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
         aggregateHomeScore = try container.decodeIfPresent(Int.self, forKey: .aggregateHomeScore)
@@ -349,6 +355,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let time: String
     let homeTeam: String
     let awayTeam: String
+    let homeShortName: String?
+    let awayShortName: String?
     let league: String
     let leagueSubcategory: String?
     let detailsURL: String?
@@ -379,6 +387,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         time: String,
         homeTeam: String,
         awayTeam: String,
+        homeShortName: String? = nil,
+        awayShortName: String? = nil,
         league: String,
         leagueSubcategory: String? = nil,
         detailsURL: String? = nil,
@@ -408,6 +418,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.time = time
         self.homeTeam = homeTeam
         self.awayTeam = awayTeam
+        self.homeShortName = homeShortName
+        self.awayShortName = awayShortName
         self.league = league
         self.leagueSubcategory = leagueSubcategory
         self.detailsURL = detailsURL
@@ -436,6 +448,16 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
 
     nonisolated var id: String {
         "\(date)|\(time)|\(league)|\(homeTeam)|\(awayTeam)"
+    }
+
+    nonisolated var displayHomeTeam: String {
+        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? homeTeam : trimmed
+    }
+
+    nonisolated var displayAwayTeam: String {
+        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? awayTeam : trimmed
     }
 
     nonisolated var dateTime: Date? {
@@ -584,6 +606,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             time: time,
             homeTeam: homeTeam,
             awayTeam: awayTeam,
+            homeShortName: homeShortName,
+            awayShortName: awayShortName,
             league: league,
             leagueSubcategory: leagueSubcategory,
             detailsURL: detailsURL,
@@ -617,6 +641,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             time: time,
             homeTeam: homeTeam,
             awayTeam: awayTeam,
+            homeShortName: homeShortName,
+            awayShortName: awayShortName,
             league: league,
             leagueSubcategory: leagueSubcategory,
             detailsURL: detailsURL,
@@ -650,6 +676,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         time = try container.decode(String.self, forKey: .time)
         homeTeam = try container.decode(String.self, forKey: .homeTeam)
         awayTeam = try container.decode(String.self, forKey: .awayTeam)
+        homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
+        awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
         league = try container.decode(String.self, forKey: .league)
         leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
         detailsURL = try container.decodeIfPresent(String.self, forKey: .detailsURL)
@@ -684,6 +712,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case time
         case homeTeam = "home_team"
         case awayTeam = "away_team"
+        case homeShortName = "home_short_name"
+        case awayShortName = "away_short_name"
         case league
         case leagueSubcategory = "league_subcategory"
         case detailsURL = "details_url"
@@ -716,6 +746,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         try container.encode(time, forKey: .time)
         try container.encode(homeTeam, forKey: .homeTeam)
         try container.encode(awayTeam, forKey: .awayTeam)
+        try container.encodeIfPresent(homeShortName, forKey: .homeShortName)
+        try container.encodeIfPresent(awayShortName, forKey: .awayShortName)
         try container.encode(league, forKey: .league)
         try container.encodeIfPresent(leagueSubcategory, forKey: .leagueSubcategory)
         try container.encodeIfPresent(detailsURL, forKey: .detailsURL)
@@ -747,6 +779,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         lhs.time == rhs.time &&
         lhs.homeTeam == rhs.homeTeam &&
         lhs.awayTeam == rhs.awayTeam &&
+        lhs.homeShortName == rhs.homeShortName &&
+        lhs.awayShortName == rhs.awayShortName &&
         lhs.league == rhs.league &&
         lhs.leagueSubcategory == rhs.leagueSubcategory &&
         lhs.detailsURL == rhs.detailsURL &&
@@ -799,6 +833,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             time: details.time ?? time,
             homeTeam: details.homeTeam ?? homeTeam,
             awayTeam: details.awayTeam ?? awayTeam,
+            homeShortName: details.homeShortName ?? homeShortName,
+            awayShortName: details.awayShortName ?? awayShortName,
             league: details.league ?? league,
             leagueSubcategory: leagueSubcategory,
             detailsURL: details.detailsURL ?? detailsURL,

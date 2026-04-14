@@ -12,6 +12,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let leagueSubcategory: String?
     let homeTeam: String
     let awayTeam: String
+    let homeShortName: String?
+    let awayShortName: String?
     let homeScore: Int?
     let awayScore: Int?
     let aggregateHomeScore: Int?
@@ -24,6 +26,16 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let awayTeamScore: Double?
     let totalTeamScore: Double?
     let tvChannels: [String]
+
+    var displayHomeTeam: String {
+        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? homeTeam : trimmed
+    }
+
+    var displayAwayTeam: String {
+        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? awayTeam : trimmed
+    }
 }
 
 @available(iOS 16.1, *)
@@ -528,7 +540,7 @@ final class LiveActivitySyncService {
                 score = "nil"
             }
             let channels = match.tvChannels.isEmpty ? "noCh" : match.tvChannels.joined(separator: ",")
-            return "\(match.homeTeam) v \(match.awayTeam) \(score) \(match.matchTime ?? "nil") ch=[\(channels)]"
+            return "\(match.displayHomeTeam) v \(match.displayAwayTeam) \(score) \(match.matchTime ?? "nil") ch=[\(channels)]"
         }.joined(separator: " | ")
         let fantasyScoreSummary = state.fantasyCurrentScore.map { " ff=\($0)" } ?? ""
         return "mode=\(state.mode) generatedAt=\(state.generatedAtEpochSeconds) delay=\(state.delayMinutes)\(fantasyScoreSummary) matches=\(state.matches.count) [\(matches)]"

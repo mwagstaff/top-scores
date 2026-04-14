@@ -64,7 +64,7 @@ final class MatchSchedulingService {
 
         let event = EKEvent(eventStore: eventStore)
         event.calendar = targetCalendar
-        event.title = "\(match.homeTeam) vs \(match.awayTeam)"
+        event.title = "\(match.displayHomeTeam) vs \(match.displayAwayTeam)"
         event.startDate = startDate
         event.endDate = startDate.addingTimeInterval(defaultMatchDuration)
         event.notes = buildNotes(for: match)
@@ -89,7 +89,7 @@ final class MatchSchedulingService {
 
         let reminder = EKReminder(eventStore: eventStore)
         reminder.calendar = calendar
-        reminder.title = "\(match.homeTeam) vs \(match.awayTeam)"
+        reminder.title = "\(match.displayHomeTeam) vs \(match.displayAwayTeam)"
         reminder.notes = buildNotes(for: match)
         reminder.dueDateComponents = Calendar.current.dateComponents([
             .year, .month, .day, .hour, .minute

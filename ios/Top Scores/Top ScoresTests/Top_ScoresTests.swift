@@ -724,6 +724,29 @@ struct Top_ScoresTests {
         )
     }
 
+    @Test func compactFixtureKickoff_movesToTrailingAccessoryForPostponedFixtures() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "14:00",
+            homeTeam: "Burnley",
+            awayTeam: "Manchester City",
+            league: "Premier League",
+            tvChannels: ["Sky Sports Main Event"],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "POSTPONED"
+        )
+
+        #expect(
+            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+                match: match,
+                hasCompactBroadcastLogo: true
+            )
+        )
+    }
+
     @Test func compactFixtureKickoff_remainsCenteredForLiveFixtures() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),

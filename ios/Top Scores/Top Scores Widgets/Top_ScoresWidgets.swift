@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import WidgetKit
 import ActivityKit
+import ImageIO
 
 private enum WidgetAppGroupConfig {
     static let identifier = "group.dev.skynolimit.topscores"
@@ -48,6 +49,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
     let time: String
     let homeTeam: String
     let awayTeam: String
+    let homeShortName: String?
+    let awayShortName: String?
     let league: String
     let leagueSubcategory: String?
     let tvChannels: [String]
@@ -64,6 +67,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         time: String,
         homeTeam: String,
         awayTeam: String,
+        homeShortName: String? = nil,
+        awayShortName: String? = nil,
         league: String,
         leagueSubcategory: String?,
         tvChannels: [String],
@@ -79,6 +84,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         self.time = time
         self.homeTeam = homeTeam
         self.awayTeam = awayTeam
+        self.homeShortName = homeShortName
+        self.awayShortName = awayShortName
         self.league = league
         self.leagueSubcategory = leagueSubcategory
         self.tvChannels = tvChannels
@@ -101,6 +108,16 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
 
     var hasScore: Bool {
         rawHasScore && !shouldSuppressScoreDisplay
+    }
+
+    var displayHomeTeam: String {
+        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? homeTeam : trimmed
+    }
+
+    var displayAwayTeam: String {
+        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? awayTeam : trimmed
     }
 
     var displayLeague: String {
@@ -164,6 +181,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
             time: time,
             homeTeam: homeTeam,
             awayTeam: awayTeam,
+            homeShortName: homeShortName,
+            awayShortName: awayShortName,
             league: league,
             leagueSubcategory: leagueSubcategory,
             tvChannels: channels,
@@ -182,6 +201,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         case time
         case homeTeam = "home_team"
         case awayTeam = "away_team"
+        case homeShortName = "home_short_name"
+        case awayShortName = "away_short_name"
         case league
         case leagueSubcategory = "league_subcategory"
         case tvChannels = "tv_channels"
@@ -229,6 +250,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let leagueSubcategory: String?
     let homeTeam: String
     let awayTeam: String
+    let homeShortName: String?
+    let awayShortName: String?
     let homeScore: Int?
     let awayScore: Int?
     let aggregateHomeScore: Int?
@@ -244,6 +267,16 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
 
     var hasScore: Bool {
         rawHasScore && !shouldSuppressScoreDisplay
+    }
+
+    var displayHomeTeam: String {
+        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? homeTeam : trimmed
+    }
+
+    var displayAwayTeam: String {
+        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? awayTeam : trimmed
     }
 
     var isInProgress: Bool {
@@ -406,7 +439,7 @@ private enum LiveActivityRenderDiagnostics {
             } else {
                 score = "nil"
             }
-            return "\(match.homeTeam) v \(match.awayTeam) \(score) \(match.matchTime ?? "nil")"
+            return "\(match.displayHomeTeam) v \(match.displayAwayTeam) \(score) \(match.matchTime ?? "nil")"
         }.joined(separator: " | ")
         return "mode=\(state.mode) generatedAt=\(state.generatedAtEpochSeconds) delay=\(state.delayMinutes) matches=\(state.matches.count) [\(matches)]"
     }
@@ -992,7 +1025,7 @@ private struct CompactMatchRow: View {
         HStack(spacing: 4) {
             WidgetTeamLogo(teamName: match.homeTeam, size: logoSize)
 
-            Text(WidgetNameFormatter.abbreviated(match.homeTeam, length: 7))
+            Text(WidgetNameFormatter.abbreviated(match.displayHomeTeam, length: 7))
                 .font(.caption2)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1003,7 +1036,7 @@ private struct CompactMatchRow: View {
                 .lineLimit(1)
                 .frame(width: centerColumnWidth, alignment: .center)
 
-            Text(WidgetNameFormatter.abbreviated(match.awayTeam, length: 7))
+            Text(WidgetNameFormatter.abbreviated(match.displayAwayTeam, length: 7))
                 .font(.caption2)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -1134,7 +1167,7 @@ private struct LargeMatchRow: View {
 
             Spacer(minLength: compact ? 1 : 4)
 
-            Text(WidgetNameFormatter.hyphenated(match.homeTeam, maxCharacters: maxTeamNameCharacters))
+            Text(WidgetNameFormatter.hyphenated(match.displayHomeTeam, maxCharacters: maxTeamNameCharacters))
                 .font(compact ? .caption2 : .caption)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -1143,7 +1176,7 @@ private struct LargeMatchRow: View {
             centerContent
                 .frame(width: centerColumnWidth, alignment: .center)
 
-            Text(WidgetNameFormatter.hyphenated(match.awayTeam, maxCharacters: maxTeamNameCharacters))
+            Text(WidgetNameFormatter.hyphenated(match.displayAwayTeam, maxCharacters: maxTeamNameCharacters))
                 .font(compact ? .caption2 : .caption)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1212,7 +1245,7 @@ private struct SmallMatchRow: View {
 
             Spacer(minLength: 1)
 
-            Text(WidgetNameFormatter.abbreviated(match.homeTeam))
+            Text(WidgetNameFormatter.abbreviated(match.displayHomeTeam))
                 .font(.caption2)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -1221,7 +1254,7 @@ private struct SmallMatchRow: View {
             centerContent
                 .frame(width: centerColumnWidth, alignment: .center)
 
-            Text(WidgetNameFormatter.abbreviated(match.awayTeam))
+            Text(WidgetNameFormatter.abbreviated(match.displayAwayTeam))
                 .font(.caption2)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1298,7 +1331,7 @@ private struct WidgetTeamLogo: View {
 
     var body: some View {
         Group {
-            if let image = WidgetTeamLogoResolver.shared.image(for: teamName) {
+            if let image = WidgetTeamLogoResolver.shared.image(for: teamName, idealPointSize: size) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -1323,7 +1356,10 @@ private struct WidgetChannelBadge: View {
     var body: some View {
         Group {
             if let primaryChannel,
-               let image = WidgetTvLogoResolver.shared.image(for: primaryChannel) {
+               let image = WidgetTvLogoResolver.shared.image(
+                   for: primaryChannel,
+                   idealPointSize: compact ? 12 : 14
+               ) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -1488,17 +1524,20 @@ private final class WidgetTeamLogoResolver {
         loadLogos()
     }
 
-    func image(for teamName: String) -> UIImage? {
+    func image(for teamName: String, idealPointSize: CGFloat? = nil) -> UIImage? {
+        let cacheKey = Self.cacheKey(for: teamName, idealPointSize: idealPointSize)
+
         lock.lock()
-        if let cached = cache[teamName] {
+        if let cached = cache[cacheKey] {
             lock.unlock()
             return cached
         }
         lock.unlock()
 
-        if let image = resolveAssetImage(for: teamName) ?? resolveAssetFallbackImage() {
+        if let image = resolveAssetImage(for: teamName, idealPointSize: idealPointSize) ??
+            resolveAssetFallbackImage(idealPointSize: idealPointSize) {
             lock.lock()
-            cache[teamName] = image
+            cache[cacheKey] = image
             lock.unlock()
             return image
         }
@@ -1506,10 +1545,10 @@ private final class WidgetTeamLogoResolver {
         let url = resolveURL(for: teamName) ?? resolveURL(for: fallbackName)
         guard let url else { return nil }
 
-        let image = UIImage(contentsOfFile: url.path)
+        let image = Self.downsampledImage(at: url, idealPointSize: idealPointSize)
         if let image {
             lock.lock()
-            cache[teamName] = image
+            cache[cacheKey] = image
             lock.unlock()
         }
 
@@ -1598,20 +1637,20 @@ private final class WidgetTeamLogoResolver {
         }
     }
 
-    private func resolveAssetImage(for teamName: String) -> UIImage? {
+    private func resolveAssetImage(for teamName: String, idealPointSize: CGFloat?) -> UIImage? {
         guard let assetName = resolveAssetName(for: teamName) else { return nil }
-        return imageFromAssets(named: assetName)
+        return imageFromAssets(named: assetName, idealPointSize: idealPointSize)
     }
 
-    private func resolveAssetFallbackImage() -> UIImage? {
+    private func resolveAssetFallbackImage(idealPointSize: CGFloat?) -> UIImage? {
         if let fallbackAssetName {
-            if let image = imageFromAssets(named: fallbackAssetName) {
+            if let image = imageFromAssets(named: fallbackAssetName, idealPointSize: idealPointSize) {
                 return image
             }
         }
 
         for candidate in [fallbackName, "\(fallbackName) 1"] {
-            if let image = imageFromAssets(named: candidate) {
+            if let image = imageFromAssets(named: candidate, idealPointSize: idealPointSize) {
                 return image
             }
         }
@@ -1619,13 +1658,73 @@ private final class WidgetTeamLogoResolver {
         return nil
     }
 
-    private func imageFromAssets(named name: String) -> UIImage? {
+    private func imageFromAssets(named name: String, idealPointSize: CGFloat?) -> UIImage? {
         for bundle in bundles {
             if let image = UIImage(named: name, in: bundle, compatibleWith: nil) {
-                return image
+                return Self.preparedImage(image, idealPointSize: idealPointSize)
             }
         }
         return nil
+    }
+
+    private static func cacheKey(for teamName: String, idealPointSize: CGFloat?) -> String {
+        let normalized = normalizedKey(teamName)
+        let pixelSize = Int(maxPixelSize(for: idealPointSize).rounded())
+        return "\(normalized)|\(pixelSize)"
+    }
+
+    private static func maxPixelSize(for idealPointSize: CGFloat?) -> CGFloat {
+        guard let idealPointSize, idealPointSize > 0 else { return 0 }
+        return max(ceil(idealPointSize * 3), 40)
+    }
+
+    private static func preparedImage(_ image: UIImage, idealPointSize: CGFloat?) -> UIImage {
+        let targetPixels = maxPixelSize(for: idealPointSize)
+        guard targetPixels > 0 else { return image }
+
+        let sourceWidth = image.size.width * image.scale
+        let sourceHeight = image.size.height * image.scale
+        let largestSide = max(sourceWidth, sourceHeight)
+        guard largestSide > targetPixels * 1.2 else { return image }
+        guard sourceWidth > 0, sourceHeight > 0 else { return image }
+
+        let scale = targetPixels / largestSide
+        let targetSize = CGSize(
+            width: max(1, floor(sourceWidth * scale)),
+            height: max(1, floor(sourceHeight * scale))
+        )
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+    }
+
+    private static func downsampledImage(at url: URL, idealPointSize: CGFloat?) -> UIImage? {
+        let targetPixels = maxPixelSize(for: idealPointSize)
+        guard targetPixels > 0 else {
+            return UIImage(contentsOfFile: url.path)
+        }
+
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return UIImage(contentsOfFile: url.path)
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(targetPixels.rounded(.up))
+        ]
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return UIImage(contentsOfFile: url.path)
+        }
+
+        return UIImage(cgImage: cgImage)
     }
 
     private func resolveAssetName(for teamName: String) -> String? {
@@ -1907,11 +2006,19 @@ private final class WidgetTvLogoResolver {
         loadLogos()
     }
 
-    func image(for channelName: String, allowsFallback: Bool = true) -> UIImage? {
+    func image(
+        for channelName: String,
+        allowsFallback: Bool = true,
+        idealPointSize: CGFloat? = nil
+    ) -> UIImage? {
         let normalizedRequest = Self.normalizedKey(channelName)
         NSLog("[Widget][TvLogo] image(for:) channelName='\(channelName)' normalized='\(normalizedRequest)' lookupSize=\(normalizedLookup.count)")
 
-        let cacheKey = "\(allowsFallback ? "fallback" : "strict")|\(channelName)"
+        let cacheKey = Self.cacheKey(
+            for: channelName,
+            allowsFallback: allowsFallback,
+            idealPointSize: idealPointSize
+        )
         lock.lock()
         if let cached = cache[cacheKey] {
             lock.unlock()
@@ -1920,7 +2027,11 @@ private final class WidgetTvLogoResolver {
         }
         lock.unlock()
 
-        if let assetImage = assetImage(for: channelName, allowsFallback: allowsFallback) {
+        if let assetImage = assetImage(
+            for: channelName,
+            allowsFallback: allowsFallback,
+            idealPointSize: idealPointSize
+        ) {
             lock.lock()
             cache[cacheKey] = assetImage
             lock.unlock()
@@ -1941,7 +2052,7 @@ private final class WidgetTvLogoResolver {
         }
         guard let url else { return nil }
 
-        let image = UIImage(contentsOfFile: url.path)
+        let image = Self.downsampledImage(at: url, idealPointSize: idealPointSize)
         NSLog("[Widget][TvLogo] image(for:) UIImage load \(image != nil ? "SUCCESS" : "FAILED") from \(url.lastPathComponent)")
         if let image {
             lock.lock()
@@ -2069,18 +2180,89 @@ private final class WidgetTvLogoResolver {
         NSLog("[Widget][TvLogo] ── loadLogos END ──")
     }
 
-    private func assetImage(for channelName: String, allowsFallback: Bool) -> UIImage? {
+    private func assetImage(
+        for channelName: String,
+        allowsFallback: Bool,
+        idealPointSize: CGFloat?
+    ) -> UIImage? {
         guard let assetName = resolveAssetName(for: channelName, allowsFallback: allowsFallback) else {
             return nil
         }
 
         for bundle in logoBundles() {
             if let image = UIImage(named: assetName, in: bundle, compatibleWith: nil) {
-                return image
+                return Self.preparedImage(image, idealPointSize: idealPointSize)
             }
         }
 
-        return UIImage(named: assetName)
+        if let image = UIImage(named: assetName) {
+            return Self.preparedImage(image, idealPointSize: idealPointSize)
+        }
+        return nil
+    }
+
+    private static func cacheKey(
+        for channelName: String,
+        allowsFallback: Bool,
+        idealPointSize: CGFloat?
+    ) -> String {
+        let normalized = normalizedKey(channelName)
+        let pixelSize = Int(maxPixelSize(for: idealPointSize).rounded())
+        return "\(allowsFallback ? "fallback" : "strict")|\(normalized)|\(pixelSize)"
+    }
+
+    private static func maxPixelSize(for idealPointSize: CGFloat?) -> CGFloat {
+        guard let idealPointSize, idealPointSize > 0 else { return 0 }
+        return max(ceil(idealPointSize * 3), 32)
+    }
+
+    private static func preparedImage(_ image: UIImage, idealPointSize: CGFloat?) -> UIImage {
+        let targetPixels = maxPixelSize(for: idealPointSize)
+        guard targetPixels > 0 else { return image }
+
+        let sourceWidth = image.size.width * image.scale
+        let sourceHeight = image.size.height * image.scale
+        let largestSide = max(sourceWidth, sourceHeight)
+        guard largestSide > targetPixels * 1.2 else { return image }
+        guard sourceWidth > 0, sourceHeight > 0 else { return image }
+
+        let scale = targetPixels / largestSide
+        let targetSize = CGSize(
+            width: max(1, floor(sourceWidth * scale)),
+            height: max(1, floor(sourceHeight * scale))
+        )
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+    }
+
+    private static func downsampledImage(at url: URL, idealPointSize: CGFloat?) -> UIImage? {
+        let targetPixels = maxPixelSize(for: idealPointSize)
+        guard targetPixels > 0 else {
+            return UIImage(contentsOfFile: url.path)
+        }
+
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return UIImage(contentsOfFile: url.path)
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(targetPixels.rounded(.up))
+        ]
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return UIImage(contentsOfFile: url.path)
+        }
+
+        return UIImage(cgImage: cgImage)
     }
 
     private func canResolveNonFallbackImage(for channelName: String) -> Bool {
@@ -2300,7 +2482,7 @@ private struct TopScoresLiveActivityWidget: Widget {
 
     private func compactLeadingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
         guard let first = LiveActivityMatchDisplayFilter.displayMatches(for: state).first else { return "TS" }
-        return String(first.homeTeam.prefix(3)).uppercased()
+        return String(first.displayHomeTeam.prefix(3)).uppercased()
     }
 
     private func compactTrailingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
@@ -2634,7 +2816,7 @@ private struct SingleUpcomingMatchView: View {
                 }
 
                 SingleUpcomingGridRow {
-                    Text(match.homeTeam)
+                    Text(match.displayHomeTeam)
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.white.opacity(0.92))
                         .lineLimit(1)
@@ -2652,7 +2834,7 @@ private struct SingleUpcomingMatchView: View {
                             .frame(height: 1)
                     }
                 } right: {
-                    Text(match.awayTeam)
+                    Text(match.displayAwayTeam)
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.white.opacity(0.92))
                         .lineLimit(1)
@@ -2711,8 +2893,8 @@ private struct SingleLiveMatchView: View {
                 }
 
                 TeamNamesWithAggregateRow(
-                    homeTeam: match.homeTeam,
-                    awayTeam: match.awayTeam,
+                    homeTeam: match.displayHomeTeam,
+                    awayTeam: match.displayAwayTeam,
                     aggregateInfo: aggregateText ?? " "
                 )
             }
@@ -2755,8 +2937,8 @@ private struct SingleFinishedMatchView: View {
                 }
 
                 TeamNamesWithAggregateRow(
-                    homeTeam: match.homeTeam,
-                    awayTeam: match.awayTeam,
+                    homeTeam: match.displayHomeTeam,
+                    awayTeam: match.displayAwayTeam,
                     aggregateInfo: aggregateText ?? " "
                 )
             }
@@ -2950,7 +3132,11 @@ private struct LiveActivityUpcomingIndicator: View {
                     .task(id: "\(primaryChannel)|\(assetName)|asset") {
                         NSLog("[LiveActivityWidget] upcoming_indicator asset channel=%@ asset=%@", primaryChannel, assetName)
                     }
-            } else if let image = WidgetTvLogoResolver.shared.image(for: primaryChannel, allowsFallback: false) {
+            } else if let image = WidgetTvLogoResolver.shared.image(
+                for: primaryChannel,
+                allowsFallback: false,
+                idealPointSize: logoSize
+            ) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -3361,7 +3547,7 @@ private struct MultiMatchEntryCell: View {
                         LiveActivityTeamLogo(teamName: match.homeTeam, size: logoSize)
                             .frame(width: logoSize, alignment: .center)
 
-                        Text(match.homeTeam)
+                        Text(match.displayHomeTeam)
                             .font(teamNameFont)
                             .foregroundStyle(.white.opacity(0.92))
                             .lineLimit(1)
@@ -3375,7 +3561,7 @@ private struct MultiMatchEntryCell: View {
                         .frame(width: scoreSlotWidth, alignment: .center)
 
                     HStack(spacing: 7) {
-                        Text(match.awayTeam)
+                        Text(match.displayAwayTeam)
                             .font(teamNameFont)
                             .foregroundStyle(.white.opacity(0.92))
                             .lineLimit(1)
@@ -3680,7 +3866,7 @@ private struct LiveActivityTeamLogo: View {
 
     var body: some View {
         Group {
-            if let image = WidgetTeamLogoResolver.shared.image(for: teamName) {
+            if let image = WidgetTeamLogoResolver.shared.image(for: teamName, idealPointSize: size) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -3706,7 +3892,7 @@ private struct LiveActivityChannelLogo: View {
 
     var body: some View {
         Group {
-            if let image = WidgetTvLogoResolver.shared.image(for: channelName) {
+            if let image = WidgetTvLogoResolver.shared.image(for: channelName, idealPointSize: size) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()

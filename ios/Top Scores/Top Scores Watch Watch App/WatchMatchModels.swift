@@ -120,6 +120,8 @@ struct WatchMatch: Identifiable, Codable, Hashable {
     let time: String
     let homeTeam: String
     let awayTeam: String
+    let homeShortName: String?
+    let awayShortName: String?
     let league: String
     let leagueSubcategory: String?
     let matchDetailsIDValue: String?
@@ -146,6 +148,16 @@ struct WatchMatch: Identifiable, Codable, Hashable {
     var scoreLine: String? {
         guard let homeScore, let awayScore else { return nil }
         return "\(homeScore)-\(awayScore)"
+    }
+
+    var displayHomeTeam: String {
+        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? homeTeam : trimmed
+    }
+
+    var displayAwayTeam: String {
+        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? awayTeam : trimmed
     }
 
     var hasScore: Bool {
@@ -175,6 +187,8 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         time = try container.decode(String.self, forKey: .time)
         homeTeam = try container.decode(String.self, forKey: .homeTeam)
         awayTeam = try container.decode(String.self, forKey: .awayTeam)
+        homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
+        awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
         league = try container.decode(String.self, forKey: .league)
         leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
         matchDetailsIDValue = try container.decodeIfPresent(String.self, forKey: .matchDetailsIDValue)
@@ -196,6 +210,8 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         case time
         case homeTeam = "home_team"
         case awayTeam = "away_team"
+        case homeShortName = "home_short_name"
+        case awayShortName = "away_short_name"
         case league
         case leagueSubcategory = "league_subcategory"
         case matchDetailsIDValue = "match_details_id"
