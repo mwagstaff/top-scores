@@ -1960,6 +1960,7 @@ let liveActivityEvalTimer = null;
 let fantasyDeadlineReminderEvalTimer = null;
 let liveActivityEvalInFlight = false;
 let liveActivityEvalStartedAtMs = 0;
+let liveActivityEvalGeneration = 0;
 let fantasyDeadlineReminderEvalInFlight = false;
 let fantasyDeadlineReminderLastEvaluationAt = null;
 let fantasyDeadlineReminderLastEvaluationError = null;
@@ -5612,6 +5613,8 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
   }
   liveActivityEvalInFlight = true;
   liveActivityEvalStartedAtMs = evalStartMs;
+  liveActivityEvalGeneration += 1;
+  const evalGeneration = liveActivityEvalGeneration;
   const nowMs = evalStartMs;
   const forceDispatch = Boolean(options && options.forceDispatch);
   const preserveExistingOnEmpty = Boolean(options && options.preserveExistingOnEmpty);
@@ -5654,7 +5657,15 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
       );
     }
 
+    if (evalGeneration !== liveActivityEvalGeneration) {
+      return;
+    }
+
     for (const user of filteredUsers) {
+      if (evalGeneration !== liveActivityEvalGeneration) {
+        return;
+      }
+
       const liveActivityState =
         user && user.liveActivity && typeof user.liveActivity === "object" ? user.liveActivity : {};
       const hasStartToken = Boolean(

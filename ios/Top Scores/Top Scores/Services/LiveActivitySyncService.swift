@@ -162,6 +162,9 @@ final class LiveActivitySyncService {
                 activityID,
                 Self.shortHex(tokenData)
             )
+            Task(priority: .background) {
+                await self.uploadActivityPushToken(activityID: activityID, tokenData: tokenData)
+            }
         }
 
         let pushTokenTask = Task(priority: .background) {
@@ -405,7 +408,8 @@ final class LiveActivitySyncService {
             let attributes = TopScoresLiveActivityAttributes(appScope: "top-scores")
             let activity = try Activity.request(
                 attributes: attributes,
-                content: .init(state: contentState, staleDate: nil)
+                content: .init(state: contentState, staleDate: nil),
+                pushType: .token
             )
             NSLog("[LiveActivitySync] Foreground start succeeded activityId=%@", activity.id)
             // Register immediately — don't rely solely on activityUpdatesTask picking this up

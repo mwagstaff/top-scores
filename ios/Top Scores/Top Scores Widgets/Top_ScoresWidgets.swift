@@ -2569,7 +2569,8 @@ private struct TopScoresLiveActivityLockScreenView: View {
                 }
             }
         }
-        .task(id: renderDiagnosticsKey) {
+        .id(viewIdentity)
+        .task(id: viewIdentity) {
             LiveActivityRenderDiagnostics.logIfNeeded(state: state, surface: "lock_screen")
         }
     }
@@ -2736,8 +2737,9 @@ private struct TopScoresLiveActivityLockScreenView: View {
         .compositingGroup()
     }
 
-    private var renderDiagnosticsKey: String {
-        "\(state.mode)|\(state.generatedAtEpochSeconds)|\(state.matches.count)|\(state.fantasyCurrentScore ?? -1)"
+    private var viewIdentity: String {
+        let matchIdentity = state.matches.map(\.renderIdentity).joined(separator: "||")
+        return "\(state.mode)|\(state.generatedAtEpochSeconds)|\(state.delayMinutes)|\(state.delayLabel ?? "nil")|\(state.fantasyCurrentScore ?? -1)|\(matchIdentity)"
     }
 }
 
@@ -3481,7 +3483,7 @@ private struct MultiMatchListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if usesSingleColumnLayout {
-                ForEach(Array(visibleMatches.enumerated()), id: \.offset) { index, match in
+                ForEach(Array(visibleMatches.enumerated()), id: \.element.renderIdentity) { index, match in
                     MultiMatchEntryCell(match: match, live: live, compact: compact, expanded: true)
                     if index < visibleMatches.count - 1 {
                         Rectangle()
@@ -3490,11 +3492,11 @@ private struct MultiMatchListView: View {
                     }
                 }
             } else {
-                ForEach(Array(chunkedMatches.enumerated()), id: \.offset) { _, rowMatches in
+                ForEach(chunkedRows) { row in
                     GeometryReader { proxy in
                         let cellWidth = max(0, (proxy.size.width - 17) / 2)
                         HStack(spacing: 8) {
-                            MultiMatchEntryCell(match: rowMatches[0], live: live, compact: compact)
+                            MultiMatchEntryCell(match: row.matches[0], live: live, compact: compact)
                                 .frame(width: cellWidth, alignment: .leading)
 
                             Rectangle()
@@ -3502,8 +3504,8 @@ private struct MultiMatchListView: View {
                                 .frame(width: 1)
                                 .padding(.vertical, 2)
 
-                            if rowMatches.count > 1 {
-                                MultiMatchEntryCell(match: rowMatches[1], live: live, compact: compact)
+                            if row.matches.count > 1 {
+                                MultiMatchEntryCell(match: row.matches[1], live: live, compact: compact)
                                     .frame(width: cellWidth, alignment: .trailing)
                             } else {
                                 Color.clear
@@ -3527,8 +3529,21 @@ private struct MultiMatchListView: View {
         }
     }
 
+    private var chunkedRows: [MultiMatchRow] {
+        chunkedMatches.map(MultiMatchRow.init(matches:))
+    }
+
     private var usesSingleColumnLayout: Bool {
         prefersSingleColumn && !compact && visibleMatches.count == 2
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct MultiMatchRow: Identifiable {
+    let matches: [TopScoresLiveActivityMatchState]
+
+    var id: String {
+        matches.map(\.renderIdentity).joined(separator: "|")
     }
 }
 
@@ -3838,6 +3853,25 @@ private struct MultiMatchEntryCell: View {
         !match.hasScore &&
             match.shouldShowAggregateBracketScoresInline &&
             !primaryChannelName.isEmpty
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private extension TopScoresLiveActivityMatchState {
+    var renderIdentity: String {
+        [
+            matchId,
+            date,
+            time,
+            league,
+            homeTeam,
+            awayTeam,
+            homeScore.map(String.init) ?? "nil",
+            awayScore.map(String.init) ?? "nil",
+            aggregateHomeScore.map(String.init) ?? "nil",
+            aggregateAwayScore.map(String.init) ?? "nil",
+            matchTime ?? "nil",
+        ].joined(separator: "|")
     }
 }
 

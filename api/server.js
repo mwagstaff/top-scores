@@ -21089,6 +21089,38 @@ const {
 } = require("./redis_client");
 
 // Save user preferences
+function preferencesSaveShouldTriggerLiveActivityReconcile(body = {}) {
+  if (!body || typeof body !== "object") return false;
+
+  const hasFantasyPatch = Object.prototype.hasOwnProperty.call(body, "fantasy");
+  const hasPreferencesPatch =
+    Object.prototype.hasOwnProperty.call(body, "preferences") &&
+    body.preferences &&
+    typeof body.preferences === "object";
+
+  return hasFantasyPatch || hasPreferencesPatch;
+}
+
+function liveActivityReconcileTriggerForPreferencesSave(body = {}) {
+  if (!body || typeof body !== "object") {
+    return "preferences_sync";
+  }
+
+  const hasFantasyPatch = Object.prototype.hasOwnProperty.call(body, "fantasy");
+  const hasPreferencesPatch =
+    Object.prototype.hasOwnProperty.call(body, "preferences") &&
+    body.preferences &&
+    typeof body.preferences === "object";
+
+  if (hasFantasyPatch && hasPreferencesPatch) {
+    return "preferences_and_fantasy_sync";
+  }
+  if (hasFantasyPatch) {
+    return "preferences_fantasy_sync";
+  }
+  return "preferences_sync";
+}
+
 app.post(`${API_PREFIX}/preferences`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
@@ -21124,13 +21156,13 @@ app.post(`${API_PREFIX}/preferences`, async (req, res) => {
           },
       }
     );
-    if (hasFantasyPatch) {
+    if (preferencesSaveShouldTriggerLiveActivityReconcile(req.body)) {
       void matchMonitor.runLiveActivityEvaluationNow({
         userDeviceToken: resolvedDeviceToken,
-        trigger: "preferences_fantasy_sync",
+        trigger: liveActivityReconcileTriggerForPreferencesSave(req.body),
         forceDispatch: true,
       }).catch((error) => {
-        console.warn("[API] Fantasy preference sync reconcile failed:", error.message || error);
+        console.warn("[API] Preference sync reconcile failed:", error.message || error);
       });
     }
     res.status(200).json({
@@ -25170,5 +25202,7 @@ module.exports = {
     buildLiveActivityTestPresets,
     resolveLiveActivityTestPreset,
     operationalMatchSortDesc,
+    preferencesSaveShouldTriggerLiveActivityReconcile,
+    liveActivityReconcileTriggerForPreferencesSave,
   },
 };
