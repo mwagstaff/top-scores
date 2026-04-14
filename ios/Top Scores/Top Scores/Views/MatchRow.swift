@@ -398,7 +398,7 @@ struct MatchRow: View {
 
     private var aggregateHomeBracketText: String? {
         guard match.shouldShowAggregateBracketScoresInline,
-              let aggregateHomeScore = match.aggregateHomeScore else {
+              let aggregateHomeScore = match.resolvedAggregateHomeScore else {
             return nil
         }
         return "(\(aggregateHomeScore))"
@@ -406,7 +406,7 @@ struct MatchRow: View {
 
     private var aggregateAwayBracketText: String? {
         guard match.shouldShowAggregateBracketScoresInline,
-              let aggregateAwayScore = match.aggregateAwayScore else {
+              let aggregateAwayScore = match.resolvedAggregateAwayScore else {
             return nil
         }
         return "(\(aggregateAwayScore))"
@@ -552,8 +552,8 @@ struct MatchRow: View {
 
     @ViewBuilder
     private var compactFixtureCenterContent: some View {
-        if shouldSwapCompactFixtureKickoffAndBroadcast {
-            compactCenteredBroadcastAccessory
+        if shouldPlaceCompactKickoffInTrailingAccessory {
+            compactUpcomingCenterAccessory
         } else {
             scoreAndStatusRow
         }
@@ -561,11 +561,36 @@ struct MatchRow: View {
 
     @ViewBuilder
     private var compactFixtureTrailingAccessory: some View {
-        if shouldSwapCompactFixtureKickoffAndBroadcast {
+        if shouldPlaceCompactKickoffInTrailingAccessory {
             compactKickoffAccessorySlot
         } else {
             compactBroadcastAccessorySlot
         }
+    }
+
+    private var compactUpcomingCenterAccessory: some View {
+        HStack(spacing: 4) {
+            if let aggregateHomeBracketText {
+                Text(aggregateHomeBracketText)
+                    .font(aggregateBracketFont)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+
+            compactCenteredBroadcastAccessory
+
+            if let aggregateAwayBracketText {
+                Text(aggregateAwayBracketText)
+                    .font(aggregateBracketFont)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var compactCenteredBroadcastAccessory: some View {
@@ -578,6 +603,13 @@ struct MatchRow: View {
                     .layoutPriority(2)
                     .fixedSize()
                     .accessibilityHidden(true)
+            } else {
+                Text("vs")
+                    .font(compactCenterPlaceholderFont)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary.opacity(0.7))
+                    .textCase(.lowercase)
+                    .fixedSize()
             }
         }
         .frame(minWidth: compactBroadcastLogoWidth, minHeight: compactAccessorySlotHeight, alignment: .center)
@@ -602,8 +634,19 @@ struct MatchRow: View {
         return primaryBroadcastLogo
     }
 
-    private var shouldSwapCompactFixtureKickoffAndBroadcast: Bool {
-        match.isUpcomingScorelessFixture && compactPrimaryBroadcastLogo != nil
+    static func shouldPlaceCompactKickoffInTrailingAccessory(
+        match: Match,
+        hasCompactBroadcastLogo: Bool
+    ) -> Bool {
+        let _ = hasCompactBroadcastLogo
+        return match.isUpcomingScorelessFixture
+    }
+
+    private var shouldPlaceCompactKickoffInTrailingAccessory: Bool {
+        Self.shouldPlaceCompactKickoffInTrailingAccessory(
+            match: match,
+            hasCompactBroadcastLogo: compactPrimaryBroadcastLogo != nil
+        )
     }
 
     private var compactFixtureVerticalSpacing: CGFloat {
@@ -616,6 +659,10 @@ struct MatchRow: View {
 
     private var compactKickoffAccessoryWidth: CGFloat {
         compactDensity == .compact ? 40 : 36
+    }
+
+    private var compactCenterPlaceholderFont: Font {
+        compactDensity == .compact ? .caption2 : .caption2
     }
 
     private var compactKickoffAccessoryFont: Font {

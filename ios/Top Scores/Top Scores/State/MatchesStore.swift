@@ -1925,8 +1925,7 @@ final class MatchesStore: ObservableObject {
         if lhs.penaltyResult != nil && rhs.penaltyResult == nil {
             return true
         }
-        if lhs.aggregateHomeScore != nil && lhs.aggregateAwayScore != nil &&
-            (rhs.aggregateHomeScore == nil || rhs.aggregateAwayScore == nil) {
+        if lhs.hasDisplayableAggregateScore && !rhs.hasDisplayableAggregateScore {
             return true
         }
         return false

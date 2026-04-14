@@ -604,6 +604,149 @@ struct Top_ScoresTests {
         #expect(match.aggregateSummaryText == "Agg: 0-0")
     }
 
+    @Test func upcomingScorelessFixture_usesFirstLegScoresWhenAggregateIsMissing() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Atletico Madrid",
+            awayTeam: "Barcelona",
+            league: "UEFA Champions League",
+            leagueSubcategory: "Semi-finals",
+            tvChannels: [],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            firstLegHomeScore: 2,
+            firstLegAwayScore: 0,
+            scoreStatus: nil
+        )
+
+        #expect(match.shouldShowAggregateBracketScoresInline)
+        #expect(match.resolvedAggregateHomeScore == 2)
+        #expect(match.resolvedAggregateAwayScore == 0)
+        #expect(match.aggregateSummaryText == "Agg: 2-0")
+    }
+
+    @Test func withScore_derivesAggregateFromFirstLegWhenAggregateIsMissing() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Liverpool",
+            awayTeam: "Paris Saint-Germain",
+            league: "UEFA Champions League",
+            leagueSubcategory: "Semi-finals",
+            tvChannels: [],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            firstLegHomeScore: 0,
+            firstLegAwayScore: 2,
+            scoreStatus: nil
+        )
+
+        let updated = match.withScore(home: 1, away: 0, status: "12'")
+
+        #expect(updated.aggregateHomeScore == 1)
+        #expect(updated.aggregateAwayScore == 2)
+        #expect(updated.aggregateSummaryText == "Agg: 1-2")
+    }
+
+    @Test func compactFixtureKickoff_movesToTrailingAccessoryWhenAggregateBracketsShow() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Atletico Madrid",
+            awayTeam: "Barcelona",
+            league: "UEFA Champions League",
+            leagueSubcategory: "Quarter-finals",
+            tvChannels: ["TNT Sports 1"],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: 2,
+            aggregateAwayScore: 0,
+            scoreStatus: nil
+        )
+
+        #expect(
+            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+                match: match,
+                hasCompactBroadcastLogo: true
+            )
+        )
+    }
+
+    @Test func compactFixtureKickoff_movesToTrailingAccessoryForStandardPreKickoffFixtures() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Arsenal",
+            awayTeam: "Sporting CP",
+            league: "UEFA Champions League",
+            leagueSubcategory: "Quarter-finals",
+            tvChannels: ["TNT Sports 1"],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: nil
+        )
+
+        #expect(
+            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+                match: match,
+                hasCompactBroadcastLogo: true
+            )
+        )
+    }
+
+    @Test func compactFixtureKickoff_movesToTrailingAccessoryWhenNoBroadcastLogoExists() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "15:00",
+            homeTeam: "Leeds United",
+            awayTeam: "Wolverhampton Wanderers",
+            league: "Premier League",
+            tvChannels: [],
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: nil
+        )
+
+        #expect(
+            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+                match: match,
+                hasCompactBroadcastLogo: false
+            )
+        )
+    }
+
+    @Test func compactFixtureKickoff_remainsCenteredForLiveFixtures() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "12:30",
+            homeTeam: "Brentford",
+            awayTeam: "Fulham",
+            league: "Premier League",
+            tvChannels: ["Sky Sports"],
+            homeScore: 1,
+            awayScore: 0,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "38'"
+        )
+
+        #expect(
+            !MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+                match: match,
+                hasCompactBroadcastLogo: true
+            )
+        )
+    }
+
     @Test func withDetails_preservesAggregateForUpcomingScorelessFixture() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),

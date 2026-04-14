@@ -469,11 +469,11 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     var hasAggregateScore: Bool {
-        aggregateHomeScore != nil && aggregateAwayScore != nil
+        resolvedAggregateScore != nil
     }
 
     var hasKnownAggregateScore: Bool {
-        aggregateHomeScore != nil && aggregateAwayScore != nil
+        resolvedAggregateScore != nil
     }
 
     var hasDisplayableAggregateScore: Bool {
@@ -484,8 +484,18 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         isUpcomingScorelessFixture && hasDisplayableAggregateScore
     }
 
+    var resolvedAggregateHomeScore: Int? {
+        resolvedAggregateScore?.home
+    }
+
+    var resolvedAggregateAwayScore: Int? {
+        resolvedAggregateScore?.away
+    }
+
     var aggregateSummaryText: String? {
-        guard let aggregateHomeScore, let aggregateAwayScore, hasKnownAggregateScore else { return nil }
+        guard let aggregate = resolvedAggregateScore else { return nil }
+        let aggregateHomeScore = aggregate.home
+        let aggregateAwayScore = aggregate.away
         return "Agg: \(aggregateHomeScore)-\(aggregateAwayScore)"
     }
 
@@ -558,8 +568,16 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         aggregateHome: Int? = nil,
         aggregateAway: Int? = nil
     ) -> Match {
-        let nextAggregateHome = aggregateHome ?? adjustedAggregate(base: aggregateHomeScore, previousScore: homeScore, nextScore: home)
-        let nextAggregateAway = aggregateAway ?? adjustedAggregate(base: aggregateAwayScore, previousScore: awayScore, nextScore: away)
+        let nextAggregateHome = aggregateHome ?? adjustedAggregate(
+            base: resolvedAggregateHomeScore,
+            previousScore: homeScore,
+            nextScore: home
+        )
+        let nextAggregateAway = aggregateAway ?? adjustedAggregate(
+            base: resolvedAggregateAwayScore,
+            previousScore: awayScore,
+            nextScore: away
+        )
 
         return Match(
             date: date,
@@ -901,8 +919,35 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
 
     private func adjustedAggregate(base: Int?, previousScore: Int?, nextScore: Int) -> Int? {
         guard let base else { return nil }
-        guard let previousScore else { return base }
-        return base + (nextScore - previousScore)
+        return base + (nextScore - (previousScore ?? 0))
+    }
+
+    private var resolvedAggregateScore: (home: Int, away: Int)? {
+        if let aggregateHomeScore, let aggregateAwayScore {
+            if !shouldSuppressPreKickoffPlaceholderAggregate(
+                home: aggregateHomeScore,
+                away: aggregateAwayScore
+            ) {
+                return (aggregateHomeScore, aggregateAwayScore)
+            }
+        }
+
+        guard let firstLegHomeScore, let firstLegAwayScore else {
+            return nil
+        }
+
+        return (
+            firstLegHomeScore + (homeScore ?? 0),
+            firstLegAwayScore + (awayScore ?? 0)
+        )
+    }
+
+    private func shouldSuppressPreKickoffPlaceholderAggregate(home: Int, away: Int) -> Bool {
+        isUpcomingScorelessFixture &&
+        home == 0 &&
+        away == 0 &&
+        firstLegHomeScore == nil &&
+        firstLegAwayScore == nil
     }
 
     private var penaltyWinnerSummaryText: String? {
@@ -932,14 +977,14 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
 
     private var aggregateWinnerSummaryText: String? {
         guard isFinished,
-              let aggregateHomeScore,
-              let aggregateAwayScore,
-              hasKnownAggregateScore,
-              aggregateHomeScore != aggregateAwayScore
+              let aggregate = resolvedAggregateScore,
+              aggregate.home != aggregate.away
         else {
             return nil
         }
 
+        let aggregateHomeScore = aggregate.home
+        let aggregateAwayScore = aggregate.away
         let homeWins = aggregateHomeScore > aggregateAwayScore
         let winner = homeWins ? homeTeam : awayTeam
         let winnerScore = homeWins ? aggregateHomeScore : aggregateAwayScore
