@@ -102,9 +102,36 @@ struct TablesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
+    private static let competitionWeights: [String: Int] = [
+        "Premier League": 100,
+        "UEFA Champions League": 90,
+        "FIFA World Cup 2026": 85,
+        "UEFA Europa League": 80,
+        "UEFA Conference League": 70,
+        "UEFA Nations League": 69,
+        "UEFA Super Cup": 68,
+        "FA Cup": 65,
+        "English League Cup": 60,
+        "Copa del Rey": 58,
+        "La Liga": 50,
+        "Bundesliga": 48,
+        "Serie A": 48,
+        "Championship": 40,
+        "Scottish Premiership": 30,
+        "Scottish Championship": 25,
+        "Scottish League One": 20,
+        "Scottish League Two": 15,
+        "League One": 14,
+        "League Two": 12,
+        "International Friendly": 10
+    ]
+
     private var sortedLeagues: [LeagueTable] {
         leagues.sorted {
-            $0.leagueName.localizedCaseInsensitiveCompare($1.leagueName) == .orderedAscending
+            let weightA = Self.competitionWeights[$0.leagueName] ?? 0
+            let weightB = Self.competitionWeights[$1.leagueName] ?? 0
+            if weightA != weightB { return weightA > weightB }
+            return $0.leagueName.localizedCaseInsensitiveCompare($1.leagueName) == .orderedAscending
         }
     }
 
@@ -237,7 +264,10 @@ struct TablesView: View {
         }
         return leagues
             .sorted {
-                $0.leagueName.localizedCaseInsensitiveCompare($1.leagueName) == .orderedAscending
+                let weightA = competitionWeights[$0.leagueName] ?? 0
+                let weightB = competitionWeights[$1.leagueName] ?? 0
+                if weightA != weightB { return weightA > weightB }
+                return $0.leagueName.localizedCaseInsensitiveCompare($1.leagueName) == .orderedAscending
             }
             .first?
             .leagueID ?? "premier-league"

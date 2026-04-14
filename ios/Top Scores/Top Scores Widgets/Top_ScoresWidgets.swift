@@ -3859,7 +3859,7 @@ private struct MultiMatchEntryCell: View {
 @available(iOSApplicationExtension 16.1, *)
 private extension TopScoresLiveActivityMatchState {
     var renderIdentity: String {
-        [
+        let parts: [String] = [
             matchId,
             date,
             time,
@@ -3871,7 +3871,8 @@ private extension TopScoresLiveActivityMatchState {
             aggregateHomeScore.map(String.init) ?? "nil",
             aggregateAwayScore.map(String.init) ?? "nil",
             matchTime ?? "nil",
-        ].joined(separator: "|")
+        ]
+        return parts.joined(separator: "|")
     }
 }
 
