@@ -196,7 +196,7 @@ struct MatchRow: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .layoutPriority(1)
 
-                scoreAndStatusRow
+                compactFixtureCenterContent
 
                 Text(match.awayTeam)
                     .font(teamNameFont)
@@ -208,7 +208,7 @@ struct MatchRow: View {
 
                 TeamLogo(name: match.awayTeam, size: logoSize)
 
-                compactBroadcastAccessorySlot
+                compactFixtureTrailingAccessory
             }
         }
         .padding(cardPadding)
@@ -550,9 +550,60 @@ struct MatchRow: View {
         .frame(width: compactAccessorySlotWidth, height: compactAccessorySlotHeight, alignment: .center)
     }
 
+    @ViewBuilder
+    private var compactFixtureCenterContent: some View {
+        if shouldSwapCompactFixtureKickoffAndBroadcast {
+            compactCenteredBroadcastAccessory
+        } else {
+            scoreAndStatusRow
+        }
+    }
+
+    @ViewBuilder
+    private var compactFixtureTrailingAccessory: some View {
+        if shouldSwapCompactFixtureKickoffAndBroadcast {
+            compactKickoffAccessorySlot
+        } else {
+            compactBroadcastAccessorySlot
+        }
+    }
+
+    private var compactCenteredBroadcastAccessory: some View {
+        ZStack {
+            if let compactPrimaryBroadcastLogo {
+                Image(uiImage: compactPrimaryBroadcastLogo)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: compactBroadcastLogoWidth, height: compactBroadcastLogoHeight)
+                    .layoutPriority(2)
+                    .fixedSize()
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(minWidth: compactBroadcastLogoWidth, minHeight: compactAccessorySlotHeight, alignment: .center)
+    }
+
+    private var compactKickoffAccessorySlot: some View {
+        Text(match.time)
+            .font(compactKickoffAccessoryFont)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.9)
+            .frame(
+                width: compactKickoffAccessoryWidth,
+                height: compactAccessorySlotHeight,
+                alignment: .trailing
+            )
+    }
+
     private var compactPrimaryBroadcastLogo: UIImage? {
         guard rowPreferences.showCompactFixtureTvLogo else { return nil }
         return primaryBroadcastLogo
+    }
+
+    private var shouldSwapCompactFixtureKickoffAndBroadcast: Bool {
+        match.isUpcomingScorelessFixture && compactPrimaryBroadcastLogo != nil
     }
 
     private var compactFixtureVerticalSpacing: CGFloat {
@@ -561,6 +612,14 @@ struct MatchRow: View {
 
     private var compactFixtureHorizontalSpacing: CGFloat {
         compactDensity == .compact ? 8 : 6
+    }
+
+    private var compactKickoffAccessoryWidth: CGFloat {
+        compactDensity == .compact ? 40 : 36
+    }
+
+    private var compactKickoffAccessoryFont: Font {
+        compactDensity == .compact ? .caption : .caption2
     }
 
     private var homeTeamEvents: [MatchTeamTimelineEvent] {
