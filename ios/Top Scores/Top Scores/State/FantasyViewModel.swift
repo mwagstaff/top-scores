@@ -141,7 +141,7 @@ final class FantasyViewModel: ObservableObject {
         let lookup = FantasySquadMembershipLookup(squad: data, expectedPointsByElementID: expectedPoints)
         let eligibleKeys = Set(
             (cachedBootstrapLookup?.teams ?? []).flatMap {
-                TeamIdentityStore.shared.normalizedKeys(for: $0.name)
+                fantasyTeamLookupKeys($0.name)
             }
         )
         matchRowContext = FantasyMatchRowContext(
@@ -223,7 +223,7 @@ final class FantasyViewModel: ObservableObject {
 
         let premierLeagueTeamKeys = Set(
             (cachedBootstrapLookup?.teams ?? []).flatMap { team in
-                TeamIdentityStore.shared.normalizedKeys(for: team.name)
+                fantasyTeamLookupKeys(team.name)
             }
         )
 
@@ -231,8 +231,8 @@ final class FantasyViewModel: ObservableObject {
             return true
         }
 
-        let homeTeamKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
-        let awayTeamKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
+        let homeTeamKeys = fantasyTeamLookupKeys(match.homeTeam)
+        let awayTeamKeys = fantasyTeamLookupKeys(match.awayTeam)
 
         return !homeTeamKeys.isDisjoint(with: premierLeagueTeamKeys) &&
             !awayTeamKeys.isDisjoint(with: premierLeagueTeamKeys)

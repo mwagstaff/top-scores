@@ -1227,7 +1227,8 @@ struct MatchDetailView: View {
                     match: activeMatch,
                     highlightToday: highlightToday,
                     showTeamEvents: true,
-                    showFantasyBadge: showFantasyBadge,
+                    showBroadcastDetails: false,
+                    showFantasyBadge: false,
                     fantasyContext: fantasyViewModel.matchRowContext,
                     rowPreferences: matchRowPreferences
                 )
@@ -1255,8 +1256,13 @@ struct MatchDetailView: View {
                 }
 
                 if !isMatchFinished {
-                    tvChannelSection
-                        .padding(.horizontal)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("TV listings")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        tvChannelSection
+                    }
+                    .padding(.horizontal)
                 }
 
                 if shouldShowMatchActions {
@@ -1726,9 +1732,13 @@ private struct FantasyMatchSquadSectionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("FPL involvement")
-                .font(.headline)
-                .foregroundStyle(.primary)
+            HStack(alignment: .center) {
+                Text("FPL involvement")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Spacer()
+                FantasyMatchParticipationBadge()
+            }
 
             ForEach(sections) { section in
                 FantasyMatchSquadTeamSectionView(section: section)
@@ -3158,8 +3168,8 @@ struct FantasyMatchRowContext: Equatable {
             .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
         else { return false }
         guard !eligibleLeagueTeamKeys.isEmpty else { return true }
-        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
-        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
+        let homeKeys = fantasyTeamLookupKeys(match.homeTeam)
+        let awayKeys = fantasyTeamLookupKeys(match.awayTeam)
         return !homeKeys.isDisjoint(with: eligibleLeagueTeamKeys) &&
                !awayKeys.isDisjoint(with: eligibleLeagueTeamKeys)
     }
