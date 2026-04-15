@@ -11,10 +11,49 @@ function generateTestMatchId() {
   return id;
 }
 
+const TEST_MATCH_TIME_ZONE = "Europe/London";
+const londonDateFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: TEST_MATCH_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const londonTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: TEST_MATCH_TIME_ZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+function formatLondonDate(date) {
+  return londonDateFormatter.format(date);
+}
+
+function formatLondonTime(date) {
+  return londonTimeFormatter.format(date);
+}
+
 class TestMatchState {
   constructor() {
     this.matches = new Map(); // Map of matchId -> match data
     this.timers = new Map(); // Map of matchId -> { simulationTimer, cleanupTimer }
+  }
+
+  recalculateAggregateScores(match) {
+    if (!match) return;
+    const firstLegHomeScore = Number(match.first_leg_home_score);
+    const firstLegAwayScore = Number(match.first_leg_away_score);
+    const homeScore = Number(match.home_score);
+    const awayScore = Number(match.away_score);
+    if (
+      Number.isFinite(firstLegHomeScore) &&
+      Number.isFinite(firstLegAwayScore) &&
+      Number.isFinite(homeScore) &&
+      Number.isFinite(awayScore)
+    ) {
+      match.aggregate_home_score = firstLegHomeScore + homeScore;
+      match.aggregate_away_score = firstLegAwayScore + awayScore;
+    }
   }
 
   getAllMatches() {
@@ -48,10 +87,19 @@ class TestMatchState {
       ? now
       : new Date(params.kickoffTime || now);
 
-    const dateStr = kickoffTime.toISOString().split("T")[0];
-    const timeStr = `${String(kickoffTime.getHours()).padStart(2, "0")}:${String(kickoffTime.getMinutes()).padStart(2, "0")}`;
+    const dateStr = formatLondonDate(kickoffTime);
+    const timeStr = formatLondonTime(kickoffTime);
 
     const matchId = generateTestMatchId();
+    const homeScore = Number(params.homeScore) || 0;
+    const awayScore = Number(params.awayScore) || 0;
+    const aggregateHomeScore = Number.isFinite(Number(params.aggregateHomeScore))
+      ? Number(params.aggregateHomeScore)
+      : null;
+    const aggregateAwayScore = Number.isFinite(Number(params.aggregateAwayScore))
+      ? Number(params.aggregateAwayScore)
+      : null;
+    const hasAggregateBaseline = aggregateHomeScore !== null && aggregateAwayScore !== null;
 
     const match = {
       id: matchId,
@@ -64,8 +112,12 @@ class TestMatchState {
       details_url: null,
       match_details_id: matchId,
       tv_channels: [],
-      home_score: params.homeScore || 0,
-      away_score: params.awayScore || 0,
+      home_score: homeScore,
+      away_score: awayScore,
+      aggregate_home_score: hasAggregateBaseline ? aggregateHomeScore : null,
+      aggregate_away_score: hasAggregateBaseline ? aggregateAwayScore : null,
+      first_leg_home_score: hasAggregateBaseline ? aggregateHomeScore - homeScore : null,
+      first_leg_away_score: hasAggregateBaseline ? aggregateAwayScore - awayScore : null,
       score_status: null, // Will be set when match starts
       home_goal_scorers: [],
       away_goal_scorers: [],
@@ -363,6 +415,7 @@ class TestMatchState {
       }
     }
 
+    this.recalculateAggregateScores(match);
     match.updated_at = new Date().toISOString();
     return {
       isHome,
@@ -477,6 +530,7 @@ class TestMatchState {
 
     const currentScore = Number(match[scoreKey] || 0);
     match[scoreKey] = Math.max(0, currentScore - 1);
+    this.recalculateAggregateScores(match);
 
     if (assisterName) {
       const assistEntry = assists.find((entry) => entry.player === assisterName);
@@ -718,6 +772,7 @@ class TestMatchState {
     match.score_status = null;
     match.matchMinute = 0;
     match.isPaused = false;
+    this.recalculateAggregateScores(match);
     match.updated_at = new Date().toISOString();
   }
 

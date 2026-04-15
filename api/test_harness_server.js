@@ -186,6 +186,16 @@ app.post("/api/test-match/create", async (req, res) => {
       awayTeam: req.body.awayTeam || "Away Team",
       homeScore: parseInt(req.body.homeScore) || 0,
       awayScore: parseInt(req.body.awayScore) || 0,
+      aggregateHomeScore:
+        req.body.aggregateHomeScore !== undefined &&
+        req.body.aggregateHomeScore !== ""
+          ? parseInt(req.body.aggregateHomeScore)
+          : undefined,
+      aggregateAwayScore:
+        req.body.aggregateAwayScore !== undefined &&
+        req.body.aggregateAwayScore !== ""
+          ? parseInt(req.body.aggregateAwayScore)
+          : undefined,
       matchSpeedMs: req.body.matchSpeedMs != null ? parseInt(req.body.matchSpeedMs) : 10000,
       homeExpectedGoals: parseFloat(req.body.homeExpectedGoals) || 2,
       awayExpectedGoals: parseFloat(req.body.awayExpectedGoals) || 2,

@@ -747,7 +747,53 @@ struct Top_ScoresTests {
         )
     }
 
-    @Test func compactFixtureKickoff_remainsCenteredForLiveFixtures() async throws {
+    @Test func compactFixtureKickoff_movesToTrailingAccessoryForFullTimeFixtures() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "19:45",
+            homeTeam: "Chelsea",
+            awayTeam: "Leeds United",
+            league: "FA Cup",
+            tvChannels: ["BBC One"],
+            homeScore: 2,
+            awayScore: 1,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "FT"
+        )
+
+        #expect(
+            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+                match: match,
+                hasCompactBroadcastLogo: true
+            )
+        )
+    }
+
+    @Test func compactFixtureKickoff_movesToTrailingAccessoryForAfterExtraTimeFixtures() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Inter Milan",
+            awayTeam: "Napoli",
+            league: "Coppa Italia",
+            tvChannels: ["TNT Sports 2"],
+            homeScore: 3,
+            awayScore: 2,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "AET"
+        )
+
+        #expect(
+            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+                match: match,
+                hasCompactBroadcastLogo: true
+            )
+        )
+    }
+
+    @Test func compactFixtureKickoff_movesToTrailingAccessoryForLiveFixtures() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),
             time: "12:30",
@@ -763,9 +809,34 @@ struct Top_ScoresTests {
         )
 
         #expect(
-            !MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
                 match: match,
                 hasCompactBroadcastLogo: true
+            )
+        )
+    }
+
+    @Test func compactFixture_showsInlineAggregateBracketsForLiveMatches() async throws {
+        let match = Match(
+            date: formattedDate(offsetDays: 0),
+            time: "20:00",
+            homeTeam: "Atletico Madrid",
+            awayTeam: "Barcelona",
+            league: "UEFA Champions League",
+            leagueSubcategory: "Quarter-finals",
+            tvChannels: ["TNT Sports 1"],
+            homeScore: 1,
+            awayScore: 0,
+            aggregateHomeScore: 3,
+            aggregateAwayScore: 2,
+            scoreStatus: "38'"
+        )
+
+        #expect(
+            MatchRow.shouldShowInlineAggregateBrackets(
+                match: match,
+                layoutStyle: .compactFixture,
+                showsFinishedInlineAggregateBrackets: false
             )
         )
     }

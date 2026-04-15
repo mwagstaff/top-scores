@@ -611,6 +611,7 @@
                 <div class="match-info">
                     <p><strong>League:</strong> <span id="leagueName">-</span></p>
                     <p><strong>Kick-off:</strong> <span id="kickoffTime">-</span></p>
+                    <p><strong>Aggregate:</strong> <span id="aggregateScore">-</span></p>
                     <p><strong>Match Speed:</strong> <span id="matchSpeed">-</span></p>
                     <p><strong>Match Details:</strong> <a id="matchDetailsLink" href="#" target="_blank" style="color: #667eea; text-decoration: none; font-weight: 600;">-</a></p>
                 </div>
@@ -730,6 +731,16 @@
                 <div class="form-group">
                     <label for="awayStartScore">Away Starting Score</label>
                     <input type="number" id="awayStartScore" value="0" min="0">
+                </div>
+
+                <div class="form-group">
+                    <label for="aggregateHomeScore">Home Aggregate Score</label>
+                    <input type="number" id="aggregateHomeScore" min="0" placeholder="Optional">
+                </div>
+
+                <div class="form-group">
+                    <label for="aggregateAwayScore">Away Aggregate Score</label>
+                    <input type="number" id="aggregateAwayScore" min="0" placeholder="Optional">
                 </div>
 
                 <div class="form-group">
@@ -1170,6 +1181,10 @@
                 ? `${match.league}: ${match.league_subcategory}`
                 : match.league;
             document.getElementById('kickoffTime').textContent = `${match.date} ${match.time}`;
+            document.getElementById('aggregateScore').textContent =
+                Number.isFinite(Number(match.aggregate_home_score)) && Number.isFinite(Number(match.aggregate_away_score))
+                    ? `${Number(match.aggregate_home_score)}-${Number(match.aggregate_away_score)}`
+                    : '-';
             const speedSecs = (data.config.matchSpeedMs / 1000).toFixed(0);
             document.getElementById('matchSpeed').textContent = `1 match min = ${speedSecs}s real-time`;
 
@@ -1397,6 +1412,8 @@
                 awayTeam: document.getElementById('awayTeam').value,
                 homeScore: document.getElementById('homeStartScore').value,
                 awayScore: document.getElementById('awayStartScore').value,
+                aggregateHomeScore: document.getElementById('aggregateHomeScore').value,
+                aggregateAwayScore: document.getElementById('aggregateAwayScore').value,
                 matchSpeedMs: document.getElementById('matchSpeed').value * 1000,
                 homeExpectedGoals: document.getElementById('homeXG').value,
                 awayExpectedGoals: document.getElementById('awayXG').value,

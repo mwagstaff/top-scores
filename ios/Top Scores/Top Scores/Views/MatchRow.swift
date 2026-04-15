@@ -423,7 +423,7 @@ struct MatchRow: View {
         }
 
         return (layoutStyle == .compactFixture || showsFinishedInlineAggregateBrackets) &&
-        match.isFinished &&
+        (match.isFinished || match.isInProgress) &&
         match.hasDisplayableAggregateScore
     }
 
@@ -565,6 +565,7 @@ struct MatchRow: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: compactBroadcastLogoWidth, height: compactBroadcastLogoHeight)
+                    .opacity(compactBroadcastLogoOpacity)
                     .layoutPriority(2)
                     .fixedSize()
                     .accessibilityHidden(true)
@@ -578,6 +579,10 @@ struct MatchRow: View {
         if shouldPlaceCompactKickoffInTrailingAccessory {
             if match.isPostponed {
                 compactPostponedCenterAccessory
+            } else if match.isInProgress {
+                compactInProgressCenterAccessory
+            } else if match.isFinished {
+                compactFinishedCenterAccessory
             } else {
                 compactUpcomingCenterAccessory
             }
@@ -589,7 +594,7 @@ struct MatchRow: View {
     @ViewBuilder
     private var compactFixtureTrailingAccessory: some View {
         if shouldPlaceCompactKickoffInTrailingAccessory {
-            compactKickoffAccessorySlot
+            compactStatusAccessorySlot
         } else {
             compactBroadcastAccessorySlot
         }
@@ -627,6 +632,7 @@ struct MatchRow: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: compactBroadcastLogoWidth, height: compactBroadcastLogoHeight)
+                    .opacity(compactBroadcastLogoOpacity)
                     .layoutPriority(2)
                     .fixedSize()
                     .accessibilityHidden(true)
@@ -642,18 +648,111 @@ struct MatchRow: View {
         .frame(minWidth: compactBroadcastLogoWidth, minHeight: compactAccessorySlotHeight, alignment: .center)
     }
 
-    private var compactKickoffAccessorySlot: some View {
-        Text(match.time)
-            .font(compactKickoffAccessoryFont)
-            .foregroundStyle(.secondary)
-            .monospacedDigit()
-            .lineLimit(1)
-            .minimumScaleFactor(0.9)
-            .frame(
-                width: compactKickoffAccessoryWidth,
-                height: compactAccessorySlotHeight,
-                alignment: .trailing
-            )
+    private var compactBroadcastLogoOpacity: Double {
+        match.isFinished ? 0.4 : 1.0
+    }
+
+    private var compactStatusAccessorySlot: some View {
+        Group {
+            if match.isInProgress {
+                MatchTimeStatusView(
+                    text: centerStatusText,
+                    isLive: true,
+                    isLargePresentation: false
+                )
+            } else {
+                Text(compactTrailingAccessoryText)
+                    .font(compactKickoffAccessoryFont)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+            }
+        }
+        .frame(minWidth: compactStatusAccessoryMinWidth, alignment: .trailing)
+        .frame(height: compactAccessorySlotHeight, alignment: .trailing)
+    }
+
+    private var compactInProgressCenterAccessory: some View {
+        HStack(spacing: 8) {
+            if let aggregateHomeBracketText {
+                Text(aggregateHomeBracketText)
+                    .font(aggregateBracketFont)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+
+            if let homeScoreText {
+                Text(homeScoreText)
+                    .font(scoreFont)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .frame(minWidth: 14, alignment: .trailing)
+            }
+
+            compactCenteredBroadcastAccessory
+
+            if let awayScoreText {
+                Text(awayScoreText)
+                    .font(scoreFont)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .frame(minWidth: 14, alignment: .leading)
+            }
+
+            if let aggregateAwayBracketText {
+                Text(aggregateAwayBracketText)
+                    .font(aggregateBracketFont)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var compactFinishedCenterAccessory: some View {
+        HStack(spacing: 8) {
+            if let aggregateHomeBracketText {
+                Text(aggregateHomeBracketText)
+                    .font(aggregateBracketFont)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+
+            if let homeScoreText {
+                Text(homeScoreText)
+                    .font(scoreFont)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .frame(minWidth: 14, alignment: .trailing)
+            }
+
+            compactCenteredBroadcastAccessory
+
+            if let awayScoreText {
+                Text(awayScoreText)
+                    .font(scoreFont)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .frame(minWidth: 14, alignment: .leading)
+            }
+
+            if let aggregateAwayBracketText {
+                Text(aggregateAwayBracketText)
+                    .font(aggregateBracketFont)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var compactPostponedCenterAccessory: some View {
@@ -679,6 +778,13 @@ struct MatchRow: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    private var compactTrailingAccessoryText: String {
+        if match.isFinished {
+            return match.displayScoreStatus ?? match.time
+        }
+        return match.time
+    }
+
     private var compactPrimaryBroadcastLogo: UIImage? {
         guard rowPreferences.showCompactFixtureTvLogo else { return nil }
         return primaryBroadcastLogo
@@ -689,7 +795,7 @@ struct MatchRow: View {
         hasCompactBroadcastLogo: Bool
     ) -> Bool {
         let _ = hasCompactBroadcastLogo
-        return match.isUpcomingScorelessFixture || match.isPostponed
+        return match.isUpcomingScorelessFixture || match.isPostponed || match.isFinished || match.isInProgress
     }
 
     private var shouldPlaceCompactKickoffInTrailingAccessory: Bool {
@@ -707,8 +813,8 @@ struct MatchRow: View {
         compactDensity == .compact ? 8 : 6
     }
 
-    private var compactKickoffAccessoryWidth: CGFloat {
-        compactDensity == .compact ? 40 : 36
+    private var compactStatusAccessoryMinWidth: CGFloat {
+        compactDensity == .compact ? 44 : 40
     }
 
     private var compactCenterPlaceholderFont: Font {
