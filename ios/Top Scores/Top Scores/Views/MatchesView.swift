@@ -434,8 +434,14 @@ struct MatchesView: View {
         ForEach(day.leagues) { league in
             leagueHeadingRow(for: league.league)
 
+            let hasMixedFantasyBadgeVisibility = compactLeagueHasMixedFantasyBadgeVisibility(league)
+
             ForEach(league.matches) { match in
-                matchRow(for: match, day: day)
+                matchRow(
+                    for: match,
+                    day: day,
+                    reserveCompactFantasyAccessorySpace: hasMixedFantasyBadgeVisibility
+                )
             }
         }
     }
@@ -458,7 +464,11 @@ struct MatchesView: View {
             .listRowBackground(Color.clear)
     }
 
-    private func matchRow(for match: Match, day: MatchDay) -> some View {
+    private func matchRow(
+        for match: Match,
+        day: MatchDay,
+        reserveCompactFantasyAccessorySpace: Bool = false
+    ) -> some View {
         NavigationLink {
             MatchDetailView(
                 match: match,
@@ -473,7 +483,8 @@ struct MatchesView: View {
                 usesCompactFixtureRows: usesCompactFixtureRows,
                 compactDensity: preferences.fixturesViewDensity,
                 rowPreferences: matchRowPreferences,
-                fantasyContext: fantasyViewModel.matchRowContext
+                fantasyContext: fantasyViewModel.matchRowContext,
+                reserveCompactFantasyAccessorySpace: reserveCompactFantasyAccessorySpace
             )
             .equatable()
         }
@@ -489,6 +500,22 @@ struct MatchesView: View {
         )
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
+    }
+
+    private func compactLeagueHasMixedFantasyBadgeVisibility(_ league: MatchLeague) -> Bool {
+        guard mode == .fixtures, usesCompactFixtureRows else { return false }
+
+        let badgeVisibility = league.matches.map { match in
+            fantasyParticipationBadgeVisibility(
+                for: match,
+                showFantasyBadge: true,
+                layoutStyle: .compactFixture,
+                rowPreferences: matchRowPreferences,
+                fantasyContext: fantasyViewModel.matchRowContext
+            )
+        }
+
+        return badgeVisibility.contains(true) && badgeVisibility.contains(false)
     }
 
     private func matchDebugFooterText(for match: Match) -> String? {
@@ -1032,6 +1059,7 @@ private struct MatchesListRowLabel: View, Equatable {
     let compactDensity: FixturesViewDensity
     let rowPreferences: MatchRowPreferences
     let fantasyContext: FantasyMatchRowContext
+    let reserveCompactFantasyAccessorySpace: Bool
 
     var body: some View {
         MatchRow(
@@ -1045,7 +1073,8 @@ private struct MatchesListRowLabel: View, Equatable {
             layoutStyle: usesCompactFixtureRows ? .compactFixture : .standard,
             compactDensity: compactDensity,
             fantasyContext: fantasyContext,
-            rowPreferences: rowPreferences
+            rowPreferences: rowPreferences,
+            reserveCompactFantasyAccessorySpace: reserveCompactFantasyAccessorySpace
         )
     }
 }

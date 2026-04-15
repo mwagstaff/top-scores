@@ -341,6 +341,13 @@ struct APIClient {
         return try JSONDecoder().decode(TeamColorsCatalogResponse.self, from: data)
     }
 
+    func fetchTeamShortNames() async throws -> TeamShortNamesResponse {
+        let request = try buildRequest(path: "team-short-names", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "team_short_names")
+        try validateSuccess(http, data: data, operation: "team_short_names")
+        return try JSONDecoder().decode(TeamShortNamesResponse.self, from: data)
+    }
+
     func fetchFantasyTransferRecommendations(
         elementID: Int,
         valueWindowMillions: Double = 1.5,
@@ -517,6 +524,46 @@ struct APIClient {
         )
         try validateSuccess(httpResponse, data: data, operation: "audit_missing_team_logos_get")
         return try JSONDecoder().decode([String].self, from: data)
+    }
+
+    func removeMissingTeamLogosAuditEntries(_ teamNames: [String]) async throws {
+        let normalizedTeamNames = Self.normalizedTeamNames(teamNames)
+        guard !normalizedTeamNames.isEmpty else { return }
+
+        let requestBody = try JSONEncoder().encode(normalizedTeamNames)
+
+        var request = try buildRequest(path: "audit/missing-team-logos", queryItems: [])
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = requestBody
+
+        let (data, httpResponse) = try await performRequest(
+            request,
+            operation: "audit_missing_team_logos_delete"
+        )
+
+        if httpResponse.statusCode == 404 {
+            var fallbackRequest = try buildRequest(
+                path: "audit/missing-team-logos/cleanup",
+                queryItems: []
+            )
+            fallbackRequest.httpMethod = "POST"
+            fallbackRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            fallbackRequest.httpBody = requestBody
+
+            let (fallbackData, fallbackResponse) = try await performRequest(
+                fallbackRequest,
+                operation: "audit_missing_team_logos_cleanup_post"
+            )
+            try validateSuccess(
+                fallbackResponse,
+                data: fallbackData,
+                operation: "audit_missing_team_logos_cleanup_post"
+            )
+            return
+        }
+
+        try validateSuccess(httpResponse, data: data, operation: "audit_missing_team_logos_delete")
     }
 
     private func fetchChannelsFromMatchesFallback() async throws -> [String] {
@@ -911,6 +958,16 @@ struct CompetitionCatalogResponse: Codable, Hashable, Sendable {
         case competitions
         case updatedAt = "updated_at"
         case source
+    }
+}
+
+struct TeamShortNamesResponse: Codable, Sendable {
+    let updatedAt: String?
+    let shortNames: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case updatedAt = "updated_at"
+        case shortNames = "short_names"
     }
 }
 

@@ -67,6 +67,7 @@ struct MatchRow: View {
     var compactDensity: FixturesViewDensity = .compact
     var fantasyContext: FantasyMatchRowContext = .empty
     var rowPreferences: MatchRowPreferences = .disabledFantasy
+    var reserveCompactFantasyAccessorySpace: Bool = false
 
     var body: some View {
         matchCard
@@ -272,18 +273,13 @@ struct MatchRow: View {
     }
 
     private var shouldShowFantasyParticipationBadge: Bool {
-        guard showFantasyBadge,
-              !match.isPostponed,
-              rowPreferences.hasFantasyManagerEntry,
-              isFantasyBadgeEnabledForLayout,
-              fantasyContext.isEligibleFixture(match),
-              let lookup = fantasyContext.lookup
-        else {
-            return false
-        }
-
-        let participationCount = lookup.participationCount(in: match)
-        return participationCount > 0
+        fantasyParticipationBadgeVisibility(
+            for: match,
+            showFantasyBadge: showFantasyBadge,
+            layoutStyle: layoutStyle,
+            rowPreferences: rowPreferences,
+            fantasyContext: fantasyContext
+        )
     }
 
     private var fantasyPlayerContributions: [FantasyMatchContributionDisplay] {
@@ -550,15 +546,6 @@ struct MatchRow: View {
         compactDensity == .compact ? 9 : 8
     }
 
-    private var isFantasyBadgeEnabledForLayout: Bool {
-        switch layoutStyle {
-        case .standard:
-            return rowPreferences.showFantasyFixtureLogos
-        case .compactFixture:
-            return rowPreferences.showCompactFixtureFantasyLogo
-        }
-    }
-
     private var compactFantasyAccessorySlot: some View {
         ZStack {
             if shouldShowFantasyParticipationBadge {
@@ -571,7 +558,9 @@ struct MatchRow: View {
             }
         }
         .frame(
-            width: shouldShowFantasyParticipationBadge ? compactAccessorySlotWidth : 0,
+            width: (shouldShowFantasyParticipationBadge || reserveCompactFantasyAccessorySpace)
+                ? compactAccessorySlotWidth
+                : 0,
             height: compactAccessorySlotHeight,
             alignment: .center
         )
@@ -890,6 +879,41 @@ struct MatchRow: View {
             awayAssists: match.awayAssists,
             awayRedCards: match.awayRedCards
         )
+    }
+}
+
+func fantasyParticipationBadgeVisibility(
+    for match: Match,
+    showFantasyBadge: Bool,
+    layoutStyle: MatchRowLayoutStyle,
+    rowPreferences: MatchRowPreferences,
+    fantasyContext: FantasyMatchRowContext
+) -> Bool {
+    guard showFantasyBadge,
+          !match.isPostponed,
+          rowPreferences.hasFantasyManagerEntry,
+          isFantasyBadgeEnabled(
+            for: layoutStyle,
+            rowPreferences: rowPreferences
+          ),
+          fantasyContext.isEligibleFixture(match),
+          let lookup = fantasyContext.lookup
+    else {
+        return false
+    }
+
+    return lookup.participationCount(in: match) > 0
+}
+
+func isFantasyBadgeEnabled(
+    for layoutStyle: MatchRowLayoutStyle,
+    rowPreferences: MatchRowPreferences
+) -> Bool {
+    switch layoutStyle {
+    case .standard:
+        return rowPreferences.showFantasyFixtureLogos
+    case .compactFixture:
+        return rowPreferences.showCompactFixtureFantasyLogo
     }
 }
 

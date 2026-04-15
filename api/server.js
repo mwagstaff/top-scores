@@ -5722,6 +5722,68 @@ function clearMissingTeamLogos() {
   };
 }
 
+function persistPrunedMissingTeamLogos(removed, source = "missing_team_logos_prune_resolved") {
+  if (!Array.isArray(removed) || removed.length === 0) {
+    return {
+      removedCount: 0,
+      removed: [],
+      totalCount: missingTeamLogosByKey.size,
+    };
+  }
+
+  missingTeamLogosLastUpdated = new Date().toISOString();
+  const names = sortedMissingTeamLogoNames();
+  writeMissingTeamLogos(MISSING_TEAM_LOGOS_OUTPUT_PATH, names);
+  void persistOperationalDatasetSafe(OP_DATASET_MISSING_TEAM_LOGOS, names, {
+    updated_at: missingTeamLogosLastUpdated,
+    source,
+  });
+
+  return {
+    removedCount: removed.length,
+    removed: removed.slice(),
+    totalCount: missingTeamLogosByKey.size,
+  };
+}
+
+function pruneAndPersistResolvableMissingTeamLogos(source = "missing_team_logos_prune_resolved") {
+  const removed = pruneResolvableMissingTeamLogos();
+  return persistPrunedMissingTeamLogos(removed, source);
+}
+
+function respondWithMissingTeamLogoCleanup(req, res) {
+  setCacheOnlyHeaders(res);
+
+  const payload = req.body;
+  const teamNames = missingTeamLogoNamesFromPayload(payload);
+  const clearAll =
+    isTruthyParam(req.query.all) ||
+    (payload && typeof payload === "object" && isTruthyParam(payload.clear_all));
+
+  if (!clearAll && !teamNames) {
+    res.status(400).json({
+      error:
+        "Invalid cleanup payload. Send a JSON array, {\"team_names\":[...]}, or set all=true/clear_all=true.",
+    });
+    return;
+  }
+
+  const result = clearAll ? clearMissingTeamLogos() : removeMissingTeamLogoNames(teamNames);
+
+  if (missingTeamLogosLastUpdated) {
+    res.set("X-Last-Updated", missingTeamLogosLastUpdated);
+  }
+
+  res.json({
+    accepted_count: clearAll ? result.removedCount : result.acceptedCount,
+    removed_count: result.removedCount,
+    removed: result.removed,
+    total_count: result.totalCount,
+    last_updated: missingTeamLogosLastUpdated,
+    cleared_all: clearAll,
+  });
+}
+
 async function mapWithConcurrency(items, concurrency, worker) {
   if (!Array.isArray(items) || items.length === 0) return;
   const limit = Math.max(1, Number(concurrency) || 1);
@@ -20629,40 +20691,16 @@ app.post(`${API_PREFIX}/audit/missing-team-logos`, (req, res) => {
 });
 
 app.post(`${API_PREFIX}/audit/missing-team-logos/cleanup`, (req, res) => {
-  setCacheOnlyHeaders(res);
+  respondWithMissingTeamLogoCleanup(req, res);
+});
 
-  const payload = req.body;
-  const teamNames = missingTeamLogoNamesFromPayload(payload);
-  const clearAll =
-    isTruthyParam(req.query.all) ||
-    (payload && typeof payload === "object" && isTruthyParam(payload.clear_all));
-
-  if (!clearAll && !teamNames) {
-    res.status(400).json({
-      error:
-        "Invalid cleanup payload. Send a JSON array, {\"team_names\":[...]}, or set all=true/clear_all=true.",
-    });
-    return;
-  }
-
-  const result = clearAll ? clearMissingTeamLogos() : removeMissingTeamLogoNames(teamNames);
-
-  if (missingTeamLogosLastUpdated) {
-    res.set("X-Last-Updated", missingTeamLogosLastUpdated);
-  }
-
-  res.json({
-    accepted_count: clearAll ? result.removedCount : result.acceptedCount,
-    removed_count: result.removedCount,
-    removed: result.removed,
-    total_count: result.totalCount,
-    last_updated: missingTeamLogosLastUpdated,
-    cleared_all: clearAll,
-  });
+app.delete(`${API_PREFIX}/audit/missing-team-logos`, (req, res) => {
+  respondWithMissingTeamLogoCleanup(req, res);
 });
 
 app.get(`${API_PREFIX}/audit/missing-team-logos`, (_req, res) => {
   setCacheOnlyHeaders(res);
+  pruneAndPersistResolvableMissingTeamLogos();
   if (missingTeamLogosLastUpdated) {
     res.set("X-Last-Updated", missingTeamLogosLastUpdated);
   }

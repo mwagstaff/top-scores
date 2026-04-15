@@ -78,6 +78,15 @@ struct Top_ScoresApp: App {
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
             guard !Task.isCancelled else { return }
 
+            PerformanceSignposter.startup.emitEvent("DeferredStartupMissingLogoAuditCleanup")
+            await MissingTeamLogoAuditCleanupService.shared.pruneIfNeeded(
+                apiBaseURL: snapshot.apiBaseURL
+            )
+            guard !Task.isCancelled else { return }
+
+            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
+            guard !Task.isCancelled else { return }
+
             PerformanceSignposter.startup.emitEvent("DeferredStartupLeagueTablesPrefetch")
             await LeagueTablesCatalog.shared.prefetch(apiBaseURL: snapshot.apiBaseURL)
             guard !Task.isCancelled else { return }
@@ -166,5 +175,86 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     ) {
         NSLog("[APNS] User interacted with push: %@", response.notification.request.identifier)
         completionHandler()
+    }
+}
+
+actor MissingTeamLogoAuditCleanupService {
+    static let shared = MissingTeamLogoAuditCleanupService()
+
+    private var attemptedBaseURLs = Set<String>()
+
+    func pruneIfNeeded(apiBaseURL: String) async {
+        let trimmedBaseURL = apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBaseURL.isEmpty else { return }
+        guard attemptedBaseURLs.insert(trimmedBaseURL).inserted else { return }
+        guard let baseURL = URL(string: trimmedBaseURL) else { return }
+
+        let signpost = PerformanceSignposter.startup.beginInterval("MissingLogoAuditCleanup")
+        defer { PerformanceSignposter.startup.endInterval("MissingLogoAuditCleanup", signpost) }
+
+        let client = APIClient(baseURL: baseURL)
+
+        do {
+            async let missingTask = client.fetchMissingTeamLogosAudit()
+            async let shortNamesTask = client.fetchTeamShortNames()
+            let (missingTeamNames, shortNamesResponse) = try await (missingTask, shortNamesTask)
+            guard !missingTeamNames.isEmpty else { return }
+
+            let alternateLookup = Self.buildAlternateLookup(shortNames: shortNamesResponse.shortNames)
+            let resolvedEntries = missingTeamNames.filter { teamName in
+                let alternates = alternateLookup[Self.normalizedTeamKey(teamName)] ?? []
+                return LogoResolver.shared.hasDedicatedLogo(
+                    for: teamName,
+                    alternateNames: alternates
+                )
+            }
+
+            guard !resolvedEntries.isEmpty else { return }
+            try await client.removeMissingTeamLogosAuditEntries(resolvedEntries)
+            NSLog(
+                "[MissingTeamLogoAuditCleanup] removed_count=%d names=%@",
+                resolvedEntries.count,
+                resolvedEntries.joined(separator: ", ")
+            )
+        } catch {
+            NSLog(
+                "[MissingTeamLogoAuditCleanup] failed api_base_url=%@ error=%@",
+                trimmedBaseURL,
+                String(describing: error)
+            )
+        }
+    }
+
+    private static func buildAlternateLookup(shortNames: [String: String]) -> [String: [String]] {
+        var output: [String: [String]] = [:]
+
+        func add(_ source: String, _ candidate: String) {
+            let sourceKey = normalizedTeamKey(source)
+            let normalizedCandidate = normalizedDisplayName(candidate)
+            guard !sourceKey.isEmpty, !normalizedCandidate.isEmpty else { return }
+
+            var existing = output[sourceKey] ?? []
+            if !existing.contains(where: { normalizedTeamKey($0) == normalizedTeamKey(normalizedCandidate) }) {
+                existing.append(normalizedCandidate)
+            }
+            output[sourceKey] = existing
+        }
+
+        for (name, shortName) in shortNames {
+            add(name, shortName)
+            add(shortName, name)
+        }
+
+        return output
+    }
+
+    private static func normalizedDisplayName(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    private static func normalizedTeamKey(_ value: String) -> String {
+        normalizedDisplayName(value).lowercased()
     }
 }
