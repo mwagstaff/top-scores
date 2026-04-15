@@ -9,6 +9,7 @@ struct TablesView: View {
     @State private var errorMessage: String?
     @State private var lastUpdated: Date?
     @State private var hasLoaded = false
+    @State private var shortNameRefreshVersion = 0
 
     private static let apiBaseURLDefaultsKey = "preferences.apiBaseURL"
 
@@ -47,12 +48,14 @@ struct TablesView: View {
             hasLoaded = true
             applyCachedTables(for: preferences.apiBaseURL, clearWhenMissing: false)
             Task {
+                await refreshTeamShortNames(apiBaseURL: preferences.apiBaseURL)
                 await loadTables(force: false)
             }
         }
         .onChange(of: preferences.apiBaseURL) { _, newValue in
             applyCachedTables(for: newValue, clearWhenMissing: true)
             Task {
+                await refreshTeamShortNames(apiBaseURL: newValue)
                 await loadTables(force: true)
             }
         }
@@ -88,6 +91,7 @@ struct TablesView: View {
                         competitionPicker
                         if let league = selectedLeague {
                             LeagueTableCard(league: league)
+                                .id("\(league.id)-\(shortNameRefreshVersion)")
                         }
                     }
                     .padding(.horizontal)
@@ -141,10 +145,6 @@ struct TablesView: View {
 
     private var competitionPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Competition")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-
             Picker("Competition", selection: $selectedLeagueID) {
                 ForEach(sortedLeagues) { league in
                     Text(league.leagueName).tag(league.leagueID)
@@ -229,6 +229,13 @@ struct TablesView: View {
         }
     }
 
+    private func refreshTeamShortNames(apiBaseURL: String) async {
+        await FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
+        await MainActor.run {
+            shortNameRefreshVersion &+= 1
+        }
+    }
+
     private func applyCachedTables(for apiBaseURL: String, clearWhenMissing: Bool) {
         guard let cachedResponse = LeagueTablesCache.load(for: apiBaseURL)?.response else {
             guard clearWhenMissing else { return }
@@ -282,14 +289,6 @@ private struct LeagueTableCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(league.leagueName)
-                .font(.headline)
-            if let stage = visibleStageName {
-                Text(stage)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
             VStack(spacing: 0) {
                 headingRow
                 tableSeparator(isThick: false)
@@ -341,8 +340,8 @@ private struct LeagueTableCard: View {
                 HStack(spacing: 6) {
                     cell(String(row.position), width: 28)
                     TableTeamLogo(name: row.team)
-                    Text(row.team)
-                        .font(.body.weight(.semibold))
+                    Text(displayTeamName(for: row))
+                        .font(.subheadline)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     cell(String(row.played), width: 30)
@@ -435,6 +434,7 @@ private struct LeagueTableCard: View {
     private func cell(_ text: String, width: CGFloat, weight: Font.Weight = .regular) -> some View {
         Text(text)
             .font(.body.monospacedDigit().weight(weight))
+            .scaleEffect(0.7)
             .lineLimit(1)
             .frame(width: width, alignment: .trailing)
     }
@@ -500,6 +500,11 @@ private struct LeagueTableCard: View {
             expandedRows.insert(rowID)
         }
     }
+
+    private func displayTeamName(for row: LeagueTableRow) -> String {
+        let canonicalName = TeamIdentityStore.shared.canonicalName(for: row.team)
+        return FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: canonicalName)
+    }
 }
 
 private struct ExpandedStatTile: View {
@@ -563,7 +568,7 @@ private struct TableTeamLogo: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 24, height: 24)
+        .frame(width: 18, height: 18)
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .accessibilityHidden(true)
     }

@@ -498,7 +498,7 @@ struct MatchRow: View {
         case .standard:
             return 12
         case .compactFixture:
-            return compactDensity == .compact ? 10 : 8
+            return compactDensity == .compact ? 8 : 6
         }
     }
 
@@ -519,7 +519,7 @@ struct MatchRow: View {
     }
 
     private var compactAccessorySlotWidth: CGFloat {
-        compactDensity == .compact ? 24 : 22
+        compactDensity == .compact ? 20 : 18
     }
 
     private var compactAccessorySlotHeight: CGFloat {
@@ -554,7 +554,11 @@ struct MatchRow: View {
                 )
             }
         }
-        .frame(width: compactAccessorySlotWidth, height: compactAccessorySlotHeight, alignment: .center)
+        .frame(
+            width: shouldShowFantasyParticipationBadge ? compactAccessorySlotWidth : 0,
+            height: compactAccessorySlotHeight,
+            alignment: .center
+        )
         .accessibilityHidden(!shouldShowFantasyParticipationBadge)
     }
 
@@ -571,7 +575,11 @@ struct MatchRow: View {
                     .accessibilityHidden(true)
             }
         }
-        .frame(width: compactAccessorySlotWidth, height: compactAccessorySlotHeight, alignment: .center)
+        .frame(
+            width: compactPrimaryBroadcastLogo == nil ? 0 : compactAccessorySlotWidth,
+            height: compactAccessorySlotHeight,
+            alignment: .center
+        )
     }
 
     @ViewBuilder
@@ -669,8 +677,8 @@ struct MatchRow: View {
                     .minimumScaleFactor(0.9)
             }
         }
-        .frame(minWidth: compactStatusAccessoryMinWidth, alignment: .trailing)
-        .frame(height: compactAccessorySlotHeight, alignment: .trailing)
+        .frame(minWidth: compactStatusAccessoryMinWidth, alignment: compactStatusAccessoryAlignment)
+        .frame(height: compactAccessorySlotHeight, alignment: compactStatusAccessoryAlignment)
     }
 
     private var compactInProgressCenterAccessory: some View {
@@ -733,7 +741,11 @@ struct MatchRow: View {
                     .frame(minWidth: 14, alignment: .trailing)
             }
 
-            compactCenteredBroadcastAccessory
+            Text("-")
+                .font(compactCenterScoreSeparatorFont)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary.opacity(0.65))
+                .fixedSize()
 
             if let awayScoreText {
                 Text(awayScoreText)
@@ -806,19 +818,27 @@ struct MatchRow: View {
     }
 
     private var compactFixtureVerticalSpacing: CGFloat {
-        compactDensity == .compact ? 10 : 8
-    }
-
-    private var compactFixtureHorizontalSpacing: CGFloat {
         compactDensity == .compact ? 8 : 6
     }
 
+    private var compactFixtureHorizontalSpacing: CGFloat {
+        compactDensity == .compact ? 6 : 4
+    }
+
     private var compactStatusAccessoryMinWidth: CGFloat {
-        compactDensity == .compact ? 44 : 40
+        compactDensity == .compact ? 40 : 36
+    }
+
+    private var compactStatusAccessoryAlignment: Alignment {
+        match.isFinished ? .center : .trailing
     }
 
     private var compactCenterPlaceholderFont: Font {
         compactDensity == .compact ? .caption2 : .caption2
+    }
+
+    private var compactCenterScoreSeparatorFont: Font {
+        compactDensity == .compact ? .caption : .caption2
     }
 
     private var compactKickoffAccessoryFont: Font {

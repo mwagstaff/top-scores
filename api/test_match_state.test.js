@@ -115,3 +115,79 @@ test("createMatch uses the local calendar day for kickoff timestamps near midnig
     state.deleteMatch(match.id);
   }
 });
+
+test("getRecentMatches sorts by created_at and filters to the requested window", () => {
+  const state = new TestMatchState();
+  const older = state.createMatch({
+    homeTeam: "Celtic",
+    awayTeam: "Rangers",
+    league: "Scottish Premiership",
+  });
+  const newer = state.createMatch({
+    homeTeam: "Arsenal",
+    awayTeam: "Chelsea",
+    league: "Premier League",
+  });
+
+  try {
+    older.created_at = "2026-04-14T08:00:00.000Z";
+    older.updated_at = older.created_at;
+    newer.created_at = "2026-04-15T09:30:00.000Z";
+    newer.updated_at = newer.created_at;
+
+    const recent = state.getRecentMatches({
+      since: "2026-04-15T00:00:00.000Z",
+    });
+
+    assert.deepEqual(recent.map((match) => match.id), [newer.id]);
+    assert.equal(typeof newer.created_at, "string");
+  } finally {
+    state.deleteMatch(older.id);
+    state.deleteMatch(newer.id);
+  }
+});
+
+test("getMatch repairs impossible negative in-progress minute status", () => {
+  const state = new TestMatchState();
+  const match = state.createMatch({
+    homeTeam: "Marlow",
+    awayTeam: "Sittingbourne Town",
+    league: "UEFA Champions League",
+  });
+
+  match.in_progress = true;
+  match.matchMinute = 23;
+  match.score_status = "-387'";
+
+  try {
+    const repaired = state.getMatch(match.id);
+    assert.ok(repaired);
+    assert.equal(repaired.score_status, "23'");
+  } finally {
+    state.deleteMatch(match.id);
+  }
+});
+
+test("getAllMatches returns defensive copies", () => {
+  const state = new TestMatchState();
+  const match = state.createMatch({
+    homeTeam: "Arsenal",
+    awayTeam: "Chelsea",
+    league: "Premier League",
+  });
+
+  try {
+    const snapshot = state.getAllMatches();
+    assert.equal(snapshot.length, 1);
+
+    snapshot[0].score_status = "-387'";
+    snapshot[0].home_score = 9;
+
+    const stored = state.getMatch(match.id);
+    assert.ok(stored);
+    assert.equal(stored.score_status, null);
+    assert.equal(stored.home_score, 0);
+  } finally {
+    state.deleteMatch(match.id);
+  }
+});

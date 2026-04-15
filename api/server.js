@@ -24733,6 +24733,22 @@ if (shouldRunRuntime) {
 }
 
 // Test harness endpoints (for internal use only)
+app.get(`${API_PREFIX}/test-harness/matches/recent`, (req, res) => {
+  const hours = parsePositiveInt(req.query.hours, 24, 1, 168);
+  const limit = parsePositiveInt(req.query.limit, 50, 1, 200);
+  const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const matches = testMatchState.getRecentMatches({ since, limit });
+
+  res.json({
+    success: true,
+    hours,
+    limit,
+    since,
+    count: matches.length,
+    matches,
+  });
+});
+
 app.get(`${API_PREFIX}/test-harness/match`, (req, res) => {
   const matchId = req.query.matchId || null;
   const match = testMatchState.getMatch(matchId);

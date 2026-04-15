@@ -39,6 +39,21 @@ class TestMatchState {
     this.timers = new Map(); // Map of matchId -> { simulationTimer, cleanupTimer }
   }
 
+  cloneMatch(match) {
+    if (!match || typeof match !== "object") return null;
+    return JSON.parse(JSON.stringify(match));
+  }
+
+  timestampValue(value) {
+    if (!value) return null;
+    if (value instanceof Date) {
+      const time = value.getTime();
+      return Number.isFinite(time) ? time : null;
+    }
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : null;
+  }
+
   recalculateAggregateScores(match) {
     if (!match) return;
     const firstLegHomeScore = Number(match.first_leg_home_score);
@@ -56,17 +71,85 @@ class TestMatchState {
     }
   }
 
+  parseMinuteStatus(status) {
+    const normalized = String(status || "").trim().replace(/'$/, "");
+    const match = normalized.match(/^(\d{1,3})(?:\+(\d{1,2}))?$/);
+    if (!match) return null;
+    const base = Number(match[1]);
+    const extra = Number(match[2] || 0);
+    if (!Number.isFinite(base) || !Number.isFinite(extra) || base < 0 || extra < 0) {
+      return null;
+    }
+    return {
+      base,
+      extra,
+      total: base + extra,
+    };
+  }
+
+  sanitizeMatch(match) {
+    if (!match || typeof match !== "object") return match;
+
+    const rawMinute = Number(match.matchMinute);
+    if (match.in_progress && (!Number.isFinite(rawMinute) || rawMinute <= 0)) {
+      match.matchMinute = 1;
+    }
+
+    const currentStatus = String(match.score_status || "").trim();
+    const hasNegativeMinuteStatus = /^-\d+(?:\+\d+)?'?$/.test(currentStatus);
+    if (!hasNegativeMinuteStatus) {
+      return match;
+    }
+
+    if (match.in_progress) {
+      const phase = this.getMatchPhaseForMatch(match);
+      match.score_status = this.getScoreStatusForMatch(match, phase);
+    } else if (Number.isFinite(Number(match.matchMinute)) && Number(match.matchMinute) > 0) {
+      match.score_status = `${Math.floor(Number(match.matchMinute))}'`;
+    } else {
+      match.score_status = null;
+    }
+
+    return match;
+  }
+
   getAllMatches() {
-    return Array.from(this.matches.values());
+    return Array.from(this.matches.values()).map((match) =>
+      this.cloneMatch(this.sanitizeMatch(match))
+    );
+  }
+
+  getRecentMatches(options = {}) {
+    const sinceMs = this.timestampValue(options && options.since);
+    const limit =
+      options && Number.isInteger(options.limit) && options.limit > 0 ? options.limit : null;
+
+    const matches = Array.from(this.matches.values())
+      .filter((match) => {
+        if (!match) return false;
+        if (sinceMs === null) return true;
+        const matchTimestamp = this.timestampValue(match.created_at || match.updated_at);
+        return matchTimestamp !== null && matchTimestamp >= sinceMs;
+      })
+      .sort((left, right) => {
+        const leftTimestamp = this.timestampValue(left && (left.created_at || left.updated_at)) || 0;
+        const rightTimestamp =
+          this.timestampValue(right && (right.created_at || right.updated_at)) || 0;
+        return rightTimestamp - leftTimestamp;
+      });
+
+    return (limit ? matches.slice(0, limit) : matches).map((match) =>
+      this.cloneMatch(this.sanitizeMatch(match))
+    );
   }
 
   getMatch(matchId) {
     if (!matchId) {
       // Return the first/most recent match if no ID specified (for backwards compatibility)
       const matches = Array.from(this.matches.values());
-      return matches.length > 0 ? matches[matches.length - 1] : null;
+      return matches.length > 0 ? this.sanitizeMatch(matches[matches.length - 1]) : null;
     }
-    return this.matches.get(matchId) || null;
+    return this.sanitizeMatch(this.matches.get(matchId) || null);
   }
 
   getMatchConfig(matchId) {
@@ -83,6 +166,7 @@ class TestMatchState {
 
   createMatch(params) {
     const now = new Date();
+    const nowIso = now.toISOString();
     const kickoffTime = params.kickoffNow
       ? now
       : new Date(params.kickoffTime || now);
@@ -129,7 +213,8 @@ class TestMatchState {
       live_text_entries: [],
       in_progress: false,
       is_test_match: true,
-      updated_at: new Date().toISOString(),
+      created_at: nowIso,
+      updated_at: nowIso,
       config: {
         matchSpeedMs: params.matchSpeedMs != null ? params.matchSpeedMs : 10000,
         homeExpectedGoals: params.homeExpectedGoals || 2,
@@ -193,10 +278,10 @@ class TestMatchState {
     match.matchMinute++;
 
     // Determine current match phase
-    const phase = this.getMatchPhase(matchId);
+    const phase = this.getMatchPhaseForMatch(match);
 
     // Update score status
-    match.score_status = this.getScoreStatus(matchId, phase);
+    match.score_status = this.getScoreStatusForMatch(match, phase);
 
     // Check for red cards (1/30 chance per minute)
     if (Math.random() < 1 / 30) {
@@ -215,8 +300,7 @@ class TestMatchState {
     match.updated_at = new Date().toISOString();
   }
 
-  getMatchPhase(matchId) {
-    const match = this.getMatch(matchId);
+  getMatchPhaseForMatch(match) {
     if (!match) return "full_time";
 
     const firstHalfEnd = 45 + match.config.firstHalfStoppageTime;
@@ -239,8 +323,11 @@ class TestMatchState {
     return "full_time";
   }
 
-  getScoreStatus(matchId, phase) {
-    const match = this.getMatch(matchId);
+  getMatchPhase(matchId) {
+    return this.getMatchPhaseForMatch(this.getMatch(matchId));
+  }
+
+  getScoreStatusForMatch(match, phase) {
     if (!match) return "FT";
 
     const firstHalfEnd = 45 + match.config.firstHalfStoppageTime;
@@ -273,6 +360,10 @@ class TestMatchState {
       default:
         return "FT";
     }
+  }
+
+  getScoreStatus(matchId, phase) {
+    return this.getScoreStatusForMatch(this.getMatch(matchId), phase);
   }
 
   shouldEndMatch(matchId, phase) {
@@ -348,8 +439,8 @@ class TestMatchState {
 
   currentEventMinuteLabel(match) {
     if (!match) return "1'";
-    const isMinuteStatus = match.score_status && /\d/.test(match.score_status);
-    return isMinuteStatus ? match.score_status : `${Math.max(1, Number(match.matchMinute) || 1)}'`;
+    const minuteStatus = this.parseMinuteStatus(match.score_status);
+    return minuteStatus ? match.score_status : `${Math.max(1, Number(match.matchMinute) || 1)}'`;
   }
 
   minuteLabelToValue(minuteLabel) {
@@ -471,8 +562,8 @@ class TestMatchState {
     if (!match) return;
 
     // Use score_status if it's a minute indicator (contains numbers), otherwise use matchMinute
-    const isMinuteStatus = match.score_status && /\d/.test(match.score_status);
-    const redCardTime = isMinuteStatus ? match.score_status : `${match.matchMinute}'`;
+    const minuteStatus = this.parseMinuteStatus(match.score_status);
+    const redCardTime = minuteStatus ? match.score_status : `${match.matchMinute}'`;
     const player = playerName || this.generatePlayerName();
 
     const redCards = isHome

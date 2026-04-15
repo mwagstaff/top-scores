@@ -120,7 +120,7 @@ struct MatchesView: View {
     }
 
     private var usesCompactFixtureRows: Bool {
-        mode == .fixtures && preferences.fixturesViewDensity != .extended
+        preferences.fixturesViewDensity != .extended
     }
 
     private var matchRowPreferences: MatchRowPreferences {
@@ -1036,7 +1036,7 @@ private struct MatchesListRowLabel: View, Equatable {
             showFantasyBadge: isFixtureMode,
             showFantasyPlayerContributions: isFixtureMode,
             teamLogoScale: 1.1,
-            showsFinishedInlineAggregateBrackets: true,
+            showsFinishedInlineAggregateBrackets: usesCompactFixtureRows,
             layoutStyle: usesCompactFixtureRows ? .compactFixture : .standard,
             compactDensity: compactDensity,
             fantasyContext: fantasyContext,

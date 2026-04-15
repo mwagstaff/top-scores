@@ -493,6 +493,110 @@
             color: #6b7280;
             margin-top: 10px;
         }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .section-header h2 {
+            margin-bottom: 0;
+        }
+
+        .section-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn-small {
+            padding: 8px 14px;
+            font-size: 0.9rem;
+        }
+
+        .recent-matches-note {
+            color: #6b7280;
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+
+        .recent-matches-list {
+            display: grid;
+            gap: 12px;
+        }
+
+        .recent-match-item {
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 16px 18px;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 16px;
+            align-items: center;
+            background: #fbfcff;
+        }
+
+        .recent-match-item.selected {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12);
+            background: #f6f8ff;
+        }
+
+        .recent-match-main {
+            min-width: 0;
+        }
+
+        .recent-match-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #22324d;
+            margin-bottom: 6px;
+        }
+
+        .recent-match-summary,
+        .recent-match-meta {
+            color: #5f6c80;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .recent-match-meta code {
+            font-size: 0.82rem;
+            background: #eef2ff;
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+
+        .recent-match-side {
+            display: grid;
+            gap: 10px;
+            justify-items: end;
+        }
+
+        .recent-match-score {
+            font-weight: 700;
+            color: #22324d;
+        }
+
+        .recent-match-empty {
+            color: #9ca3af;
+            text-align: center;
+            padding: 18px 0 6px;
+        }
+
+        @media (max-width: 720px) {
+            .recent-match-item {
+                grid-template-columns: 1fr;
+            }
+
+            .recent-match-side {
+                justify-items: start;
+            }
+        }
     </style>
 </head>
 <body>
@@ -593,6 +697,21 @@
             </div>
         </div>
 
+        <div class="card">
+            <div class="section-header">
+                <h2>Recent Harness Matches</h2>
+                <div class="section-actions">
+                    <button onclick="refreshHarnessState()" class="btn-small">Refresh</button>
+                </div>
+            </div>
+            <p class="recent-matches-note">
+                Shows harness matches created in the last 24 hours so you can quickly reopen controls or delete stale fixtures that are still appearing in the app.
+            </p>
+            <div id="recentMatchesList" class="recent-matches-list">
+                <p class="recent-match-empty">Loading recent harness matches...</p>
+            </div>
+        </div>
+
         <!-- Match Status Display -->
         <div id="matchStatus" class="hidden">
             <div class="scoreboard">
@@ -609,6 +728,7 @@
                 </div>
                 <div class="status" id="matchStatusBadge">Not Started</div>
                 <div class="match-info">
+                    <p><strong>Harness ID:</strong> <span id="matchHarnessId">-</span></p>
                     <p><strong>League:</strong> <span id="leagueName">-</span></p>
                     <p><strong>Kick-off:</strong> <span id="kickoffTime">-</span></p>
                     <p><strong>Aggregate:</strong> <span id="aggregateScore">-</span></p>
@@ -801,6 +921,10 @@
     <script>
         let pollInterval = null;
         let liveActivityPresets = [];
+        let recentHarnessMatches = [];
+        let selectedHarnessMatchId = null;
+        let currentHarnessMatchId = null;
+        let currentHarnessMatchSummary = null;
         const liveActivityStorageKeys = {
             deviceToken: 'top-scores.live-activity.device-token',
             presetId: 'top-scores.live-activity.preset-id',
@@ -811,11 +935,30 @@
             return adminIndex === -1 ? '' : pathname.slice(0, adminIndex);
         })();
         const COMPETITIONS_API_URL = `${API_BASE_PREFIX}/api/v1/competitions`;
+        const RECENT_TEST_MATCHES_API_URL = `${API_BASE_PREFIX}/api/v1/test-harness/matches/recent`;
         const TEST_MATCH_API_BASE = `${API_BASE_PREFIX}/api/v1/test-harness/match`;
         const LIVE_ACTIVITY_API_BASE = `${API_BASE_PREFIX}/api/v1/live-activity/test`;
 
         function buildAppUrl(path) {
             return `${API_BASE_PREFIX}${path}`;
+        }
+
+        function buildUrlWithQuery(path, query = {}) {
+            const params = new URLSearchParams();
+            Object.entries(query || {}).forEach(([key, value]) => {
+                if (value === null || value === undefined || value === '') {
+                    return;
+                }
+                params.set(key, String(value));
+            });
+            const search = params.toString();
+            return search ? `${path}?${search}` : path;
+        }
+
+        function buildTestMatchApiUrl(path = '', matchId = selectedHarnessMatchId || currentHarnessMatchId) {
+            return buildUrlWithQuery(`${TEST_MATCH_API_BASE}${path}`, {
+                matchId: matchId || null,
+            });
         }
 
         function escapeHtml(value) {
@@ -825,6 +968,29 @@
                 .replaceAll('>', '&gt;')
                 .replaceAll('"', '&quot;')
                 .replaceAll("'", '&#39;');
+        }
+
+        function formatTimestamp(value) {
+            if (!value) return '—';
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return String(value);
+            return new Intl.DateTimeFormat(undefined, {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+            }).format(date);
+        }
+
+        function summarizeMatchState(match) {
+            if (!match) {
+                return 'Unavailable';
+            }
+            if (match.in_progress) {
+                return match.isPaused ? `Paused at ${match.score_status || 'LIVE'}` : `Live ${match.score_status || ''}`.trim();
+            }
+            if (match.score_status) {
+                return match.score_status;
+            }
+            return 'Not started';
         }
 
         function showLiveActivityMessage(message, tone = 'warn') {
@@ -1139,17 +1305,113 @@
             }
         }
 
+        function renderRecentMatches(matches) {
+            const container = document.getElementById('recentMatchesList');
+            container.innerHTML = '';
+
+            if (!Array.isArray(matches) || matches.length === 0) {
+                container.innerHTML = '<p class="recent-match-empty">No harness matches created in the last 24 hours.</p>';
+                return;
+            }
+
+            matches.forEach((match) => {
+                const item = document.createElement('div');
+                item.className = `recent-match-item${match.id === (selectedHarnessMatchId || currentHarnessMatchId) ? ' selected' : ''}`;
+
+                const main = document.createElement('div');
+                main.className = 'recent-match-main';
+                main.innerHTML = `
+                    <div class="recent-match-title">${escapeHtml(match.home_team || 'Home')} vs ${escapeHtml(match.away_team || 'Away')}</div>
+                    <div class="recent-match-summary">
+                        ${escapeHtml(match.league_subcategory ? `${match.league}: ${match.league_subcategory}` : (match.league || 'Unknown competition'))}
+                    </div>
+                    <div class="recent-match-summary">
+                        Kick-off ${escapeHtml(match.date || '—')} ${escapeHtml(match.time || '')}
+                    </div>
+                    <div class="recent-match-meta">
+                        Created ${escapeHtml(formatTimestamp(match.created_at || match.updated_at))} • Updated ${escapeHtml(formatTimestamp(match.updated_at))}
+                    </div>
+                    <div class="recent-match-meta">
+                        ID <code>${escapeHtml(match.id || 'unknown')}</code>
+                    </div>
+                `;
+
+                const side = document.createElement('div');
+                side.className = 'recent-match-side';
+                side.innerHTML = `
+                    <div class="recent-match-score">${escapeHtml(`${Number(match.home_score) || 0}-${Number(match.away_score) || 0}`)} • ${escapeHtml(summarizeMatchState(match))}</div>
+                    <div class="btn-group">
+                        <button class="btn-small">Load Controls</button>
+                        <button class="btn-small btn-danger">Delete</button>
+                    </div>
+                `;
+
+                const [selectButton, deleteButton] = side.querySelectorAll('button');
+                selectButton.addEventListener('click', () => {
+                    selectHarnessMatch(match.id);
+                });
+                deleteButton.addEventListener('click', () => {
+                    deleteMatch(match.id);
+                });
+
+                item.appendChild(main);
+                item.appendChild(side);
+                container.appendChild(item);
+            });
+        }
+
+        async function loadRecentMatches() {
+            try {
+                const response = await fetch(buildUrlWithQuery(RECENT_TEST_MATCHES_API_URL, {
+                    hours: 24,
+                    limit: 100,
+                }));
+                const payload = await response.json();
+                if (!response.ok || !payload || !Array.isArray(payload.matches)) {
+                    throw new Error(payload && payload.error ? payload.error : `Request failed with ${response.status}`);
+                }
+                recentHarnessMatches = payload.matches;
+                renderRecentMatches(recentHarnessMatches);
+            } catch (err) {
+                console.error('Failed to load recent harness matches:', err);
+                document.getElementById('recentMatchesList').innerHTML =
+                    '<p class="recent-match-empty">Failed to load recent harness matches.</p>';
+            }
+        }
+
+        async function selectHarnessMatch(matchId) {
+            selectedHarnessMatchId = matchId || null;
+            await refreshHarnessState();
+        }
+
+        async function refreshHarnessState() {
+            await Promise.all([
+                loadRecentMatches(),
+                loadMatchStatus(),
+            ]);
+        }
+
         async function loadMatchStatus() {
             try {
-                const response = await fetch(TEST_MATCH_API_BASE);
+                const response = await fetch(buildTestMatchApiUrl());
                 const data = await response.json();
 
+                if (!data.active && selectedHarnessMatchId) {
+                    selectedHarnessMatchId = null;
+                    return loadMatchStatus();
+                }
+
                 if (data.active) {
+                    if (!selectedHarnessMatchId && data.match && data.match.id) {
+                        selectedHarnessMatchId = data.match.id;
+                    }
                     updateMatchDisplay(data.match, data);
                     document.getElementById('matchStatus').classList.remove('hidden');
                     document.getElementById('createForm').classList.add('hidden');
                     document.getElementById('noMatch').classList.add('hidden');
                 } else {
+                    currentHarnessMatchId = null;
+                    currentHarnessMatchSummary = null;
                     document.getElementById('matchStatus').classList.add('hidden');
                     document.getElementById('createForm').classList.remove('hidden');
                     document.getElementById('noMatch').classList.add('hidden');
@@ -1160,10 +1422,13 @@
         }
 
         function updateMatchDisplay(match, data) {
+            currentHarnessMatchId = match.id || null;
+            currentHarnessMatchSummary = match;
             document.getElementById('homeTeamName').textContent = match.home_team;
             document.getElementById('awayTeamName').textContent = match.away_team;
             document.getElementById('homeScore').textContent = match.home_score || 0;
             document.getElementById('awayScore').textContent = match.away_score || 0;
+            document.getElementById('matchHarnessId').textContent = match.id || '-';
 
             const statusBadge = document.getElementById('matchStatusBadge');
             if (match.in_progress) {
@@ -1231,6 +1496,7 @@
 
             renderEventsTimeline(match);
             renderLiveTextFeed(match);
+            renderRecentMatches(recentHarnessMatches);
         }
 
         function parseMinute(raw) {
@@ -1429,9 +1695,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
                 });
+                const result = await response.json();
 
                 if (response.ok) {
-                    await loadMatchStatus();
+                    selectedHarnessMatchId = result && result.match ? result.match.id : null;
+                    await refreshHarnessState();
                     startPolling();
                 } else {
                     alert('Failed to create match');
@@ -1444,8 +1712,8 @@
 
         async function startMatch() {
             try {
-                await fetch(`${TEST_MATCH_API_BASE}/start`, { method: 'POST' });
-                await loadMatchStatus();
+                await fetch(buildTestMatchApiUrl('/start'), { method: 'POST' });
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to start match:', err);
             }
@@ -1453,8 +1721,8 @@
 
         async function pauseMatch() {
             try {
-                await fetch(`${TEST_MATCH_API_BASE}/pause`, { method: 'POST' });
-                await loadMatchStatus();
+                await fetch(buildTestMatchApiUrl('/pause'), { method: 'POST' });
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to pause match:', err);
             }
@@ -1462,8 +1730,8 @@
 
         async function resumeMatch() {
             try {
-                await fetch(`${TEST_MATCH_API_BASE}/resume`, { method: 'POST' });
-                await loadMatchStatus();
+                await fetch(buildTestMatchApiUrl('/resume'), { method: 'POST' });
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to resume match:', err);
             }
@@ -1477,13 +1745,13 @@
                 return;
             }
             try {
-                const response = await fetch(`${TEST_MATCH_API_BASE}/set-speed`, {
+                const response = await fetch(buildTestMatchApiUrl('/set-speed'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ speedMs: secs * 1000 })
                 });
                 if (response.ok) {
-                    await loadMatchStatus();
+                    await refreshHarnessState();
                 } else {
                     alert('Failed to set match speed');
                 }
@@ -1504,7 +1772,7 @@
             };
 
             try {
-                await fetch(`${TEST_MATCH_API_BASE}/add-goal`, {
+                await fetch(buildTestMatchApiUrl('/add-goal'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
@@ -1512,7 +1780,7 @@
 
                 document.getElementById(playerInput).value = '';
                 document.getElementById(assisterInput).value = '';
-                await loadMatchStatus();
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to add goal:', err);
             }
@@ -1527,14 +1795,14 @@
             };
 
             try {
-                await fetch(`${TEST_MATCH_API_BASE}/add-red-card`, {
+                await fetch(buildTestMatchApiUrl('/add-red-card'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
                 });
 
                 document.getElementById(playerInput).value = '';
-                await loadMatchStatus();
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to add red card:', err);
             }
@@ -1554,7 +1822,7 @@
             };
 
             try {
-                const response = await fetch(`${TEST_MATCH_API_BASE}/simulate-var-disallowed-goal`, {
+                const response = await fetch(buildTestMatchApiUrl('/simulate-var-disallowed-goal'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
@@ -1566,7 +1834,7 @@
 
                 document.getElementById(playerInput).value = '';
                 document.getElementById(assisterInput).value = '';
-                await loadMatchStatus();
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to simulate VAR-disallowed goal:', err);
                 alert('Failed to simulate VAR-disallowed goal');
@@ -1575,8 +1843,8 @@
 
         async function jumpToHT() {
             try {
-                await fetch(`${TEST_MATCH_API_BASE}/jump-to-ht`, { method: 'POST' });
-                await loadMatchStatus();
+                await fetch(buildTestMatchApiUrl('/jump-to-ht'), { method: 'POST' });
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to jump to HT:', err);
             }
@@ -1584,8 +1852,8 @@
 
         async function jumpToFT() {
             try {
-                await fetch(`${TEST_MATCH_API_BASE}/jump-to-ft`, { method: 'POST' });
-                await loadMatchStatus();
+                await fetch(buildTestMatchApiUrl('/jump-to-ft'), { method: 'POST' });
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to jump to FT:', err);
             }
@@ -1597,22 +1865,39 @@
             }
 
             try {
-                await fetch(`${TEST_MATCH_API_BASE}/restart`, { method: 'POST' });
-                await loadMatchStatus();
+                await fetch(buildTestMatchApiUrl('/restart'), { method: 'POST' });
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to restart match:', err);
             }
         }
 
-        async function deleteMatch() {
-            if (!confirm('Are you sure you want to delete the test match?')) {
+        async function deleteMatch(matchId = null) {
+            const targetMatchId = matchId || selectedHarnessMatchId || currentHarnessMatchId;
+            const summary = recentHarnessMatches.find((match) => match.id === targetMatchId) || currentHarnessMatchSummary;
+            const label = summary
+                ? `${summary.home_team || 'Home'} vs ${summary.away_team || 'Away'} (${targetMatchId || 'unknown'})`
+                : 'this test match';
+
+            if (!targetMatchId) {
+                alert('No harness match is currently selected.');
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to delete ${label}?`)) {
                 return;
             }
 
             try {
-                await fetch(`${TEST_MATCH_API_BASE}/delete`, { method: 'POST' });
-                stopPolling();
-                await loadMatchStatus();
+                await fetch(buildTestMatchApiUrl('/delete', targetMatchId), { method: 'POST' });
+                if (selectedHarnessMatchId === targetMatchId) {
+                    selectedHarnessMatchId = null;
+                }
+                if (currentHarnessMatchId === targetMatchId) {
+                    currentHarnessMatchId = null;
+                    currentHarnessMatchSummary = null;
+                }
+                await refreshHarnessState();
             } catch (err) {
                 console.error('Failed to delete match:', err);
             }
@@ -1625,7 +1910,7 @@
 
         function startPolling() {
             if (pollInterval) return;
-            pollInterval = setInterval(loadMatchStatus, 2000); // Poll every 2 seconds
+            pollInterval = setInterval(refreshHarnessState, 2000); // Poll every 2 seconds
         }
 
         function stopPolling() {
@@ -1640,7 +1925,7 @@
             restoreLiveActivityInputs();
             await loadLiveActivityPresets();
             await loadCompetitions();
-            await loadMatchStatus();
+            await refreshHarnessState();
             startPolling();
 
             const presetSelect = document.getElementById('liveActivityPreset');
