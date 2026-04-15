@@ -95,7 +95,11 @@ struct MatchRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .center, spacing: 10) {
-                    TeamLogo(name: match.homeTeam, size: logoSize)
+                    TeamLogo(
+                        name: match.homeTeam,
+                        alternateNames: [match.homeShortName].compactMap { $0 },
+                        size: logoSize
+                    )
 
                     HStack(alignment: .center, spacing: 8) {
                         Text(match.displayHomeTeam)
@@ -118,7 +122,11 @@ struct MatchRow: View {
                     }
                     .frame(maxWidth: .infinity)
 
-                    TeamLogo(name: match.awayTeam, size: logoSize)
+                    TeamLogo(
+                        name: match.awayTeam,
+                        alternateNames: [match.awayShortName].compactMap { $0 },
+                        size: logoSize
+                    )
                 }
                 .frame(maxWidth: .infinity)
 
@@ -187,7 +195,11 @@ struct MatchRow: View {
             HStack(alignment: .center, spacing: compactFixtureHorizontalSpacing) {
                 compactFantasyAccessorySlot
 
-                TeamLogo(name: match.homeTeam, size: logoSize)
+                TeamLogo(
+                    name: match.homeTeam,
+                    alternateNames: [match.homeShortName].compactMap { $0 },
+                    size: logoSize
+                )
 
                 Text(match.displayHomeTeam)
                     .font(teamNameFont)
@@ -207,7 +219,11 @@ struct MatchRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(1)
 
-                TeamLogo(name: match.awayTeam, size: logoSize)
+                TeamLogo(
+                    name: match.awayTeam,
+                    alternateNames: [match.awayShortName].compactMap { $0 },
+                    size: logoSize
+                )
 
                 compactFixtureTrailingAccessory
             }
@@ -1541,7 +1557,10 @@ struct MatchDetailView: View {
     }
 
     private func reportMissingTeamLogosIfNeeded(for match: Match) {
-        let missingTeamNames = LogoResolver.shared.missingTeamNames(in: [match.homeTeam, match.awayTeam])
+        let missingTeamNames = LogoResolver.shared.missingTeamNames(in: [
+            (match.homeTeam, [match.homeShortName].compactMap { $0 }),
+            (match.awayTeam, [match.awayShortName].compactMap { $0 }),
+        ])
         guard !missingTeamNames.isEmpty else { return }
         guard let baseURL = URL(string: preferences.apiBaseURL) else { return }
 
@@ -3554,11 +3573,12 @@ private struct TvLogoRow: View {
 
 private struct TeamLogo: View {
     let name: String
+    var alternateNames: [String] = []
     var size: CGFloat = 22
 
     var body: some View {
         Group {
-            if let image = LogoResolver.shared.image(for: name) {
+            if let image = LogoResolver.shared.image(for: name, alternateNames: alternateNames) {
                 Image(uiImage: image)
                     .resizable()
             } else {

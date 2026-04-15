@@ -1023,7 +1023,11 @@ private struct CompactMatchRow: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            WidgetTeamLogo(teamName: match.homeTeam, size: logoSize)
+            WidgetTeamLogo(
+                teamName: match.homeTeam,
+                alternateNames: [match.homeShortName].compactMap { $0 },
+                size: logoSize
+            )
 
             Text(WidgetNameFormatter.abbreviated(match.displayHomeTeam, length: 7))
                 .font(.caption2)
@@ -1041,7 +1045,11 @@ private struct CompactMatchRow: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .trailing)
 
-            WidgetTeamLogo(teamName: match.awayTeam, size: logoSize)
+            WidgetTeamLogo(
+                teamName: match.awayTeam,
+                alternateNames: [match.awayShortName].compactMap { $0 },
+                size: logoSize
+            )
         }
     }
 
@@ -1163,7 +1171,11 @@ private struct LargeMatchRow: View {
 
     var body: some View {
         HStack(spacing: compact ? 4 : 6) {
-            WidgetTeamLogo(teamName: match.homeTeam, size: compact ? 14 : 16)
+            WidgetTeamLogo(
+                teamName: match.homeTeam,
+                alternateNames: [match.homeShortName].compactMap { $0 },
+                size: compact ? 14 : 16
+            )
 
             Spacer(minLength: compact ? 1 : 4)
 
@@ -1184,7 +1196,11 @@ private struct LargeMatchRow: View {
 
             Spacer(minLength: compact ? 1 : 4)
 
-            WidgetTeamLogo(teamName: match.awayTeam, size: compact ? 14 : 16)
+            WidgetTeamLogo(
+                teamName: match.awayTeam,
+                alternateNames: [match.awayShortName].compactMap { $0 },
+                size: compact ? 14 : 16
+            )
         }
     }
 
@@ -1241,7 +1257,11 @@ private struct SmallMatchRow: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            WidgetTeamLogo(teamName: match.homeTeam, size: 12)
+            WidgetTeamLogo(
+                teamName: match.homeTeam,
+                alternateNames: [match.homeShortName].compactMap { $0 },
+                size: 12
+            )
 
             Spacer(minLength: 1)
 
@@ -1262,7 +1282,11 @@ private struct SmallMatchRow: View {
 
             Spacer(minLength: 1)
 
-            WidgetTeamLogo(teamName: match.awayTeam, size: 12)
+            WidgetTeamLogo(
+                teamName: match.awayTeam,
+                alternateNames: [match.awayShortName].compactMap { $0 },
+                size: 12
+            )
         }
     }
 
@@ -1327,11 +1351,16 @@ private enum WidgetNameFormatter {
 
 private struct WidgetTeamLogo: View {
     let teamName: String
+    var alternateNames: [String] = []
     let size: CGFloat
 
     var body: some View {
         Group {
-            if let image = WidgetTeamLogoResolver.shared.image(for: teamName, idealPointSize: size) {
+            if let image = WidgetTeamLogoResolver.shared.image(
+                for: teamName,
+                alternateNames: alternateNames,
+                idealPointSize: size
+            ) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -1524,8 +1553,16 @@ private final class WidgetTeamLogoResolver {
         loadLogos()
     }
 
-    func image(for teamName: String, idealPointSize: CGFloat? = nil) -> UIImage? {
-        let cacheKey = Self.cacheKey(for: teamName, idealPointSize: idealPointSize)
+    func image(
+        for teamName: String,
+        alternateNames: [String] = [],
+        idealPointSize: CGFloat? = nil
+    ) -> UIImage? {
+        let cacheKey = Self.cacheKey(
+            for: teamName,
+            alternateNames: alternateNames,
+            idealPointSize: idealPointSize
+        )
 
         lock.lock()
         if let cached = cache[cacheKey] {
@@ -1534,7 +1571,11 @@ private final class WidgetTeamLogoResolver {
         }
         lock.unlock()
 
-        if let image = resolveAssetImage(for: teamName, idealPointSize: idealPointSize) ??
+        if let image = resolveAssetImage(
+            for: teamName,
+            alternateNames: alternateNames,
+            idealPointSize: idealPointSize
+        ) ??
             resolveAssetFallbackImage(idealPointSize: idealPointSize) {
             lock.lock()
             cache[cacheKey] = image
@@ -1542,7 +1583,8 @@ private final class WidgetTeamLogoResolver {
             return image
         }
 
-        let url = resolveURL(for: teamName) ?? resolveURL(for: fallbackName)
+        let url = resolveURL(for: teamName, alternateNames: alternateNames) ??
+            resolveURL(for: fallbackName)
         guard let url else { return nil }
 
         let image = Self.downsampledImage(at: url, idealPointSize: idealPointSize)
@@ -1637,8 +1679,14 @@ private final class WidgetTeamLogoResolver {
         }
     }
 
-    private func resolveAssetImage(for teamName: String, idealPointSize: CGFloat?) -> UIImage? {
-        guard let assetName = resolveAssetName(for: teamName) else { return nil }
+    private func resolveAssetImage(
+        for teamName: String,
+        alternateNames: [String] = [],
+        idealPointSize: CGFloat?
+    ) -> UIImage? {
+        guard let assetName = resolveAssetName(for: teamName, alternateNames: alternateNames) else {
+            return nil
+        }
         return imageFromAssets(named: assetName, idealPointSize: idealPointSize)
     }
 
@@ -1667,8 +1715,14 @@ private final class WidgetTeamLogoResolver {
         return nil
     }
 
-    private static func cacheKey(for teamName: String, idealPointSize: CGFloat?) -> String {
-        let normalized = normalizedKey(teamName)
+    private static func cacheKey(
+        for teamName: String,
+        alternateNames: [String],
+        idealPointSize: CGFloat?
+    ) -> String {
+        let normalized = lookupCandidates(for: teamName, alternateNames: alternateNames)
+            .map(normalizedKey)
+            .joined(separator: "|")
         let pixelSize = Int(maxPixelSize(for: idealPointSize).rounded())
         return "\(normalized)|\(pixelSize)"
     }
@@ -1727,37 +1781,46 @@ private final class WidgetTeamLogoResolver {
         return UIImage(cgImage: cgImage)
     }
 
-    private func resolveAssetName(for teamName: String) -> String? {
-        let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+    private func resolveAssetName(for teamName: String, alternateNames: [String] = []) -> String? {
+        var fuzzyCandidates: [String] = []
 
-        let lower = trimmed.lowercased()
-        if let direct = assetOriginalLookup[lower] {
-            return direct
-        }
-
-        for alias in Self.aliases(for: trimmed) {
-            if let directAlias = assetOriginalLookup[alias] {
-                return directAlias
+        for candidate in Self.lookupCandidates(for: teamName, alternateNames: alternateNames) {
+            let lower = candidate.lowercased()
+            if let direct = assetOriginalLookup[lower] {
+                return direct
             }
 
-            let aliasKey = Self.normalizedKey(alias)
-            if let match = assetNormalizedLookup[aliasKey] {
+            for alias in Self.aliases(for: candidate) {
+                if let directAlias = assetOriginalLookup[alias] {
+                    return directAlias
+                }
+
+                let aliasKey = Self.normalizedKey(alias)
+                if let match = assetNormalizedLookup[aliasKey] {
+                    return match
+                }
+            }
+
+            let normalized = Self.normalizedKey(candidate)
+            if let match = assetNormalizedLookup[normalized] {
+                return match
+            }
+
+            let core = Self.normalizedCoreKey(candidate)
+            if let uniqueCoreMatch = uniqueAssetCoreMatch(for: core) {
+                return uniqueCoreMatch
+            }
+
+            fuzzyCandidates.append(normalized)
+        }
+
+        for normalized in fuzzyCandidates {
+            if let match = fuzzyAssetMatch(normalizedTeam: normalized) {
                 return match
             }
         }
 
-        let normalized = Self.normalizedKey(trimmed)
-        if let match = assetNormalizedLookup[normalized] {
-            return match
-        }
-
-        let core = Self.normalizedCoreKey(trimmed)
-        if let uniqueCoreMatch = uniqueAssetCoreMatch(for: core) {
-            return uniqueCoreMatch
-        }
-
-        return fuzzyAssetMatch(normalizedTeam: normalized)
+        return nil
     }
 
     private func uniqueAssetCoreMatch(for coreKey: String) -> String? {
@@ -1817,33 +1880,42 @@ private final class WidgetTeamLogoResolver {
             .joined(separator: " ")
     }
 
-    private func resolveURL(for teamName: String) -> URL? {
-        let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+    private func resolveURL(for teamName: String, alternateNames: [String] = []) -> URL? {
+        var fuzzyCandidates: [String] = []
 
-        let lower = trimmed.lowercased()
-        if let direct = originalLookup[lower] {
-            return direct
+        for candidate in Self.lookupCandidates(for: teamName, alternateNames: alternateNames) {
+            let lower = candidate.lowercased()
+            if let direct = originalLookup[lower] {
+                return direct
+            }
+
+            for alias in Self.aliases(for: candidate) {
+                let aliasKey = Self.normalizedKey(alias)
+                if let match = normalizedLookup[aliasKey] {
+                    return match
+                }
+            }
+
+            let normalized = Self.normalizedKey(candidate)
+            if let match = normalizedLookup[normalized] {
+                return match
+            }
+
+            let core = Self.normalizedCoreKey(candidate)
+            if let uniqueCoreMatch = uniqueCoreMatch(for: core) {
+                return uniqueCoreMatch
+            }
+
+            fuzzyCandidates.append(normalized)
         }
 
-        for alias in Self.aliases(for: trimmed) {
-            let aliasKey = Self.normalizedKey(alias)
-            if let match = normalizedLookup[aliasKey] {
+        for normalized in fuzzyCandidates {
+            if let match = fuzzyMatch(normalizedTeam: normalized) {
                 return match
             }
         }
 
-        let normalized = Self.normalizedKey(trimmed)
-        if let match = normalizedLookup[normalized] {
-            return match
-        }
-
-        let core = Self.normalizedCoreKey(trimmed)
-        if let uniqueCoreMatch = uniqueCoreMatch(for: core) {
-            return uniqueCoreMatch
-        }
-
-        return fuzzyMatch(normalizedTeam: normalized)
+        return nil
     }
 
     private func uniqueCoreMatch(for coreKey: String) -> URL? {
@@ -1914,6 +1986,23 @@ private final class WidgetTeamLogoResolver {
             return [alias, lowered]
         }
         return [lowered]
+    }
+
+    private static func lookupCandidates(for teamName: String, alternateNames: [String]) -> [String] {
+        var output: [String] = []
+        var seen = Set<String>()
+
+        func add(_ candidate: String) {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { return }
+            output.append(trimmed)
+        }
+
+        add(teamName)
+        alternateNames.forEach(add)
+        return output
     }
 
     private static func similarity(_ lhs: String, _ rhs: String) -> Double {
@@ -2806,7 +2895,11 @@ private struct SingleUpcomingMatchView: View {
                 }
 
                 SingleUpcomingGridRow {
-                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
+                    LiveActivityTeamLogo(
+                        teamName: match.homeTeam,
+                        alternateNames: [match.homeShortName].compactMap { $0 },
+                        size: 24
+                    )
                 } center: {
                     Text(match.time)
                         .font(.subheadline.monospacedDigit().weight(.semibold))
@@ -2814,7 +2907,11 @@ private struct SingleUpcomingMatchView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                 } right: {
-                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
+                    LiveActivityTeamLogo(
+                        teamName: match.awayTeam,
+                        alternateNames: [match.awayShortName].compactMap { $0 },
+                        size: 24
+                    )
                 }
 
                 SingleUpcomingGridRow {
@@ -2887,17 +2984,26 @@ private struct SingleLiveMatchView: View {
                 )
 
                 HStack(spacing: compact ? 8 : 10) {
-                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
+                    LiveActivityTeamLogo(
+                        teamName: match.homeTeam,
+                        alternateNames: [match.homeShortName].compactMap { $0 },
+                        size: 24
+                    )
                     Spacer(minLength: 8)
                     LiveActivitySingleScoreRow(match: match, compact: compact)
                     Spacer(minLength: 8)
-                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
+                    LiveActivityTeamLogo(
+                        teamName: match.awayTeam,
+                        alternateNames: [match.awayShortName].compactMap { $0 },
+                        size: 24
+                    )
                 }
 
                 TeamNamesWithAggregateRow(
                     homeTeam: match.displayHomeTeam,
                     awayTeam: match.displayAwayTeam,
-                    aggregateInfo: aggregateText ?? " "
+                    aggregateInfo: aggregateText ?? " ",
+                    compact: compact
                 )
             }
         }
@@ -2931,17 +3037,26 @@ private struct SingleFinishedMatchView: View {
                 )
 
                 HStack(spacing: compact ? 8 : 10) {
-                    LiveActivityTeamLogo(teamName: match.homeTeam, size: 24)
+                    LiveActivityTeamLogo(
+                        teamName: match.homeTeam,
+                        alternateNames: [match.homeShortName].compactMap { $0 },
+                        size: 24
+                    )
                     Spacer(minLength: 8)
                     LiveActivitySingleScoreRow(match: match, compact: compact)
                     Spacer(minLength: 8)
-                    LiveActivityTeamLogo(teamName: match.awayTeam, size: 24)
+                    LiveActivityTeamLogo(
+                        teamName: match.awayTeam,
+                        alternateNames: [match.awayShortName].compactMap { $0 },
+                        size: 24
+                    )
                 }
 
                 TeamNamesWithAggregateRow(
                     homeTeam: match.displayHomeTeam,
                     awayTeam: match.displayAwayTeam,
-                    aggregateInfo: aggregateText ?? " "
+                    aggregateInfo: aggregateText ?? " ",
+                    compact: compact
                 )
             }
         }
@@ -3443,32 +3558,49 @@ private struct TeamNamesWithAggregateRow: View {
     let homeTeam: String
     let awayTeam: String
     let aggregateInfo: String
+    var compact: Bool = false
 
     var body: some View {
-        ZStack {
-            HStack(spacing: 8) {
-                Text(homeTeam)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .multilineTextAlignment(.trailing)
-                Spacer(minLength: 4)
-                Text(awayTeam)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .multilineTextAlignment(.leading)
+        HStack(alignment: .center, spacing: compact ? 8 : 10) {
+            Text(homeTeam)
+                .font(teamNameFont)
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .allowsTightening(true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.leading)
+
+            ZStack {
+                Color.clear
+                    .frame(width: centerSlotWidth, height: 1)
+
+                if !aggregateInfo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(aggregateInfo)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
             }
 
-            if !aggregateInfo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(aggregateInfo)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.65))
-                    .lineLimit(1)
-            }
+            Text(awayTeam)
+                .font(teamNameFont)
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .allowsTightening(true)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .multilineTextAlignment(.trailing)
         }
+    }
+
+    private var teamNameFont: Font {
+        compact ? .caption2.weight(.medium) : .caption.weight(.medium)
+    }
+
+    private var centerSlotWidth: CGFloat {
+        compact ? 76 : 88
     }
 }
 
@@ -3559,7 +3691,11 @@ private struct MultiMatchEntryCell: View {
             if expanded {
                 HStack(spacing: 10) {
                     HStack(spacing: 7) {
-                        LiveActivityTeamLogo(teamName: match.homeTeam, size: logoSize)
+                        LiveActivityTeamLogo(
+                            teamName: match.homeTeam,
+                            alternateNames: [match.homeShortName].compactMap { $0 },
+                            size: logoSize
+                        )
                             .frame(width: logoSize, alignment: .center)
 
                         Text(match.displayHomeTeam)
@@ -3584,7 +3720,11 @@ private struct MultiMatchEntryCell: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .multilineTextAlignment(.leading)
 
-                        LiveActivityTeamLogo(teamName: match.awayTeam, size: logoSize)
+                        LiveActivityTeamLogo(
+                            teamName: match.awayTeam,
+                            alternateNames: [match.awayShortName].compactMap { $0 },
+                            size: logoSize
+                        )
                             .frame(width: logoSize, alignment: .center)
                     }
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -3595,13 +3735,21 @@ private struct MultiMatchEntryCell: View {
             } else if live {
                 HStack(spacing: 0) {
                     HStack(spacing: 8) {
-                        LiveActivityTeamLogo(teamName: match.homeTeam, size: 20)
+                        LiveActivityTeamLogo(
+                            teamName: match.homeTeam,
+                            alternateNames: [match.homeShortName].compactMap { $0 },
+                            size: 20
+                        )
                             .frame(width: 20, alignment: .center)
 
                         liveScoreView
                             .frame(width: scoreSlotWidth, alignment: .center)
 
-                        LiveActivityTeamLogo(teamName: match.awayTeam, size: 20)
+                        LiveActivityTeamLogo(
+                            teamName: match.awayTeam,
+                            alternateNames: [match.awayShortName].compactMap { $0 },
+                            size: 20
+                        )
                             .frame(width: 20, alignment: .center)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3622,13 +3770,21 @@ private struct MultiMatchEntryCell: View {
             } else {
                 HStack(spacing: 0) {
                     HStack(spacing: 8) {
-                        LiveActivityTeamLogo(teamName: match.homeTeam, size: 20)
+                        LiveActivityTeamLogo(
+                            teamName: match.homeTeam,
+                            alternateNames: [match.homeShortName].compactMap { $0 },
+                            size: 20
+                        )
                             .frame(width: 20, alignment: .center)
 
                         scoreView
                             .frame(width: scoreSlotWidth, alignment: .center)
 
-                        LiveActivityTeamLogo(teamName: match.awayTeam, size: 20)
+                        LiveActivityTeamLogo(
+                            teamName: match.awayTeam,
+                            alternateNames: [match.awayShortName].compactMap { $0 },
+                            size: 20
+                        )
                             .frame(width: 20, alignment: .center)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3897,11 +4053,16 @@ private struct ChannelInfoRow: View {
 @available(iOSApplicationExtension 16.1, *)
 private struct LiveActivityTeamLogo: View {
     let teamName: String
+    var alternateNames: [String] = []
     let size: CGFloat
 
     var body: some View {
         Group {
-            if let image = WidgetTeamLogoResolver.shared.image(for: teamName, idealPointSize: size) {
+            if let image = WidgetTeamLogoResolver.shared.image(
+                for: teamName,
+                alternateNames: alternateNames,
+                idealPointSize: size
+            ) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()

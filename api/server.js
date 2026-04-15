@@ -1641,41 +1641,89 @@ function uniqueKnownTeamLogoCoreMatch(coreKey) {
   return unique.length === 1 ? unique[0] : null;
 }
 
+function knownTeamLogoNameCandidates(name, lookup = null) {
+  const trimmed = normalizeMissingTeamLogoName(name);
+  if (!trimmed) return [];
+
+  const resolvedLookup =
+    lookup && typeof lookup.get === "function"
+      ? lookup
+      : buildResolvedTeamShortNameLookup(scrapedTeamShortNamesByKey, loadTeamShortNameOverrides());
+
+  const output = [];
+  const seen = new Set();
+  const targetKey = normalizeTeamShortNameKey(trimmed);
+
+  function add(candidate) {
+    const normalized = normalizeMissingTeamLogoName(candidate);
+    if (!normalized) return;
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    output.push(normalized);
+  }
+
+  add(trimmed);
+  add(resolveApiTeamShortName(trimmed, resolvedLookup));
+
+  if (targetKey && resolvedLookup && typeof resolvedLookup.values === "function") {
+    for (const entry of resolvedLookup.values()) {
+      if (!entry || !entry.name || !entry.short_name) continue;
+      if (normalizeTeamShortNameKey(entry.short_name) === targetKey) {
+        add(entry.name);
+      }
+      if (normalizeTeamShortNameKey(entry.name) === targetKey) {
+        add(entry.short_name);
+      }
+    }
+  }
+
+  return output;
+}
+
 function resolveKnownTeamLogoAsset(name) {
   loadKnownTeamLogoCatalog();
 
   const trimmed = normalizeMissingTeamLogoName(name);
   if (!trimmed || knownTeamLogoNormalizedLookup.size === 0) return null;
 
-  const direct = knownTeamLogoOriginalLookup.get(trimmed.toLowerCase());
-  if (direct) return direct;
-
-  for (const alias of knownTeamLogoAliases(trimmed)) {
-    const directAlias = knownTeamLogoOriginalLookup.get(alias);
-    if (directAlias) return directAlias;
-
-    const aliasKey = normalizeTeamLogoCatalogKey(alias);
-    if (aliasKey && knownTeamLogoNormalizedLookup.has(aliasKey)) {
-      return knownTeamLogoNormalizedLookup.get(aliasKey);
-    }
-  }
-
-  const normalizedKey = normalizeTeamLogoCatalogKey(trimmed);
-  if (normalizedKey && knownTeamLogoNormalizedLookup.has(normalizedKey)) {
-    return knownTeamLogoNormalizedLookup.get(normalizedKey);
-  }
-
-  const coreKey = normalizeTeamLogoCatalogCoreKey(trimmed);
-  const coreMatch = uniqueKnownTeamLogoCoreMatch(coreKey);
-  if (coreMatch) return coreMatch;
+  const shortNameLookup = buildResolvedTeamShortNameLookup(
+    scrapedTeamShortNamesByKey,
+    loadTeamShortNameOverrides()
+  );
 
   let bestMatch = null;
   let bestScore = 0;
-  for (const [candidateKey, candidateName] of knownTeamLogoNormalizedLookup.entries()) {
-    const score = similarity(normalizedKey, candidateKey);
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = candidateName;
+
+  for (const candidate of knownTeamLogoNameCandidates(trimmed, shortNameLookup)) {
+    const direct = knownTeamLogoOriginalLookup.get(candidate.toLowerCase());
+    if (direct) return direct;
+
+    for (const alias of knownTeamLogoAliases(candidate)) {
+      const directAlias = knownTeamLogoOriginalLookup.get(alias);
+      if (directAlias) return directAlias;
+
+      const aliasKey = normalizeTeamLogoCatalogKey(alias);
+      if (aliasKey && knownTeamLogoNormalizedLookup.has(aliasKey)) {
+        return knownTeamLogoNormalizedLookup.get(aliasKey);
+      }
+    }
+
+    const normalizedKey = normalizeTeamLogoCatalogKey(candidate);
+    if (normalizedKey && knownTeamLogoNormalizedLookup.has(normalizedKey)) {
+      return knownTeamLogoNormalizedLookup.get(normalizedKey);
+    }
+
+    const coreKey = normalizeTeamLogoCatalogCoreKey(candidate);
+    const coreMatch = uniqueKnownTeamLogoCoreMatch(coreKey);
+    if (coreMatch) return coreMatch;
+
+    for (const [candidateKey, candidateName] of knownTeamLogoNormalizedLookup.entries()) {
+      const score = similarity(normalizedKey, candidateKey);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = candidateName;
+      }
     }
   }
 
@@ -25188,6 +25236,7 @@ module.exports = {
     parseMatchStatusMinute,
     normalizeTeamName,
     normalizeTeamShortNameEntry,
+    knownTeamLogoNameCandidates,
     extractTeamShortNameEntriesFromMatch,
     buildTeamShortNamesPayloadFromMaps,
     buildPersistedTeamShortNamesDataset,

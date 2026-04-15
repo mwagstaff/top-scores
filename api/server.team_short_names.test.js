@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   __private: {
     normalizeTeamShortNameEntry,
+    knownTeamLogoNameCandidates,
     extractTeamShortNameEntriesFromMatch,
     buildTeamShortNamesPayloadFromMaps,
     buildPersistedTeamShortNamesDataset,
@@ -50,6 +51,25 @@ test("buildTeamShortNamesPayloadFromMaps prefers override values over scraped on
 
   const payload = buildTeamShortNamesPayloadFromMaps(scraped, override);
   assert.equal(payload.short_names["Paris Saint-Germain"], "PSG");
+});
+
+test("knownTeamLogoNameCandidates expands between long and short team names", () => {
+  const overrides = new Map();
+  const bosnia = normalizeTeamShortNameEntry("Bosnia-Herzegovina", "Bosnia", {
+    updated_at: "2026-04-15T10:00:00.000Z",
+    source: "test",
+  });
+  overrides.set(bosnia.key, bosnia);
+  const lookup = buildResolvedTeamShortNameLookup(new Map(), overrides);
+
+  assert.deepEqual(knownTeamLogoNameCandidates("Bosnia-Herzegovina", lookup), [
+    "Bosnia-Herzegovina",
+    "Bosnia",
+  ]);
+  assert.deepEqual(knownTeamLogoNameCandidates("Bosnia", lookup), [
+    "Bosnia",
+    "Bosnia-Herzegovina",
+  ]);
 });
 
 test("collectTeamShortNameScrapeCandidates only returns BBC matches with unknown teams", () => {

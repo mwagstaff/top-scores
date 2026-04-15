@@ -376,8 +376,14 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
             height: logoSize
         )
 
-        let homeLogo = WatchTeamLogoResolver.shared.image(for: featuredMatch.homeTeam)
-        let awayLogo = WatchTeamLogoResolver.shared.image(for: featuredMatch.awayTeam)
+        let homeLogo = WatchTeamLogoResolver.shared.image(
+            for: featuredMatch.homeTeam,
+            alternateNames: [featuredMatch.homeShortName].compactMap { $0 }
+        )
+        let awayLogo = WatchTeamLogoResolver.shared.image(
+            for: featuredMatch.awayTeam,
+            alternateNames: [featuredMatch.awayShortName].compactMap { $0 }
+        )
         drawLogo(homeLogo, in: leftLogoFrame)
         drawLogo(awayLogo, in: rightLogoFrame)
 

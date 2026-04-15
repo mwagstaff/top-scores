@@ -935,12 +935,17 @@ struct MatchesView: View {
     }
 
     private func reportMissingTeamLogosIfNeeded(days: [MatchDay]) {
-        let allTeamNames = days
+        let teamEntries = days
             .flatMap(\.leagues)
             .flatMap(\.matches)
-            .flatMap { [$0.homeTeam, $0.awayTeam] }
+            .flatMap {
+                [
+                    ($0.homeTeam, [$0.homeShortName].compactMap { $0 }),
+                    ($0.awayTeam, [$0.awayShortName].compactMap { $0 }),
+                ]
+            }
 
-        let missingTeamNames = Set(LogoResolver.shared.missingTeamNames(in: allTeamNames))
+        let missingTeamNames = Set(LogoResolver.shared.missingTeamNames(in: teamEntries))
             .subtracting(reportedMissingLogoNames)
         guard !missingTeamNames.isEmpty else { return }
         guard let baseURL = URL(string: preferences.apiBaseURL) else { return }

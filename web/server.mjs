@@ -16,12 +16,14 @@ const generatedAssetsRoot = isProduction
   : path.join(__dirname, "public", "generated-assets");
 const teamLogoManifestPath = path.join(generatedAssetsRoot, "team-logo-manifest.json");
 const tvLogosRoot = path.join(generatedAssetsRoot, "tv-logos");
+const teamShortNamesConfigPath = path.join(__dirname, "..", "api", "team_short_names.json");
 const appIconPath = path.join(generatedAssetsRoot, "app-icon.png");
 const faviconPath = path.join(generatedAssetsRoot, "favicon-32.png");
 const appleTouchIconPath = path.join(generatedAssetsRoot, "apple-touch-icon.png");
 
 const teamLogoIndex = buildTeamLogoIndex();
 const tvLogoIndex = buildTvLogoIndex();
+const teamShortNameEntries = loadTeamShortNameEntries();
 const teamLogoAliases = new Map(
   Object.entries({
     "manchester united": "man united",
@@ -267,6 +269,31 @@ function buildTvLogoIndex() {
   );
 }
 
+function loadTeamShortNameEntries() {
+  try {
+    if (!fs.existsSync(teamShortNamesConfigPath)) {
+      return [];
+    }
+
+    const raw = fs.readFileSync(teamShortNamesConfigPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const shortNames =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
+      parsed.short_names && typeof parsed.short_names === "object" && !Array.isArray(parsed.short_names)
+        ? parsed.short_names
+        : {};
+
+    return Object.entries(shortNames)
+      .map(([name, shortName]) => ({
+        name: String(name || "").trim(),
+        shortName: String(shortName || "").trim(),
+      }))
+      .filter((entry) => entry.name && entry.shortName);
+  } catch (_error) {
+    return [];
+  }
+}
+
 function resolveTeamLogo(teamName) {
   const trimmed = decodeURIComponent(teamName || "").trim();
   if (!trimmed) {
@@ -357,13 +384,37 @@ function stripDiacritics(value) {
 }
 
 function logoCandidates(teamName) {
-  const lowered = String(teamName || "").trim().toLowerCase();
-  const candidates = [teamName];
+  const output = [];
+  const seen = new Set();
+
+  function add(candidate) {
+    const trimmed = String(candidate || "").trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    output.push(trimmed);
+  }
+
+  const trimmed = String(teamName || "").trim();
+  const lowered = trimmed.toLowerCase();
+  add(trimmed);
+
   const alias = teamLogoAliases.get(lowered);
   if (alias) {
-    candidates.unshift(alias);
+    add(alias);
   }
-  return candidates;
+
+  for (const entry of teamShortNameEntries) {
+    if (entry.name.toLowerCase() === lowered) {
+      add(entry.shortName);
+    }
+    if (entry.shortName.toLowerCase() === lowered) {
+      add(entry.name);
+    }
+  }
+
+  return output;
 }
 
 function similarity(left, right) {

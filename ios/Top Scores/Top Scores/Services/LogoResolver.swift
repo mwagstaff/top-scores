@@ -44,8 +44,8 @@ final class LogoResolver {
         loadLogos()
     }
 
-    func image(for teamName: String) -> UIImage? {
-        let source = resolveSource(for: teamName) ?? fallbackSource
+    func image(for teamName: String, alternateNames: [String] = []) -> UIImage? {
+        let source = resolvePreferredSource(for: teamName, alternateNames: alternateNames) ?? fallbackSource
         guard let source else { return nil }
 
         let cacheKey = source.identifier as NSString
@@ -60,22 +60,28 @@ final class LogoResolver {
         return image
     }
 
-    func hasDedicatedLogo(for teamName: String) -> Bool {
-        guard let resolved = resolveSource(for: teamName) else { return false }
+    func hasDedicatedLogo(for teamName: String, alternateNames: [String] = []) -> Bool {
+        guard let resolved = resolvePreferredSource(for: teamName, alternateNames: alternateNames) else {
+            return false
+        }
         return !isFallbackSource(resolved)
     }
 
     func missingTeamNames(in teamNames: [String]) -> [String] {
+        missingTeamNames(in: teamNames.map { ($0, [String]()) })
+    }
+
+    func missingTeamNames(in teamEntries: [(String, [String])]) -> [String] {
         var missing: [String] = []
         var seen = Set<String>()
 
-        for rawTeamName in teamNames {
+        for (rawTeamName, alternateNames) in teamEntries {
             let normalizedDisplayName = Self.normalizedDisplayName(rawTeamName)
             guard !normalizedDisplayName.isEmpty else { continue }
             let dedupeKey = normalizedDisplayName.lowercased()
             guard !seen.contains(dedupeKey) else { continue }
             seen.insert(dedupeKey)
-            if !hasDedicatedLogo(for: normalizedDisplayName) {
+            if !hasDedicatedLogo(for: normalizedDisplayName, alternateNames: alternateNames) {
                 missing.append(normalizedDisplayName)
             }
         }
@@ -83,6 +89,15 @@ final class LogoResolver {
         return missing.sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }
+    }
+
+    private func resolvePreferredSource(for teamName: String, alternateNames: [String]) -> ImageSource? {
+        for candidate in Self.lookupCandidates(for: teamName, alternateNames: alternateNames) {
+            if let resolved = resolveSource(for: candidate) {
+                return resolved
+            }
+        }
+        return nil
     }
 
     private func loadLogos() {
@@ -310,6 +325,23 @@ final class LogoResolver {
             add(name)
         }
 
+        return output
+    }
+
+    private static func lookupCandidates(for name: String, alternateNames: [String]) -> [String] {
+        var output: [String] = []
+        var seen = Set<String>()
+
+        func add(_ candidate: String) {
+            let normalized = normalizedDisplayName(candidate)
+            guard !normalized.isEmpty else { return }
+            let key = normalized.lowercased()
+            guard seen.insert(key).inserted else { return }
+            output.append(normalized)
+        }
+
+        add(name)
+        alternateNames.forEach(add)
         return output
     }
 

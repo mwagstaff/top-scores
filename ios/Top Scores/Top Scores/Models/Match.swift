@@ -494,11 +494,11 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         resolvedAggregateScore != nil
     }
 
-    var hasKnownAggregateScore: Bool {
+    nonisolated var hasKnownAggregateScore: Bool {
         resolvedAggregateScore != nil
     }
 
-    var hasDisplayableAggregateScore: Bool {
+    nonisolated var hasDisplayableAggregateScore: Bool {
         hasKnownAggregateScore
     }
 
@@ -958,7 +958,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return base + (nextScore - (previousScore ?? 0))
     }
 
-    private var resolvedAggregateScore: (home: Int, away: Int)? {
+    private nonisolated var resolvedAggregateScore: (home: Int, away: Int)? {
         if let aggregateHomeScore, let aggregateAwayScore {
             if !shouldSuppressPreKickoffPlaceholderAggregate(
                 home: aggregateHomeScore,
@@ -978,7 +978,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         )
     }
 
-    private func shouldSuppressPreKickoffPlaceholderAggregate(home: Int, away: Int) -> Bool {
+    private nonisolated func shouldSuppressPreKickoffPlaceholderAggregate(home: Int, away: Int) -> Bool {
         isUpcomingScorelessFixture &&
         home == 0 &&
         away == 0 &&

@@ -16,22 +16,24 @@ final class WatchTeamLogoResolver {
         loadLogos()
     }
 
-    func image(for teamName: String) -> UIImage? {
-        if let cached = cache[teamName] {
+    func image(for teamName: String, alternateNames: [String] = []) -> UIImage? {
+        let cacheKey = Self.cacheKey(for: teamName, alternateNames: alternateNames)
+        if let cached = cache[cacheKey] {
             return cached
         }
 
-        if let assetImage = resolveAssetImage(for: teamName) ?? resolveAssetFallbackImage() {
-            cache[teamName] = assetImage
+        if let assetImage = resolveAssetImage(for: teamName, alternateNames: alternateNames) ??
+            resolveAssetFallbackImage() {
+            cache[cacheKey] = assetImage
             return assetImage
         }
 
-        let url = resolveURL(for: teamName) ?? resolveURL(for: fallbackName)
+        let url = resolveURL(for: teamName, alternateNames: alternateNames) ?? resolveURL(for: fallbackName)
         guard let url else { return nil }
 
         let image = UIImage(contentsOfFile: url.path)
         if let image {
-            cache[teamName] = image
+            cache[cacheKey] = image
         }
 
         return image
@@ -71,11 +73,8 @@ final class WatchTeamLogoResolver {
         return output
     }
 
-    private func resolveAssetImage(for teamName: String) -> UIImage? {
-        let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        for candidate in assetNameCandidates(for: trimmed) {
+    private func resolveAssetImage(for teamName: String, alternateNames: [String] = []) -> UIImage? {
+        for candidate in assetNameCandidates(for: teamName, alternateNames: alternateNames) {
             if let image = UIImage(named: candidate) {
                 return image
             }
@@ -93,7 +92,7 @@ final class WatchTeamLogoResolver {
         return nil
     }
 
-    private func assetNameCandidates(for teamName: String) -> [String] {
+    private func assetNameCandidates(for teamName: String, alternateNames: [String] = []) -> [String] {
         var candidates: [String] = []
         var seen = Set<String>()
 
@@ -106,19 +105,21 @@ final class WatchTeamLogoResolver {
             candidates.append(trimmed)
         }
 
-        add(teamName)
-        add(teamName.replacingOccurrences(of: "’", with: "'"))
-        add(teamName.replacingOccurrences(of: "'", with: ""))
+        for rawCandidate in Self.lookupCandidates(for: teamName, alternateNames: alternateNames) {
+            add(rawCandidate)
+            add(rawCandidate.replacingOccurrences(of: "’", with: "'"))
+            add(rawCandidate.replacingOccurrences(of: "'", with: ""))
 
-        let lowered = teamName.lowercased()
-        if let alias = Self.aliasMap[lowered] {
-            add(alias)
-            add(Self.displayName(forAlias: alias))
-        }
+            let lowered = rawCandidate.lowercased()
+            if let alias = Self.aliasMap[lowered] {
+                add(alias)
+                add(Self.displayName(forAlias: alias))
+            }
 
-        for (fullName, alias) in Self.aliasMap where alias == lowered {
-            add(fullName)
-            add(Self.displayName(forAlias: fullName))
+            for (fullName, alias) in Self.aliasMap where alias == lowered {
+                add(fullName)
+                add(Self.displayName(forAlias: fullName))
+            }
         }
 
         return candidates
@@ -150,33 +151,42 @@ final class WatchTeamLogoResolver {
             .joined(separator: " ")
     }
 
-    private func resolveURL(for teamName: String) -> URL? {
-        let trimmed = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+    private func resolveURL(for teamName: String, alternateNames: [String] = []) -> URL? {
+        var fuzzyCandidates: [String] = []
 
-        let lower = trimmed.lowercased()
-        if let direct = originalLookup[lower] {
-            return direct
+        for candidate in Self.lookupCandidates(for: teamName, alternateNames: alternateNames) {
+            let lower = candidate.lowercased()
+            if let direct = originalLookup[lower] {
+                return direct
+            }
+
+            for alias in Self.aliases(for: candidate) {
+                let aliasKey = Self.normalizedKey(alias)
+                if let match = normalizedLookup[aliasKey] {
+                    return match
+                }
+            }
+
+            let normalized = Self.normalizedKey(candidate)
+            if let match = normalizedLookup[normalized] {
+                return match
+            }
+
+            let core = Self.normalizedCoreKey(candidate)
+            if let uniqueCoreMatch = uniqueCoreMatch(for: core) {
+                return uniqueCoreMatch
+            }
+
+            fuzzyCandidates.append(normalized)
         }
 
-        for alias in Self.aliases(for: trimmed) {
-            let aliasKey = Self.normalizedKey(alias)
-            if let match = normalizedLookup[aliasKey] {
+        for normalized in fuzzyCandidates {
+            if let match = fuzzyMatch(normalizedTeam: normalized) {
                 return match
             }
         }
 
-        let normalized = Self.normalizedKey(trimmed)
-        if let match = normalizedLookup[normalized] {
-            return match
-        }
-
-        let core = Self.normalizedCoreKey(trimmed)
-        if let uniqueCoreMatch = uniqueCoreMatch(for: core) {
-            return uniqueCoreMatch
-        }
-
-        return fuzzyMatch(normalizedTeam: normalized)
+        return nil
     }
 
     private func uniqueCoreMatch(for coreKey: String) -> URL? {
@@ -247,6 +257,29 @@ final class WatchTeamLogoResolver {
             return [alias, lowered]
         }
         return [lowered]
+    }
+
+    private static func lookupCandidates(for teamName: String, alternateNames: [String]) -> [String] {
+        var output: [String] = []
+        var seen = Set<String>()
+
+        func add(_ candidate: String) {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { return }
+            output.append(trimmed)
+        }
+
+        add(teamName)
+        alternateNames.forEach(add)
+        return output
+    }
+
+    private static func cacheKey(for teamName: String, alternateNames: [String]) -> String {
+        lookupCandidates(for: teamName, alternateNames: alternateNames)
+            .map(normalizedKey)
+            .joined(separator: "|")
     }
 
     private static func similarity(_ lhs: String, _ rhs: String) -> Double {

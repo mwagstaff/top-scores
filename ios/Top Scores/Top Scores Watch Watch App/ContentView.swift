@@ -257,9 +257,15 @@ private struct WatchMatchLozengeTopRow: View {
                     .frame(maxWidth: .infinity, alignment: .center)
 
                 HStack(spacing: 8) {
-                    WatchTeamLogo(name: match.homeTeam)
+                    WatchTeamLogo(
+                        name: match.homeTeam,
+                        alternateNames: [match.homeShortName].compactMap { $0 }
+                    )
                     Spacer(minLength: 0)
-                    WatchTeamLogo(name: match.awayTeam)
+                    WatchTeamLogo(
+                        name: match.awayTeam,
+                        alternateNames: [match.awayShortName].compactMap { $0 }
+                    )
                 }
             }
         }
@@ -321,7 +327,10 @@ private struct WatchMatchTopRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            WatchTeamLogo(name: match.homeTeam)
+            WatchTeamLogo(
+                name: match.homeTeam,
+                alternateNames: [match.homeShortName].compactMap { $0 }
+            )
             Text(match.displayHomeTeam)
                 .font(.footnote)
                 .lineLimit(1)
@@ -332,7 +341,10 @@ private struct WatchMatchTopRow: View {
                 .font(.footnote)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-            WatchTeamLogo(name: match.awayTeam)
+            WatchTeamLogo(
+                name: match.awayTeam,
+                alternateNames: [match.awayShortName].compactMap { $0 }
+            )
         }
         .frame(maxWidth: .infinity, alignment: .center)
     }
@@ -340,10 +352,11 @@ private struct WatchMatchTopRow: View {
 
 private struct WatchTeamLogo: View {
     let name: String
+    var alternateNames: [String] = []
 
     var body: some View {
         Group {
-            if let image = WatchTeamLogoResolver.shared.image(for: name) {
+            if let image = WatchTeamLogoResolver.shared.image(for: name, alternateNames: alternateNames) {
                 Image(uiImage: image)
                     .resizable()
             } else {
@@ -471,7 +484,10 @@ private struct WatchMatchDetailView: View {
                     }
 
                     HStack(spacing: 6) {
-                        WatchTeamLogo(name: activeMatch.homeTeam)
+                        WatchTeamLogo(
+                            name: activeMatch.homeTeam,
+                            alternateNames: [activeMatch.homeShortName].compactMap { $0 }
+                        )
 
                         if activeMatch.hasScore {
                             HStack(spacing: 4) {
@@ -497,7 +513,10 @@ private struct WatchMatchDetailView: View {
                                 .frame(maxWidth: .infinity)
                         }
 
-                        WatchTeamLogo(name: activeMatch.awayTeam)
+                        WatchTeamLogo(
+                            name: activeMatch.awayTeam,
+                            alternateNames: [activeMatch.awayShortName].compactMap { $0 }
+                        )
                     }
 
                     if let penaltyResult = activeMatch.penaltyResult {
