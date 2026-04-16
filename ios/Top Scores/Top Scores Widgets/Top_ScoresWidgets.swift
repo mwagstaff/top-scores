@@ -19,6 +19,7 @@ private struct WidgetPreferencesSnapshot: Codable, Equatable {
     let apiBaseURL: String
     let refreshIntervalMinutes: Int
     let showAllMatches: Bool
+    let premierLeagueMatchesFirst: Bool
 
     enum CodingKeys: String, CodingKey {
         case selectedLeagues
@@ -29,6 +30,7 @@ private struct WidgetPreferencesSnapshot: Codable, Equatable {
         case apiBaseURL
         case refreshIntervalMinutes
         case showAllMatches
+        case premierLeagueMatchesFirst
     }
 
     init(from decoder: Decoder) throws {
@@ -41,6 +43,7 @@ private struct WidgetPreferencesSnapshot: Codable, Equatable {
         apiBaseURL = try container.decodeIfPresent(String.self, forKey: .apiBaseURL) ?? ""
         refreshIntervalMinutes = try container.decodeIfPresent(Int.self, forKey: .refreshIntervalMinutes) ?? 10
         showAllMatches = try container.decodeIfPresent(Bool.self, forKey: .showAllMatches) ?? false
+        premierLeagueMatchesFirst = try container.decodeIfPresent(Bool.self, forKey: .premierLeagueMatchesFirst) ?? true
     }
 }
 
@@ -582,6 +585,21 @@ private enum WidgetMatchDataLoader {
 }
 
 private enum WidgetMatchPipeline {
+    private static let premierLeagueTeamNames: Set<String> = [
+        "arsenal", "aston villa", "bournemouth", "afc bournemouth", "brentford",
+        "brighton", "brighton and hove albion", "brighton & hove albion", "burnley",
+        "chelsea", "crystal palace", "everton", "fulham", "leeds", "leeds united",
+        "liverpool", "manchester city", "man city", "manchester united", "man united",
+        "newcastle", "newcastle united", "nottingham forest", "nottm forest",
+        "sunderland", "tottenham", "tottenham hotspur", "spurs",
+        "west ham", "west ham united", "wolverhampton wanderers", "wolves",
+    ]
+
+    private static func matchIncludesPremierLeagueTeam(_ match: WidgetMatch) -> Bool {
+        premierLeagueTeamNames.contains(match.homeTeam.lowercased()) ||
+        premierLeagueTeamNames.contains(match.awayTeam.lowercased())
+    }
+
     static func groupedDays(from payload: WidgetSharedMatchesPayload?) -> [WidgetMatchDay] {
         guard let payload else { return [] }
 
@@ -597,7 +615,7 @@ private enum WidgetMatchPipeline {
         // Widgets are fixtures-first surfaces; keep today onwards to match the app's Fixtures view.
         let upcomingFixtures = filterFixtures(sourceMatches)
         let sorted = sortedMatches(upcomingFixtures)
-        return groupMatches(sorted)
+        return groupMatches(sorted, premierLeagueMatchesFirst: payload.snapshot.premierLeagueMatchesFirst)
     }
 
     private static func filterFixtures(_ matches: [WidgetMatch]) -> [WidgetMatch] {
@@ -644,7 +662,7 @@ private enum WidgetMatchPipeline {
         }
     }
 
-    private static func groupMatches(_ matches: [WidgetMatch]) -> [WidgetMatchDay] {
+    private static func groupMatches(_ matches: [WidgetMatch], premierLeagueMatchesFirst: Bool) -> [WidgetMatchDay] {
         let groupedByDate = Dictionary(grouping: matches) { $0.date }
         let dateKeys = groupedByDate.keys.sorted()
 
@@ -662,7 +680,15 @@ private enum WidgetMatchPipeline {
             let groupedByLeague = Dictionary(grouping: sortedDateMatches) { $0.displayLeague }
             let orderedMatches = groupedByLeague.compactMap { entry -> (league: String, matches: [WidgetMatch], firstKickoff: Date, weight: Double)? in
                 let (league, leagueMatches) = entry
-                let sortedLeagueMatches = sortedMatches(leagueMatches)
+                var sortedLeagueMatches = sortedMatches(leagueMatches)
+                if premierLeagueMatchesFirst {
+                    sortedLeagueMatches = sortedLeagueMatches.sorted { lhs, rhs in
+                        let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
+                        let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                        if lhsEPL != rhsEPL { return lhsEPL && !rhsEPL }
+                        return false
+                    }
+                }
                 guard let firstMatch = sortedLeagueMatches.first else { return nil }
                 return (
                     league: league,

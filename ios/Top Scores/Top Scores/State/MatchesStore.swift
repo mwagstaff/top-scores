@@ -308,7 +308,8 @@ private enum MatchGroupingEngine {
         _ matches: [Match],
         descendingDates: Bool = false,
         sortOrder: MatchGroupSortOrder,
-        ratingLookup: TeamRatingLookup
+        ratingLookup: TeamRatingLookup,
+        premierLeagueMatchesFirst: Bool = false
     ) -> [MatchDay] {
         let memo = GroupingMemo()
         let groupedByDate = Dictionary(grouping: matches) { $0.date }
@@ -348,7 +349,8 @@ private enum MatchGroupingEngine {
                     leagueMatches,
                     sortOrder: sortOrder,
                     ratingLookup: ratingLookup,
-                    memo: memo
+                    memo: memo,
+                    premierLeagueMatchesFirst: premierLeagueMatchesFirst
                 )
                 guard let leadingMatch = sortedLeagueMatches.first else { return nil }
                 return (
@@ -368,12 +370,18 @@ private enum MatchGroupingEngine {
                     if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
                         return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
                     }
+                    if lhs.weight != rhs.weight {
+                        return lhs.weight > rhs.weight
+                    }
                     if lhs.leadingMatchRating != rhs.leadingMatchRating {
                         return lhs.leadingMatchRating > rhs.leadingMatchRating
                     }
                 case .kickoffThenAlphabetical:
                     if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
                         return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
+                    }
+                    if lhs.weight != rhs.weight {
+                        return lhs.weight > rhs.weight
                     }
                     let homeCompare = lhs.leadingMatchHomeTeam.localizedCaseInsensitiveCompare(rhs.leadingMatchHomeTeam)
                     if homeCompare != .orderedSame {
@@ -384,15 +392,15 @@ private enum MatchGroupingEngine {
                         return awayCompare == .orderedAscending
                     }
                 case .teamScore, .alphabetical:
+                    if lhs.weight != rhs.weight {
+                        return lhs.weight > rhs.weight
+                    }
                     if lhs.totalTeamRating != rhs.totalTeamRating {
                         return lhs.totalTeamRating > rhs.totalTeamRating
                     }
                     if lhs.leadingMatchRating != rhs.leadingMatchRating {
                         return lhs.leadingMatchRating > rhs.leadingMatchRating
                     }
-                }
-                if lhs.weight != rhs.weight {
-                    return lhs.weight > rhs.weight
                 }
                 return lhs.league.localizedCaseInsensitiveCompare(rhs.league) == .orderedAscending
             }
@@ -428,15 +436,31 @@ private enum MatchGroupingEngine {
         CompetitionWeightConfig.weight(for: competitionName) ?? 0
     }
 
+    private nonisolated static func matchIncludesPremierLeagueTeam(_ match: Match) -> Bool {
+        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
+        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
+        return !homeKeys.isDisjoint(with: MatchesStore.premierLeagueTeamKeys) ||
+            !awayKeys.isDisjoint(with: MatchesStore.premierLeagueTeamKeys)
+    }
+
     private nonisolated static func sortMatchesWithinLeague(
         _ matches: [Match],
         sortOrder: MatchGroupSortOrder,
         ratingLookup: TeamRatingLookup,
-        memo: GroupingMemo
+        memo: GroupingMemo,
+        premierLeagueMatchesFirst: Bool = false
     ) -> [Match] {
         matches.sorted { lhs, rhs in
             if lhs.isPostponed != rhs.isPostponed {
                 return !lhs.isPostponed && rhs.isPostponed
+            }
+
+            if premierLeagueMatchesFirst {
+                let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
+                let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                if lhsEPL != rhsEPL {
+                    return lhsEPL && !rhsEPL
+                }
             }
 
             switch sortOrder {
@@ -1728,6 +1752,7 @@ final class MatchesStore: ObservableObject {
 
         let descendingDates = (mode == .results)
         let sortOrder = currentSnapshot?.matchGroupSortOrder ?? PreferencesStore.defaultMatchGroupSortOrder
+        let premierLeagueMatchesFirst = currentSnapshot?.premierLeagueMatchesFirst ?? PreferencesStore.defaultPremierLeagueMatchesFirst
         let ratingLookup = teamRatingLookup
         let groupingRevisionAtStart = groupingRevision
         let taskID = UUID()
@@ -1741,7 +1766,8 @@ final class MatchesStore: ObservableObject {
                 matchesToGroup,
                 descendingDates: descendingDates,
                 sortOrder: sortOrder,
-                ratingLookup: ratingLookup
+                ratingLookup: ratingLookup,
+                premierLeagueMatchesFirst: premierLeagueMatchesFirst
             )
             let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             guard !Task.isCancelled else { return }
@@ -1949,7 +1975,7 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static let premierLeagueTeamKeys: Set<String> = [
+    fileprivate static let premierLeagueTeamKeys: Set<String> = [
         "Arsenal",
         "Aston Villa",
         "Bournemouth",

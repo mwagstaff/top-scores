@@ -237,6 +237,11 @@ struct PreferencesView: View {
                         Text("Kick-off based modes order competition groups by the first visible match. The other modes rank competition groups by combined team ranking scores.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+
+                        Toggle("Show matches with Premier League teams first", isOn: premierLeagueMatchesFirstBinding)
+                        Text("When enabled, fixtures involving Premier League teams are listed ahead of other matches within each competition group.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
                     Section("Fantasy Premier League") {
@@ -499,6 +504,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.matchGroupSortOrder },
             set: { preferences.matchGroupSortOrder = $0 }
+        )
+    }
+
+    private var premierLeagueMatchesFirstBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.premierLeagueMatchesFirst },
+            set: { preferences.premierLeagueMatchesFirst = $0 }
         )
     }
 

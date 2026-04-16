@@ -82,6 +82,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let showFantasyFixtureLogos: Bool
     let showFantasyExpectedPoints: Bool
     let showFantasyRealTimePoints: Bool
+    let premierLeagueMatchesFirst: Bool
 
     nonisolated var showsFantasyDataInFixtures: Bool {
         showFantasyFixtureLogos || showFantasyExpectedPoints || showFantasyRealTimePoints
@@ -133,7 +134,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showCompactFixtureFantasyLogo: Bool = PreferencesStore.defaultShowCompactFixtureFantasyLogo,
         showFantasyFixtureLogos: Bool = PreferencesStore.defaultShowFantasyFixtureLogos,
         showFantasyExpectedPoints: Bool = PreferencesStore.defaultShowFantasyExpectedPoints,
-        showFantasyRealTimePoints: Bool = PreferencesStore.defaultShowFantasyRealTimePoints
+        showFantasyRealTimePoints: Bool = PreferencesStore.defaultShowFantasyRealTimePoints,
+        premierLeagueMatchesFirst: Bool = PreferencesStore.defaultPremierLeagueMatchesFirst
     ) {
         self.selectedLeagues = selectedLeagues
         self.selectedChannels = selectedChannels
@@ -165,6 +167,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
         self.showFantasyExpectedPoints = showFantasyExpectedPoints
         self.showFantasyRealTimePoints = showFantasyRealTimePoints
+        self.premierLeagueMatchesFirst = premierLeagueMatchesFirst
     }
 
     enum CodingKeys: String, CodingKey {
@@ -198,6 +201,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case showFantasyFixtureLogos
         case showFantasyExpectedPoints
         case showFantasyRealTimePoints
+        case premierLeagueMatchesFirst
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
@@ -243,6 +247,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showFantasyFixtureLogos = try container.decodeIfPresent(Bool.self, forKey: .showFantasyFixtureLogos) ?? legacyShowFantasyMatchPills
         showFantasyExpectedPoints = try container.decodeIfPresent(Bool.self, forKey: .showFantasyExpectedPoints) ?? legacyShowFantasyMatchPills
         showFantasyRealTimePoints = try container.decodeIfPresent(Bool.self, forKey: .showFantasyRealTimePoints) ?? legacyShowFantasyMatchPills
+        premierLeagueMatchesFirst = try container.decodeIfPresent(Bool.self, forKey: .premierLeagueMatchesFirst) ?? PreferencesStore.defaultPremierLeagueMatchesFirst
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -277,6 +282,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         try container.encode(showFantasyFixtureLogos, forKey: .showFantasyFixtureLogos)
         try container.encode(showFantasyExpectedPoints, forKey: .showFantasyExpectedPoints)
         try container.encode(showFantasyRealTimePoints, forKey: .showFantasyRealTimePoints)
+        try container.encode(premierLeagueMatchesFirst, forKey: .premierLeagueMatchesFirst)
     }
 
     nonisolated static func == (lhs: PreferencesSnapshot, rhs: PreferencesSnapshot) -> Bool {
@@ -309,7 +315,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         lhs.showCompactFixtureFantasyLogo == rhs.showCompactFixtureFantasyLogo &&
         lhs.showFantasyFixtureLogos == rhs.showFantasyFixtureLogos &&
         lhs.showFantasyExpectedPoints == rhs.showFantasyExpectedPoints &&
-        lhs.showFantasyRealTimePoints == rhs.showFantasyRealTimePoints
+        lhs.showFantasyRealTimePoints == rhs.showFantasyRealTimePoints &&
+        lhs.premierLeagueMatchesFirst == rhs.premierLeagueMatchesFirst
     }
 }
 
@@ -355,6 +362,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultShowFantasyExpectedPoints = false
     nonisolated static let defaultShowFantasyRealTimePoints = false
     nonisolated static let defaultShowFantasyMatchPills = false
+    nonisolated static let defaultPremierLeagueMatchesFirst = true
     #if DEBUG
     nonisolated static let defaultShowPredictionRedoButton = false
     #endif
@@ -479,6 +487,10 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var premierLeagueMatchesFirst: Bool {
+        didSet { persist() }
+    }
+
     #if DEBUG
     @Published var showPredictionRedoButton: Bool {
         didSet { persist() }
@@ -549,6 +561,8 @@ final class PreferencesStore: ObservableObject {
             ?? legacyShowFantasyMatchPills
         let showFantasyRealTimePoints = userDefaults.object(forKey: Keys.showFantasyRealTimePoints) as? Bool
             ?? legacyShowFantasyMatchPills
+        let premierLeagueMatchesFirst = userDefaults.object(forKey: Keys.premierLeagueMatchesFirst) as? Bool
+            ?? Self.defaultPremierLeagueMatchesFirst
         #if DEBUG
         let showPredictionRedoButton = userDefaults.object(forKey: Keys.showPredictionRedoButton) as? Bool
             ?? Self.defaultShowPredictionRedoButton
@@ -584,6 +598,7 @@ final class PreferencesStore: ObservableObject {
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
         self.showFantasyExpectedPoints = showFantasyExpectedPoints
         self.showFantasyRealTimePoints = showFantasyRealTimePoints
+        self.premierLeagueMatchesFirst = premierLeagueMatchesFirst
         #if DEBUG
         self.showPredictionRedoButton = showPredictionRedoButton
         #endif
@@ -626,7 +641,8 @@ final class PreferencesStore: ObservableObject {
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
             showFantasyExpectedPoints: showFantasyExpectedPoints,
-            showFantasyRealTimePoints: showFantasyRealTimePoints
+            showFantasyRealTimePoints: showFantasyRealTimePoints,
+            premierLeagueMatchesFirst: premierLeagueMatchesFirst
         )
     }
 
@@ -665,7 +681,8 @@ final class PreferencesStore: ObservableObject {
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
             showFantasyExpectedPoints: showFantasyExpectedPoints,
-            showFantasyRealTimePoints: showFantasyRealTimePoints
+            showFantasyRealTimePoints: showFantasyRealTimePoints,
+            premierLeagueMatchesFirst: premierLeagueMatchesFirst
         )
     }
 
@@ -701,6 +718,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(showFantasyFixtureLogos, forKey: Keys.showFantasyFixtureLogos)
         userDefaults.set(showFantasyExpectedPoints, forKey: Keys.showFantasyExpectedPoints)
         userDefaults.set(showFantasyRealTimePoints, forKey: Keys.showFantasyRealTimePoints)
+        userDefaults.set(premierLeagueMatchesFirst, forKey: Keys.premierLeagueMatchesFirst)
         userDefaults.set(showsFantasyDataInFixtures, forKey: Keys.showFantasyMatchPills)
         #if DEBUG
         userDefaults.set(showPredictionRedoButton, forKey: Keys.showPredictionRedoButton)
@@ -783,6 +801,8 @@ final class PreferencesStore: ObservableObject {
             ?? legacyShowFantasyMatchPills
         let showFantasyRealTimePoints = userDefaults.object(forKey: Keys.showFantasyRealTimePoints) as? Bool
             ?? legacyShowFantasyMatchPills
+        let premierLeagueMatchesFirst = userDefaults.object(forKey: Keys.premierLeagueMatchesFirst) as? Bool
+            ?? Self.defaultPremierLeagueMatchesFirst
 
         return PreferencesSnapshot(
             selectedLeagues: leagues,
@@ -814,7 +834,8 @@ final class PreferencesStore: ObservableObject {
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
             showFantasyExpectedPoints: showFantasyExpectedPoints,
-            showFantasyRealTimePoints: showFantasyRealTimePoints
+            showFantasyRealTimePoints: showFantasyRealTimePoints,
+            premierLeagueMatchesFirst: premierLeagueMatchesFirst
         )
     }
 
@@ -851,6 +872,7 @@ final class PreferencesStore: ObservableObject {
         static let showFantasyExpectedPoints = "preferences.showFantasyExpectedPoints"
         static let showFantasyRealTimePoints = "preferences.showFantasyRealTimePoints"
         static let showFantasyMatchPills = "preferences.showFantasyMatchPills"
+        static let premierLeagueMatchesFirst = "preferences.premierLeagueMatchesFirst"
         #if DEBUG
         static let showPredictionRedoButton = "preferences.showPredictionRedoButton"
         #endif
