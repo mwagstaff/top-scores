@@ -8914,12 +8914,25 @@ async function backfillIncompleteMatchDetailsOnStartup(options = {}) {
         ? Boolean(payload.in_progress)
         : isInProgressMatchStatus(resolveMatchScoreStatus(payload));
     if (inProgress) return;
-    // Only include finished matches where the stored data is still incomplete.
-    // matchDetailsNeedsBackfill covers: missing goal scorers (score > 0 but no
-    // scorers recorded), missing lineups, malformed metadata, stale status, etc.
-    // Matches that already have complete data pass this check cleanly — we will
-    // NOT re-scrape them, which is intentional (data is already in Redis).
-    if (!matchDetailsNeedsBackfill(payload, nowMs)) return;
+    // Primary check: standard backfill conditions (missing scorers vs score,
+    // missing lineups, malformed metadata, stale status, etc.).
+    const needsStandardBackfill = matchDetailsNeedsBackfill(payload, nowMs);
+    // Secondary check: catch the coverage gap where matchDetailsNeedsEnrichment
+    // returns false because home_score/away_score is 0 or null in the stored
+    // record (e.g. scrape happened before the score was available), even though
+    // the match is finished and BBC may now have goal scorer data.
+    // We check for a final status token AND completely empty goal scorer arrays.
+    // This includes genuine 0-0 results — those are cheap to confirm (BBC fetch
+    // returns no scorers and the record gets a refreshed updated_at, no harm done).
+    const scoreStatus = resolveMatchScoreStatus(payload);
+    const isFinalStatus = MATCH_STATUS_COMPLETE_TOKENS.has(
+      String(scoreStatus || "").toUpperCase()
+    );
+    const hasNoGoalScorers =
+      countGoalsFromScorers(payload.home_goal_scorers) === 0 &&
+      countGoalsFromScorers(payload.away_goal_scorers) === 0;
+    const needsFinishedEnrichment = isFinalStatus && hasNoGoalScorers;
+    if (!needsStandardBackfill && !needsFinishedEnrichment) return;
     candidates.push({ payload, kickoff });
   });
 
@@ -9008,10 +9021,23 @@ function collectInProgressMatchDetailTargets() {
     if (!detailsUrl) return;
 
     const isInProgress = Boolean(stablePayload.in_progress);
-    // Also include recently-finished active matches that still have a goals mismatch
-    // (score > 0 but no goal scorers recorded) — keeps them in the poll until BBC
-    // publishes the scorer data, avoiding a stale zero-goals cache entry.
-    const needsPostMatchEnrichment = !isInProgress && matchDetailsNeedsEnrichment(stablePayload);
+    // Also keep recently-finished active matches in the poll target list when:
+    // (a) score > 0 but goal scorers are missing (standard enrichment gap), OR
+    // (b) the record has a final status but no goal scorers at all — covers the
+    //     case where the stored score is 0/null even though the actual result was
+    //     non-zero (scrape happened before score was available).
+    // The active-window guard ensures we only poll matches the client is actually
+    // interested in — inactive finished matches are not included.
+    const isFinalStatus = !isInProgress &&
+      MATCH_STATUS_COMPLETE_TOKENS.has(
+        String(resolveMatchScoreStatus(stablePayload) || "").toUpperCase()
+      );
+    const hasNoGoalScorers = isFinalStatus &&
+      countGoalsFromScorers(stablePayload.home_goal_scorers) === 0 &&
+      countGoalsFromScorers(stablePayload.away_goal_scorers) === 0;
+    const needsPostMatchEnrichment = !isInProgress && (
+      matchDetailsNeedsEnrichment(stablePayload) || hasNoGoalScorers
+    );
     if (!isInProgress && !needsPostMatchEnrichment) {
       targets.delete(detailsId);
       return;
@@ -9104,6 +9130,21 @@ async function refreshInProgressMatchDetails(options = {}) {
           });
           if (result && result.payload && result.match_id) {
             refreshedDetailsIds.add(result.match_id);
+            // When a match has just reached a final status but BBC hasn't yet
+            // published goal scorer data, proactively extend the active window
+            // by 30 minutes so the scheduled poll keeps checking without relying
+            // solely on the client sending match_states to maintain the window.
+            const updatedPayload = result.payload;
+            const updatedStatus = resolveMatchScoreStatus(updatedPayload);
+            const justFinished = MATCH_STATUS_COMPLETE_TOKENS.has(
+              String(updatedStatus || "").toUpperCase()
+            );
+            const stillMissingScorers =
+              countGoalsFromScorers(updatedPayload.home_goal_scorers) === 0 &&
+              countGoalsFromScorers(updatedPayload.away_goal_scorers) === 0;
+            if (justFinished && stillMissingScorers) {
+              markMatchDetailsActive(result.match_id, 30 * 60 * 1000);
+            }
           }
         } catch (err) {
           console.warn(

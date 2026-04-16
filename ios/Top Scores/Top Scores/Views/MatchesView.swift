@@ -458,7 +458,7 @@ struct MatchesView: View {
 
             ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
                 let prevTime: String? = index > 0 ? league.matches[index - 1].time : nil
-                if prevTime != nil && prevTime != match.time {
+                if mode == .fixtures && prevTime != nil && prevTime != match.time {
                     kickoffDividerRow(time: match.time)
                 }
                 matchRow(for: match, day: day)
@@ -473,7 +473,7 @@ struct MatchesView: View {
 
             ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
                 let prevTime: String? = index > 0 ? league.matches[index - 1].time : nil
-                if prevTime != nil && prevTime != match.time {
+                if mode == .fixtures && prevTime != nil && prevTime != match.time {
                     kickoffDividerRow(time: match.time)
                 }
                 matchRow(for: match, day: day)
@@ -482,30 +482,22 @@ struct MatchesView: View {
     }
 
     private func leagueHeadingDividerRow(for league: MatchLeague) -> some View {
-        HStack(spacing: 8) {
-            Rectangle()
-                .frame(height: 1)
-                .foregroundStyle(.white.opacity(0.0))
-            Text(league.league)
-                .font(usesCompactFixtureRows ? .caption : .footnote)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary.opacity(0.95))
-                .textCase(nil)
-                .fixedSize()
-            Rectangle()
-                .frame(height: 1)
-                .foregroundStyle(.white.opacity(0.0))
-        }
-        .listRowInsets(
-            EdgeInsets(
-                top: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingTop + 2 : 10,
-                leading: 16,
-                bottom: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingBottom : 3,
-                trailing: 16
+        Text(league.league)
+            .font(usesCompactFixtureRows ? .caption : .footnote)
+            .fontWeight(.semibold)
+            .foregroundStyle(.secondary.opacity(0.95))
+            .textCase(nil)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .listRowInsets(
+                EdgeInsets(
+                    top: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingTop + 2 : 10,
+                    leading: 16,
+                    bottom: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingBottom : 3,
+                    trailing: 16
+                )
             )
-        )
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
     }
 
     private func kickoffDividerRow(time: String) -> some View {
