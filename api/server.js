@@ -846,6 +846,11 @@ let matchDetailsUpdating = false;
 const matchDetailsBackfillTasks = new Map();
 const matchDetailsWarmTasks = new Map();
 let matchDetailsSnapshotWarmTask = null;
+let startupBackfillCandidates = 0;
+let startupBackfillRemaining = 0;
+let startupBackfillSucceeded = 0;
+let startupBackfillFailed = 0;
+let startupBackfillRunning = false;
 const matchDetailsActiveRefreshUntilById = new Map();
 const matchDetailsBackfillNextAttemptAt = new Map();
 let operationalCacheState = buildDefaultOperationalCacheState();
@@ -4774,6 +4779,26 @@ function buildPrometheusMetricsText() {
   lines.push("# HELP top_scores_match_details_warm_tasks Active match details warm tasks.");
   lines.push("# TYPE top_scores_match_details_warm_tasks gauge");
   pushPrometheusSample(lines, "top_scores_match_details_warm_tasks", matchDetailsWarmTasks.size);
+
+  lines.push("# HELP top_scores_startup_backfill_candidates Total finished match detail records identified for startup backfill.");
+  lines.push("# TYPE top_scores_startup_backfill_candidates gauge");
+  pushPrometheusSample(lines, "top_scores_startup_backfill_candidates", startupBackfillCandidates);
+
+  lines.push("# HELP top_scores_startup_backfill_remaining Startup backfill records still waiting to be processed.");
+  lines.push("# TYPE top_scores_startup_backfill_remaining gauge");
+  pushPrometheusSample(lines, "top_scores_startup_backfill_remaining", startupBackfillRemaining);
+
+  lines.push("# HELP top_scores_startup_backfill_succeeded_total Startup backfill records successfully fetched from BBC and persisted to Redis.");
+  lines.push("# TYPE top_scores_startup_backfill_succeeded_total gauge");
+  pushPrometheusSample(lines, "top_scores_startup_backfill_succeeded_total", startupBackfillSucceeded);
+
+  lines.push("# HELP top_scores_startup_backfill_failed_total Startup backfill records that could not be fetched from BBC.");
+  lines.push("# TYPE top_scores_startup_backfill_failed_total gauge");
+  pushPrometheusSample(lines, "top_scores_startup_backfill_failed_total", startupBackfillFailed);
+
+  lines.push("# HELP top_scores_startup_backfill_running 1 while the startup backfill is in progress, 0 when complete.");
+  lines.push("# TYPE top_scores_startup_backfill_running gauge");
+  pushPrometheusSample(lines, "top_scores_startup_backfill_running", startupBackfillRunning ? 1 : 0);
 
   const nodeVersion = process.version.replace(/^v/, "");
   const versionParts = nodeVersion.split(".");
@@ -8861,6 +8886,96 @@ function collectMatchDetailsSubsetByMatches(matches) {
   return subset;
 }
 
+// Backfill concurrency for startup — low enough not to hammer BBC on restart.
+const STARTUP_BACKFILL_CONCURRENCY = 3;
+// Backfill finished matches kicked off within this window.
+// BBC holds historical data for at least 90 days; beyond that pages are unreliable.
+const STARTUP_BACKFILL_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
+
+async function backfillIncompleteMatchDetailsOnStartup(options = {}) {
+  if (startupBackfillRunning) return;
+  startupBackfillRunning = true;
+
+  const trigger = options && options.trigger ? String(options.trigger) : "startup_backfill";
+  const nowMs = Date.now();
+  const cutoffMs = nowMs - STARTUP_BACKFILL_LOOKBACK_MS;
+
+  const candidates = [];
+  matchDetailsById.forEach((payload) => {
+    if (!payload || !payload.details_url) return;
+    const kickoff = kickoffTimestampMs(payload);
+    // Only consider matches that have already kicked off (past matches).
+    if (!Number.isFinite(kickoff) || kickoff >= nowMs) return;
+    // Ignore matches outside the lookback window.
+    if (kickoff < cutoffMs) return;
+    // Skip in-progress matches — the scheduled 10 s poll handles those.
+    const inProgress =
+      payload.in_progress !== undefined
+        ? Boolean(payload.in_progress)
+        : isInProgressMatchStatus(resolveMatchScoreStatus(payload));
+    if (inProgress) return;
+    // Only include finished matches where the stored data is still incomplete.
+    // matchDetailsNeedsBackfill covers: missing goal scorers (score > 0 but no
+    // scorers recorded), missing lineups, malformed metadata, stale status, etc.
+    // Matches that already have complete data pass this check cleanly — we will
+    // NOT re-scrape them, which is intentional (data is already in Redis).
+    if (!matchDetailsNeedsBackfill(payload, nowMs)) return;
+    candidates.push({ payload, kickoff });
+  });
+
+  // Process most-recent matches first so the data users are most likely to view
+  // becomes available as quickly as possible.
+  candidates.sort((a, b) => b.kickoff - a.kickoff);
+
+  startupBackfillCandidates = candidates.length;
+  startupBackfillRemaining = candidates.length;
+  startupBackfillSucceeded = 0;
+  startupBackfillFailed = 0;
+
+  if (candidates.length === 0) {
+    console.log("[Startup] No incomplete match details found within 90-day lookback window — skipping backfill.");
+    startupBackfillRunning = false;
+    return;
+  }
+
+  console.log(
+    `[Startup] Backfilling ${candidates.length} incomplete match detail record(s) ` +
+    `(concurrency=${STARTUP_BACKFILL_CONCURRENCY}, lookback=90d, most-recent-first).`
+  );
+
+  await mapWithConcurrency(candidates, STARTUP_BACKFILL_CONCURRENCY, async ({ payload }) => {
+    const matchId = normalizeMatchDetailsId(payload.id);
+    try {
+      const fetched = await fetchBbcMatchByDetailsUrl(payload.details_url);
+      if (!fetched) {
+        startupBackfillFailed++;
+        startupBackfillRemaining--;
+        return;
+      }
+      const nowIso = new Date().toISOString();
+      const currentPayload = matchDetailsById.get(matchId) || payload;
+      const combined = buildMergedMatchDetailsCandidate(currentPayload, fetched, payload.details_url);
+      await upsertCanonicalMatchDetailsFromMatch(combined, {
+        updated_at: nowIso,
+        source: `startup_backfill:${trigger}`,
+        reason: "startup_backfill",
+      });
+      startupBackfillSucceeded++;
+    } catch (error) {
+      startupBackfillFailed++;
+      console.warn(`[Startup] Backfill failed for match ${matchId}:`, error.message || error);
+    } finally {
+      startupBackfillRemaining--;
+    }
+  });
+
+  console.log(
+    `[Startup] Match details backfill complete — ` +
+    `succeeded=${startupBackfillSucceeded} failed=${startupBackfillFailed} total=${candidates.length}.`
+  );
+  startupBackfillRunning = false;
+}
+
 async function rebuildMatchDetailsCache(source = "match_details_rebuild") {
   const nowIso = new Date().toISOString();
   indexMatchDetailsFromMatches(cachedMergedMatches, nowIso);
@@ -8893,7 +9008,11 @@ function collectInProgressMatchDetailTargets() {
     if (!detailsUrl) return;
 
     const isInProgress = Boolean(stablePayload.in_progress);
-    if (!isInProgress) {
+    // Also include recently-finished active matches that still have a goals mismatch
+    // (score > 0 but no goal scorers recorded) — keeps them in the poll until BBC
+    // publishes the scorer data, avoiding a stale zero-goals cache entry.
+    const needsPostMatchEnrichment = !isInProgress && matchDetailsNeedsEnrichment(stablePayload);
+    if (!isInProgress && !needsPostMatchEnrichment) {
       targets.delete(detailsId);
       return;
     }
@@ -13296,6 +13415,9 @@ function mergePreferredOperationalMatchDetailsSnapshots(memorySnapshot, redisSna
 
 async function getPreferredOperationalMatchDetailsSnapshotSafe() {
   const memorySnapshot = currentOperationalMatchDetailsMemorySnapshot();
+  if (memorySnapshot && memorySnapshot.total > 0) {
+    return { ...memorySnapshot, redis_total: 0, redis_error: null };
+  }
   const redisSnapshot = await getOperationalMatchDetailsSnapshotSafe();
   return mergePreferredOperationalMatchDetailsSnapshots(memorySnapshot, redisSnapshot);
 }
@@ -19486,6 +19608,7 @@ app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
 });
 
 app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
+  const handlerStartMs = Date.now();
   setCacheOnlyHeaders(res);
   await ensureTeamShortNamesCacheReady();
   const teamShortNameLookup = buildResolvedTeamShortNameLookup(
@@ -19535,13 +19658,11 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
 
   const detailsLookup = await getOperationalMatchDetailsByIdSafe(matchId);
   const payload = detailsLookup && detailsLookup.payload ? detailsLookup.payload : null;
+  const detailsSource = payload ? detailsLookup.source || "unknown" : "memory_fallback";
   const fallbackMatchRecord = findInMemoryMatchRecordByMatchId(matchId);
-  const responsePayload = await enrichMatchDetailsAggregateImmediately(
-    payload || buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord),
-    {
-      persistSource: "match_details_request_knockout_aggregate_enrichment",
-    }
-  );
+
+  const responsePayload = payload || buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord);
+
   if (!responsePayload) {
     scheduleMatchDetailsWarm(matchId, {
       trigger: "match_details_request",
@@ -19551,9 +19672,14 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     return;
   }
   const stableResponsePayload = withStableMatchDetailsState(responsePayload) || responsePayload;
+
+  const mergeStartMs = Date.now();
   const enrichedResponsePayload = await mergeConfirmedVarDisallowedGoalsIntoPayload(stableResponsePayload);
+  const mergeDurationMs = Date.now() - mergeStartMs;
 
   if (payload) {
+    // Backfill handles aggregate enrichment asynchronously (matchDetailsMissingKnockoutAggregate
+    // is one of the backfill trigger conditions), avoiding a blocking BBC API call per request.
     scheduleMatchDetailsBackfill(payload, { trigger: "match_details_request" });
   } else {
     scheduleMatchDetailsWarm(matchId, {
@@ -19562,10 +19688,23 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     });
   }
 
-  res.set(
-    "X-Operational-Source",
-    payload ? detailsLookup.source || "unknown" : "memory_fallback"
+  const totalDurationMs = Date.now() - handlerStartMs;
+  const p = enrichedResponsePayload || {};
+  const goals = (Array.isArray(p.home_goal_scorers) ? p.home_goal_scorers.length : 0) +
+                (Array.isArray(p.away_goal_scorers) ? p.away_goal_scorers.length : 0);
+  const assists = (Array.isArray(p.home_assists) ? p.home_assists.length : 0) +
+                  (Array.isArray(p.away_assists) ? p.away_assists.length : 0);
+  const yellowCards = (Array.isArray(p.home_yellow_cards) ? p.home_yellow_cards.length : 0) +
+                      (Array.isArray(p.away_yellow_cards) ? p.away_yellow_cards.length : 0);
+  const redCards = (Array.isArray(p.home_red_cards) ? p.home_red_cards.length : 0) +
+                   (Array.isArray(p.away_red_cards) ? p.away_red_cards.length : 0);
+  console.log(
+    `[API][match_details] id=${matchId} source=${detailsSource} goals=${goals} assists=${assists}` +
+    ` yellow_cards=${yellowCards} red_cards=${redCards}` +
+    ` merge_ms=${mergeDurationMs} total_ms=${totalDurationMs}`
   );
+
+  res.set("X-Operational-Source", detailsSource);
   if (stableResponsePayload.updated_at) {
     res.set("X-Last-Updated", stableResponsePayload.updated_at);
   } else if (matchDetailsLastUpdated) {
@@ -24665,6 +24804,10 @@ async function bootstrapOperationalState() {
   await updateRecentCache("startup_bootstrap");
   await rebuildMergedMatchesCache("startup_bootstrap");
   await rebuildMatchDetailsCache("startup_bootstrap");
+
+  // Proactively backfill finished matches missing goal/lineup data within the lookback window.
+  // Runs in background — does not block the server becoming ready.
+  void backfillIncompleteMatchDetailsOnStartup({ trigger: "startup_bootstrap" });
 
   // Run network refresh tasks in background after bootstrapping cached state.
   void refreshInProgressMatchDetails({ trigger: "startup_bootstrap" });

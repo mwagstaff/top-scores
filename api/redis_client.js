@@ -51,6 +51,10 @@ const LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS = parsePositiveIntOrFallback(
   process.env.LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS,
   14 * 24 * 60 * 60
 );
+const LIVE_ACTIVITY_DEBUG_MAX_RECORDS_PER_DEVICE = parsePositiveIntOrFallback(
+  process.env.LIVE_ACTIVITY_DEBUG_MAX_RECORDS_PER_DEVICE,
+  500
+);
 const LIVE_ACTIVITY_MATCH_TIMELINE_TTL_SECONDS = parsePositiveIntOrFallback(
   process.env.LIVE_ACTIVITY_MATCH_TIMELINE_TTL_SECONDS,
   12 * 60 * 60
@@ -658,22 +662,20 @@ async function getAllUserPreferences() {
     const redisClient = await getClient();
     const pattern = `${USER_PREFERENCES_PREFIX}*`;
 
-    const keys = await redisClient.keys(pattern);
+    const keys = [];
+    for await (const entry of redisClient.scanIterator({ MATCH: pattern, COUNT: 500 })) {
+      if (Array.isArray(entry)) {
+        keys.push(...entry);
+      } else {
+        keys.push(entry);
+      }
+    }
 
     if (keys.length === 0) {
       return [];
     }
 
-    const values = await Promise.all(
-      keys.map(async (key) => {
-        try {
-          return await redisClient.get(key);
-        } catch (error) {
-          console.error(`[Redis] Error fetching key ${key}:`, error);
-          return null;
-        }
-      })
-    );
+    const values = await redisClient.mGet(keys);
 
     return values
       .filter((value) => value !== null)
@@ -1127,6 +1129,8 @@ async function saveLiveActivityDebugRecord(deviceToken, payload = {}) {
 
     const cutoffMs = pruneCutoffMs(LIVE_ACTIVITY_DEBUG_HISTORY_TTL_SECONDS);
     await pruneIndexEntries(redisClient, deviceIndexKey, cutoffMs);
+    // Cap total records per device to prevent unbounded growth
+    await redisClient.zRemRangeByRank(deviceIndexKey, 0, -(LIVE_ACTIVITY_DEBUG_MAX_RECORDS_PER_DEVICE + 1));
     return record;
   } catch (error) {
     console.error("[Redis] Error saving live activity debug history:", error);
@@ -1147,13 +1151,13 @@ async function getLiveActivityDebugRecords(options = {}) {
     const redisClient = await getClient();
     const indexKey = buildLiveActivityDebugDeviceIndexKey(deviceToken);
     if (!indexKey) return [];
-    const allRecords = await getHistoryRecordsAll(redisClient, indexKey, "live activity debug");
-    const filtered = allRecords.filter((record) => (
-      record &&
-      typeof record === "object" &&
-      String(record.device_token || "").trim() === deviceToken
-    ));
-    filtered.sort((lhs, rhs) => {
+    // Fetch only the records we actually need — avoid scanning the full set
+    const fetchCount = limit > 0 ? limit : LIVE_ACTIVITY_DEBUG_MAX_RECORDS_PER_DEVICE;
+    const rawKeys = order === "asc"
+      ? await redisClient.zRange(indexKey, 0, fetchCount - 1)
+      : await redisClient.zRange(indexKey, -fetchCount, -1);
+    const records = await getHistoryRecordsBySortedKeys(redisClient, rawKeys, indexKey, "live activity debug");
+    records.sort((lhs, rhs) => {
       const left = numericTimestampMs(lhs && lhs.timestamp_ms);
       const right = numericTimestampMs(rhs && rhs.timestamp_ms);
       if (left !== right) return order === "asc" ? left - right : right - left;
@@ -1161,7 +1165,7 @@ async function getLiveActivityDebugRecords(options = {}) {
         String(rhs && rhs.record_id ? rhs.record_id : "")
       );
     });
-    return limit > 0 ? filtered.slice(0, limit) : filtered;
+    return limit > 0 ? records.slice(0, limit) : records;
   } catch (error) {
     console.error("[Redis] Error retrieving live activity debug history:", error);
     return [];

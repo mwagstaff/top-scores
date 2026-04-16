@@ -1,0 +1,389 @@
+{
+  "uid": "top-scores-match-details-hydration",
+  "title": "top-scores API • Match Details Hydration",
+  "tags": ["top-scores", "match-details", "backfill", "hydration"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Startup Backfill — Candidates",
+      "description": "Total finished match detail records (within 90-day window) identified as needing a BBC scrape on the last server start.",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_startup_backfill_candidates{job=\"top-scores\"}",
+          "legendFormat": "candidates"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Startup Backfill — Remaining",
+      "description": "Records still waiting to be processed. Counts down to 0 as the backfill progresses.",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "orange", "value": 20 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_startup_backfill_remaining{job=\"top-scores\"}",
+          "legendFormat": "remaining"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Startup Backfill — Succeeded",
+      "description": "Records successfully fetched from BBC and persisted to Redis.",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_startup_backfill_succeeded_total{job=\"top-scores\"}",
+          "legendFormat": "succeeded"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Startup Backfill — Failed",
+      "description": "Records that could not be fetched from BBC (BBC 404, network error, etc.).",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_startup_backfill_failed_total{job=\"top-scores\"}",
+          "legendFormat": "failed"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Startup Backfill — Running",
+      "description": "1 while the startup backfill sweep is in progress, 0 when complete.",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_startup_backfill_running{job=\"top-scores\"}",
+          "legendFormat": "running"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Startup Backfill — Progress Over Time",
+      "description": "Counts down to 0 as the backfill works through candidates (most-recent matches first).",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "targets": [
+        {
+          "expr": "top_scores_startup_backfill_candidates{job=\"top-scores\"}",
+          "legendFormat": "candidates (total)"
+        },
+        {
+          "expr": "top_scores_startup_backfill_remaining{job=\"top-scores\"}",
+          "legendFormat": "remaining"
+        },
+        {
+          "expr": "top_scores_startup_backfill_succeeded_total{job=\"top-scores\"}",
+          "legendFormat": "succeeded"
+        },
+        {
+          "expr": "top_scores_startup_backfill_failed_total{job=\"top-scores\"}",
+          "legendFormat": "failed"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Active Refresh Targets",
+      "description": "Matches currently marked active for live refresh (within the 15-minute active window).",
+      "gridPos": { "x": 0, "y": 12, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_details_active_refresh_targets{job=\"top-scores\"}",
+          "legendFormat": "active targets"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "In-Flight Backfill Tasks",
+      "description": "Async per-match backfill tasks currently running (triggered by client requests).",
+      "gridPos": { "x": 4, "y": 12, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "yellow", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_details_backfill_tasks{job=\"top-scores\"}",
+          "legendFormat": "backfill tasks"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Warm Tasks",
+      "description": "Match detail warm-up tasks currently running (for matches not yet in the operational cache).",
+      "gridPos": { "x": 8, "y": 12, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "yellow", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_details_warm_tasks{job=\"top-scores\"}",
+          "legendFormat": "warm tasks"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "In-Flight Tasks Over Time",
+      "description": "Backfill and warm tasks in flight. Spikes here indicate user-triggered BBC fetches.",
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_details_active_refresh_targets{job=\"top-scores\"}",
+          "legendFormat": "active refresh targets"
+        },
+        {
+          "expr": "top_scores_match_details_backfill_tasks{job=\"top-scores\"}",
+          "legendFormat": "backfill tasks"
+        },
+        {
+          "expr": "top_scores_match_details_warm_tasks{job=\"top-scores\"}",
+          "legendFormat": "warm tasks"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Match Details — /api/v1/matches/:matchId Response Time",
+      "description": "p50/p95/p99 latency for the match details endpoint. Should stay below 500 ms once the startup backfill has populated Redis.",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"top-scores\",route=\"/api/v1/matches/:matchId\"}[$__rate_interval])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"top-scores\",route=\"/api/v1/matches/:matchId\"}[$__rate_interval])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"top-scores\",route=\"/api/v1/matches/:matchId\"}[$__rate_interval])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    }
+  ]
+}
