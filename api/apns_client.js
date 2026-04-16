@@ -148,7 +148,8 @@ function isTerminalApnsReason(errorText) {
   return (
     normalized.includes("baddevicetoken") ||
     normalized.includes("unregistered") ||
-    normalized.includes("device token not for topic")
+    normalized.includes("device token not for topic") ||
+    normalized.includes("expiredtoken")
   );
 }
 

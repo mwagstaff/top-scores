@@ -10,6 +10,7 @@ struct TablesView: View {
     @State private var lastUpdated: Date?
     @State private var hasLoaded = false
     @State private var shortNameRefreshVersion = 0
+    @State private var screenOpenedAt: Date?
 
     private static let apiBaseURLDefaultsKey = "preferences.apiBaseURL"
 
@@ -46,10 +47,14 @@ struct TablesView: View {
         .onAppear {
             guard !hasLoaded else { return }
             hasLoaded = true
+            screenOpenedAt = Date()
             applyCachedTables(for: preferences.apiBaseURL, clearWhenMissing: false)
             Task {
                 await refreshTeamShortNames(apiBaseURL: preferences.apiBaseURL)
                 await loadTables(force: false)
+                let durationMs = screenOpenedAt.map { Int(Date().timeIntervalSince($0) * 1000) }
+                screenOpenedAt = nil
+                AppMetricsService.shared.fireScreenView(screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
             }
         }
         .onChange(of: preferences.apiBaseURL) { _, newValue in
@@ -98,7 +103,10 @@ struct TablesView: View {
                     .padding(.vertical, 12)
                 }
                 .refreshable {
+                    let refreshStart = Date()
                     await loadTables(force: true)
+                    let durationMs = Int(Date().timeIntervalSince(refreshStart) * 1000)
+                    AppMetricsService.shared.fireActivity("manual_refresh", screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
                 }
                 .safeAreaPadding(.bottom, 80)
             }

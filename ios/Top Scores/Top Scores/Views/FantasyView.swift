@@ -97,6 +97,8 @@ struct FantasyView: View {
     @State private var lastStartedFantasyRefreshRequest: PendingFantasyRefreshRequest?
     @State private var lastStartedFantasyRefreshAt: Date?
     @State private var hasLoadedFantasyStorageState = false
+    @State private var screenOpenedAt: Date?
+    @State private var screenViewSentForActivation = false
     private let rivalsSectionScrollID = "fantasy-rivals-section"
     private let fantasyLoadingInterstitialMinimumDurationNanoseconds: UInt64 = 3_000_000_000
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
@@ -271,6 +273,7 @@ struct FantasyView: View {
                 }
                 armSharedEntryPolling()
                 consumeSharedFantasyEntryURLIfNeeded()
+                beginScreenViewTiming()
             }
             .onChange(of: isSelected) { _, selected in
                 guard selected else {
@@ -279,6 +282,8 @@ struct FantasyView: View {
                     inFlightFantasyRefreshRequest = nil
                     pendingFantasyRefreshRequest = nil
                     fantasyViewModel.cancelBackgroundRefreshWork()
+                    screenOpenedAt = nil
+                    screenViewSentForActivation = false
                     return
                 }
                 if isFantasySetupReadyForRefresh {
@@ -292,6 +297,7 @@ struct FantasyView: View {
                 }
                 armSharedEntryPolling()
                 consumeSharedFantasyEntryURLIfNeeded()
+                beginScreenViewTiming()
             }
             .onChange(of: scenePhase) { _, newValue in
                 guard newValue == .active else {
@@ -377,6 +383,7 @@ struct FantasyView: View {
                 handleFantasyLoadingInterstitialChange(isLoading: isLoading)
                 if !isLoading {
                     drainPendingFantasyRefreshIfNeeded()
+                    sendTimedScreenView()
                 }
             }
             .onChange(of: fantasyViewModel.isRefreshing) { _, isRefreshing in
@@ -2764,6 +2771,23 @@ struct FantasyView: View {
         FantasyLoadingInterstitialView()
             .transition(.opacity)
             .animation(.easeInOut(duration: 0.2), value: showFantasyLoadingInterstitial)
+    }
+
+    private func beginScreenViewTiming() {
+        screenOpenedAt = Date()
+        screenViewSentForActivation = false
+        let isIdle = !fantasyViewModel.isLoading && !fantasyViewModel.isRefreshing
+        if isIdle {
+            sendTimedScreenView()
+        }
+    }
+
+    private func sendTimedScreenView() {
+        guard !screenViewSentForActivation else { return }
+        screenViewSentForActivation = true
+        let durationMs = screenOpenedAt.map { Int(Date().timeIntervalSince($0) * 1000) }
+        screenOpenedAt = nil
+        AppMetricsService.shared.fireScreenView(screen: "fantasy", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
     }
 
     private func handleFantasyLoadingInterstitialChange(isLoading: Bool) {

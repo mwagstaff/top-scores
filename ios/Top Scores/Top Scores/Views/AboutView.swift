@@ -36,6 +36,11 @@ struct AboutView: View {
                 }
             }
         }
+        .onAppear {
+            let openedAt = Date()
+            let durationMs = Int(Date().timeIntervalSince(openedAt) * 1000)
+            AppMetricsService.shared.fireScreenView(screen: "about", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
+        }
     }
 
     private var content: some View {

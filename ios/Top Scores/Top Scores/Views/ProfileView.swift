@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ProfileView: View {
+    @EnvironmentObject private var preferences: PreferencesStore
+
     var body: some View {
         NavigationStack {
             List {
@@ -27,6 +29,11 @@ struct ProfileView: View {
                 }
             }
             .navigationTitle("Profile")
+        }
+        .onAppear {
+            let openedAt = Date()
+            let durationMs = Int(Date().timeIntervalSince(openedAt) * 1000)
+            AppMetricsService.shared.fireScreenView(screen: "profile", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
         }
     }
 

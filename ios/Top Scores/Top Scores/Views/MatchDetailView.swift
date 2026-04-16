@@ -20,6 +20,8 @@ struct MatchDetailView: View {
     @State private var detailsRefreshTask: Task<Void, Never>?
     @State private var detailsErrorMessage: String?
     @State private var pendingEventsQuickRetry = false
+    @State private var screenOpenedAt: Date?
+    @State private var screenViewSent = false
 
     private static let detailsRefreshIntervalNanos: UInt64 = 10_000_000_000
     private static let idleDetailsRefreshIntervalNanos: UInt64 = 30_000_000_000
@@ -214,9 +216,18 @@ struct MatchDetailView: View {
         .navigationTitle("Match Details")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            screenOpenedAt = Date()
+            screenViewSent = false
             startDetailsRefresh()
             ensureFantasySquadLoadedIfNeeded()
             reportMissingTeamLogosIfNeeded(for: activeMatch)
+            AppMetricsService.shared.fireScreenView(screen: "match_detail", apiBaseURL: preferences.apiBaseURL)
+        }
+        .onChange(of: detailedMatch) { _, newValue in
+            guard !screenViewSent, newValue != nil, let openedAt = screenOpenedAt else { return }
+            screenViewSent = true
+            let durationMs = Int(Date().timeIntervalSince(openedAt) * 1000)
+            AppMetricsService.shared.fireActivity("match_details_loaded", screen: "match_detail", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
         }
         .onDisappear {
             detailsRefreshTask?.cancel()

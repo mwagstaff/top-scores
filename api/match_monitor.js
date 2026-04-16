@@ -4972,7 +4972,8 @@ function isTerminalLiveActivityError(result) {
   return (
     message.includes("baddevicetoken") ||
     message.includes("unregistered") ||
-    message.includes("device token not for topic")
+    message.includes("device token not for topic") ||
+    message.includes("expiredtoken")
   );
 }
 

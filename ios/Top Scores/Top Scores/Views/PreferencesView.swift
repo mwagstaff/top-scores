@@ -36,6 +36,11 @@ struct PreferencesView: View {
         .task {
             await viewModel.reload(baseURL: preferences.apiBaseURL)
         }
+        .onAppear {
+            let openedAt = Date()
+            let durationMs = Int(Date().timeIntervalSince(openedAt) * 1000)
+            AppMetricsService.shared.fireScreenView(screen: "preferences", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
+        }
         .onChange(of: preferences.apiBaseURL) { _, newValue in
             reloadTask?.cancel()
             reloadTask = Task {
@@ -480,28 +485,40 @@ struct PreferencesView: View {
     private var englishPremierLeagueTeamsOnlyBinding: Binding<Bool> {
         Binding(
             get: { preferences.englishPremierLeagueTeamsOnly },
-            set: { preferences.englishPremierLeagueTeamsOnly = $0 }
+            set: {
+                preferences.englishPremierLeagueTeamsOnly = $0
+                AppMetricsService.shared.fireActivity("pref_epl_only_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
+            }
         )
     }
 
     private var homeNationsFilterEnabledBinding: Binding<Bool> {
         Binding(
             get: { preferences.homeNationsFilterEnabled },
-            set: { preferences.homeNationsFilterEnabled = $0 }
+            set: {
+                preferences.homeNationsFilterEnabled = $0
+                AppMetricsService.shared.fireActivity("pref_home_nations_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
+            }
         )
     }
 
     private var majorUEFAClubGamesEnabledBinding: Binding<Bool> {
         Binding(
             get: { preferences.majorUEFAClubGamesEnabled },
-            set: { preferences.majorUEFAClubGamesEnabled = $0 }
+            set: {
+                preferences.majorUEFAClubGamesEnabled = $0
+                AppMetricsService.shared.fireActivity("pref_major_uefa_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
+            }
         )
     }
 
     private var majorTournamentsFilterEnabledBinding: Binding<Bool> {
         Binding(
             get: { preferences.majorTournamentsFilterEnabled },
-            set: { preferences.majorTournamentsFilterEnabled = $0 }
+            set: {
+                preferences.majorTournamentsFilterEnabled = $0
+                AppMetricsService.shared.fireActivity("pref_major_tournaments_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
+            }
         )
     }
 
@@ -594,14 +611,20 @@ struct PreferencesView: View {
     private var competitionFilterEnabledBinding: Binding<Bool> {
         Binding(
             get: { preferences.competitionFilterEnabled },
-            set: { preferences.competitionFilterEnabled = $0 }
+            set: {
+                preferences.competitionFilterEnabled = $0
+                AppMetricsService.shared.fireActivity("pref_competition_filter_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
+            }
         )
     }
 
     private var channelFilterEnabledBinding: Binding<Bool> {
         Binding(
             get: { preferences.channelFilterEnabled },
-            set: { preferences.channelFilterEnabled = $0 }
+            set: {
+                preferences.channelFilterEnabled = $0
+                AppMetricsService.shared.fireActivity("pref_channel_filter_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
+            }
         )
     }
 

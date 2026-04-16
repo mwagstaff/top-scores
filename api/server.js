@@ -641,6 +641,7 @@ const appUsageMetrics = {
   appMetricEventsRejectedTotal: 0,
 };
 const appMetricEventsByDimension = new Map();
+const appEventDurationMetrics = new Map();
 const seenDeviceTokens = new Set();
 const deviceLastSeenAtMs = new Map();
 let appMetricEventsLastUpdated = null;
@@ -657,6 +658,7 @@ const RUNTIME_SERVICE_NAME = "top-scores-api";
 const RUNTIME_ENVIRONMENT = String(process.env.NODE_ENV || "development").trim() || "development";
 const HTTP_REQUEST_DURATION_BUCKETS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5];
 const SOURCE_FETCH_DURATION_BUCKETS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
+const APP_EVENT_DURATION_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0];
 const FPL_TRANSFER_RECOMMENDATION_DURATION_BUCKETS = [0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1];
 const UNIQUE_USER_WINDOWS = [
   { period: "1m", windowMs: 60 * 1000 },
@@ -1777,8 +1779,8 @@ function normalizeMetricLabel(value, fallback = "unknown") {
   const normalized = String(value || "")
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
+    .replace(/[^a-z0-9.]+/g, "_")
+    .replace(/^[_.]+|[_.]+$/g, "")
     .slice(0, 64);
   return normalized || fallback;
 }
@@ -5383,6 +5385,17 @@ function buildPrometheusMetricsText() {
         platform: entry.labels.platform,
       });
     });
+
+  const appEventDurationEntries = Array.from(appEventDurationMetrics.values()).sort((lhs, rhs) =>
+    metricLabelKey(lhs.labels).localeCompare(metricLabelKey(rhs.labels))
+  );
+  appendHistogramMetrics(
+    lines,
+    "top_scores_app_event_duration_seconds",
+    "Duration of app screen loads and user activities in seconds, by event type and screen.",
+    APP_EVENT_DURATION_BUCKETS,
+    appEventDurationEntries
+  );
 
   liveActivityMetrics.appendPrometheusMetrics(lines, pushPrometheusSample);
 
@@ -19406,6 +19419,18 @@ app.post(`${API_PREFIX}/app-metrics`, (req, res) => {
     appMetricEventsByDimension.set(key, { labels, count: 1 });
   }
 
+  const rawDurationMs = payload.durationMs;
+  const parsedDurationMs = Number(rawDurationMs);
+  if (Number.isFinite(parsedDurationMs) && parsedDurationMs >= 0) {
+    const durationSeconds = parsedDurationMs / 1000;
+    recordHistogramSample(
+      appEventDurationMetrics,
+      { event, screen: labels.screen },
+      durationSeconds,
+      APP_EVENT_DURATION_BUCKETS
+    );
+  }
+
   appUsageMetrics.appMetricEventsTotal += 1;
   appMetricEventsLastUpdated = new Date().toISOString();
 
@@ -19415,6 +19440,7 @@ app.post(`${API_PREFIX}/app-metrics`, (req, res) => {
     event,
     has_device_token: Boolean(deviceToken),
     received_at: appMetricEventsLastUpdated,
+    has_duration: Number.isFinite(parsedDurationMs) && parsedDurationMs >= 0,
   });
 });
 
@@ -23928,7 +23954,8 @@ function isLiveActivityTerminalResult(result) {
   return (
     message.includes("baddevicetoken") ||
     message.includes("unregistered") ||
-    message.includes("device token not for topic")
+    message.includes("device token not for topic") ||
+    message.includes("expiredtoken")
   );
 }
 

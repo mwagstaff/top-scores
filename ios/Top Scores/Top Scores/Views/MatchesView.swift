@@ -98,6 +98,8 @@ struct MatchesView: View {
     @State private var lastPredictorCandidateDateKeys: Set<String> = []
     @State private var didRunActivationForVisibleCycle = false
     @State private var navigationMatch: MatchNavigation?
+    @State private var screenOpenedAt: Date?
+    @State private var screenViewSentForActivation = false
 
     private static let minimumSearchCharacters = 3
     private static let searchDebounceNanoseconds: UInt64 = 250_000_000
@@ -282,14 +284,22 @@ struct MatchesView: View {
         .onAppear {
             guard isSelected else { return }
             runActivationIfNeeded(logEvent: "onAppear")
+            beginScreenViewTiming()
         }
         .onChange(of: isSelected) { _, selected in
             matchesStore.setModeVisibility(mode, isVisible: selected)
             guard selected else {
                 didRunActivationForVisibleCycle = false
+                screenOpenedAt = nil
+                screenViewSentForActivation = false
                 return
             }
             runActivationIfNeeded(logEvent: "isSelected")
+            beginScreenViewTiming()
+        }
+        .onChange(of: matchesStore.isLoading) { _, isLoading in
+            guard !isLoading else { return }
+            sendTimedScreenView()
         }
         .onChange(of: preferences.snapshot) { _, _ in
             guard isSelected else { return }
@@ -350,6 +360,22 @@ struct MatchesView: View {
         } message: {
             Text(predictionErrorMessage ?? "Unable to generate predictions right now.")
         }
+    }
+
+    private func beginScreenViewTiming() {
+        screenOpenedAt = Date()
+        screenViewSentForActivation = false
+        if !matchesStore.isLoading {
+            sendTimedScreenView()
+        }
+    }
+
+    private func sendTimedScreenView() {
+        guard !screenViewSentForActivation else { return }
+        screenViewSentForActivation = true
+        let durationMs = screenOpenedAt.map { Int(Date().timeIntervalSince($0) * 1000) }
+        screenOpenedAt = nil
+        AppMetricsService.shared.fireScreenView(screen: mode.rawValue, durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
     }
 
     private func ensureFantasySquadLoadedIfNeeded() {
@@ -426,6 +452,7 @@ struct MatchesView: View {
         )
         .safeAreaPadding(.bottom, 80)
         .refreshable {
+            let refreshStart = Date()
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             matchesStore.queueRefresh(
                 preferences: snapshot,
@@ -433,6 +460,8 @@ struct MatchesView: View {
                 reason: "pull_to_refresh"
             )
             await Task.yield()
+            let durationMs = Int(Date().timeIntervalSince(refreshStart) * 1000)
+            AppMetricsService.shared.fireActivity("manual_refresh", screen: mode.rawValue, durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
         }
     }
 
@@ -701,6 +730,7 @@ struct MatchesView: View {
                         isSearchVisible = true
                     }
                     rebuildSearchIndex(from: matchesStore.groupedMatches)
+                    AppMetricsService.shared.fireActivity("search_activated", screen: mode.rawValue, apiBaseURL: preferences.apiBaseURL)
                 }
             } label: {
                 Image(systemName: isSearchVisible ? "magnifyingglass.circle.fill" : "magnifyingglass")

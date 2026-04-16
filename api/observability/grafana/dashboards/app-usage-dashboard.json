@@ -1,0 +1,655 @@
+{
+  "uid": "top-scores-app-usage",
+  "title": "top-scores • App Usage",
+  "tags": ["top-scores", "app", "usage", "performance", "ios"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Unique Devices (All Time)",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_app_metrics_unique_devices_total{job=\"top-scores\"}",
+          "legendFormat": "Unique devices"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Active Devices (Last 30 Days)",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_app_metrics_active_devices_total{job=\"top-scores\"}",
+          "legendFormat": "Active devices"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Total Events (All Time)",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_app_metrics_events_total{job=\"top-scores\"}",
+          "legendFormat": "Total events"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Rejected Events (All Time)",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_app_metrics_events_rejected_total{job=\"top-scores\"}",
+          "legendFormat": "Rejected events"
+        }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Active Devices Over Time",
+      "description": "Number of unique device IDs seen within the active window (rolling 30-day lookback). Note: the active device count is tracked in-memory and resets to zero on server restart, which can cause visible drops in this chart.",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "top_scores_app_metrics_active_devices_total{job=\"top-scores\"}",
+          "legendFormat": "Active devices"
+        },
+        {
+          "expr": "top_scores_app_metrics_unique_devices_total{job=\"top-scores\"}",
+          "legendFormat": "Unique devices (all time)"
+        }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Event Rate by Type",
+      "description": "Rate of app events received per minute, broken down by event type.",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm",
+          "custom": { "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (event) (rate(top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}[5m])) * 60",
+          "legendFormat": "{{event}}"
+        }
+      ]
+    },
+
+    {
+      "type": "table",
+      "title": "Top Screens Opened",
+      "description": "Screens (screen_view events) ordered by total views.",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 10 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Total Views" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "screen" },
+            "properties": [
+              { "id": "displayName", "value": "Screen" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [{ "displayName": "Total Views", "desc": true }],
+        "footer": { "show": false }
+      },
+      "transformations": [
+        { "id": "labelsToFields", "options": { "valueLabel": "screen" } },
+        { "id": "merge", "options": {} },
+        {
+          "id": "filterFieldsByName",
+          "options": { "include": { "names": ["screen", "Value"] } }
+        }
+      ],
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (screen) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\", event=\"screen_view\"}))",
+          "legendFormat": "{{screen}}",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+
+    {
+      "type": "table",
+      "title": "Top Activities Performed",
+      "description": "User activities (non-screen_view events) ordered by total count.",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 10 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Total Count" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "event" },
+            "properties": [{ "id": "displayName", "value": "Activity" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "screen" },
+            "properties": [{ "id": "displayName", "value": "Screen" }]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [{ "displayName": "Total Count", "desc": true }],
+        "footer": { "show": false }
+      },
+      "transformations": [
+        { "id": "labelsToFields", "options": { "valueLabel": "event" } },
+        { "id": "merge", "options": {} }
+      ],
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (event, screen) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"}))",
+          "legendFormat": "{{event}} / {{screen}}",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Screen Load Time — p90 & p95 (All Screens)",
+      "description": "90th and 95th percentile load time across all screen_view events that reported a duration.",
+      "gridPos": { "x": 0, "y": 22, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.90, sum(increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"}[1h])) by (le)) * 1000",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"}[1h])) by (le)) * 1000",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Activity Duration — p90 & p95 (All Activities)",
+      "description": "90th and 95th percentile duration across all non-screen_view activities that reported a duration.",
+      "gridPos": { "x": 12, "y": 22, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.90, sum(increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"}[1h])) by (le)) * 1000",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"}[1h])) by (le)) * 1000",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+
+    {
+      "type": "table",
+      "title": "Screen Load Time — p90 & p95 per Screen",
+      "description": "Percentile load times per screen (from screen open to data ready). Only screens that reported durationMs are included.",
+      "gridPos": { "x": 0, "y": 30, "w": 12, "h": 10 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "screen" },
+            "properties": [{ "id": "displayName", "value": "Screen" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value #p90" },
+            "properties": [
+              { "id": "displayName", "value": "p90 (ms)" },
+              { "id": "custom.width", "value": 110 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value #p95" },
+            "properties": [
+              { "id": "displayName", "value": "p95 (ms)" },
+              { "id": "custom.width", "value": 110 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [{ "displayName": "p95 (ms)", "desc": true }],
+        "footer": { "show": false }
+      },
+      "transformations": [
+        { "id": "merge", "options": {} }
+      ],
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.90, sum by (screen, le) (top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"})) * 1000",
+          "legendFormat": "{{screen}}",
+          "refId": "p90",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (screen, le) (top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"})) * 1000",
+          "legendFormat": "{{screen}}",
+          "refId": "p95",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+
+    {
+      "type": "table",
+      "title": "Activity Duration — p90 & p95 per Activity",
+      "description": "Percentile durations per activity type. Only activities that reported durationMs are included.",
+      "gridPos": { "x": 12, "y": 30, "w": 12, "h": 10 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "event" },
+            "properties": [{ "id": "displayName", "value": "Activity" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "screen" },
+            "properties": [{ "id": "displayName", "value": "Screen" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value #p90" },
+            "properties": [
+              { "id": "displayName", "value": "p90 (ms)" },
+              { "id": "custom.width", "value": 110 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value #p95" },
+            "properties": [
+              { "id": "displayName", "value": "p95 (ms)" },
+              { "id": "custom.width", "value": 110 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [{ "displayName": "p95 (ms)", "desc": true }],
+        "footer": { "show": false }
+      },
+      "transformations": [
+        { "id": "merge", "options": {} }
+      ],
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.90, sum by (event, screen, le) (top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"})) * 1000",
+          "legendFormat": "{{event}} / {{screen}}",
+          "refId": "p90",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (event, screen, le) (top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"})) * 1000",
+          "legendFormat": "{{event}} / {{screen}}",
+          "refId": "p95",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Screen Load Time p90 — Per Screen Over Time",
+      "description": "p90 load time per screen over the selected time window.",
+      "gridPos": { "x": 0, "y": 40, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.90, sum by (screen, le) (increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"}[1h]))) * 1000",
+          "legendFormat": "{{screen}}"
+        }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Activity Duration p90 — Per Activity Over Time",
+      "description": "p90 duration per activity type over the selected time window.",
+      "gridPos": { "x": 0, "y": 48, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.90, sum by (event, le) (increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"}[1h]))) * 1000",
+          "legendFormat": "{{event}}"
+        }
+      ]
+    },
+
+    {
+      "type": "table",
+      "title": "Events by Device Model",
+      "description": "Total events broken down by device model (e.g. iPhone, iPad).",
+      "gridPos": { "x": 0, "y": 56, "w": 6, "h": 10 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "device_model" },
+            "properties": [{ "id": "displayName", "value": "Device Model" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Events" },
+              { "id": "custom.width", "value": 100 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [{ "displayName": "Events", "desc": true }],
+        "footer": { "show": false }
+      },
+      "transformations": [
+        { "id": "labelsToFields", "options": { "valueLabel": "device_model" } },
+        { "id": "merge", "options": {} },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["device_model", "Value"] } } }
+      ],
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (device_model) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}))",
+          "legendFormat": "{{device_model}}",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+
+    {
+      "type": "table",
+      "title": "Events by Device Type",
+      "description": "Total events broken down by device type (phone, pad, etc.).",
+      "gridPos": { "x": 6, "y": 56, "w": 6, "h": 10 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "device_type" },
+            "properties": [{ "id": "displayName", "value": "Device Type" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Events" },
+              { "id": "custom.width", "value": 100 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [{ "displayName": "Events", "desc": true }],
+        "footer": { "show": false }
+      },
+      "transformations": [
+        { "id": "labelsToFields", "options": { "valueLabel": "device_type" } },
+        { "id": "merge", "options": {} },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["device_type", "Value"] } } }
+      ],
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (device_type) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}))",
+          "legendFormat": "{{device_type}}",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+
+    {
+      "type": "table",
+      "title": "Events by App Version",
+      "description": "Total events broken down by app version and build number.",
+      "gridPos": { "x": 12, "y": 56, "w": 6, "h": 10 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "app_version" },
+            "properties": [{ "id": "displayName", "value": "Version" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "build_number" },
+            "properties": [{ "id": "displayName", "value": "Build" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Events" },
+              { "id": "custom.width", "value": 90 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [{ "displayName": "Events", "desc": true }],
+        "footer": { "show": false }
+      },
+      "transformations": [
+        { "id": "labelsToFields", "options": { "valueLabel": "app_version" } },
+        { "id": "merge", "options": {} },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["app_version", "build_number", "Value"] } } }
+      ],
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (app_version, build_number) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}))",
+          "legendFormat": "{{app_version}} ({{build_number}})",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+
+    {
+      "type": "table",
+      "title": "Events by iOS Version",
+      "description": "Total events broken down by iOS/OS version.",
+      "gridPos": { "x": 18, "y": 56, "w": 6, "h": 10 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "os_version" },
+            "properties": [{ "id": "displayName", "value": "iOS Version" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Events" },
+              { "id": "custom.width", "value": 100 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [{ "displayName": "Events", "desc": true }],
+        "footer": { "show": false }
+      },
+      "transformations": [
+        { "id": "labelsToFields", "options": { "valueLabel": "os_version" } },
+        { "id": "merge", "options": {} },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["os_version", "Value"] } } }
+      ],
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (os_version) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}))",
+          "legendFormat": "{{os_version}}",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    }
+  ]
+}
