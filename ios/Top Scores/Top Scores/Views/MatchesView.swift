@@ -423,8 +423,9 @@ struct MatchesView: View {
         ForEach(day.leagues) { league in
             leagueHeadingRow(for: league.league)
 
-            ForEach(league.matches) { match in
-                matchRow(for: match, day: day)
+            ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
+                let prevTime = index > 0 ? league.matches[index - 1].time : nil
+                matchRow(for: match, day: day, kickoffTimeGap: prevTime != nil && prevTime != match.time)
             }
         }
     }
@@ -436,10 +437,12 @@ struct MatchesView: View {
 
             let hasMixedFantasyBadgeVisibility = compactLeagueHasMixedFantasyBadgeVisibility(league)
 
-            ForEach(league.matches) { match in
+            ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
+                let prevTime = index > 0 ? league.matches[index - 1].time : nil
                 matchRow(
                     for: match,
                     day: day,
+                    kickoffTimeGap: prevTime != nil && prevTime != match.time,
                     reserveCompactFantasyAccessorySpace: hasMixedFantasyBadgeVisibility
                 )
             }
@@ -467,6 +470,7 @@ struct MatchesView: View {
     private func matchRow(
         for match: Match,
         day: MatchDay,
+        kickoffTimeGap: Bool = false,
         reserveCompactFantasyAccessorySpace: Bool = false
     ) -> some View {
         NavigationLink {
@@ -492,7 +496,7 @@ struct MatchesView: View {
         .buttonStyle(.plain)
         .listRowInsets(
             EdgeInsets(
-                top: usesCompactFixtureRows ? compactFixturesSpacing.rowTop : 4,
+                top: (usesCompactFixtureRows ? compactFixturesSpacing.rowTop : 4) + (kickoffTimeGap ? 4 : 0),
                 leading: 16,
                 bottom: usesCompactFixtureRows ? compactFixturesSpacing.rowBottom : 8,
                 trailing: 16

@@ -455,22 +455,24 @@ private enum MatchGroupingEngine {
                 return !lhs.isPostponed && rhs.isPostponed
             }
 
-            if premierLeagueMatchesFirst {
-                let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
-                let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
-                if lhsEPL != rhsEPL {
-                    return lhsEPL && !rhsEPL
-                }
-            }
-
             switch sortOrder {
             case .teamScore:
+                if premierLeagueMatchesFirst {
+                    let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
+                    let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                    if lhsEPL != rhsEPL { return lhsEPL && !rhsEPL }
+                }
                 let leftScore = memo.totalTeamRating(for: lhs, ratingLookup: ratingLookup)
                 let rightScore = memo.totalTeamRating(for: rhs, ratingLookup: ratingLookup)
                 if leftScore != rightScore {
                     return leftScore > rightScore
                 }
             case .alphabetical:
+                if premierLeagueMatchesFirst {
+                    let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
+                    let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                    if lhsEPL != rhsEPL { return lhsEPL && !rhsEPL }
+                }
                 let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
                 if homeCompare != .orderedSame {
                     return homeCompare == .orderedAscending
@@ -485,6 +487,11 @@ private enum MatchGroupingEngine {
                 if leftDate != rightDate {
                     return leftDate < rightDate
                 }
+                if premierLeagueMatchesFirst {
+                    let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
+                    let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                    if lhsEPL != rhsEPL { return lhsEPL && !rhsEPL }
+                }
                 let leftScore = memo.totalTeamRating(for: lhs, ratingLookup: ratingLookup)
                 let rightScore = memo.totalTeamRating(for: rhs, ratingLookup: ratingLookup)
                 if leftScore != rightScore {
@@ -495,6 +502,11 @@ private enum MatchGroupingEngine {
                 let rightDate = memo.matchSortDate(for: rhs)
                 if leftDate != rightDate {
                     return leftDate < rightDate
+                }
+                if premierLeagueMatchesFirst {
+                    let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
+                    let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                    if lhsEPL != rhsEPL { return lhsEPL && !rhsEPL }
                 }
                 let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
                 if homeCompare != .orderedSame {
