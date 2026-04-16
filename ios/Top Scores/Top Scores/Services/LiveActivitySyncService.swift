@@ -22,10 +22,90 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let firstLegAwayScore: Int?
     let matchTime: String?
     let penaltyWinner: String?
-    let homeTeamScore: Double?
-    let awayTeamScore: Double?
-    let totalTeamScore: Double?
     let tvChannels: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case matchId
+        case date
+        case time
+        case league
+        case leagueSubcategory
+        case homeTeam
+        case awayTeam
+        case homeShortName
+        case awayShortName
+        case homeScore
+        case awayScore
+        case aggregateHomeScore
+        case aggregateAwayScore
+        case firstLegHomeScore
+        case firstLegAwayScore
+        case matchTime
+        case penaltyWinner
+        case tvChannels
+    }
+
+    init(
+        matchId: String,
+        date: String,
+        time: String,
+        league: String,
+        leagueSubcategory: String? = nil,
+        homeTeam: String,
+        awayTeam: String,
+        homeShortName: String? = nil,
+        awayShortName: String? = nil,
+        homeScore: Int? = nil,
+        awayScore: Int? = nil,
+        aggregateHomeScore: Int? = nil,
+        aggregateAwayScore: Int? = nil,
+        firstLegHomeScore: Int? = nil,
+        firstLegAwayScore: Int? = nil,
+        matchTime: String? = nil,
+        penaltyWinner: String? = nil,
+        tvChannels: [String] = []
+    ) {
+        self.matchId = matchId
+        self.date = date
+        self.time = time
+        self.league = league
+        self.leagueSubcategory = leagueSubcategory
+        self.homeTeam = homeTeam
+        self.awayTeam = awayTeam
+        self.homeShortName = homeShortName
+        self.awayShortName = awayShortName
+        self.homeScore = homeScore
+        self.awayScore = awayScore
+        self.aggregateHomeScore = aggregateHomeScore
+        self.aggregateAwayScore = aggregateAwayScore
+        self.firstLegHomeScore = firstLegHomeScore
+        self.firstLegAwayScore = firstLegAwayScore
+        self.matchTime = matchTime
+        self.penaltyWinner = penaltyWinner
+        self.tvChannels = tvChannels
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        matchId = try container.decode(String.self, forKey: .matchId)
+        date = try container.decode(String.self, forKey: .date)
+        time = try container.decode(String.self, forKey: .time)
+        league = try container.decode(String.self, forKey: .league)
+        leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
+        homeTeam = try container.decode(String.self, forKey: .homeTeam)
+        awayTeam = try container.decode(String.self, forKey: .awayTeam)
+        homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
+        awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
+        homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
+        awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
+        aggregateHomeScore = try container.decodeIfPresent(Int.self, forKey: .aggregateHomeScore)
+        aggregateAwayScore = try container.decodeIfPresent(Int.self, forKey: .aggregateAwayScore)
+        firstLegHomeScore = try container.decodeIfPresent(Int.self, forKey: .firstLegHomeScore)
+        firstLegAwayScore = try container.decodeIfPresent(Int.self, forKey: .firstLegAwayScore)
+        matchTime = try container.decodeIfPresent(String.self, forKey: .matchTime)
+        penaltyWinner = try container.decodeIfPresent(String.self, forKey: .penaltyWinner)
+        tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
+    }
 
     var displayHomeTeam: String {
         let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -44,7 +124,6 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
         let mode: String
         let generatedAtEpochSeconds: Int
         let delayMinutes: Int
-        let delayLabel: String?
         let fantasyCurrentScore: Int?
         let matches: [TopScoresLiveActivityMatchState]
     }

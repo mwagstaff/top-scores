@@ -201,12 +201,14 @@ actor MissingTeamLogoAuditCleanupService {
             guard !missingTeamNames.isEmpty else { return }
 
             let alternateLookup = Self.buildAlternateLookup(shortNames: shortNamesResponse.shortNames)
-            let resolvedEntries = missingTeamNames.filter { teamName in
-                let alternates = alternateLookup[Self.normalizedTeamKey(teamName)] ?? []
-                return LogoResolver.shared.hasDedicatedLogo(
-                    for: teamName,
-                    alternateNames: alternates
-                )
+            let resolvedEntries = await MainActor.run {
+                missingTeamNames.filter { teamName in
+                    let alternates = alternateLookup[Self.normalizedTeamKey(teamName)] ?? []
+                    return LogoResolver.shared.hasDedicatedLogo(
+                        for: teamName,
+                        alternateNames: alternates
+                    )
+                }
             }
 
             guard !resolvedEntries.isEmpty else { return }

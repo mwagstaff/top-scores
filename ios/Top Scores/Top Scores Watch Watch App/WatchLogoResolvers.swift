@@ -220,15 +220,15 @@ final class WatchTeamLogoResolver {
         return nil
     }
 
-    private static func normalizedKey(_ value: String) -> String {
+    private nonisolated static func normalizedKey(_ value: String) -> String {
         normalizedTokens(value).joined()
     }
 
-    private static func normalizedCoreKey(_ value: String) -> String {
+    private nonisolated static func normalizedCoreKey(_ value: String) -> String {
         normalizedTokens(value, stripClubAffixes: true).joined()
     }
 
-    private static func normalizedTokens(_ value: String, stripClubAffixes: Bool = false) -> [String] {
+    private nonisolated static func normalizedTokens(_ value: String, stripClubAffixes: Bool = false) -> [String] {
         let lowered = value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .replacingOccurrences(of: "&", with: " and ")
@@ -312,12 +312,12 @@ final class WatchTeamLogoResolver {
         return previous[rhsChars.count]
     }
 
-    private static let stopWords: Set<String> = [
+    private nonisolated static let stopWords: Set<String> = [
         "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk",
         "club", "de", "the", "and", "atletico", "athletic", "sporting"
     ]
 
-    private static let clubAffixWords: Set<String> = [
+    private nonisolated static let clubAffixWords: Set<String> = [
         "city", "town", "united", "rovers", "county", "albion", "wanderers",
         "hotspur", "saint", "st", "calcio"
     ]

@@ -365,13 +365,16 @@ private enum MatchGroupingEngine {
                 )
             }
             .sorted { lhs, rhs in
+                // Competition groups are always ordered by weight descending across all
+                // sort modes — Premier League (100) first, Championship (40) last, etc.
+                // Kick-off time and other criteria are tiebreakers within the same weight.
+                if lhs.weight != rhs.weight {
+                    return lhs.weight > rhs.weight
+                }
                 switch sortOrder {
                 case .kickoffThenTeamScore:
                     if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
                         return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
-                    }
-                    if lhs.weight != rhs.weight {
-                        return lhs.weight > rhs.weight
                     }
                     if lhs.leadingMatchRating != rhs.leadingMatchRating {
                         return lhs.leadingMatchRating > rhs.leadingMatchRating
@@ -379,9 +382,6 @@ private enum MatchGroupingEngine {
                 case .kickoffThenAlphabetical:
                     if lhs.leadingMatchKickoff != rhs.leadingMatchKickoff {
                         return lhs.leadingMatchKickoff < rhs.leadingMatchKickoff
-                    }
-                    if lhs.weight != rhs.weight {
-                        return lhs.weight > rhs.weight
                     }
                     let homeCompare = lhs.leadingMatchHomeTeam.localizedCaseInsensitiveCompare(rhs.leadingMatchHomeTeam)
                     if homeCompare != .orderedSame {
@@ -392,9 +392,6 @@ private enum MatchGroupingEngine {
                         return awayCompare == .orderedAscending
                     }
                 case .teamScore, .alphabetical:
-                    if lhs.weight != rhs.weight {
-                        return lhs.weight > rhs.weight
-                    }
                     if lhs.totalTeamRating != rhs.totalTeamRating {
                         return lhs.totalTeamRating > rhs.totalTeamRating
                     }
@@ -1976,7 +1973,7 @@ final class MatchesStore: ObservableObject {
         return value.uppercased()
     }
 
-    private static let homeNationsTeamKeys: Set<String> = [
+    private nonisolated static let homeNationsTeamKeys: Set<String> = [
         "England",
         "Northern Ireland",
         "Scotland",
@@ -1987,7 +1984,7 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    fileprivate static let premierLeagueTeamKeys: Set<String> = [
+    fileprivate nonisolated static let premierLeagueTeamKeys: Set<String> = [
         "Arsenal",
         "Aston Villa",
         "Bournemouth",

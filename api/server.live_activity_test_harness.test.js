@@ -42,7 +42,6 @@ test("buildLiveActivityTestContentState uses preset defaults and explicit overri
 
   assert.equal(contentState.mode, "single_live");
   assert.equal(contentState.delayMinutes, 3);
-  assert.equal(contentState.delayLabel, "Delayed 3 m");
   assert.equal(contentState.fantasyCurrentScore, 21);
   assert.equal(contentState.matches.length, 5);
 });
@@ -57,6 +56,6 @@ test("buildLiveActivityTestContentState returns an empty ended payload", () => {
 
   assert.equal(contentState.mode, "ended");
   assert.equal(contentState.delayMinutes, 0);
-  assert.equal(contentState.fantasyCurrentScore, null);
+  assert.equal(contentState.fantasyCurrentScore, undefined);
   assert.deepEqual(contentState.matches, []);
 });

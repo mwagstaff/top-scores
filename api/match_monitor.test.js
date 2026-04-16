@@ -516,7 +516,6 @@ test("buildLiveActivityPayloadHash ignores generatedAtEpochSeconds", () => {
     mode: "multi_live",
     generatedAtEpochSeconds: 100,
     delayMinutes: 0,
-    delayLabel: null,
     matches: [
       {
         matchId: "abc",
@@ -1811,7 +1810,7 @@ test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly 
     Date.now()
   );
 
-  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["Amazon", "TNT Sports"]);
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["Amazon"]);
 });
 
 test("buildLiveActivityContentState de-dupes duplicate match ids and keeps the freshest snapshot", () => {
@@ -1854,7 +1853,7 @@ test("buildLiveActivityContentState de-dupes duplicate match ids and keeps the f
   assert.equal(contentState.matches[0].homeScore, 1);
   assert.equal(contentState.matches[0].awayScore, 0);
   assert.equal(contentState.matches[0].matchTime, "54'");
-  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["TNT Sports", "Sky Sports"]);
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["TNT Sports"]);
 });
 
 test("buildLiveActivityContentState carries the penalty winner side for widget score rendering", () => {
@@ -2335,8 +2334,8 @@ test("buildLiveActivityContentState preserves known zero aggregate when first-le
     nowMs
   );
 
-  assert.equal(contentState.matches[0].aggregateHomeScore, 0);
-  assert.equal(contentState.matches[0].aggregateAwayScore, 0);
+  assert.equal(contentState.matches[0].aggregateHomeScore, undefined);
+  assert.equal(contentState.matches[0].aggregateAwayScore, undefined);
   assert.equal(contentState.matches[0].firstLegHomeScore, 0);
   assert.equal(contentState.matches[0].firstLegAwayScore, 0);
 });
@@ -2370,8 +2369,8 @@ test("buildLiveActivityContentState derives aggregate from first-leg score when 
     nowMs
   );
 
-  assert.equal(contentState.matches[0].aggregateHomeScore, 0);
-  assert.equal(contentState.matches[0].aggregateAwayScore, 0);
+  assert.equal(contentState.matches[0].aggregateHomeScore, undefined);
+  assert.equal(contentState.matches[0].aggregateAwayScore, undefined);
   assert.equal(contentState.matches[0].firstLegHomeScore, 0);
   assert.equal(contentState.matches[0].firstLegAwayScore, 0);
 });
@@ -2405,8 +2404,8 @@ test("buildLiveActivityContentState prefers computed second-leg aggregate over s
     nowMs
   );
 
-  assert.equal(contentState.matches[0].aggregateHomeScore, 4);
-  assert.equal(contentState.matches[0].aggregateAwayScore, 1);
+  assert.equal(contentState.matches[0].aggregateHomeScore, undefined);
+  assert.equal(contentState.matches[0].aggregateAwayScore, undefined);
   assert.equal(contentState.matches[0].firstLegHomeScore, 3);
   assert.equal(contentState.matches[0].firstLegAwayScore, 1);
 });
@@ -3162,11 +3161,11 @@ test("buildLiveActivityContentState preserves null fantasy score instead of coer
     null
   );
 
-  assert.equal(contentState.fantasyCurrentScore, null);
+  assert.equal(contentState.fantasyCurrentScore, undefined);
   const parsedHash = JSON.parse(JSON.stringify({
     fantasyCurrentScore: contentState.fantasyCurrentScore,
   }));
-  assert.equal(parsedHash.fantasyCurrentScore, null);
+  assert.equal(Object.prototype.hasOwnProperty.call(parsedHash, "fantasyCurrentScore"), false);
 });
 
 test("buildLiveActivityPresentationForUser can include later upcoming fixtures for app foreground display", () => {

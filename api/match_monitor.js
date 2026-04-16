@@ -52,8 +52,8 @@ const LIVE_ACTIVITY_TEAM_RANKING_FETCH_TIMEOUT_MS = 15 * 1000;
 // If APNS accepts a start but the app never reports an activity token, retry quickly.
 const LIVE_ACTIVITY_PENDING_MAX_MS = 2 * 60 * 1000;
 const LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS = 30 * 60;
-const LIVE_ACTIVITY_PAYLOAD_WARN_BYTES = 3500;
 const LIVE_ACTIVITY_PAYLOAD_HARD_LIMIT_BYTES = 4096;
+const LIVE_ACTIVITY_PAYLOAD_WARN_BYTES = LIVE_ACTIVITY_PAYLOAD_HARD_LIMIT_BYTES - 256;
 const LIVE_ACTIVITY_STALE_LIVE_UPDATED_GRACE_MS = 5 * 60 * 1000;
 const LIVE_ACTIVITY_STALE_LIVE_KICKOFF_GRACE_MS = 2 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_FINISHED_RETENTION_MS = 8 * 60 * 60 * 1000;
@@ -4726,53 +4726,76 @@ function buildLiveActivityContentState(
   nowMs = Date.now(),
   fantasyCurrentScore = null
 ) {
-  const delayLabel = delayMinutes > 0 && (mode === "single_live" || mode === "multi_live")
-    ? `Delayed ${delayMinutes} m`
-    : null;
   const normalizedMatches = dedupeLiveActivityMatches(matches).map((rawMatch) => {
     const match = mode.includes("upcoming")
       ? sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state")
       : rawMatch;
     const aggregate = resolveLiveActivityAggregateScores(match);
-    return {
-    matchId: String(match.match_details_id || ""),
-    date: String(match.date || ""),
-    time: String(match.time || ""),
-    league: String(match.league || ""),
-    leagueSubcategory:
-      match && match.league_subcategory !== undefined && match.league_subcategory !== null
-        ? String(match.league_subcategory)
-        : null,
-    homeTeam: String(match.home_team || ""),
-    awayTeam: String(match.away_team || ""),
-    homeScore: toNumericScore(match.home_score),
-    awayScore: toNumericScore(match.away_score),
-    aggregateHomeScore: aggregate.home,
-    aggregateAwayScore: aggregate.away,
-    firstLegHomeScore: toNumericScore(match.first_leg_home_score),
-    firstLegAwayScore: toNumericScore(match.first_leg_away_score),
-    matchTime: displayStatusToken(match.score_status),
-    penaltyWinner: penaltyShootoutWinnerSide(match),
-    homeTeamScore: toNumericScore(match.home_team_score),
-    awayTeamScore: toNumericScore(match.away_team_score),
-    totalTeamScore: toNumericScore(match.total_team_score),
-    tvChannels: canonicalLiveActivityChannels(match.tv_channels).slice(0, 3),
+    const normalizedMatch = {
+      matchId: String(match.match_details_id || ""),
+      date: String(match.date || ""),
+      time: String(match.time || ""),
+      league: String(match.league || ""),
+      homeTeam: String(match.home_team || ""),
+      awayTeam: String(match.away_team || ""),
     };
+    const leagueSubcategory =
+      match && match.league_subcategory !== undefined && match.league_subcategory !== null
+        ? String(match.league_subcategory).trim()
+        : "";
+    if (leagueSubcategory) {
+      normalizedMatch.leagueSubcategory = leagueSubcategory;
+    }
+    const homeScore = toNumericScore(match.home_score);
+    if (homeScore !== null) {
+      normalizedMatch.homeScore = homeScore;
+    }
+    const awayScore = toNumericScore(match.away_score);
+    if (awayScore !== null) {
+      normalizedMatch.awayScore = awayScore;
+    }
+    const firstLegHomeScore = toNumericScore(match.first_leg_home_score);
+    const firstLegAwayScore = toNumericScore(match.first_leg_away_score);
+    if (firstLegHomeScore !== null && firstLegAwayScore !== null) {
+      normalizedMatch.firstLegHomeScore = firstLegHomeScore;
+      normalizedMatch.firstLegAwayScore = firstLegAwayScore;
+    } else {
+      if (aggregate.home !== null) {
+        normalizedMatch.aggregateHomeScore = aggregate.home;
+      }
+      if (aggregate.away !== null) {
+        normalizedMatch.aggregateAwayScore = aggregate.away;
+      }
+    }
+    const matchTime = displayStatusToken(match.score_status);
+    if (matchTime) {
+      normalizedMatch.matchTime = matchTime;
+    }
+    const penaltyWinner = penaltyShootoutWinnerSide(match);
+    if (penaltyWinner) {
+      normalizedMatch.penaltyWinner = penaltyWinner;
+    }
+    const tvChannels = canonicalLiveActivityChannels(match.tv_channels).slice(0, 1);
+    if (tvChannels.length > 0) {
+      normalizedMatch.tvChannels = tvChannels;
+    }
+    return normalizedMatch;
   });
 
-  return {
+  const contentState = {
     mode,
     generatedAtEpochSeconds: Math.floor(nowMs / 1000),
     delayMinutes: Number(delayMinutes || 0),
-    delayLabel,
-    fantasyCurrentScore:
-      fantasyCurrentScore !== null &&
-      fantasyCurrentScore !== undefined &&
-      Number.isFinite(Number(fantasyCurrentScore))
-        ? Number(fantasyCurrentScore)
-        : null,
     matches: normalizedMatches,
   };
+  if (
+    fantasyCurrentScore !== null &&
+    fantasyCurrentScore !== undefined &&
+    Number.isFinite(Number(fantasyCurrentScore))
+  ) {
+    contentState.fantasyCurrentScore = Number(fantasyCurrentScore);
+  }
+  return contentState;
 }
 
 function liveActivityPayloadMetrics(contentState) {
@@ -5117,7 +5140,6 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       mode: "ended",
       generatedAtEpochSeconds: Math.floor(nowMs / 1000),
       delayMinutes: 0,
-      delayLabel: null,
       matches: [],
     };
     const endRawPayload = buildLiveActivityApsPayload("end", endedContentState, {

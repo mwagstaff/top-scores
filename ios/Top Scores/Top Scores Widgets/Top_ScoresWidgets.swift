@@ -287,10 +287,90 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let firstLegAwayScore: Int?
     let matchTime: String?
     let penaltyWinner: String?
-    let homeTeamScore: Double?
-    let awayTeamScore: Double?
-    let totalTeamScore: Double?
     let tvChannels: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case matchId
+        case date
+        case time
+        case league
+        case leagueSubcategory
+        case homeTeam
+        case awayTeam
+        case homeShortName
+        case awayShortName
+        case homeScore
+        case awayScore
+        case aggregateHomeScore
+        case aggregateAwayScore
+        case firstLegHomeScore
+        case firstLegAwayScore
+        case matchTime
+        case penaltyWinner
+        case tvChannels
+    }
+
+    init(
+        matchId: String,
+        date: String,
+        time: String,
+        league: String,
+        leagueSubcategory: String? = nil,
+        homeTeam: String,
+        awayTeam: String,
+        homeShortName: String? = nil,
+        awayShortName: String? = nil,
+        homeScore: Int? = nil,
+        awayScore: Int? = nil,
+        aggregateHomeScore: Int? = nil,
+        aggregateAwayScore: Int? = nil,
+        firstLegHomeScore: Int? = nil,
+        firstLegAwayScore: Int? = nil,
+        matchTime: String? = nil,
+        penaltyWinner: String? = nil,
+        tvChannels: [String] = []
+    ) {
+        self.matchId = matchId
+        self.date = date
+        self.time = time
+        self.league = league
+        self.leagueSubcategory = leagueSubcategory
+        self.homeTeam = homeTeam
+        self.awayTeam = awayTeam
+        self.homeShortName = homeShortName
+        self.awayShortName = awayShortName
+        self.homeScore = homeScore
+        self.awayScore = awayScore
+        self.aggregateHomeScore = aggregateHomeScore
+        self.aggregateAwayScore = aggregateAwayScore
+        self.firstLegHomeScore = firstLegHomeScore
+        self.firstLegAwayScore = firstLegAwayScore
+        self.matchTime = matchTime
+        self.penaltyWinner = penaltyWinner
+        self.tvChannels = tvChannels
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        matchId = try container.decode(String.self, forKey: .matchId)
+        date = try container.decode(String.self, forKey: .date)
+        time = try container.decode(String.self, forKey: .time)
+        league = try container.decode(String.self, forKey: .league)
+        leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
+        homeTeam = try container.decode(String.self, forKey: .homeTeam)
+        awayTeam = try container.decode(String.self, forKey: .awayTeam)
+        homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
+        awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
+        homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
+        awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
+        aggregateHomeScore = try container.decodeIfPresent(Int.self, forKey: .aggregateHomeScore)
+        aggregateAwayScore = try container.decodeIfPresent(Int.self, forKey: .aggregateAwayScore)
+        firstLegHomeScore = try container.decodeIfPresent(Int.self, forKey: .firstLegHomeScore)
+        firstLegAwayScore = try container.decodeIfPresent(Int.self, forKey: .firstLegAwayScore)
+        matchTime = try container.decodeIfPresent(String.self, forKey: .matchTime)
+        penaltyWinner = try container.decodeIfPresent(String.self, forKey: .penaltyWinner)
+        tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
+    }
 
     var hasScore: Bool {
         rawHasScore && !shouldSuppressScoreDisplay
@@ -409,7 +489,6 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
         let mode: String
         let generatedAtEpochSeconds: Int
         let delayMinutes: Int
-        let delayLabel: String?
         let fantasyCurrentScore: Int?
         let matches: [TopScoresLiveActivityMatchState]
     }
@@ -746,14 +825,15 @@ private enum WidgetMatchPipeline {
                 )
             }
             .sorted { lhs, rhs in
-                if lhs.firstKickoff != rhs.firstKickoff {
-                    return lhs.firstKickoff < rhs.firstKickoff
-                }
-
+                // Competition groups are always ordered by weight descending —
+                // Premier League (100) first, Championship (40) last, etc.
+                // Kick-off time is a tiebreaker within the same weight.
                 if lhs.weight != rhs.weight {
                     return lhs.weight > rhs.weight
                 }
-
+                if lhs.firstKickoff != rhs.firstKickoff {
+                    return lhs.firstKickoff < rhs.firstKickoff
+                }
                 return lhs.league.localizedCaseInsensitiveCompare(rhs.league) == .orderedAscending
             }
             .flatMap(\.matches)
@@ -2042,15 +2122,15 @@ private final class WidgetTeamLogoResolver {
         return nil
     }
 
-    private static func normalizedKey(_ value: String) -> String {
+    private nonisolated static func normalizedKey(_ value: String) -> String {
         normalizedTokens(value).joined()
     }
 
-    private static func normalizedCoreKey(_ value: String) -> String {
+    private nonisolated static func normalizedCoreKey(_ value: String) -> String {
         normalizedTokens(value, stripClubAffixes: true).joined()
     }
 
-    private static func normalizedTokens(_ value: String, stripClubAffixes: Bool = false) -> [String] {
+    private nonisolated static func normalizedTokens(_ value: String, stripClubAffixes: Bool = false) -> [String] {
         let lowered = value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .replacingOccurrences(of: "&", with: " and ")
@@ -2128,12 +2208,12 @@ private final class WidgetTeamLogoResolver {
         return previous[rhsChars.count]
     }
 
-    private static let stopWords: Set<String> = [
+    private nonisolated static let stopWords: Set<String> = [
         "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk",
         "club", "de", "the", "and", "atletico", "athletic", "sporting"
     ]
 
-    private static let clubAffixWords: Set<String> = [
+    private nonisolated static let clubAffixWords: Set<String> = [
         "city", "town", "united", "rovers", "county", "albion", "wanderers",
         "hotspur", "saint", "st", "calcio"
     ]
@@ -2842,8 +2922,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
         if state.delayMinutes > 0 {
             return "Delayed \(state.delayMinutes) m | Tap to open"
         }
-        guard let delayLabel = state.delayLabel, !delayLabel.isEmpty else { return nil }
-        return "\(delayLabel) | Tap to open"
+        return nil
     }
 
     private var fantasyScoreText: String? {
@@ -2921,7 +3000,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
 
     private var viewIdentity: String {
         let matchIdentity = state.matches.map(\.renderIdentity).joined(separator: "||")
-        return "\(state.mode)|\(state.generatedAtEpochSeconds)|\(state.delayMinutes)|\(state.delayLabel ?? "nil")|\(state.fantasyCurrentScore ?? -1)|\(matchIdentity)"
+        return "\(state.mode)|\(state.generatedAtEpochSeconds)|\(state.delayMinutes)|\(state.fantasyCurrentScore ?? -1)|\(matchIdentity)"
     }
 }
 

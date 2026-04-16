@@ -23782,29 +23782,20 @@ function buildLiveActivityTestContentState(payload = {}, now = new Date()) {
   const matches = matchesSource
     .map((match, index) => normalizeLiveActivityTestMatch(match, index, now))
     .slice(0, 10);
-  const delayLabel =
-    delayMinutes > 0 && mode.includes("live") ? `Delayed ${delayMinutes} m` : null;
-
-  return {
+  const contentState = {
     mode,
     generatedAtEpochSeconds: Math.floor(now.getTime() / 1000),
     delayMinutes,
-    delayLabel,
-    fantasyCurrentScore: Number.isFinite(
-      Number(
-        payload.fantasyCurrentScore !== undefined
-          ? payload.fantasyCurrentScore
-          : presetPayload.fantasyCurrentScore
-      )
-    )
-      ? Number(
-        payload.fantasyCurrentScore !== undefined
-          ? payload.fantasyCurrentScore
-          : presetPayload.fantasyCurrentScore
-      )
-      : null,
     matches,
   };
+  const resolvedFantasyCurrentScore =
+    payload.fantasyCurrentScore !== undefined
+      ? payload.fantasyCurrentScore
+      : presetPayload.fantasyCurrentScore;
+  if (Number.isFinite(Number(resolvedFantasyCurrentScore))) {
+    contentState.fantasyCurrentScore = Number(resolvedFantasyCurrentScore);
+  }
+  return contentState;
 }
 
 function resolveLiveActivityTestUserDeviceToken(req, body = {}) {
@@ -23851,7 +23842,6 @@ async function endSupersededLiveActivityIfNeeded({
       mode: "ended",
       generatedAtEpochSeconds: timestamp,
       delayMinutes: 0,
-      delayLabel: null,
       fantasyCurrentScore: null,
       matches: [],
     },
@@ -24374,7 +24364,6 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
           mode: "ended",
           generatedAtEpochSeconds: timestamp,
           delayMinutes: 0,
-          delayLabel: null,
           matches: [],
         },
         dismissalDate: timestamp,
@@ -24610,7 +24599,6 @@ app.post(`${API_PREFIX}/live-activity/test/end`, async (req, res) => {
         mode: "ended",
         generatedAtEpochSeconds: timestamp,
         delayMinutes: 0,
-        delayLabel: null,
         matches: [],
       },
       dismissalDate: timestamp,
