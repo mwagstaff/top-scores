@@ -113,6 +113,14 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         rawHasScore && !shouldSuppressScoreDisplay
     }
 
+    var resolvedAggregateHomeScore: Int? {
+        resolvedAggregateScore?.home
+    }
+
+    var resolvedAggregateAwayScore: Int? {
+        resolvedAggregateScore?.away
+    }
+
     var displayHomeTeam: String {
         let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? homeTeam : trimmed
@@ -176,6 +184,22 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
 
         guard homeScore == 0, awayScore == 0 else { return false }
         return secondsSinceKickoff <= 15 * 60
+    }
+
+    private var resolvedAggregateScore: (home: Int, away: Int)? {
+        if let firstLegHomeScore, let firstLegAwayScore {
+            if homeScore != nil || awayScore != nil {
+                return (
+                    firstLegHomeScore + (homeScore ?? 0),
+                    firstLegAwayScore + (awayScore ?? 0)
+                )
+            }
+
+            return (firstLegHomeScore, firstLegAwayScore)
+        }
+
+        guard let aggregateHomeScore, let aggregateAwayScore else { return nil }
+        return (aggregateHomeScore, aggregateAwayScore)
     }
 
     func withTvChannels(_ channels: [String]) -> WidgetMatch {
@@ -301,7 +325,15 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     }
 
     var hasDisplayableAggregateScore: Bool {
-        aggregateHomeScore != nil && aggregateAwayScore != nil
+        resolvedAggregateScore != nil
+    }
+
+    var resolvedAggregateHomeScore: Int? {
+        resolvedAggregateScore?.home
+    }
+
+    var resolvedAggregateAwayScore: Int? {
+        resolvedAggregateScore?.away
     }
 
     var homeWonOnPenalties: Bool {
@@ -352,6 +384,22 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
 
         guard homeScore == 0, awayScore == 0 else { return false }
         return secondsSinceKickoff <= 15 * 60
+    }
+
+    private var resolvedAggregateScore: (home: Int, away: Int)? {
+        if let firstLegHomeScore, let firstLegAwayScore {
+            if homeScore != nil || awayScore != nil {
+                return (
+                    firstLegHomeScore + (homeScore ?? 0),
+                    firstLegAwayScore + (awayScore ?? 0)
+                )
+            }
+
+            return (firstLegHomeScore, firstLegAwayScore)
+        }
+
+        guard let aggregateHomeScore, let aggregateAwayScore else { return nil }
+        return (aggregateHomeScore, aggregateAwayScore)
     }
 }
 
@@ -3007,7 +3055,7 @@ private struct SingleUpcomingMatchView: View {
     }
 
     private var aggregateText: String? {
-        guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
+        guard let home = match.resolvedAggregateHomeScore, let away = match.resolvedAggregateAwayScore else { return nil }
         guard match.hasDisplayableAggregateScore else { return nil }
         return "(\(home)-\(away))"
     }
@@ -3060,7 +3108,7 @@ private struct SingleLiveMatchView: View {
     }
 
     private var aggregateText: String? {
-        guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
+        guard let home = match.resolvedAggregateHomeScore, let away = match.resolvedAggregateAwayScore else { return nil }
         guard match.hasDisplayableAggregateScore else { return nil }
         return "Agg: \(home)-\(away)"
     }
@@ -3113,7 +3161,7 @@ private struct SingleFinishedMatchView: View {
     }
 
     private var aggregateText: String? {
-        guard let home = match.aggregateHomeScore, let away = match.aggregateAwayScore else { return nil }
+        guard let home = match.resolvedAggregateHomeScore, let away = match.resolvedAggregateAwayScore else { return nil }
         guard match.hasDisplayableAggregateScore else { return nil }
         return "Agg: \(home)-\(away)"
     }
@@ -3248,14 +3296,14 @@ private struct LiveActivityUpcomingCenterIndicator: View {
     }
 
     private var aggregateHomeText: String? {
-        guard let aggregateHomeScore = match.aggregateHomeScore, match.hasDisplayableAggregateScore else {
+        guard let aggregateHomeScore = match.resolvedAggregateHomeScore, match.hasDisplayableAggregateScore else {
             return nil
         }
         return "(\(aggregateHomeScore))"
     }
 
     private var aggregateAwayText: String? {
-        guard let aggregateAwayScore = match.aggregateAwayScore, match.hasDisplayableAggregateScore else {
+        guard let aggregateAwayScore = match.resolvedAggregateAwayScore, match.hasDisplayableAggregateScore else {
             return nil
         }
         return "(\(aggregateAwayScore))"
@@ -3911,12 +3959,12 @@ private struct MultiMatchEntryCell: View {
     }
 
     private var aggregateHomeText: String? {
-        guard showsAggregateScore, let home = match.aggregateHomeScore else { return nil }
+        guard showsAggregateScore, let home = match.resolvedAggregateHomeScore else { return nil }
         return "(\(home))"
     }
 
     private var aggregateAwayText: String? {
-        guard showsAggregateScore, let away = match.aggregateAwayScore else { return nil }
+        guard showsAggregateScore, let away = match.resolvedAggregateAwayScore else { return nil }
         return "(\(away))"
     }
 
@@ -3949,8 +3997,8 @@ private struct MultiMatchEntryCell: View {
     private var showsAggregateScore: Bool {
         guard match.hasScore,
               match.hasDisplayableAggregateScore,
-              match.aggregateHomeScore != nil,
-              match.aggregateAwayScore != nil else {
+              match.resolvedAggregateHomeScore != nil,
+              match.resolvedAggregateAwayScore != nil else {
             return false
         }
         return true

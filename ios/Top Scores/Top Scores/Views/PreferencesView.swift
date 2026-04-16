@@ -106,8 +106,8 @@ struct PreferencesView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
 
-                            Toggle("Fantasy Premier League logo", isOn: showCompactFixtureFantasyLogoBinding)
-                            Text("Shows the Fantasy Premier League logo on the left side of compact fixture lozenges when your squad has one or more players involved in the match.")
+                            Toggle("Fantasy Premier League indicator", isOn: showCompactFixtureFantasyLogoBinding)
+                            Text("Shows a pink chevron on compact fixture lozenges when your squad has one or more players involved in the match.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }

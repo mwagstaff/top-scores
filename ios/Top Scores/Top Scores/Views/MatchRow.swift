@@ -67,8 +67,6 @@ struct MatchRow: View {
     var compactDensity: FixturesViewDensity = .compact
     var fantasyContext: FantasyMatchRowContext = .empty
     var rowPreferences: MatchRowPreferences = .disabledFantasy
-    var reserveCompactFantasyAccessorySpace: Bool = false
-
     var body: some View {
         matchCard
             .opacity(match.isPostponed ? 0.5 : 1.0)
@@ -194,8 +192,6 @@ struct MatchRow: View {
             }
 
             HStack(alignment: .center, spacing: compactFixtureHorizontalSpacing) {
-                compactFantasyAccessorySlot
-
                 TeamLogo(
                     name: match.homeTeam,
                     alternateNames: [match.homeShortName].compactMap { $0 },
@@ -536,35 +532,6 @@ struct MatchRow: View {
 
     private var compactAccessorySlotHeight: CGFloat {
         compactDensity == .compact ? 20 : 18
-    }
-
-    private var compactFantasyBadgeDiameter: CGFloat {
-        compactDensity == .compact ? 16 : 14
-    }
-
-    private var compactFantasyBadgeIconSize: CGFloat {
-        compactDensity == .compact ? 9 : 8
-    }
-
-    private var compactFantasyAccessorySlot: some View {
-        ZStack {
-            if shouldShowFantasyParticipationBadge {
-                FantasyMatchParticipationBadge(
-                    diameter: compactFantasyBadgeDiameter,
-                    iconSize: compactFantasyBadgeIconSize,
-                    iconScale: 1.0,
-                    shadowOpacity: 0
-                )
-            }
-        }
-        .frame(
-            width: (shouldShowFantasyParticipationBadge || reserveCompactFantasyAccessorySpace)
-                ? compactAccessorySlotWidth
-                : 0,
-            height: compactAccessorySlotHeight,
-            alignment: .center
-        )
-        .accessibilityHidden(!shouldShowFantasyParticipationBadge)
     }
 
     private var compactBroadcastAccessorySlot: some View {

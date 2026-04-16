@@ -97,6 +97,7 @@ struct MatchesView: View {
     @State private var reportedMissingLogoNames: Set<String> = []
     @State private var lastPredictorCandidateDateKeys: Set<String> = []
     @State private var didRunActivationForVisibleCycle = false
+    @State private var navigationMatch: MatchNavigation?
 
     private static let minimumSearchCharacters = 3
     private static let searchDebounceNanoseconds: UInt64 = 250_000_000
@@ -234,38 +235,49 @@ struct MatchesView: View {
         return formatter
     }()
 
-    var body: some View {
-        NavigationStack {
-            GeometryReader { proxy in
-                VStack(spacing: 0) {
-                    headerView
-                    Group {
-                        if matchesStore.isLoading && matchesStore.groupedMatches.isEmpty {
-                            VStack(spacing: 16) {
-                                ProgressView()
-                                Text(mode.loadingText)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if displayedMatchDays.isEmpty {
-                            emptyState
-                        } else {
-                            matchesList
+    private var navigationStackContent: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                headerView
+                Group {
+                    if matchesStore.isLoading && matchesStore.groupedMatches.isEmpty {
+                        VStack(spacing: 16) {
+                            ProgressView()
+                            Text(mode.loadingText)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if displayedMatchDays.isEmpty {
+                        emptyState
+                    } else {
+                        matchesList
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
-                .background(Color(.systemBackground))
-                .overlay(alignment: .top) {
-                    if showToast {
-                        ToastView(message: toastMessage)
-                            .padding(.top, 8)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+            .background(Color(.systemBackground))
+            .overlay(alignment: .top) {
+                if showToast {
+                    ToastView(message: toastMessage)
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
+        }
+        .navigationDestination(item: $navigationMatch) { nav in
+            MatchDetailView(
+                match: nav.match,
+                highlightToday: nav.highlightToday,
+                showFantasyBadge: nav.showFantasyBadge
+            )
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            navigationStackContent
         }
         .onAppear {
             guard isSelected else { return }
@@ -459,18 +471,12 @@ struct MatchesView: View {
         ForEach(day.leagues) { league in
             leagueHeadingDividerRow(for: league)
 
-            let hasMixedFantasyBadgeVisibility = compactLeagueHasMixedFantasyBadgeVisibility(league)
-
             ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
                 let prevTime: String? = index > 0 ? league.matches[index - 1].time : nil
                 if prevTime != nil && prevTime != match.time {
                     kickoffDividerRow(time: match.time)
                 }
-                matchRow(
-                    for: match,
-                    day: day,
-                    reserveCompactFantasyAccessorySpace: hasMixedFantasyBadgeVisibility
-                )
+                matchRow(for: match, day: day)
             }
         }
     }
@@ -521,58 +527,79 @@ struct MatchesView: View {
         .listRowBackground(Color.clear)
     }
 
-    private func matchRow(
-        for match: Match,
-        day: MatchDay,
-        reserveCompactFantasyAccessorySpace: Bool = false
-    ) -> some View {
-        NavigationLink {
-            MatchDetailView(
-                match: match,
-                highlightToday: day.isToday,
-                showFantasyBadge: mode == .fixtures
-            )
-        } label: {
-            MatchesListRowLabel(
-                match: match,
-                isFixtureMode: mode == .fixtures,
-                highlightToday: day.isToday,
-                usesCompactFixtureRows: usesCompactFixtureRows,
-                compactDensity: preferences.fixturesViewDensity,
-                rowPreferences: matchRowPreferences,
-                fantasyContext: fantasyViewModel.matchRowContext,
-                reserveCompactFantasyAccessorySpace: reserveCompactFantasyAccessorySpace
-            )
-            .equatable()
-        }
-        .disabled(match.isPostponed)
-        .buttonStyle(.plain)
-        .listRowInsets(
-            EdgeInsets(
-                top: usesCompactFixtureRows ? compactFixturesSpacing.rowTop : 4,
-                leading: 16,
-                bottom: usesCompactFixtureRows ? compactFixturesSpacing.rowBottom : 8,
-                trailing: 16
-            )
+    @ViewBuilder
+    private func matchRow(for match: Match, day: MatchDay) -> some View {
+        let showFPLChevron = fantasyParticipationBadgeVisibility(
+            for: match,
+            showFantasyBadge: mode == .fixtures,
+            layoutStyle: .compactFixture,
+            rowPreferences: matchRowPreferences,
+            fantasyContext: fantasyViewModel.matchRowContext
         )
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
-    }
-
-    private func compactLeagueHasMixedFantasyBadgeVisibility(_ league: MatchLeague) -> Bool {
-        guard mode == .fixtures, usesCompactFixtureRows else { return false }
-
-        let badgeVisibility = league.matches.map { match in
-            fantasyParticipationBadgeVisibility(
-                for: match,
-                showFantasyBadge: true,
-                layoutStyle: .compactFixture,
-                rowPreferences: matchRowPreferences,
-                fantasyContext: fantasyViewModel.matchRowContext
+        if usesCompactFixtureRows {
+            Button {
+                navigationMatch = MatchNavigation(
+                    match: match,
+                    highlightToday: day.isToday,
+                    showFantasyBadge: mode == .fixtures
+                )
+            } label: {
+                HStack(spacing: 0) {
+                    MatchesListRowLabel(
+                        match: match,
+                        isFixtureMode: mode == .fixtures,
+                        highlightToday: day.isToday,
+                        usesCompactFixtureRows: true,
+                        compactDensity: preferences.fixturesViewDensity,
+                        rowPreferences: matchRowPreferences,
+                        fantasyContext: fantasyViewModel.matchRowContext
+                    )
+                    .equatable()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(showFPLChevron ? .semibold : .regular))
+                        .foregroundStyle(showFPLChevron
+                            ? Color(red: 0.95, green: 0.20, blue: 0.66)
+                            : Color(.tertiaryLabel))
+                        .frame(width: 16)
+                }
+            }
+            .disabled(match.isPostponed)
+            .buttonStyle(.plain)
+            .listRowInsets(
+                EdgeInsets(
+                    top: compactFixturesSpacing.rowTop,
+                    leading: 16,
+                    bottom: compactFixturesSpacing.rowBottom,
+                    trailing: 0
+                )
             )
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        } else {
+            NavigationLink {
+                MatchDetailView(
+                    match: match,
+                    highlightToday: day.isToday,
+                    showFantasyBadge: mode == .fixtures
+                )
+            } label: {
+                MatchesListRowLabel(
+                    match: match,
+                    isFixtureMode: mode == .fixtures,
+                    highlightToday: day.isToday,
+                    usesCompactFixtureRows: false,
+                    compactDensity: preferences.fixturesViewDensity,
+                    rowPreferences: matchRowPreferences,
+                    fantasyContext: fantasyViewModel.matchRowContext
+                )
+                .equatable()
+            }
+            .disabled(match.isPostponed)
+            .buttonStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
         }
-
-        return badgeVisibility.contains(true) && badgeVisibility.contains(false)
     }
 
     private func matchDebugFooterText(for match: Match) -> String? {
@@ -1116,7 +1143,6 @@ private struct MatchesListRowLabel: View, Equatable {
     let compactDensity: FixturesViewDensity
     let rowPreferences: MatchRowPreferences
     let fantasyContext: FantasyMatchRowContext
-    let reserveCompactFantasyAccessorySpace: Bool
 
     var body: some View {
         MatchRow(
@@ -1130,10 +1156,16 @@ private struct MatchesListRowLabel: View, Equatable {
             layoutStyle: usesCompactFixtureRows ? .compactFixture : .standard,
             compactDensity: compactDensity,
             fantasyContext: fantasyContext,
-            rowPreferences: rowPreferences,
-            reserveCompactFantasyAccessorySpace: reserveCompactFantasyAccessorySpace
+            rowPreferences: rowPreferences
         )
     }
+}
+
+private struct MatchNavigation: Identifiable, Hashable, Sendable {
+    let match: Match
+    let highlightToday: Bool
+    let showFantasyBadge: Bool
+    var id: String { match.id }
 }
 
 private struct PredictionJob: Identifiable, Sendable {

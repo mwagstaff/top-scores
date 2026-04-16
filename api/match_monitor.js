@@ -1799,9 +1799,45 @@ function scoreSnapshot(match) {
   };
 }
 
+function resolveAggregateScores(match, homeScore = undefined, awayScore = undefined) {
+  if (!match || typeof match !== "object") {
+    return { home: null, away: null };
+  }
+
+  const firstLegHomeScore = toNumericScore(match.first_leg_home_score);
+  const firstLegAwayScore = toNumericScore(match.first_leg_away_score);
+  if (Number.isFinite(firstLegHomeScore) && Number.isFinite(firstLegAwayScore)) {
+    const resolvedHomeScore = toNumericScore(
+      homeScore !== undefined ? homeScore : match.home_score
+    );
+    const resolvedAwayScore = toNumericScore(
+      awayScore !== undefined ? awayScore : match.away_score
+    );
+    if (Number.isFinite(resolvedHomeScore) || Number.isFinite(resolvedAwayScore)) {
+      return {
+        home: firstLegHomeScore + (Number.isFinite(resolvedHomeScore) ? resolvedHomeScore : 0),
+        away: firstLegAwayScore + (Number.isFinite(resolvedAwayScore) ? resolvedAwayScore : 0),
+      };
+    }
+
+    return {
+      home: firstLegHomeScore,
+      away: firstLegAwayScore,
+    };
+  }
+
+  const aggregateHomeScore = toNumericScore(match.aggregate_home_score);
+  const aggregateAwayScore = toNumericScore(match.aggregate_away_score);
+  return {
+    home: aggregateHomeScore,
+    away: aggregateAwayScore,
+  };
+}
+
 function aggregateScoreSuffix(match, homeScore, awayScore) {
-  const aggregateHomeScore = toNumericScore(match && match.aggregate_home_score);
-  const aggregateAwayScore = toNumericScore(match && match.aggregate_away_score);
+  const aggregate = resolveAggregateScores(match, homeScore, awayScore);
+  const aggregateHomeScore = aggregate.home;
+  const aggregateAwayScore = aggregate.away;
   if (!Number.isFinite(aggregateHomeScore) || !Number.isFinite(aggregateAwayScore)) {
     return "";
   }
@@ -4600,13 +4636,7 @@ function sanitizeAggregateForLiveActivity(match) {
 }
 
 function resolveLiveActivityAggregateScores(match) {
-  if (!match || typeof match !== "object") {
-    return { home: null, away: null };
-  }
-
-  const aggregateHomeScore = toNumericScore(match.aggregate_home_score);
-  const aggregateAwayScore = toNumericScore(match.aggregate_away_score);
-  return { home: aggregateHomeScore, away: aggregateAwayScore };
+  return resolveAggregateScores(match);
 }
 
 function shouldSuppressPreKickoffScoresForLiveActivity(match, nowMs = Date.now()) {

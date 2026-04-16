@@ -2341,7 +2341,7 @@ test("buildLiveActivityContentState preserves known zero aggregate when first-le
   assert.equal(contentState.matches[0].firstLegAwayScore, 0);
 });
 
-test("buildLiveActivityContentState does not synthesize aggregate from first-leg score when aggregate is missing", () => {
+test("buildLiveActivityContentState derives aggregate from first-leg score when aggregate is missing", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs + 2 * 60 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -2370,10 +2370,45 @@ test("buildLiveActivityContentState does not synthesize aggregate from first-leg
     nowMs
   );
 
-  assert.equal(contentState.matches[0].aggregateHomeScore, null);
-  assert.equal(contentState.matches[0].aggregateAwayScore, null);
+  assert.equal(contentState.matches[0].aggregateHomeScore, 0);
+  assert.equal(contentState.matches[0].aggregateAwayScore, 0);
   assert.equal(contentState.matches[0].firstLegHomeScore, 0);
   assert.equal(contentState.matches[0].firstLegAwayScore, 0);
+});
+
+test("buildLiveActivityContentState prefers computed second-leg aggregate over stale explicit aggregate", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 16 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_live",
+    [
+      {
+        match_details_id: "c6x8p4q7v1zt",
+        date: kickoff.date,
+        time: kickoff.time,
+        league: "UEFA Champions League",
+        league_subcategory: "Quarter-final",
+        home_team: "Aston Villa",
+        away_team: "Bologna",
+        home_score: 1,
+        away_score: 0,
+        aggregate_home_score: 3,
+        aggregate_away_score: 1,
+        first_leg_home_score: 3,
+        first_leg_away_score: 1,
+        score_status: "16'",
+      },
+    ],
+    0,
+    nowMs
+  );
+
+  assert.equal(contentState.matches[0].aggregateHomeScore, 4);
+  assert.equal(contentState.matches[0].aggregateAwayScore, 1);
+  assert.equal(contentState.matches[0].firstLegHomeScore, 3);
+  assert.equal(contentState.matches[0].firstLegAwayScore, 1);
 });
 
 test("buildLiveActivityPresentationForUser derives delayed live score from goal timeline up to delayed minute", () => {
@@ -4059,6 +4094,41 @@ test("includes aggregate score in goal notification body when available", () => 
   assert.equal(goals[0].body, "Atletico Madrid 1 - 0 Club Brugge (agg: 4-3) (A. Griezmann)");
 });
 
+test("derives second-leg aggregate in goal notification body when explicit aggregate is stale", () => {
+  const monitorState = newMonitorState();
+
+  const oldMatch = {
+    home_team: "Aston Villa",
+    away_team: "Bologna",
+    score_status: "10'",
+    home_score: 0,
+    away_score: 0,
+    aggregate_home_score: 3,
+    aggregate_away_score: 1,
+    first_leg_home_score: 3,
+    first_leg_away_score: 1,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    score_status: "16'",
+    home_score: 1,
+    away_score: 0,
+    home_goal_scorers: [{ player: "O. Watkins", goal_times: ["16'"] }],
+  };
+
+  const goals = __testHooks
+    .buildMatchEvents(oldMatch, newMatch, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+
+  assert.equal(goals.length, 1);
+  assert.equal(goals[0].body, "Aston Villa 1 - 0 Bologna (agg: 4-1) (O. Watkins)");
+});
+
 test("includes explicit aggregate 0-0 in score update notifications", () => {
   const oldMatch = {
     home_team: "Wolves",
@@ -4308,6 +4378,33 @@ test("buildScoreChangeEvent includes aggregate score in body when available", ()
   const event = __testHooks.buildScoreChangeEvent(oldMatch, newMatch);
   assert.ok(event);
   assert.equal(event.body, "Atletico Madrid 1 - 0 Club Brugge (agg: 4-3) (12')");
+});
+
+test("buildScoreChangeEvent derives second-leg aggregate when explicit aggregate is stale", () => {
+  const oldMatch = {
+    home_team: "Aston Villa",
+    away_team: "Bologna",
+    home_score: 0,
+    away_score: 0,
+    score_status: "10'",
+    aggregate_home_score: 3,
+    aggregate_away_score: 1,
+    first_leg_home_score: 3,
+    first_leg_away_score: 1,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    home_score: 1,
+    away_score: 0,
+    score_status: "16'",
+  };
+
+  const event = __testHooks.buildScoreChangeEvent(oldMatch, newMatch);
+  assert.ok(event);
+  assert.equal(event.body, "Aston Villa 1 - 0 Bologna (agg: 4-1) (16')");
 });
 
 test("buildScoreChangeEvent returns null when score and status unchanged", () => {

@@ -959,23 +959,29 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     private nonisolated var resolvedAggregateScore: (home: Int, away: Int)? {
-        if let aggregateHomeScore, let aggregateAwayScore {
-            if !shouldSuppressPreKickoffPlaceholderAggregate(
+        let explicitAggregate: (home: Int, away: Int)? = {
+            guard let aggregateHomeScore, let aggregateAwayScore else { return nil }
+            guard !shouldSuppressPreKickoffPlaceholderAggregate(
                 home: aggregateHomeScore,
                 away: aggregateAwayScore
-            ) {
-                return (aggregateHomeScore, aggregateAwayScore)
+            ) else {
+                return nil
             }
+            return (aggregateHomeScore, aggregateAwayScore)
+        }()
+
+        if let firstLegHomeScore, let firstLegAwayScore {
+            if homeScore != nil || awayScore != nil {
+                return (
+                    firstLegHomeScore + (homeScore ?? 0),
+                    firstLegAwayScore + (awayScore ?? 0)
+                )
+            }
+
+            return (firstLegHomeScore, firstLegAwayScore)
         }
 
-        guard let firstLegHomeScore, let firstLegAwayScore else {
-            return nil
-        }
-
-        return (
-            firstLegHomeScore + (homeScore ?? 0),
-            firstLegAwayScore + (awayScore ?? 0)
-        )
+        return explicitAggregate
     }
 
     private nonisolated func shouldSuppressPreKickoffPlaceholderAggregate(home: Int, away: Int) -> Bool {
