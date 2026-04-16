@@ -192,7 +192,28 @@ struct MatchesView: View {
     }
 
     private var displayedMatchDays: [MatchDay] {
-        isSearchFilteringActive ? filteredMatchDays : matchesStore.groupedMatches
+        let days = isSearchFilteringActive ? filteredMatchDays : matchesStore.groupedMatches
+        guard !preferences.showPostponedGames else { return days }
+        return Self.filteringPostponed(days)
+    }
+
+    private static func filteringPostponed(_ days: [MatchDay]) -> [MatchDay] {
+        days.compactMap { day in
+            let filteredLeagues = day.leagues.compactMap { league -> MatchLeague? in
+                let filteredMatches = league.matches.filter { !$0.isPostponed }
+                guard !filteredMatches.isEmpty else { return nil }
+                return MatchLeague(id: league.id, league: league.league, matches: filteredMatches)
+            }
+            guard !filteredLeagues.isEmpty else { return nil }
+            return MatchDay(
+                id: day.id,
+                dateKey: day.dateKey,
+                displayDate: day.displayDate,
+                isToday: day.isToday,
+                isTomorrow: day.isTomorrow,
+                leagues: filteredLeagues
+            )
+        }
     }
 
     private var predictionErrorPresented: Binding<Bool> {
@@ -421,11 +442,14 @@ struct MatchesView: View {
     @ViewBuilder
     private func standardLeagueRows(for day: MatchDay) -> some View {
         ForEach(day.leagues) { league in
-            leagueHeadingRow(for: league.league)
+            leagueHeadingDividerRow(for: league)
 
             ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
-                let prevTime = index > 0 ? league.matches[index - 1].time : nil
-                matchRow(for: match, day: day, kickoffTimeGap: prevTime != nil && prevTime != match.time)
+                let prevTime: String? = index > 0 ? league.matches[index - 1].time : nil
+                if prevTime != nil && prevTime != match.time {
+                    kickoffDividerRow(time: match.time)
+                }
+                matchRow(for: match, day: day)
             }
         }
     }
@@ -433,44 +457,73 @@ struct MatchesView: View {
     @ViewBuilder
     private func compactLeagueRows(for day: MatchDay) -> some View {
         ForEach(day.leagues) { league in
-            leagueHeadingRow(for: league.league)
+            leagueHeadingDividerRow(for: league)
 
             let hasMixedFantasyBadgeVisibility = compactLeagueHasMixedFantasyBadgeVisibility(league)
 
             ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
-                let prevTime = index > 0 ? league.matches[index - 1].time : nil
+                let prevTime: String? = index > 0 ? league.matches[index - 1].time : nil
+                if prevTime != nil && prevTime != match.time {
+                    kickoffDividerRow(time: match.time)
+                }
                 matchRow(
                     for: match,
                     day: day,
-                    kickoffTimeGap: prevTime != nil && prevTime != match.time,
                     reserveCompactFantasyAccessorySpace: hasMixedFantasyBadgeVisibility
                 )
             }
         }
     }
 
-    private func leagueHeadingRow(for leagueName: String) -> some View {
-        Text(leagueName)
-            .font(usesCompactFixtureRows ? .footnote : .subheadline)
-            .fontWeight(.semibold)
-            .foregroundStyle(.secondary)
-            .textCase(nil)
-            .listRowInsets(
-                EdgeInsets(
-                    top: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingTop : 8,
-                    leading: 16,
-                    bottom: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingBottom : 2,
-                    trailing: 16
-                )
+    private func leagueHeadingDividerRow(for league: MatchLeague) -> some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .frame(height: 1)
+                .foregroundStyle(.white.opacity(0.0))
+            Text(league.league)
+                .font(usesCompactFixtureRows ? .caption : .footnote)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary.opacity(0.95))
+                .textCase(nil)
+                .fixedSize()
+            Rectangle()
+                .frame(height: 1)
+                .foregroundStyle(.white.opacity(0.0))
+        }
+        .listRowInsets(
+            EdgeInsets(
+                top: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingTop + 2 : 10,
+                leading: 16,
+                bottom: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingBottom : 3,
+                trailing: 16
             )
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+        )
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+    }
+
+    private func kickoffDividerRow(time: String) -> some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .frame(height: 1)
+                .foregroundStyle(.white.opacity(0.08))
+            Text(time)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary.opacity(0.55))
+                .monospacedDigit()
+                .fixedSize()
+            Rectangle()
+                .frame(height: 1)
+                .foregroundStyle(.white.opacity(0.08))
+        }
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 2, trailing: 16))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 
     private func matchRow(
         for match: Match,
         day: MatchDay,
-        kickoffTimeGap: Bool = false,
         reserveCompactFantasyAccessorySpace: Bool = false
     ) -> some View {
         NavigationLink {
@@ -496,7 +549,7 @@ struct MatchesView: View {
         .buttonStyle(.plain)
         .listRowInsets(
             EdgeInsets(
-                top: (usesCompactFixtureRows ? compactFixturesSpacing.rowTop : 4) + (kickoffTimeGap ? 4 : 0),
+                top: usesCompactFixtureRows ? compactFixturesSpacing.rowTop : 4,
                 leading: 16,
                 bottom: usesCompactFixtureRows ? compactFixturesSpacing.rowBottom : 8,
                 trailing: 16

@@ -79,6 +79,11 @@ struct PreferencesView: View {
                     }
 
                     Section("Display") {
+                        Toggle("Show postponed games", isOn: showPostponedGamesBinding)
+                        Text("When off, postponed matches are hidden from the Fixtures screen.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
                         Toggle("App icon badge", isOn: showTodayUnfinishedFixturesBadgeBinding)
                         Text("Shows an app icon badge with the number of today's fixtures (either yet to kick off or in play).")
                             .font(.footnote)
@@ -511,6 +516,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.premierLeagueMatchesFirst },
             set: { preferences.premierLeagueMatchesFirst = $0 }
+        )
+    }
+
+    private var showPostponedGamesBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showPostponedGames },
+            set: { preferences.showPostponedGames = $0 }
         )
     }
 
