@@ -1816,8 +1816,16 @@ private final class WidgetTeamLogoResolver {
                 return direct
             }
 
+            if let direct = directAssetName(for: candidate) {
+                return direct
+            }
+
             for alias in Self.aliases(for: candidate) {
                 if let directAlias = assetOriginalLookup[alias] {
+                    return directAlias
+                }
+
+                if let directAlias = directAssetName(for: alias) {
                     return directAlias
                 }
 
@@ -1846,6 +1854,17 @@ private final class WidgetTeamLogoResolver {
             }
         }
 
+        return nil
+    }
+
+    private func directAssetName(for name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        for bundle in bundles {
+            if UIImage(named: trimmed, in: bundle, compatibleWith: nil) != nil {
+                return trimmed
+            }
+        }
         return nil
     }
 
