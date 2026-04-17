@@ -1,0 +1,260 @@
+{
+  "uid": "top-scores-redis",
+  "title": "top-scores • Redis Health & Performance",
+  "tags": ["top-scores", "redis", "performance", "infrastructure"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 4,
+  "refresh": "30s",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total Redis Operations",
+      "description": "Cumulative Redis operations recorded since server start.",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background", "graphMode": "none", "justifyMode": "center" },
+      "targets": [{ "expr": "sum(top_scores_redis_operations_total{job=\"top-scores\"})", "legendFormat": "Total Operations" }]
+    },
+    {
+      "type": "stat",
+      "title": "Total Errors",
+      "description": "Cumulative Redis operation errors since server start.",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 10 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background", "graphMode": "none", "justifyMode": "center" },
+      "targets": [{ "expr": "sum(top_scores_redis_operation_errors_total{job=\"top-scores\"})", "legendFormat": "Total Errors" }]
+    },
+    {
+      "type": "stat",
+      "title": "Ops / sec (5m avg)",
+      "description": "Average Redis operations per second over the last 5 minutes.",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }, { "color": "green", "value": 0.1 }] } },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background", "graphMode": "area", "justifyMode": "center" },
+      "targets": [{ "expr": "sum(rate(top_scores_redis_operations_total{job=\"top-scores\"}[5m]))", "legendFormat": "Ops/sec" }]
+    },
+    {
+      "type": "stat",
+      "title": "p90 Duration (all ops)",
+      "description": "90th percentile duration across all Redis operation types (cumulative since server start).",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 25 }, { "color": "red", "value": 100 }] } },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background", "graphMode": "none", "justifyMode": "center" },
+      "targets": [{ "expr": "histogram_quantile(0.90, sum by (le) (top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"})) * 1000", "legendFormat": "p90 ms" }]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Ops / sec by Operation",
+      "description": "Redis operations per second broken down by operation type.",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": true } }, "overrides": [] },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_operations_total{job=\"top-scores\"}[5m]))", "legendFormat": "{{operation}}" }]
+    },
+    {
+      "type": "table",
+      "title": "Call Count by Operation",
+      "description": "Total Redis operations per operation type since server start, sorted by most called.",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "operation" }, "properties": [{ "id": "displayName", "value": "Operation" }, { "id": "custom.width", "value": 340 }] },
+          { "matcher": { "id": "byName", "options": "Value" }, "properties": [{ "id": "displayName", "value": "Total Calls" }, { "id": "custom.width", "value": 140 }] }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "Total Calls", "desc": true }], "footer": { "show": false } },
+      "transformations": [
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value"] } } }
+      ],
+      "targets": [{ "expr": "sum by (operation) (top_scores_redis_operations_total{job=\"top-scores\"})", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "p90 Duration by Operation (ms)",
+      "description": "90th percentile operation duration in milliseconds.",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "spanNulls": true } }, "overrides": [] },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{ "expr": "histogram_quantile(0.90, sum by (operation, le) (increase(top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"}[1h]))) * 1000", "legendFormat": "p90 {{operation}}" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "p95 Duration by Operation (ms)",
+      "description": "95th percentile operation duration in milliseconds.",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "spanNulls": true } }, "overrides": [] },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (operation, le) (increase(top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"}[1h]))) * 1000", "legendFormat": "p95 {{operation}}" }]
+    },
+    {
+      "type": "table",
+      "title": "p90 & p95 Duration by Operation — Slowest First",
+      "description": "Operations sorted by p90 duration. Percentiles computed from cumulative histograms since server start.",
+      "gridPos": { "x": 0, "y": 28, "w": 24, "h": 10 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "operation" }, "properties": [{ "id": "displayName", "value": "Operation" }, { "id": "custom.width", "value": 300 }] },
+          {
+            "matcher": { "id": "byName", "options": "Value #p90" },
+            "properties": [
+              { "id": "displayName", "value": "p90 (ms)" }, { "id": "unit", "value": "ms" }, { "id": "custom.width", "value": 110 },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 50 }] } },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value #p95" },
+            "properties": [
+              { "id": "displayName", "value": "p95 (ms)" }, { "id": "unit", "value": "ms" }, { "id": "custom.width", "value": 110 },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 25 }, { "color": "red", "value": 100 }] } },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "p90 (ms)", "desc": true }], "footer": { "show": false } },
+      "transformations": [
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value #p90", "Value #p95"] } } }
+      ],
+      "targets": [
+        { "expr": "histogram_quantile(0.90, sum by (operation, le) (top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"})) * 1000", "legendFormat": "{{operation}}", "refId": "p90", "instant": true, "format": "table" },
+        { "expr": "histogram_quantile(0.95, sum by (operation, le) (top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"})) * 1000", "legendFormat": "{{operation}}", "refId": "p95", "instant": true, "format": "table" }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Average Duration by Operation (ms)",
+      "description": "Mean Redis operation duration in milliseconds over time.",
+      "gridPos": { "x": 0, "y": 38, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "spanNulls": true } }, "overrides": [] },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_operation_duration_seconds_sum{job=\"top-scores\"}[5m])) / sum by (operation) (rate(top_scores_redis_operation_duration_seconds_count{job=\"top-scores\"}[5m])) * 1000", "legendFormat": "avg {{operation}}" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Records Returned / sec by Operation",
+      "description": "Rate of records/results returned per second by Redis operation type.",
+      "gridPos": { "x": 12, "y": 38, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": true } }, "overrides": [] },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_results_returned_total{job=\"top-scores\"}[5m]))", "legendFormat": "{{operation}}" }]
+    },
+    {
+      "type": "table",
+      "title": "Average Duration by Operation — Slowest First",
+      "description": "Mean operation duration (total duration sum ÷ call count) since server start.",
+      "gridPos": { "x": 0, "y": 46, "w": 12, "h": 10 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "operation" }, "properties": [{ "id": "displayName", "value": "Operation" }, { "id": "custom.width", "value": 260 }] },
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Avg Duration (ms)" }, { "id": "unit", "value": "ms" }, { "id": "custom.width", "value": 150 },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 50 }] } },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "Avg Duration (ms)", "desc": true }], "footer": { "show": false } },
+      "transformations": [
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value"] } } }
+      ],
+      "targets": [{ "expr": "sum by (operation) (top_scores_redis_operation_duration_seconds_sum{job=\"top-scores\"}) / sum by (operation) (top_scores_redis_operation_duration_seconds_count{job=\"top-scores\"}) * 1000", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
+    },
+    {
+      "type": "table",
+      "title": "Records Returned by Operation",
+      "description": "Total records/results returned by each Redis operation since server start.",
+      "gridPos": { "x": 12, "y": 46, "w": 12, "h": 10 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "operation" }, "properties": [{ "id": "displayName", "value": "Operation" }, { "id": "custom.width", "value": 260 }] },
+          { "matcher": { "id": "byName", "options": "Value" }, "properties": [{ "id": "displayName", "value": "Total Records" }, { "id": "custom.width", "value": 130 }] }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "Total Records", "desc": true }], "footer": { "show": false } },
+      "transformations": [
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value"] } } }
+      ],
+      "targets": [{ "expr": "sum by (operation) (top_scores_redis_results_returned_total{job=\"top-scores\"})", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Errors / sec by Operation",
+      "description": "Redis operation errors per second by operation type.",
+      "gridPos": { "x": 0, "y": 56, "w": 24, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": true } }, "overrides": [] },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_operation_errors_total{job=\"top-scores\"}[5m]))", "legendFormat": "{{operation}}" }]
+    },
+    {
+      "type": "table",
+      "title": "Error Count by Operation",
+      "description": "Total Redis operation errors per operation type since server start.",
+      "gridPos": { "x": 0, "y": 64, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "operation" }, "properties": [{ "id": "displayName", "value": "Operation" }, { "id": "custom.width", "value": 340 }] },
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Errors" }, { "id": "custom.width", "value": 100 },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "Errors", "desc": true }], "footer": { "show": false } },
+      "transformations": [
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value"] } } }
+      ],
+      "targets": [{ "expr": "sum by (operation) (top_scores_redis_operation_errors_total{job=\"top-scores\"})", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
+    },
+
+    {
+      "type": "text",
+      "title": "Slow Query Log (Individual Queries ≥ 50ms)",
+      "gridPos": { "x": 0, "y": 72, "w": 24, "h": 3 },
+      "options": {
+        "mode": "markdown",
+        "content": "Individual slow queries (≥ 50 ms) are captured in a rolling log (last 200 entries). To view them, fetch: **`GET /api/v1/admin/redis/slow-queries`** — returns each query with `operation`, `duration_ms`, `result_count`, `recorded_at`, and `error` fields, plus an `operations_summary` sorted by average duration."
+      },
+      "targets": []
+    }
+  ]
+}

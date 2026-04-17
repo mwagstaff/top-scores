@@ -659,6 +659,7 @@ const RUNTIME_ENVIRONMENT = String(process.env.NODE_ENV || "development").trim()
 const HTTP_REQUEST_DURATION_BUCKETS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5];
 const SOURCE_FETCH_DURATION_BUCKETS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
 const APP_EVENT_DURATION_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0];
+const REDIS_OP_DURATION_BUCKETS_S = [0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 5.0];
 const FPL_TRANSFER_RECOMMENDATION_DURATION_BUCKETS = [0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1];
 const UNIQUE_USER_WINDOWS = [
   { period: "1m", windowMs: 60 * 1000 },
@@ -5637,6 +5638,41 @@ function buildPrometheusMetricsText() {
     });
   });
   pushPrometheusSample(lines, "unique_users", seenDeviceTokens.size, { period: "all" });
+
+  // Redis operation metrics
+  const redisMetrics = getRedisMetrics();
+  if (redisMetrics.operations.length > 0) {
+    lines.push("# HELP top_scores_redis_operations_total Total Redis operations by type.");
+    lines.push("# TYPE top_scores_redis_operations_total counter");
+    redisMetrics.operations.forEach((op) => {
+      pushPrometheusSample(lines, "top_scores_redis_operations_total", op.calls, { operation: op.operation });
+    });
+
+    lines.push("# HELP top_scores_redis_operation_errors_total Total Redis operation errors by type.");
+    lines.push("# TYPE top_scores_redis_operation_errors_total counter");
+    redisMetrics.operations.forEach((op) => {
+      pushPrometheusSample(lines, "top_scores_redis_operation_errors_total", op.errors, { operation: op.operation });
+    });
+
+    lines.push("# HELP top_scores_redis_results_returned_total Total records/results returned by Redis operations.");
+    lines.push("# TYPE top_scores_redis_results_returned_total counter");
+    redisMetrics.operations.forEach((op) => {
+      pushPrometheusSample(lines, "top_scores_redis_results_returned_total", op.resultCountTotal, { operation: op.operation });
+    });
+
+    appendHistogramMetrics(
+      lines,
+      "top_scores_redis_operation_duration_seconds",
+      "Duration of Redis operations by type in seconds.",
+      REDIS_OP_DURATION_BUCKETS_S,
+      redisMetrics.operations.map((op) => ({
+        labels: { operation: op.operation },
+        count: op.calls,
+        sum: op.durationSumSeconds,
+        bucketCounts: op.bucketCounts,
+      }))
+    );
+  }
 
   return `${lines.join("\n")}\n`;
 }
@@ -19346,6 +19382,26 @@ app.post(`${API_PREFIX}/admin/redis/reconciliation/run`, async (req, res) => {
   }
 });
 
+app.get(`${API_PREFIX}/admin/redis/slow-queries`, (req, res) => {
+  setCacheOnlyHeaders(res);
+  const metrics = getRedisMetrics();
+  const limitRaw = Number(req.query.limit);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(500, Math.floor(limitRaw)) : 50;
+  res.status(200).json({
+    slow_query_threshold_ms: 50,
+    total: metrics.slowQueries.length,
+    limit,
+    queries: metrics.slowQueries.slice(0, limit),
+    operations_summary: metrics.operations.map((op) => ({
+      operation: op.operation,
+      calls: op.calls,
+      errors: op.errors,
+      avg_duration_ms: op.calls > 0 ? Math.round((op.durationSumSeconds * 1000) / op.calls) : 0,
+      total_results: op.resultCountTotal,
+    })).sort((a, b) => b.avg_duration_ms - a.avg_duration_ms),
+  });
+});
+
 app.post(`${API_PREFIX}/admin/cache-state/invalidate`, (req, res) => {
   setCacheOnlyHeaders(res);
 
@@ -21378,6 +21434,7 @@ const {
   saveOperationalMatchWriteLogEntries,
   getOperationalMatchWriteLog,
   __historyConfig: bbcHistoryConfig,
+  getRedisMetrics,
 } = require("./redis_client");
 
 // Save user preferences

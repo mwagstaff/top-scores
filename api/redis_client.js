@@ -92,6 +92,95 @@ let client = null;
 let isConnected = false;
 let ttlPolicyEnsured = false;
 
+// ─── Redis operation metrics ──────────────────────────────────────────────────
+const REDIS_OP_DURATION_BUCKETS_S = [0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 5.0];
+const SLOW_QUERY_THRESHOLD_MS = 50;
+const SLOW_QUERY_MAX_ENTRIES = 200;
+const _redisOpStats = new Map();
+const _slowQueryLog = [];
+
+function _extractResultCount(result) {
+  if (result === null || result === undefined) return 0;
+  if (Array.isArray(result)) return result.length;
+  if (typeof result !== "object") return 1;
+  if (Number.isFinite(result.total)) return Math.max(0, Number(result.total));
+  if (Number.isFinite(result.written)) return Math.max(0, Number(result.written));
+  if (Number.isFinite(result.upserted)) return Math.max(0, Number(result.upserted));
+  if (Number.isFinite(result.deleted)) return Math.max(0, Number(result.deleted));
+  if (Array.isArray(result.entries)) return result.entries.length;
+  if (Array.isArray(result.matches)) return result.matches.length;
+  if (result.records && typeof result.records === "object") return Object.keys(result.records).length;
+  return 1;
+}
+
+function _recordRedisOp(operation, durationMs, opts) {
+  const error = opts && opts.error ? opts.error : null;
+  const resultCount = opts && opts.resultCount !== undefined ? opts.resultCount : null;
+  const durationS = durationMs / 1000;
+
+  if (!_redisOpStats.has(operation)) {
+    _redisOpStats.set(operation, {
+      calls: 0,
+      errors: 0,
+      durationSumSeconds: 0,
+      bucketCounts: REDIS_OP_DURATION_BUCKETS_S.map(() => 0),
+      resultCountTotal: 0,
+    });
+  }
+  const s = _redisOpStats.get(operation);
+  s.calls += 1;
+  s.durationSumSeconds += durationS;
+  if (Number.isFinite(resultCount) && resultCount >= 0) {
+    s.resultCountTotal += resultCount;
+  }
+  if (error) s.errors += 1;
+  REDIS_OP_DURATION_BUCKETS_S.forEach((boundary, i) => {
+    if (durationS <= boundary) s.bucketCounts[i] += 1;
+  });
+
+  if (durationMs >= SLOW_QUERY_THRESHOLD_MS || error) {
+    _slowQueryLog.push({
+      operation,
+      duration_ms: Math.round(durationMs),
+      result_count: Number.isFinite(resultCount) ? resultCount : null,
+      recorded_at: new Date().toISOString(),
+      error: error ? String(error) : null,
+    });
+    if (_slowQueryLog.length > SLOW_QUERY_MAX_ENTRIES) {
+      _slowQueryLog.splice(0, _slowQueryLog.length - SLOW_QUERY_MAX_ENTRIES);
+    }
+  }
+}
+
+function _withMetrics(operation, fn) {
+  return async function metricsWrapper(...args) {
+    const t0 = Date.now();
+    try {
+      const result = await fn(...args);
+      _recordRedisOp(operation, Date.now() - t0, { resultCount: _extractResultCount(result) });
+      return result;
+    } catch (error) {
+      _recordRedisOp(operation, Date.now() - t0, { error: error.message || String(error) });
+      throw error;
+    }
+  };
+}
+
+function getRedisMetrics() {
+  return {
+    operations: Array.from(_redisOpStats.entries()).map(([op, s]) => ({
+      operation: op,
+      calls: s.calls,
+      errors: s.errors,
+      durationSumSeconds: s.durationSumSeconds,
+      bucketCounts: s.bucketCounts.slice(),
+      resultCountTotal: s.resultCountTotal,
+    })),
+    slowQueries: _slowQueryLog.slice().reverse(),
+    durationBucketsSeconds: REDIS_OP_DURATION_BUCKETS_S.slice(),
+  };
+}
+
 function sanitizeTokenForKey(value, fallback = "unknown") {
   const normalized = String(value || "").trim();
   if (!normalized) return fallback;
@@ -2347,36 +2436,37 @@ async function closeRedisConnection() {
 
 module.exports = {
   getClient,
-  saveUserPreferences,
-  updateUserLiveActivityState,
-  getUserPreferences,
-  deleteUserPreferences,
-  getAllUserPreferences,
-  saveFantasyReminderRecord,
-  getFantasyReminderRecord,
-  getFantasyReminderRecords,
-  saveLiveActivityDebugRecord,
-  getLiveActivityDebugRecords,
-  saveLiveActivityMatchTimelineSnapshots,
-  getLiveActivityMatchTimelineSnapshotsAt,
-  saveBbcMatchEventHistory,
-  saveBbcNotificationHistory,
-  claimFantasyReminderSendIdempotency,
-  claimBbcNotificationIdempotency,
-  getBbcMatchHistoryGrouped,
-  getBbcRealtimeSnapshot,
-  cleanupBbcHistory,
-  saveOperationalDataset,
-  getOperationalDataset,
-  getOperationalDatasets,
-  saveOperationalMatchDetailsRecords,
-  getOperationalMatchDetails,
-  getAllOperationalMatchDetails,
-  getOperationalMatchDetailsSummary,
-  deleteOperationalMatchDetailsRecords,
-  saveOperationalMatchWriteLogEntries,
-  getOperationalMatchWriteLog,
+  saveUserPreferences: _withMetrics("save_user_preferences", saveUserPreferences),
+  updateUserLiveActivityState: _withMetrics("update_live_activity_state", updateUserLiveActivityState),
+  getUserPreferences: _withMetrics("get_user_preferences", getUserPreferences),
+  deleteUserPreferences: _withMetrics("delete_user_preferences", deleteUserPreferences),
+  getAllUserPreferences: _withMetrics("get_all_user_preferences", getAllUserPreferences),
+  saveFantasyReminderRecord: _withMetrics("save_fantasy_reminder", saveFantasyReminderRecord),
+  getFantasyReminderRecord: _withMetrics("get_fantasy_reminder", getFantasyReminderRecord),
+  getFantasyReminderRecords: _withMetrics("get_fantasy_reminders", getFantasyReminderRecords),
+  saveLiveActivityDebugRecord: _withMetrics("save_live_activity_debug", saveLiveActivityDebugRecord),
+  getLiveActivityDebugRecords: _withMetrics("get_live_activity_debug", getLiveActivityDebugRecords),
+  saveLiveActivityMatchTimelineSnapshots: _withMetrics("save_live_activity_timeline", saveLiveActivityMatchTimelineSnapshots),
+  getLiveActivityMatchTimelineSnapshotsAt: _withMetrics("get_live_activity_timeline", getLiveActivityMatchTimelineSnapshotsAt),
+  saveBbcMatchEventHistory: _withMetrics("save_bbc_event_history", saveBbcMatchEventHistory),
+  saveBbcNotificationHistory: _withMetrics("save_bbc_notification_history", saveBbcNotificationHistory),
+  claimFantasyReminderSendIdempotency: _withMetrics("claim_fantasy_idempotency", claimFantasyReminderSendIdempotency),
+  claimBbcNotificationIdempotency: _withMetrics("claim_bbc_notification_idempotency", claimBbcNotificationIdempotency),
+  getBbcMatchHistoryGrouped: _withMetrics("get_bbc_history_grouped", getBbcMatchHistoryGrouped),
+  getBbcRealtimeSnapshot: _withMetrics("get_bbc_realtime_snapshot", getBbcRealtimeSnapshot),
+  cleanupBbcHistory: _withMetrics("cleanup_bbc_history", cleanupBbcHistory),
+  saveOperationalDataset: _withMetrics("save_operational_dataset", saveOperationalDataset),
+  getOperationalDataset: _withMetrics("get_operational_dataset", getOperationalDataset),
+  getOperationalDatasets: _withMetrics("get_operational_datasets", getOperationalDatasets),
+  saveOperationalMatchDetailsRecords: _withMetrics("save_match_details", saveOperationalMatchDetailsRecords),
+  getOperationalMatchDetails: _withMetrics("get_match_details", getOperationalMatchDetails),
+  getAllOperationalMatchDetails: _withMetrics("get_all_match_details", getAllOperationalMatchDetails),
+  getOperationalMatchDetailsSummary: _withMetrics("get_match_details_summary", getOperationalMatchDetailsSummary),
+  deleteOperationalMatchDetailsRecords: _withMetrics("delete_match_details", deleteOperationalMatchDetailsRecords),
+  saveOperationalMatchWriteLogEntries: _withMetrics("save_match_write_log", saveOperationalMatchWriteLogEntries),
+  getOperationalMatchWriteLog: _withMetrics("get_match_write_log", getOperationalMatchWriteLog),
   closeRedisConnection,
+  getRedisMetrics,
   __historyConfig: buildHistoryRetentionPolicy(),
   __private: {
     sanitizeTokenForKey,
