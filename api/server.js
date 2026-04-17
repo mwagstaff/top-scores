@@ -12014,6 +12014,167 @@ function toTeamsApiTeamPayload(rows) {
   }));
 }
 
+const TEAM_RANKINGS_RESPONSE_CACHE_LIMIT = 32;
+const teamRankingsResponseCache = new Map();
+
+function clearTeamRankingsResponseCache() {
+  teamRankingsResponseCache.clear();
+}
+
+function setTeamRankingsResponseCacheEntry(key, value) {
+  if (!key) return;
+  if (teamRankingsResponseCache.has(key)) {
+    teamRankingsResponseCache.delete(key);
+  }
+  teamRankingsResponseCache.set(key, value);
+  while (teamRankingsResponseCache.size > TEAM_RANKINGS_RESPONSE_CACHE_LIMIT) {
+    const oldestKey = teamRankingsResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    teamRankingsResponseCache.delete(oldestKey);
+  }
+}
+
+function buildTeamRankingsResponseCacheKey(options = {}) {
+  return JSON.stringify({
+    source: options.source || TEAM_RANKING_DEFAULT_SOURCE,
+    type: options.type || null,
+    league: options.leagueFilter || null,
+    merged_updated_at:
+      options.mergedDataset && options.mergedDataset.updated_at
+        ? options.mergedDataset.updated_at
+        : null,
+    merged_count:
+      Array.isArray(options.mergedDataset && options.mergedDataset.items)
+        ? options.mergedDataset.items.length
+        : 0,
+    club_elo_updated_at:
+      options.clubEloDataset && options.clubEloDataset.updated_at
+        ? options.clubEloDataset.updated_at
+        : null,
+    club_elo_count:
+      Array.isArray(options.clubEloDataset && options.clubEloDataset.items)
+        ? options.clubEloDataset.items.length
+        : 0,
+    football_database_updated_at:
+      options.footballDatabaseDataset && options.footballDatabaseDataset.updated_at
+        ? options.footballDatabaseDataset.updated_at
+        : null,
+    football_database_count:
+      Array.isArray(options.footballDatabaseDataset && options.footballDatabaseDataset.items)
+        ? options.footballDatabaseDataset.items.length
+        : 0,
+    national_elo_updated_at:
+      options.nationalEloDataset && options.nationalEloDataset.updated_at
+        ? options.nationalEloDataset.updated_at
+        : null,
+    national_elo_count:
+      Array.isArray(options.nationalEloDataset && options.nationalEloDataset.items)
+        ? options.nationalEloDataset.items.length
+        : 0,
+  });
+}
+
+async function resolveTeamRankingDatasetsForResponse() {
+  const memoryDatasets = {
+    mergedDataset: currentMergedMatchesDatasetSnapshot(),
+    clubEloDataset: currentOperationalDatasetMemorySnapshot(OP_DATASET_CLUB_ELO_TEAMS),
+    footballDatabaseDataset: currentOperationalDatasetMemorySnapshot(
+      OP_DATASET_FOOTBALL_DATABASE_TEAMS
+    ),
+    nationalEloDataset: currentOperationalDatasetMemorySnapshot(OP_DATASET_NATIONAL_ELO_TEAMS),
+  };
+
+  const datasetNamesByField = {
+    mergedDataset: OP_DATASET_MERGED_MATCHES,
+    clubEloDataset: OP_DATASET_CLUB_ELO_TEAMS,
+    footballDatabaseDataset: OP_DATASET_FOOTBALL_DATABASE_TEAMS,
+    nationalEloDataset: OP_DATASET_NATIONAL_ELO_TEAMS,
+  };
+
+  const resolvedEntries = await Promise.all(
+    Object.entries(memoryDatasets).map(async ([field, dataset]) => {
+      if (Array.isArray(dataset && dataset.items) && dataset.items.length > 0) {
+        return [field, dataset];
+      }
+      const fallback = await getOperationalArrayDataset(datasetNamesByField[field], []);
+      return [field, fallback];
+    })
+  );
+
+  return Object.fromEntries(resolvedEntries);
+}
+
+function buildTeamRankingsResponsePayload(options = {}) {
+  const mergedDataset = options.mergedDataset || { items: [], updated_at: null, source: "unknown" };
+  const clubEloDataset = options.clubEloDataset || { items: [], updated_at: null, source: "unknown" };
+  const footballDatabaseDataset =
+    options.footballDatabaseDataset || { items: [], updated_at: null, source: "unknown" };
+  const nationalEloDataset =
+    options.nationalEloDataset || { items: [], updated_at: null, source: "unknown" };
+  const rankedRows = buildRankedTeamsForSource(
+    mergedDataset.items,
+    clubEloDataset.items,
+    footballDatabaseDataset.items,
+    nationalEloDataset.items,
+    options.source || TEAM_RANKING_DEFAULT_SOURCE,
+    options.leagueFilter || null
+  );
+  const filteredRows = filterRankedRowsByTeamType(rankedRows, options.type || null);
+  const updatedAt = newestIsoTimestamp([
+    mergedDataset.updated_at,
+    clubEloDataset.updated_at,
+    footballDatabaseDataset.updated_at,
+    nationalEloDataset.updated_at,
+    clubEloLastUpdated,
+    footballDatabaseLastUpdated,
+    nationalEloLastUpdated,
+  ]);
+
+  return {
+    payload: toTeamsApiTeamPayload(filteredRows),
+    updatedAt,
+    operationalSource:
+      `merged=${mergedDataset.source || "unknown"};` +
+      `club_elo=${clubEloDataset.source || "unknown"};` +
+      `footballdatabase=${footballDatabaseDataset.source || "unknown"};` +
+      `national_elo=${nationalEloDataset.source || "unknown"}`,
+  };
+}
+
+async function getCachedTeamRankingsResponse(options = {}) {
+  const datasets = await resolveTeamRankingDatasetsForResponse();
+  const cacheKey = buildTeamRankingsResponseCacheKey({
+    ...options,
+    ...datasets,
+  });
+  const cached = teamRankingsResponseCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const response = buildTeamRankingsResponsePayload({
+    ...options,
+    ...datasets,
+  });
+  setTeamRankingsResponseCacheEntry(cacheKey, response);
+  return response;
+}
+
+async function warmDefaultTeamRankingsResponseCache(trigger = "background") {
+  try {
+    await getCachedTeamRankingsResponse({
+      source: TEAM_RANKING_DEFAULT_SOURCE,
+      type: TEAM_TYPE_CLUB,
+      leagueFilter: null,
+    });
+  } catch (error) {
+    console.warn(
+      `[TeamsCache] Warm failed trigger=${trigger}:`,
+      error && error.message ? error.message : error
+    );
+  }
+}
+
 function buildUnmatchedTeamPayloadFromUnifiedRows(rows) {
   return (Array.isArray(rows) ? rows : [])
     .filter((row) => !isRankedTeamRow(row) && !row._excluded_from_matching)
@@ -14439,9 +14600,15 @@ function canonicalMatchDetailsToListPayload(payload) {
 }
 
 function canonicalMatchDetailsRecordsToListPayloads(recordsById, options = {}) {
-  const normalizedRecords =
-    recordsById && typeof recordsById === "object" ? recordsById : {};
-  const primaryPayloads = Object.values(normalizedRecords)
+  const lookup =
+    recordsById instanceof Map
+      ? recordsById
+      : recordsById && typeof recordsById === "object"
+        ? recordsById
+        : {};
+  const primaryPayloads = (
+    lookup instanceof Map ? Array.from(lookup.values()) : Object.values(lookup)
+  )
     .map((payload) => canonicalMatchDetailsToListPayload(payload))
     .filter(Boolean);
 
@@ -14452,11 +14619,11 @@ function canonicalMatchDetailsRecordsToListPayloads(recordsById, options = {}) {
     return dedupeMatchListPayloads(primaryPayloads);
   }
 
-  const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(normalizedRecords);
+  const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(lookup);
   const supplementalPayloads = fallbackMatches
     .map((match) =>
       toMatchListPayload(match, {
-        matchDetailsLookup: normalizedRecords,
+        matchDetailsLookup: lookup,
         matchDetailsIdentityIndex,
       })
     )
@@ -14471,8 +14638,104 @@ function canonicalMatchDetailsRecordsToPublicListPayloads(recordsById, options =
   );
 }
 
+const MATCH_LIST_RESPONSE_CACHE_LIMIT = 32;
+const MATCH_LIST_RESPONSE_CACHE_TTL_MS = 30 * 1000;
+const matchListResponseCache = new Map();
+
+function matchDetailsLookupSize(matchDetailsLookup) {
+  if (matchDetailsLookup instanceof Map) {
+    return matchDetailsLookup.size;
+  }
+  if (matchDetailsLookup && typeof matchDetailsLookup === "object") {
+    return Object.keys(matchDetailsLookup).length;
+  }
+  return 0;
+}
+
+function setMatchListResponseCacheEntry(key, value) {
+  if (!key) return;
+  if (matchListResponseCache.has(key)) {
+    matchListResponseCache.delete(key);
+  }
+  matchListResponseCache.set(key, value);
+  while (matchListResponseCache.size > MATCH_LIST_RESPONSE_CACHE_LIMIT) {
+    const oldestKey = matchListResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    matchListResponseCache.delete(oldestKey);
+  }
+}
+
+function buildMatchListResponseCacheKey(options = {}) {
+  return JSON.stringify({
+    kind: options.kind || "public",
+    match_details_updated_at: options.matchDetailsUpdatedAt || null,
+    match_details_count: Number.isFinite(options.matchDetailsCount)
+      ? options.matchDetailsCount
+      : matchDetailsLookupSize(options.matchDetailsLookup),
+    merged_updated_at:
+      options.mergedDataset && options.mergedDataset.updated_at
+        ? options.mergedDataset.updated_at
+        : null,
+    merged_count:
+      Array.isArray(options.mergedDataset && options.mergedDataset.items)
+        ? options.mergedDataset.items.length
+        : 0,
+    bbc_range_updated_at:
+      options.bbcRangeDataset && options.bbcRangeDataset.updated_at
+        ? options.bbcRangeDataset.updated_at
+        : null,
+    bbc_range_count:
+      Array.isArray(options.bbcRangeDataset && options.bbcRangeDataset.items)
+        ? options.bbcRangeDataset.items.length
+        : 0,
+  });
+}
+
+function getCachedCanonicalPublicMatchListPayloads(options = {}) {
+  const cacheKey = buildMatchListResponseCacheKey({
+    ...options,
+    kind: "public",
+  });
+  const nowMs = Date.now();
+  const cached = matchListResponseCache.get(cacheKey);
+  if (
+    cached &&
+    Array.isArray(cached.payload) &&
+    nowMs - cached.createdAtMs <= MATCH_LIST_RESPONSE_CACHE_TTL_MS
+  ) {
+    return cached.payload;
+  }
+
+  const fallbackMatches = [
+    ...(Array.isArray(options.mergedDataset && options.mergedDataset.items)
+      ? options.mergedDataset.items
+      : []),
+    ...(Array.isArray(options.bbcRangeDataset && options.bbcRangeDataset.items)
+      ? options.bbcRangeDataset.items.map((match) => ({ ...match, has_bbc_source: true }))
+      : []),
+  ];
+  const payload = canonicalMatchDetailsRecordsToPublicListPayloads(
+    options.matchDetailsLookup instanceof Map || (options.matchDetailsLookup && typeof options.matchDetailsLookup === "object")
+      ? options.matchDetailsLookup
+      : {},
+    {
+      fallbackMatches,
+      nowMs,
+    }
+  );
+  setMatchListResponseCacheEntry(cacheKey, {
+    createdAtMs: nowMs,
+    payload,
+  });
+  return payload;
+}
+
 function canonicalLiveActivityMatchesFromDetailsRecords(recordsById) {
-  return Object.values(recordsById && typeof recordsById === "object" ? recordsById : {})
+  const lookup =
+    recordsById instanceof Map
+      ? Array.from(recordsById.values())
+      : Object.values(recordsById && typeof recordsById === "object" ? recordsById : {});
+  return lookup
     .map((payload) => {
       const statePayload = getMatchDetailsStatePayload(payload);
       if (!statePayload) return null;
@@ -15995,6 +16258,8 @@ async function updateMatches(options = {}) {
     });
     await updateRecentCache(SOURCE_LIVE_FOOTBALL);
     await rebuildMergedMatchesCache(SOURCE_LIVE_FOOTBALL);
+    clearTeamRankingsResponseCache();
+    void warmDefaultTeamRankingsResponseCache(`live_matches_${trigger}`);
     success = true;
     logPollSuccess("live_football", {
       source: SOURCE_LIVE_FOOTBALL,
@@ -16191,7 +16456,6 @@ async function updateBbcMatches(options = {}) {
       count: filteredMatches.length,
       updated_at: bbcLastUpdated,
     });
-    void updateTeamShortNamesCache({ trigger: `${trigger}_bbc_live_refresh` });
   } catch (err) {
     recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_LIVE, err, {
       trigger,
@@ -16244,6 +16508,8 @@ async function updateBbcRangeMatches(options = {}) {
       source: SOURCE_BBC_RANGE,
     });
     await rebuildMergedMatchesCache(SOURCE_BBC_RANGE);
+    clearTeamRankingsResponseCache();
+    void warmDefaultTeamRankingsResponseCache(`bbc_range_${trigger}`);
     success = true;
     logPollSuccess("bbc_date_range_matches", {
       source: SOURCE_BBC_RANGE,
@@ -16263,7 +16529,6 @@ async function updateBbcRangeMatches(options = {}) {
       past_days: BBC_RANGE_PAST_DAYS,
       future_days: BBC_RANGE_FUTURE_DAYS,
     });
-    void updateTeamShortNamesCache({ trigger: `${trigger}_bbc_range_refresh` });
   } catch (err) {
     recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_RANGE, err, {
       trigger,
@@ -16955,6 +17220,8 @@ async function updateClubEloTeams(options = {}) {
       source: SOURCE_CLUB_ELO,
       ttl_seconds: CLUB_ELO_REDIS_TTL_SECONDS,
     });
+    clearTeamRankingsResponseCache();
+    void warmDefaultTeamRankingsResponseCache(`club_elo_${trigger}`);
     success = true;
     logPollSuccess("club_elo_rankings", {
       source: SOURCE_CLUB_ELO,
@@ -17067,6 +17334,8 @@ async function updateFootballDatabaseTeams(options = {}) {
       source: SOURCE_FOOTBALL_DATABASE,
       ttl_seconds: FOOTBALL_DATABASE_REDIS_TTL_SECONDS,
     });
+    clearTeamRankingsResponseCache();
+    void warmDefaultTeamRankingsResponseCache(`football_database_${trigger}`);
     success = true;
     logPollSuccess("football_database_rankings", {
       source: SOURCE_FOOTBALL_DATABASE,
@@ -17204,6 +17473,8 @@ async function updateNationalEloTeams(options = {}) {
       source: SOURCE_NATIONAL_ELO,
       ttl_seconds: NATIONAL_ELO_REDIS_TTL_SECONDS,
     });
+    clearTeamRankingsResponseCache();
+    void warmDefaultTeamRankingsResponseCache(`national_elo_${trigger}`);
     success = true;
     logPollSuccess("national_elo_rankings", {
       source: SOURCE_NATIONAL_ELO,
@@ -19550,26 +19821,42 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       return;
     }
 
+    const memoryMatchDetailsSnapshot = currentMatchDetailsLookupSnapshot();
     const [
-      canonicalSnapshot,
       mergedDataset,
       bbcRangeDataset,
+      redisMatchDetailsSnapshot,
     ] = await Promise.all([
-      getPreferredOperationalMatchDetailsSnapshotSafe(),
       getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
       getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
+      memoryMatchDetailsSnapshot ? Promise.resolve(null) : getOperationalMatchDetailsSnapshotSafe(),
     ]);
+    const canonicalLookup = memoryMatchDetailsSnapshot
+      ? memoryMatchDetailsSnapshot.lookup
+      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.records
+        ? redisMatchDetailsSnapshot.records
+        : {};
+    const canonicalUpdatedAt = memoryMatchDetailsSnapshot
+      ? memoryMatchDetailsSnapshot.updated_at || matchDetailsLastUpdated || null
+      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.updated_at
+        ? redisMatchDetailsSnapshot.updated_at
+        : null;
+    const canonicalSource = memoryMatchDetailsSnapshot
+      ? memoryMatchDetailsSnapshot.source || "memory"
+      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.source
+        ? redisMatchDetailsSnapshot.source
+        : "unknown";
     const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
     const latestUpdated = newestIsoTimestamp([
-      canonicalSnapshot.updated_at,
+      canonicalUpdatedAt,
       mergedDataset.updated_at,
       bbcRangeDataset.updated_at,
     ]);
     setLastModifiedHeaders(res, latestUpdated);
-    res.set("X-Operational-Source", canonicalSnapshot.source || "unknown");
+    res.set("X-Operational-Source", canonicalSource);
     res.set(
       "X-Operational-Match-Details-Source",
-      canonicalSnapshot.source || "unknown"
+      canonicalSource
     );
     if (isNotModifiedRequest(req, latestUpdated)) {
       res.status(304).end();
@@ -19592,16 +19879,14 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const homeNations = isTruthyParam(req.query.home_nations);
     const majorTournaments = isTruthyParam(req.query.major_tournaments);
 
-    const fallbackMatches = [
-      ...(Array.isArray(mergedDataset.items) ? mergedDataset.items : []),
-      ...(Array.isArray(bbcRangeDataset.items)
-        ? bbcRangeDataset.items.map((match) => ({ ...match, has_bbc_source: true }))
-        : []),
-    ];
-
-    let filtered = canonicalMatchDetailsRecordsToPublicListPayloads(
-      canonicalSnapshot.records || {},
-      { fallbackMatches }
+    let filtered = getCachedCanonicalPublicMatchListPayloads(
+      {
+        matchDetailsLookup: canonicalLookup,
+        matchDetailsUpdatedAt: canonicalUpdatedAt,
+        matchDetailsCount: matchDetailsLookupSize(canonicalLookup),
+        mergedDataset,
+        bbcRangeDataset,
+      }
     ).filter((match) =>
       matchesFilters(match, {
         leagues,
@@ -19696,7 +19981,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
           sort_order: sortOrder,
         },
         updated_at: latestUpdated || null,
-        source: canonicalSnapshot.source || "unknown",
+        source: canonicalSource,
       });
       return;
     }
@@ -19983,47 +20268,21 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
     });
     return;
   }
-  const [mergedDataset, clubEloDataset, footballDatabaseDataset, nationalEloDataset] = await Promise.all([
-    getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
-    getOperationalArrayDataset(OP_DATASET_CLUB_ELO_TEAMS, cachedClubEloTeams),
-    getOperationalArrayDataset(
-      OP_DATASET_FOOTBALL_DATABASE_TEAMS,
-      cachedFootballDatabaseTeams
-    ),
-    getOperationalArrayDataset(OP_DATASET_NATIONAL_ELO_TEAMS, cachedNationalEloTeams),
-  ]);
-  const rankedRows = buildRankedTeamsForSource(
-    mergedDataset.items,
-    clubEloDataset.items,
-    footballDatabaseDataset.items,
-    nationalEloDataset.items,
-    sourceSelection.source,
-    leagueFilter
-  );
-  const filteredRows = filterRankedRowsByTeamType(rankedRows, typeSelection.type);
-  const updatedAt = newestIsoTimestamp([
-    mergedDataset.updated_at,
-    clubEloDataset.updated_at,
-    footballDatabaseDataset.updated_at,
-    nationalEloDataset.updated_at,
-    clubEloLastUpdated,
-    footballDatabaseLastUpdated,
-    nationalEloLastUpdated,
-  ]);
-  if (updatedAt) {
-    res.set("X-Last-Updated", updatedAt);
-  }
+  const response = await getCachedTeamRankingsResponse({
+    source: sourceSelection.source,
+    type: typeSelection.type,
+    leagueFilter,
+  });
+  setLastModifiedHeaders(res, response.updatedAt);
   res.set("X-Team-Metadata-Source", sourceSelection.source);
   res.set("X-Team-Metadata-Default-Source", TEAM_RANKING_DEFAULT_SOURCE);
   res.set("X-Team-Type-Filter", typeSelection.type || "all");
-  res.set(
-    "X-Operational-Source",
-    `merged=${mergedDataset.source || "unknown"};` +
-      `club_elo=${clubEloDataset.source || "unknown"};` +
-      `footballdatabase=${footballDatabaseDataset.source || "unknown"};` +
-      `national_elo=${nationalEloDataset.source || "unknown"}`
-  );
-  res.json(toTeamsApiTeamPayload(filteredRows));
+  res.set("X-Operational-Source", response.operationalSource);
+  if (isNotModifiedRequest(req, response.updatedAt)) {
+    res.status(304).end();
+    return;
+  }
+  res.json(response.payload);
 });
 
 app.get(`${API_PREFIX}/teams/config`, (_req, res) => {
@@ -24969,6 +25228,7 @@ async function bootstrapOperationalState() {
   void updateFantasyEventLive({ trigger: "startup_bootstrap" });
   void updateTeamShortNamesCache({ trigger: "startup_bootstrap" });
   void syncTeamShortNamesCacheToRedis({ trigger: "startup_bootstrap" });
+  void warmDefaultTeamRankingsResponseCache("startup_bootstrap");
   recordRuntimeComponentSuccess(COMPONENT_BOOTSTRAP, {
     operation: "bootstrap_operational_state",
     seed_result: seedResult,
