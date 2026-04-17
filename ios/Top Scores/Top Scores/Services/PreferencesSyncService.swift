@@ -345,6 +345,7 @@ actor PreferencesSyncService {
                 "fixturesViewDensity": snapshot.fixturesViewDensity.rawValue,
                 "showCompactFixtureTvLogo": snapshot.showCompactFixtureTvLogo,
                 "showCompactFixtureFantasyLogo": snapshot.showCompactFixtureFantasyLogo,
+                "showKickoffTimeDividers": snapshot.showKickoffTimeDividers,
                 "showFantasyFixtureLogos": snapshot.showFantasyFixtureLogos,
                 "showFantasyExpectedPoints": snapshot.showFantasyExpectedPoints,
                 "showFantasyRealTimePoints": snapshot.showFantasyRealTimePoints,
@@ -514,6 +515,7 @@ actor PreferencesSyncService {
                 fixturesViewDensity: fixturesViewDensity,
                 showCompactFixtureTvLogo: preferences["showCompactFixtureTvLogo"] as? Bool ?? PreferencesStore.defaultShowCompactFixtureTvLogo,
                 showCompactFixtureFantasyLogo: preferences["showCompactFixtureFantasyLogo"] as? Bool ?? PreferencesStore.defaultShowCompactFixtureFantasyLogo,
+                showKickoffTimeDividers: preferences["showKickoffTimeDividers"] as? Bool ?? PreferencesStore.defaultShowKickoffTimeDividers,
                 showFantasyFixtureLogos: preferences["showFantasyFixtureLogos"] as? Bool ?? legacyShowFantasyMatchPills,
                 showFantasyExpectedPoints: preferences["showFantasyExpectedPoints"] as? Bool ?? legacyShowFantasyMatchPills,
                 showFantasyRealTimePoints: preferences["showFantasyRealTimePoints"] as? Bool ?? legacyShowFantasyMatchPills

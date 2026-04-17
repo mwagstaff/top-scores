@@ -79,6 +79,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let fixturesViewDensity: FixturesViewDensity
     let showCompactFixtureTvLogo: Bool
     let showCompactFixtureFantasyLogo: Bool
+    let showKickoffTimeDividers: Bool
     let showFantasyFixtureLogos: Bool
     let showFantasyExpectedPoints: Bool
     let showFantasyRealTimePoints: Bool
@@ -133,6 +134,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         fixturesViewDensity: FixturesViewDensity = PreferencesStore.defaultFixturesViewDensity,
         showCompactFixtureTvLogo: Bool = PreferencesStore.defaultShowCompactFixtureTvLogo,
         showCompactFixtureFantasyLogo: Bool = PreferencesStore.defaultShowCompactFixtureFantasyLogo,
+        showKickoffTimeDividers: Bool = PreferencesStore.defaultShowKickoffTimeDividers,
         showFantasyFixtureLogos: Bool = PreferencesStore.defaultShowFantasyFixtureLogos,
         showFantasyExpectedPoints: Bool = PreferencesStore.defaultShowFantasyExpectedPoints,
         showFantasyRealTimePoints: Bool = PreferencesStore.defaultShowFantasyRealTimePoints,
@@ -166,6 +168,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.fixturesViewDensity = fixturesViewDensity
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
         self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
+        self.showKickoffTimeDividers = showKickoffTimeDividers
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
         self.showFantasyExpectedPoints = showFantasyExpectedPoints
         self.showFantasyRealTimePoints = showFantasyRealTimePoints
@@ -201,6 +204,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case fixturesViewDensity
         case showCompactFixtureTvLogo
         case showCompactFixtureFantasyLogo
+        case showKickoffTimeDividers
         case showFantasyFixtureLogos
         case showFantasyExpectedPoints
         case showFantasyRealTimePoints
@@ -244,6 +248,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         fixturesViewDensity = try container.decodeIfPresent(FixturesViewDensity.self, forKey: .fixturesViewDensity) ?? PreferencesStore.defaultFixturesViewDensity
         showCompactFixtureTvLogo = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureTvLogo) ?? PreferencesStore.defaultShowCompactFixtureTvLogo
         showCompactFixtureFantasyLogo = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureFantasyLogo) ?? PreferencesStore.defaultShowCompactFixtureFantasyLogo
+        showKickoffTimeDividers = try container.decodeIfPresent(Bool.self, forKey: .showKickoffTimeDividers) ?? PreferencesStore.defaultShowKickoffTimeDividers
         let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
         let legacyShowFantasyMatchPills =
             try legacyContainer.decodeIfPresent(Bool.self, forKey: .showFantasyMatchPills)
@@ -284,6 +289,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         try container.encode(fixturesViewDensity, forKey: .fixturesViewDensity)
         try container.encode(showCompactFixtureTvLogo, forKey: .showCompactFixtureTvLogo)
         try container.encode(showCompactFixtureFantasyLogo, forKey: .showCompactFixtureFantasyLogo)
+        try container.encode(showKickoffTimeDividers, forKey: .showKickoffTimeDividers)
         try container.encode(showFantasyFixtureLogos, forKey: .showFantasyFixtureLogos)
         try container.encode(showFantasyExpectedPoints, forKey: .showFantasyExpectedPoints)
         try container.encode(showFantasyRealTimePoints, forKey: .showFantasyRealTimePoints)
@@ -319,6 +325,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         lhs.fixturesViewDensity == rhs.fixturesViewDensity &&
         lhs.showCompactFixtureTvLogo == rhs.showCompactFixtureTvLogo &&
         lhs.showCompactFixtureFantasyLogo == rhs.showCompactFixtureFantasyLogo &&
+        lhs.showKickoffTimeDividers == rhs.showKickoffTimeDividers &&
         lhs.showFantasyFixtureLogos == rhs.showFantasyFixtureLogos &&
         lhs.showFantasyExpectedPoints == rhs.showFantasyExpectedPoints &&
         lhs.showFantasyRealTimePoints == rhs.showFantasyRealTimePoints &&
@@ -365,6 +372,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultFixturesViewDensity: FixturesViewDensity = .compact
     nonisolated static let defaultShowCompactFixtureTvLogo = true
     nonisolated static let defaultShowCompactFixtureFantasyLogo = true
+    nonisolated static let defaultShowKickoffTimeDividers = false
     nonisolated static let defaultShowFantasyFixtureLogos = false
     nonisolated static let defaultShowFantasyExpectedPoints = false
     nonisolated static let defaultShowFantasyRealTimePoints = false
@@ -483,6 +491,10 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var showKickoffTimeDividers: Bool {
+        didSet { persist() }
+    }
+
     @Published var showFantasyFixtureLogos: Bool {
         didSet { persist() }
     }
@@ -565,6 +577,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultShowCompactFixtureTvLogo
         let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
             ?? Self.defaultShowCompactFixtureFantasyLogo
+        let showKickoffTimeDividers = userDefaults.object(forKey: Keys.showKickoffTimeDividers) as? Bool
+            ?? Self.defaultShowKickoffTimeDividers
         let legacyShowFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
             ?? Self.defaultShowFantasyMatchPills
         let showFantasyFixtureLogos = userDefaults.object(forKey: Keys.showFantasyFixtureLogos) as? Bool
@@ -609,6 +623,7 @@ final class PreferencesStore: ObservableObject {
         self.fixturesViewDensity = fixturesViewDensity
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
         self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
+        self.showKickoffTimeDividers = showKickoffTimeDividers
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
         self.showFantasyExpectedPoints = showFantasyExpectedPoints
         self.showFantasyRealTimePoints = showFantasyRealTimePoints
@@ -654,6 +669,7 @@ final class PreferencesStore: ObservableObject {
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
+            showKickoffTimeDividers: showKickoffTimeDividers,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
             showFantasyExpectedPoints: showFantasyExpectedPoints,
             showFantasyRealTimePoints: showFantasyRealTimePoints,
@@ -695,6 +711,7 @@ final class PreferencesStore: ObservableObject {
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
+            showKickoffTimeDividers: showKickoffTimeDividers,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
             showFantasyExpectedPoints: showFantasyExpectedPoints,
             showFantasyRealTimePoints: showFantasyRealTimePoints,
@@ -732,6 +749,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(fixturesViewDensity == .ultraCompact, forKey: Keys.compactFixturesViewEnabled)
         userDefaults.set(showCompactFixtureTvLogo, forKey: Keys.showCompactFixtureTvLogo)
         userDefaults.set(showCompactFixtureFantasyLogo, forKey: Keys.showCompactFixtureFantasyLogo)
+        userDefaults.set(showKickoffTimeDividers, forKey: Keys.showKickoffTimeDividers)
         userDefaults.set(showFantasyFixtureLogos, forKey: Keys.showFantasyFixtureLogos)
         userDefaults.set(showFantasyExpectedPoints, forKey: Keys.showFantasyExpectedPoints)
         userDefaults.set(showFantasyRealTimePoints, forKey: Keys.showFantasyRealTimePoints)
@@ -811,6 +829,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultShowCompactFixtureTvLogo
         let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
             ?? Self.defaultShowCompactFixtureFantasyLogo
+        let showKickoffTimeDividers = userDefaults.object(forKey: Keys.showKickoffTimeDividers) as? Bool
+            ?? Self.defaultShowKickoffTimeDividers
         let legacyShowFantasyMatchPills = userDefaults.object(forKey: Keys.showFantasyMatchPills) as? Bool
             ?? Self.defaultShowFantasyMatchPills
         let showFantasyFixtureLogos = userDefaults.object(forKey: Keys.showFantasyFixtureLogos) as? Bool
@@ -852,6 +872,7 @@ final class PreferencesStore: ObservableObject {
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
+            showKickoffTimeDividers: showKickoffTimeDividers,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
             showFantasyExpectedPoints: showFantasyExpectedPoints,
             showFantasyRealTimePoints: showFantasyRealTimePoints,
@@ -889,6 +910,7 @@ final class PreferencesStore: ObservableObject {
         static let compactFixturesViewEnabled = "preferences.compactFixturesViewEnabled"
         static let showCompactFixtureTvLogo = "preferences.showCompactFixtureTvLogo"
         static let showCompactFixtureFantasyLogo = "preferences.showCompactFixtureFantasyLogo"
+        static let showKickoffTimeDividers = "preferences.showKickoffTimeDividers"
         static let showFantasyFixtureLogos = "preferences.showFantasyFixtureLogos"
         static let showFantasyExpectedPoints = "preferences.showFantasyExpectedPoints"
         static let showFantasyRealTimePoints = "preferences.showFantasyRealTimePoints"

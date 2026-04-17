@@ -31,6 +31,7 @@ struct Top_ScoresTests {
         #expect(store.fixturesViewDensity == .compact)
         #expect(store.showCompactFixtureTvLogo)
         #expect(store.showCompactFixtureFantasyLogo)
+        #expect(!store.showKickoffTimeDividers)
         #expect(!store.showFantasyFixtureLogos)
         #expect(!store.showFantasyExpectedPoints)
         #expect(!store.showFantasyRealTimePoints)
@@ -46,11 +47,13 @@ struct Top_ScoresTests {
         store.fixturesViewDensity = .ultraCompact
         store.showCompactFixtureTvLogo = false
         store.showCompactFixtureFantasyLogo = false
+        store.showKickoffTimeDividers = true
 
         let reloaded = PreferencesStore(userDefaults: defaults)
         #expect(reloaded.fixturesViewDensity == .ultraCompact)
         #expect(!reloaded.showCompactFixtureTvLogo)
         #expect(!reloaded.showCompactFixtureFantasyLogo)
+        #expect(reloaded.showKickoffTimeDividers)
     }
 
     @Test @MainActor func preferencesStore_migratesLegacyCompactFixturesToggleToUltraCompact() async throws {

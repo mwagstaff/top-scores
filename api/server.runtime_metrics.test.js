@@ -1,5 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const {
+  __private: {
+    resetRedisMetricsForTests,
+    recordRedisOpForTests,
+  },
+} = require("./redis_client");
 
 const {
   __private: {
@@ -8,6 +14,11 @@ const {
 } = require("./server");
 
 test("buildPrometheusMetricsText includes top-scores runtime health metrics", () => {
+  resetRedisMetricsForTests();
+  recordRedisOpForTests("test_payload_metric", 75, {
+    resultCount: 2,
+    payloadBytes: 2048,
+  });
   const metricsText = buildPrometheusMetricsText();
 
   [
@@ -35,7 +46,15 @@ test("buildPrometheusMetricsText includes top-scores runtime health metrics", ()
     "top_scores_operational_redis_reconciliation_component_status_code",
     "top_scores_operational_memory_age_seconds",
     "top_scores_operational_redis_age_seconds",
+    "top_scores_redis_operation_payload_bytes_total",
+    "top_scores_redis_operation_payload_bytes_avg",
+    "top_scores_redis_operation_payload_bytes_max",
   ].forEach((metricName) => {
     assert.match(metricsText, new RegExp(`(^|\\n)# HELP ${metricName}\\b`));
   });
+
+  assert.match(metricsText, /top_scores_redis_operation_payload_bytes_total\{operation="test_payload_metric"\}\s+2048(?:\.0+)?\b/);
+  assert.match(metricsText, /top_scores_redis_operation_payload_bytes_avg\{operation="test_payload_metric"\}\s+2048(?:\.0+)?\b/);
+  assert.match(metricsText, /top_scores_redis_operation_payload_bytes_max\{operation="test_payload_metric"\}\s+2048(?:\.0+)?\b/);
+  resetRedisMetricsForTests();
 });

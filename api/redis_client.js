@@ -8,6 +8,8 @@ const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 
 const DB_NAME = "top_scores";
 const USER_PREFERENCES_PREFIX = `${DB_NAME}:user_preferences:`;
+const USER_PREFERENCES_INDEX_KEY = `${DB_NAME}:user_preferences:index`;
+const USER_PREFERENCES_INDEX_READY_KEY = `${DB_NAME}:user_preferences:index:ready`;
 
 const ONE_WEEK_SECONDS = 7 * 24 * 60 * 60;
 
@@ -96,8 +98,41 @@ let ttlPolicyEnsured = false;
 const REDIS_OP_DURATION_BUCKETS_S = [0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 5.0];
 const SLOW_QUERY_THRESHOLD_MS = 50;
 const SLOW_QUERY_MAX_ENTRIES = 200;
+const REDIS_METRIC_META = Symbol("redisMetricMeta");
 const _redisOpStats = new Map();
 const _slowQueryLog = [];
+
+function attachRedisMetricMeta(result, meta = {}) {
+  if (!result || (typeof result !== "object" && !Array.isArray(result))) {
+    return result;
+  }
+  Object.defineProperty(result, REDIS_METRIC_META, {
+    value: {
+      ...(result[REDIS_METRIC_META] && typeof result[REDIS_METRIC_META] === "object"
+        ? result[REDIS_METRIC_META]
+        : {}),
+      ...meta,
+    },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  return result;
+}
+
+function readRedisMetricMeta(value) {
+  if (!value || (typeof value !== "object" && !Array.isArray(value))) {
+    return null;
+  }
+  return value[REDIS_METRIC_META] && typeof value[REDIS_METRIC_META] === "object"
+    ? value[REDIS_METRIC_META]
+    : null;
+}
+
+function utf8ByteLength(value) {
+  if (typeof value !== "string" || value.length === 0) return 0;
+  return Buffer.byteLength(value, "utf8");
+}
 
 function _extractResultCount(result) {
   if (result === null || result === undefined) return 0;
@@ -116,6 +151,10 @@ function _extractResultCount(result) {
 function _recordRedisOp(operation, durationMs, opts) {
   const error = opts && opts.error ? opts.error : null;
   const resultCount = opts && opts.resultCount !== undefined ? opts.resultCount : null;
+  const payloadBytes =
+    opts && Number.isFinite(Number(opts.payloadBytes)) && Number(opts.payloadBytes) >= 0
+      ? Math.round(Number(opts.payloadBytes))
+      : null;
   const durationS = durationMs / 1000;
 
   if (!_redisOpStats.has(operation)) {
@@ -125,6 +164,10 @@ function _recordRedisOp(operation, durationMs, opts) {
       durationSumSeconds: 0,
       bucketCounts: REDIS_OP_DURATION_BUCKETS_S.map(() => 0),
       resultCountTotal: 0,
+      payloadBytesTotal: 0,
+      payloadByteSamples: 0,
+      payloadBytesMin: null,
+      payloadBytesMax: 0,
     });
   }
   const s = _redisOpStats.get(operation);
@@ -132,6 +175,13 @@ function _recordRedisOp(operation, durationMs, opts) {
   s.durationSumSeconds += durationS;
   if (Number.isFinite(resultCount) && resultCount >= 0) {
     s.resultCountTotal += resultCount;
+  }
+  if (payloadBytes !== null) {
+    s.payloadBytesTotal += payloadBytes;
+    s.payloadByteSamples += 1;
+    s.payloadBytesMin =
+      s.payloadBytesMin === null ? payloadBytes : Math.min(s.payloadBytesMin, payloadBytes);
+    s.payloadBytesMax = Math.max(s.payloadBytesMax, payloadBytes);
   }
   if (error) s.errors += 1;
   REDIS_OP_DURATION_BUCKETS_S.forEach((boundary, i) => {
@@ -143,6 +193,7 @@ function _recordRedisOp(operation, durationMs, opts) {
       operation,
       duration_ms: Math.round(durationMs),
       result_count: Number.isFinite(resultCount) ? resultCount : null,
+      payload_bytes: payloadBytes,
       recorded_at: new Date().toISOString(),
       error: error ? String(error) : null,
     });
@@ -157,7 +208,14 @@ function _withMetrics(operation, fn) {
     const t0 = Date.now();
     try {
       const result = await fn(...args);
-      _recordRedisOp(operation, Date.now() - t0, { resultCount: _extractResultCount(result) });
+      const metricMeta = readRedisMetricMeta(result);
+      _recordRedisOp(operation, Date.now() - t0, {
+        resultCount: _extractResultCount(result),
+        payloadBytes:
+          metricMeta && Number.isFinite(Number(metricMeta.payloadBytes))
+            ? Number(metricMeta.payloadBytes)
+            : null,
+      });
       return result;
     } catch (error) {
       _recordRedisOp(operation, Date.now() - t0, { error: error.message || String(error) });
@@ -175,6 +233,10 @@ function getRedisMetrics() {
       durationSumSeconds: s.durationSumSeconds,
       bucketCounts: s.bucketCounts.slice(),
       resultCountTotal: s.resultCountTotal,
+      payloadBytesTotal: s.payloadBytesTotal,
+      payloadByteSamples: s.payloadByteSamples,
+      payloadBytesMin: s.payloadBytesMin,
+      payloadBytesMax: s.payloadBytesMax,
     })),
     slowQueries: _slowQueryLog.slice().reverse(),
     durationBucketsSeconds: REDIS_OP_DURATION_BUCKETS_S.slice(),
@@ -231,6 +293,42 @@ function numericTimestampMs(value) {
   const parsed = Number(value);
   if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
   return Date.now();
+}
+
+function buildUserPreferencesKey(deviceToken) {
+  return `${USER_PREFERENCES_PREFIX}${String(deviceToken || "").trim()}`;
+}
+
+function userPreferencesTokenFromKey(key) {
+  const normalizedKey = String(key || "");
+  return normalizedKey.startsWith(USER_PREFERENCES_PREFIX)
+    ? normalizedKey.slice(USER_PREFERENCES_PREFIX.length)
+    : "";
+}
+
+async function scanUserPreferenceTokens(redisClient) {
+  const tokens = [];
+  const pattern = `${USER_PREFERENCES_PREFIX}*`;
+  for await (const entry of redisClient.scanIterator({ MATCH: pattern, COUNT: 500 })) {
+    const keys = Array.isArray(entry) ? entry : [entry];
+    keys.forEach((key) => {
+      const token = userPreferencesTokenFromKey(key);
+      if (token) tokens.push(token);
+    });
+  }
+  return Array.from(new Set(tokens));
+}
+
+async function rebuildUserPreferencesIndex(redisClient) {
+  const tokens = await scanUserPreferenceTokens(redisClient);
+  const transaction = redisClient.multi();
+  transaction.del(USER_PREFERENCES_INDEX_KEY);
+  tokens.forEach((token) => {
+    transaction.sAdd(USER_PREFERENCES_INDEX_KEY, token);
+  });
+  transaction.set(USER_PREFERENCES_INDEX_READY_KEY, "1");
+  await transaction.exec();
+  return tokens;
 }
 
 function pruneCutoffMs(ttlSeconds) {
@@ -641,7 +739,7 @@ async function saveUserPreferences(
   }
 
   const normalizedToken = deviceToken.trim();
-  const key = `${USER_PREFERENCES_PREFIX}${normalizedToken}`;
+  const key = buildUserPreferencesKey(normalizedToken);
 
   try {
     const redisClient = await getClient();
@@ -693,11 +791,15 @@ async function saveUserPreferences(
       updatedAt: new Date().toISOString(),
     };
 
-    await redisClient.set(key, JSON.stringify(data), { EX: USER_PREFERENCES_TTL_SECONDS });
+    const serializedData = JSON.stringify(data);
+    const transaction = redisClient.multi();
+    transaction.set(key, serializedData, { EX: USER_PREFERENCES_TTL_SECONDS });
+    transaction.sAdd(USER_PREFERENCES_INDEX_KEY, normalizedToken);
+    await transaction.exec();
     console.log(
       `[Redis] Saved preferences for device: ${normalizedToken.substring(0, 12)}... (APNS: ${resolvedAPNSToken ? "Yes" : "No"}, Dev: ${resolvedIsDevelopmentBuild})`
     );
-    return data;
+    return attachRedisMetricMeta(data, { payloadBytes: utf8ByteLength(serializedData) });
   } catch (error) {
     console.error("[Redis] Error saving user preferences:", error);
     throw error;
@@ -710,7 +812,7 @@ async function getUserPreferences(deviceToken) {
   }
 
   const normalizedToken = deviceToken.trim();
-  const key = `${USER_PREFERENCES_PREFIX}${normalizedToken}`;
+  const key = buildUserPreferencesKey(normalizedToken);
 
   try {
     const redisClient = await getClient();
@@ -733,11 +835,14 @@ async function deleteUserPreferences(deviceToken) {
   }
 
   const normalizedToken = deviceToken.trim();
-  const key = `${USER_PREFERENCES_PREFIX}${normalizedToken}`;
+  const key = buildUserPreferencesKey(normalizedToken);
 
   try {
     const redisClient = await getClient();
-    const deleted = await redisClient.del(key);
+    const [deleted] = await Promise.all([
+      redisClient.del(key),
+      redisClient.sRem(USER_PREFERENCES_INDEX_KEY, normalizedToken),
+    ]);
     console.log(`[Redis] Deleted preferences for device: ${normalizedToken.substring(0, 12)}...`);
     return deleted > 0;
   } catch (error) {
@@ -749,34 +854,52 @@ async function deleteUserPreferences(deviceToken) {
 async function getAllUserPreferences() {
   try {
     const redisClient = await getClient();
-    const pattern = `${USER_PREFERENCES_PREFIX}*`;
+    const [indexReady, indexedTokensRaw] = await Promise.all([
+      redisClient.get(USER_PREFERENCES_INDEX_READY_KEY),
+      redisClient.sMembers(USER_PREFERENCES_INDEX_KEY),
+    ]);
 
-    const keys = [];
-    for await (const entry of redisClient.scanIterator({ MATCH: pattern, COUNT: 500 })) {
-      if (Array.isArray(entry)) {
-        keys.push(...entry);
-      } else {
-        keys.push(entry);
-      }
+    let indexedTokens = Array.isArray(indexedTokensRaw)
+      ? indexedTokensRaw.map((token) => String(token || "").trim()).filter(Boolean)
+      : [];
+    if (!indexReady || indexedTokens.length === 0) {
+      indexedTokens = await rebuildUserPreferencesIndex(redisClient);
     }
 
-    if (keys.length === 0) {
-      return [];
+    if (indexedTokens.length === 0) {
+      return attachRedisMetricMeta([], { payloadBytes: 0 });
     }
 
+    const keys = indexedTokens.map((token) => buildUserPreferencesKey(token));
     const values = await redisClient.mGet(keys);
+    const staleTokens = [];
+    const records = [];
+    let payloadBytes = 0;
 
-    return values
-      .filter((value) => value !== null)
-      .map((value) => {
-        try {
-          return JSON.parse(value);
-        } catch (error) {
-          console.error("[Redis] Error parsing preference value:", error);
-          return null;
+    values.forEach((value, index) => {
+      if (value === null) {
+        staleTokens.push(indexedTokens[index]);
+        return;
+      }
+      payloadBytes += utf8ByteLength(value);
+      try {
+        const parsed = JSON.parse(value);
+        if (parsed && parsed.deviceToken) {
+          records.push(parsed);
+        } else {
+          staleTokens.push(indexedTokens[index]);
         }
-      })
-      .filter((data) => data && data.deviceToken);
+      } catch (error) {
+        console.error("[Redis] Error parsing preference value:", error);
+        staleTokens.push(indexedTokens[index]);
+      }
+    });
+
+    if (staleTokens.length > 0) {
+      await redisClient.sRem(USER_PREFERENCES_INDEX_KEY, staleTokens);
+    }
+
+    return attachRedisMetricMeta(records, { payloadBytes });
   } catch (error) {
     console.error("[Redis] Error retrieving all user preferences:", error);
     return [];
@@ -789,7 +912,7 @@ async function updateUserLiveActivityState(deviceToken, liveActivityPatch = {}, 
   }
 
   const normalizedToken = deviceToken.trim();
-  const key = `${USER_PREFERENCES_PREFIX}${normalizedToken}`;
+  const key = buildUserPreferencesKey(normalizedToken);
   const nowIso = new Date().toISOString();
 
   try {
@@ -820,9 +943,13 @@ async function updateUserLiveActivityState(deviceToken, liveActivityPatch = {}, 
       updatedAt: nowIso,
     };
 
-    await redisClient.set(key, JSON.stringify(data), { EX: USER_PREFERENCES_TTL_SECONDS });
+    const serializedData = JSON.stringify(data);
+    const transaction = redisClient.multi();
+    transaction.set(key, serializedData, { EX: USER_PREFERENCES_TTL_SECONDS });
+    transaction.sAdd(USER_PREFERENCES_INDEX_KEY, normalizedToken);
+    await transaction.exec();
     console.log(`[Redis] Updated live activity state for device: ${normalizedToken.substring(0, 12)}...`);
-    return data;
+    return attachRedisMetricMeta(data, { payloadBytes: utf8ByteLength(serializedData) });
   } catch (error) {
     console.error("[Redis] Error updating live activity state:", error);
     throw error;
@@ -1661,15 +1788,16 @@ async function saveOperationalDataset(name, payload, options = {}) {
       source: options.source || null,
       payload,
     };
+    const serializedRecord = JSON.stringify(record);
     const ttlSeconds = Number(options.ttl_seconds);
     if (Number.isFinite(ttlSeconds) && ttlSeconds > 0) {
-      await redisClient.set(key, JSON.stringify(record), {
+      await redisClient.set(key, serializedRecord, {
         EX: Math.floor(ttlSeconds),
       });
     } else {
-      await redisClient.set(key, JSON.stringify(record));
+      await redisClient.set(key, serializedRecord);
     }
-    return record;
+    return attachRedisMetricMeta(record, { payloadBytes: utf8ByteLength(serializedRecord) });
   } catch (error) {
     console.error(`[Redis] Error saving operational dataset ${name}:`, error);
     throw error;
@@ -1685,7 +1813,7 @@ async function getOperationalDataset(name) {
     const parsed = safeJsonParse(raw, `operational dataset ${name}`);
     if (!parsed || typeof parsed !== "object") return null;
     if (!Object.prototype.hasOwnProperty.call(parsed, "payload")) return null;
-    return parsed;
+    return attachRedisMetricMeta(parsed, { payloadBytes: utf8ByteLength(raw) });
   } catch (error) {
     console.error(`[Redis] Error retrieving operational dataset ${name}:`, error);
     return null;
@@ -1703,15 +1831,17 @@ async function getOperationalDatasets(names = []) {
     const keys = requestedNames.map((name) => buildOperationalDatasetKey(name));
     const rawValues = await redisClient.mGet(keys);
     const output = {};
+    let payloadBytes = 0;
     requestedNames.forEach((name, index) => {
       const raw = rawValues[index];
       if (!raw) return;
+      payloadBytes += utf8ByteLength(raw);
       const parsed = safeJsonParse(raw, `operational dataset ${name}`);
       if (parsed && typeof parsed === "object" && Object.prototype.hasOwnProperty.call(parsed, "payload")) {
         output[name] = parsed;
       }
     });
-    return output;
+    return attachRedisMetricMeta(output, { payloadBytes });
   } catch (error) {
     console.error("[Redis] Error retrieving operational datasets:", error);
     return {};
@@ -1782,13 +1912,15 @@ async function saveOperationalMatchDetailsRecords(recordsById, options = {}) {
       }
     }
 
+    let payloadBytes = 0;
     records.forEach(([matchId, payload]) => {
-      const key = buildOperationalMatchDetailsKey(matchId);
       const normalizedPayload = {
         ...payload,
         id: String(payload.id || matchId).trim().toLowerCase(),
       };
-      transaction.set(key, JSON.stringify(normalizedPayload));
+      const serializedPayload = JSON.stringify(normalizedPayload);
+      payloadBytes += utf8ByteLength(serializedPayload);
+      transaction.set(buildOperationalMatchDetailsKey(matchId), serializedPayload);
       transaction.sAdd(OPERATIONAL_MATCH_DETAILS_INDEX_KEY, normalizedPayload.id);
     });
 
@@ -1811,13 +1943,13 @@ async function saveOperationalMatchDetailsRecords(recordsById, options = {}) {
       })
     );
 
-    return {
+    return attachRedisMetricMeta({
       updated_at: updatedAt,
       upserted: records.length,
       removed,
       total: Number(total || 0),
       replace,
-    };
+    }, { payloadBytes });
   } catch (error) {
     console.error("[Redis] Error saving operational match details:", error);
     throw error;
@@ -1858,12 +1990,14 @@ async function getAllOperationalMatchDetails() {
     const values = await redisClient.mGet(keys);
     const records = {};
     const staleIds = [];
+    let payloadBytes = 0;
     ids.forEach((matchId, index) => {
       const raw = values[index];
       if (!raw) {
         staleIds.push(matchId);
         return;
       }
+      payloadBytes += utf8ByteLength(raw);
       const parsed = safeJsonParse(raw, `operational match details ${matchId}`);
       if (!parsed || typeof parsed !== "object") {
         staleIds.push(matchId);
@@ -1879,11 +2013,11 @@ async function getAllOperationalMatchDetails() {
 
     const metaRaw = await redisClient.get(OPERATIONAL_MATCH_DETAILS_META_KEY);
     const meta = metaRaw ? safeJsonParse(metaRaw, "operational match details meta") : null;
-    return {
+    return attachRedisMetricMeta({
       updated_at: meta && meta.updated_at ? meta.updated_at : null,
       total: Object.keys(records).length,
       records,
-    };
+    }, { payloadBytes });
   } catch (error) {
     console.error("[Redis] Error retrieving all operational match details:", error);
     return {
@@ -2434,6 +2568,15 @@ async function closeRedisConnection() {
   }
 }
 
+function resetRedisMetricsForTests() {
+  _redisOpStats.clear();
+  _slowQueryLog.length = 0;
+}
+
+function recordRedisOpForTests(operation, durationMs, opts = {}) {
+  _recordRedisOp(operation, durationMs, opts);
+}
+
 module.exports = {
   getClient,
   saveUserPreferences: _withMetrics("save_user_preferences", saveUserPreferences),
@@ -2473,6 +2616,12 @@ module.exports = {
     normalizeTimeRange,
     shortDeviceToken,
     normalizeFantasyReminderStatus,
+    attachRedisMetricMeta,
+    readRedisMetricMeta,
+    buildUserPreferencesKey,
+    userPreferencesTokenFromKey,
+    resetRedisMetricsForTests,
+    recordRedisOpForTests,
     buildLiveActivityDebugRecordKey,
     buildLiveActivityDebugDeviceIndexKey,
     buildLiveActivityMatchTimelineIndexKey,

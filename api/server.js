@@ -5660,6 +5660,33 @@ function buildPrometheusMetricsText() {
       pushPrometheusSample(lines, "top_scores_redis_results_returned_total", op.resultCountTotal, { operation: op.operation });
     });
 
+    lines.push("# HELP top_scores_redis_operation_payload_bytes_total Total serialized payload bytes handled by Redis operations.");
+    lines.push("# TYPE top_scores_redis_operation_payload_bytes_total counter");
+    redisMetrics.operations.forEach((op) => {
+      pushPrometheusSample(lines, "top_scores_redis_operation_payload_bytes_total", op.payloadBytesTotal, {
+        operation: op.operation,
+      });
+    });
+
+    lines.push("# HELP top_scores_redis_operation_payload_bytes_avg Average serialized payload bytes handled per Redis operation call.");
+    lines.push("# TYPE top_scores_redis_operation_payload_bytes_avg gauge");
+    redisMetrics.operations.forEach((op) => {
+      pushPrometheusSample(
+        lines,
+        "top_scores_redis_operation_payload_bytes_avg",
+        op.payloadByteSamples > 0 ? op.payloadBytesTotal / op.payloadByteSamples : 0,
+        { operation: op.operation }
+      );
+    });
+
+    lines.push("# HELP top_scores_redis_operation_payload_bytes_max Maximum serialized payload bytes handled by a Redis operation call.");
+    lines.push("# TYPE top_scores_redis_operation_payload_bytes_max gauge");
+    redisMetrics.operations.forEach((op) => {
+      pushPrometheusSample(lines, "top_scores_redis_operation_payload_bytes_max", op.payloadBytesMax || 0, {
+        operation: op.operation,
+      });
+    });
+
     appendHistogramMetrics(
       lines,
       "top_scores_redis_operation_duration_seconds",
@@ -19398,6 +19425,10 @@ app.get(`${API_PREFIX}/admin/redis/slow-queries`, (req, res) => {
       errors: op.errors,
       avg_duration_ms: op.calls > 0 ? Math.round((op.durationSumSeconds * 1000) / op.calls) : 0,
       total_results: op.resultCountTotal,
+      total_payload_bytes: op.payloadBytesTotal,
+      avg_payload_bytes:
+        op.payloadByteSamples > 0 ? Math.round(op.payloadBytesTotal / op.payloadByteSamples) : 0,
+      max_payload_bytes: op.payloadBytesMax || 0,
     })).sort((a, b) => b.avg_duration_ms - a.avg_duration_ms),
   });
 });

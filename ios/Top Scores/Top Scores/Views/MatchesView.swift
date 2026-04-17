@@ -487,7 +487,7 @@ struct MatchesView: View {
 
             ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
                 let prevTime: String? = index > 0 ? league.matches[index - 1].time : nil
-                if mode == .fixtures && prevTime != nil && prevTime != match.time {
+                if shouldShowKickoffDivider(currentTime: match.time, previousTime: prevTime) {
                     kickoffDividerRow(time: match.time)
                 }
                 matchRow(for: match, day: day)
@@ -502,12 +502,19 @@ struct MatchesView: View {
 
             ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
                 let prevTime: String? = index > 0 ? league.matches[index - 1].time : nil
-                if mode == .fixtures && prevTime != nil && prevTime != match.time {
+                if shouldShowKickoffDivider(currentTime: match.time, previousTime: prevTime) {
                     kickoffDividerRow(time: match.time)
                 }
                 matchRow(for: match, day: day)
             }
         }
+    }
+
+    private func shouldShowKickoffDivider(currentTime: String, previousTime: String?) -> Bool {
+        mode == .fixtures &&
+        preferences.showKickoffTimeDividers &&
+        previousTime != nil &&
+        previousTime != currentTime
     }
 
     private func leagueHeadingDividerRow(for league: MatchLeague) -> some View {

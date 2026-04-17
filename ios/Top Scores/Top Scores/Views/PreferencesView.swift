@@ -116,6 +116,11 @@ struct PreferencesView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
+
+                        Toggle("Kick-off time dividers", isOn: showKickoffTimeDividersBinding)
+                        Text("Shows kick-off time divider headings to easily distinguish different match kick-off times")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
                     Section("Competitions") {
@@ -568,6 +573,13 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.showCompactFixtureFantasyLogo },
             set: { preferences.showCompactFixtureFantasyLogo = $0 }
+        )
+    }
+
+    private var showKickoffTimeDividersBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showKickoffTimeDividers },
+            set: { preferences.showKickoffTimeDividers = $0 }
         )
     }
 
