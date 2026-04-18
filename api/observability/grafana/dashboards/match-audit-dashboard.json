@@ -1,0 +1,301 @@
+{
+  "uid": "top-scores-match-audit",
+  "title": "top-scores API • Match Audit",
+  "tags": ["top-scores", "audit", "match-health", "reconciliation"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Matches Checked",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_matches_checked{job=\"top-scores-match-audit\"}",
+          "legendFormat": "matches checked"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Matches With Issues",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_matches_with_issues{job=\"top-scores-match-audit\"}",
+          "legendFormat": "matches with issues"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Issues Total",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_issues_total{job=\"top-scores-match-audit\"}",
+          "legendFormat": "issues total"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Healthy Matches",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_healthy_matches{job=\"top-scores-match-audit\"}",
+          "legendFormat": "healthy matches"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Report Age (s)",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 120 },
+              { "color": "red", "value": 600 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_report_age_seconds{job=\"top-scores-match-audit\"}",
+          "legendFormat": "report age"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Run Failures",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_run_failures_total{job=\"top-scores-match-audit\"}",
+          "legendFormat": "run failures"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Current Issue Counts by Code",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_issue_count{job=\"top-scores-match-audit\"}",
+          "legendFormat": "{{code}} ({{severity}})"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Audit Coverage Stats",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_matches_checked{job=\"top-scores-match-audit\"}",
+          "legendFormat": "matches checked"
+        },
+        {
+          "expr": "top_scores_match_audit_started_matches{job=\"top-scores-match-audit\"}",
+          "legendFormat": "started matches"
+        },
+        {
+          "expr": "top_scores_match_audit_finished_expected_matches{job=\"top-scores-match-audit\"}",
+          "legendFormat": "expected finished"
+        },
+        {
+          "expr": "top_scores_match_audit_detail_candidates{job=\"top-scores-match-audit\"}",
+          "legendFormat": "detail candidates"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Current Issue Matches",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 12 },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_issue_match{job=\"top-scores-match-audit\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{match_id}}"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Value",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

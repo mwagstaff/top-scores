@@ -15350,7 +15350,7 @@ async function rescrapeCanonicalMatchDetailsByIds(matchIds, options = {}) {
             : null;
         const detailsUrl =
           String((existingPayload && existingPayload.details_url) || "").trim() ||
-          `https://www.bbc.co.uk/sport/football/${matchId}`;
+          `https://www.bbc.co.uk/sport/football/live/${matchId}`;
         const fetched = await fetchBbcMatchByDetailsUrl(detailsUrl);
         if (!fetched) {
           failed.push({ match_id: matchId, error: "No BBC match payload returned." });

@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { fetchMatches, fetchTeamRankings } from "../api";
 import { usePreferences } from "../preferences";
-import {
-  TeamRatingLookup,
-  groupMatches,
-} from "../matchGrouping";
+import { TeamRatingLookup, groupMatches } from "../matchGrouping";
 import { MatchCard } from "./MatchCard";
 import type { MatchDayGroup, MatchesMode } from "../types";
 
@@ -32,32 +29,27 @@ const initialState: ScreenState = {
 
 export function MatchesScreen({ mode }: MatchesScreenProps) {
   const { preferences } = usePreferences();
-  const [searchText, setSearchText] = useState("");
-  const [state, setState] = useState<ScreenState>(initialState);
-  const [reloadToken, reload] = useReducer((value) => value + 1, 0);
+  const [searchText, setSearchText]   = useState("");
+  const [showSearch, setShowSearch]   = useState(false);
+  const [state, setState]             = useState<ScreenState>(initialState);
+  const [reloadToken, reload]         = useReducer((v) => v + 1, 0);
 
-  const requestKey = JSON.stringify({
-    mode,
-    preferences,
-    reloadToken,
-  });
+  const requestKey = JSON.stringify({ mode, preferences, reloadToken });
 
   useEffect(() => {
-    const controller = new AbortController();
+    const controller    = new AbortController();
     let refreshTimeoutId = 0;
-    let loadInFlight = false;
+    let loadInFlight     = false;
 
     const load = async (manual = false) => {
-      if (loadInFlight) {
-        return;
-      }
-
+      if (loadInFlight) return;
       loadInFlight = true;
+
       setState((current) => ({
         ...current,
-        loading: current.groups.length === 0,
+        loading:    current.groups.length === 0,
         refreshing: manual || current.groups.length > 0,
-        error: null,
+        error:      null,
       }));
 
       try {
@@ -71,9 +63,8 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           rankingsPromise,
           fetchMatches(mode, preferences, controller.signal),
         ]);
-        if (controller.signal.aborted) {
-          return;
-        }
+
+        if (controller.signal.aborted) return;
 
         const grouped = groupMatches(
           payload.matches,
@@ -83,29 +74,21 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
         );
 
         setState({
-          loading: false,
-          refreshing: false,
-          error: null,
+          loading: false, refreshing: false, error: null,
           groups: grouped,
           totalCount: payload.totalCount,
           lastUpdated: payload.lastUpdated,
         });
       } catch (error) {
-        if (controller.signal.aborted) {
-          return;
-        }
-
+        if (controller.signal.aborted) return;
         setState((current) => ({
           ...current,
-          loading: false,
-          refreshing: false,
+          loading: false, refreshing: false,
           error: error instanceof Error ? error.message : "Unable to load matches.",
         }));
       } finally {
         loadInFlight = false;
-        if (!controller.signal.aborted) {
-          scheduleRefresh();
-        }
+        if (!controller.signal.aborted) scheduleRefresh();
       }
     };
 
@@ -114,17 +97,14 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
       refreshTimeoutId = window.setTimeout(() => {
         if (document.visibilityState === "visible") {
           void load(true);
-          return;
+        } else {
+          scheduleRefresh();
         }
-
-        scheduleRefresh();
       }, preferences.refreshIntervalMinutes * 60_000);
     };
 
     const handleWindowActive = () => {
-      if (document.visibilityState === "visible") {
-        void load(true);
-      }
+      if (document.visibilityState === "visible") void load(true);
     };
 
     void load();
@@ -139,11 +119,10 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
     };
   }, [requestKey]);
 
+  // Filter matches by search query (min 3 chars to trigger)
   const displayedGroups = useMemo(() => {
     const query = searchText.trim().toLowerCase();
-    if (query.length < 3) {
-      return state.groups;
-    }
+    if (query.length < 3) return state.groups;
 
     return state.groups
       .map((day) => ({
@@ -153,14 +132,10 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
             ...league,
             matches: league.matches.filter((match) => {
               const haystack = [
-                match.homeTeam,
-                match.awayTeam,
-                match.league,
-                match.leagueSubcategory || "",
+                match.homeTeam, match.awayTeam,
+                match.league, match.leagueSubcategory ?? "",
                 match.tvChannels.join(" "),
-              ]
-                .join(" ")
-                .toLowerCase();
+              ].join(" ").toLowerCase();
               return haystack.includes(query);
             }),
           }))
@@ -170,53 +145,73 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
   }, [searchText, state.groups]);
 
   const title = mode === "fixtures" ? "Fixtures" : "Results";
-  const subtitle =
-    mode === "fixtures"
-      ? "Today onward, grouped by date and competition."
-      : "Recent scorelines, newest match-days first.";
 
   return (
     <section className="screen-panel">
-      <header className="screen-header">
-        <div>
-          <div className="screen-kicker">{title}</div>
-          <h2>{title}</h2>
-          <p>{subtitle}</p>
-        </div>
+      {/* ── Minimal toolbar: search + refresh icons ── */}
+      <div className="match-controls">
+        {showSearch && (
+          <span style={{ flex: 1, marginRight: "0.25rem", fontSize: "0.75rem", color: "var(--text-muted)", alignSelf: "center" }}>
+            {searchText.trim().length >= 3 && displayedGroups.length === 0
+              ? "No matches"
+              : searchText.trim().length >= 3
+              ? `${displayedGroups.reduce((n, d) => n + d.leagues.reduce((m, l) => m + l.matches.length, 0), 0)} match${displayedGroups.reduce((n, d) => n + d.leagues.reduce((m, l) => m + l.matches.length, 0), 0) === 1 ? "" : "es"}`
+              : null}
+          </span>
+        )}
+
+        {/* Search toggle */}
         <button
           type="button"
-          className="ghost-button"
+          className={`control-btn${showSearch ? " is-active" : ""}`}
+          onClick={() => {
+            setShowSearch((v) => {
+              if (v) setSearchText(""); // clear on close
+              return !v;
+            });
+          }}
+          aria-label={showSearch ? "Close search" : "Search"}
+          style={showSearch ? { color: "var(--accent)", borderColor: "var(--accent-border)", background: "var(--accent-soft)" } : undefined}
+        >
+          {/* Magnifier icon */}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m16.5 16.5 4 4" />
+          </svg>
+        </button>
+
+        {/* Refresh */}
+        <button
+          type="button"
+          className={`control-btn${state.refreshing ? " is-spinning" : ""}`}
           onClick={() => reload()}
           disabled={state.refreshing}
+          aria-label={state.refreshing ? "Refreshing…" : `Refresh ${title.toLowerCase()}`}
         >
-          {state.refreshing ? "Refreshing..." : `Refresh ${title.toLowerCase()}`}
+          {/* Refresh / rotate icon */}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 0 0 4.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 0 1-15.357-2m15.357 2H15" />
+          </svg>
         </button>
-      </header>
-
-      <div className="screen-toolbar">
-        <label className="search-field">
-          <span>Search</span>
-          <input
-            type="search"
-            placeholder={`Search ${title.toLowerCase()}, team, or channel`}
-            value={searchText}
-            onChange={(event) => setSearchText(event.target.value)}
-          />
-        </label>
-        <div className="meta-grid">
-          <div className="stat-card">
-            <span>Matches</span>
-            <strong>{state.totalCount}</strong>
-          </div>
-          <div className="stat-card">
-            <span>Last updated</span>
-            <strong>{formatLastUpdated(state.lastUpdated)}</strong>
-          </div>
-        </div>
       </div>
 
+      {/* ── Collapsible search field ── */}
+      {showSearch && (
+        <div className="match-search">
+          <input
+            type="search"
+            placeholder="Search teams, leagues, channels…"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+          />
+        </div>
+      )}
+
+      {/* ── Match list ── */}
       {state.loading ? (
-        <div className="empty-state">Loading {title.toLowerCase()}...</div>
+        <div className="empty-state">Loading {title.toLowerCase()}…</div>
       ) : state.error ? (
         <div className="empty-state is-error">{state.error}</div>
       ) : displayedGroups.length === 0 ? (
@@ -251,20 +246,21 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           ))}
         </div>
       )}
+
+      {/* ── Last updated footer ── */}
+      {state.lastUpdated && (
+        <div className="match-list-footer">
+          Updated {formatLastUpdated(state.lastUpdated)}
+        </div>
+      )}
     </section>
   );
 }
 
 function formatLastUpdated(value: string | null): string {
-  if (!value) {
-    return "Unknown";
-  }
-
+  if (!value) return "";
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
+  if (Number.isNaN(parsed.getTime())) return value;
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",

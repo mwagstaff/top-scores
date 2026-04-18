@@ -14,6 +14,7 @@
     "start:api": "node server.js",
     "start:monitor": "node monitor.js",
     "start:scraper": "node scraper.js",
+    "start:audit": "node audit.js",
     "test-harness": "node -e \"console.log('Start the main API server with npm start, then open http://localhost:3000/admin/harness')\"",
     "live-activity:harness": "./live_activity_test_harness.sh"
   },

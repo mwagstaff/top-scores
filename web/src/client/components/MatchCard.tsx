@@ -3,9 +3,7 @@ import { fetchMatchDetails, shouldRetryMatchDetails } from "../api";
 import {
   aggregateSummary,
   displayStatus,
-  isMatchFinished,
   isMatchLive,
-  parseKickoff,
 } from "../matchGrouping";
 import { type ResolvedTeamColors, useTeamColorCatalog } from "../teamColors";
 import type {
@@ -29,34 +27,26 @@ interface MatchCardProps {
 export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
   const [homeLogoMissing, setHomeLogoMissing] = useState(false);
   const [awayLogoMissing, setAwayLogoMissing] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [details, setDetails] = useState<MatchDetails | null>(match.matchDetails ?? null);
-  const [detailsLoading, setDetailsLoading] = useState(false);
-  const [detailsError, setDetailsError] = useState<string | null>(null);
-  const retriedIncompleteDetailsIdRef = useRef<string | null>(null);
+  const [isExpanded, setIsExpanded]           = useState(false);
+  const [details, setDetails]                 = useState<MatchDetails | null>(match.matchDetails ?? null);
+  const [detailsLoading, setDetailsLoading]   = useState(false);
+  const [detailsError, setDetailsError]       = useState<string | null>(null);
+  const retriedIncompleteDetailsIdRef         = useRef<string | null>(null);
 
-  const kickoffText = useMemo(() => {
-    const kickoff = parseKickoff(match);
-    if (!kickoff) {
-      return `${match.date} ${match.time}`;
-    }
-
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-    }).format(kickoff);
-  }, [match]);
-
-  const status = displayStatus(match);
+  const status        = displayStatus(match);
   const aggregateText = aggregateSummary(match);
-  const isLive = isMatchLive(match);
-  const showBroadcastDetails = !isMatchFinished(match);
-  const isExpandable = Boolean(match.matchDetailsId);
+  const isLive        = isMatchLive(match);
+  const isExpandable  = Boolean(match.matchDetailsId);
   const detailPanelId = `match-details-${match.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
+  // Derived display state
+  const hasScore  = typeof match.homeScore === "number" && typeof match.awayScore === "number";
+  // Show TV logos only for upcoming/live fixtures (live always has a score, so this is effectively only upcoming)
+  const showTv    = !hasScore && match.tvChannels.length > 0;
+  // Right column: penalty result overrides; otherwise the status string (FT / AET / 45' / 15:00)
+  const rightText = match.penaltyResult ?? status;
+
+  // Sync details when match prop updates (e.g. from live polling)
   useEffect(() => {
     setDetails(match.matchDetails ?? null);
     setDetailsLoading(false);
@@ -65,182 +55,166 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
   }, [match.id]);
 
   useEffect(() => {
-    if (!match.matchDetails) {
-      return;
+    if (match.matchDetails) {
+      setDetails(match.matchDetails);
+      setDetailsLoading(false);
+      setDetailsError(null);
     }
-
-    setDetails(match.matchDetails);
-    setDetailsLoading(false);
-    setDetailsError(null);
   }, [match.matchDetails]);
 
+  // Fetch details on expand
   useEffect(() => {
     let cancelled = false;
-
     if (!isExpanded || !match.matchDetailsId || details || detailsError) {
-      return () => {
-        cancelled = true;
-      };
+      return () => { cancelled = true; };
     }
 
     setDetailsLoading(true);
     setDetailsError(null);
 
     void fetchMatchDetails(match.matchDetailsId)
-      .then((payload) => {
-        if (!cancelled) {
-          setDetails(payload);
-        }
-      })
+      .then((payload) => { if (!cancelled) setDetails(payload); })
       .catch((error) => {
         if (!cancelled) {
-          if (
-            error &&
-            typeof error === "object" &&
-            "status" in error &&
-            error.status === 404
-          ) {
-            setDetailsError("Match details are not available for this fixture yet.");
-          } else {
-            setDetailsError(
-              error instanceof Error ? error.message : "Match details unavailable."
-            );
-          }
+          setDetailsError(
+            error && typeof error === "object" && "status" in error && error.status === 404
+              ? "Match details are not available for this fixture yet."
+              : error instanceof Error ? error.message : "Match details unavailable."
+          );
         }
       })
-      .finally(() => {
-        if (!cancelled) {
-          setDetailsLoading(false);
-        }
-      });
+      .finally(() => { if (!cancelled) setDetailsLoading(false); });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [details, detailsError, isExpanded, match.matchDetailsId]);
 
+  // Retry once if details came back incomplete
   useEffect(() => {
     let cancelled = false;
-
     if (
-      !isExpanded ||
-      !match.matchDetailsId ||
-      !details ||
+      !isExpanded || !match.matchDetailsId || !details ||
       !shouldRetryMatchDetails(details) ||
       retriedIncompleteDetailsIdRef.current === match.matchDetailsId
     ) {
-      return () => {
-        cancelled = true;
-      };
+      return () => { cancelled = true; };
     }
 
     retriedIncompleteDetailsIdRef.current = match.matchDetailsId;
-    const retryTimer = window.setTimeout(() => {
-      void fetchMatchDetails(match.matchDetailsId)
-        .then((payload) => {
-          if (!cancelled) {
-            setDetails(payload);
-            setDetailsError(null);
-          }
-        })
+    const timer = window.setTimeout(() => {
+      void fetchMatchDetails(match.matchDetailsId!)
+        .then((payload) => { if (!cancelled) { setDetails(payload); setDetailsError(null); } })
         .catch((error) => {
-          if (!cancelled) {
-            setDetailsError(
-              error instanceof Error ? error.message : "Match details unavailable."
-            );
-          }
+          if (!cancelled) setDetailsError(error instanceof Error ? error.message : "Match details unavailable.");
         });
     }, 1500);
 
-    return () => {
-      cancelled = true;
-      window.clearTimeout(retryTimer);
-    };
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [details, isExpanded, match.matchDetailsId]);
 
-  const summary = (
+  // ── Compact single-row summary ────────────────────────────────
+  //
+  // Layout (7-column CSS grid):
+  //   home-logo | home-name | center (score or TV) | away-name | away-logo | status | chevron
+  //
+  const rowContent = (
     <>
-      <div className="match-teams">
-        <TeamBadge
-          teamName={match.homeTeam}
-          missing={homeLogoMissing}
-          onMissing={() => setHomeLogoMissing(true)}
-        />
-        <div className="match-scoreboard">
-          <div className="match-line">
-            <div className="team-name team-name-home">{match.homeTeam}</div>
-            <div className={`status-pill${isLive ? " is-live" : ""}`}>
-              {typeof match.homeScore === "number" && <span>{match.homeScore}</span>}
-              <strong>{status}</strong>
-              {typeof match.awayScore === "number" && <span>{match.awayScore}</span>}
-            </div>
-            <div className="team-name team-name-away">{match.awayTeam}</div>
-          </div>
+      {/* Home logo */}
+      <TeamBadge
+        teamName={match.homeTeam}
+        missing={homeLogoMissing}
+        onMissing={() => setHomeLogoMissing(true)}
+      />
 
-          {aggregateText && <div className="match-meta-center">({aggregateText})</div>}
-          {match.penaltyResult && <div className="match-meta-center">{match.penaltyResult}</div>}
-        </div>
-        <TeamBadge
-          teamName={match.awayTeam}
-          missing={awayLogoMissing}
-          onMissing={() => setAwayLogoMissing(true)}
-        />
+      {/* Home team name – right-aligned */}
+      <div className="match-team-name match-team-home" title={match.homeTeam}>
+        {match.homeTeam}
       </div>
 
-      <div className="match-footer">
-        <div className="match-kickoff">{kickoffText}</div>
-        <div className="match-footer-right">
-          {showBroadcastDetails && (
-            <div className="broadcast-wrap">
-              <div className="broadcast-text">
-                {match.tvChannels.length > 0 ? match.tvChannels.join(" • ") : "TV TBA"}
-              </div>
-              <div className="broadcast-logos" aria-hidden="true">
-                {match.tvChannels.map((channel) => (
-                  <img
-                    key={`${match.id}-${channel}`}
-                    src={`/logos/tv/${encodeURIComponent(channel)}`}
-                    alt=""
-                    onError={(event) => {
-                      event.currentTarget.style.display = "none";
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-          {isExpandable && (
-            <span className={`match-chevron${isExpanded ? " is-expanded" : ""}`} aria-hidden="true">
-              <svg viewBox="0 0 20 20">
-                <path d="m5 7 5 5 5-5" />
-              </svg>
-            </span>
-          )}
-        </div>
+      {/* Centre column: score OR TV logos */}
+      <div className="match-center">
+        {hasScore ? (
+          <div className="mc-score">
+            <span className="mc-num">{match.homeScore}</span>
+            <span className="mc-sep">—</span>
+            <span className="mc-num">{match.awayScore}</span>
+          </div>
+        ) : showTv ? (
+          <div className="mc-tv">
+            {match.tvChannels.slice(0, 2).map((ch) => (
+              <img
+                key={`${match.id}-tv-${ch}`}
+                src={`/logos/tv/${encodeURIComponent(ch)}`}
+                alt=""
+                className="mc-tv-logo"
+                onError={(e) => { e.currentTarget.style.display = "none"; }}
+              />
+            ))}
+          </div>
+        ) : null}
+        {/* Two-legged aggregate sub-label */}
+        {aggregateText && <div className="mc-agg">{aggregateText}</div>}
+      </div>
+
+      {/* Away team name – left-aligned */}
+      <div className="match-team-name match-team-away" title={match.awayTeam}>
+        {match.awayTeam}
+      </div>
+
+      {/* Away logo */}
+      <TeamBadge
+        teamName={match.awayTeam}
+        missing={awayLogoMissing}
+        onMissing={() => setAwayLogoMissing(true)}
+      />
+
+      {/* Right status: FT / AET / 45' / 15:00 / P 3-4 */}
+      <div className={`mc-right${isLive ? " is-live" : ""}`}>
+        {rightText}
+      </div>
+
+      {/* Expand chevron (always present to keep grid stable; invisible when not expandable) */}
+      <div className="mc-chevron-wrap" aria-hidden="true">
+        {isExpandable && (
+          <svg
+            className={`mc-chevron${isExpanded ? " is-expanded" : ""}`}
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m4 6 4 4 4-4" />
+          </svg>
+        )}
       </div>
     </>
   );
 
   return (
     <article className={`match-card${highlightToday ? " is-highlighted" : ""}`}>
+      {/* Use a button when expandable so the whole row is keyboard/click accessible */}
       {isExpandable ? (
         <button
           type="button"
-          className="match-summary-button"
-          onClick={() => setIsExpanded((current) => !current)}
+          className="match-row"
+          onClick={() => setIsExpanded((v) => !v)}
           aria-expanded={isExpanded}
           aria-controls={detailPanelId}
         >
-          {summary}
+          {rowContent}
         </button>
       ) : (
-        <div className="match-summary-static">{summary}</div>
+        <div className="match-row">
+          {rowContent}
+        </div>
       )}
 
+      {/* Expanded match details panel */}
       {isExpandable && isExpanded && (
         <div className="match-details-panel" id={detailPanelId}>
           {detailsLoading ? (
-            <div className="match-details-message">Loading match details...</div>
+            <div className="match-details-message">Loading match details…</div>
           ) : detailsError ? (
             <div className="match-details-message is-error">{detailsError}</div>
           ) : details ? (
@@ -254,6 +228,9 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
   );
 }
 
+
+// ── Team badge (logo with initials fallback) ──────────────────────
+
 interface TeamBadgeProps {
   teamName: string;
   missing: boolean;
@@ -262,10 +239,9 @@ interface TeamBadgeProps {
 
 function TeamBadge({ teamName, missing, onMissing }: TeamBadgeProps) {
   const initials = teamName
-    .split(/\s+/)
-    .filter(Boolean)
+    .split(/\s+/).filter(Boolean)
     .slice(0, 2)
-    .map((token) => token[0]?.toUpperCase() ?? "")
+    .map((t) => t[0]?.toUpperCase() ?? "")
     .join("");
 
   if (missing) {
@@ -282,12 +258,11 @@ function TeamBadge({ teamName, missing, onMissing }: TeamBadgeProps) {
   );
 }
 
-interface ExpandedMatchDetailsProps {
-  details: MatchDetails;
-}
 
-function ExpandedMatchDetails({ details }: ExpandedMatchDetailsProps) {
-  const timelineEntries = useMemo(() => buildTimelineEntries(details), [details]);
+// ── Expanded match details ────────────────────────────────────────
+
+function ExpandedMatchDetails({ details }: { details: MatchDetails }) {
+  const timelineEntries   = useMemo(() => buildTimelineEntries(details), [details]);
   const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
 
   if (timelineEntries.length === 0 && !hasCompleteLineups) {
@@ -302,8 +277,8 @@ function ExpandedMatchDetails({ details }: ExpandedMatchDetailsProps) {
           <div className="timeline-list">
             {timelineEntries.map((entry) => (
               <div
-                className={`timeline-row timeline-row-${entry.side}`}
                 key={`${entry.side}-${entry.kind}-${entry.minute}-${entry.player}`}
+                className={`timeline-row timeline-row-${entry.side}`}
               >
                 <span className="timeline-minute">{entry.minute}</span>
                 <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
@@ -314,10 +289,13 @@ function ExpandedMatchDetails({ details }: ExpandedMatchDetailsProps) {
         </section>
       )}
 
-      {hasCompleteLineups && <LineupSection details={details} teamLineups={details.teamLineups} />}
+      {hasCompleteLineups && <LineupSection details={details} teamLineups={details.teamLineups!} />}
     </div>
   );
 }
+
+
+// ── Lineup section ────────────────────────────────────────────────
 
 interface LineupSectionProps {
   details: MatchDetails;
@@ -326,30 +304,29 @@ interface LineupSectionProps {
 
 function LineupSection({ details, teamLineups }: LineupSectionProps) {
   const teamColorCatalog = useTeamColorCatalog();
-  const homeLineup = teamLineups.home!;
-  const awayLineup = teamLineups.away!;
+  const homeLineup       = teamLineups.home!;
+  const awayLineup       = teamLineups.away!;
+
   const homeLookup = buildLineupEventLookup({
-    goals: details.homeGoalScorers,
-    assists: details.homeAssists,
-    yellowCards: details.homeYellowCards,
-    redCards: details.homeRedCards,
+    goals: details.homeGoalScorers, assists: details.homeAssists,
+    yellowCards: details.homeYellowCards, redCards: details.homeRedCards,
     substitutions: homeLineup.substitutions,
   });
   const awayLookup = buildLineupEventLookup({
-    goals: details.awayGoalScorers,
-    assists: details.awayAssists,
-    yellowCards: details.awayYellowCards,
-    redCards: details.awayRedCards,
+    goals: details.awayGoalScorers, assists: details.awayAssists,
+    yellowCards: details.awayYellowCards, redCards: details.awayRedCards,
     substitutions: awayLineup.substitutions,
   });
-  const homeTeamName = homeLineup.team || details.homeTeam || "Home";
-  const awayTeamName = awayLineup.team || details.awayTeam || "Away";
+
+  const homeTeamName     = homeLineup.team || details.homeTeam || "Home";
+  const awayTeamName     = awayLineup.team || details.awayTeam || "Away";
   const homeNumberColors = teamColorCatalog.lineupColors(homeTeamName, awayTeamName, "home");
   const awayNumberColors = teamColorCatalog.lineupColors(awayTeamName, homeTeamName, "away");
 
   return (
     <section className="details-section lineup-section">
       <div className="details-section-title">Starting Line-ups</div>
+
       <div className="lineup-formations">
         <div className="lineup-formation-chip">
           <span className="lineup-formation-team">{homeTeamName}</span>
@@ -399,6 +376,9 @@ function LineupSection({ details, teamLineups }: LineupSectionProps) {
   );
 }
 
+
+// ── Lineup half ───────────────────────────────────────────────────
+
 interface LineupHalfProps {
   teamName: string;
   starters: MatchLineupPlayer[];
@@ -413,14 +393,13 @@ function LineupHalf({ teamName, starters, lookup, numberColors, side }: LineupHa
   return (
     <div className={`lineup-half lineup-half-${side}`}>
       {side === "away" && <div className="lineup-half-spacer" aria-hidden="true" />}
-
       {side === "home" && <div className="lineup-team-label">{teamName.toUpperCase()}</div>}
 
       <div className="lineup-half-rows">
         {groupedRows.map((row, rowIndex) => (
           <div
-            className="lineup-row"
             key={`${side}-${rowIndex}`}
+            className="lineup-row"
             style={{ gridTemplateColumns: `repeat(${row.players.length}, minmax(0, 1fr))` }}
           >
             {row.players.map((player) => (
@@ -436,14 +415,16 @@ function LineupHalf({ teamName, starters, lookup, numberColors, side }: LineupHa
         ))}
       </div>
 
-      {side === "home" ? (
-        <div className="lineup-half-spacer" aria-hidden="true" />
-      ) : (
-        <div className="lineup-team-label lineup-team-label-away">{teamName.toUpperCase()}</div>
-      )}
+      {side === "home"
+        ? <div className="lineup-half-spacer" aria-hidden="true" />
+        : <div className="lineup-team-label lineup-team-label-away">{teamName.toUpperCase()}</div>
+      }
     </div>
   );
 }
+
+
+// ── Player marker ─────────────────────────────────────────────────
 
 interface LineupPlayerMarkerProps {
   player: MatchLineupPlayer;
@@ -454,19 +435,18 @@ interface LineupPlayerMarkerProps {
 
 function LineupPlayerMarker({ player, summary, replacementSummary, numberColors }: LineupPlayerMarkerProps) {
   const replacementPlayer = summary.substitution?.playerOn ?? null;
-  const badgeItems = buildPlayerBadgeItems(summary);
-  const replacementBadgeItems = replacementSummary ? buildPlayerBadgeItems(replacementSummary) : [];
+  const badgeItems        = buildPlayerBadgeItems(summary);
+  const replacementBadges = replacementSummary ? buildPlayerBadgeItems(replacementSummary) : [];
+
   const numberStyle = {
-    "--lineup-player-number-bg": numberColors.background,
-    "--lineup-player-number-fg": numberColors.foreground,
+    "--lineup-player-number-bg":     numberColors.background,
+    "--lineup-player-number-fg":     numberColors.foreground,
     "--lineup-player-number-stroke": numberColors.outlineColor ?? "transparent",
   } as CSSProperties;
 
   return (
     <div className="lineup-player">
-      <div className="lineup-player-number" style={numberStyle}>
-        {player.number}
-      </div>
+      <div className="lineup-player-number" style={numberStyle}>{player.number}</div>
 
       {badgeItems.length > 0 && (
         <div className="lineup-player-badges">
@@ -487,12 +467,13 @@ function LineupPlayerMarker({ player, summary, replacementSummary, numberColors 
             <div className="lineup-player-name-row lineup-player-name-row-sub">
               <span className="lineup-sub-arrow lineup-sub-arrow-on">↑</span>
               <span className="lineup-player-name">
-                {condensedLineupPlayerName(replacementPlayer.name)} ({formattedMatchMinute(summary.substitution?.minute || "")})
+                {condensedLineupPlayerName(replacementPlayer.name)}{" "}
+                ({formattedMatchMinute(summary.substitution?.minute ?? "")})
               </span>
             </div>
-            {replacementBadgeItems.length > 0 && (
+            {replacementBadges.length > 0 && (
               <div className="lineup-player-badges">
-                {replacementBadgeItems.map((badge) => (
+                {replacementBadges.map((badge) => (
                   <LineupEventBadge key={`${replacementPlayer.number}-${badge.kind}`} badge={badge} />
                 ))}
               </div>
@@ -504,34 +485,43 @@ function LineupPlayerMarker({ player, summary, replacementSummary, numberColors 
   );
 }
 
-interface LineupSubstitutesTableProps {
-  lineup: MatchTeamLineup;
-}
 
-function LineupSubstitutesTable({ lineup }: LineupSubstitutesTableProps) {
+// ── Substitutes table ─────────────────────────────────────────────
+
+function LineupSubstitutesTable({ lineup }: { lineup: MatchTeamLineup }) {
   return (
     <section className="lineup-substitutes-table">
-      <div className="lineup-substitutes-title">{(lineup.team || "Team").toUpperCase()} SUBSTITUTES</div>
+      <div className="lineup-substitutes-title">
+        {(lineup.team || "Team").toUpperCase()} SUBSTITUTES
+      </div>
 
       <div className="lineup-substitutes-card">
         {lineup.substitutes.map((substitute, index) => {
           const substitution =
-            lineup.substitutions.find((item) => item.playerOn.number === substitute.number) || null;
+            lineup.substitutions.find((item) => item.playerOn.number === substitute.number) ?? null;
           return (
-            <div className="lineup-substitute-row" key={`${lineup.team}-${substitute.number}-${substitute.name}`}>
+            <div
+              key={`${lineup.team}-${substitute.number}-${substitute.name}`}
+              className="lineup-substitute-row"
+            >
               <div className="lineup-substitute-number">{substitute.number}</div>
               <div className="lineup-substitute-copy">
-                <div className="lineup-substitute-name">{condensedLineupPlayerName(substitute.name)}</div>
+                <div className="lineup-substitute-name">
+                  {condensedLineupPlayerName(substitute.name)}
+                </div>
                 {substitution && (
                   <div className="lineup-substitute-meta">
                     <span className="lineup-sub-arrow lineup-sub-arrow-on">↑</span>
                     <span>
-                      {formattedMatchMinute(substitution.minute)} for {condensedLineupPlayerName(substitution.playerOff.name)}
+                      {formattedMatchMinute(substitution.minute)} for{" "}
+                      {condensedLineupPlayerName(substitution.playerOff.name)}
                     </span>
                   </div>
                 )}
               </div>
-              {index < lineup.substitutes.length - 1 && <div className="lineup-substitute-divider" />}
+              {index < lineup.substitutes.length - 1 && (
+                <div className="lineup-substitute-divider" />
+              )}
             </div>
           );
         })}
@@ -540,19 +530,19 @@ function LineupSubstitutesTable({ lineup }: LineupSubstitutesTableProps) {
   );
 }
 
+
+// ── Event badge ───────────────────────────────────────────────────
+
 interface LineupEventBadgeDescriptor {
   kind: "goal" | "assist" | "yellow-card" | "red-card";
   count: number;
 }
 
 function LineupEventBadge({ badge }: { badge: LineupEventBadgeDescriptor }) {
-  const label = badge.kind === "goal" ? "⚽" : badge.kind === "assist" ? "A" : "";
+  const label     = badge.kind === "goal" ? "⚽" : badge.kind === "assist" ? "A" : "";
   const cardClass =
-    badge.kind === "yellow-card"
-      ? " lineup-event-badge-card-yellow"
-      : badge.kind === "red-card"
-        ? " lineup-event-badge-card-red"
-        : "";
+    badge.kind === "yellow-card" ? " lineup-event-badge-card-yellow" :
+    badge.kind === "red-card"    ? " lineup-event-badge-card-red"    : "";
 
   return (
     <span className="lineup-event-badge">
@@ -566,16 +556,21 @@ function LineupEventBadge({ badge }: { badge: LineupEventBadgeDescriptor }) {
   );
 }
 
+
+// ── Guard: only render lineup when both teams have 11 starters ────
+
 function hasRenderableTeamLineups(
   teamLineups: MatchTeamLineups | null | undefined
 ): teamLineups is MatchTeamLineups & { home: MatchTeamLineup; away: MatchTeamLineup } {
   return Boolean(
-    teamLineups?.home &&
-      teamLineups.away &&
-      teamLineups.home.startingLineup.length === 11 &&
-      teamLineups.away.startingLineup.length === 11
+    teamLineups?.home && teamLineups.away &&
+    teamLineups.home.startingLineup.length === 11 &&
+    teamLineups.away.startingLineup.length === 11
   );
 }
+
+
+// ── Lineup row building ───────────────────────────────────────────
 
 interface LineupRow {
   players: MatchLineupPlayer[];
@@ -588,46 +583,46 @@ function buildDisplayLineupRows(starters: MatchLineupPlayer[], side: "home" | "a
 }
 
 function buildLineupRows(starters: MatchLineupPlayer[]): LineupRow[] {
-  const playersWithFormationRows = starters.filter(
-    (player) =>
-      typeof player.formationRowIndex === "number" && typeof player.formationSlotIndex === "number"
+  const withFormation = starters.filter(
+    (p) => typeof p.formationRowIndex === "number" && typeof p.formationSlotIndex === "number"
   );
 
-  if (playersWithFormationRows.length === starters.length) {
+  if (withFormation.length === starters.length) {
     const groupedByRow = new Map<number, MatchLineupPlayer[]>();
     for (const player of starters) {
       const rowIndex = player.formationRowIndex ?? 0;
-      const row = groupedByRow.get(rowIndex) ?? [];
+      const row      = groupedByRow.get(rowIndex) ?? [];
       row.push(player);
       groupedByRow.set(rowIndex, row);
     }
 
     return Array.from(groupedByRow.entries())
-      .sort((left, right) => left[0] - right[0])
+      .sort(([a], [b]) => a - b)
       .map(([, row]) => {
-        const players = [...row].sort((left, right) => {
-          const leftSlot = left.formationSlotIndex ?? 0;
-          const rightSlot = right.formationSlotIndex ?? 0;
-          if (leftSlot !== rightSlot) {
-            return leftSlot - rightSlot;
-          }
-          return left.number - right.number;
+        const players = [...row].sort((l, r) => {
+          const ls = l.formationSlotIndex ?? 0;
+          const rs = r.formationSlotIndex ?? 0;
+          return ls !== rs ? ls - rs : l.number - r.number;
         });
         return {
           players,
-          slotCount: Math.max(...players.map((player) => player.formationRowSize ?? players.length), players.length),
+          slotCount: Math.max(...players.map((p) => p.formationRowSize ?? players.length), players.length),
         };
       });
   }
 
-  const goalkeepers = starters.filter((player) => player.positionCategory === "goalkeeper");
-  const defenders = starters.filter((player) => player.positionCategory === "defender");
-  const midfielders = starters.filter((player) => player.positionCategory === "midfielder");
-  const attackers = starters.filter((player) => player.positionCategory === "attacker");
+  // Fallback: group by position category
+  const goalkeepers = starters.filter((p) => p.positionCategory === "goalkeeper");
+  const defenders   = starters.filter((p) => p.positionCategory === "defender");
+  const midfielders = starters.filter((p) => p.positionCategory === "midfielder");
+  const attackers   = starters.filter((p) => p.positionCategory === "attacker");
   return [goalkeepers, defenders, midfielders, attackers]
     .filter((row) => row.length > 0)
     .map((players) => ({ players, slotCount: players.length }));
 }
+
+
+// ── Event lookup ──────────────────────────────────────────────────
 
 interface MatchLineupPlayerEventSummary {
   goals: number;
@@ -643,11 +638,7 @@ interface MatchLineupEventLookup {
 }
 
 function buildLineupEventLookup({
-  goals,
-  assists,
-  yellowCards,
-  redCards,
-  substitutions,
+  goals, assists, yellowCards, redCards, substitutions,
 }: {
   goals: MatchGoalScorer[];
   assists: MatchAssistProvider[];
@@ -655,60 +646,41 @@ function buildLineupEventLookup({
   redCards: MatchRedCardEvent[];
   substitutions: MatchLineupSubstitution[];
 }): MatchLineupEventLookup {
-  const goalEntries = goals.map((goal) => ({
-    count: goal.goalTimes.length,
-    lookup: buildPlayerNameLookup(goal.player),
-  }));
-  const assistEntries = assists.map((assist) => ({
-    count: assist.assistTimes.length,
-    lookup: buildPlayerNameLookup(assist.player),
-  }));
-  const yellowCardEntries = yellowCards.map((card) => ({
-    count: card.yellowCardTimes.length,
-    lookup: buildPlayerNameLookup(card.player),
-  }));
-  const redCardEntries = redCards.map((card) => ({
-    count: card.redCardTimes.length,
-    lookup: buildPlayerNameLookup(card.player),
-  }));
+  const goalEntries       = goals.map((g)  => ({ count: g.goalTimes.length,       lookup: buildPlayerNameLookup(g.player)  }));
+  const assistEntries     = assists.map((a) => ({ count: a.assistTimes.length,     lookup: buildPlayerNameLookup(a.player)  }));
+  const yellowCardEntries = yellowCards.map((c) => ({ count: c.yellowCardTimes.length, lookup: buildPlayerNameLookup(c.player) }));
+  const redCardEntries    = redCards.map((c)    => ({ count: c.redCardTimes.length,    lookup: buildPlayerNameLookup(c.player) }));
 
-  const bestCount = (playerName: string, entries: Array<{ count: number; lookup: MatchPlayerNameLookup }>) => {
-    const lookup = buildPlayerNameLookup(playerName);
-    const best = entries.reduce<{ count: number; score: number } | null>((current, entry) => {
+  const bestCount = (name: string, entries: Array<{ count: number; lookup: MatchPlayerNameLookup }>) => {
+    const lookup = buildPlayerNameLookup(name);
+    return entries.reduce<{ count: number; score: number } | null>((best, entry) => {
       const score = matchPlayerNameLookup(lookup, entry.lookup);
-      if (score <= 0) {
-        return current;
-      }
-      if (!current || score > current.score || (score === current.score && entry.count > current.count)) {
+      if (score <= 0) return best;
+      if (!best || score > best.score || (score === best.score && entry.count > best.count)) {
         return { count: entry.count, score };
       }
-      return current;
-    }, null);
-
-    return best?.count ?? 0;
+      return best;
+    }, null)?.count ?? 0;
   };
 
   return {
     summaryFor(player) {
       return {
-        goals: bestCount(player.name, goalEntries),
-        assists: bestCount(player.name, assistEntries),
+        goals:       bestCount(player.name, goalEntries),
+        assists:     bestCount(player.name, assistEntries),
         yellowCards: bestCount(player.name, yellowCardEntries),
-        redCards: bestCount(player.name, redCardEntries),
-        substitution: substitutions.find((item) => item.playerOff.number === player.number) || null,
+        redCards:    bestCount(player.name, redCardEntries),
+        substitution: substitutions.find((s) => s.playerOff.number === player.number) ?? null,
       };
     },
     replacementSummaryFor(player) {
-      const substitution = substitutions.find((item) => item.playerOff.number === player.number);
-      if (!substitution) {
-        return null;
-      }
-
+      const sub = substitutions.find((s) => s.playerOff.number === player.number);
+      if (!sub) return null;
       return {
-        goals: bestCount(substitution.playerOn.name, goalEntries),
-        assists: bestCount(substitution.playerOn.name, assistEntries),
-        yellowCards: bestCount(substitution.playerOn.name, yellowCardEntries),
-        redCards: bestCount(substitution.playerOn.name, redCardEntries),
+        goals:       bestCount(sub.playerOn.name, goalEntries),
+        assists:     bestCount(sub.playerOn.name, assistEntries),
+        yellowCards: bestCount(sub.playerOn.name, yellowCardEntries),
+        redCards:    bestCount(sub.playerOn.name, redCardEntries),
         substitution: null,
       };
     },
@@ -717,152 +689,74 @@ function buildLineupEventLookup({
 
 function buildPlayerBadgeItems(summary: MatchLineupPlayerEventSummary): LineupEventBadgeDescriptor[] {
   const badges: LineupEventBadgeDescriptor[] = [];
-  if (summary.goals > 0) {
-    badges.push({ kind: "goal", count: summary.goals });
-  }
-  if (summary.assists > 0) {
-    badges.push({ kind: "assist", count: summary.assists });
-  }
-  if (summary.yellowCards > 0) {
-    badges.push({ kind: "yellow-card", count: summary.yellowCards });
-  }
-  if (summary.redCards > 0) {
-    badges.push({ kind: "red-card", count: summary.redCards });
-  }
+  if (summary.goals       > 0) badges.push({ kind: "goal",        count: summary.goals       });
+  if (summary.assists     > 0) badges.push({ kind: "assist",      count: summary.assists     });
+  if (summary.yellowCards > 0) badges.push({ kind: "yellow-card", count: summary.yellowCards });
+  if (summary.redCards    > 0) badges.push({ kind: "red-card",    count: summary.redCards    });
   return badges;
 }
+
+
+// ── Timeline builder ──────────────────────────────────────────────
 
 function buildTimelineEntries(details: MatchDetails) {
   const homeAssistLookup = buildAssistLookup(details.homeAssists);
   const awayAssistLookup = buildAssistLookup(details.awayAssists);
-  const entries: Array<{
-    side: "home" | "away";
-    minute: string;
-    player: string;
-    text: string;
-    kind: string;
-    icon: string;
-    baseMinute: number;
-    extraMinute: number;
-    sequence: number;
-  }> = [];
+
+  type Entry = {
+    side: "home" | "away"; minute: string; player: string;
+    text: string; kind: string; icon: string;
+    baseMinute: number; extraMinute: number; sequence: number;
+  };
+
+  const entries: Entry[] = [];
   let sequence = 0;
 
-  for (const scorer of details.homeGoalScorers) {
-    for (const minute of scorer.goalTimes) {
-      const parsed = parseMinute(minute);
-      if (!parsed) continue;
-      const assist = homeAssistLookup.get(parsed.lookupKey) || homeAssistLookup.get(String(parsed.base));
-      entries.push({
-        side: "home",
-        minute: parsed.display,
-        player: scorer.player,
-        text: formatGoalText(scorer.player, assist, parsed.isPenalty),
-        kind: "goal",
-        icon: "⚽",
-        baseMinute: parsed.base,
-        extraMinute: parsed.extra,
-        sequence: sequence++,
-      });
+  const addGoals = (
+    scorers: MatchGoalScorer[],
+    side: "home" | "away",
+    assistLookup: Map<string, string>
+  ) => {
+    for (const scorer of scorers) {
+      for (const minute of scorer.goalTimes) {
+        const parsed = parseMinute(minute);
+        if (!parsed) continue;
+        const assist = assistLookup.get(parsed.lookupKey) ?? assistLookup.get(String(parsed.base));
+        entries.push({ side, minute: parsed.display, player: scorer.player,
+          text: formatGoalText(scorer.player, assist, parsed.isPenalty),
+          kind: "goal", icon: "⚽",
+          baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
+      }
+      for (const minute of scorer.ownGoalTimes) {
+        const parsed = parseMinute(minute);
+        if (!parsed) continue;
+        entries.push({ side, minute: parsed.display, player: scorer.player,
+          text: `${abbreviatePlayerName(scorer.player)} (OG)`,
+          kind: "own-goal", icon: "⚽",
+          baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
+      }
+      for (const minute of scorer.disallowedGoalTimes) {
+        const parsed = parseMinute(minute);
+        if (!parsed) continue;
+        const assist = assistLookup.get(parsed.lookupKey) ?? assistLookup.get(String(parsed.base));
+        entries.push({ side, minute: parsed.display, player: scorer.player,
+          text: formatDisallowedGoalText(scorer.player, assist, parsed.isPenalty),
+          kind: "disallowed-goal", icon: "⚽",
+          baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
+      }
     }
-    for (const minute of scorer.ownGoalTimes) {
-      const parsed = parseMinute(minute);
-      if (!parsed) continue;
-      entries.push({
-        side: "home",
-        minute: parsed.display,
-        player: scorer.player,
-        text: `${abbreviatePlayerName(scorer.player)} (OG)`,
-        kind: "own-goal",
-        icon: "⚽",
-        baseMinute: parsed.base,
-        extraMinute: parsed.extra,
-        sequence: sequence++,
-      });
-    }
-    for (const minute of scorer.disallowedGoalTimes) {
-      const parsed = parseMinute(minute);
-      if (!parsed) continue;
-      const assist = homeAssistLookup.get(parsed.lookupKey) || homeAssistLookup.get(String(parsed.base));
-      entries.push({
-        side: "home",
-        minute: parsed.display,
-        player: scorer.player,
-        text: formatDisallowedGoalText(scorer.player, assist, parsed.isPenalty),
-        kind: "disallowed-goal",
-        icon: "⚽",
-        baseMinute: parsed.base,
-        extraMinute: parsed.extra,
-        sequence: sequence++,
-      });
-    }
-  }
+  };
 
-  for (const scorer of details.awayGoalScorers) {
-    for (const minute of scorer.goalTimes) {
-      const parsed = parseMinute(minute);
-      if (!parsed) continue;
-      const assist = awayAssistLookup.get(parsed.lookupKey) || awayAssistLookup.get(String(parsed.base));
-      entries.push({
-        side: "away",
-        minute: parsed.display,
-        player: scorer.player,
-        text: formatGoalText(scorer.player, assist, parsed.isPenalty),
-        kind: "goal",
-        icon: "⚽",
-        baseMinute: parsed.base,
-        extraMinute: parsed.extra,
-        sequence: sequence++,
-      });
-    }
-    for (const minute of scorer.ownGoalTimes) {
-      const parsed = parseMinute(minute);
-      if (!parsed) continue;
-      entries.push({
-        side: "away",
-        minute: parsed.display,
-        player: scorer.player,
-        text: `${abbreviatePlayerName(scorer.player)} (OG)`,
-        kind: "own-goal",
-        icon: "⚽",
-        baseMinute: parsed.base,
-        extraMinute: parsed.extra,
-        sequence: sequence++,
-      });
-    }
-    for (const minute of scorer.disallowedGoalTimes) {
-      const parsed = parseMinute(minute);
-      if (!parsed) continue;
-      const assist = awayAssistLookup.get(parsed.lookupKey) || awayAssistLookup.get(String(parsed.base));
-      entries.push({
-        side: "away",
-        minute: parsed.display,
-        player: scorer.player,
-        text: formatDisallowedGoalText(scorer.player, assist, parsed.isPenalty),
-        kind: "disallowed-goal",
-        icon: "⚽",
-        baseMinute: parsed.base,
-        extraMinute: parsed.extra,
-        sequence: sequence++,
-      });
-    }
-  }
+  addGoals(details.homeGoalScorers, "home", homeAssistLookup);
+  addGoals(details.awayGoalScorers, "away", awayAssistLookup);
 
   for (const card of details.homeRedCards) {
     for (const minute of card.redCardTimes) {
       const parsed = parseMinute(minute);
       if (!parsed) continue;
-      entries.push({
-        side: "home",
-        minute: parsed.display,
-        player: card.player,
-        text: abbreviatePlayerName(card.player),
-        kind: "red-card",
-        icon: "🟥",
-        baseMinute: parsed.base,
-        extraMinute: parsed.extra,
-        sequence: sequence++,
-      });
+      entries.push({ side: "home", minute: parsed.display, player: card.player,
+        text: abbreviatePlayerName(card.player), kind: "red-card", icon: "🟥",
+        baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
     }
   }
 
@@ -870,34 +764,21 @@ function buildTimelineEntries(details: MatchDetails) {
     for (const minute of card.redCardTimes) {
       const parsed = parseMinute(minute);
       if (!parsed) continue;
-      entries.push({
-        side: "away",
-        minute: parsed.display,
-        player: card.player,
-        text: abbreviatePlayerName(card.player),
-        kind: "red-card",
-        icon: "🟥",
-        baseMinute: parsed.base,
-        extraMinute: parsed.extra,
-        sequence: sequence++,
-      });
+      entries.push({ side: "away", minute: parsed.display, player: card.player,
+        text: abbreviatePlayerName(card.player), kind: "red-card", icon: "🟥",
+        baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
     }
   }
 
-  return entries.sort((left, right) => {
-    if (left.baseMinute !== right.baseMinute) {
-      return left.baseMinute - right.baseMinute;
-    }
-    if (left.extraMinute !== right.extraMinute) {
-      return left.extraMinute - right.extraMinute;
-    }
-    return left.sequence - right.sequence;
-  });
+  return entries.sort((l, r) =>
+    l.baseMinute  !== r.baseMinute  ? l.baseMinute  - r.baseMinute  :
+    l.extraMinute !== r.extraMinute ? l.extraMinute - r.extraMinute :
+    l.sequence    - r.sequence
+  );
 }
 
 function buildAssistLookup(assists: MatchAssistProvider[]) {
   const lookup = new Map<string, string>();
-
   for (const assist of assists) {
     for (const minute of assist.assistTimes) {
       const parsed = parseMinute(minute);
@@ -908,18 +789,13 @@ function buildAssistLookup(assists: MatchAssistProvider[]) {
       }
     }
   }
-
   return lookup;
 }
 
 function formatGoalText(player: string, assist: string | undefined, isPenalty: boolean) {
   const name = abbreviatePlayerName(player);
-  if (isPenalty) {
-    return `${name} (pen)`;
-  }
-  if (assist) {
-    return `${name} (${assist})`;
-  }
+  if (isPenalty) return `${name} (pen)`;
+  if (assist)    return `${name} (${assist})`;
   return name;
 }
 
@@ -929,131 +805,86 @@ function formatDisallowedGoalText(player: string, assist: string | undefined, is
 
 function abbreviatePlayerName(fullName: string) {
   const trimmed = fullName.trim();
-  const parts = trimmed.split(/\s+/).filter(Boolean);
-  if (parts.length <= 1) {
-    return trimmed;
-  }
-
-  return `${parts.slice(0, -1).map((part) => `${part[0]}.`).join(" ")} ${parts.at(-1)}`;
+  const parts   = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return trimmed;
+  return `${parts.slice(0, -1).map((p) => `${p[0]}.`).join(" ")} ${parts.at(-1)}`;
 }
 
 function formattedMatchMinute(rawValue: string) {
-  const trimmed = rawValue.trim();
-  if (!trimmed) {
-    return "-";
-  }
-  return trimmed.includes("'") ? trimmed : `${trimmed}'`;
+  const t = rawValue.trim();
+  if (!t) return "-";
+  return t.includes("'") ? t : `${t}'`;
 }
 
 function condensedLineupPlayerName(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-
-  const hasCaptainSuffix = /\(c\)/i.test(trimmed);
-  const baseName = trimmed.replace(/\(c\)/gi, "").trim();
-  const parts = baseName.split(/\s+/).filter(Boolean);
-  const last = parts.at(-1);
-  if (!last) {
-    return trimmed;
-  }
+  const trimmed       = value.trim();
+  if (!trimmed) return trimmed;
+  const hasCaptain    = /\(c\)/i.test(trimmed);
+  const baseName      = trimmed.replace(/\(c\)/gi, "").trim();
+  const parts         = baseName.split(/\s+/).filter(Boolean);
+  const last          = parts.at(-1);
+  if (!last) return trimmed;
 
   const particles = new Set([
-    "al",
-    "bin",
-    "bint",
-    "da",
-    "de",
-    "del",
-    "della",
-    "den",
-    "der",
-    "di",
-    "dos",
-    "du",
-    "el",
-    "la",
-    "le",
-    "st",
-    "ten",
-    "ter",
-    "van",
-    "von",
+    "al","bin","bint","da","de","del","della","den","der",
+    "di","dos","du","el","la","le","st","ten","ter","van","von",
   ]);
 
   const surnameParts = [last];
-  for (let index = parts.length - 2; index >= 0; index -= 1) {
-    const candidate = parts[index].toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
-    if (!particles.has(candidate)) {
-      break;
-    }
-    surnameParts.unshift(parts[index]);
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const candidate = parts[i].toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+    if (!particles.has(candidate)) break;
+    surnameParts.unshift(parts[i]);
   }
 
   const condensed = surnameParts.join(" ");
-  return hasCaptainSuffix ? `${condensed} (c)` : condensed;
+  return hasCaptain ? `${condensed} (c)` : condensed;
 }
 
-interface MatchPlayerNameLookup {
-  full: string;
-  initialAndLast: string;
-  last: string;
-}
+
+// ── Player name fuzzy matching ────────────────────────────────────
+
+interface MatchPlayerNameLookup { full: string; initialAndLast: string; last: string; }
 
 function buildPlayerNameLookup(name: string): MatchPlayerNameLookup {
-  const cleaned = name.replace(/\(c\)/gi, "");
-  const normalized = cleaned
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-  const tokens = normalized.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  const first = tokens[0] ?? "";
-  const last = tokens.at(-1) ?? "";
-
+  const cleaned    = name.replace(/\(c\)/gi, "");
+  const normalized = cleaned.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const tokens     = normalized.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const first      = tokens[0] ?? "";
+  const last       = tokens.at(-1) ?? "";
   return {
-    full: tokens.join(" "),
+    full:           tokens.join(" "),
     initialAndLast: first && last ? `${first[0]} ${last}` : tokens.join(" "),
     last,
   };
 }
 
 function matchPlayerNameLookup(left: MatchPlayerNameLookup, right: MatchPlayerNameLookup) {
-  if (!left.full || !right.full) {
-    return 0;
-  }
-  if (left.full === right.full) {
-    return 3;
-  }
-  if (left.initialAndLast && left.initialAndLast === right.initialAndLast) {
-    return 2;
-  }
-  if (left.last && left.last === right.last) {
-    return 1;
-  }
+  if (!left.full || !right.full)                                         return 0;
+  if (left.full === right.full)                                          return 3;
+  if (left.initialAndLast && left.initialAndLast === right.initialAndLast) return 2;
+  if (left.last && left.last === right.last)                             return 1;
   return 0;
 }
 
+
+// ── Minute parsing ────────────────────────────────────────────────
+
 function parseMinute(rawValue: string) {
   const normalized = rawValue.trim();
-  if (!normalized) {
-    return null;
-  }
+  if (!normalized) return null;
 
   const isPenalty = normalized.toLowerCase().includes("pen");
-  const match = normalized.match(/(\d{1,3})(?:\s*')?(?:\+\s*(\d{1,2}))?/);
-  if (!match) {
-    return null;
-  }
+  const m         = normalized.match(/(\d{1,3})(?:\s*')?(?:\+\s*(\d{1,2}))?/);
+  if (!m) return null;
 
-  const base = Number(match[1]);
-  const extra = match[2] ? Number(match[2]) : 0;
-  const display = extra > 0 ? `${base}+${extra}'` : `${base}'`;
+  const base  = Number(m[1]);
+  const extra = m[2] ? Number(m[2]) : 0;
 
   return {
     base,
     extra,
-    display,
+    display:   extra > 0 ? `${base}+${extra}'` : `${base}'`,
     lookupKey: extra > 0 ? `${base}+${extra}` : String(base),
     isPenalty,
   };
