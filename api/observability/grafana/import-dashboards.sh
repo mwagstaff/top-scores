@@ -21,6 +21,7 @@ PROM_CONFIG_FILE="${PROM_CONFIG_FILE:-/etc/prometheus/prometheus.yml}"
 PROM_RELOAD_URL="${PROM_RELOAD_URL:-http://localhost:9090/-/reload}"
 PROM_SCRAPE_JOB_NAME="${PROM_SCRAPE_JOB_NAME:-top-scores}"
 PROM_SCRAPE_TARGET="${PROM_SCRAPE_TARGET:-host.docker.internal:3011}"
+PROM_SCRAPE_TARGETS="${PROM_SCRAPE_TARGETS:-$PROM_SCRAPE_TARGET}"
 PROM_SCRAPE_METRICS_PATH="${PROM_SCRAPE_METRICS_PATH:-/metrics}"
 
 curl_json() {
@@ -130,15 +131,28 @@ ensure_prometheus_scrape_config() {
     "$PROM_CONFIG_FILE" \
     "$PROM_SCRAPE_JOB_NAME" \
     "$PROM_SCRAPE_METRICS_PATH" \
-    "$PROM_SCRAPE_TARGET" \
+    "$PROM_SCRAPE_TARGETS" \
     "$PROM_RELOAD_URL" <<'EOF'
 set -euo pipefail
 
 config_file="$1"
 job_name="$2"
 metrics_path="$3"
-target="$4"
+targets_csv="$4"
 reload_url="$5"
+
+IFS=',' read -r -a targets <<< "$targets_csv"
+target_yaml=""
+for target in "${targets[@]}"; do
+  target="$(printf '%s' "$target" | xargs)"
+  [[ -n "$target" ]] || continue
+  target_yaml="${target_yaml}        - '${target}'"$'\n'
+done
+
+if [[ -z "$target_yaml" ]]; then
+  echo "Error: no Prometheus scrape targets configured" >&2
+  exit 1
+fi
 
 mounted_config_file="$(
   sudo docker inspect prometheus --format '{{range .Mounts}}{{if eq .Destination "/etc/prometheus/prometheus.yml"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true
@@ -154,7 +168,8 @@ ${begin_marker}
   - job_name: '${job_name}'
     metrics_path: '${metrics_path}'
     static_configs:
-      - targets: ['${target}']
+      - targets:
+${target_yaml%$'\n'}
 ${end_marker}
 BLOCK
 )"

@@ -10899,6 +10899,13 @@ function buildCompetitionListFromConfig() {
     .sort(compareInsensitive);
 }
 
+function buildCompetitionWeightsPayload() {
+  return buildCompetitionCatalog().map((entry) => ({
+    name: entry.name,
+    weight: entry.weight,
+  }));
+}
+
 function buildTeamList(matches, leagueFilter) {
   const set = new Set();
   const normalizedFilter = leagueFilter ? normalizeLeagueName(leagueFilter) : null;
@@ -21233,6 +21240,15 @@ app.get(`${API_PREFIX}/competitions`, async (_req, res) => {
   res.json(buildCompetitionListFromConfig());
 });
 
+app.get(`${API_PREFIX}/competitions/weights`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  if (COMPETITION_WEIGHTS_UPDATED_AT) {
+    res.set("X-Last-Updated", COMPETITION_WEIGHTS_UPDATED_AT);
+  }
+  res.set("X-Operational-Source", "server_config");
+  res.json(buildCompetitionWeightsPayload());
+});
+
 app.get(`${API_PREFIX}/teams`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const handlerStartedAtMs = Date.now();
@@ -27163,6 +27179,8 @@ module.exports = {
   shutdownRuntime,
   installRuntimeSignalHandlers,
   __private: {
+    buildCompetitionCatalog,
+    buildCompetitionWeightsPayload,
     toMatchListPayload,
     dedupeMatchListPayloads,
     toMonitorCandidateFromDetailsPayload,

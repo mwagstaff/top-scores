@@ -22,6 +22,7 @@ REMOTE_DIR="~/dev/${PROJECT_NAME}"
 API_SERVICE_LABEL="com.${PROJECT_NAME}.api"
 SCRAPER_SERVICE_LABEL="com.${PROJECT_NAME}.scraper"
 MONITOR_SERVICE_LABEL="com.${PROJECT_NAME}.monitor"
+AUDIT_SERVICE_LABEL="com.${PROJECT_NAME}.audit"
 
 # Optional: if you want to deploy a specific branch/commit state, you could
 # add git checks here (not included by default).
@@ -83,12 +84,15 @@ ssh "$HOST" "
   API_ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/server.js\"
   SCRAPER_ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/scraper.js\"
   MONITOR_ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/monitor.js\"
+  AUDIT_ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/audit.js\"
   API_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}.log\"
   API_ERROR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}.error.log\"
   SCRAPER_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-scraper.log\"
   SCRAPER_ERROR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-scraper.error.log\"
   MONITOR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-monitor.log\"
   MONITOR_ERROR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-monitor.error.log\"
+  AUDIT_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-audit.log\"
+  AUDIT_ERROR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-audit.error.log\"
 
   if [[ ! -f \"\$API_ENTRY_FILE\" ]]; then
     echo \"Error: API entry file not found at \$API_ENTRY_FILE\" >&2
@@ -100,6 +104,10 @@ ssh "$HOST" "
   fi
   if [[ ! -f \"\$MONITOR_ENTRY_FILE\" ]]; then
     echo \"Error: monitor entry file not found at \$MONITOR_ENTRY_FILE\" >&2
+    exit 1
+  fi
+  if [[ ! -f \"\$AUDIT_ENTRY_FILE\" ]]; then
+    echo \"Error: audit entry file not found at \$AUDIT_ENTRY_FILE\" >&2
     exit 1
   fi
 
@@ -175,6 +183,10 @@ EOF_PLIST
     restart_launchd_service \"${MONITOR_SERVICE_LABEL}\"
     echo 'Monitor service restarted via launchd'
 
+    write_launchd_service \"${AUDIT_SERVICE_LABEL}\" \"\$AUDIT_ENTRY_FILE\" \"\$AUDIT_LOG_FILE\" \"\$AUDIT_ERROR_LOG_FILE\"
+    restart_launchd_service \"${AUDIT_SERVICE_LABEL}\"
+    echo 'Audit service restarted via launchd'
+
   elif command -v systemctl >/dev/null 2>&1; then
     echo \"==> Using systemd (Linux)\"
 
@@ -219,6 +231,7 @@ EOF_SYSTEMD
     write_systemd_service \"${SCRAPER_SERVICE_LABEL}\" \"\$SCRAPER_ENTRY_FILE\" \"\$SCRAPER_LOG_FILE\" \"\$SCRAPER_ERROR_LOG_FILE\" \"${PROJECT_NAME} Scraper Service\"
     write_systemd_service \"${API_SERVICE_LABEL}\" \"\$API_ENTRY_FILE\" \"\$API_LOG_FILE\" \"\$API_ERROR_LOG_FILE\" \"${PROJECT_NAME} API Service\"
     write_systemd_service \"${MONITOR_SERVICE_LABEL}\" \"\$MONITOR_ENTRY_FILE\" \"\$MONITOR_LOG_FILE\" \"\$MONITOR_ERROR_LOG_FILE\" \"${PROJECT_NAME} Monitor Service\"
+    write_systemd_service \"${AUDIT_SERVICE_LABEL}\" \"\$AUDIT_ENTRY_FILE\" \"\$AUDIT_LOG_FILE\" \"\$AUDIT_ERROR_LOG_FILE\" \"${PROJECT_NAME} Audit Service\"
 
     systemctl --user daemon-reload
     restart_systemd_service \"${SCRAPER_SERVICE_LABEL}\"
@@ -227,6 +240,8 @@ EOF_SYSTEMD
     echo 'API service restarted via systemd'
     restart_systemd_service \"${MONITOR_SERVICE_LABEL}\"
     echo 'Monitor service restarted via systemd'
+    restart_systemd_service \"${AUDIT_SERVICE_LABEL}\"
+    echo 'Audit service restarted via systemd'
 
   else
     echo \"Error: Neither launchd nor systemd found. Cannot manage service.\" >&2
@@ -264,19 +279,20 @@ if [[ -f "$DASHBOARD_SCRIPT" ]]; then
   )"
 
   if [[ -n "$AUTO_PROM_HOST_IP" ]]; then
-    AUTO_PROM_SCRAPE_TARGET="${AUTO_PROM_HOST_IP}:3010"
+    AUTO_PROM_SCRAPE_HOST="$AUTO_PROM_HOST_IP"
   elif [[ -n "$AUTO_PROM_GW" ]]; then
-    AUTO_PROM_SCRAPE_TARGET="${AUTO_PROM_GW}:3010"
+    AUTO_PROM_SCRAPE_HOST="$AUTO_PROM_GW"
   else
-    AUTO_PROM_SCRAPE_TARGET="host.docker.internal:3010"
+    AUTO_PROM_SCRAPE_HOST="host.docker.internal"
   fi
+
+  AUTO_PROM_SCRAPE_TARGETS="${AUTO_PROM_SCRAPE_HOST}:3010,${AUTO_PROM_SCRAPE_HOST}:3015"
 
   echo "   Prometheus config: ${AUTO_PROM_CONFIG_FILE}"
   echo "   Host IP candidate: ${AUTO_PROM_HOST_IP:-<none>}"
   echo "   Docker GW fallback: ${AUTO_PROM_GW:-<none>}"
-  echo "   Prometheus scrape target: ${AUTO_PROM_SCRAPE_TARGET}"
+  echo "   Prometheus scrape targets: ${AUTO_PROM_SCRAPE_TARGETS}"
 
-  AUTO_PROM_SCRAPE_PORT="${AUTO_PROM_SCRAPE_TARGET##*:}"
   AUTO_PROM_NET_NAME="$(
     ssh "$HOST" "sudo docker inspect prometheus --format '{{range \$k,\$v := .NetworkSettings.Networks}}{{\$k}} {{end}}' 2>/dev/null | awk '{print \$1}' || true"
   )"
@@ -287,12 +303,14 @@ if [[ -f "$DASHBOARD_SCRIPT" ]]; then
     )"
   fi
   if [[ -n "$AUTO_PROM_SUBNET" ]]; then
-    echo "   Ensuring firewall allows ${AUTO_PROM_SUBNET} -> tcp/${AUTO_PROM_SCRAPE_PORT}"
-    ssh "$HOST" "sudo iptables -C INPUT -p tcp -s \"$AUTO_PROM_SUBNET\" --dport \"$AUTO_PROM_SCRAPE_PORT\" -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p tcp -s \"$AUTO_PROM_SUBNET\" --dport \"$AUTO_PROM_SCRAPE_PORT\" -j ACCEPT"
+    for AUTO_PROM_SCRAPE_PORT in 3010 3015; do
+      echo "   Ensuring firewall allows ${AUTO_PROM_SUBNET} -> tcp/${AUTO_PROM_SCRAPE_PORT}"
+      ssh "$HOST" "sudo iptables -C INPUT -p tcp -s \"$AUTO_PROM_SUBNET\" --dport \"$AUTO_PROM_SCRAPE_PORT\" -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p tcp -s \"$AUTO_PROM_SUBNET\" --dport \"$AUTO_PROM_SCRAPE_PORT\" -j ACCEPT"
+    done
   fi
 
   PROM_CONFIG_FILE="${PROM_CONFIG_FILE:-${AUTO_PROM_CONFIG_FILE}}" \
-  PROM_SCRAPE_TARGET="${PROM_SCRAPE_TARGET:-${AUTO_PROM_SCRAPE_TARGET}}" \
+  PROM_SCRAPE_TARGETS="${PROM_SCRAPE_TARGETS:-${AUTO_PROM_SCRAPE_TARGETS}}" \
     "$DASHBOARD_SCRIPT"
 else
   echo "==> No Grafana dashboard import script found, skipping..."
