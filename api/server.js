@@ -12084,19 +12084,30 @@ function setTeamRankingsResponseCacheEntry(key, value) {
   }
 }
 
+function buildTeamRankingsUniverseSignature(matches, leagueFilter = null) {
+  const names = uniqueMatchTeamNames(matches, leagueFilter);
+  return {
+    count: names.length,
+    signature: names
+      .map((name) => String(name || "").replace(/\s+/g, " ").trim().toLowerCase())
+      .filter(Boolean)
+      .join("|"),
+  };
+}
+
 function buildTeamRankingsResponseCacheKey(options = {}) {
+  const mergedUniverse = buildTeamRankingsUniverseSignature(
+    options.mergedDataset && Array.isArray(options.mergedDataset.items)
+      ? options.mergedDataset.items
+      : [],
+    options.leagueFilter || null
+  );
   return JSON.stringify({
     source: options.source || TEAM_RANKING_DEFAULT_SOURCE,
     type: options.type || null,
     league: options.leagueFilter || null,
-    merged_updated_at:
-      options.mergedDataset && options.mergedDataset.updated_at
-        ? options.mergedDataset.updated_at
-        : null,
-    merged_count:
-      Array.isArray(options.mergedDataset && options.mergedDataset.items)
-        ? options.mergedDataset.items.length
-        : 0,
+    merged_team_signature: mergedUniverse.signature,
+    merged_team_count: mergedUniverse.count,
     club_elo_updated_at:
       options.clubEloDataset && options.clubEloDataset.updated_at
         ? options.clubEloDataset.updated_at
@@ -26393,6 +26404,8 @@ module.exports = {
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
     bumpCacheStateSnapshot,
+    buildTeamRankingsUniverseSignature,
+    buildTeamRankingsResponseCacheKey,
     inspectOperationalStateReadiness,
     clearFootballOperationalMemoryState,
     reloadOperationalStateDomainsFromRedis,
