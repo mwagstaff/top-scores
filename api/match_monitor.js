@@ -23,7 +23,8 @@ const { teamIdentityNames, teamIdentityKeys } = require("./team_identity");
 
 // Configuration
 const POLL_INTERVAL_MS = 10 * 1000; // Poll every 10 seconds for monitored matches
-const DAILY_MATCHES_CHECK_INTERVAL_MS = 15 * 1000; // Check for today's matches every 15 seconds
+// Avoid contending with API request handling by polling the full candidate set less aggressively.
+const DAILY_MATCHES_CHECK_INTERVAL_MS = 60 * 1000; // Check for today's matches every 60 seconds
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Clean up every 5 minutes
 const UPCOMING_MONITOR_WINDOW_MS = 15 * 60 * 1000;
 const RECENT_KICKOFF_PENDING_GRACE_MS = 20 * 60 * 1000;
@@ -39,7 +40,8 @@ const SCORE_REVERSION_CONFIRMATION_POLLS = 3;
 const SCORE_CORRECTION_CONFIRMATION_POLLS = 5;
 const VAR_DECISION_REVIEW_WINDOW_MINUTES = 5;
 const MONITOR_DIAGNOSTICS_RECENT_LIMIT = 300; // Keep a rolling in-memory diagnostics window
-const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG !== "0";
+const MATCH_MONITOR_VERBOSE_LOG_ENABLED = process.env.MATCH_MONITOR_VERBOSE_LOG === "1";
+const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG === "1";
 const LIVE_ACTIVITY_EVAL_INTERVAL_MS = 15 * 1000;
 const LIVE_ACTIVITY_NON_SCORE_UPDATE_MIN_INTERVAL_MS = 60 * 1000;
 const LIVE_ACTIVITY_EVAL_STALL_TIMEOUT_MS = 30 * 1000;
@@ -113,6 +115,11 @@ const SNAPSHOT_NULL_CLEAR_FIELDS = new Set(["aggregate_home_score", "aggregate_a
 
 function shortDeviceToken(deviceToken) {
   return String(deviceToken || "").slice(0, 12);
+}
+
+function monitorVerboseLog(...args) {
+  if (!MATCH_MONITOR_VERBOSE_LOG_ENABLED) return;
+  console.log(...args);
 }
 
 function logDecision(decisionType, details = {}) {
@@ -2287,12 +2294,14 @@ async function checkTodaysMatches() {
     };
     const expectedActiveMatches = new Map();
 
-    console.log(`[MatchMonitor] Found ${matches.length} matches for ${today}`);
+    monitorVerboseLog(`[MatchMonitor] Found ${matches.length} matches for ${today}`);
 
     for (const match of matches) {
       const matchId = match.match_details_id;
       if (!matchId) {
-        console.log(`[MatchMonitor] Skipping match without match_details_id: ${match.home_team} vs ${match.away_team}`);
+        monitorVerboseLog(
+          `[MatchMonitor] Skipping match without match_details_id: ${match.home_team} vs ${match.away_team}`
+        );
         checkSummary.skipped_missing_match_id += 1;
         incrementReasonCounter(checkSummary.reasons, "missing_match_id");
         addMonitorDecisionDiagnostic({
@@ -2311,7 +2320,9 @@ async function checkTodaysMatches() {
 
       // Skip matches we've already fully processed today
       if (finishedMatchIds.has(matchId)) {
-        console.log(`[MatchMonitor] Match ${match.home_team} vs ${match.away_team} (${matchId}): already finished, skipping`);
+        monitorVerboseLog(
+          `[MatchMonitor] Match ${match.home_team} vs ${match.away_team} (${matchId}): already finished, skipping`
+        );
         checkSummary.skipped_finished += 1;
         incrementReasonCounter(checkSummary.reasons, "already_finished");
         addMonitorDecisionDiagnostic({
@@ -2330,7 +2341,9 @@ async function checkTodaysMatches() {
       const relevanceDecision = evaluateMatchRelevance(match);
       const relevant = relevanceDecision.relevant;
       incrementReasonCounter(checkSummary.reasons, relevanceDecision.reason);
-      console.log(`[MatchMonitor] Match ${match.home_team} vs ${match.away_team} (${matchId}): score_status=${match.score_status}, relevant=${relevant}`);
+      monitorVerboseLog(
+        `[MatchMonitor] Match ${match.home_team} vs ${match.away_team} (${matchId}): score_status=${match.score_status}, relevant=${relevant}`
+      );
       logDecision("match_relevance", {
         match_id: matchId,
         home_team: match.home_team,
@@ -2345,7 +2358,9 @@ async function checkTodaysMatches() {
         expectedActiveMatches.set(matchId, match);
         checkSummary.relevant_matches += 1;
         if (!monitoredMatches.has(matchId)) {
-          console.log(`[MatchMonitor] ✓ Starting to monitor match: ${match.home_team} vs ${match.away_team} (status: ${match.score_status || "none"})`);
+          monitorVerboseLog(
+            `[MatchMonitor] Starting to monitor match: ${match.home_team} vs ${match.away_team} (status: ${match.score_status || "none"})`
+          );
           checkSummary.started_monitoring += 1;
           addMonitorDecisionDiagnostic({
             match_id: matchId,
@@ -2370,7 +2385,9 @@ async function checkTodaysMatches() {
             action: "already_monitoring",
             kickoff_delta_ms: relevanceDecision.kickoff_delta_ms,
           });
-          console.log(`[MatchMonitor] Already monitoring: ${match.home_team} vs ${match.away_team}`);
+          monitorVerboseLog(
+            `[MatchMonitor] Already monitoring: ${match.home_team} vs ${match.away_team}`
+          );
         }
       } else {
         checkSummary.skipped_irrelevant += 1;
@@ -4851,7 +4868,7 @@ function logLiveActivityPayloadDiagnostics(user, event, presentation, contentSta
     seconds_until_stale: LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
   };
 
-  console.log(`[MatchMonitor] Live Activity payload ${JSON.stringify(diagnostics)}`);
+  monitorVerboseLog(`[MatchMonitor] Live Activity payload ${JSON.stringify(diagnostics)}`);
 
   if (
     metrics.contentStateBytes >= LIVE_ACTIVITY_PAYLOAD_WARN_BYTES ||
@@ -5056,7 +5073,7 @@ function logLiveActivitySkipDiagnostics(user, presentation, contentState, state,
       }))
       : [],
   };
-  console.log(`[MatchMonitor] Live Activity skip ${JSON.stringify(diagnostics)}`);
+  monitorVerboseLog(`[MatchMonitor] Live Activity skip ${JSON.stringify(diagnostics)}`);
 }
 
 function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = false, options = {}) {
@@ -5094,7 +5111,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
         state
       )
     ) {
-      console.log(
+      monitorVerboseLog(
         `[MatchMonitor] Live Activity preserve existing on empty ${JSON.stringify({
           user_device_short: shortDeviceToken(user && user.deviceToken),
           reason: "preserve_existing_on_empty",
@@ -5114,7 +5131,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       return;
     }
     if (isTestHoldActive) {
-      console.log(
+      monitorVerboseLog(
         `[MatchMonitor] Live Activity hold active ${JSON.stringify({
           user_device_short: shortDeviceToken(user && user.deviceToken),
           reason: "test_hold_active",
@@ -5311,7 +5328,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   if (!pushToStartToken) return;
   if (hasPendingStart && pendingAgeMs < LIVE_ACTIVITY_PENDING_MAX_MS) {
     // A start push already succeeded; wait for activity push token from app and avoid duplicate starts.
-    console.log(
+    monitorVerboseLog(
       `[MatchMonitor] Live Activity pending start wait ${JSON.stringify({
         user_device_short: shortDeviceToken(user && user.deviceToken),
         reason: "pending_start_wait",
