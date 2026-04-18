@@ -36,6 +36,7 @@ const {
     resolveStableMatchScoreStatus,
     withStableMatchDetailsState,
     filterStaleBbcMatches,
+    shouldRefreshCanonicalMatchDetailsFromBbcLive,
     buildDefaultOperationalCacheState,
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
@@ -218,6 +219,61 @@ test("toMatchListPayload preserves explicit BBC-source flag without requiring ma
 
   assert.equal(payload.has_bbc_source, true);
   assert.equal(payload.match_details_id, undefined);
+});
+
+test("shouldRefreshCanonicalMatchDetailsFromBbcLive heals missing canonical records", () => {
+  clearFootballOperationalMemoryState();
+
+  assert.equal(
+    shouldRefreshCanonicalMatchDetailsFromBbcLive(
+      baseMatch({
+        score_status: "FT",
+        home_score: 2,
+        away_score: 1,
+        home_goal_scorers: [{ player: "Matheus Cunha", goal_times: ["55'"] }],
+        away_goal_scorers: [{ player: "Mohamed Salah", goal_times: ["12'"] }],
+        team_lineups: buildCompleteTeamLineups(),
+      })
+    ),
+    true
+  );
+});
+
+test("shouldRefreshCanonicalMatchDetailsFromBbcLive heals incomplete canonical records", () => {
+  clearFootballOperationalMemoryState();
+
+  upsertMatchDetailsFromMatch(baseMatch());
+
+  assert.equal(
+    shouldRefreshCanonicalMatchDetailsFromBbcLive(
+      baseMatch({
+        score_status: "FT",
+        home_score: 2,
+        away_score: 1,
+        home_goal_scorers: [{ player: "Matheus Cunha", goal_times: ["55'"] }],
+        away_goal_scorers: [{ player: "Mohamed Salah", goal_times: ["12'"] }],
+        team_lineups: buildCompleteTeamLineups(),
+      })
+    ),
+    true
+  );
+});
+
+test("shouldRefreshCanonicalMatchDetailsFromBbcLive skips unchanged canonical records", () => {
+  clearFootballOperationalMemoryState();
+
+  const livePayload = baseMatch({
+    home_team: "Wolverhampton Wanderers",
+    score_status: "FT",
+    home_score: 2,
+    away_score: 1,
+    home_goal_scorers: [{ player: "Matheus Cunha", goal_times: ["55'", "81'"] }],
+    away_goal_scorers: [{ player: "Mohamed Salah", goal_times: ["12'"] }],
+    team_lineups: buildCompleteTeamLineups(),
+  });
+  upsertMatchDetailsFromMatch(livePayload);
+
+  assert.equal(shouldRefreshCanonicalMatchDetailsFromBbcLive(livePayload), false);
 });
 
 test("canonicalMatchDetailsToListPayload materializes a list row from canonical Redis state", () => {

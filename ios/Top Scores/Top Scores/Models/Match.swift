@@ -543,6 +543,9 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     var displayScoreStatus: String? {
+        if let penaltyDisplayScoreText {
+            return penaltyDisplayScoreText
+        }
         guard let scoreStatus = stabilizedScoreStatus() else { return nil }
         return MatchStatusFormatter.displayValue(for: scoreStatus)
     }
@@ -1015,6 +1018,28 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         }
 
         return "\(winner) win \(scorePair.0) - \(scorePair.1) on penalties"
+    }
+
+    private var penaltyDisplayScoreText: String? {
+        let trimmedPenaltyResult = penaltyResult?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmedPenaltyResult, !trimmedPenaltyResult.isEmpty else {
+            return nil
+        }
+
+        guard let scorePair = Self.firstScorePair(in: trimmedPenaltyResult) else {
+            return nil
+        }
+
+        let homeMentioned = Self.containsTeamName(homeTeam, in: trimmedPenaltyResult)
+        let awayMentioned = Self.containsTeamName(awayTeam, in: trimmedPenaltyResult)
+        guard homeMentioned != awayMentioned else {
+            return nil
+        }
+
+        let homePenaltyScore = homeMentioned ? scorePair.0 : scorePair.1
+        let awayPenaltyScore = homeMentioned ? scorePair.1 : scorePair.0
+        return "P \(homePenaltyScore)-\(awayPenaltyScore)"
     }
 
     private var aggregateWinnerSummaryText: String? {

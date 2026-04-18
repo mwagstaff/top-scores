@@ -529,6 +529,40 @@ struct Top_ScoresTests {
         #expect(match.winnerSummaryText == "West Ham United win 5 - 3 on penalties")
     }
 
+    @Test func displayScoreStatus_formatsHomeAwayPenaltyTallyForHomeWinner() async throws {
+        let match = Match(
+            date: "2026-03-01",
+            time: "19:45",
+            homeTeam: "West Ham United",
+            awayTeam: "Brentford",
+            league: "FA Cup",
+            tvChannels: [],
+            homeScore: 1,
+            awayScore: 1,
+            scoreStatus: "AET",
+            penaltyResult: "West Ham United win 5-3 on penalties"
+        )
+
+        #expect(match.displayScoreStatus == "P 5-3")
+    }
+
+    @Test func displayScoreStatus_formatsHomeAwayPenaltyTallyForAwayWinner() async throws {
+        let match = Match(
+            date: "2026-04-18",
+            time: "20:00",
+            homeTeam: "Atlético Madrid",
+            awayTeam: "Real Sociedad",
+            league: "Copa del Rey",
+            tvChannels: [],
+            homeScore: 2,
+            awayScore: 2,
+            scoreStatus: "AET",
+            penaltyResult: "Real Sociedad win 4 - 3 on penalties"
+        )
+
+        #expect(match.displayScoreStatus == "P 3-4")
+    }
+
     @Test func winnerSummaryText_formatsAggregateWinners() async throws {
         let match = Match(
             date: "2026-02-25",

@@ -17235,6 +17235,36 @@ function filterStaleBbcMatches(newMatches, cachedMatches) {
   return filtered;
 }
 
+function shouldRefreshCanonicalMatchDetailsFromBbcLive(match) {
+  const incoming = normalizeMatchDetailsPayload(match);
+  if (!incoming) return false;
+
+  const existing = matchDetailsById.get(incoming.id) || null;
+  if (!existing) return true;
+  if (matchDetailsNeedsBackfill(existing)) return true;
+
+  const mergedCandidate = mergeMatchDetailsPayload(
+    existing,
+    incoming,
+    existing.updated_at || "1970-01-01T00:00:00.000Z"
+  );
+  const normalizedCandidate = {
+    ...mergedCandidate,
+    id: incoming.id,
+    updated_at: existing.updated_at || null,
+    in_progress: isInProgressMatchStatus(resolveStableMatchScoreStatus(mergedCandidate)),
+    tv_channels: uniqueChannels(mergedCandidate && mergedCandidate.tv_channels),
+  };
+
+  const previousComparable = canonicalMatchComparablePayload(existing);
+  const nextComparable = canonicalMatchComparablePayload(normalizedCandidate);
+  if (!previousComparable || !nextComparable) {
+    return true;
+  }
+
+  return hashComparablePayload(previousComparable) !== hashComparablePayload(nextComparable);
+}
+
 function parseMatchTimeMinutes(matchTime) {
   if (!matchTime || typeof matchTime !== 'string') return null;
 
@@ -17275,29 +17305,35 @@ async function updateBbcMatches(options = {}) {
     const filteredMatches = filterStaleBbcMatches(matches, cachedBbcMatches);
     const matchesChanged =
       hashComparablePayload(filteredMatches) !== hashComparablePayload(previousMatches);
+    const canonicalUpdatedAt = new Date().toISOString();
     cachedBbcMatches = filteredMatches;
     recordsFetched = filteredMatches.length;
     setSourceCacheSize(SOURCE_BBC_LIVE, filteredMatches.length);
+    const canonicalRefreshTargets = filteredMatches.filter(shouldRefreshCanonicalMatchDetailsFromBbcLive);
     if (matchesChanged) {
-      bbcLastUpdated = new Date().toISOString();
+      bbcLastUpdated = canonicalUpdatedAt;
       writeBbcFixtures(BBC_OUTPUT_PATH, filteredMatches);
       await persistOperationalDatasetSafe(OP_DATASET_BBC_LIVE_MATCHES, filteredMatches, {
         updated_at: bbcLastUpdated,
         source: SOURCE_BBC_LIVE,
       });
       await updateRecentCache(SOURCE_BBC_LIVE);
+    }
+    if (canonicalRefreshTargets.length > 0) {
       await mapWithConcurrency(
-        filteredMatches,
+        canonicalRefreshTargets,
         Math.min(MATCH_DETAILS_POLL_CONCURRENCY, 8),
         async (match) => {
           await upsertCanonicalMatchDetailsFromMatch(match, {
-            updated_at: bbcLastUpdated,
+            updated_at: canonicalUpdatedAt,
             source: SOURCE_BBC_LIVE,
             reason: "bbc_live_poll",
             skipCacheInvalidation: true,
           });
         }
       );
+    }
+    if (matchesChanged) {
       invalidateCacheDomains(["matches", "match_details", "bbc_live"], {
         updated_at: bbcLastUpdated,
         reason: "bbc_live_refresh",
@@ -17311,6 +17347,7 @@ async function updateBbcMatches(options = {}) {
       count: filteredMatches.length,
       updated_at: bbcLastUpdated,
       changed: matchesChanged,
+      canonical_refreshed: canonicalRefreshTargets.length,
       duration_ms: Date.now() - startedAtMs,
     });
     recordRuntimeComponentSuccess(COMPONENT_SOURCE_BBC_LIVE, {
@@ -17320,6 +17357,7 @@ async function updateBbcMatches(options = {}) {
       count: filteredMatches.length,
       updated_at: bbcLastUpdated,
       changed: matchesChanged,
+      canonical_refreshed: canonicalRefreshTargets.length,
     });
   } catch (err) {
     recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_LIVE, err, {
@@ -27185,6 +27223,7 @@ module.exports = {
     mergeClubEloFixtureMetadata,
     matchDetailsIdFromUrl,
     filterStaleBbcMatches,
+    shouldRefreshCanonicalMatchDetailsFromBbcLive,
     buildDefaultOperationalCacheState,
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
