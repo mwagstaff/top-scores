@@ -7,6 +7,7 @@ const {
     normalizeCacheStateDomains,
   },
   startApiRuntime,
+  startMonitorRuntime,
   startScraperRuntime,
   shutdownRuntime,
 } = require("./server");
@@ -31,8 +32,9 @@ test("normalizeCacheStateDomains accepts teams tables and team short name aliase
   });
 });
 
-test("server exports explicit api and scraper runtime starters", () => {
+test("server exports explicit api monitor and scraper runtime starters", () => {
   assert.equal(typeof startApiRuntime, "function");
+  assert.equal(typeof startMonitorRuntime, "function");
   assert.equal(typeof startScraperRuntime, "function");
   assert.equal(typeof shutdownRuntime, "function");
 });

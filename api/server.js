@@ -116,6 +116,7 @@ function parseEnvBoolean(value, fallback = false) {
 
 const PORT = Number(process.env.PORT || 3011);
 const SCRAPER_PORT = Number(process.env.SCRAPER_PORT || 3013);
+const MONITOR_PORT = Number(process.env.MONITOR_PORT || 3014);
 const SOURCE_URL = process.env.SOURCE_URL || DEFAULT_URL;
 const OUTPUT_PATH = process.env.OUTPUT_PATH || DEFAULT_OUTPUT;
 const INTERVAL_MINUTES = Number(process.env.UPDATE_INTERVAL_MINUTES || 30);
@@ -887,6 +888,132 @@ let runtimeRole = "library";
 let runtimeServer = null;
 let runtimeShutdownPromise = null;
 let runtimeSignalHandlersInstalled = false;
+
+function isApiRuntime() {
+  return runtimeRole === "api";
+}
+
+function isMonitorRuntime() {
+  return runtimeRole === "monitor";
+}
+
+function monitorRuntimeBaseUrl() {
+  return `http://127.0.0.1:${MONITOR_PORT}`;
+}
+
+async function requestMonitorRuntime(pathname, options = {}) {
+  const url = new URL(pathname, monitorRuntimeBaseUrl());
+  const query = options.query && typeof options.query === "object" ? options.query : null;
+  if (query) {
+    Object.entries(query).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      if (Array.isArray(value)) {
+        value.forEach((item) => {
+          if (item === undefined || item === null || item === "") return;
+          url.searchParams.append(key, String(item));
+        });
+        return;
+      }
+      url.searchParams.set(key, String(value));
+    });
+  }
+
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs)) ? Number(options.timeoutMs) : 20000;
+  const headers = {
+    Accept: "application/json",
+    ...(options.headers && typeof options.headers === "object" ? options.headers : {}),
+  };
+  let body;
+  if (options.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(options.body);
+  }
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: options.method || "GET",
+      headers,
+      body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    const wrapped = new Error(
+      `[MonitorRuntime] Request failed for ${url.pathname}: ${error && error.message ? error.message : error}`
+    );
+    wrapped.statusCode = 503;
+    throw wrapped;
+  }
+
+  const text = await response.text();
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (_error) {
+      payload = { raw: text };
+    }
+  }
+
+  if (!response.ok) {
+    const wrapped = new Error(
+      payload && payload.message
+        ? payload.message
+        : payload && payload.error
+          ? payload.error
+          : `Monitor runtime responded ${response.status}`
+    );
+    wrapped.statusCode = response.status;
+    wrapped.payload = payload;
+    throw wrapped;
+  }
+
+  return {
+    status: response.status,
+    payload,
+  };
+}
+
+async function getCurrentMonitorStatus(options = {}) {
+  if (isMonitorRuntime()) {
+    return matchMonitor.getStatus(options);
+  }
+  try {
+    const response = await requestMonitorRuntime(`${API_PREFIX}/monitor/status`, {
+      method: "GET",
+      query: {
+        match_id: options.matchId || "",
+        limit_recent: options.limitRecent || "",
+      },
+      timeoutMs: 8000,
+    });
+    return response && response.payload ? response.payload : null;
+  } catch (error) {
+    return {
+      success: false,
+      unavailable: true,
+      isMonitoring: false,
+      monitoredMatchCount: 0,
+      scheduledNotificationCount: 0,
+      diagnostics: {
+        last_error: error && error.message ? error.message : String(error),
+      },
+    };
+  }
+}
+
+function triggerMonitorRuntimeRequest(pathname, options = {}) {
+  if (isMonitorRuntime()) {
+    return Promise.resolve(null);
+  }
+  return requestMonitorRuntime(pathname, options).catch((error) => {
+    console.warn(
+      `[MonitorRuntime] Background request failed path=${pathname}:`,
+      error && error.message ? error.message : error
+    );
+    return null;
+  });
+}
 let missingTeamLogosByKey = new Map();
 let missingTeamLogosLastUpdated = null;
 let knownTeamLogoCatalogLoaded = false;
@@ -17222,21 +17349,13 @@ async function updateFantasyBootstrapStatic(options = {}) {
     console.info(
       `[FPLBootstrap] Download complete source=${FPL_BOOTSTRAP_SOURCE_URL} trigger=${trigger} bytes=${fantasyBootstrapPayloadBytes} events=${fantasyBootstrapEventsCount} duration_ms=${Date.now() - startedAtMs} updated_at=${fantasyBootstrapLastUpdated}`
     );
-    if (
-      matchMonitor &&
-      typeof matchMonitor.runFantasyDeadlineReminderEvaluationNow === "function"
-    ) {
-      void matchMonitor
-        .runFantasyDeadlineReminderEvaluationNow({
-          reason: `fpl_bootstrap_refresh:${trigger}`,
-        })
-        .catch((error) => {
-          console.warn(
-            "[FPLBootstrap] Fantasy deadline reminder refresh after bootstrap failed:",
-            error && error.message ? error.message : error
-          );
-        });
-    }
+    void triggerMonitorRuntimeRequest("/internal/fantasy-reminders/evaluate", {
+      method: "POST",
+      body: {
+        reason: `fpl_bootstrap_refresh:${trigger}`,
+      },
+      timeoutMs: 15000,
+    });
     logPollSuccess("fpl_bootstrap_static", {
       source: SOURCE_FPL_BOOTSTRAP,
       trigger,
@@ -19354,7 +19473,7 @@ async function buildAdminArchitectureOverviewPayload() {
     { level: bbcTablesHealth.level, status: bbcTablesHealth.status }
   );
   const fantasyApiHealth = combineAdminHealth({ level: fplHealth.level, status: fplHealth.status });
-  const monitorStatus = matchMonitor.getStatus({ limitRecent: 10 });
+  const monitorStatus = await getCurrentMonitorStatus({ limitRecent: 10 });
   const matchMonitorHealth = combineAdminHealth(
     { level: redisHealth.level, status: redisHealth.status },
     monitorStatus && monitorStatus.diagnostics && monitorStatus.diagnostics.last_error
@@ -19797,7 +19916,7 @@ async function buildAdminArchitectureComponentDetail(componentId) {
   }
 
   if (componentId === "match_monitor") {
-    const status = matchMonitor.getStatus({ limitRecent: 20 });
+    const status = await getCurrentMonitorStatus({ limitRecent: 20 });
     return {
       component,
       detail: {
@@ -22254,12 +22373,14 @@ app.post(`${API_PREFIX}/preferences`, async (req, res) => {
       }
     );
     if (preferencesSaveShouldTriggerLiveActivityReconcile(req.body)) {
-      void matchMonitor.runLiveActivityEvaluationNow({
-        userDeviceToken: resolvedDeviceToken,
-        trigger: liveActivityReconcileTriggerForPreferencesSave(req.body),
-        forceDispatch: true,
-      }).catch((error) => {
-        console.warn("[API] Preference sync reconcile failed:", error.message || error);
+      void triggerMonitorRuntimeRequest(`${API_PREFIX}/live-activity/reconcile`, {
+        method: "POST",
+        body: {
+          userDeviceToken: resolvedDeviceToken,
+          trigger: liveActivityReconcileTriggerForPreferencesSave(req.body),
+          force: true,
+        },
+        timeoutMs: 15000,
       });
     }
     res.status(200).json({
@@ -22488,6 +22609,18 @@ app.post(`${API_PREFIX}/live-activity/restart`, async (req, res) => {
   }
 
   try {
+    if (!isMonitorRuntime()) {
+      const response = await requestMonitorRuntime(`${API_PREFIX}/live-activity/restart`, {
+        method: "POST",
+        body: {
+          ...(req.body && typeof req.body === "object" ? req.body : {}),
+          userDeviceToken: resolvedDeviceToken,
+        },
+        timeoutMs: 30000,
+      });
+      res.status(response.status).json(response.payload);
+      return;
+    }
     const record = await getUserPreferences(resolvedDeviceToken);
     if (!record) {
       res.status(404).json({
@@ -23230,29 +23363,41 @@ app.post(`${API_PREFIX}/admin/fantasy-reminders/:reminderId/test-send`, async (r
   }
 
   try {
-    const record = await getFantasyReminderRecord(reminderId);
-    if (!record) {
-      res.status(404).json({ error: "Reminder not found.", reminder_id: reminderId });
-      return;
-    }
+    if (isMonitorRuntime()) {
+      const record = await getFantasyReminderRecord(reminderId);
+      if (!record) {
+        res.status(404).json({ error: "Reminder not found.", reminder_id: reminderId });
+        return;
+      }
 
-    const result = await matchMonitor.sendFantasyDeadlineReminderNow(reminderId, {
-      reason: "admin_test_send",
-    });
-    if (!result || !result.success) {
-      res.status(409).json({
-        error: result && result.error ? result.error : "Failed to send reminder test push.",
+      const result = await matchMonitor.sendFantasyDeadlineReminderNow(reminderId, {
+        reason: "admin_test_send",
+      });
+      if (!result || !result.success) {
+        res.status(409).json({
+          error: result && result.error ? result.error : "Failed to send reminder test push.",
+          reminder_id: reminderId,
+          ...result,
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
         reminder_id: reminderId,
         ...result,
       });
       return;
     }
 
-    res.status(200).json({
-      success: true,
-      reminder_id: reminderId,
-      ...result,
-    });
+    const response = await requestMonitorRuntime(
+      `${API_PREFIX}/admin/fantasy-reminders/${encodeURIComponent(reminderId)}/test-send`,
+      {
+        method: "POST",
+        timeoutMs: 20000,
+      }
+    );
+    res.status(response.status).json(response.payload);
   } catch (error) {
     console.error("[API] Error test-sending fantasy reminder:", error);
     res.status(500).json({
@@ -24776,6 +24921,18 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
   }
 
   try {
+    if (!isMonitorRuntime()) {
+      const response = await requestMonitorRuntime(`${API_PREFIX}/live-activity/test/state`, {
+        method: "GET",
+        query: {
+          ...(req.query && typeof req.query === "object" ? req.query : {}),
+          userDeviceToken: resolvedDeviceToken,
+        },
+        timeoutMs: 20000,
+      });
+      res.status(response.status).json(response.payload);
+      return;
+    }
     const record = await getUserPreferences(resolvedDeviceToken);
     if (!record) {
       res.status(404).json({
@@ -25023,6 +25180,18 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
   }
 
   try {
+    if (!isMonitorRuntime()) {
+      const response = await requestMonitorRuntime(`${API_PREFIX}/live-activity/test/start`, {
+        method: "POST",
+        body: {
+          ...payload,
+          userDeviceToken,
+        },
+        timeoutMs: 30000,
+      });
+      res.status(response.status).json(response.payload);
+      return;
+    }
     const record = await getUserPreferences(userDeviceToken);
     const liveActivityState =
       record && record.liveActivity && typeof record.liveActivity === "object"
@@ -25359,6 +25528,18 @@ app.post(`${API_PREFIX}/live-activity/test/update`, async (req, res) => {
   }
 
   try {
+    if (!isMonitorRuntime()) {
+      const response = await requestMonitorRuntime(`${API_PREFIX}/live-activity/test/update`, {
+        method: "POST",
+        body: {
+          ...payload,
+          userDeviceToken,
+        },
+        timeoutMs: 30000,
+      });
+      res.status(response.status).json(response.payload);
+      return;
+    }
     const record = await getUserPreferences(userDeviceToken);
     const explicitActivityPushToken = normalizeLiveActivityToken(payload.activityPushToken);
     const storedActivityPushToken = normalizeLiveActivityToken(
@@ -25428,6 +25609,18 @@ app.post(`${API_PREFIX}/live-activity/test/end`, async (req, res) => {
   }
 
   try {
+    if (!isMonitorRuntime()) {
+      const response = await requestMonitorRuntime(`${API_PREFIX}/live-activity/test/end`, {
+        method: "POST",
+        body: {
+          ...payload,
+          userDeviceToken,
+        },
+        timeoutMs: 30000,
+      });
+      res.status(response.status).json(response.payload);
+      return;
+    }
     const record = await getUserPreferences(userDeviceToken);
     const explicitActivityPushToken = normalizeLiveActivityToken(payload.activityPushToken);
     const storedActivityPushToken = normalizeLiveActivityToken(
@@ -25638,6 +25831,12 @@ async function bootstrapOperationalState(options = {}) {
     void updateTeamShortNamesCache({ trigger: "startup_bootstrap" });
     void syncTeamShortNamesCacheToRedis({ trigger: "startup_bootstrap" });
     void pollCacheStateAndRefreshFromRedis({ trigger: "startup_bootstrap" });
+  } else if (mode === "monitor") {
+    const readiness = await inspectOperationalStateReadiness();
+    if (!readiness.ready) {
+      clearFootballOperationalMemoryState();
+    }
+    void pollCacheStateAndRefreshFromRedis({ trigger: "startup_bootstrap" });
   } else {
     const readiness = await inspectOperationalStateReadiness();
     if (!readiness.ready) {
@@ -25717,6 +25916,10 @@ function startApiIntervals() {
     void refreshInProgressMatchDetails({ trigger: "interval" });
   }, matchDetailsPollInterval);
 
+  startCacheStateWatcher();
+}
+
+function startMonitorIntervals() {
   startCacheStateWatcher();
 }
 
@@ -26016,8 +26219,33 @@ if (typeof matchMonitor.setCanonicalMatchStateWriter === "function") {
   );
 }
 
+app.post("/internal/fantasy-reminders/evaluate", async (req, res) => {
+  setCacheOnlyHeaders(res);
+  if (!isMonitorRuntime()) {
+    res.status(404).json({ error: "Not available in API runtime." });
+    return;
+  }
+  try {
+    const result = await matchMonitor.runFantasyDeadlineReminderEvaluationNow({
+      reason:
+        req.body && typeof req.body.reason === "string" && req.body.reason.trim()
+          ? req.body.reason.trim()
+          : "internal",
+    });
+    res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to evaluate fantasy deadline reminders",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
 // Status endpoint for monitoring
-app.get(`${API_PREFIX}/monitor/status`, (req, res) => {
+app.get(`${API_PREFIX}/monitor/status`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const rawMatchId = req.query.match_id ? String(req.query.match_id).trim() : "";
   const normalizedMatchId = rawMatchId ? normalizeMatchDetailsId(rawMatchId) : "";
@@ -26028,18 +26256,41 @@ app.get(`${API_PREFIX}/monitor/status`, (req, res) => {
     return;
   }
   const limitRecent = parsePositiveInt(req.query.limit_recent, 50, 1, 500);
-  const status = matchMonitor.getStatus({
-    matchId: normalizedMatchId || "",
-    limitRecent,
-  });
-  res.status(200).json({
-    success: true,
-    filters: {
-      match_id: normalizedMatchId || null,
-      limit_recent: limitRecent,
-    },
-    ...status,
-  });
+  try {
+    if (!isMonitorRuntime()) {
+      const response = await requestMonitorRuntime(`${API_PREFIX}/monitor/status`, {
+        method: "GET",
+        query: {
+          match_id: normalizedMatchId || "",
+          limit_recent: limitRecent,
+        },
+        timeoutMs: 10000,
+      });
+      res.status(response.status).json(response.payload);
+      return;
+    }
+    const status = matchMonitor.getStatus({
+      matchId: normalizedMatchId || "",
+      limitRecent,
+    });
+    res.status(200).json({
+      success: true,
+      filters: {
+        match_id: normalizedMatchId || null,
+        limit_recent: limitRecent,
+      },
+      ...status,
+    });
+  } catch (error) {
+    res.status(error && error.statusCode ? error.statusCode : 503).json(
+      error && error.payload
+        ? error.payload
+        : {
+            error: "Failed to retrieve monitor status",
+            message: error && error.message ? error.message : String(error),
+          }
+    );
+  }
 });
 
 // Trigger an immediate Live Activity evaluation cycle.
@@ -26051,6 +26302,17 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
     teamShortNameOverridesByKey
   );
   try {
+    if (!isMonitorRuntime()) {
+      const response = await requestMonitorRuntime(`${API_PREFIX}/live-activity/reconcile`, {
+        method: "POST",
+        body: _req.body || {},
+        query: _req.query || {},
+        headers: _req.deviceToken ? { "X-Device-Token": _req.deviceToken } : {},
+        timeoutMs: 30000,
+      });
+      res.status(response.status).json(applyTeamShortNamesToApiValue(response.payload, teamShortNameLookup));
+      return;
+    }
     const force = String(_req.query.force || _req.body?.force || "").trim().toLowerCase();
     const forceDispatch = force === "1" || force === "true" || force === "yes";
     const allowEndRaw = String(_req.query.allowEnd || _req.body?.allowEnd || "").trim().toLowerCase();
@@ -26162,6 +26424,16 @@ app.post(`${API_PREFIX}/live-activity/reconcile-all`, async (_req, res) => {
     teamShortNameOverridesByKey
   );
   try {
+    if (!isMonitorRuntime()) {
+      const response = await requestMonitorRuntime(`${API_PREFIX}/live-activity/reconcile-all`, {
+        method: "POST",
+        body: _req.body || {},
+        query: _req.query || {},
+        timeoutMs: 30000,
+      });
+      res.status(response.status).json(applyTeamShortNamesToApiValue(response.payload, teamShortNameLookup));
+      return;
+    }
     const force = String(_req.query.force || _req.body?.force || "true").trim().toLowerCase();
     const forceDispatch = !(force === "0" || force === "false" || force === "no");
     const allowEndRaw = String(_req.query.allowEnd || _req.body?.allowEnd || "").trim().toLowerCase();
@@ -26234,10 +26506,10 @@ async function shutdownRuntime(options = {}) {
     stopCacheStateWatcher();
     clearRuntimeIntervals();
 
-    if (options.stopMatchMonitor !== false) {
+    if (options.stopMatchMonitor === true) {
       matchMonitor.stopMonitoring();
     }
-    if (options.shutdownApns !== false) {
+    if (options.shutdownApns === true) {
       const { shutdown: shutdownAPNS } = require("./apns_client");
       await shutdownAPNS();
     }
@@ -26258,8 +26530,8 @@ function installRuntimeSignalHandlers() {
   const handleSignal = (signal) => {
     console.log(`${signal} received, shutting down gracefully`);
     void shutdownRuntime({
-      stopMatchMonitor: runtimeRole === "api",
-      shutdownApns: runtimeRole === "api",
+      stopMatchMonitor: runtimeRole === "monitor",
+      shutdownApns: runtimeRole === "monitor",
     })
       .then(() => {
         process.exit(0);
@@ -26283,12 +26555,31 @@ function startApiRuntime() {
   }
 
   runtimeRole = "api";
-  matchMonitor.initialize(SERVER_BASE_URL);
   operationalBootstrapPromise = bootstrapOperationalState({ mode: "api" });
   startApiIntervals();
 
   runtimeServer = app.listen(PORT, () => {
     console.log(`Server listening on http://localhost:${PORT}`);
+  });
+
+  return runtimeServer;
+}
+
+function startMonitorRuntime() {
+  if (runtimeServer) {
+    if (runtimeRole !== "monitor") {
+      throw new Error(`Runtime already started as ${runtimeRole}`);
+    }
+    return runtimeServer;
+  }
+
+  runtimeRole = "monitor";
+  matchMonitor.initialize(SERVER_BASE_URL);
+  operationalBootstrapPromise = bootstrapOperationalState({ mode: "monitor" });
+  startMonitorIntervals();
+
+  runtimeServer = app.listen(MONITOR_PORT, () => {
+    console.log(`Monitor listening on http://localhost:${MONITOR_PORT}`);
   });
 
   setTimeout(() => {
@@ -26297,7 +26588,7 @@ function startApiRuntime() {
         matchMonitor.startMonitoring();
       })
       .catch((error) => {
-        console.error("[Runtime] API bootstrap failed:", error.message || error);
+        console.error("[Runtime] Monitor bootstrap failed:", error.message || error);
       });
   }, 2000);
 
@@ -26336,6 +26627,7 @@ if (require.main === module) {
 module.exports = {
   app,
   startApiRuntime,
+  startMonitorRuntime,
   startScraperRuntime,
   shutdownRuntime,
   installRuntimeSignalHandlers,

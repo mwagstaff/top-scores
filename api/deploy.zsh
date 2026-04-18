@@ -21,6 +21,7 @@ REMOTE_DIR="~/dev/${PROJECT_NAME}"
 # Generate service labels based on project name
 API_SERVICE_LABEL="com.${PROJECT_NAME}.api"
 SCRAPER_SERVICE_LABEL="com.${PROJECT_NAME}.scraper"
+MONITOR_SERVICE_LABEL="com.${PROJECT_NAME}.monitor"
 
 # Optional: if you want to deploy a specific branch/commit state, you could
 # add git checks here (not included by default).
@@ -81,10 +82,13 @@ ssh "$HOST" "
   REMOTE_DIR_EXPANDED=\$(eval echo $REMOTE_DIR)
   API_ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/server.js\"
   SCRAPER_ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/scraper.js\"
+  MONITOR_ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/monitor.js\"
   API_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}.log\"
   API_ERROR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}.error.log\"
   SCRAPER_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-scraper.log\"
   SCRAPER_ERROR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-scraper.error.log\"
+  MONITOR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-monitor.log\"
+  MONITOR_ERROR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-monitor.error.log\"
 
   if [[ ! -f \"\$API_ENTRY_FILE\" ]]; then
     echo \"Error: API entry file not found at \$API_ENTRY_FILE\" >&2
@@ -92,6 +96,10 @@ ssh "$HOST" "
   fi
   if [[ ! -f \"\$SCRAPER_ENTRY_FILE\" ]]; then
     echo \"Error: scraper entry file not found at \$SCRAPER_ENTRY_FILE\" >&2
+    exit 1
+  fi
+  if [[ ! -f \"\$MONITOR_ENTRY_FILE\" ]]; then
+    echo \"Error: monitor entry file not found at \$MONITOR_ENTRY_FILE\" >&2
     exit 1
   fi
 
@@ -163,6 +171,10 @@ EOF_PLIST
     restart_launchd_service \"${API_SERVICE_LABEL}\"
     echo 'API service restarted via launchd'
 
+    write_launchd_service \"${MONITOR_SERVICE_LABEL}\" \"\$MONITOR_ENTRY_FILE\" \"\$MONITOR_LOG_FILE\" \"\$MONITOR_ERROR_LOG_FILE\"
+    restart_launchd_service \"${MONITOR_SERVICE_LABEL}\"
+    echo 'Monitor service restarted via launchd'
+
   elif command -v systemctl >/dev/null 2>&1; then
     echo \"==> Using systemd (Linux)\"
 
@@ -206,12 +218,15 @@ EOF_SYSTEMD
 
     write_systemd_service \"${SCRAPER_SERVICE_LABEL}\" \"\$SCRAPER_ENTRY_FILE\" \"\$SCRAPER_LOG_FILE\" \"\$SCRAPER_ERROR_LOG_FILE\" \"${PROJECT_NAME} Scraper Service\"
     write_systemd_service \"${API_SERVICE_LABEL}\" \"\$API_ENTRY_FILE\" \"\$API_LOG_FILE\" \"\$API_ERROR_LOG_FILE\" \"${PROJECT_NAME} API Service\"
+    write_systemd_service \"${MONITOR_SERVICE_LABEL}\" \"\$MONITOR_ENTRY_FILE\" \"\$MONITOR_LOG_FILE\" \"\$MONITOR_ERROR_LOG_FILE\" \"${PROJECT_NAME} Monitor Service\"
 
     systemctl --user daemon-reload
     restart_systemd_service \"${SCRAPER_SERVICE_LABEL}\"
     echo 'Scraper service restarted via systemd'
     restart_systemd_service \"${API_SERVICE_LABEL}\"
     echo 'API service restarted via systemd'
+    restart_systemd_service \"${MONITOR_SERVICE_LABEL}\"
+    echo 'Monitor service restarted via systemd'
 
   else
     echo \"Error: Neither launchd nor systemd found. Cannot manage service.\" >&2
