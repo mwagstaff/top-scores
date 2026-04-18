@@ -237,6 +237,46 @@ test("canonicalMatchDetailsToListPayload materializes a list row from canonical 
   });
 });
 
+test("buildMonitorCandidatesForDate does not regress finished matches to stale BBC live minutes", () => {
+  const date = "2026-03-03";
+  const time = "15:00";
+
+  const candidates = buildMonitorCandidatesForDate(
+    date,
+    [
+      {
+        date,
+        time,
+        league: "Premier League",
+        home_team: "Newcastle United",
+        away_team: "AFC Bournemouth",
+        home_score: 1,
+        away_score: 2,
+        score_status: "FT",
+        match_details_id: "c0lejl83egpt",
+      },
+    ],
+    {},
+    {
+      bbcMatches: [
+        {
+          date,
+          time,
+          home_team: "Newcastle United",
+          away_team: "AFC Bournemouth",
+          home_score: 1,
+          away_score: 2,
+          match_time: "90+8",
+        },
+      ],
+    }
+  );
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].match_details_id, "c0lejl83egpt");
+  assert.equal(candidates[0].score_status, "FT");
+});
+
 test("normalizeMatchDetailsPayload strips staged knockout suffixes from league when subcategory is present", () => {
   const payload = normalizeMatchDetailsPayload({
     id: "ucl-quarter-1",

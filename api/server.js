@@ -122,6 +122,28 @@ const OUTPUT_PATH = process.env.OUTPUT_PATH || DEFAULT_OUTPUT;
 const INTERVAL_MINUTES = Number(process.env.UPDATE_INTERVAL_MINUTES || 30);
 const INTERVAL_MS = Number(process.env.UPDATE_INTERVAL_MS || INTERVAL_MINUTES * 60 * 1000);
 const CACHE_STATE_WATCH_INTERVAL_MS = Number(process.env.CACHE_STATE_WATCH_INTERVAL_MS || 5000);
+const parsedDebugSlowApiRequestThresholdMs = Number(
+  process.env.DEBUG_SLOW_API_REQUEST_THRESHOLD_MS || 1000
+);
+const DEBUG_SLOW_API_REQUEST_THRESHOLD_MS = Number.isFinite(parsedDebugSlowApiRequestThresholdMs)
+  ? Math.max(0, Math.floor(parsedDebugSlowApiRequestThresholdMs))
+  : 1000;
+const parsedDebugEventLoopStallThresholdMs = Number(
+  process.env.DEBUG_EVENT_LOOP_STALL_THRESHOLD_MS || 1000
+);
+const DEBUG_EVENT_LOOP_STALL_THRESHOLD_MS = Number.isFinite(parsedDebugEventLoopStallThresholdMs)
+  ? Math.max(0, Math.floor(parsedDebugEventLoopStallThresholdMs))
+  : 1000;
+const parsedDebugOperationalRefreshThresholdMs = Number(
+  process.env.DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS || 250
+);
+const DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS = Number.isFinite(parsedDebugOperationalRefreshThresholdMs)
+  ? Math.max(0, Math.floor(parsedDebugOperationalRefreshThresholdMs))
+  : 250;
+const DEBUG_ROUTE_STAGE_LOGGING_ENABLED = parseEnvBoolean(
+  process.env.DEBUG_ROUTE_STAGE_LOGGING,
+  false
+);
 
 const BBC_SOURCE_URL = process.env.BBC_SOURCE_URL || DEFAULT_BBC_URL;
 const BBC_OUTPUT_PATH = process.env.BBC_OUTPUT_PATH || DEFAULT_BBC_OUTPUT;
@@ -522,6 +544,16 @@ const parsedMatchDetailsPollIntervalMs = Number(
 const MATCH_DETAILS_POLL_INTERVAL_MS = Number.isFinite(parsedMatchDetailsPollIntervalMs)
   ? Math.max(1000, Math.floor(parsedMatchDetailsPollIntervalMs))
   : 10 * 1000;
+const parsedApiStartupWarmDelayMs = Number(process.env.API_STARTUP_WARM_DELAY_MS || 60 * 1000);
+const API_STARTUP_WARM_DELAY_MS = Number.isFinite(parsedApiStartupWarmDelayMs)
+  ? Math.max(0, Math.floor(parsedApiStartupWarmDelayMs))
+  : 60 * 1000;
+const parsedVarHistoryGroupedCacheTtlMs = Number(
+  process.env.VAR_HISTORY_GROUPED_CACHE_TTL_MS || 15 * 1000
+);
+const VAR_HISTORY_GROUPED_CACHE_TTL_MS = Number.isFinite(parsedVarHistoryGroupedCacheTtlMs)
+  ? Math.max(1000, Math.floor(parsedVarHistoryGroupedCacheTtlMs))
+  : 15 * 1000;
 const parsedMatchDetailsPollConcurrency = Number(
   process.env.MATCH_DETAILS_POLL_CONCURRENCY || 20
 );
@@ -786,6 +818,7 @@ app.use((req, res, next) => {
 
   const requestId = Math.random().toString(36).slice(2, 10);
   const startedAtMs = Date.now();
+  req.requestId = requestId;
   res.set("X-Request-Id", requestId);
   res.on("finish", () => {
     const durationMs = Date.now() - startedAtMs;
@@ -807,6 +840,15 @@ app.use((req, res, next) => {
       console.log(
         `[api] id=${requestId} method=${req.method} path=${req.originalUrl} status=${res.statusCode} duration_ms=${durationMs} device_token=${req.deviceToken ? "present" : "missing"}`
       );
+      if (
+        Number.isFinite(DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) &&
+        DEBUG_SLOW_API_REQUEST_THRESHOLD_MS > 0 &&
+        durationMs >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS
+      ) {
+        logPerformanceDiagnostic(
+          `[api][slow] id=${requestId} method=${req.method} route=${route} status=${res.statusCode} duration_ms=${durationMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
+        );
+      }
     }
   });
   next();
@@ -888,6 +930,18 @@ let runtimeRole = "library";
 let runtimeServer = null;
 let runtimeShutdownPromise = null;
 let runtimeSignalHandlersInstalled = false;
+const runtimeTimeoutHandles = [];
+let eventLoopStallLoggerHandle = null;
+let eventLoopStallLoggerExpectedAtMs = 0;
+let unmatchedTeamMetricsRefreshTimer = null;
+let unmatchedTeamMetricsRefreshRunning = false;
+let unmatchedTeamMetricsDirty = true;
+let unmatchedTeamMetricsLastComputedAt = null;
+let unmatchedTeamMetricsLastDurationMs = 0;
+let varHistoryGroupedCache = null;
+let varHistoryGroupedCacheExpiresAtMs = 0;
+let varHistoryGroupedCacheTask = null;
+const UNMATCHED_TEAM_METRICS_BACKGROUND_DELAY_MS = 5 * 60 * 1000;
 
 function isApiRuntime() {
   return runtimeRole === "api";
@@ -895,6 +949,77 @@ function isApiRuntime() {
 
 function isMonitorRuntime() {
   return runtimeRole === "monitor";
+}
+
+function currentEventLoopLagP99Ms() {
+  try {
+    return Number((eventLoopDelayMonitor.percentile(99) / 1e6).toFixed(3));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function logPerformanceDiagnostic(message) {
+  // Keep latency/throughput diagnostics on stdout so stderr stays reserved for actionable warnings.
+  console.info(message);
+}
+
+function buildRuntimeActivitySnapshot() {
+  return {
+    runtime: runtimeRole,
+    startup_backfill_running: startupBackfillRunning,
+    cache_state_refresh_running: Boolean(cacheStateWatchTask),
+    live_matches_updating: updating,
+    bbc_live_updating: bbcUpdating,
+    bbc_range_updating: bbcRangeUpdating,
+    epl_updating: eplUpdating,
+    league_tables_updating: leagueTablesUpdating,
+    club_elo_updating: clubEloUpdating,
+    club_elo_fixtures_updating: clubEloFixturesUpdating,
+    football_database_updating: footballDatabaseUpdating,
+    national_elo_updating: nationalEloUpdating,
+    fantasy_bootstrap_updating: fantasyBootstrapUpdating,
+    fantasy_fixtures_updating: fantasyFixturesUpdating,
+    fantasy_event_live_updating: fantasyEventLiveUpdating,
+    team_short_names_updating: teamShortNamesUpdating,
+    team_short_names_redis_sync_updating: teamShortNamesRedisSyncUpdating,
+    match_details_poll_updating: matchDetailsUpdating,
+    match_details_count: matchDetailsById.size,
+    merged_matches_count: cachedMergedMatches.length,
+  };
+}
+
+function startEventLoopStallLogger() {
+  if (
+    eventLoopStallLoggerHandle ||
+    !Number.isFinite(DEBUG_EVENT_LOOP_STALL_THRESHOLD_MS) ||
+    DEBUG_EVENT_LOOP_STALL_THRESHOLD_MS <= 0
+  ) {
+    return;
+  }
+  const intervalMs = 250;
+  eventLoopStallLoggerExpectedAtMs = Date.now() + intervalMs;
+  eventLoopStallLoggerHandle = setInterval(() => {
+    const nowMs = Date.now();
+    const delayMs = nowMs - eventLoopStallLoggerExpectedAtMs;
+    eventLoopStallLoggerExpectedAtMs = nowMs + intervalMs;
+    if (delayMs < DEBUG_EVENT_LOOP_STALL_THRESHOLD_MS) {
+      return;
+    }
+    logPerformanceDiagnostic(
+      `[EventLoopStall] delay_ms=${delayMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
+    );
+  }, intervalMs);
+  if (typeof eventLoopStallLoggerHandle.unref === "function") {
+    eventLoopStallLoggerHandle.unref();
+  }
+}
+
+function stopEventLoopStallLogger() {
+  if (!eventLoopStallLoggerHandle) return;
+  clearInterval(eventLoopStallLoggerHandle);
+  eventLoopStallLoggerHandle = null;
+  eventLoopStallLoggerExpectedAtMs = 0;
 }
 
 function monitorRuntimeBaseUrl() {
@@ -1052,6 +1177,8 @@ let fantasyEventLiveLastSuccessDurationSeconds = 0;
 let fantasyEventLiveLastFailureDurationSeconds = 0;
 let fantasyBootstrapNextDailyRefreshAt = null;
 let fantasyBootstrapDailyRefreshTimer = null;
+let teamRankingsNextDailyWarmAt = null;
+let teamRankingsDailyWarmTimer = null;
 let fantasyTransferRecommendationRequestsTotal = 0;
 let fantasyTransferRecommendationFailuresTotal = 0;
 const fantasyAssistantManagerEntries = new Map();
@@ -2692,6 +2819,35 @@ function scheduleFantasyBootstrapDailyRefresh() {
   ) {
     fantasyBootstrapDailyRefreshTimer.unref();
   }
+}
+
+function scheduleTeamRankingsDailyWarm() {
+  if (teamRankingsDailyWarmTimer) {
+    cancelRuntimeTimeout(teamRankingsDailyWarmTimer);
+    teamRankingsDailyWarmTimer = null;
+  }
+
+  const delayMs = millisecondsUntilNextLondonTime(0, 0);
+  const nextAt = new Date(Date.now() + delayMs);
+  teamRankingsNextDailyWarmAt = nextAt.toISOString();
+  const londonTarget = londonDateTimeFormatter.format(nextAt);
+  console.info(
+    `[TeamsCache] Daily warm scheduled next_london="${londonTarget}" next_iso=${teamRankingsNextDailyWarmAt}`
+  );
+
+  teamRankingsDailyWarmTimer = registerRuntimeTimeout(() => {
+    teamRankingsDailyWarmTimer = null;
+    void warmDefaultTeamRankingsResponseCache("daily_midnight");
+    scheduleTeamRankingsDailyWarm();
+  }, delayMs);
+}
+
+function scheduleInitialTeamRankingsWarm() {
+  void operationalBootstrapPromise
+    .then(() => warmDefaultTeamRankingsResponseCache("startup_prewarm"))
+    .catch((error) => {
+      console.warn("[TeamsCache] Startup warm failed:", error.message || error);
+    });
 }
 
 function parseFiniteNumber(value, fallback = 0) {
@@ -5453,6 +5609,30 @@ function buildPrometheusMetricsText() {
     lines,
     "national_elo_unmatched_team_count",
     nationalEloUnmatchedTeamCount
+  );
+
+  lines.push("# HELP top_scores_unmatched_team_metrics_dirty Whether unmatched-team diagnostics need recomputation.");
+  lines.push("# TYPE top_scores_unmatched_team_metrics_dirty gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_unmatched_team_metrics_dirty",
+    unmatchedTeamMetricsDirty ? 1 : 0
+  );
+
+  lines.push("# HELP top_scores_unmatched_team_metrics_last_duration_ms Duration of the last unmatched-team metrics recomputation.");
+  lines.push("# TYPE top_scores_unmatched_team_metrics_last_duration_ms gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_unmatched_team_metrics_last_duration_ms",
+    unmatchedTeamMetricsLastDurationMs
+  );
+
+  lines.push("# HELP top_scores_unmatched_team_metrics_last_computed_timestamp_seconds Last unmatched-team metrics recomputation timestamp.");
+  lines.push("# TYPE top_scores_unmatched_team_metrics_last_computed_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_unmatched_team_metrics_last_computed_timestamp_seconds",
+    isoTimestampToSeconds(unmatchedTeamMetricsLastComputedAt)
   );
 
   lines.push("# HELP national_elo_last_success_duration_seconds Duration of the most recent successful National Elo download+import.");
@@ -10486,12 +10666,7 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
   );
   const previousById = Object.fromEntries(matchDetailsById);
   indexMatchDetailsFromMatches(cachedMergedMatches);
-  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
-  refreshFootballDatabaseUnmatchedTeamMetric(
-    cachedMergedMatches,
-    cachedFootballDatabaseTeams
-  );
-  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+  invalidateUnmatchedTeamMetrics({ schedule: false });
 
   const updatedAt =
     newestIsoTimestamp([bbcRangeLastUpdated, lastUpdated, bbcLastUpdated, recentLastUpdated]) ||
@@ -10627,8 +10802,21 @@ function applyScoresToMatches(matches, bbcMatches, now = new Date()) {
       ...match,
       home_score: swapped ? source.away_score : source.home_score,
       away_score: swapped ? source.home_score : source.away_score,
-      score_status: source.match_time,
     };
+    const mergedHomeScore = parseNumericScore(merged.home_score);
+    const mergedAwayScore = parseNumericScore(merged.away_score);
+    const sourceStatus = stabilizeMatchStatus(
+      resolveMatchScoreStatus(source) || source.match_time || source.score_status || null,
+      {
+        date: merged.date || match.date || null,
+        time: merged.time || match.time || null,
+        hasScore: mergedHomeScore !== null && mergedAwayScore !== null,
+        nowMs: now.getTime(),
+      }
+    );
+    merged.score_status = pickPreferredMatchStatus(match.score_status, sourceStatus, {
+      preferIncomingOnTie: true,
+    });
 
     if (source.aggregate_home_score !== undefined && source.aggregate_home_score !== null) {
       merged.aggregate_home_score = swapped
@@ -10874,7 +11062,7 @@ function markClubEloSuccess(updatedAtIso, teams, durationSeconds = null) {
     clubEloLastSuccessDurationSeconds = durationSeconds;
   }
   refreshClubEloDataMetrics(teams);
-  refreshClubEloUnmatchedTeamMetric();
+  invalidateUnmatchedTeamMetrics();
 }
 
 function markClubEloFailure(failedAtIso = new Date().toISOString(), durationSeconds = null) {
@@ -10923,7 +11111,7 @@ function markFootballDatabaseSuccess(
     footballDatabaseDataDate = normalizedDataDate;
   }
   refreshFootballDatabaseDataMetrics(teams);
-  refreshFootballDatabaseUnmatchedTeamMetric();
+  invalidateUnmatchedTeamMetrics();
 }
 
 function markFootballDatabaseFailure(
@@ -10973,7 +11161,7 @@ function markNationalEloSuccess(updatedAtIso, teams, durationSeconds = null, dat
     nationalEloDataDate = normalizedDataDate;
   }
   refreshNationalEloDataMetrics(teams);
-  refreshNationalEloUnmatchedTeamMetric();
+  invalidateUnmatchedTeamMetrics();
 }
 
 function markNationalEloFailure(failedAtIso = new Date().toISOString(), durationSeconds = null) {
@@ -12330,22 +12518,48 @@ function buildTeamRankingsResponsePayload(options = {}) {
 }
 
 async function getCachedTeamRankingsResponse(options = {}) {
+  const startedAtMs = Date.now();
   const datasets = await resolveTeamRankingDatasetsForResponse();
+  const datasetResolveMs = Date.now() - startedAtMs;
   const cacheKey = buildTeamRankingsResponseCacheKey({
     ...options,
     ...datasets,
   });
   const cached = teamRankingsResponseCache.get(cacheKey);
   if (cached) {
-    return cached;
+    return {
+      ...cached,
+      cacheHit: true,
+      datasetResolveMs,
+      buildMs: 0,
+      totalMs: Date.now() - startedAtMs,
+    };
   }
 
+  const buildStartedAtMs = Date.now();
   const response = buildTeamRankingsResponsePayload({
     ...options,
     ...datasets,
   });
+  const buildMs = Date.now() - buildStartedAtMs;
   setTeamRankingsResponseCacheEntry(cacheKey, response);
-  return response;
+  if (
+    Number.isFinite(DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) &&
+    DEBUG_SLOW_API_REQUEST_THRESHOLD_MS > 0 &&
+    buildMs >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS
+  ) {
+    logPerformanceDiagnostic(
+      `[TeamsCache][miss] build_ms=${buildMs} cache_size=${teamRankingsResponseCache.size} ` +
+      `source=${options.source || TEAM_RANKING_DEFAULT_SOURCE} type=${options.type || "all"} league=${options.leagueFilter || "all"} key=${cacheKey}`
+    );
+  }
+  return {
+    ...response,
+    cacheHit: false,
+    datasetResolveMs,
+    buildMs,
+    totalMs: Date.now() - startedAtMs,
+  };
 }
 
 async function warmDefaultTeamRankingsResponseCache(trigger = "background") {
@@ -12360,6 +12574,35 @@ async function warmDefaultTeamRankingsResponseCache(trigger = "background") {
       `[TeamsCache] Warm failed trigger=${trigger}:`,
       error && error.message ? error.message : error
     );
+  }
+}
+
+async function getCachedVarHistoryGrouped(loadHistory) {
+  const nowMs = Date.now();
+  if (varHistoryGroupedCache && nowMs < varHistoryGroupedCacheExpiresAtMs) {
+    return varHistoryGroupedCache;
+  }
+  if (varHistoryGroupedCacheTask) {
+    return varHistoryGroupedCacheTask;
+  }
+
+  const effectiveLoadHistory =
+    typeof loadHistory === "function" ? loadHistory : getBbcMatchHistoryGrouped;
+  const task = (async () => {
+    const history = await effectiveLoadHistory({
+      start_ms: nowMs - 24 * 60 * 60 * 1000,
+      end_ms: nowMs + 60 * 60 * 1000,
+    });
+    varHistoryGroupedCache = history;
+    varHistoryGroupedCacheExpiresAtMs = Date.now() + VAR_HISTORY_GROUPED_CACHE_TTL_MS;
+    return history;
+  })();
+
+  varHistoryGroupedCacheTask = task;
+  try {
+    return await task;
+  } finally {
+    varHistoryGroupedCacheTask = null;
   }
 }
 
@@ -13313,6 +13556,7 @@ function setOperationalCacheStateHeaders(res, state = operationalCacheState) {
 }
 
 async function hydrateOperationalStateFromRedis() {
+  const startedAtMs = Date.now();
   recordRuntimeComponentStart(COMPONENT_OPERATIONAL_REDIS, {
     operation: "hydrate_operational_state",
   });
@@ -13467,12 +13711,7 @@ async function hydrateOperationalStateFromRedis() {
       setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, matchDetailsById.size);
     }
 
-    refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
-    refreshFootballDatabaseUnmatchedTeamMetric(
-      cachedMergedMatches,
-      cachedFootballDatabaseTeams
-    );
-    refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+    invalidateUnmatchedTeamMetrics({ schedule: false });
 
     console.log(
       "[OperationalState] Hydrated from Redis:",
@@ -13489,6 +13728,7 @@ async function hydrateOperationalStateFromRedis() {
         team_short_names: scrapedTeamShortNamesByKey.size,
         match_details: matchDetailsById.size,
         cache_state_updated_at: operationalCacheState.updated_at,
+        duration_ms: Date.now() - startedAtMs,
       })
     );
     recordRuntimeComponentSuccess(COMPONENT_OPERATIONAL_REDIS, {
@@ -13618,6 +13858,17 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
     return { reloaded_domains: [] };
   }
 
+  const reloadStartedAtMs = Date.now();
+  const stageTimings = {
+    fetch_ms: 0,
+    matches_ms: 0,
+    match_details_ms: 0,
+    teams_ms: 0,
+    tables_ms: 0,
+    team_short_names_ms: 0,
+    unmatched_metrics_ms: 0,
+    total_ms: 0,
+  };
   const reloads = [];
   const recordMap = {};
   const nowIso =
@@ -13672,9 +13923,12 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
     );
   }
 
+  const fetchStartedAtMs = Date.now();
   await Promise.all(reloads);
+  stageTimings.fetch_ms = Date.now() - fetchStartedAtMs;
 
   if (recordMap.matches) {
+    const startedAtMs = Date.now();
     const records = recordMap.matches;
     const liveRecord = records[OP_DATASET_LIVE_MATCHES];
     if (liveRecord && Array.isArray(liveRecord.payload)) {
@@ -13710,18 +13964,22 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
     }
 
     clearMatchListResponseCache();
+    stageTimings.matches_ms = Date.now() - startedAtMs;
   }
 
   if (recordMap.match_details && recordMap.match_details.records) {
+    const startedAtMs = Date.now();
     const filteredRecords = filterMatchDetailsRecordsByCompetition(recordMap.match_details.records);
     matchDetailsById = new Map(Object.entries(filteredRecords));
     matchDetailsLastUpdated =
       recordMap.match_details.updated_at || matchDetailsLastUpdated || nowIso;
     setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, matchDetailsById.size);
     clearMatchListResponseCache();
+    stageTimings.match_details_ms = Date.now() - startedAtMs;
   }
 
   if (recordMap.teams) {
+    const startedAtMs = Date.now();
     const teams = recordMap.teams;
     const teamsRecord = teams[OP_DATASET_PREMIER_LEAGUE_TEAMS];
     if (teamsRecord && Array.isArray(teamsRecord.payload)) {
@@ -13760,19 +14018,22 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
         nationalEloLastUpdated ? String(nationalEloLastUpdated).slice(0, 10) : null
       );
     }
-    clearTeamRankingsResponseCache();
+    stageTimings.teams_ms = Date.now() - startedAtMs;
   }
 
   if (recordMap.tables) {
+    const startedAtMs = Date.now();
     const tablesRecord = recordMap.tables[OP_DATASET_LEAGUE_TABLES];
     if (tablesRecord && Array.isArray(tablesRecord.payload)) {
       cachedLeagueTables = sortLeagueTablesForResponse(tablesRecord.payload);
       leagueTablesLastUpdated = tablesRecord.updated_at || leagueTablesLastUpdated;
       setSourceCacheSize(SOURCE_BBC_LEAGUE_TABLES, leagueTableRowsCount(cachedLeagueTables));
     }
+    stageTimings.tables_ms = Date.now() - startedAtMs;
   }
 
   if (recordMap.team_short_names) {
+    const startedAtMs = Date.now();
     const teamShortNamesRecord = recordMap.team_short_names[OP_DATASET_TEAM_SHORT_NAMES];
     if (teamShortNamesRecord && teamShortNamesRecord.payload && typeof teamShortNamesRecord.payload === "object") {
       const restored = restoreScrapedTeamShortNamesFromDataset(teamShortNamesRecord.payload, {
@@ -13782,14 +14043,34 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
       scrapedTeamShortNamesByKey = restored.map;
       scrapedTeamShortNamesLastUpdated = restored.updated_at || scrapedTeamShortNamesLastUpdated;
     }
+    stageTimings.team_short_names_ms = Date.now() - startedAtMs;
   }
 
-  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
-  refreshFootballDatabaseUnmatchedTeamMetric(
-    cachedMergedMatches,
-    cachedFootballDatabaseTeams
-  );
-  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+  const unmatchedMetricsStartedAtMs = Date.now();
+  if (recordMap.matches || recordMap.teams) {
+    invalidateUnmatchedTeamMetrics({ schedule: false });
+  }
+  stageTimings.unmatched_metrics_ms = Date.now() - unmatchedMetricsStartedAtMs;
+  stageTimings.total_ms = Date.now() - reloadStartedAtMs;
+
+  if (
+    Number.isFinite(DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS) &&
+    DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS > 0 &&
+    stageTimings.total_ms >= DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS
+  ) {
+    logPerformanceDiagnostic(
+      `[OperationalState][reload][timings] domains=${selectedDomains.join(",")} timings=${JSON.stringify(stageTimings)} counts=${JSON.stringify({
+        merged_matches: cachedMergedMatches.length,
+        match_details: matchDetailsById.size,
+        premier_league_teams: cachedPremierLeagueTeams.length,
+        league_tables: cachedLeagueTables.length,
+        club_elo_teams: cachedClubEloTeams.length,
+        football_database_teams: cachedFootballDatabaseTeams.length,
+        national_elo_teams: cachedNationalEloTeams.length,
+        team_short_names: scrapedTeamShortNamesByKey.size,
+      })}`
+    );
+  }
 
   return {
     reloaded_domains: selectedDomains,
@@ -13802,6 +14083,11 @@ async function pollCacheStateAndRefreshFromRedis(options = {}) {
   }
 
   cacheStateWatchTask = (async () => {
+    const startedAtMs = Date.now();
+    const trigger =
+      options && typeof options.trigger === "string" && options.trigger.trim()
+        ? options.trigger.trim()
+        : "unknown";
     try {
       const cacheStateRecord = await loadOperationalDatasetSafe(OP_DATASET_CACHE_STATE);
       if (!cacheStateRecord || !cacheStateRecord.payload || typeof cacheStateRecord.payload !== "object") {
@@ -13818,11 +14104,31 @@ async function pollCacheStateAndRefreshFromRedis(options = {}) {
       );
       if (changedDomains.length === 0) {
         operationalCacheState = remoteState;
+        const durationMs = Date.now() - startedAtMs;
+        if (
+          Number.isFinite(DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS) &&
+          DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS > 0 &&
+          durationMs >= DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS
+        ) {
+          logPerformanceDiagnostic(
+            `[OperationalState][refresh] trigger=${trigger} changed_domains=none duration_ms=${durationMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
+          );
+        }
         return { reloaded_domains: [] };
       }
 
       const result = await reloadOperationalStateDomainsFromRedis(changedDomains, options);
       operationalCacheState = remoteState;
+      const durationMs = Date.now() - startedAtMs;
+      if (
+        Number.isFinite(DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS) &&
+        DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS > 0 &&
+        durationMs >= DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS
+      ) {
+        logPerformanceDiagnostic(
+          `[OperationalState][refresh] trigger=${trigger} changed_domains=${changedDomains.join(",")} duration_ms=${durationMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
+        );
+      }
       return result;
     } catch (error) {
       console.warn("[OperationalState] Cache-state refresh failed:", error.message || error);
@@ -14688,12 +14994,7 @@ async function purgeLiveSourceDuplicateData(options = {}) {
     }),
   ]);
 
-  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
-  refreshFootballDatabaseUnmatchedTeamMetric(
-    cachedMergedMatches,
-    cachedFootballDatabaseTeams
-  );
-  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+  invalidateUnmatchedTeamMetrics({ schedule: false });
 
   let canonicalDeleteResult = null;
   if (targets.duplicate_canonical_match_ids.length > 0) {
@@ -14757,12 +15058,7 @@ async function purgeCanonicalDuplicateData(options = {}) {
     source,
   });
 
-  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
-  refreshFootballDatabaseUnmatchedTeamMetric(
-    cachedMergedMatches,
-    cachedFootballDatabaseTeams
-  );
-  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+  invalidateUnmatchedTeamMetrics({ schedule: false });
 
   let canonicalDeleteResult = null;
   if (targets.duplicate_canonical_match_ids.length > 0) {
@@ -14861,12 +15157,7 @@ async function purgeDisallowedCompetitionData(options = {}) {
     }),
   ]);
 
-  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
-  refreshFootballDatabaseUnmatchedTeamMetric(
-    cachedMergedMatches,
-    cachedFootballDatabaseTeams
-  );
-  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+  invalidateUnmatchedTeamMetrics({ schedule: false });
 
   let canonicalDeleteResult = null;
   if (disallowedTargets.matchedCanonicalMatchIds.length > 0) {
@@ -14920,12 +15211,7 @@ async function deleteAdminRogueMatches(selectors, options = {}) {
   );
 
   cachedMergedMatches = nextMergedMatches;
-  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
-  refreshFootballDatabaseUnmatchedTeamMetric(
-    cachedMergedMatches,
-    cachedFootballDatabaseTeams
-  );
-  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+  invalidateUnmatchedTeamMetrics({ schedule: false });
 
   await persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
     updated_at: updatedAt,
@@ -16690,21 +16976,18 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayloads(payloads, options = 
   if (matchIds.length === 0) {
     return items;
   }
+  const matchIdSet = new Set(matchIds);
 
   const loadHistory =
     options && typeof options.loadHistory === "function"
       ? options.loadHistory
       : getBbcMatchHistoryGrouped;
-  const nowMs = Date.now();
-  const history = await loadHistory({
-    start_ms: nowMs - 24 * 60 * 60 * 1000,
-    end_ms: nowMs + 60 * 60 * 1000,
-  });
+  const history = await getCachedVarHistoryGrouped(loadHistory);
   const historyMatchesById = new Map();
   if (history && !history.error && Array.isArray(history.matches)) {
     history.matches.forEach((entry) => {
       const matchId = normalizeMatchDetailsId(entry && entry.match_id);
-      if (!matchId || !matchIds.includes(matchId)) return;
+      if (!matchId || !matchIdSet.has(matchId)) return;
       historyMatchesById.set(matchId, entry);
     });
   }
@@ -16785,31 +17068,35 @@ async function updateMatches(options = {}) {
     interval_ms: INTERVAL_MS,
   });
   try {
+    const previousMatches = cachedMatches;
     const matches = filterMatchesByCompetition(await fetchMatches(SOURCE_URL));
+    const matchesChanged =
+      hashComparablePayload(matches) !== hashComparablePayload(previousMatches);
     cachedMatches = matches;
     recordsFetched = matches.length;
     setSourceCacheSize(SOURCE_LIVE_FOOTBALL, matches.length);
-    lastUpdated = new Date().toISOString();
-    writeMatches(OUTPUT_PATH, matches);
-    await persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, matches, {
-      updated_at: lastUpdated,
-      source: SOURCE_LIVE_FOOTBALL,
-    });
-    await updateRecentCache(SOURCE_LIVE_FOOTBALL);
-    await rebuildMergedMatchesCache(SOURCE_LIVE_FOOTBALL);
-    clearTeamRankingsResponseCache();
-    void warmDefaultTeamRankingsResponseCache(`live_matches_${trigger}`);
-    invalidateCacheDomains(["matches", "match_details"], {
-      updated_at: lastUpdated,
-      reason: "live_matches_refresh",
-      source: SOURCE_LIVE_FOOTBALL,
-    });
+    if (matchesChanged) {
+      lastUpdated = new Date().toISOString();
+      writeMatches(OUTPUT_PATH, matches);
+      await persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, matches, {
+        updated_at: lastUpdated,
+        source: SOURCE_LIVE_FOOTBALL,
+      });
+      await updateRecentCache(SOURCE_LIVE_FOOTBALL);
+      await rebuildMergedMatchesCache(SOURCE_LIVE_FOOTBALL);
+      invalidateCacheDomains(["matches", "match_details"], {
+        updated_at: lastUpdated,
+        reason: "live_matches_refresh",
+        source: SOURCE_LIVE_FOOTBALL,
+      });
+    }
     success = true;
     logPollSuccess("live_football", {
       source: SOURCE_LIVE_FOOTBALL,
       trigger,
       count: matches.length,
       updated_at: lastUpdated,
+      changed: matchesChanged,
       duration_ms: Date.now() - startedAtMs,
     });
     recordRuntimeComponentSuccess(COMPONENT_SOURCE_LIVE_FOOTBALL, {
@@ -16818,6 +17105,7 @@ async function updateMatches(options = {}) {
       interval_ms: INTERVAL_MS,
       count: matches.length,
       updated_at: lastUpdated,
+      changed: matchesChanged,
     });
   } catch (err) {
     recordRuntimeComponentFailure(COMPONENT_SOURCE_LIVE_FOOTBALL, err, {
@@ -16962,41 +17250,47 @@ async function updateBbcMatches(options = {}) {
     interval_ms: BBC_INTERVAL_MS,
   });
   try {
+    const previousMatches = cachedBbcMatches;
     const matches = filterMatchesByCompetition(await fetchBbcFixtures(BBC_SOURCE_URL));
     const filteredMatches = filterStaleBbcMatches(matches, cachedBbcMatches);
+    const matchesChanged =
+      hashComparablePayload(filteredMatches) !== hashComparablePayload(previousMatches);
     cachedBbcMatches = filteredMatches;
     recordsFetched = filteredMatches.length;
     setSourceCacheSize(SOURCE_BBC_LIVE, filteredMatches.length);
-    bbcLastUpdated = new Date().toISOString();
-    writeBbcFixtures(BBC_OUTPUT_PATH, filteredMatches);
-    await persistOperationalDatasetSafe(OP_DATASET_BBC_LIVE_MATCHES, filteredMatches, {
-      updated_at: bbcLastUpdated,
-      source: SOURCE_BBC_LIVE,
-    });
-    await updateRecentCache(SOURCE_BBC_LIVE);
-    await mapWithConcurrency(
-      filteredMatches,
-      Math.min(MATCH_DETAILS_POLL_CONCURRENCY, 8),
-      async (match) => {
-        await upsertCanonicalMatchDetailsFromMatch(match, {
-          updated_at: bbcLastUpdated,
-          source: SOURCE_BBC_LIVE,
-          reason: "bbc_live_poll",
-          skipCacheInvalidation: true,
-        });
-      }
-    );
-    invalidateCacheDomains(["matches", "match_details", "bbc_live"], {
-      updated_at: bbcLastUpdated,
-      reason: "bbc_live_refresh",
-      source: SOURCE_BBC_LIVE,
-    });
+    if (matchesChanged) {
+      bbcLastUpdated = new Date().toISOString();
+      writeBbcFixtures(BBC_OUTPUT_PATH, filteredMatches);
+      await persistOperationalDatasetSafe(OP_DATASET_BBC_LIVE_MATCHES, filteredMatches, {
+        updated_at: bbcLastUpdated,
+        source: SOURCE_BBC_LIVE,
+      });
+      await updateRecentCache(SOURCE_BBC_LIVE);
+      await mapWithConcurrency(
+        filteredMatches,
+        Math.min(MATCH_DETAILS_POLL_CONCURRENCY, 8),
+        async (match) => {
+          await upsertCanonicalMatchDetailsFromMatch(match, {
+            updated_at: bbcLastUpdated,
+            source: SOURCE_BBC_LIVE,
+            reason: "bbc_live_poll",
+            skipCacheInvalidation: true,
+          });
+        }
+      );
+      invalidateCacheDomains(["matches", "match_details", "bbc_live"], {
+        updated_at: bbcLastUpdated,
+        reason: "bbc_live_refresh",
+        source: SOURCE_BBC_LIVE,
+      });
+    }
     success = true;
     logPollSuccess("bbc_live_matches", {
       source: SOURCE_BBC_LIVE,
       trigger,
       count: filteredMatches.length,
       updated_at: bbcLastUpdated,
+      changed: matchesChanged,
       duration_ms: Date.now() - startedAtMs,
     });
     recordRuntimeComponentSuccess(COMPONENT_SOURCE_BBC_LIVE, {
@@ -17005,6 +17299,7 @@ async function updateBbcMatches(options = {}) {
       interval_ms: BBC_INTERVAL_MS,
       count: filteredMatches.length,
       updated_at: bbcLastUpdated,
+      changed: matchesChanged,
     });
   } catch (err) {
     recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_LIVE, err, {
@@ -17058,8 +17353,6 @@ async function updateBbcRangeMatches(options = {}) {
       source: SOURCE_BBC_RANGE,
     });
     await rebuildMergedMatchesCache(SOURCE_BBC_RANGE);
-    clearTeamRankingsResponseCache();
-    void warmDefaultTeamRankingsResponseCache(`bbc_range_${trigger}`);
     invalidateCacheDomains(["matches", "match_details"], {
       updated_at: bbcRangeLastUpdated,
       reason: "bbc_range_refresh",
@@ -17765,30 +18058,35 @@ async function updateClubEloTeams(options = {}) {
       minRows: CLUB_ELO_MIN_ROWS,
       minBytes: CLUB_ELO_MIN_BYTES,
     });
+    const previousTeams = cachedClubEloTeams;
     const teams = normalizeClubEloTeamsPayload(result.teams);
     if (!Array.isArray(teams) || teams.length === 0) {
       throw new Error("Club Elo update returned no teams");
     }
+    const teamsChanged = hashComparablePayload(teams) !== hashComparablePayload(previousTeams);
 
     cachedClubEloTeams = teams;
     recordsFetched = teams.length;
     setSourceCacheSize(SOURCE_CLUB_ELO, teams.length);
-    clubEloLastUpdated = new Date().toISOString();
+    const pollCompletedAtIso = new Date().toISOString();
+    if (teamsChanged || !clubEloLastUpdated) {
+      clubEloLastUpdated = pollCompletedAtIso;
+    }
     const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
-    markClubEloSuccess(clubEloLastUpdated, teams, durationSeconds);
-    writeClubEloTeams(CLUB_ELO_OUTPUT_PATH, teams);
-    await persistOperationalDatasetSafe(OP_DATASET_CLUB_ELO_TEAMS, teams, {
-      updated_at: clubEloLastUpdated,
-      source: SOURCE_CLUB_ELO,
-      ttl_seconds: CLUB_ELO_REDIS_TTL_SECONDS,
-    });
-    clearTeamRankingsResponseCache();
-    void warmDefaultTeamRankingsResponseCache(`club_elo_${trigger}`);
-    invalidateCacheDomains(["teams"], {
-      updated_at: clubEloLastUpdated,
-      reason: "club_elo_rankings_refresh",
-      source: SOURCE_CLUB_ELO,
-    });
+    markClubEloSuccess(pollCompletedAtIso, teams, durationSeconds);
+    if (teamsChanged) {
+      writeClubEloTeams(CLUB_ELO_OUTPUT_PATH, teams);
+      await persistOperationalDatasetSafe(OP_DATASET_CLUB_ELO_TEAMS, teams, {
+        updated_at: clubEloLastUpdated,
+        source: SOURCE_CLUB_ELO,
+        ttl_seconds: CLUB_ELO_REDIS_TTL_SECONDS,
+      });
+      invalidateCacheDomains(["teams"], {
+        updated_at: clubEloLastUpdated,
+        reason: "club_elo_rankings_refresh",
+        source: SOURCE_CLUB_ELO,
+      });
+    }
     success = true;
     logPollSuccess("club_elo_rankings", {
       source: SOURCE_CLUB_ELO,
@@ -17796,6 +18094,7 @@ async function updateClubEloTeams(options = {}) {
       count: teams.length,
       date: result.date,
       updated_at: clubEloLastUpdated,
+      changed: teamsChanged,
       duration_ms: Date.now() - startedAtMs,
     });
     recordRuntimeComponentSuccess(COMPONENT_SOURCE_CLUB_ELO, {
@@ -17879,35 +18178,40 @@ async function updateFootballDatabaseTeams(options = {}) {
       adaptiveConcurrencyEnabled: FOOTBALL_DATABASE_ADAPTIVE_CONCURRENCY_ENABLED,
       adaptiveMinConcurrency: FOOTBALL_DATABASE_ADAPTIVE_MIN_CONCURRENCY,
     });
+    const previousTeams = cachedFootballDatabaseTeams;
     const teams = normalizeFootballDatabaseTeamsPayload(result.teams);
     if (!Array.isArray(teams) || teams.length === 0) {
       throw new Error("FootballDatabase update returned no teams");
     }
+    const teamsChanged = hashComparablePayload(teams) !== hashComparablePayload(previousTeams);
 
     cachedFootballDatabaseTeams = teams;
     recordsFetched = teams.length;
     setSourceCacheSize(SOURCE_FOOTBALL_DATABASE, teams.length);
-    footballDatabaseLastUpdated = new Date().toISOString();
+    const pollCompletedAtIso = new Date().toISOString();
+    if (teamsChanged || !footballDatabaseLastUpdated) {
+      footballDatabaseLastUpdated = pollCompletedAtIso;
+    }
     const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
     markFootballDatabaseSuccess(
-      footballDatabaseLastUpdated,
+      pollCompletedAtIso,
       teams,
       durationSeconds,
       result.dateModified
     );
-    writeFootballDatabaseTeams(FOOTBALL_DATABASE_OUTPUT_PATH, teams);
-    await persistOperationalDatasetSafe(OP_DATASET_FOOTBALL_DATABASE_TEAMS, teams, {
-      updated_at: footballDatabaseLastUpdated,
-      source: SOURCE_FOOTBALL_DATABASE,
-      ttl_seconds: FOOTBALL_DATABASE_REDIS_TTL_SECONDS,
-    });
-    clearTeamRankingsResponseCache();
-    void warmDefaultTeamRankingsResponseCache(`football_database_${trigger}`);
-    invalidateCacheDomains(["teams"], {
-      updated_at: footballDatabaseLastUpdated,
-      reason: "football_database_rankings_refresh",
-      source: SOURCE_FOOTBALL_DATABASE,
-    });
+    if (teamsChanged) {
+      writeFootballDatabaseTeams(FOOTBALL_DATABASE_OUTPUT_PATH, teams);
+      await persistOperationalDatasetSafe(OP_DATASET_FOOTBALL_DATABASE_TEAMS, teams, {
+        updated_at: footballDatabaseLastUpdated,
+        source: SOURCE_FOOTBALL_DATABASE,
+        ttl_seconds: FOOTBALL_DATABASE_REDIS_TTL_SECONDS,
+      });
+      invalidateCacheDomains(["teams"], {
+        updated_at: footballDatabaseLastUpdated,
+        reason: "football_database_rankings_refresh",
+        source: SOURCE_FOOTBALL_DATABASE,
+      });
+    }
     success = true;
     logPollSuccess("football_database_rankings", {
       source: SOURCE_FOOTBALL_DATABASE,
@@ -17922,6 +18226,7 @@ async function updateFootballDatabaseTeams(options = {}) {
           ? result.adaptive_concurrency.final_concurrency
           : FOOTBALL_DATABASE_CONCURRENCY,
       updated_at: footballDatabaseLastUpdated,
+      changed: teamsChanged,
       duration_ms: Date.now() - startedAtMs,
     });
     recordRuntimeComponentSuccess(COMPONENT_SOURCE_FOOTBALL_DATABASE, {
@@ -18023,35 +18328,40 @@ async function updateNationalEloTeams(options = {}) {
       preferIpv4: NATIONAL_ELO_PREFER_IPV4,
       userAgent: NATIONAL_ELO_USER_AGENT,
     });
+    const previousTeams = cachedNationalEloTeams;
     const teams = normalizeNationalEloTeamsPayload(result.teams);
     if (!Array.isArray(teams) || teams.length === 0) {
       throw new Error("National Elo update returned no teams");
     }
+    const teamsChanged = hashComparablePayload(teams) !== hashComparablePayload(previousTeams);
 
     cachedNationalEloTeams = teams;
     recordsFetched = teams.length;
     setSourceCacheSize(SOURCE_NATIONAL_ELO, teams.length);
-    nationalEloLastUpdated = new Date().toISOString();
+    const pollCompletedAtIso = new Date().toISOString();
+    if (teamsChanged || !nationalEloLastUpdated) {
+      nationalEloLastUpdated = pollCompletedAtIso;
+    }
     const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
     markNationalEloSuccess(
-      nationalEloLastUpdated,
+      pollCompletedAtIso,
       teams,
       durationSeconds,
       result.dateModified || (result.lastModified ? String(result.lastModified).slice(0, 10) : null)
     );
-    writeNationalEloTeams(NATIONAL_ELO_OUTPUT_PATH, teams);
-    await persistOperationalDatasetSafe(OP_DATASET_NATIONAL_ELO_TEAMS, teams, {
-      updated_at: nationalEloLastUpdated,
-      source: SOURCE_NATIONAL_ELO,
-      ttl_seconds: NATIONAL_ELO_REDIS_TTL_SECONDS,
-    });
-    clearTeamRankingsResponseCache();
-    void warmDefaultTeamRankingsResponseCache(`national_elo_${trigger}`);
-    invalidateCacheDomains(["teams"], {
-      updated_at: nationalEloLastUpdated,
-      reason: "national_elo_rankings_refresh",
-      source: SOURCE_NATIONAL_ELO,
-    });
+    if (teamsChanged) {
+      writeNationalEloTeams(NATIONAL_ELO_OUTPUT_PATH, teams);
+      await persistOperationalDatasetSafe(OP_DATASET_NATIONAL_ELO_TEAMS, teams, {
+        updated_at: nationalEloLastUpdated,
+        source: SOURCE_NATIONAL_ELO,
+        ttl_seconds: NATIONAL_ELO_REDIS_TTL_SECONDS,
+      });
+      invalidateCacheDomains(["teams"], {
+        updated_at: nationalEloLastUpdated,
+        reason: "national_elo_rankings_refresh",
+        source: SOURCE_NATIONAL_ELO,
+      });
+    }
     success = true;
     logPollSuccess("national_elo_rankings", {
       source: SOURCE_NATIONAL_ELO,
@@ -18064,6 +18374,7 @@ async function updateNationalEloTeams(options = {}) {
           ? !result.partial_fetch.successors_loaded || !result.partial_fetch.team_dictionary_loaded
           : false,
       updated_at: nationalEloLastUpdated,
+      changed: teamsChanged,
       duration_ms: Date.now() - startedAtMs,
     });
     recordRuntimeComponentSuccess(COMPONENT_SOURCE_NATIONAL_ELO, {
@@ -20387,27 +20698,35 @@ app.get("/metrics", (_req, res) => {
 app.get(`${API_PREFIX}/matches`, async (req, res) => {
   setCacheOnlyHeaders(res);
   try {
+    const handlerStartedAtMs = Date.now();
+    const timings = {};
+    let stageStartedAtMs = Date.now();
     await ensureTeamShortNamesCacheReady();
+    timings.ensure_team_short_names_ms = Date.now() - stageStartedAtMs;
     const teamShortNameLookup = buildResolvedTeamShortNameLookup(
       scrapedTeamShortNamesByKey,
       teamShortNameOverridesByKey
     );
+    stageStartedAtMs = Date.now();
     const range = parseRequiredDateRange(req.query);
+    timings.parse_range_ms = Date.now() - stageStartedAtMs;
     if (range.error) {
       res.status(400).json({ error: range.error });
       return;
     }
 
     const memoryMatchDetailsSnapshot = currentMatchDetailsLookupSnapshot();
+    stageStartedAtMs = Date.now();
     const [
       mergedDataset,
       bbcRangeDataset,
       redisMatchDetailsSnapshot,
     ] = await Promise.all([
       getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
-      getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
+        getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
       memoryMatchDetailsSnapshot ? Promise.resolve(null) : getOperationalMatchDetailsSnapshotSafe(),
     ]);
+    timings.dataset_load_ms = Date.now() - stageStartedAtMs;
     const canonicalLookup = memoryMatchDetailsSnapshot
       ? memoryMatchDetailsSnapshot.lookup
       : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.records
@@ -20456,6 +20775,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const homeNations = isTruthyParam(req.query.home_nations);
     const majorTournaments = isTruthyParam(req.query.major_tournaments);
 
+    stageStartedAtMs = Date.now();
     let filtered = getCachedCanonicalPublicMatchListPayloads(
       {
         matchDetailsLookup: canonicalLookup,
@@ -20475,8 +20795,10 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
         manualMappings,
       })
     );
+    timings.base_filter_ms = Date.now() - stageStartedAtMs;
 
     if (eplOnly || homeNations || majorTournaments) {
+      stageStartedAtMs = Date.now();
       filtered = filtered.filter((match) =>
         matchPassesCategoryFilters(match, {
           eplOnly,
@@ -20485,6 +20807,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
           premierLeagueTeams: premierLeagueDataset.items,
         })
       );
+      timings.category_filter_ms = Date.now() - stageStartedAtMs;
     }
 
     // Inject all test matches if they match filters
@@ -20523,13 +20846,17 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       }
     }
 
+    stageStartedAtMs = Date.now();
     filtered = filtered.slice().sort((lhs, rhs) => sortAdminMatchesByKickoff(lhs, rhs, "asc"));
     if (sortOrder === "desc") {
       filtered = filtered.slice().reverse();
     }
+    timings.sort_ms = Date.now() - stageStartedAtMs;
     let payload = filtered;
     if (listMode) {
+      stageStartedAtMs = Date.now();
       payload = payload.filter((item) => isListPayloadVisibleForMode(item, listMode));
+      timings.mode_filter_ms = Date.now() - stageStartedAtMs;
     }
 
     const totalCount = payload.length;
@@ -20537,8 +20864,31 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const pageStart = (page - 1) * pageSize;
     const pageEnd = pageStart + pageSize;
     const pagedRaw = pageStart >= totalCount ? [] : payload.slice(pageStart, pageEnd);
+    stageStartedAtMs = Date.now();
     const paged = await mergeConfirmedVarDisallowedGoalsIntoPayloads(pagedRaw);
+    timings.var_merge_ms = Date.now() - stageStartedAtMs;
     const hasMore = page < totalPages;
+    timings.total_ms = Date.now() - handlerStartedAtMs;
+
+    if (
+      DEBUG_ROUTE_STAGE_LOGGING_ENABLED ||
+      timings.total_ms >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS
+    ) {
+      logPerformanceDiagnostic(
+        `[API][matches][timings] id=${req.requestId || "unknown"} total_ms=${timings.total_ms} ` +
+        `counts=${JSON.stringify({
+          total_count: totalCount,
+          page_size: pageSize,
+          paged_count: paged.length,
+          match_details_count: matchDetailsLookupSize(canonicalLookup),
+          merged_matches_count: Array.isArray(mergedDataset.items) ? mergedDataset.items.length : 0,
+        })} timings=${JSON.stringify(timings)} sources=${JSON.stringify({
+          merged: mergedDataset.source || "unknown",
+          bbc_range: bbcRangeDataset.source || "unknown",
+          match_details: canonicalSource,
+        })}`
+      );
+    }
 
     res.set("X-Total-Count", String(totalCount));
     res.set("X-Page", String(page));
@@ -20827,6 +21177,7 @@ app.get(`${API_PREFIX}/competitions`, async (_req, res) => {
 
 app.get(`${API_PREFIX}/teams`, async (req, res) => {
   setCacheOnlyHeaders(res);
+  const handlerStartedAtMs = Date.now();
   const leagueFilter = req.query.league ? String(req.query.league) : null;
   const sourceSelection = resolveTeamRankingSource(req.query.source);
   const typeSelection = resolveTeamTypeFilter(req.query.type);
@@ -20850,6 +21201,14 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
     type: typeSelection.type,
     leagueFilter,
   });
+  const totalMs = Date.now() - handlerStartedAtMs;
+  if (DEBUG_ROUTE_STAGE_LOGGING_ENABLED || totalMs >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) {
+    logPerformanceDiagnostic(
+      `[API][teams][timings] id=${req.requestId || "unknown"} total_ms=${totalMs} ` +
+      `cache_hit=${response.cacheHit ? "true" : "false"} dataset_resolve_ms=${response.datasetResolveMs || 0} ` +
+      `build_ms=${response.buildMs || 0} source=${sourceSelection.source} type=${typeSelection.type || "all"} league=${leagueFilter || "all"}`
+    );
+  }
   setLastModifiedHeaders(res, response.updatedAt);
   res.set("X-Team-Metadata-Source", sourceSelection.source);
   res.set("X-Team-Metadata-Default-Source", TEAM_RANKING_DEFAULT_SOURCE);
@@ -25842,12 +26201,6 @@ async function bootstrapOperationalState(options = {}) {
     if (!readiness.ready) {
       clearFootballOperationalMemoryState();
     }
-    void backfillIncompleteMatchDetailsOnStartup({ trigger: "startup_bootstrap" });
-    void refreshInProgressMatchDetails({ trigger: "startup_bootstrap" });
-    void updateFantasyBootstrapStatic({ trigger: "startup_bootstrap" });
-    void updateFantasyFixtures({ trigger: "startup_bootstrap" });
-    void updateFantasyEventLive({ trigger: "startup_bootstrap" });
-    void warmDefaultTeamRankingsResponseCache("startup_bootstrap");
     void pollCacheStateAndRefreshFromRedis({ trigger: "startup_bootstrap" });
   }
 
@@ -25871,10 +26224,119 @@ function registerRuntimeInterval(callback, intervalMs) {
   return handle;
 }
 
+function registerRuntimeTimeout(callback, delayMs) {
+  const handle = setTimeout(() => {
+    const index = runtimeTimeoutHandles.indexOf(handle);
+    if (index >= 0) {
+      runtimeTimeoutHandles.splice(index, 1);
+    }
+    callback();
+  }, delayMs);
+  runtimeTimeoutHandles.push(handle);
+  if (typeof handle.unref === "function") {
+    handle.unref();
+  }
+  return handle;
+}
+
+function cancelRuntimeTimeout(handle) {
+  if (!handle) return;
+  clearTimeout(handle);
+  const index = runtimeTimeoutHandles.indexOf(handle);
+  if (index >= 0) {
+    runtimeTimeoutHandles.splice(index, 1);
+  }
+}
+
 function clearRuntimeIntervals() {
   while (runtimeIntervalHandles.length > 0) {
     clearInterval(runtimeIntervalHandles.pop());
   }
+}
+
+function clearRuntimeTimeouts() {
+  while (runtimeTimeoutHandles.length > 0) {
+    clearTimeout(runtimeTimeoutHandles.pop());
+  }
+}
+
+function recomputeUnmatchedTeamMetricsNow() {
+  const startedAtMs = Date.now();
+  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
+  refreshFootballDatabaseUnmatchedTeamMetric(
+    cachedMergedMatches,
+    cachedFootballDatabaseTeams
+  );
+  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+  unmatchedTeamMetricsDirty = false;
+  unmatchedTeamMetricsLastComputedAt = new Date().toISOString();
+  unmatchedTeamMetricsLastDurationMs = Date.now() - startedAtMs;
+  if (
+    Number.isFinite(DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS) &&
+    DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS > 0 &&
+    unmatchedTeamMetricsLastDurationMs >= DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS
+  ) {
+    logPerformanceDiagnostic(
+      `[OperationalState][unmatched_metrics] duration_ms=${unmatchedTeamMetricsLastDurationMs} counts=${JSON.stringify({
+        club_elo_unmatched: clubEloUnmatchedTeamCount,
+        football_database_unmatched: footballDatabaseUnmatchedTeamCount,
+        national_elo_unmatched: nationalEloUnmatchedTeamCount,
+      })}`
+    );
+  }
+}
+
+function scheduleUnmatchedTeamMetricsRefresh(options = {}) {
+  const delayMs = Number.isFinite(options.delayMs) && options.delayMs >= 0
+    ? options.delayMs
+    : UNMATCHED_TEAM_METRICS_BACKGROUND_DELAY_MS;
+  unmatchedTeamMetricsDirty = true;
+  if (unmatchedTeamMetricsRefreshRunning) {
+    return false;
+  }
+  if (unmatchedTeamMetricsRefreshTimer) {
+    cancelRuntimeTimeout(unmatchedTeamMetricsRefreshTimer);
+    unmatchedTeamMetricsRefreshTimer = null;
+  }
+  unmatchedTeamMetricsRefreshTimer = registerRuntimeTimeout(() => {
+    unmatchedTeamMetricsRefreshTimer = null;
+    unmatchedTeamMetricsRefreshRunning = true;
+    try {
+      recomputeUnmatchedTeamMetricsNow();
+    } finally {
+      unmatchedTeamMetricsRefreshRunning = false;
+    }
+  }, delayMs);
+  return true;
+}
+
+function invalidateUnmatchedTeamMetrics(options = {}) {
+  unmatchedTeamMetricsDirty = true;
+  if (options.schedule === true) {
+    scheduleUnmatchedTeamMetricsRefresh(options);
+  }
+}
+
+function scheduleDeferredApiWarmTasks() {
+  const delayMs =
+    Number.isFinite(API_STARTUP_WARM_DELAY_MS) && API_STARTUP_WARM_DELAY_MS > 0
+      ? API_STARTUP_WARM_DELAY_MS
+      : 0;
+
+  const runWarmTasks = () => {
+    console.log("[Startup] Running deferred API warm tasks");
+    void backfillIncompleteMatchDetailsOnStartup({ trigger: "deferred_startup_bootstrap" });
+    void updateFantasyBootstrapStatic({ trigger: "deferred_startup_bootstrap" });
+    void updateFantasyFixtures({ trigger: "deferred_startup_bootstrap" });
+  };
+
+  if (delayMs === 0) {
+    runWarmTasks();
+    return null;
+  }
+
+  console.log(`[Startup] Scheduling deferred API warm tasks in ${delayMs}ms`);
+  return registerRuntimeTimeout(runWarmTasks, delayMs);
 }
 
 function startApiIntervals() {
@@ -25908,6 +26370,10 @@ function startApiIntervals() {
     pollFantasyAssistantManagerEntries();
   }, FANTASY_ASSISTANT_MANAGER_POLL_INTERVAL_MS);
 
+  startCacheStateWatcher();
+}
+
+function startMonitorIntervals() {
   const matchDetailsPollInterval =
     Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
       ? MATCH_DETAILS_POLL_INTERVAL_MS
@@ -25915,11 +26381,6 @@ function startApiIntervals() {
   registerRuntimeInterval(() => {
     void refreshInProgressMatchDetails({ trigger: "interval" });
   }, matchDetailsPollInterval);
-
-  startCacheStateWatcher();
-}
-
-function startMonitorIntervals() {
   startCacheStateWatcher();
 }
 
@@ -26503,7 +26964,13 @@ async function shutdownRuntime(options = {}) {
       clearTimeout(fantasyBootstrapDailyRefreshTimer);
       fantasyBootstrapDailyRefreshTimer = null;
     }
+    if (teamRankingsDailyWarmTimer) {
+      cancelRuntimeTimeout(teamRankingsDailyWarmTimer);
+      teamRankingsDailyWarmTimer = null;
+    }
+    stopEventLoopStallLogger();
     stopCacheStateWatcher();
+    clearRuntimeTimeouts();
     clearRuntimeIntervals();
 
     if (options.stopMatchMonitor === true) {
@@ -26555,8 +27022,12 @@ function startApiRuntime() {
   }
 
   runtimeRole = "api";
+  startEventLoopStallLogger();
   operationalBootstrapPromise = bootstrapOperationalState({ mode: "api" });
   startApiIntervals();
+  scheduleInitialTeamRankingsWarm();
+  scheduleTeamRankingsDailyWarm();
+  scheduleDeferredApiWarmTasks();
 
   runtimeServer = app.listen(PORT, () => {
     console.log(`Server listening on http://localhost:${PORT}`);
@@ -26574,6 +27045,7 @@ function startMonitorRuntime() {
   }
 
   runtimeRole = "monitor";
+  startEventLoopStallLogger();
   matchMonitor.initialize(SERVER_BASE_URL);
   operationalBootstrapPromise = bootstrapOperationalState({ mode: "monitor" });
   startMonitorIntervals();
@@ -26604,6 +27076,7 @@ function startScraperRuntime() {
   }
 
   runtimeRole = "scraper";
+  startEventLoopStallLogger();
   operationalBootstrapPromise = bootstrapOperationalState({ mode: "scraper" });
   startScraperIntervals();
 

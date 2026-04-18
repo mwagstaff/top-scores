@@ -8,9 +8,10 @@ const __dirname = path.dirname(__filename);
 const productionClientRoot = path.join(__dirname, "dist");
 const apiBaseUrl = (process.env.TOP_SCORES_API_BASE_URL ||
   process.env.API_BASE_URL ||
-  "https://api.skynolimit.dev/top-scores/api/v1").replace(/\/+$/, "");
+  "http://127.0.0.1:3011/api/v1").replace(/\/+$/, "");
 const port = Number(process.env.PORT || 3020);
 const isProduction = process.env.NODE_ENV === "production";
+const debugProxyThresholdMs = Number(process.env.TOP_SCORES_WEB_PROXY_SLOW_MS || 500);
 const generatedAssetsRoot = isProduction
   ? path.join(productionClientRoot, "generated-assets")
   : path.join(__dirname, "public", "generated-assets");
@@ -144,6 +145,8 @@ app.use(
     type: "*/*",
   }),
   async (req, res) => {
+    const requestId = Math.random().toString(36).slice(2, 10);
+    const startedAtMs = Date.now();
     try {
       const suffix = req.originalUrl.replace(/^\/api\/v1\/?/, "");
       const target = new URL(
@@ -156,6 +159,7 @@ app.use(
         headers: buildProxyHeaders(req.headers),
         body: shouldSendBody(req.method) ? req.body : undefined,
       });
+      const upstreamHeadersReceivedAtMs = Date.now();
 
       res.status(upstream.status);
       upstream.headers.forEach((value, key) => {
@@ -166,8 +170,26 @@ app.use(
       });
 
       const buffer = Buffer.from(await upstream.arrayBuffer());
+      const totalDurationMs = Date.now() - startedAtMs;
+      const upstreamHeaderDurationMs = upstreamHeadersReceivedAtMs - startedAtMs;
+      const bodyReadDurationMs = totalDurationMs - upstreamHeaderDurationMs;
+      const logLine =
+        `[web][proxy] id=${requestId} method=${req.method} path=${req.originalUrl} ` +
+        `target=${target.toString()} status=${upstream.status} ` +
+        `upstream_header_ms=${upstreamHeaderDurationMs} body_read_ms=${bodyReadDurationMs} total_ms=${totalDurationMs}`;
+      if (totalDurationMs >= debugProxyThresholdMs) {
+        // eslint-disable-next-line no-console
+        console.warn(logLine);
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(logLine);
+      }
       res.send(buffer);
     } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[web][proxy][error] method=${req.method} path=${req.originalUrl} base=${apiBaseUrl} message=${error instanceof Error ? error.message : String(error)}`
+      );
       res.status(502).json({
         error: "Failed to reach the Top Scores API",
         details: error instanceof Error ? error.message : String(error),
