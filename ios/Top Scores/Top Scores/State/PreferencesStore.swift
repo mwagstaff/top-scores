@@ -32,22 +32,18 @@ enum MatchGroupSortOrder: String, Codable, CaseIterable, Identifiable, Sendable 
     }
 }
 
-enum FixturesViewDensity: String, Codable, CaseIterable, Identifiable, Sendable {
-    case extended
+enum FixturesViewDensity: String, Codable, Sendable {
     case compact
-    case ultraCompact
 
-    var id: String { rawValue }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = FixturesViewDensity(rawValue: rawValue) ?? .compact
+    }
 
-    var title: String {
-        switch self {
-        case .extended:
-            return "Extended"
-        case .compact:
-            return "Compact"
-        case .ultraCompact:
-            return "Ultra compact"
-        }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
@@ -569,10 +565,9 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultFantasyDeadlineRemindersEnabled
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
-        let legacyCompactFixturesViewEnabled = userDefaults.object(forKey: Keys.compactFixturesViewEnabled) as? Bool
         let fixturesViewDensity = userDefaults.string(forKey: Keys.fixturesViewDensity)
             .flatMap(FixturesViewDensity.init(rawValue:))
-            ?? (legacyCompactFixturesViewEnabled == true ? .ultraCompact : Self.defaultFixturesViewDensity)
+            ?? Self.defaultFixturesViewDensity
         let showCompactFixtureTvLogo = userDefaults.object(forKey: Keys.showCompactFixtureTvLogo) as? Bool
             ?? Self.defaultShowCompactFixtureTvLogo
         let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
@@ -746,7 +741,6 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(fantasyDeadlineRemindersEnabled, forKey: Keys.fantasyDeadlineRemindersEnabled)
         userDefaults.set(showTodayUnfinishedFixturesBadge, forKey: Keys.showTodayUnfinishedFixturesBadge)
         userDefaults.set(fixturesViewDensity.rawValue, forKey: Keys.fixturesViewDensity)
-        userDefaults.set(fixturesViewDensity == .ultraCompact, forKey: Keys.compactFixturesViewEnabled)
         userDefaults.set(showCompactFixtureTvLogo, forKey: Keys.showCompactFixtureTvLogo)
         userDefaults.set(showCompactFixtureFantasyLogo, forKey: Keys.showCompactFixtureFantasyLogo)
         userDefaults.set(showKickoffTimeDividers, forKey: Keys.showKickoffTimeDividers)
@@ -821,10 +815,9 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultFantasyDeadlineRemindersEnabled
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
-        let legacyCompactFixturesViewEnabled = userDefaults.object(forKey: Keys.compactFixturesViewEnabled) as? Bool
         let fixturesViewDensity = userDefaults.string(forKey: Keys.fixturesViewDensity)
             .flatMap(FixturesViewDensity.init(rawValue:))
-            ?? (legacyCompactFixturesViewEnabled == true ? .ultraCompact : Self.defaultFixturesViewDensity)
+            ?? Self.defaultFixturesViewDensity
         let showCompactFixtureTvLogo = userDefaults.object(forKey: Keys.showCompactFixtureTvLogo) as? Bool
             ?? Self.defaultShowCompactFixtureTvLogo
         let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
@@ -907,7 +900,6 @@ final class PreferencesStore: ObservableObject {
         static let fantasyDeadlineRemindersEnabled = "preferences.fantasyDeadlineRemindersEnabled"
         static let showTodayUnfinishedFixturesBadge = "preferences.showTodayUnfinishedFixturesBadge"
         static let fixturesViewDensity = "preferences.fixturesViewDensity"
-        static let compactFixturesViewEnabled = "preferences.compactFixturesViewEnabled"
         static let showCompactFixtureTvLogo = "preferences.showCompactFixtureTvLogo"
         static let showCompactFixtureFantasyLogo = "preferences.showCompactFixtureFantasyLogo"
         static let showKickoffTimeDividers = "preferences.showKickoffTimeDividers"

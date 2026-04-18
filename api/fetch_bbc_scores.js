@@ -507,6 +507,28 @@ function parseScorePair(text) {
   return null;
 }
 
+function formatPenaltyShootoutProgressStatus(homeScore, awayScore) {
+  if (!isScoreValue(homeScore) || !isScoreValue(awayScore)) return null;
+  return `P ${homeScore}-${awayScore}`;
+}
+
+function extractPenaltyShootoutProgressStatusFromText(text) {
+  const cleaned = normalizeText(text).replace(/[–—]/g, "-");
+  if (!cleaned || !/^penalt(?:y|ies)\b/i.test(cleaned)) return null;
+
+  const directPair = cleaned.match(/\b(\d+)\s*-\s*(\d+)\b/);
+  if (directPair) {
+    return formatPenaltyShootoutProgressStatus(directPair[1], directPair[2]);
+  }
+
+  const numbers = cleaned.match(/\b\d+\b/g);
+  if (numbers && numbers.length >= 2) {
+    return formatPenaltyShootoutProgressStatus(numbers[0], numbers[1]);
+  }
+
+  return null;
+}
+
 function parseAggregateScoreText(text) {
   const cleaned = normalizeText(text).replace(/[–—]/g, "-");
   if (!cleaned) return null;
@@ -621,6 +643,9 @@ function extractStatusFromText(text) {
   if (!cleaned) return null;
   const lower = cleaned.toLowerCase();
 
+  const penaltyProgress = extractPenaltyShootoutProgressStatusFromText(cleaned);
+  if (penaltyProgress) return penaltyProgress;
+
   // Special case: if text contains "win" and "penalties", it's a result description, not a status
   // Look for "AET" in the actual text instead
   if (lower.includes("win") && lower.includes("penalties")) {
@@ -628,13 +653,28 @@ function extractStatusFromText(text) {
   }
 
   for (const [phrase, code] of STATUS_ALIASES.entries()) {
-    if (lower.includes(phrase)) return code;
+    if (lower.includes(phrase)) {
+      const minuteCandidate = extractMinuteStatusFromText(cleaned);
+      if (minuteCandidate && code === "ET") return minuteCandidate;
+      return code;
+    }
   }
 
+  const minuteCandidate = extractMinuteStatusFromText(cleaned);
   const statusMatch = cleaned.match(/\b(HT|FT|AET|ET|Pens?)\b/i);
-  if (statusMatch) return normalizeStatusToken(statusMatch[1]);
+  if (statusMatch) {
+    const status = normalizeStatusToken(statusMatch[1]);
+    if (minuteCandidate && status === "ET") return minuteCandidate;
+    return status;
+  }
 
-  const minuteNormalized = cleaned.replace(/(\d{1,3})'\+(\d{1,2})/g, "$1+$2");
+  if (minuteCandidate) return minuteCandidate;
+
+  return null;
+}
+
+function extractMinuteStatusFromText(text) {
+  const minuteNormalized = normalizeText(text).replace(/(\d{1,3})'\+(\d{1,2})/g, "$1+$2");
   if (/^\d{1,3}(?:\+\d{1,2})?'?$/.test(minuteNormalized)) {
     return minuteNormalized.replace(/'$/, "");
   }
@@ -648,7 +688,6 @@ function extractStatusFromText(text) {
     const added = String(minuteWordsMatch[2] || "").trim();
     return added ? `${base}+${added}` : base;
   }
-
   return null;
 }
 
@@ -681,12 +720,29 @@ function extractStatus($node, $) {
   return null;
 }
 
-function extractStatusFromBbcNode($node, $) {
+function collectBbcStatusTextCandidates($node, $) {
   const statusEl = $node.find(BBC_STATUS_SELECTOR).first();
-  const statusText = statusEl.length ? normalizeText(statusEl.text()) : "";
-  const candidate = extractStatusFromText(statusText);
-  if (candidate && !isKickoffTime(candidate)) {
-    return candidate;
+  if (!statusEl.length) return [];
+
+  const candidates = [];
+  uniquePush(candidates, normalizeText(statusEl.text()));
+
+  const $wrapper = statusEl.closest("[class*='MatchProgressWrapper'], [class*='MatchProgressContainer']");
+  const $hiddenScope = $wrapper.length ? $wrapper : statusEl.parent();
+  $hiddenScope.find(BBC_HIDDEN_TEXT_SELECTOR).each((_, el) => {
+    uniquePush(candidates, normalizeText($(el).text()));
+  });
+
+  return candidates;
+}
+
+function extractStatusFromBbcNode($node, $) {
+  const candidates = collectBbcStatusTextCandidates($node, $);
+  for (const statusText of candidates) {
+    const candidate = extractStatusFromText(statusText);
+    if (candidate && !isKickoffTime(candidate)) {
+      return candidate;
+    }
   }
   return null;
 }
@@ -1620,15 +1676,16 @@ function parseMatchDetailsFromHtml(html, homeTeam = null, awayTeam = null) {
   const resolvedAwayTeam = requestedAwayTeam || fallbackTeamsFromHeader[1] || pageMetadata.away_team || null;
 
   // Parse match status/time from the page
-  const $status = $primaryScope.find(BBC_STATUS_SELECTOR).first();
   let matchTime = null;
-  if ($status.length) {
-    const statusText = normalizeText($status.text());
-    if (statusText) {
+  const statusCandidates = collectBbcStatusTextCandidates($primaryScope, $);
+  if (statusCandidates.length) {
+    for (const statusText of statusCandidates) {
       const parsedStatus = extractStatusFromText(statusText);
       if (parsedStatus) {
         matchTime = parsedStatus;
-      } else if (isKickoffTime(statusText)) {
+        break;
+      }
+      if (!matchTime && isKickoffTime(statusText)) {
         matchTime = statusText;
       }
     }
@@ -2151,6 +2208,82 @@ function pickEventStatus(event) {
   return bestStatus;
 }
 
+function pickPenaltyShootoutScore(team) {
+  if (!team || typeof team !== "object") return null;
+  const candidates = [
+    team.penaltyShootoutScore,
+    team.penalty_score,
+    team.penalties,
+    team.penaltyScore,
+  ];
+  for (const candidate of candidates) {
+    if (isScoreValue(candidate)) return String(candidate);
+  }
+  return null;
+}
+
+function pickPenaltyShootoutScoresFromParticipants(event) {
+  const participants = Array.isArray(event && event.participants) ? event.participants : [];
+  if (!participants.length) return null;
+
+  let home = null;
+  let away = null;
+  participants.forEach((participant, index) => {
+    if (!participant || typeof participant !== "object") return;
+
+    const score = pickPenaltyShootoutScore(participant);
+    if (!score) return;
+
+    const alignment = normalizeText(participant.alignment).toLowerCase();
+    if (alignment === "home" && home === null) {
+      home = score;
+      return;
+    }
+    if (alignment === "away" && away === null) {
+      away = score;
+      return;
+    }
+
+    if (index === 0 && home === null) home = score;
+    if (index === 1 && away === null) away = score;
+  });
+
+  if (!isScoreValue(home) || !isScoreValue(away)) return null;
+  return [home, away];
+}
+
+function extractPenaltyShootoutProgressStatusFromEvent(event) {
+  if (!event || typeof event !== "object") return null;
+
+  const lifecycleHints = [
+    event.status,
+    event.eventStatus,
+    event.state,
+    event.phase,
+  ];
+  if (lifecycleHints.some((value) => isPostEventLifecycleStatus(value))) {
+    return null;
+  }
+
+  const statusCandidates = pickEventStatusTextCandidates(event);
+  const hasPenaltyShootoutStatus = statusCandidates.some((candidate) => {
+    const parsed = extractStatusFromText(candidate);
+    return normalizeStatusToken(parsed) === "Pens" || /^penalt(?:y|ies)\b/i.test(normalizeText(candidate));
+  });
+  if (!hasPenaltyShootoutStatus) return null;
+
+  let homePenaltyScore = pickPenaltyShootoutScore(event.home);
+  let awayPenaltyScore = pickPenaltyShootoutScore(event.away);
+  if (!homePenaltyScore || !awayPenaltyScore) {
+    const participantScores = pickPenaltyShootoutScoresFromParticipants(event);
+    if (participantScores) {
+      [homePenaltyScore, awayPenaltyScore] = participantScores;
+    }
+  }
+
+  return formatPenaltyShootoutProgressStatus(homePenaltyScore, awayPenaltyScore);
+}
+
 function extractMatchFromEvent(event) {
   if (!event || typeof event !== "object") return null;
   const homeName = normalizeText(
@@ -2161,7 +2294,7 @@ function extractMatchFromEvent(event) {
   );
   if (!homeName || !awayName) return null;
 
-  const status = pickEventStatus(event);
+  const status = extractPenaltyShootoutProgressStatusFromEvent(event) || pickEventStatus(event);
   if (!status || isKickoffTime(status)) return null;
   const isPostponed = isPostponedStatus(status);
 
@@ -2261,7 +2394,7 @@ function extractMatchFromObject(node) {
   const away = pickString(node, ["awayTeam", "away_team", "away", "awayName", "away_team_name"]);
   if (!home || !away) return null;
 
-  const status = pickStatus(node);
+  const status = extractPenaltyShootoutProgressStatusFromEvent(node) || pickStatus(node);
   if (!status || isKickoffTime(status)) return null;
   const isPostponed = isPostponedStatus(status);
 
@@ -2783,7 +2916,7 @@ function extractScheduledMatchFromEvent(event, options = {}) {
   }
 
   // Check if match has started before including scores
-  const status = pickEventStatus(event);
+  const status = extractPenaltyShootoutProgressStatusFromEvent(event) || pickEventStatus(event);
   const hasMatchStatus = status && !isKickoffTime(status);
   const shouldIncludeScores = hasMatchStatus && !isPostponedStatus(status);
 

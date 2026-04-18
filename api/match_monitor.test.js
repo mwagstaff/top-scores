@@ -73,6 +73,11 @@ test("isMatchRelevant keeps recently kicked off fixtures eligible until live sta
   );
 });
 
+test("penalty shootout progress tallies are treated as live match status", () => {
+  assert.equal(__testHooks.isLiveMatchStatus("P 0-0"), true);
+  assert.equal(__testHooks.isPenaltyShootoutStatus("P 0-0"), true);
+});
+
 test("mergeSnapshotWithFallback preserves existing league when new payload omits it", () => {
   const merged = __testHooks.mergeSnapshotWithFallback(
     {

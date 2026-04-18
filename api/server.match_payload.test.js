@@ -48,6 +48,8 @@ const {
     isAllowedMatchDetailsPayload,
     matchPassesCompetitionTableValidation,
     collectDisallowedCompetitionTargets,
+    clearFootballOperationalMemoryState,
+    collectInProgressMatchDetailTargets,
     mergeBbcAndLiveMatches,
     matchIncludesHomeNation,
     matchIsMajorTournament,
@@ -55,11 +57,20 @@ const {
     isListPayloadVisibleForMode,
     mergeClubEloFixtureMetadata,
     operationalMatchSortDesc,
+    upsertMatchDetailsFromMatch,
   },
 } = require("./server");
 
 const DETAILS_ID = "c1e937445p2t";
 const DETAILS_URL = `https://www.bbc.co.uk/sport/football/live/${DETAILS_ID}`;
+
+function kickoffWithinLiveWindow() {
+  const kickoff = new Date(Date.now() - 60 * 60 * 1000);
+  return {
+    date: kickoff.toISOString().slice(0, 10),
+    time: kickoff.toISOString().slice(11, 16),
+  };
+}
 
 function baseMatch(overrides = {}) {
   return {
@@ -639,6 +650,11 @@ test("normalizeTeamName canonicalizes team aliases from shared identity config",
 test("normalizeMatchStatusValue canonicalizes postponed status", () => {
   assert.equal(normalizeMatchStatusValue("Match Postponed"), "POSTPONED");
   assert.equal(normalizeMatchStatusValue("POSTPONED"), "POSTPONED");
+});
+
+test("normalizeMatchStatusValue canonicalizes penalty shootout progress tallies", () => {
+  assert.equal(normalizeMatchStatusValue("P 0-0"), "P 0-0");
+  assert.equal(normalizeMatchStatusValue("p 4 - 3"), "P 4-3");
 });
 
 test("normalizeCompetitionFilterName maps World Cup qualifying competitions to the World Cup family", () => {
@@ -1549,6 +1565,24 @@ test("isListPayloadVisibleForMode keeps future fixtures visible without legacy B
         match_details_id: "cn43ql18lg8t",
       },
       "fixtures",
+      now
+    ),
+    true
+  );
+});
+
+test("isListPayloadVisibleForMode keeps penalty shootouts in progress visible in results", () => {
+  const now = new Date("2026-04-04T17:45:00Z");
+  assert.equal(
+    isListPayloadVisibleForMode(
+      {
+        date: "2026-04-04",
+        time: "17:15",
+        home_team: "Atletico Madrid",
+        away_team: "Real Sociedad",
+        score_status: "P 0-0",
+      },
+      "results",
       now
     ),
     true
@@ -2973,6 +3007,59 @@ test("markMatchDetailsActive enables short-lived refresh tracking for requested 
   assert.equal(isMatchDetailsActive(DETAILS_ID), true);
   assert.equal(markMatchDetailsActive("not-valid!"), false);
   assert.equal(isMatchDetailsActive("not-valid!"), false);
+});
+
+test("collectInProgressMatchDetailTargets includes live matches without active refresh markers", () => {
+  clearFootballOperationalMemoryState();
+  const kickoff = kickoffWithinLiveWindow();
+
+  upsertMatchDetailsFromMatch(
+    baseMatch({
+      ...kickoff,
+      details_url: DETAILS_URL,
+      score_status: "111",
+      home_score: 2,
+      away_score: 2,
+      has_bbc_source: true,
+    }),
+    "2026-03-03T21:21:00.000Z"
+  );
+
+  const targets = collectInProgressMatchDetailTargets();
+  assert.deepStrictEqual(
+    targets.map((target) => ({ id: target.id, details_url: target.details_url })),
+    [{ id: DETAILS_ID, details_url: DETAILS_URL }]
+  );
+
+  clearFootballOperationalMemoryState();
+});
+
+test("collectInProgressMatchDetailTargets keeps finished enrichment polling behind the active window", () => {
+  clearFootballOperationalMemoryState();
+  const kickoff = kickoffWithinLiveWindow();
+
+  upsertMatchDetailsFromMatch(
+    baseMatch({
+      ...kickoff,
+      details_url: DETAILS_URL,
+      score_status: "FT",
+      home_score: 1,
+      away_score: 0,
+      home_goal_scorers: [],
+      away_goal_scorers: [],
+    }),
+    "2026-03-03T21:30:00.000Z"
+  );
+
+  assert.deepStrictEqual(collectInProgressMatchDetailTargets(), []);
+
+  assert.equal(markMatchDetailsActive(DETAILS_ID), true);
+  assert.deepStrictEqual(
+    collectInProgressMatchDetailTargets().map((target) => target.id),
+    [DETAILS_ID]
+  );
+
+  clearFootballOperationalMemoryState();
 });
 
 test("matchDetailsNeedsBackfill refreshes cached records that are missing core metadata", () => {

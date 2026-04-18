@@ -860,6 +860,12 @@ test("extractStatusFromText parses minute-word formats", () => {
   assert.equal(__private.extractStatusFromText("45 minutes plus 2"), "45+2");
 });
 
+test("extractStatusFromText prefers the live minute for extra-time progress labels", () => {
+  assert.equal(__private.extractStatusFromText("111' ET"), "111");
+  assert.equal(__private.extractStatusFromText("111 minutes extra time , in progress"), "111");
+  assert.equal(__private.extractStatusFromText("After extra time"), "AET");
+});
+
 test("pickEventStatus prefers live minute over conflicting FT token", () => {
   const event = {
     periodLabel: { accessible: "24 minutes" },
@@ -908,6 +914,121 @@ test("parseMatchesFromDom ignores aggregate-only fixture cards", () => {
   const $ = cheerio.load(html);
   const parsed = __private.parseMatchesFromDom($);
   assert.deepStrictEqual(parsed, []);
+});
+
+test("parseMatchDetailsFromHtml prefers the live minute over ET on extra-time BBC headers", () => {
+  const html = `
+    <div class="ssrcss-xxm013-MatchProgressContainer e1efi6g50">
+      <div class="ssrcss-m3fdxs-MatchProgressWrapper ep2tsh21">
+        <span class="visually-hidden ssrcss-i2z2ig-VisuallyHidden e16en2lz0">111 minutes extra time , in progress</span>
+        <div aria-hidden="true" class="ssrcss-ym1hxj-StyledPeriod e307mhr0"><div>111' ET</div></div>
+      </div>
+    </div>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.equal(parsed.match_time, "111");
+  assert.equal(parsed.score_status, "111");
+});
+
+test("parseMatchDetailsFromHtml maps penalty shootout progress to a compact status label", () => {
+  const html = `
+    <article data-event-id="cy0130ned7yt">
+      <div data-participant-id="home">
+        <div class="TeamNameWrapper">
+          <span>Atletico Madrid</span>
+        </div>
+      </div>
+      <div data-testid="score">
+        <div class="HomeScore">2</div>
+        <div class="AwayScore">2</div>
+      </div>
+      <div data-participant-id="away">
+        <div class="TeamNameWrapper">
+          <span>Real Sociedad</span>
+        </div>
+      </div>
+      <div class="ssrcss-xxm013-MatchProgressContainer e1efi6g50">
+        <div class="ssrcss-m3fdxs-MatchProgressWrapper ep2tsh21">
+          <span class="visually-hidden ssrcss-i2z2ig-VisuallyHidden e16en2lz0">Penalties Atletico Madrid 0 , Real Sociedad 0</span>
+          <div aria-hidden="true" class="ssrcss-ym1hxj-StyledPeriod e307mhr0"><div>Penalties 0-0</div></div>
+        </div>
+      </div>
+    </article>
+  `;
+
+  const parsed = parseMatchDetailsFromHtml(html);
+  assert.ok(parsed);
+  assert.equal(parsed.match_time, "P 0-0");
+  assert.equal(parsed.score_status, "P 0-0");
+});
+
+test("parseScheduledMatchesFromJson keeps penalty shootout tallies while penalties are in progress", () => {
+  const initialData = {
+    eventGroups: [
+      {
+        secondaryGroups: [
+          {
+            events: [
+              {
+                home: {
+                  fullName: "Atletico Madrid",
+                  score: "2",
+                },
+                away: {
+                  fullName: "Real Sociedad",
+                  score: "2",
+                },
+                participants: [
+                  {
+                    alignment: "home",
+                    penaltyShootoutScore: "0",
+                  },
+                  {
+                    alignment: "away",
+                    penaltyShootoutScore: "0",
+                  },
+                ],
+                startDateTime: "2026-04-18T20:00:00Z",
+                tournament: "Copa del Rey",
+                status: "MidEvent",
+                periodLabel: {
+                  value: "PENS",
+                  accessible: "Match going to Penalties",
+                },
+                statusComment: {
+                  value: "PENS",
+                  accessible: "Match going to Penalties",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const escapedInitialData = JSON.stringify(JSON.stringify(initialData));
+  const html = `<script>window.__INITIAL_DATA__=${escapedInitialData};</script>`;
+
+  const matches = __private.parseScheduledMatchesFromJson(html, {
+    fallbackDate: "2026-04-18",
+    timeZone: "Europe/London",
+  });
+
+  assert.deepStrictEqual(matches, [
+    {
+      date: "2026-04-18",
+      time: "21:00",
+      league: "Copa del Rey",
+      home_team: "Atletico Madrid",
+      away_team: "Real Sociedad",
+      tv_channels: [],
+      home_score: 2,
+      away_score: 2,
+      score_status: "P 0-0",
+    },
+  ]);
 });
 
 test("parseLiveTextEntriesFromHtml extracts VAR overturned goal commentary and pagination", () => {

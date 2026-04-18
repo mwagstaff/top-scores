@@ -122,10 +122,6 @@ struct MatchesView: View {
         preferences.showAllMatches
     }
 
-    private var usesCompactFixtureRows: Bool {
-        preferences.fixturesViewDensity != .extended
-    }
-
     private var matchRowPreferences: MatchRowPreferences {
         MatchRowPreferences(
             preferences: preferences,
@@ -134,52 +130,20 @@ struct MatchesView: View {
     }
 
     private var compactFixturesSpacing: CompactFixturesSpacingProfile {
-        switch preferences.fixturesViewDensity {
-        case .extended:
-            return CompactFixturesSpacingProfile(
-                dayHeaderTopFirst: 6,
-                dayHeaderTop: 10,
-                dayHeaderBottom: 2,
-                leagueHeadingTop: 3,
-                leagueHeadingBottom: 2,
-                rowTop: 2,
-                rowBottom: 5,
-                minListRowHeight: 24
-            )
-        case .compact:
-            return CompactFixturesSpacingProfile(
-                dayHeaderTopFirst: 6,
-                dayHeaderTop: 10,
-                dayHeaderBottom: 2,
-                leagueHeadingTop: 3,
-                leagueHeadingBottom: 2,
-                rowTop: 2,
-                rowBottom: 5,
-                minListRowHeight: 24
-            )
-        case .ultraCompact:
-            return CompactFixturesSpacingProfile(
-                dayHeaderTopFirst: 4,
-                dayHeaderTop: 8,
-                dayHeaderBottom: 1,
-                leagueHeadingTop: 2,
-                leagueHeadingBottom: 1,
-                rowTop: 1,
-                rowBottom: 3,
-                minListRowHeight: 18
-            )
-        }
+        CompactFixturesSpacingProfile(
+            dayHeaderTopFirst: 6,
+            dayHeaderTop: 10,
+            dayHeaderBottom: 2,
+            leagueHeadingTop: 3,
+            leagueHeadingBottom: 2,
+            rowTop: 2,
+            rowBottom: 5,
+            minListRowHeight: 24
+        )
     }
 
     private var compactDayHeaderFont: Font {
-        switch preferences.fixturesViewDensity {
-        case .extended:
-            return .headline
-        case .compact:
-            return .headline
-        case .ultraCompact:
-            return .subheadline
-        }
+        .headline
     }
 
     private var normalizedDebouncedQuery: String {
@@ -416,40 +380,27 @@ struct MatchesView: View {
 
     private var matchesList: some View {
         List {
-            if usesCompactFixtureRows {
-                ForEach(Array(displayedMatchDays.enumerated()), id: \.element.id) { index, day in
-                    sectionHeader(for: day)
-                        .listRowInsets(
-                            EdgeInsets(
-                                top: index == 0
-                                    ? compactFixturesSpacing.dayHeaderTopFirst
-                                    : compactFixturesSpacing.dayHeaderTop,
-                                leading: 16,
-                                bottom: compactFixturesSpacing.dayHeaderBottom,
-                                trailing: 16
-                            )
+            ForEach(Array(displayedMatchDays.enumerated()), id: \.element.id) { index, day in
+                sectionHeader(for: day)
+                    .listRowInsets(
+                        EdgeInsets(
+                            top: index == 0
+                                ? compactFixturesSpacing.dayHeaderTopFirst
+                                : compactFixturesSpacing.dayHeaderTop,
+                            leading: 16,
+                            bottom: compactFixturesSpacing.dayHeaderBottom,
+                            trailing: 16
                         )
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+                    )
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
 
-                    compactLeagueRows(for: day)
-                }
-            } else {
-                ForEach(displayedMatchDays) { day in
-                    Section {
-                        standardLeagueRows(for: day)
-                    } header: {
-                        sectionHeader(for: day)
-                    }
-                }
+                compactLeagueRows(for: day)
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .environment(
-            \.defaultMinListRowHeight,
-            usesCompactFixtureRows ? compactFixturesSpacing.minListRowHeight : 44
-        )
+        .environment(\.defaultMinListRowHeight, compactFixturesSpacing.minListRowHeight)
         .safeAreaPadding(.bottom, 80)
         .refreshable {
             let refreshStart = Date()
@@ -468,7 +419,7 @@ struct MatchesView: View {
     private func sectionHeader(for day: MatchDay) -> some View {
         HStack(spacing: 12) {
             Text(day.displayDate)
-                .font(usesCompactFixtureRows ? compactDayHeaderFont : .title3)
+                .font(compactDayHeaderFont)
                 .fontWeight(.semibold)
 
             Spacer()
@@ -478,21 +429,6 @@ struct MatchesView: View {
             }
         }
         .textCase(nil)
-    }
-
-    @ViewBuilder
-    private func standardLeagueRows(for day: MatchDay) -> some View {
-        ForEach(day.leagues) { league in
-            leagueHeadingDividerRow(for: league)
-
-            ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
-                let prevTime: String? = index > 0 ? league.matches[index - 1].time : nil
-                if shouldShowKickoffDivider(currentTime: match.time, previousTime: prevTime) {
-                    kickoffDividerRow(time: match.time)
-                }
-                matchRow(for: match, day: day)
-            }
-        }
     }
 
     @ViewBuilder
@@ -519,16 +455,16 @@ struct MatchesView: View {
 
     private func leagueHeadingDividerRow(for league: MatchLeague) -> some View {
         Text(league.league)
-            .font(usesCompactFixtureRows ? .caption : .footnote)
+            .font(.caption)
             .fontWeight(.semibold)
             .foregroundStyle(.secondary.opacity(0.95))
             .textCase(nil)
             .frame(maxWidth: .infinity, alignment: .leading)
             .listRowInsets(
                 EdgeInsets(
-                    top: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingTop + 2 : 10,
+                    top: compactFixturesSpacing.leagueHeadingTop + 2,
                     leading: 16,
-                    bottom: usesCompactFixtureRows ? compactFixturesSpacing.leagueHeadingBottom : 3,
+                    bottom: compactFixturesSpacing.leagueHeadingBottom,
                     trailing: 16
                 )
             )
@@ -564,70 +500,42 @@ struct MatchesView: View {
             rowPreferences: matchRowPreferences,
             fantasyContext: fantasyViewModel.matchRowContext
         )
-        if usesCompactFixtureRows {
-            Button {
-                navigationMatch = MatchNavigation(
-                    match: match,
-                    highlightToday: day.isToday,
-                    showFantasyBadge: mode == .fixtures
-                )
-            } label: {
-                HStack(spacing: 0) {
-                    MatchesListRowLabel(
-                        match: match,
-                        isFixtureMode: mode == .fixtures,
-                        highlightToday: day.isToday,
-                        usesCompactFixtureRows: true,
-                        compactDensity: preferences.fixturesViewDensity,
-                        rowPreferences: matchRowPreferences,
-                        fantasyContext: fantasyViewModel.matchRowContext
-                    )
-                    .equatable()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(showFPLChevron ? .semibold : .regular))
-                        .foregroundStyle(showFPLChevron
-                            ? Color(red: 0.95, green: 0.20, blue: 0.66)
-                            : Color(.tertiaryLabel))
-                        .frame(width: 16)
-                }
-            }
-            .disabled(match.isPostponed)
-            .buttonStyle(.plain)
-            .listRowInsets(
-                EdgeInsets(
-                    top: compactFixturesSpacing.rowTop,
-                    leading: 16,
-                    bottom: compactFixturesSpacing.rowBottom,
-                    trailing: 0
-                )
+        Button {
+            navigationMatch = MatchNavigation(
+                match: match,
+                highlightToday: day.isToday,
+                showFantasyBadge: mode == .fixtures
             )
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-        } else {
-            NavigationLink {
-                MatchDetailView(
-                    match: match,
-                    highlightToday: day.isToday,
-                    showFantasyBadge: mode == .fixtures
-                )
-            } label: {
+        } label: {
+            HStack(spacing: 0) {
                 MatchesListRowLabel(
                     match: match,
                     isFixtureMode: mode == .fixtures,
                     highlightToday: day.isToday,
-                    usesCompactFixtureRows: false,
-                    compactDensity: preferences.fixturesViewDensity,
                     rowPreferences: matchRowPreferences,
                     fantasyContext: fantasyViewModel.matchRowContext
                 )
                 .equatable()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(showFPLChevron ? .semibold : .regular))
+                    .foregroundStyle(showFPLChevron
+                        ? Color(red: 0.95, green: 0.20, blue: 0.66)
+                        : Color(.tertiaryLabel))
+                    .frame(width: 16)
             }
-            .disabled(match.isPostponed)
-            .buttonStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
         }
+        .disabled(match.isPostponed)
+        .buttonStyle(.plain)
+        .listRowInsets(
+            EdgeInsets(
+                top: compactFixturesSpacing.rowTop,
+                leading: 16,
+                bottom: compactFixturesSpacing.rowBottom,
+                trailing: 0
+            )
+        )
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 
     private func matchDebugFooterText(for match: Match) -> String? {
@@ -670,8 +578,8 @@ struct MatchesView: View {
                     .font(.caption)
                     .fontWeight(.semibold)
             }
-            .padding(.horizontal, usesCompactFixtureRows ? 9 : 10)
-            .padding(.vertical, usesCompactFixtureRows ? 4 : 6)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
             .background(
                 Capsule()
                     .fill(Color(.tertiarySystemBackground))
@@ -1168,8 +1076,6 @@ private struct MatchesListRowLabel: View, Equatable {
     let match: Match
     let isFixtureMode: Bool
     let highlightToday: Bool
-    let usesCompactFixtureRows: Bool
-    let compactDensity: FixturesViewDensity
     let rowPreferences: MatchRowPreferences
     let fantasyContext: FantasyMatchRowContext
 
@@ -1181,9 +1087,8 @@ private struct MatchesListRowLabel: View, Equatable {
             showFantasyBadge: isFixtureMode,
             showFantasyPlayerContributions: isFixtureMode,
             teamLogoScale: 1.1,
-            showsFinishedInlineAggregateBrackets: usesCompactFixtureRows,
-            layoutStyle: usesCompactFixtureRows ? .compactFixture : .standard,
-            compactDensity: compactDensity,
+            showsFinishedInlineAggregateBrackets: true,
+            layoutStyle: .compactFixture,
             fantasyContext: fantasyContext,
             rowPreferences: rowPreferences
         )

@@ -1091,6 +1091,7 @@ enum MatchStatusFormatter {
     private nonisolated static let completeTokens: Set<String> = ["FT", "AET"]
     private nonisolated static let postponedTokens: Set<String> = ["POSTPONED", "MATCH POSTPONED"]
     private nonisolated static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
+    private nonisolated static let penaltyProgressPattern = #"^P\s+(\d+)\s*-\s*(\d+)$"#
     private nonisolated static let maximumLiveWindow: TimeInterval = 3.5 * 60 * 60
 
     nonisolated static func displayValue(for rawStatus: String) -> String {
@@ -1110,6 +1111,7 @@ enum MatchStatusFormatter {
         let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return false }
         if isMinuteStatus(status) { return true }
+        if isPenaltyShootoutStatus(status) { return true }
 
         let token = status.uppercased()
         if completeTokens.contains(token) { return false }
@@ -1162,6 +1164,18 @@ enum MatchStatusFormatter {
             return incomingStatus
         default:
             break
+        }
+
+        let currentPenalty = isPenaltyShootoutStatus(currentStatus)
+        let incomingPenalty = isPenaltyShootoutStatus(incomingStatus)
+        if currentPenalty, !incomingPenalty {
+            return currentStatus
+        }
+        if incomingPenalty, !currentPenalty {
+            return incomingStatus
+        }
+        if currentPenalty, incomingPenalty {
+            return incomingStatus
         }
 
         let currentMinute = parseMatchTimeMinutes(currentStatus)
@@ -1232,6 +1246,9 @@ enum MatchStatusFormatter {
             let added = components.count > 1 ? Int(components[1].trimmingCharacters(in: CharacterSet(charactersIn: "'"))) ?? 0 : 0
             return base + added
         }
+        if matchTime.range(of: penaltyProgressPattern, options: .regularExpression) != nil {
+            return 120
+        }
 
         let upper = matchTime.uppercased()
         if upper.contains("HT") || upper.contains("HALF") { return 45 }
@@ -1262,7 +1279,10 @@ enum MatchStatusFormatter {
     }
 
     private nonisolated static func isPenaltyShootoutStatus(_ status: String) -> Bool {
-        status == "PENS" || status == "PEN" || status == "PEN."
+        status == "PENS" ||
+        status == "PEN" ||
+        status == "PEN." ||
+        status.range(of: penaltyProgressPattern, options: .regularExpression) != nil
     }
 
     private nonisolated static func trimmedStatus(_ value: String?) -> String? {
@@ -1275,6 +1295,14 @@ enum MatchStatusFormatter {
     private nonisolated static func canonicalStatus(_ value: String?) -> String? {
         guard let value = trimmedStatus(value) else {
             return nil
+        }
+        if let match = value.range(of: penaltyProgressPattern, options: .regularExpression) {
+            let parts = value[match]
+                .split(whereSeparator: { !$0.isNumber })
+                .map(String.init)
+            if parts.count >= 2 {
+                return "P \(parts[0])-\(parts[1])"
+            }
         }
         let uppercased = value.uppercased()
         if postponedTokens.contains(uppercased) {

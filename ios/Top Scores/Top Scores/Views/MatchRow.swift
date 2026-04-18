@@ -64,7 +64,6 @@ struct MatchRow: View {
     var teamLogoScale: CGFloat = 1.0
     var showsFinishedInlineAggregateBrackets: Bool = false
     var layoutStyle: MatchRowLayoutStyle = .standard
-    var compactDensity: FixturesViewDensity = .compact
     var fantasyContext: FantasyMatchRowContext = .empty
     var rowPreferences: MatchRowPreferences = .disabledFantasy
     var body: some View {
@@ -451,7 +450,7 @@ struct MatchRow: View {
         case .standard:
             return .subheadline
         case .compactFixture:
-            return compactDensity == .compact ? .subheadline : .footnote
+            return .subheadline
         }
     }
 
@@ -467,7 +466,7 @@ struct MatchRow: View {
         case .standard:
             return .headline
         case .compactFixture:
-            return compactDensity == .compact ? .headline : .subheadline
+            return .headline
         }
     }
 
@@ -479,7 +478,7 @@ struct MatchRow: View {
         case .standard:
             return .caption
         case .compactFixture:
-            return compactDensity == .compact ? .caption : .caption2
+            return .caption
         }
     }
 
@@ -492,7 +491,7 @@ struct MatchRow: View {
             case .standard:
                 baseSize = 22
             case .compactFixture:
-                baseSize = compactDensity == .compact ? 20 : 18
+                baseSize = 20
             }
         }
         return baseSize * teamLogoScale
@@ -506,7 +505,7 @@ struct MatchRow: View {
         case .standard:
             return 12
         case .compactFixture:
-            return compactDensity == .compact ? 8 : 6
+            return 8
         }
     }
 
@@ -527,11 +526,11 @@ struct MatchRow: View {
     }
 
     private var compactAccessorySlotWidth: CGFloat {
-        compactDensity == .compact ? 20 : 18
+        20
     }
 
     private var compactAccessorySlotHeight: CGFloat {
-        compactDensity == .compact ? 20 : 18
+        20
     }
 
     private var compactBroadcastAccessorySlot: some View {
@@ -640,17 +639,20 @@ struct MatchRow: View {
                     isLive: true,
                     isLargePresentation: false
                 )
+                .fixedSize(horizontal: true, vertical: false)
             } else {
                 Text(compactTrailingAccessoryText)
                     .font(compactKickoffAccessoryFont)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .lineLimit(1)
-                    .minimumScaleFactor(0.9)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
-        .frame(minWidth: compactStatusAccessoryMinWidth, alignment: compactStatusAccessoryAlignment)
+        .frame(width: compactStatusAccessoryWidth, alignment: compactStatusAccessoryAlignment)
         .frame(height: compactAccessorySlotHeight, alignment: compactStatusAccessoryAlignment)
+        .layoutPriority(2)
     }
 
     private var compactInProgressCenterAccessory: some View {
@@ -790,15 +792,15 @@ struct MatchRow: View {
     }
 
     private var compactFixtureVerticalSpacing: CGFloat {
-        compactDensity == .compact ? 8 : 6
+        8
     }
 
     private var compactFixtureHorizontalSpacing: CGFloat {
-        compactDensity == .compact ? 6 : 4
+        6
     }
 
-    private var compactStatusAccessoryMinWidth: CGFloat {
-        compactDensity == .compact ? 40 : 36
+    private var compactStatusAccessoryWidth: CGFloat {
+        62
     }
 
     private var compactStatusAccessoryAlignment: Alignment {
@@ -806,15 +808,15 @@ struct MatchRow: View {
     }
 
     private var compactCenterPlaceholderFont: Font {
-        compactDensity == .compact ? .caption2 : .caption2
+        .caption2
     }
 
     private var compactCenterScoreSeparatorFont: Font {
-        compactDensity == .compact ? .caption : .caption2
+        .caption
     }
 
     private var compactKickoffAccessoryFont: Font {
-        compactDensity == .compact ? .caption : .caption2
+        .caption
     }
 
     private var homeTeamEvents: [MatchTeamTimelineEvent] {
@@ -1420,6 +1422,8 @@ private struct MatchTimeStatusView: View {
             .fontWeight(isLive ? .semibold : .regular)
             .foregroundStyle(isLive ? Color.red : Color.secondary)
             .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.9)
             .padding(.horizontal, isLive ? 8 : 0)
             .padding(.vertical, isLive ? 5 : 0)
             .frame(minWidth: isLive ? 28 : nil)

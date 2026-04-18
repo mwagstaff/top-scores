@@ -94,28 +94,15 @@ struct PreferencesView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
-                        Picker("Fixtures view", selection: fixturesViewDensityBinding) {
-                            ForEach(FixturesViewDensity.allCases) { density in
-                                Text(density.title).tag(density)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        Text("Extended shows a roomy 2-row layout, including TV channel information. Compact is a more compact single-line layout. Choose Ultra Compact for the tightest view.")
+                        Toggle("TV channel logo", isOn: showCompactFixtureTvLogoBinding)
+                        Text("Shows the primary TV channel logo on the right side of fixture rows.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
-                        if preferences.fixturesViewDensity != .extended {
-                            Toggle("TV channel logo", isOn: showCompactFixtureTvLogoBinding)
-                            Text("Shows the primary TV channel logo on the right side of compact fixture lozenges.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            Toggle("Fantasy Premier League indicator", isOn: showCompactFixtureFantasyLogoBinding)
-                            Text("Shows a pink chevron on compact fixture lozenges when your squad has one or more players involved in the match.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                        Toggle("Fantasy Premier League indicator", isOn: showCompactFixtureFantasyLogoBinding)
+                        Text("Shows a pink chevron on fixture rows when your squad has one or more players involved in the match.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
 
                         Toggle("Kick-off time dividers", isOn: showKickoffTimeDividersBinding)
                         Text("Shows kick-off time divider headings to easily distinguish different match kick-off times")
@@ -552,13 +539,6 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.showTodayUnfinishedFixturesBadge },
             set: { preferences.showTodayUnfinishedFixturesBadge = $0 }
-        )
-    }
-
-    private var fixturesViewDensityBinding: Binding<FixturesViewDensity> {
-        Binding(
-            get: { preferences.fixturesViewDensity },
-            set: { preferences.fixturesViewDensity = $0 }
         )
     }
 

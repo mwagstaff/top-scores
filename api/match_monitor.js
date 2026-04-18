@@ -111,6 +111,7 @@ const MATCH_STATUS_COMPLETE_TOKENS = new Set(["FT", "AET"]);
 const MATCH_STATUS_IN_PROGRESS_TOKENS = new Set(["LIVE", "HT", "ET", "PENS", "PEN", "PEN."]);
 const MATCH_STATUS_PENALTY_TOKENS = new Set(["PENS", "PEN", "PEN."]);
 const MATCH_STATUS_POSTPONED_TOKENS = new Set(["POSTPONED", "MATCH POSTPONED"]);
+const MATCH_STATUS_PENALTY_PROGRESS_PATTERN = /^P\s+(\d+)\s*-\s*(\d+)$/i;
 const SNAPSHOT_NULL_CLEAR_FIELDS = new Set(["aggregate_home_score", "aggregate_away_score"]);
 
 function shortDeviceToken(deviceToken) {
@@ -178,7 +179,12 @@ function resetMonitorDiagnostics() {
 }
 
 function normalizeStatusToken(status) {
-  return String(status || "").trim().toUpperCase();
+  const normalized = String(status || "").trim();
+  const penaltyProgress = normalized.match(MATCH_STATUS_PENALTY_PROGRESS_PATTERN);
+  if (penaltyProgress) {
+    return `P ${penaltyProgress[1]}-${penaltyProgress[2]}`;
+  }
+  return normalized.toUpperCase();
 }
 
 function parseStatusMinute(status) {
@@ -346,6 +352,7 @@ function isLiveMatchStatus(status) {
   const normalized = String(status || "").trim();
   if (!normalized) return false;
   if (MATCH_STATUS_MINUTE_PATTERN.test(normalized)) return true;
+  if (MATCH_STATUS_PENALTY_PROGRESS_PATTERN.test(normalized)) return true;
   return MATCH_STATUS_IN_PROGRESS_TOKENS.has(normalized.toUpperCase());
 }
 
@@ -356,7 +363,8 @@ function isFinishedMatchStatus(status) {
 }
 
 function isPenaltyShootoutStatus(status) {
-  return MATCH_STATUS_PENALTY_TOKENS.has(normalizeStatusToken(status));
+  const normalized = normalizeStatusToken(status);
+  return MATCH_STATUS_PENALTY_TOKENS.has(normalized) || MATCH_STATUS_PENALTY_PROGRESS_PATTERN.test(normalized);
 }
 
 function hasPenaltyShootoutResult(match) {
@@ -4249,6 +4257,10 @@ function monitoredMatchStatesSnapshot(nowMs = Date.now()) {
 function displayStatusToken(status) {
   const value = String(status || "").trim();
   if (!value) return null;
+  const penaltyProgress = value.match(MATCH_STATUS_PENALTY_PROGRESS_PATTERN);
+  if (penaltyProgress) {
+    return `P ${penaltyProgress[1]}-${penaltyProgress[2]}`;
+  }
   if (MATCH_STATUS_MINUTE_PATTERN.test(value)) {
     return value.includes("'") ? value : `${value}'`;
   }

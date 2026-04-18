@@ -7892,6 +7892,7 @@ const MATCH_STATUS_IN_PROGRESS_TOKENS = new Set(["LIVE", "HT", "ET", "PENS", "PE
 const MATCH_STATUS_COMPLETE_TOKENS = new Set(["FT", "AET"]);
 const MATCH_STATUS_POSTPONED_TOKENS = new Set(["POSTPONED", "MATCH POSTPONED"]);
 const MATCH_STATUS_MINUTE_PATTERN = /^\d{1,3}(?:\+\d{1,2})?'?$/;
+const MATCH_STATUS_PENALTY_PROGRESS_PATTERN = /^P\s+(\d+)\s*-\s*(\d+)$/i;
 const MATCH_DETAILS_ID_PATTERN = /^[a-z0-9]+$/i;
 const SYNTHETIC_MATCH_ID_PREFIX = "syn";
 const MATCH_DETAILS_EVENT_FIELDS = [
@@ -8044,6 +8045,10 @@ function normalizeMatchStatusValue(status) {
   if (MATCH_STATUS_MINUTE_PATTERN.test(normalized)) {
     return normalized.replace(/'$/, "");
   }
+  const penaltyProgressMatch = normalized.match(MATCH_STATUS_PENALTY_PROGRESS_PATTERN);
+  if (penaltyProgressMatch) {
+    return `P ${penaltyProgressMatch[1]}-${penaltyProgressMatch[2]}`;
+  }
 
   const token = normalized.toUpperCase();
   if (MATCH_STATUS_POSTPONED_TOKENS.has(token)) return "POSTPONED";
@@ -8087,6 +8092,7 @@ function isFirstHalfMinuteStatus(status) {
 function isPenaltyShootoutStatusToken(status) {
   const normalized = normalizeMatchStatusValue(status);
   if (!normalized) return false;
+  if (MATCH_STATUS_PENALTY_PROGRESS_PATTERN.test(normalized)) return true;
   const token = normalized.toUpperCase();
   return token === "PENS" || token === "PEN" || token === "PEN.";
 }
@@ -8115,6 +8121,8 @@ function pickPreferredMatchStatus(existingStatus, incomingStatus, options = {}) 
   const incomingFinished = MATCH_STATUS_COMPLETE_TOKENS.has(incomingToken);
   const existingPostponed = isPostponedMatchStatus(existing);
   const incomingPostponed = isPostponedMatchStatus(incoming);
+  const existingPenalty = isPenaltyShootoutStatusToken(existing);
+  const incomingPenalty = isPenaltyShootoutStatusToken(incoming);
   const existingMinute = parseMatchStatusMinute(existing);
   const incomingMinute = parseMatchStatusMinute(incoming);
   const incomingLive =
@@ -8131,6 +8139,12 @@ function pickPreferredMatchStatus(existingStatus, incomingStatus, options = {}) 
     return incoming;
   }
   if (existingPostponed && incomingPostponed) {
+    return preferIncomingOnTie ? incoming : existing;
+  }
+
+  if (existingPenalty && !incomingPenalty) return existing;
+  if (incomingPenalty && !existingPenalty) return incoming;
+  if (existingPenalty && incomingPenalty) {
     return preferIncomingOnTie ? incoming : existing;
   }
 
@@ -8187,6 +8201,7 @@ function isInProgressMatchStatus(status) {
   const normalized = normalizeMatchStatusValue(status);
   if (!normalized) return false;
   if (MATCH_STATUS_MINUTE_PATTERN.test(normalized)) return true;
+  if (isPenaltyShootoutStatusToken(normalized)) return true;
 
   const token = normalized.toUpperCase();
   if (MATCH_STATUS_COMPLETE_TOKENS.has(token)) return false;
@@ -8633,7 +8648,7 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
 
   // If we have a penalty result (shootout complete) and status is "Pens", change to "AET"
   // The JSON data often has "Pens" status, but the HTML shows "AET" when complete
-  if (merged.penalty_result && (merged.score_status === "Pens" || merged.score_status === "PEN" || merged.score_status === "PEN.")) {
+  if (merged.penalty_result && isPenaltyShootoutStatusToken(merged.score_status)) {
     merged.score_status = "AET";
   }
 
@@ -9439,7 +9454,6 @@ async function rebuildMatchDetailsCache(source = "match_details_rebuild") {
 function collectInProgressMatchDetailTargets() {
   const nowMs = Date.now();
   pruneInactiveMatchDetailsRefreshEntries(nowMs);
-  if (matchDetailsActiveRefreshUntilById.size === 0) return [];
 
   const targets = new Map();
   const upsertTarget = (detailsPayload) => {
@@ -9448,19 +9462,24 @@ function collectInProgressMatchDetailTargets() {
 
     const detailsId = normalizeMatchDetailsId(stablePayload.id);
     if (!detailsId) return;
-    if (!isMatchDetailsActive(detailsId, nowMs)) return;
 
     const detailsUrl = String(stablePayload.details_url || "").trim();
     if (!detailsUrl) return;
 
     const isInProgress = Boolean(stablePayload.in_progress);
-    // Also keep recently-finished active matches in the poll target list when:
+    const isActive = isMatchDetailsActive(detailsId, nowMs);
+    if (!isInProgress && !isActive) {
+      targets.delete(detailsId);
+      return;
+    }
+    // Poll all genuinely live matches every interval. For non-live matches,
+    // only keep recently-finished active matches in the poll target list when:
     // (a) score > 0 but goal scorers are missing (standard enrichment gap), OR
     // (b) the record has a final status but no goal scorers at all — covers the
     //     case where the stored score is 0/null even though the actual result was
     //     non-zero (scrape happened before score was available).
-    // The active-window guard ensures we only poll matches the client is actually
-    // interested in — inactive finished matches are not included.
+    // The active-window guard only applies to finished matches, so inactive
+    // historical records are not kept in the poll set.
     const isFinalStatus = !isInProgress &&
       MATCH_STATUS_COMPLETE_TOKENS.has(
         String(resolveMatchScoreStatus(stablePayload) || "").toUpperCase()
@@ -10463,7 +10482,7 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
   }
 
   // If we have a penalty result (shootout complete) and status is "Pens", change to "AET"
-  if (merged.penalty_result && (merged.score_status === "Pens" || merged.score_status === "PEN" || merged.score_status === "PEN.")) {
+  if (merged.penalty_result && isPenaltyShootoutStatusToken(merged.score_status)) {
     merged.score_status = "AET";
   }
 
@@ -13825,6 +13844,7 @@ function clearFootballOperationalMemoryState() {
   cachedNationalEloTeams = [];
   nationalEloLastUpdated = null;
   matchDetailsById = new Map();
+  matchDetailsActiveRefreshUntilById.clear();
   matchDetailsLastUpdated = null;
   scrapedTeamShortNamesByKey = new Map();
   scrapedTeamShortNamesLastUpdated = null;
@@ -22216,7 +22236,7 @@ app.get(`${API_PREFIX}/bbc/live`, async (_req, res) => {
   // Rewrite completed penalty shootouts from canonical match-details state so clients do not
   // display transient shootout tallies instead of the settled post-AET scoreline.
   const transformedMatches = bbcLiveDataset.items.map((match) => {
-    if (match.match_time === "Pens" || match.match_time === "PEN" || match.match_time === "PEN.") {
+    if (isPenaltyShootoutStatusToken(match.match_time)) {
       const detailsId = matchDetailsIdFromUrl(match.details_url);
       if (detailsId) {
         const matchDetails =
@@ -27173,6 +27193,7 @@ module.exports = {
     buildTeamRankingsResponseCacheKey,
     inspectOperationalStateReadiness,
     clearFootballOperationalMemoryState,
+    collectInProgressMatchDetailTargets,
     reloadOperationalStateDomainsFromRedis,
     pollCacheStateAndRefreshFromRedis,
     startApiIntervals,
@@ -27181,6 +27202,7 @@ module.exports = {
     buildLiveActivityTestPresets,
     resolveLiveActivityTestPreset,
     operationalMatchSortDesc,
+    upsertMatchDetailsFromMatch,
     preferencesSaveShouldTriggerLiveActivityReconcile,
     liveActivityReconcileTriggerForPreferencesSave,
   },
