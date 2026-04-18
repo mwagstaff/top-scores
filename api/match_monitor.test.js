@@ -3298,6 +3298,84 @@ test("buildLiveActivityPresentationForUser ignores stale delayed snapshots and r
   assert.equal(presentation.matches[0].away_score, 0);
 });
 
+test("buildLiveActivityPresentationForUser hides scores when full delay buffer exists but delayed snapshot is missing", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 85 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(2),
+    [
+      {
+        matchId: "c-delayed-missing",
+        state: {
+          lastState: {
+            match_details_id: "c-delayed-missing",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "Premier League",
+            home_team: "Arsenal",
+            away_team: "Chelsea",
+            home_score: 1,
+            away_score: 0,
+            score_status: "55",
+            updated_at: new Date(nowMs - 10 * 60 * 1000).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 10 * 60 * 1000,
+              match: {
+                match_details_id: "c-delayed-missing",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Premier League",
+                home_team: "Arsenal",
+                away_team: "Chelsea",
+                home_score: 1,
+                away_score: 0,
+                score_status: "55",
+              },
+            },
+            {
+              timestampMs: kickoffMs - 60 * 1000,
+              match: {
+                match_details_id: "c-delayed-missing",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "Premier League",
+                home_team: "Arsenal",
+                away_team: "Chelsea",
+                home_score: 0,
+                away_score: 0,
+                score_status: null,
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "c-delayed-missing",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Chelsea",
+          home_score: 1,
+          away_score: 0,
+          score_status: "55",
+          updated_at: new Date(nowMs - 10 * 60 * 1000).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].home_score, null);
+  assert.equal(presentation.matches[0].away_score, null);
+  assert.equal(presentation.matches[0].score_status, "53");
+});
+
 test("buildLiveActivityPresentationForUser uses delayed snapshot goal timeline when current scorer arrays are missing", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 92 * 60 * 1000;

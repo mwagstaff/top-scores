@@ -5517,6 +5517,25 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
       const delayedHasAggregateAway =
         delayed && Object.prototype.hasOwnProperty.call(delayed, "aggregate_away_score");
       const delayedScoreOverride = delayedScoreOverrideFromTimeline(currentMatch, delayed);
+      if (!delayed && !delayedLiveState && !delayedScoreOverride) {
+        upcomingMatches.push(
+          sanitizeAggregateForLiveActivity(
+            sanitizePreKickoffScoresForLiveActivity(
+              {
+                ...currentMatch,
+                home_score: null,
+                away_score: null,
+                score_status: null,
+                aggregate_home_score: null,
+                aggregate_away_score: null,
+              },
+              nowMs,
+              "presentation_missing_delayed_snapshot"
+            )
+          )
+        );
+        continue;
+      }
       const currentClearsAggregateHome =
         currentMatch &&
         Object.prototype.hasOwnProperty.call(currentMatch, "aggregate_home_score") &&
@@ -5532,17 +5551,23 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
             ? delayedLiveState.home_score
             : delayedScoreOverride && Number.isFinite(delayedScoreOverride.home_score)
             ? delayedScoreOverride.home_score
-            : delayed.home_score,
+            : delayed && delayed.home_score !== undefined
+            ? delayed.home_score
+            : null,
         away_score:
           delayedLiveState && delayedLiveState.away_score !== undefined
             ? delayedLiveState.away_score
             : delayedScoreOverride && Number.isFinite(delayedScoreOverride.away_score)
             ? delayedScoreOverride.away_score
-            : delayed.away_score,
+            : delayed && delayed.away_score !== undefined
+            ? delayed.away_score
+            : null,
         score_status:
           delayedLiveState && delayedLiveState.score_status
             ? delayedLiveState.score_status
-            : delayed.score_status || currentMatch.score_status,
+            : delayed && delayed.score_status
+            ? delayed.score_status
+            : currentMatch.score_status,
         // Keep aggregate values on the same delayed timeline as primary scores/status.
         aggregate_home_score: currentClearsAggregateHome
           ? null

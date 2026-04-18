@@ -18,8 +18,9 @@ PROJECT_NAME="${SCRIPT_DIR:t}"
 LOCAL_DIR="$SCRIPT_DIR"
 REMOTE_DIR="~/dev/${PROJECT_NAME}"
 
-# Generate service label based on project name
-SERVICE_LABEL="com.${PROJECT_NAME}.api"
+# Generate service labels based on project name
+API_SERVICE_LABEL="com.${PROJECT_NAME}.api"
+SCRAPER_SERVICE_LABEL="com.${PROJECT_NAME}.scraper"
 
 # Optional: if you want to deploy a specific branch/commit state, you could
 # add git checks here (not included by default).
@@ -74,40 +75,47 @@ ssh "$HOST" "export PATH='/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'; \
     npm install --omit=dev
   fi"
 
-echo "==> Setting up and restarting service..."
+echo "==> Setting up and restarting services..."
 ssh "$HOST" "
   set -e
   REMOTE_DIR_EXPANDED=\$(eval echo $REMOTE_DIR)
+  API_ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/server.js\"
+  SCRAPER_ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/scraper.js\"
+  API_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}.log\"
+  API_ERROR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}.error.log\"
+  SCRAPER_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-scraper.log\"
+  SCRAPER_ERROR_LOG_FILE=\"\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}-scraper.error.log\"
 
-  # Detect which entry file to use (server.js or index.js)
-  if [[ -f \"\$REMOTE_DIR_EXPANDED/server.js\" ]]; then
-    ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/server.js\"
-    echo 'Using server.js as entry point'
-  elif [[ -f \"\$REMOTE_DIR_EXPANDED/index.js\" ]]; then
-    ENTRY_FILE=\"\$REMOTE_DIR_EXPANDED/index.js\"
-    echo 'Using index.js as entry point'
-  else
-    echo \"Error: Neither server.js nor index.js found in \$REMOTE_DIR_EXPANDED\" >&2
+  if [[ ! -f \"\$API_ENTRY_FILE\" ]]; then
+    echo \"Error: API entry file not found at \$API_ENTRY_FILE\" >&2
+    exit 1
+  fi
+  if [[ ! -f \"\$SCRAPER_ENTRY_FILE\" ]]; then
+    echo \"Error: scraper entry file not found at \$SCRAPER_ENTRY_FILE\" >&2
     exit 1
   fi
 
   # Detect OS and use appropriate service manager
   if [[ \"\$OSTYPE\" == \"darwin\"* ]] || command -v launchctl >/dev/null 2>&1; then
     echo \"==> Using launchd (macOS)\"
-    PLIST=\"\$HOME/Library/LaunchAgents/${SERVICE_LABEL}.plist\"
     DOMAIN=\"gui/\$(id -u)\"
 
     # Create LaunchAgent directory if it doesn't exist
     mkdir -p \"\$HOME/Library/LaunchAgents\"
 
-    # Create plist file
-    cat > \"\$PLIST\" << 'EOF_PLIST'
+    write_launchd_service() {
+      local label=\"\$1\"
+      local entry_file=\"\$2\"
+      local log_file=\"\$3\"
+      local error_log_file=\"\$4\"
+      local plist=\"\$HOME/Library/LaunchAgents/\${label}.plist\"
+      cat > \"\$plist\" << 'EOF_PLIST'
 <?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\">
 <dict>
   <key>Label</key>
-  <string>${SERVICE_LABEL}</string>
+  <string>LABEL_PLACEHOLDER</string>
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/node</string>
@@ -120,9 +128,9 @@ ssh "$HOST" "
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>REMOTE_DIR_PLACEHOLDER/${PROJECT_NAME}.log</string>
+  <string>LOG_FILE_PLACEHOLDER</string>
   <key>StandardErrorPath</key>
-  <string>REMOTE_DIR_PLACEHOLDER/${PROJECT_NAME}.error.log</string>
+  <string>ERROR_LOG_FILE_PLACEHOLDER</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -131,54 +139,79 @@ ssh "$HOST" "
 </dict>
 </plist>
 EOF_PLIST
+      sed -i '' \"s|LABEL_PLACEHOLDER|\$label|g\" \"\$plist\"
+      sed -i '' \"s|ENTRY_FILE_PLACEHOLDER|\$entry_file|g\" \"\$plist\"
+      sed -i '' \"s|REMOTE_DIR_PLACEHOLDER|\$REMOTE_DIR_EXPANDED|g\" \"\$plist\"
+      sed -i '' \"s|LOG_FILE_PLACEHOLDER|\$log_file|g\" \"\$plist\"
+      sed -i '' \"s|ERROR_LOG_FILE_PLACEHOLDER|\$error_log_file|g\" \"\$plist\"
+    }
 
-    # Replace placeholders
-    sed -i '' \"s|ENTRY_FILE_PLACEHOLDER|\$ENTRY_FILE|g\" \"\$PLIST\"
-    sed -i '' \"s|REMOTE_DIR_PLACEHOLDER|\$REMOTE_DIR_EXPANDED|g\" \"\$PLIST\"
+    restart_launchd_service() {
+      local label=\"\$1\"
+      local plist=\"\$HOME/Library/LaunchAgents/\${label}.plist\"
+      launchctl bootout \"\$DOMAIN/\$label\" 2>/dev/null || true
+      launchctl bootstrap \"\$DOMAIN\" \"\$plist\"
+      launchctl enable \"\$DOMAIN/\$label\" || true
+      launchctl kickstart -k \"\$DOMAIN/\$label\"
+    }
 
-    # Restart service
-    launchctl bootout \"\$DOMAIN/$SERVICE_LABEL\" 2>/dev/null || true
-    launchctl bootstrap \"\$DOMAIN\" \"\$PLIST\"
-    launchctl enable \"\$DOMAIN/$SERVICE_LABEL\" || true
-    launchctl kickstart -k \"\$DOMAIN/$SERVICE_LABEL\"
-    echo 'Service restarted via launchd'
+    write_launchd_service \"${SCRAPER_SERVICE_LABEL}\" \"\$SCRAPER_ENTRY_FILE\" \"\$SCRAPER_LOG_FILE\" \"\$SCRAPER_ERROR_LOG_FILE\"
+    restart_launchd_service \"${SCRAPER_SERVICE_LABEL}\"
+    echo 'Scraper service restarted via launchd'
+
+    write_launchd_service \"${API_SERVICE_LABEL}\" \"\$API_ENTRY_FILE\" \"\$API_LOG_FILE\" \"\$API_ERROR_LOG_FILE\"
+    restart_launchd_service \"${API_SERVICE_LABEL}\"
+    echo 'API service restarted via launchd'
 
   elif command -v systemctl >/dev/null 2>&1; then
     echo \"==> Using systemd (Linux)\"
-    SERVICE_FILE=\"\$HOME/.config/systemd/user/${SERVICE_LABEL}.service\"
 
     # Create systemd user directory
     mkdir -p \"\$HOME/.config/systemd/user\"
 
-    # Create systemd service file
-    cat > \"\$SERVICE_FILE\" << EOF_SYSTEMD
+    write_systemd_service() {
+      local label=\"\$1\"
+      local entry_file=\"\$2\"
+      local log_file=\"\$3\"
+      local error_log_file=\"\$4\"
+      local description=\"\$5\"
+      local service_file=\"\$HOME/.config/systemd/user/\${label}.service\"
+      cat > \"\$service_file\" << EOF_SYSTEMD
 [Unit]
-Description=${PROJECT_NAME} API Service
+Description=\${description}
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=\$REMOTE_DIR_EXPANDED
-ExecStart=\$(command -v node) \$ENTRY_FILE
+ExecStart=\$(command -v node) \$entry_file
 Restart=always
 RestartSec=10
-StandardOutput=append:\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}.log
-StandardError=append:\$REMOTE_DIR_EXPANDED/${PROJECT_NAME}.error.log
+StandardOutput=append:\$log_file
+StandardError=append:\$error_log_file
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=NODE_ENV=production
 
 [Install]
 WantedBy=default.target
 EOF_SYSTEMD
+    }
 
-    # Reload systemd, enable and restart service
+    restart_systemd_service() {
+      local label=\"\$1\"
+      systemctl --user enable \"\${label}.service\"
+      systemctl --user restart \"\${label}.service\"
+      systemctl --user status \"\${label}.service\" --no-pager || true
+    }
+
+    write_systemd_service \"${SCRAPER_SERVICE_LABEL}\" \"\$SCRAPER_ENTRY_FILE\" \"\$SCRAPER_LOG_FILE\" \"\$SCRAPER_ERROR_LOG_FILE\" \"${PROJECT_NAME} Scraper Service\"
+    write_systemd_service \"${API_SERVICE_LABEL}\" \"\$API_ENTRY_FILE\" \"\$API_LOG_FILE\" \"\$API_ERROR_LOG_FILE\" \"${PROJECT_NAME} API Service\"
+
     systemctl --user daemon-reload
-    systemctl --user enable ${SERVICE_LABEL}.service
-    systemctl --user restart ${SERVICE_LABEL}.service
-    echo 'Service restarted via systemd'
-
-    # Show service status
-    systemctl --user status ${SERVICE_LABEL}.service --no-pager || true
+    restart_systemd_service \"${SCRAPER_SERVICE_LABEL}\"
+    echo 'Scraper service restarted via systemd'
+    restart_systemd_service \"${API_SERVICE_LABEL}\"
+    echo 'API service restarted via systemd'
 
   else
     echo \"Error: Neither launchd nor systemd found. Cannot manage service.\" >&2

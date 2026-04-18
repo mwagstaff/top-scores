@@ -115,10 +115,12 @@ function parseEnvBoolean(value, fallback = false) {
 }
 
 const PORT = Number(process.env.PORT || 3011);
+const SCRAPER_PORT = Number(process.env.SCRAPER_PORT || 3013);
 const SOURCE_URL = process.env.SOURCE_URL || DEFAULT_URL;
 const OUTPUT_PATH = process.env.OUTPUT_PATH || DEFAULT_OUTPUT;
 const INTERVAL_MINUTES = Number(process.env.UPDATE_INTERVAL_MINUTES || 30);
 const INTERVAL_MS = Number(process.env.UPDATE_INTERVAL_MS || INTERVAL_MINUTES * 60 * 1000);
+const CACHE_STATE_WATCH_INTERVAL_MS = Number(process.env.CACHE_STATE_WATCH_INTERVAL_MS || 5000);
 
 const BBC_SOURCE_URL = process.env.BBC_SOURCE_URL || DEFAULT_BBC_URL;
 const BBC_OUTPUT_PATH = process.env.BBC_OUTPUT_PATH || DEFAULT_BBC_OUTPUT;
@@ -718,7 +720,14 @@ const OP_DATASET_NATIONAL_ELO_TEAMS = "national_elo_teams";
 const OP_DATASET_MISSING_TEAM_LOGOS = "missing_team_logos";
 const OP_DATASET_TEAM_SHORT_NAMES = "team_short_names";
 const OP_DATASET_CACHE_STATE = "cache_state";
-const CACHE_STATE_DOMAINS = Object.freeze(["matches", "match_details", "bbc_live"]);
+const CACHE_STATE_DOMAINS = Object.freeze([
+  "matches",
+  "match_details",
+  "teams",
+  "tables",
+  "team_short_names",
+  "bbc_live",
+]);
 const CACHE_STATE_DOMAIN_ALIASES = Object.freeze({
   matches: "matches",
   match: "matches",
@@ -734,10 +743,25 @@ const CACHE_STATE_DOMAIN_ALIASES = Object.freeze({
   "bbc-live": "bbc_live",
   bbclive: "bbc_live",
   bbc: "bbc_live",
+  team: "teams",
+  teams: "teams",
+  ranking: "teams",
+  rankings: "teams",
+  table: "tables",
+  tables: "tables",
+  standings: "tables",
+  team_short_names: "team_short_names",
+  "team-short-names": "team_short_names",
+  teamshortnames: "team_short_names",
+  short_names: "team_short_names",
+  shortnames: "team_short_names",
 });
 const CACHE_STATE_HEADERS_BY_DOMAIN = Object.freeze({
   matches: "X-Cache-Generation-Matches",
   match_details: "X-Cache-Generation-Match-Details",
+  teams: "X-Cache-Generation-Teams",
+  tables: "X-Cache-Generation-Tables",
+  team_short_names: "X-Cache-Generation-Team-Short-Names",
   bbc_live: "X-Cache-Generation-Bbc-Live",
 });
 const eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
@@ -857,6 +881,12 @@ let startupBackfillRunning = false;
 const matchDetailsActiveRefreshUntilById = new Map();
 const matchDetailsBackfillNextAttemptAt = new Map();
 let operationalCacheState = buildDefaultOperationalCacheState();
+let cacheStateWatchTask = null;
+let cacheStateWatchTimer = null;
+let runtimeRole = "library";
+let runtimeServer = null;
+let runtimeShutdownPromise = null;
+let runtimeSignalHandlersInstalled = false;
 let missingTeamLogosByKey = new Map();
 let missingTeamLogosLastUpdated = null;
 let knownTeamLogoCatalogLoaded = false;
@@ -6998,6 +7028,12 @@ async function updateTeamShortNamesCache(options = {}) {
       await syncTeamShortNamesCacheToRedis({
         trigger: `${trigger}_scrape`,
         updated_at: updatedAt,
+        skipCacheInvalidation: true,
+      });
+      invalidateCacheDomains(["team_short_names"], {
+        updated_at: updatedAt,
+        reason: "team_short_names_scrape",
+        source: "team_short_names",
       });
     }
 
@@ -7041,6 +7077,13 @@ async function syncTeamShortNamesCacheToRedis(options = {}) {
         `team_short_names_${trigger}`
       )
     );
+    if (!options.skipCacheInvalidation) {
+      invalidateCacheDomains(["team_short_names"], {
+        updated_at: payload.updated_at,
+        reason: `team_short_names_${trigger}`,
+        source: "team_short_names",
+      });
+    }
     return {
       trigger,
       updated_at: payload.updated_at,
@@ -8580,6 +8623,13 @@ async function upsertCanonicalMatchDetailsFromMatch(match, options = {}) {
       saveOperationalMatchWriteLogEntries: options.saveOperationalMatchWriteLogEntries,
     }
   );
+  if (!options.skipCacheInvalidation) {
+    invalidateCacheDomains(["matches", "match_details"], {
+      updated_at: updatedAtIso,
+      reason: options.reason || "canonical_match_details_upsert",
+      source: options.source || runtimeRole || "api",
+    });
+  }
 
   return {
     match_id: incoming.id,
@@ -12964,21 +13014,19 @@ function buildCacheStateDomainSnapshot(options = {}) {
 }
 
 function buildDefaultOperationalCacheState(nowIso = new Date().toISOString()) {
+  const defaultDomainOptions = {
+    generation: 1,
+    updated_at: nowIso,
+  };
   return {
     updated_at: nowIso,
     domains: {
-      matches: buildCacheStateDomainSnapshot({
-        generation: 1,
-        updated_at: nowIso,
-      }),
-      match_details: buildCacheStateDomainSnapshot({
-        generation: 1,
-        updated_at: nowIso,
-      }),
-      bbc_live: buildCacheStateDomainSnapshot({
-        generation: 1,
-        updated_at: nowIso,
-      }),
+      matches: buildCacheStateDomainSnapshot(defaultDomainOptions),
+      match_details: buildCacheStateDomainSnapshot(defaultDomainOptions),
+      teams: buildCacheStateDomainSnapshot(defaultDomainOptions),
+      tables: buildCacheStateDomainSnapshot(defaultDomainOptions),
+      team_short_names: buildCacheStateDomainSnapshot(defaultDomainOptions),
+      bbc_live: buildCacheStateDomainSnapshot(defaultDomainOptions),
     },
   };
 }
@@ -13317,6 +13365,355 @@ async function hydrateOperationalStateFromRedis() {
     });
     console.warn("[OperationalState] Failed to hydrate from Redis:", error.message || error);
   }
+}
+
+async function inspectOperationalStateReadiness() {
+  const [
+    mergedDataset,
+    clubEloDataset,
+    footballDatabaseDataset,
+    nationalEloDataset,
+    cacheStateDataset,
+    matchDetailsSummary,
+  ] = await Promise.all([
+    loadOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES),
+    loadOperationalDatasetSafe(OP_DATASET_CLUB_ELO_TEAMS),
+    loadOperationalDatasetSafe(OP_DATASET_FOOTBALL_DATABASE_TEAMS),
+    loadOperationalDatasetSafe(OP_DATASET_NATIONAL_ELO_TEAMS),
+    loadOperationalDatasetSafe(OP_DATASET_CACHE_STATE),
+    getOperationalMatchDetailsSummary(),
+  ]);
+  const hasMergedState =
+    mergedDataset && Array.isArray(mergedDataset.payload) && mergedDataset.payload.length > 0;
+  const hasMatchDetails = Number(matchDetailsSummary && matchDetailsSummary.total) > 0;
+  const hasCacheState = Boolean(
+    cacheStateDataset &&
+      cacheStateDataset.payload &&
+      typeof cacheStateDataset.payload === "object"
+  );
+  const hasClubEloState =
+    clubEloDataset && Array.isArray(clubEloDataset.payload) && clubEloDataset.payload.length > 0;
+  const hasClubEloSeedData = Array.isArray(cachedClubEloTeams) && cachedClubEloTeams.length > 0;
+  const hasFootballDatabaseState =
+    footballDatabaseDataset &&
+    Array.isArray(footballDatabaseDataset.payload) &&
+    footballDatabaseDataset.payload.length > 0;
+  const hasFootballDatabaseSeedData =
+    Array.isArray(cachedFootballDatabaseTeams) && cachedFootballDatabaseTeams.length > 0;
+  const hasNationalEloState =
+    nationalEloDataset && Array.isArray(nationalEloDataset.payload) && nationalEloDataset.payload.length > 0;
+  const hasNationalEloSeedData =
+    Array.isArray(cachedNationalEloTeams) && cachedNationalEloTeams.length > 0;
+  const clubEloReady = hasClubEloState || !hasClubEloSeedData;
+  const footballDatabaseReady =
+    hasFootballDatabaseState || !hasFootballDatabaseSeedData;
+  const nationalEloReady = hasNationalEloState || !hasNationalEloSeedData;
+  const ready =
+    hasMergedState &&
+    hasMatchDetails &&
+    hasCacheState &&
+    clubEloReady &&
+    footballDatabaseReady &&
+    nationalEloReady;
+
+  return {
+    ready,
+    reason: ready ? "redis_has_state" : "redis_was_empty_or_partial",
+  };
+}
+
+function clearFootballOperationalMemoryState() {
+  cachedMatches = [];
+  lastUpdated = null;
+  cachedBbcMatches = [];
+  bbcLastUpdated = null;
+  cachedBbcRangeMatches = [];
+  bbcRangeLastUpdated = null;
+  cachedMergedMatches = [];
+  cachedRecentMatches = [];
+  recentLastUpdated = null;
+  cachedPremierLeagueTeams = [];
+  eplLastUpdated = null;
+  cachedLeagueTables = [];
+  leagueTablesLastUpdated = null;
+  cachedClubEloTeams = [];
+  clubEloLastUpdated = null;
+  cachedClubEloFixtures = [];
+  clubEloFixturesLastUpdated = null;
+  clubEloFixturesLastMatchedCount = 0;
+  clubEloFixturesLastUnmatchedCount = 0;
+  cachedFootballDatabaseTeams = [];
+  footballDatabaseLastUpdated = null;
+  cachedNationalEloTeams = [];
+  nationalEloLastUpdated = null;
+  matchDetailsById = new Map();
+  matchDetailsLastUpdated = null;
+  scrapedTeamShortNamesByKey = new Map();
+  scrapedTeamShortNamesLastUpdated = null;
+  operationalCacheState = buildDefaultOperationalCacheState();
+  setSourceCacheSize(SOURCE_LIVE_FOOTBALL, 0);
+  setSourceCacheSize(SOURCE_BBC_LIVE, 0);
+  setSourceCacheSize(SOURCE_BBC_RANGE, 0);
+  setSourceCacheSize(SOURCE_RECENT_CACHE, 0);
+  setSourceCacheSize(SOURCE_BBC_PREMIER_LEAGUE, 0);
+  setSourceCacheSize(SOURCE_BBC_LEAGUE_TABLES, 0);
+  setSourceCacheSize(SOURCE_CLUB_ELO, 0);
+  setSourceCacheSize(SOURCE_CLUB_ELO_FIXTURES, 0);
+  setSourceCacheSize(SOURCE_FOOTBALL_DATABASE, 0);
+  setSourceCacheSize(SOURCE_NATIONAL_ELO, 0);
+  setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, 0);
+  clearMatchListResponseCache();
+  clearTeamRankingsResponseCache();
+}
+
+function cacheStateGenerationForDomain(state, domain) {
+  const snapshot = normalizeOperationalCacheState(state);
+  return snapshot && snapshot.domains && snapshot.domains[domain]
+    ? Number(snapshot.domains[domain].generation || 0)
+    : 0;
+}
+
+async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
+  const normalized = normalizeCacheStateDomains(domains);
+  const selectedDomains = normalized.domains;
+  if (selectedDomains.length === 0) {
+    return { reloaded_domains: [] };
+  }
+
+  const reloads = [];
+  const recordMap = {};
+  const nowIso =
+    typeof options.updated_at === "string" && options.updated_at.trim()
+      ? options.updated_at.trim()
+      : new Date().toISOString();
+
+  if (selectedDomains.includes("matches") || selectedDomains.includes("bbc_live")) {
+    reloads.push(
+      getOperationalDatasets([
+        OP_DATASET_LIVE_MATCHES,
+        OP_DATASET_BBC_LIVE_MATCHES,
+        OP_DATASET_BBC_RANGE_MATCHES,
+        OP_DATASET_RECENT_MATCHES,
+        OP_DATASET_MERGED_MATCHES,
+      ]).then((records) => {
+        recordMap.matches = records || {};
+      })
+    );
+  }
+  if (selectedDomains.includes("match_details")) {
+    reloads.push(
+      getAllOperationalMatchDetails().then((snapshot) => {
+        recordMap.match_details = snapshot || null;
+      })
+    );
+  }
+  if (selectedDomains.includes("teams")) {
+    reloads.push(
+      getOperationalDatasets([
+        OP_DATASET_PREMIER_LEAGUE_TEAMS,
+        OP_DATASET_CLUB_ELO_TEAMS,
+        OP_DATASET_FOOTBALL_DATABASE_TEAMS,
+        OP_DATASET_NATIONAL_ELO_TEAMS,
+      ]).then((records) => {
+        recordMap.teams = records || {};
+      })
+    );
+  }
+  if (selectedDomains.includes("tables")) {
+    reloads.push(
+      getOperationalDatasets([OP_DATASET_LEAGUE_TABLES]).then((records) => {
+        recordMap.tables = records || {};
+      })
+    );
+  }
+  if (selectedDomains.includes("team_short_names")) {
+    reloads.push(
+      getOperationalDatasets([OP_DATASET_TEAM_SHORT_NAMES]).then((records) => {
+        recordMap.team_short_names = records || {};
+      })
+    );
+  }
+
+  await Promise.all(reloads);
+
+  if (recordMap.matches) {
+    const records = recordMap.matches;
+    const liveRecord = records[OP_DATASET_LIVE_MATCHES];
+    if (liveRecord && Array.isArray(liveRecord.payload)) {
+      cachedMatches = filterMatchesByCompetition(liveRecord.payload);
+      lastUpdated = liveRecord.updated_at || lastUpdated;
+      setSourceCacheSize(SOURCE_LIVE_FOOTBALL, cachedMatches.length);
+    }
+
+    const bbcLiveRecord = records[OP_DATASET_BBC_LIVE_MATCHES];
+    if (bbcLiveRecord && Array.isArray(bbcLiveRecord.payload)) {
+      cachedBbcMatches = filterMatchesByCompetition(bbcLiveRecord.payload);
+      bbcLastUpdated = bbcLiveRecord.updated_at || bbcLastUpdated;
+      setSourceCacheSize(SOURCE_BBC_LIVE, cachedBbcMatches.length);
+    }
+
+    const bbcRangeRecord = records[OP_DATASET_BBC_RANGE_MATCHES];
+    if (bbcRangeRecord && Array.isArray(bbcRangeRecord.payload)) {
+      cachedBbcRangeMatches = filterMatchesByCompetition(bbcRangeRecord.payload);
+      bbcRangeLastUpdated = bbcRangeRecord.updated_at || bbcRangeLastUpdated;
+      setSourceCacheSize(SOURCE_BBC_RANGE, cachedBbcRangeMatches.length);
+    }
+
+    const recentRecord = records[OP_DATASET_RECENT_MATCHES];
+    if (recentRecord && Array.isArray(recentRecord.payload)) {
+      cachedRecentMatches = filterMatchesByCompetition(recentRecord.payload);
+      recentLastUpdated = recentRecord.updated_at || recentLastUpdated;
+      setSourceCacheSize(SOURCE_RECENT_CACHE, cachedRecentMatches.length);
+    }
+
+    const mergedRecord = records[OP_DATASET_MERGED_MATCHES];
+    if (mergedRecord && Array.isArray(mergedRecord.payload)) {
+      cachedMergedMatches = filterMatchesByCompetition(mergedRecord.payload);
+    }
+
+    clearMatchListResponseCache();
+  }
+
+  if (recordMap.match_details && recordMap.match_details.records) {
+    const filteredRecords = filterMatchDetailsRecordsByCompetition(recordMap.match_details.records);
+    matchDetailsById = new Map(Object.entries(filteredRecords));
+    matchDetailsLastUpdated =
+      recordMap.match_details.updated_at || matchDetailsLastUpdated || nowIso;
+    setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, matchDetailsById.size);
+    clearMatchListResponseCache();
+  }
+
+  if (recordMap.teams) {
+    const teams = recordMap.teams;
+    const teamsRecord = teams[OP_DATASET_PREMIER_LEAGUE_TEAMS];
+    if (teamsRecord && Array.isArray(teamsRecord.payload)) {
+      cachedPremierLeagueTeams = teamsRecord.payload
+        .map((team) => String(team || "").trim())
+        .filter(Boolean);
+      eplLastUpdated = teamsRecord.updated_at || eplLastUpdated;
+      setSourceCacheSize(SOURCE_BBC_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
+    }
+    const clubEloRecord = teams[OP_DATASET_CLUB_ELO_TEAMS];
+    if (clubEloRecord && Array.isArray(clubEloRecord.payload)) {
+      cachedClubEloTeams = normalizeClubEloTeamsPayload(clubEloRecord.payload);
+      clubEloLastUpdated = clubEloRecord.updated_at || clubEloLastUpdated;
+      setSourceCacheSize(SOURCE_CLUB_ELO, cachedClubEloTeams.length);
+      markClubEloSuccess(clubEloLastUpdated, cachedClubEloTeams);
+    }
+    const footballDatabaseRecord = teams[OP_DATASET_FOOTBALL_DATABASE_TEAMS];
+    if (footballDatabaseRecord && Array.isArray(footballDatabaseRecord.payload)) {
+      cachedFootballDatabaseTeams = normalizeFootballDatabaseTeamsPayload(
+        footballDatabaseRecord.payload
+      );
+      footballDatabaseLastUpdated =
+        footballDatabaseRecord.updated_at || footballDatabaseLastUpdated;
+      setSourceCacheSize(SOURCE_FOOTBALL_DATABASE, cachedFootballDatabaseTeams.length);
+      markFootballDatabaseSuccess(footballDatabaseLastUpdated, cachedFootballDatabaseTeams);
+    }
+    const nationalEloRecord = teams[OP_DATASET_NATIONAL_ELO_TEAMS];
+    if (nationalEloRecord && Array.isArray(nationalEloRecord.payload)) {
+      cachedNationalEloTeams = normalizeNationalEloTeamsPayload(nationalEloRecord.payload);
+      nationalEloLastUpdated = nationalEloRecord.updated_at || nationalEloLastUpdated;
+      setSourceCacheSize(SOURCE_NATIONAL_ELO, cachedNationalEloTeams.length);
+      markNationalEloSuccess(
+        nationalEloLastUpdated,
+        cachedNationalEloTeams,
+        null,
+        nationalEloLastUpdated ? String(nationalEloLastUpdated).slice(0, 10) : null
+      );
+    }
+    clearTeamRankingsResponseCache();
+  }
+
+  if (recordMap.tables) {
+    const tablesRecord = recordMap.tables[OP_DATASET_LEAGUE_TABLES];
+    if (tablesRecord && Array.isArray(tablesRecord.payload)) {
+      cachedLeagueTables = sortLeagueTablesForResponse(tablesRecord.payload);
+      leagueTablesLastUpdated = tablesRecord.updated_at || leagueTablesLastUpdated;
+      setSourceCacheSize(SOURCE_BBC_LEAGUE_TABLES, leagueTableRowsCount(cachedLeagueTables));
+    }
+  }
+
+  if (recordMap.team_short_names) {
+    const teamShortNamesRecord = recordMap.team_short_names[OP_DATASET_TEAM_SHORT_NAMES];
+    if (teamShortNamesRecord && teamShortNamesRecord.payload && typeof teamShortNamesRecord.payload === "object") {
+      const restored = restoreScrapedTeamShortNamesFromDataset(teamShortNamesRecord.payload, {
+        updated_at: teamShortNamesRecord.updated_at || null,
+        source: teamShortNamesRecord.source || "redis_operational_dataset",
+      });
+      scrapedTeamShortNamesByKey = restored.map;
+      scrapedTeamShortNamesLastUpdated = restored.updated_at || scrapedTeamShortNamesLastUpdated;
+    }
+  }
+
+  refreshClubEloUnmatchedTeamMetric(cachedMergedMatches, cachedClubEloTeams);
+  refreshFootballDatabaseUnmatchedTeamMetric(
+    cachedMergedMatches,
+    cachedFootballDatabaseTeams
+  );
+  refreshNationalEloUnmatchedTeamMetric(cachedMergedMatches, cachedNationalEloTeams);
+
+  return {
+    reloaded_domains: selectedDomains,
+  };
+}
+
+async function pollCacheStateAndRefreshFromRedis(options = {}) {
+  if (cacheStateWatchTask) {
+    return cacheStateWatchTask;
+  }
+
+  cacheStateWatchTask = (async () => {
+    try {
+      const cacheStateRecord = await loadOperationalDatasetSafe(OP_DATASET_CACHE_STATE);
+      if (!cacheStateRecord || !cacheStateRecord.payload || typeof cacheStateRecord.payload !== "object") {
+        return { reloaded_domains: [] };
+      }
+      const remoteState = normalizeOperationalCacheState(
+        cacheStateRecord.payload,
+        cacheStateRecord.updated_at || null
+      );
+      const changedDomains = CACHE_STATE_DOMAINS.filter(
+        (domain) =>
+          cacheStateGenerationForDomain(remoteState, domain) >
+          cacheStateGenerationForDomain(operationalCacheState, domain)
+      );
+      if (changedDomains.length === 0) {
+        operationalCacheState = remoteState;
+        return { reloaded_domains: [] };
+      }
+
+      const result = await reloadOperationalStateDomainsFromRedis(changedDomains, options);
+      operationalCacheState = remoteState;
+      return result;
+    } catch (error) {
+      console.warn("[OperationalState] Cache-state refresh failed:", error.message || error);
+      return { reloaded_domains: [], error: error.message || String(error) };
+    } finally {
+      cacheStateWatchTask = null;
+    }
+  })();
+
+  return cacheStateWatchTask;
+}
+
+function startCacheStateWatcher() {
+  if (cacheStateWatchTimer) {
+    return cacheStateWatchTimer;
+  }
+  cacheStateWatchTimer = setInterval(() => {
+    void pollCacheStateAndRefreshFromRedis({ trigger: `${runtimeRole}_interval` });
+  }, CACHE_STATE_WATCH_INTERVAL_MS);
+  if (typeof cacheStateWatchTimer.unref === "function") {
+    cacheStateWatchTimer.unref();
+  }
+  return cacheStateWatchTimer;
+}
+
+function stopCacheStateWatcher() {
+  if (!cacheStateWatchTimer) return;
+  clearInterval(cacheStateWatchTimer);
+  cacheStateWatchTimer = null;
 }
 
 async function persistStartupOperationalStateFromDisk() {
@@ -14641,6 +15038,10 @@ function canonicalMatchDetailsRecordsToPublicListPayloads(recordsById, options =
 const MATCH_LIST_RESPONSE_CACHE_LIMIT = 32;
 const MATCH_LIST_RESPONSE_CACHE_TTL_MS = 30 * 1000;
 const matchListResponseCache = new Map();
+
+function clearMatchListResponseCache() {
+  matchListResponseCache.clear();
+}
 
 function matchDetailsLookupSize(matchDetailsLookup) {
   if (matchDetailsLookup instanceof Map) {
@@ -16260,6 +16661,11 @@ async function updateMatches(options = {}) {
     await rebuildMergedMatchesCache(SOURCE_LIVE_FOOTBALL);
     clearTeamRankingsResponseCache();
     void warmDefaultTeamRankingsResponseCache(`live_matches_${trigger}`);
+    invalidateCacheDomains(["matches", "match_details"], {
+      updated_at: lastUpdated,
+      reason: "live_matches_refresh",
+      source: SOURCE_LIVE_FOOTBALL,
+    });
     success = true;
     logPollSuccess("live_football", {
       source: SOURCE_LIVE_FOOTBALL,
@@ -16438,9 +16844,15 @@ async function updateBbcMatches(options = {}) {
           updated_at: bbcLastUpdated,
           source: SOURCE_BBC_LIVE,
           reason: "bbc_live_poll",
+          skipCacheInvalidation: true,
         });
       }
     );
+    invalidateCacheDomains(["matches", "match_details", "bbc_live"], {
+      updated_at: bbcLastUpdated,
+      reason: "bbc_live_refresh",
+      source: SOURCE_BBC_LIVE,
+    });
     success = true;
     logPollSuccess("bbc_live_matches", {
       source: SOURCE_BBC_LIVE,
@@ -16510,6 +16922,11 @@ async function updateBbcRangeMatches(options = {}) {
     await rebuildMergedMatchesCache(SOURCE_BBC_RANGE);
     clearTeamRankingsResponseCache();
     void warmDefaultTeamRankingsResponseCache(`bbc_range_${trigger}`);
+    invalidateCacheDomains(["matches", "match_details"], {
+      updated_at: bbcRangeLastUpdated,
+      reason: "bbc_range_refresh",
+      source: SOURCE_BBC_RANGE,
+    });
     success = true;
     logPollSuccess("bbc_date_range_matches", {
       source: SOURCE_BBC_RANGE,
@@ -16590,6 +17007,11 @@ async function updatePremierLeagueTeams(options = {}) {
         source: SOURCE_BBC_PREMIER_LEAGUE,
       }
     );
+    invalidateCacheDomains(["teams"], {
+      updated_at: eplLastUpdated,
+      reason: "premier_league_teams_refresh",
+      source: SOURCE_BBC_PREMIER_LEAGUE,
+    });
     success = true;
     logPollSuccess("bbc_premier_league_teams", {
       source: SOURCE_BBC_PREMIER_LEAGUE,
@@ -16705,6 +17127,11 @@ async function updateLeagueTables(options = {}) {
         }
       );
     }
+    invalidateCacheDomains(["tables", "teams"], {
+      updated_at: leagueTablesLastUpdated,
+      reason: "league_tables_refresh",
+      source: SOURCE_BBC_LEAGUE_TABLES,
+    });
 
     success = true;
     logPollSuccess("bbc_league_tables", {
@@ -17114,6 +17541,11 @@ async function updateClubEloFixtures(options = {}) {
         source: SOURCE_CLUB_ELO_FIXTURES,
       });
       matchDetailsLastUpdated = nowIso;
+      invalidateCacheDomains(["match_details"], {
+        updated_at: nowIso,
+        reason: "club_elo_fixtures_refresh",
+        source: SOURCE_CLUB_ELO_FIXTURES,
+      });
     }
 
     success = true;
@@ -17222,6 +17654,11 @@ async function updateClubEloTeams(options = {}) {
     });
     clearTeamRankingsResponseCache();
     void warmDefaultTeamRankingsResponseCache(`club_elo_${trigger}`);
+    invalidateCacheDomains(["teams"], {
+      updated_at: clubEloLastUpdated,
+      reason: "club_elo_rankings_refresh",
+      source: SOURCE_CLUB_ELO,
+    });
     success = true;
     logPollSuccess("club_elo_rankings", {
       source: SOURCE_CLUB_ELO,
@@ -17336,6 +17773,11 @@ async function updateFootballDatabaseTeams(options = {}) {
     });
     clearTeamRankingsResponseCache();
     void warmDefaultTeamRankingsResponseCache(`football_database_${trigger}`);
+    invalidateCacheDomains(["teams"], {
+      updated_at: footballDatabaseLastUpdated,
+      reason: "football_database_rankings_refresh",
+      source: SOURCE_FOOTBALL_DATABASE,
+    });
     success = true;
     logPollSuccess("football_database_rankings", {
       source: SOURCE_FOOTBALL_DATABASE,
@@ -17475,6 +17917,11 @@ async function updateNationalEloTeams(options = {}) {
     });
     clearTeamRankingsResponseCache();
     void warmDefaultTeamRankingsResponseCache(`national_elo_${trigger}`);
+    invalidateCacheDomains(["teams"], {
+      updated_at: nationalEloLastUpdated,
+      reason: "national_elo_rankings_refresh",
+      source: SOURCE_NATIONAL_ELO,
+    });
     success = true;
     logPollSuccess("national_elo_rankings", {
       source: SOURCE_NATIONAL_ELO,
@@ -25137,210 +25584,203 @@ app.post(`${API_PREFIX}/notifications/test`, async (req, res) => {
 // ===== End User Preferences Endpoints =====
 
 async function seedOperationalStateFromDiskIfNeeded() {
-  const [
-    mergedDataset,
-    clubEloDataset,
-    footballDatabaseDataset,
-    nationalEloDataset,
-    cacheStateDataset,
-    matchDetailsSummary,
-  ] = await Promise.all([
-    loadOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES),
-    loadOperationalDatasetSafe(OP_DATASET_CLUB_ELO_TEAMS),
-    loadOperationalDatasetSafe(OP_DATASET_FOOTBALL_DATABASE_TEAMS),
-    loadOperationalDatasetSafe(OP_DATASET_NATIONAL_ELO_TEAMS),
-    loadOperationalDatasetSafe(OP_DATASET_CACHE_STATE),
-    getOperationalMatchDetailsSummary(),
-  ]);
-  const hasMergedState =
-    mergedDataset && Array.isArray(mergedDataset.payload) && mergedDataset.payload.length > 0;
-  const hasMatchDetails = Number(matchDetailsSummary && matchDetailsSummary.total) > 0;
-  const hasCacheState = Boolean(
-    cacheStateDataset &&
-      cacheStateDataset.payload &&
-      typeof cacheStateDataset.payload === "object"
-  );
-  const hasClubEloState =
-    clubEloDataset && Array.isArray(clubEloDataset.payload) && clubEloDataset.payload.length > 0;
-  const hasClubEloSeedData = Array.isArray(cachedClubEloTeams) && cachedClubEloTeams.length > 0;
-  const hasFootballDatabaseState =
-    footballDatabaseDataset &&
-    Array.isArray(footballDatabaseDataset.payload) &&
-    footballDatabaseDataset.payload.length > 0;
-  const hasFootballDatabaseSeedData =
-    Array.isArray(cachedFootballDatabaseTeams) && cachedFootballDatabaseTeams.length > 0;
-  const hasNationalEloState =
-    nationalEloDataset && Array.isArray(nationalEloDataset.payload) && nationalEloDataset.payload.length > 0;
-  const hasNationalEloSeedData =
-    Array.isArray(cachedNationalEloTeams) && cachedNationalEloTeams.length > 0;
-  const clubEloReady = hasClubEloState || !hasClubEloSeedData;
-  const footballDatabaseReady =
-    hasFootballDatabaseState || !hasFootballDatabaseSeedData;
-  const nationalEloReady = hasNationalEloState || !hasNationalEloSeedData;
-  if (
-    hasMergedState &&
-    hasMatchDetails &&
-    hasCacheState &&
-    clubEloReady &&
-    footballDatabaseReady &&
-    nationalEloReady
-  ) {
-    return { seeded: false, reason: "redis_has_state" };
+  const readiness = await inspectOperationalStateReadiness();
+  if (readiness.ready) {
+    return { seeded: false, reason: readiness.reason };
   }
 
   await persistStartupOperationalStateFromDisk();
   return { seeded: true, reason: "redis_was_empty_or_partial" };
 }
 
-async function bootstrapOperationalState() {
+async function bootstrapOperationalState(options = {}) {
+  const mode =
+    typeof options.mode === "string" && options.mode.trim() ? options.mode.trim() : "api";
   recordRuntimeComponentStart(COMPONENT_BOOTSTRAP, {
     operation: "bootstrap_operational_state",
+    mode,
   });
   loadMissingTeamLogosFromDisk();
 
   await hydrateOperationalStateFromRedis();
-  const seedResult = await seedOperationalStateFromDiskIfNeeded();
-  if (seedResult.seeded) {
-    await hydrateOperationalStateFromRedis();
+  let seedResult = { seeded: false, reason: "redis_has_state" };
+
+  if (mode === "scraper") {
+    seedResult = await seedOperationalStateFromDiskIfNeeded();
+    if (seedResult.seeded) {
+      await hydrateOperationalStateFromRedis();
+    }
+
+    await updateRecentCache("startup_bootstrap");
+    await rebuildMergedMatchesCache("startup_bootstrap");
+    await rebuildMatchDetailsCache("startup_bootstrap");
+
+    void updateMatches({ trigger: "startup_bootstrap" });
+    void updateBbcMatches({ trigger: "startup_bootstrap" });
+    void updateBbcRangeMatches({ trigger: "startup_bootstrap" });
+    void updatePremierLeagueTeams({ trigger: "startup_bootstrap" });
+    void updateLeagueTables({ trigger: "startup_bootstrap" });
+    void updateClubEloTeams({ trigger: "startup_bootstrap" });
+    void updateClubEloFixtures({ trigger: "startup_bootstrap" });
+    void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
+    void updateNationalEloTeams({ trigger: "startup_bootstrap" });
+    void updateTeamShortNamesCache({ trigger: "startup_bootstrap" });
+    void syncTeamShortNamesCacheToRedis({ trigger: "startup_bootstrap" });
+    void pollCacheStateAndRefreshFromRedis({ trigger: "startup_bootstrap" });
+  } else {
+    const readiness = await inspectOperationalStateReadiness();
+    if (!readiness.ready) {
+      clearFootballOperationalMemoryState();
+    }
+    void backfillIncompleteMatchDetailsOnStartup({ trigger: "startup_bootstrap" });
+    void refreshInProgressMatchDetails({ trigger: "startup_bootstrap" });
+    void updateFantasyBootstrapStatic({ trigger: "startup_bootstrap" });
+    void updateFantasyFixtures({ trigger: "startup_bootstrap" });
+    void updateFantasyEventLive({ trigger: "startup_bootstrap" });
+    void warmDefaultTeamRankingsResponseCache("startup_bootstrap");
+    void pollCacheStateAndRefreshFromRedis({ trigger: "startup_bootstrap" });
   }
 
-  await updateRecentCache("startup_bootstrap");
-  await rebuildMergedMatchesCache("startup_bootstrap");
-  await rebuildMatchDetailsCache("startup_bootstrap");
-
-  // Proactively backfill finished matches missing goal/lineup data within the lookback window.
-  // Runs in background — does not block the server becoming ready.
-  void backfillIncompleteMatchDetailsOnStartup({ trigger: "startup_bootstrap" });
-
-  // Run network refresh tasks in background after bootstrapping cached state.
-  void refreshInProgressMatchDetails({ trigger: "startup_bootstrap" });
-  void updateMatches({ trigger: "startup_bootstrap" });
-  void updateBbcMatches({ trigger: "startup_bootstrap" });
-  void updateBbcRangeMatches({ trigger: "startup_bootstrap" });
-  void updatePremierLeagueTeams({ trigger: "startup_bootstrap" });
-  void updateLeagueTables({ trigger: "startup_bootstrap" });
-  void updateClubEloTeams({ trigger: "startup_bootstrap" });
-  void updateClubEloFixtures({ trigger: "startup_bootstrap" });
-  void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
-  void updateNationalEloTeams({ trigger: "startup_bootstrap" });
-  void updateFantasyBootstrapStatic({ trigger: "startup_bootstrap" });
-  void updateFantasyFixtures({ trigger: "startup_bootstrap" });
-  void updateFantasyEventLive({ trigger: "startup_bootstrap" });
-  void updateTeamShortNamesCache({ trigger: "startup_bootstrap" });
-  void syncTeamShortNamesCacheToRedis({ trigger: "startup_bootstrap" });
-  void warmDefaultTeamRankingsResponseCache("startup_bootstrap");
   recordRuntimeComponentSuccess(COMPONENT_BOOTSTRAP, {
     operation: "bootstrap_operational_state",
+    mode,
     seed_result: seedResult,
     merged_matches: cachedMergedMatches.length,
     match_details: matchDetailsById.size,
   });
 }
+let operationalBootstrapPromise = Promise.resolve();
+const runtimeIntervalHandles = [];
 
-const shouldRunRuntime = require.main === module;
-const operationalBootstrapPromise = shouldRunRuntime
-  ? bootstrapOperationalState().catch((error) => {
-    recordRuntimeComponentFailure(COMPONENT_BOOTSTRAP, error, {
-      operation: "bootstrap_operational_state",
-    });
-    console.warn("[Startup] Operational bootstrap failed:", error.message || error);
-  })
-  : Promise.resolve();
+function registerRuntimeInterval(callback, intervalMs) {
+  const handle = setInterval(callback, intervalMs);
+  runtimeIntervalHandles.push(handle);
+  if (typeof handle.unref === "function") {
+    handle.unref();
+  }
+  return handle;
+}
 
-if (shouldRunRuntime) {
-  const interval = Number.isFinite(INTERVAL_MS) && INTERVAL_MS > 0 ? INTERVAL_MS : 30 * 60 * 1000;
-  setInterval(() => {
-    void updateMatches({ trigger: "interval" });
-  }, interval);
-  const bbcInterval = Number.isFinite(BBC_INTERVAL_MS) && BBC_INTERVAL_MS > 0 ? BBC_INTERVAL_MS : 30 * 1000;
-  setInterval(() => {
-    void updateBbcMatches({ trigger: "interval" });
-  }, bbcInterval);
-  const bbcRangeInterval =
-    Number.isFinite(BBC_RANGE_INTERVAL_MS) && BBC_RANGE_INTERVAL_MS > 0
-      ? BBC_RANGE_INTERVAL_MS
-      : 60 * 60 * 1000;
-  setInterval(() => {
-    void updateBbcRangeMatches({ trigger: "interval" });
-  }, bbcRangeInterval);
-  const eplInterval =
-    Number.isFinite(EPL_INTERVAL_MS) && EPL_INTERVAL_MS > 0 ? EPL_INTERVAL_MS : 24 * 60 * 60 * 1000;
-  setInterval(() => {
-    void updatePremierLeagueTeams({ trigger: "interval" });
-  }, eplInterval);
-  const leagueTablesInterval =
-    Number.isFinite(LEAGUE_TABLES_INTERVAL_MS) && LEAGUE_TABLES_INTERVAL_MS > 0
-      ? LEAGUE_TABLES_INTERVAL_MS
-      : 2 * 60 * 1000;
-  setInterval(() => {
-    void updateLeagueTables({ trigger: "interval" });
-  }, leagueTablesInterval);
-  const clubEloInterval =
-    Number.isFinite(CLUB_ELO_INTERVAL_MS) && CLUB_ELO_INTERVAL_MS > 0
-      ? CLUB_ELO_INTERVAL_MS
-      : 12 * 60 * 60 * 1000;
-  setInterval(() => {
-    void updateClubEloTeams({ trigger: "interval" });
-  }, clubEloInterval);
-  const clubEloFixturesInterval =
-    Number.isFinite(CLUB_ELO_FIXTURES_INTERVAL_MS) && CLUB_ELO_FIXTURES_INTERVAL_MS > 0
-      ? CLUB_ELO_FIXTURES_INTERVAL_MS
-      : 12 * 60 * 60 * 1000;
-  setInterval(() => {
-    void updateClubEloFixtures({ trigger: "interval" });
-  }, clubEloFixturesInterval);
-  const footballDatabaseInterval =
-    Number.isFinite(FOOTBALL_DATABASE_INTERVAL_MS) && FOOTBALL_DATABASE_INTERVAL_MS > 0
-      ? FOOTBALL_DATABASE_INTERVAL_MS
-      : 12 * 60 * 60 * 1000;
-  setInterval(() => {
-    void updateFootballDatabaseTeams({ trigger: "interval" });
-  }, footballDatabaseInterval);
-  const nationalEloInterval =
-    Number.isFinite(NATIONAL_ELO_INTERVAL_MS) && NATIONAL_ELO_INTERVAL_MS > 0
-      ? NATIONAL_ELO_INTERVAL_MS
-      : 12 * 60 * 60 * 1000;
-  setInterval(() => {
-    void updateNationalEloTeams({ trigger: "interval" });
-  }, nationalEloInterval);
+function clearRuntimeIntervals() {
+  while (runtimeIntervalHandles.length > 0) {
+    clearInterval(runtimeIntervalHandles.pop());
+  }
+}
+
+function startApiIntervals() {
   const fantasyBootstrapInterval =
     Number.isFinite(FPL_BOOTSTRAP_INTERVAL_MS) && FPL_BOOTSTRAP_INTERVAL_MS > 0
       ? FPL_BOOTSTRAP_INTERVAL_MS
       : 12 * 60 * 60 * 1000;
-  setInterval(() => {
+  registerRuntimeInterval(() => {
     void updateFantasyBootstrapStatic({ trigger: "interval" });
   }, fantasyBootstrapInterval);
+
   scheduleFantasyBootstrapDailyRefresh();
+
   const fantasyFixturesInterval =
     Number.isFinite(FPL_FIXTURES_INTERVAL_MS) && FPL_FIXTURES_INTERVAL_MS > 0
       ? FPL_FIXTURES_INTERVAL_MS
       : 6 * 60 * 60 * 1000;
-  setInterval(() => {
+  registerRuntimeInterval(() => {
     void updateFantasyFixtures({ trigger: "interval" });
   }, fantasyFixturesInterval);
+
   const fantasyEventLiveInterval =
     Number.isFinite(FPL_EVENT_LIVE_INTERVAL_MS) && FPL_EVENT_LIVE_INTERVAL_MS > 0
       ? FPL_EVENT_LIVE_INTERVAL_MS
       : 15 * 1000;
-  setInterval(() => {
+  registerRuntimeInterval(() => {
     void updateFantasyEventLive({ trigger: "interval" });
   }, fantasyEventLiveInterval);
-  setInterval(() => {
-    void updateTeamShortNamesCache({ trigger: "interval" });
-  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS);
-  setInterval(() => {
-    void syncTeamShortNamesCacheToRedis({ trigger: "interval" });
-  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS);
-  setInterval(() => {
+
+  registerRuntimeInterval(() => {
     pollFantasyAssistantManagerEntries();
   }, FANTASY_ASSISTANT_MANAGER_POLL_INTERVAL_MS);
+
   const matchDetailsPollInterval =
     Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
       ? MATCH_DETAILS_POLL_INTERVAL_MS
       : 10 * 1000;
-  setInterval(() => {
+  registerRuntimeInterval(() => {
     void refreshInProgressMatchDetails({ trigger: "interval" });
   }, matchDetailsPollInterval);
+
+  startCacheStateWatcher();
+}
+
+function startScraperIntervals() {
+  const interval = Number.isFinite(INTERVAL_MS) && INTERVAL_MS > 0 ? INTERVAL_MS : 30 * 60 * 1000;
+  registerRuntimeInterval(() => {
+    void updateMatches({ trigger: "interval" });
+  }, interval);
+
+  const bbcInterval = Number.isFinite(BBC_INTERVAL_MS) && BBC_INTERVAL_MS > 0 ? BBC_INTERVAL_MS : 30 * 1000;
+  registerRuntimeInterval(() => {
+    void updateBbcMatches({ trigger: "interval" });
+  }, bbcInterval);
+
+  const bbcRangeInterval =
+    Number.isFinite(BBC_RANGE_INTERVAL_MS) && BBC_RANGE_INTERVAL_MS > 0
+      ? BBC_RANGE_INTERVAL_MS
+      : 60 * 60 * 1000;
+  registerRuntimeInterval(() => {
+    void updateBbcRangeMatches({ trigger: "interval" });
+  }, bbcRangeInterval);
+
+  const eplInterval =
+    Number.isFinite(EPL_INTERVAL_MS) && EPL_INTERVAL_MS > 0 ? EPL_INTERVAL_MS : 24 * 60 * 60 * 1000;
+  registerRuntimeInterval(() => {
+    void updatePremierLeagueTeams({ trigger: "interval" });
+  }, eplInterval);
+
+  const leagueTablesInterval =
+    Number.isFinite(LEAGUE_TABLES_INTERVAL_MS) && LEAGUE_TABLES_INTERVAL_MS > 0
+      ? LEAGUE_TABLES_INTERVAL_MS
+      : 2 * 60 * 1000;
+  registerRuntimeInterval(() => {
+    void updateLeagueTables({ trigger: "interval" });
+  }, leagueTablesInterval);
+
+  const clubEloInterval =
+    Number.isFinite(CLUB_ELO_INTERVAL_MS) && CLUB_ELO_INTERVAL_MS > 0
+      ? CLUB_ELO_INTERVAL_MS
+      : 12 * 60 * 60 * 1000;
+  registerRuntimeInterval(() => {
+    void updateClubEloTeams({ trigger: "interval" });
+  }, clubEloInterval);
+
+  const clubEloFixturesInterval =
+    Number.isFinite(CLUB_ELO_FIXTURES_INTERVAL_MS) && CLUB_ELO_FIXTURES_INTERVAL_MS > 0
+      ? CLUB_ELO_FIXTURES_INTERVAL_MS
+      : 12 * 60 * 60 * 1000;
+  registerRuntimeInterval(() => {
+    void updateClubEloFixtures({ trigger: "interval" });
+  }, clubEloFixturesInterval);
+
+  const footballDatabaseInterval =
+    Number.isFinite(FOOTBALL_DATABASE_INTERVAL_MS) && FOOTBALL_DATABASE_INTERVAL_MS > 0
+      ? FOOTBALL_DATABASE_INTERVAL_MS
+      : 12 * 60 * 60 * 1000;
+  registerRuntimeInterval(() => {
+    void updateFootballDatabaseTeams({ trigger: "interval" });
+  }, footballDatabaseInterval);
+
+  const nationalEloInterval =
+    Number.isFinite(NATIONAL_ELO_INTERVAL_MS) && NATIONAL_ELO_INTERVAL_MS > 0
+      ? NATIONAL_ELO_INTERVAL_MS
+      : 12 * 60 * 60 * 1000;
+  registerRuntimeInterval(() => {
+    void updateNationalEloTeams({ trigger: "interval" });
+  }, nationalEloInterval);
+
+  registerRuntimeInterval(() => {
+    void updateTeamShortNamesCache({ trigger: "interval" });
+  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS);
+  registerRuntimeInterval(() => {
+    void syncTeamShortNamesCacheToRedis({ trigger: "interval" });
+  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS);
+
   operationalBootstrapPromise
     .then(() =>
       runRedisReconciliationCheck({
@@ -25351,7 +25791,7 @@ if (shouldRunRuntime) {
     .catch((error) => {
       console.warn("[RedisReconciliation] Initial run failed:", error.message || error);
     });
-  setInterval(() => {
+  registerRuntimeInterval(() => {
     operationalBootstrapPromise
       .then(() =>
         runRedisReconciliationCheck({
@@ -25363,6 +25803,8 @@ if (shouldRunRuntime) {
         console.warn("[RedisReconciliation] Interval run failed:", error.message || error);
       });
   }, REDIS_RECONCILIATION_INTERVAL_MS);
+
+  startCacheStateWatcher();
 }
 
 // Test harness endpoints (for internal use only)
@@ -25536,11 +25978,7 @@ app.post(`${API_PREFIX}/test-harness/match/delete`, (req, res) => {
 // ===== Match Monitoring for Push Notifications =====
 const matchMonitor = require("./match_monitor");
 
-// Initialize and start match monitoring
 const SERVER_BASE_URL = `http://localhost:${PORT}${API_PREFIX}`;
-if (shouldRunRuntime) {
-  matchMonitor.initialize(SERVER_BASE_URL);
-}
 matchMonitor.setLiveActivityMatchDetailsProvider(() => {
   return getPreferredOperationalMatchDetailsSnapshotSafe().then((snapshot) =>
     snapshot && snapshot.records ? snapshot.records : {}
@@ -25744,45 +26182,152 @@ app.post(`${API_PREFIX}/live-activity/reconcile-all`, async (_req, res) => {
   }
 });
 
-if (shouldRunRuntime) {
-  app.listen(PORT, () => {
+function closeRuntimeServer() {
+  if (!runtimeServer) return Promise.resolve();
+  const serverToClose = runtimeServer;
+  runtimeServer = null;
+  return new Promise((resolve, reject) => {
+    serverToClose.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function createScraperHealthApp() {
+  const scraperApp = express();
+  scraperApp.disable("x-powered-by");
+  scraperApp.get("/healthcheck", (_req, res) => {
+    res.json({ status: "ok", role: "scraper" });
+  });
+  scraperApp.get("/metrics", (_req, res) => {
+    res.set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+    res.send(buildPrometheusMetricsText());
+  });
+  return scraperApp;
+}
+
+async function shutdownRuntime(options = {}) {
+  if (runtimeShutdownPromise) {
+    return runtimeShutdownPromise;
+  }
+
+  runtimeShutdownPromise = (async () => {
+    if (fantasyBootstrapDailyRefreshTimer) {
+      clearTimeout(fantasyBootstrapDailyRefreshTimer);
+      fantasyBootstrapDailyRefreshTimer = null;
+    }
+    stopCacheStateWatcher();
+    clearRuntimeIntervals();
+
+    if (options.stopMatchMonitor !== false) {
+      matchMonitor.stopMonitoring();
+    }
+    if (options.shutdownApns !== false) {
+      const { shutdown: shutdownAPNS } = require("./apns_client");
+      await shutdownAPNS();
+    }
+
+    await closeRuntimeServer();
+    runtimeRole = "library";
+  })().finally(() => {
+    runtimeShutdownPromise = null;
+  });
+
+  return runtimeShutdownPromise;
+}
+
+function installRuntimeSignalHandlers() {
+  if (runtimeSignalHandlersInstalled) return;
+  runtimeSignalHandlersInstalled = true;
+
+  const handleSignal = (signal) => {
+    console.log(`${signal} received, shutting down gracefully`);
+    void shutdownRuntime({
+      stopMatchMonitor: runtimeRole === "api",
+      shutdownApns: runtimeRole === "api",
+    })
+      .then(() => {
+        process.exit(0);
+      })
+      .catch((error) => {
+        console.error(`[Runtime] Shutdown failed after ${signal}:`, error.message || error);
+        process.exit(1);
+      });
+  };
+
+  process.on("SIGTERM", () => handleSignal("SIGTERM"));
+  process.on("SIGINT", () => handleSignal("SIGINT"));
+}
+
+function startApiRuntime() {
+  if (runtimeServer) {
+    if (runtimeRole !== "api") {
+      throw new Error(`Runtime already started as ${runtimeRole}`);
+    }
+    return runtimeServer;
+  }
+
+  runtimeRole = "api";
+  matchMonitor.initialize(SERVER_BASE_URL);
+  operationalBootstrapPromise = bootstrapOperationalState({ mode: "api" });
+  startApiIntervals();
+
+  runtimeServer = app.listen(PORT, () => {
     console.log(`Server listening on http://localhost:${PORT}`);
-
-    // Start match monitoring after server is ready
-    setTimeout(async () => {
-      await operationalBootstrapPromise;
-      matchMonitor.startMonitoring();
-    }, 2000); // Wait 2 seconds for server to fully initialize
   });
 
-  // Graceful shutdown
-  process.on("SIGTERM", async () => {
-    console.log("SIGTERM received, shutting down gracefully");
-    if (fantasyBootstrapDailyRefreshTimer) {
-      clearTimeout(fantasyBootstrapDailyRefreshTimer);
-      fantasyBootstrapDailyRefreshTimer = null;
+  setTimeout(() => {
+    void operationalBootstrapPromise
+      .then(() => {
+        matchMonitor.startMonitoring();
+      })
+      .catch((error) => {
+        console.error("[Runtime] API bootstrap failed:", error.message || error);
+      });
+  }, 2000);
+
+  return runtimeServer;
+}
+
+function startScraperRuntime() {
+  if (runtimeServer) {
+    if (runtimeRole !== "scraper") {
+      throw new Error(`Runtime already started as ${runtimeRole}`);
     }
-    matchMonitor.stopMonitoring();
-    const { shutdown: shutdownAPNS } = require("./apns_client");
-    await shutdownAPNS();
-    process.exit(0);
+    return runtimeServer;
+  }
+
+  runtimeRole = "scraper";
+  operationalBootstrapPromise = bootstrapOperationalState({ mode: "scraper" });
+  startScraperIntervals();
+
+  const scraperApp = createScraperHealthApp();
+  runtimeServer = scraperApp.listen(SCRAPER_PORT, () => {
+    console.log(`Scraper listening on http://localhost:${SCRAPER_PORT}`);
   });
 
-  process.on("SIGINT", async () => {
-    console.log("SIGINT received, shutting down gracefully");
-    if (fantasyBootstrapDailyRefreshTimer) {
-      clearTimeout(fantasyBootstrapDailyRefreshTimer);
-      fantasyBootstrapDailyRefreshTimer = null;
-    }
-    matchMonitor.stopMonitoring();
-    const { shutdown: shutdownAPNS } = require("./apns_client");
-    await shutdownAPNS();
-    process.exit(0);
+  void operationalBootstrapPromise.catch((error) => {
+    console.error("[Runtime] Scraper bootstrap failed:", error.message || error);
   });
+
+  return runtimeServer;
+}
+
+if (require.main === module) {
+  startApiRuntime();
+  installRuntimeSignalHandlers();
 }
 
 module.exports = {
   app,
+  startApiRuntime,
+  startScraperRuntime,
+  shutdownRuntime,
+  installRuntimeSignalHandlers,
   __private: {
     toMatchListPayload,
     dedupeMatchListPayloads,
@@ -25848,6 +26393,12 @@ module.exports = {
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
     bumpCacheStateSnapshot,
+    inspectOperationalStateReadiness,
+    clearFootballOperationalMemoryState,
+    reloadOperationalStateDomainsFromRedis,
+    pollCacheStateAndRefreshFromRedis,
+    startApiIntervals,
+    startScraperIntervals,
     buildLiveActivityTestContentState,
     buildLiveActivityTestPresets,
     resolveLiveActivityTestPreset,

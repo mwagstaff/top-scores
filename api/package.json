@@ -11,6 +11,8 @@
     "cleanup:invalid-redis-matches": "node scripts/cleanup_invalid_redis_matches.js",
     "test:bbc-details": "node test_bbc_match_details.js",
     "start": "node server.js",
+    "start:api": "node server.js",
+    "start:scraper": "node scraper.js",
     "test-harness": "node -e \"console.log('Start the main API server with npm start, then open http://localhost:3000/admin/harness')\"",
     "live-activity:harness": "./live_activity_test_harness.sh"
   },
