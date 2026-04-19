@@ -1308,6 +1308,48 @@ function createAuditServiceApp() {
     });
   });
 
+  app.get(`${API_PREFIX}/audit/matches`, (req, res) => {
+    setNoStoreHeaders(res);
+    const report = auditState.current_report || buildEmptyAuditReport();
+    const pageSize = Number.isFinite(Number(req.query.page_size))
+      ? Math.max(1, Math.min(1000, Math.floor(Number(req.query.page_size))))
+      : 100;
+    const page = Number.isFinite(Number(req.query.page))
+      ? Math.max(1, Math.floor(Number(req.query.page)))
+      : 1;
+    const filteredIssues = filteredIssuesFromReport(report, req.query);
+    const filteredMatches = groupIssuesByMatch(
+      filteredIssues.map((issue) => ({
+        summary: {
+          match_id: issue.match_id,
+          audit_match_id: issue.audit_match_id,
+          date: issue.date,
+          time: issue.time,
+          league: issue.league,
+          home_team: issue.home_team,
+          away_team: issue.away_team,
+          score_status: issue.score_status,
+          home_score: issue.home_score,
+          away_score: issue.away_score,
+        },
+        issues: [issue],
+      }))
+    );
+    const paged = paginate(filteredMatches, page, pageSize);
+    res.json({
+      success: true,
+      generated_at: report.generated_at,
+      pagination: {
+        page: paged.page,
+        page_size: paged.page_size,
+        total_count: paged.total_count,
+        total_pages: paged.total_pages,
+        has_more: paged.has_more,
+      },
+      matches: paged.items,
+    });
+  });
+
   app.post(`${API_PREFIX}/audit/run`, async (_req, res) => {
     setNoStoreHeaders(res);
     try {

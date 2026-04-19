@@ -1065,7 +1065,9 @@ final class MatchesStore: ObservableObject {
                 endDate: loadRange.upperBound,
                 pageSize: resultsHistoryPageSize,
                 includePreferenceFilters: false,
-                hydrateStates: !shouldReloadHistory,
+                // Results can retain stale synthetic rows across full-history reloads unless
+                // we reconcile each list row with its current match-details state payload.
+                hydrateStates: true,
                 ifModifiedSince: ifModifiedSince
             )
             let refreshCompletedAt = Date()

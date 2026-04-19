@@ -1244,6 +1244,72 @@ test("mergeBbcAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT
   assert.equal(pisaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/cx2vvg0v3rpt");
 });
 
+test("mergeBbcAndLiveMatches collapses La Liga and Bundesliga alias rows onto BBC-backed FT rows", () => {
+  const osasunaMerged = mergeBbcAndLiveMatches(
+    [
+      {
+        date: "2026-04-12",
+        time: "13:00",
+        league: "La Liga",
+        home_team: "Osasuna",
+        away_team: "Real Betis",
+        tv_channels: ["Premier Sports 2"],
+      },
+    ],
+    [
+      {
+        date: "2026-04-12",
+        time: "13:00",
+        league: "Spanish La Liga",
+        home_team: "Osasuna",
+        away_team: "Real Betis",
+        home_score: 1,
+        away_score: 1,
+        score_status: "FT",
+        details_url: "https://www.bbc.co.uk/sport/football/live/cx24nxnxggkt",
+        has_bbc_source: true,
+      },
+    ]
+  );
+
+  assert.equal(osasunaMerged.length, 1);
+  assert.equal(osasunaMerged[0].league, "La Liga");
+  assert.equal(osasunaMerged[0].score_status, "FT");
+  assert.equal(osasunaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/cx24nxnxggkt");
+
+  const stuttgartMerged = mergeBbcAndLiveMatches(
+    [
+      {
+        date: "2026-04-12",
+        time: "16:30",
+        league: "Bundesliga",
+        home_team: "VfB Stuttgart",
+        away_team: "Hamburg",
+        tv_channels: ["Amazon Prime PPV"],
+      },
+    ],
+    [
+      {
+        date: "2026-04-12",
+        time: "16:30",
+        league: "German Bundesliga",
+        home_team: "Stuttgart",
+        away_team: "Hamburger SV",
+        home_score: 4,
+        away_score: 0,
+        score_status: "FT",
+        details_url: "https://www.bbc.co.uk/sport/football/live/c705j1jx2y0t",
+        has_bbc_source: true,
+      },
+    ]
+  );
+
+  assert.equal(stuttgartMerged.length, 1);
+  assert.equal(stuttgartMerged[0].league, "Bundesliga");
+  assert.equal(stuttgartMerged[0].score_status, "FT");
+  assert.equal(stuttgartMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/c705j1jx2y0t");
+});
+
 test("collectAdminRogueMatchTargets only selects the exact rogue short-name row", () => {
   const { selectors, invalid } = normalizeAdminRogueMatchSelectors({
     matches: [
@@ -1774,6 +1840,66 @@ test("dedupeMatchListPayloads collapses Serie A alias rows and keeps the BBC liv
   assert.equal(pisaDeduped[0].match_details_id, "cx2vvg0v3rpt");
   assert.equal(pisaDeduped[0].league, "Italian Serie A");
   assert.equal(pisaDeduped[0].score_status, "FT");
+});
+
+test("dedupeMatchListPayloads collapses La Liga and Bundesliga alias rows and keeps the BBC live match ids", () => {
+  const osasunaDeduped = dedupeMatchListPayloads([
+    {
+      date: "2026-04-12",
+      time: "13:00",
+      league: "La Liga",
+      home_team: "Osasuna",
+      away_team: "Real Betis",
+      match_details_id: "syn913f0b827e8d1aca",
+      tv_channels: ["Premier Sports 2"],
+    },
+    {
+      date: "2026-04-12",
+      time: "13:00",
+      league: "Spanish La Liga",
+      home_team: "Osasuna",
+      away_team: "Real Betis",
+      match_details_id: "cx24nxnxggkt",
+      home_score: 1,
+      away_score: 1,
+      score_status: "FT",
+      has_bbc_source: true,
+    },
+  ]);
+
+  assert.equal(osasunaDeduped.length, 1);
+  assert.equal(osasunaDeduped[0].match_details_id, "cx24nxnxggkt");
+  assert.equal(osasunaDeduped[0].score_status, "FT");
+  assert.equal(osasunaDeduped[0].has_bbc_source, true);
+
+  const stuttgartDeduped = dedupeMatchListPayloads([
+    {
+      date: "2026-04-12",
+      time: "16:30",
+      league: "Bundesliga",
+      home_team: "VfB Stuttgart",
+      away_team: "Hamburg",
+      match_details_id: "syn0ec2a20debd46f6b",
+      tv_channels: ["Amazon Prime PPV"],
+    },
+    {
+      date: "2026-04-12",
+      time: "16:30",
+      league: "German Bundesliga",
+      home_team: "Stuttgart",
+      away_team: "Hamburger SV",
+      match_details_id: "c705j1jx2y0t",
+      home_score: 4,
+      away_score: 0,
+      score_status: "FT",
+      has_bbc_source: true,
+    },
+  ]);
+
+  assert.equal(stuttgartDeduped.length, 1);
+  assert.equal(stuttgartDeduped[0].match_details_id, "c705j1jx2y0t");
+  assert.equal(stuttgartDeduped[0].score_status, "FT");
+  assert.equal(stuttgartDeduped[0].has_bbc_source, true);
 });
 
 test("isListPayloadVisibleForMode excludes future same-day fixtures from results", () => {

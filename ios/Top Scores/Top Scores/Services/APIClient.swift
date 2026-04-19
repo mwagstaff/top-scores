@@ -36,7 +36,7 @@ struct APIClient {
             preferences: preferences,
             mode: .results,
             includePreferenceFilters: false,
-            hydrateStates: false
+            hydrateStates: true
         )
         let fixtures = try await fixturesTask
         let results = try await resultsTask

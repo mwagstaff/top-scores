@@ -1445,6 +1445,7 @@ function normalizeLeagueName(name) {
   const aliases = {
     "german bundesliga": "Bundesliga",
     "italian serie a": "Serie A",
+    "spanish la liga": "La Liga",
   };
   if (aliases[lowered]) {
     return aliases[lowered];
@@ -24637,6 +24638,22 @@ app.get(`${API_PREFIX}/audit/issues`, async (req, res) => {
   } catch (error) {
     res.status(Number.isFinite(error && error.statusCode) ? error.statusCode : 503).json({
       error: "Failed to retrieve audit issues",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/audit/matches`, async (req, res) => {
+  try {
+    const response = await requestAuditRuntime(`${API_PREFIX}/audit/matches`, {
+      method: "GET",
+      query: req.query,
+      timeoutMs: 15000,
+    });
+    res.status(response.status).json(response.payload || {});
+  } catch (error) {
+    res.status(Number.isFinite(error && error.statusCode) ? error.statusCode : 503).json({
+      error: "Failed to retrieve audit matches",
       message: error && error.message ? error.message : String(error),
     });
   }
