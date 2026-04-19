@@ -8,6 +8,11 @@ const AUDIT_UNBOUNDED_START_DATE = process.env.AUDIT_UNBOUNDED_START_DATE || "19
 const AUDIT_LOOKBACK_DAYS = Number.isFinite(Number(process.env.AUDIT_LOOKBACK_DAYS))
   ? Math.max(0, Math.floor(Number(process.env.AUDIT_LOOKBACK_DAYS)))
   : 0;
+const AUDIT_INTERVAL_LOOKBACK_DAYS = Number.isFinite(Number(process.env.AUDIT_INTERVAL_LOOKBACK_DAYS))
+  ? Math.max(0, Math.floor(Number(process.env.AUDIT_INTERVAL_LOOKBACK_DAYS)))
+  : AUDIT_LOOKBACK_DAYS === 0
+    ? 7
+    : AUDIT_LOOKBACK_DAYS;
 const AUDIT_POLL_INTERVAL_MS = Number.isFinite(Number(process.env.AUDIT_POLL_INTERVAL_MS))
   ? Math.max(30 * 1000, Math.floor(Number(process.env.AUDIT_POLL_INTERVAL_MS)))
   : 5 * 60 * 1000;
@@ -164,6 +169,7 @@ function buildPublicConfig() {
     port: AUDIT_PORT,
     poll_interval_ms: AUDIT_POLL_INTERVAL_MS,
     lookback_days: AUDIT_LOOKBACK_DAYS,
+    interval_lookback_days: AUDIT_INTERVAL_LOOKBACK_DAYS,
     unbounded_start_date: AUDIT_UNBOUNDED_START_DATE,
     match_max_duration_ms: AUDIT_MATCH_MAX_DURATION_MS,
     auto_repair_enabled: AUDIT_AUTO_REPAIR_ENABLED,
@@ -172,6 +178,14 @@ function buildPublicConfig() {
     time_zone: AUDIT_TIME_ZONE,
     upstream_api_root: AUDIT_MAIN_API_ROOT,
   };
+}
+
+function resolveAuditLookbackDays(trigger = "interval") {
+  const normalizedTrigger = String(trigger || "interval").trim().toLowerCase();
+  if (normalizedTrigger === "manual_api") {
+    return AUDIT_LOOKBACK_DAYS;
+  }
+  return AUDIT_INTERVAL_LOOKBACK_DAYS;
 }
 
 function currentRunSnapshot() {
@@ -862,7 +876,8 @@ async function autoRepairReportIssues(report, trigger = "interval") {
 
 async function buildAuditReport(trigger = "interval") {
   const nowMs = Date.now();
-  const window = buildDateRangeWindow(nowMs, AUDIT_LOOKBACK_DAYS);
+  const effectiveLookbackDays = resolveAuditLookbackDays(trigger);
+  const window = buildDateRangeWindow(nowMs, effectiveLookbackDays);
   updateCurrentRun({
     trigger,
     status: "running",
@@ -927,7 +942,7 @@ async function buildAuditReport(trigger = "interval") {
     window: {
       start: window.start,
       end: window.end,
-      lookback_days: AUDIT_LOOKBACK_DAYS,
+      lookback_days: effectiveLookbackDays,
       unbounded: Boolean(window.unbounded),
       time_zone: AUDIT_TIME_ZONE,
     },

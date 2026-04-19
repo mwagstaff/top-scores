@@ -12,6 +12,22 @@ const DEFAULT_BBC_PREMIER_LEAGUE_OUTPUT = path.join(
   __dirname,
   "bbc_premier_league_teams.json"
 );
+let bbcPremierLeagueRequestObserver = null;
+
+function setBbcPremierLeagueRequestObserver(observer) {
+  bbcPremierLeagueRequestObserver = typeof observer === "function" ? observer : null;
+}
+
+function notifyBbcPremierLeagueRequestObserver(event) {
+  if (typeof bbcPremierLeagueRequestObserver !== "function" || !event || typeof event !== "object") {
+    return;
+  }
+  try {
+    bbcPremierLeagueRequestObserver(event);
+  } catch (_error) {
+    // Metrics hooks must never break scraping.
+  }
+}
 
 const POSITION_KEYS = [
   "position",
@@ -43,8 +59,25 @@ const TEAM_OBJECT_KEYS = ["team", "club", "participant", "competitor", "side"];
 
 function fetchHtml(url) {
   return new Promise((resolve, reject) => {
-    const target = new URL(url);
+    const requestedUrl = String(url || "").trim();
+    const target = new URL(requestedUrl);
     const lib = target.protocol === "https:" ? https : http;
+    let settled = false;
+
+    const complete = ({ statusCode, error, html }) => {
+      if (settled) return;
+      settled = true;
+      notifyBbcPremierLeagueRequestObserver({
+        source: "bbc_premier_league_table",
+        url: requestedUrl,
+        statusCode,
+      });
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(html);
+    };
 
     const req = lib.get(
       target,
@@ -54,6 +87,7 @@ function fetchHtml(url) {
         },
       },
       (res) => {
+        const statusCode = Number(res.statusCode || 0);
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           const redirect = new URL(res.headers.location, target).toString();
           res.resume();
@@ -63,7 +97,11 @@ function fetchHtml(url) {
 
         if (res.statusCode !== 200) {
           res.resume();
-          reject(new Error(`Request failed with status ${res.statusCode}`));
+          const error = new Error(`Request failed with status ${statusCode}`);
+          error.statusCode = statusCode;
+          error.code = `HTTP_${statusCode}`;
+          error.url = requestedUrl;
+          complete({ statusCode, error });
           return;
         }
 
@@ -72,14 +110,26 @@ function fetchHtml(url) {
         res.on("data", (chunk) => {
           data += chunk;
         });
-        res.on("end", () => resolve(data));
+        res.on("end", () => complete({ statusCode, html: data }));
       }
     );
 
     req.setTimeout(30000, () => {
-      req.destroy(new Error("Request timed out"));
+      const error = new Error("Request timed out");
+      error.code = "ETIMEDOUT";
+      error.url = requestedUrl;
+      req.destroy(error);
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (!error.url) error.url = requestedUrl;
+      complete({
+        statusCode:
+          Number.isFinite(Number(error.statusCode)) && Number(error.statusCode) >= 0
+            ? Number(error.statusCode)
+            : 0,
+        error,
+      });
+    });
   });
 }
 
@@ -500,5 +550,6 @@ module.exports = {
   DEFAULT_BBC_PREMIER_LEAGUE_OUTPUT,
   extractPremierLeagueTeamsFromHtml,
   fetchPremierLeagueTeams,
+  setBbcPremierLeagueRequestObserver,
   writePremierLeagueTeams,
 };

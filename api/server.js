@@ -36,18 +36,21 @@ const {
   fetchBbcFixtures,
   fetchBbcScoresFixturesByDateRange,
   fetchBbcMatchByDetailsUrl,
+  setBbcRequestObserver,
   writeBbcFixtures,
 } = require("./fetch_bbc_scores");
 const {
   DEFAULT_BBC_TABLES_URL,
   DEFAULT_BBC_PREMIER_LEAGUE_OUTPUT,
   fetchPremierLeagueTeams,
+  setBbcPremierLeagueRequestObserver,
   writePremierLeagueTeams,
 } = require("./fetch_bbc_premier_league_table");
 const {
   LEAGUE_TABLE_SOURCES,
   DEFAULT_BBC_LEAGUE_TABLES_OUTPUT,
   fetchLeagueTables,
+  setBbcLeagueTablesRequestObserver,
   writeLeagueTables,
 } = require("./fetch_bbc_league_tables");
 const {
@@ -545,6 +548,28 @@ const parsedMatchDetailsPollIntervalMs = Number(
 const MATCH_DETAILS_POLL_INTERVAL_MS = Number.isFinite(parsedMatchDetailsPollIntervalMs)
   ? Math.max(1000, Math.floor(parsedMatchDetailsPollIntervalMs))
   : 10 * 1000;
+const parsedMatchDetailsFinishedEnrichmentPollIntervalMs = Number(
+  process.env.MATCH_DETAILS_FINISHED_ENRICHMENT_POLL_INTERVAL_MS || 2 * 60 * 1000
+);
+const MATCH_DETAILS_FINISHED_ENRICHMENT_POLL_INTERVAL_MS = Number.isFinite(
+  parsedMatchDetailsFinishedEnrichmentPollIntervalMs
+)
+  ? Math.max(
+    MATCH_DETAILS_POLL_INTERVAL_MS,
+    Math.floor(parsedMatchDetailsFinishedEnrichmentPollIntervalMs)
+  )
+  : 2 * 60 * 1000;
+const parsedMatchDetailsFinishedEnrichmentErrorBackoffMs = Number(
+  process.env.MATCH_DETAILS_FINISHED_ENRICHMENT_ERROR_BACKOFF_MS || 5 * 60 * 1000
+);
+const MATCH_DETAILS_FINISHED_ENRICHMENT_ERROR_BACKOFF_MS = Number.isFinite(
+  parsedMatchDetailsFinishedEnrichmentErrorBackoffMs
+)
+  ? Math.max(
+    MATCH_DETAILS_FINISHED_ENRICHMENT_POLL_INTERVAL_MS,
+    Math.floor(parsedMatchDetailsFinishedEnrichmentErrorBackoffMs)
+  )
+  : 5 * 60 * 1000;
 const parsedApiStartupWarmDelayMs = Number(process.env.API_STARTUP_WARM_DELAY_MS || 60 * 1000);
 const API_STARTUP_WARM_DELAY_MS = Number.isFinite(parsedApiStartupWarmDelayMs)
   ? Math.max(0, Math.floor(parsedApiStartupWarmDelayMs))
@@ -690,7 +715,6 @@ let processCpuUsageSample = {
   usage: process.cpuUsage(),
 };
 let eventLoopUtilizationSample = performance.eventLoopUtilization();
-const RUNTIME_SERVICE_NAME = "top-scores-api";
 const RUNTIME_ENVIRONMENT = String(process.env.NODE_ENV || "development").trim() || "development";
 const HTTP_REQUEST_DURATION_BUCKETS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5];
 const SOURCE_FETCH_DURATION_BUCKETS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
@@ -707,6 +731,8 @@ const UNIQUE_USER_WINDOWS = [
 ];
 const httpRequestMetrics = new Map();
 const sourceFetchMetrics = new Map();
+const bbcHttpRequestMetrics = new Map();
+const bbcHttpFailedResponseMetrics = new Map();
 const fantasyTransferRecommendationMetrics = new Map();
 const sourceRecordsFetchedTotalBySource = new Map();
 const sourceCacheSizeBySource = new Map();
@@ -923,6 +949,7 @@ let startupBackfillSucceeded = 0;
 let startupBackfillFailed = 0;
 let startupBackfillRunning = false;
 const matchDetailsActiveRefreshUntilById = new Map();
+const matchDetailsRefreshNotBeforeById = new Map();
 const matchDetailsBackfillNextAttemptAt = new Map();
 let operationalCacheState = buildDefaultOperationalCacheState();
 let cacheStateWatchTask = null;
@@ -950,6 +977,13 @@ function isApiRuntime() {
 
 function isMonitorRuntime() {
   return runtimeRole === "monitor";
+}
+
+function runtimeServiceName() {
+  if (runtimeRole === "api") return "top-scores-api";
+  if (runtimeRole === "monitor") return "top-scores-monitor";
+  if (runtimeRole === "scraper") return "top-scores-scraper";
+  return "top-scores-library";
 }
 
 function currentEventLoopLagP99Ms() {
@@ -2235,6 +2269,20 @@ function metricLabelKey(labels) {
     .join("|");
 }
 
+function parseMetricLabelKey(key) {
+  return String(key || "")
+    .split("|")
+    .filter(Boolean)
+    .reduce((labels, pair) => {
+      const separatorIndex = pair.indexOf(":");
+      if (separatorIndex <= 0) return labels;
+      const labelKey = pair.slice(0, separatorIndex);
+      const labelValue = pair.slice(separatorIndex + 1);
+      labels[labelKey] = labelValue;
+      return labels;
+    }, {});
+}
+
 function formatPrometheusLabels(labels) {
   return Object.keys(labels)
     .sort()
@@ -2337,6 +2385,41 @@ function trackSourceUpdateMetrics({ source, startedAtMs, success, recordsFetched
     }
   }
 }
+
+function trackBbcHttpRequestMetric({ source, url, statusCode }) {
+  const normalizedSource = String(source || "bbc_unknown").trim() || "bbc_unknown";
+  const normalizedStatusCode =
+    Number.isFinite(Number(statusCode)) && Number(statusCode) >= 0
+      ? String(Math.floor(Number(statusCode)))
+      : "0";
+  const normalizedUrl = String(url || "").trim();
+
+  const requestLabels = {
+    source: normalizedSource,
+    status_code: normalizedStatusCode,
+  };
+  const requestKey = metricLabelKey(requestLabels);
+  bbcHttpRequestMetrics.set(requestKey, (bbcHttpRequestMetrics.get(requestKey) || 0) + 1);
+
+  if (Number(normalizedStatusCode) < 400 || !normalizedUrl) {
+    return;
+  }
+
+  const failedLabels = {
+    source: normalizedSource,
+    status_code: normalizedStatusCode,
+    url: normalizedUrl,
+  };
+  const failedKey = metricLabelKey(failedLabels);
+  bbcHttpFailedResponseMetrics.set(
+    failedKey,
+    (bbcHttpFailedResponseMetrics.get(failedKey) || 0) + 1
+  );
+}
+
+setBbcRequestObserver(trackBbcHttpRequestMetric);
+setBbcPremierLeagueRequestObserver(trackBbcHttpRequestMetric);
+setBbcLeagueTablesRequestObserver(trackBbcHttpRequestMetric);
 
 function logPollSuccess(job, details = {}) {
   const fields = Object.entries(details)
@@ -4994,8 +5077,9 @@ function buildPrometheusMetricsText() {
   lines.push("# HELP top_scores_runtime_info Runtime identity for the top-scores API process.");
   lines.push("# TYPE top_scores_runtime_info gauge");
   pushPrometheusSample(lines, "top_scores_runtime_info", 1, {
-    service: RUNTIME_SERVICE_NAME,
+    service: runtimeServiceName(),
     environment: RUNTIME_ENVIRONMENT,
+    runtime: runtimeRole,
     node_version: process.version,
     pid: String(process.pid),
   });
@@ -5251,6 +5335,32 @@ function buildPrometheusMetricsText() {
   sourceMetricEntries.forEach((entry) => {
     pushPrometheusSample(lines, "source_fetches_total", entry.count, entry.labels);
   });
+
+  lines.push("# HELP top_scores_bbc_http_requests_total Total number of BBC upstream HTTP requests by source and response code.");
+  lines.push("# TYPE top_scores_bbc_http_requests_total counter");
+  Array.from(bbcHttpRequestMetrics.entries())
+    .sort(([lhs], [rhs]) => lhs.localeCompare(rhs))
+    .forEach(([key, count]) => {
+      pushPrometheusSample(
+        lines,
+        "top_scores_bbc_http_requests_total",
+        count,
+        parseMetricLabelKey(key)
+      );
+    });
+
+  lines.push("# HELP top_scores_bbc_http_failed_responses_total Total number of failed BBC upstream HTTP responses by source, response code, and URL.");
+  lines.push("# TYPE top_scores_bbc_http_failed_responses_total counter");
+  Array.from(bbcHttpFailedResponseMetrics.entries())
+    .sort(([lhs], [rhs]) => lhs.localeCompare(rhs))
+    .forEach(([key, count]) => {
+      pushPrometheusSample(
+        lines,
+        "top_scores_bbc_http_failed_responses_total",
+        count,
+        parseMetricLabelKey(key)
+      );
+    });
 
   lines.push("# HELP source_records_fetched_total Total number of source records fetched.");
   lines.push("# TYPE source_records_fetched_total counter");
@@ -8380,12 +8490,35 @@ function resolveStableMatchScoreStatus(match, options = {}) {
   if (!match || typeof match !== "object") return null;
   const homeScore = parseNumericScore(match.home_score);
   const awayScore = parseNumericScore(match.away_score);
-  return stabilizeMatchStatus(resolveMatchScoreStatus(match) || match.score_status || null, {
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  const stabilizedStatus = stabilizeMatchStatus(resolveMatchScoreStatus(match) || match.score_status || null, {
     date: match.date || null,
     time: match.time || null,
     hasScore: homeScore !== null && awayScore !== null,
-    nowMs: options.nowMs,
+    nowMs,
   });
+  if (!isInProgressMatchStatus(stabilizedStatus) || homeScore === null || awayScore === null) {
+    return stabilizedStatus;
+  }
+
+  const updatedAtMs = Date.parse(String(match.updated_at || "").trim());
+  if (!Number.isFinite(updatedAtMs) || nowMs <= updatedAtMs) {
+    return stabilizedStatus;
+  }
+
+  const hasKickoffMetadata =
+    isDateOnly(String(match.date || "").trim()) &&
+    TIME_ONLY_PATTERN.test(String(match.time || "").trim());
+  if (hasKickoffMetadata) {
+    return stabilizedStatus;
+  }
+
+  const staleByAge = nowMs - updatedAtMs >= MATCH_DETAILS_STALE_IN_PROGRESS_MS;
+  if (staleByAge) {
+    return "FT";
+  }
+
+  return stabilizedStatus;
 }
 
 function hasExplicitNoScoreState(match) {
@@ -8444,6 +8577,7 @@ function pruneInactiveMatchDetailsRefreshEntries(nowMs = Date.now()) {
   matchDetailsActiveRefreshUntilById.forEach((refreshUntilMs, matchId) => {
     if (!Number.isFinite(refreshUntilMs) || refreshUntilMs <= nowMs) {
       matchDetailsActiveRefreshUntilById.delete(matchId);
+      matchDetailsRefreshNotBeforeById.delete(matchId);
     }
   });
 }
@@ -8468,6 +8602,37 @@ function isMatchDetailsActive(matchId, nowMs = Date.now()) {
   const refreshUntilMs = matchDetailsActiveRefreshUntilById.get(normalizedMatchId);
   if (!Number.isFinite(refreshUntilMs) || refreshUntilMs <= nowMs) {
     matchDetailsActiveRefreshUntilById.delete(normalizedMatchId);
+    return false;
+  }
+  return true;
+}
+
+function clearMatchDetailsRefreshBackoff(matchId) {
+  const normalizedMatchId = normalizeMatchDetailsId(matchId);
+  if (!normalizedMatchId) return;
+  matchDetailsRefreshNotBeforeById.delete(normalizedMatchId);
+}
+
+function deferMatchDetailsRefresh(matchId, delayMs) {
+  const normalizedMatchId = normalizeMatchDetailsId(matchId);
+  if (!normalizedMatchId) return false;
+  const normalizedDelayMs = Number.isFinite(delayMs)
+    ? Math.max(MATCH_DETAILS_POLL_INTERVAL_MS, Math.floor(delayMs))
+    : MATCH_DETAILS_FINISHED_ENRICHMENT_POLL_INTERVAL_MS;
+  matchDetailsRefreshNotBeforeById.set(normalizedMatchId, Date.now() + normalizedDelayMs);
+  return true;
+}
+
+function shouldDeferMatchDetailsRefresh(matchId, nowMs = Date.now()) {
+  const normalizedMatchId = normalizeMatchDetailsId(matchId);
+  if (!normalizedMatchId) return false;
+  const notBeforeMs = matchDetailsRefreshNotBeforeById.get(normalizedMatchId);
+  if (!Number.isFinite(notBeforeMs)) {
+    matchDetailsRefreshNotBeforeById.delete(normalizedMatchId);
+    return false;
+  }
+  if (notBeforeMs <= nowMs) {
+    matchDetailsRefreshNotBeforeById.delete(normalizedMatchId);
     return false;
   }
   return true;
@@ -9559,7 +9724,8 @@ function collectInProgressMatchDetailTargets() {
     const detailsUrl = String(stablePayload.details_url || "").trim();
     if (!detailsUrl) return;
 
-    const isInProgress = Boolean(stablePayload.in_progress);
+    const isStaleInProgress = matchDetailsHasStaleInProgressStatus(stablePayload, nowMs);
+    const isInProgress = Boolean(stablePayload.in_progress) && !isStaleInProgress;
     const isActive = isMatchDetailsActive(detailsId, nowMs);
     if (!isInProgress && !isActive) {
       targets.delete(detailsId);
@@ -9587,6 +9753,10 @@ function collectInProgressMatchDetailTargets() {
       targets.delete(detailsId);
       return;
     }
+    const targetKind = isInProgress ? "live" : "finished_enrichment";
+    if (targetKind === "finished_enrichment" && shouldDeferMatchDetailsRefresh(detailsId, nowMs)) {
+      return;
+    }
 
     const existing = targets.get(detailsId);
     const mergedSeedMatch = existing && existing.seed_match
@@ -9610,6 +9780,7 @@ function collectInProgressMatchDetailTargets() {
     targets.set(detailsId, {
       id: detailsId,
       details_url: detailsUrl,
+      kind: targetKind,
       seed_match: mergedSeedMatch,
     });
   };
@@ -9690,8 +9861,29 @@ async function refreshInProgressMatchDetails(options = {}) {
             if (justFinished && stillMissingScorers) {
               markMatchDetailsActive(result.match_id, 30 * 60 * 1000);
             }
+            if (target.kind === "finished_enrichment") {
+              const stillNeedsEnrichment = Boolean(
+                matchDetailsNeedsEnrichment(updatedPayload) || stillMissingScorers
+              );
+              if (stillNeedsEnrichment) {
+                deferMatchDetailsRefresh(
+                  result.match_id,
+                  MATCH_DETAILS_FINISHED_ENRICHMENT_POLL_INTERVAL_MS
+                );
+              } else {
+                clearMatchDetailsRefreshBackoff(result.match_id);
+              }
+            } else {
+              clearMatchDetailsRefreshBackoff(result.match_id);
+            }
           }
         } catch (err) {
+          if (target.kind === "finished_enrichment") {
+            deferMatchDetailsRefresh(
+              target.id,
+              MATCH_DETAILS_FINISHED_ENRICHMENT_ERROR_BACKOFF_MS
+            );
+          }
           console.warn(
             `Failed to refresh match details for ${target.details_url}:`,
             err.message || err
@@ -13949,6 +14141,7 @@ function clearFootballOperationalMemoryState() {
   nationalEloLastUpdated = null;
   matchDetailsById = new Map();
   matchDetailsActiveRefreshUntilById.clear();
+  matchDetailsRefreshNotBeforeById.clear();
   matchDetailsLastUpdated = null;
   scrapedTeamShortNamesByKey = new Map();
   scrapedTeamShortNamesLastUpdated = null;
@@ -15403,6 +15596,7 @@ async function deleteCanonicalMatchDetailsByIds(matchIds, options = {}) {
       removedFromMemory += 1;
     }
     matchDetailsActiveRefreshUntilById.delete(matchId);
+    matchDetailsRefreshNotBeforeById.delete(matchId);
     matchDetailsBackfillNextAttemptAt.delete(matchId);
     matchDetailsBackfillTasks.delete(matchId);
   });

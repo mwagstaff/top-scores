@@ -46,6 +46,20 @@ const BBC_LIVE_TEXT_MAX_PAGES = 6;
 const BBC_COMPLETED_STATUSES = new Set(["FT", "AET", "Pens", "PENS", "PEN", "PEN."]);
 const BBC_POSTPONED_STATUSES = new Set(["POSTPONED", "MATCH POSTPONED"]);
 const bbcDetailsCache = new Map();
+let bbcRequestObserver = null;
+
+function setBbcRequestObserver(observer) {
+  bbcRequestObserver = typeof observer === "function" ? observer : null;
+}
+
+function notifyBbcRequestObserver(event) {
+  if (typeof bbcRequestObserver !== "function" || !event || typeof event !== "object") return;
+  try {
+    bbcRequestObserver(event);
+  } catch (_error) {
+    // Swallow observer errors so scraping never fails because of metrics hooks.
+  }
+}
 
 const TEAM_SELECTORS = [
   "[data-team-name]",
@@ -97,11 +111,29 @@ const STATUS_ALIASES = new Map([
   ["postponed", "POSTPONED"],
 ]);
 
-function fetchHtml(url) {
+function fetchHtml(url, options = {}) {
   return new Promise((resolve, reject) => {
+    const source = String(options.source || "bbc_unknown").trim() || "bbc_unknown";
+    const requestedUrl = String(url || "").trim();
     // Add cache-busting query parameter with current timestamp
-    const target = new URL(url);
+    const target = new URL(requestedUrl);
     target.searchParams.set('_t', Date.now().toString());
+    let settled = false;
+
+    const complete = ({ statusCode, error, html }) => {
+      if (settled) return;
+      settled = true;
+      notifyBbcRequestObserver({
+        source,
+        url: requestedUrl,
+        statusCode,
+      });
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(html);
+    };
 
     const lib = target.protocol === "https:" ? https : http;
     const req = lib.get(
@@ -116,16 +148,21 @@ function fetchHtml(url) {
         },
       },
       (res) => {
+        const statusCode = Number(res.statusCode || 0);
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           const redirect = new URL(res.headers.location, target).toString();
           res.resume();
-          fetchHtml(redirect).then(resolve).catch(reject);
+          fetchHtml(redirect, options).then(resolve).catch(reject);
           return;
         }
 
         if (res.statusCode !== 200) {
           res.resume();
-          reject(new Error(`Request failed with status ${res.statusCode}`));
+          const error = new Error(`Request failed with status ${statusCode}`);
+          error.statusCode = statusCode;
+          error.code = `HTTP_${statusCode}`;
+          error.url = requestedUrl;
+          complete({ statusCode, error });
           return;
         }
 
@@ -134,14 +171,26 @@ function fetchHtml(url) {
         res.on("data", (chunk) => {
           data += chunk;
         });
-        res.on("end", () => resolve(data));
+        res.on("end", () => complete({ statusCode, html: data }));
       }
     );
 
     req.setTimeout(30000, () => {
-      req.destroy(new Error("Request timed out"));
+      const error = new Error("Request timed out");
+      error.code = "ETIMEDOUT";
+      error.url = requestedUrl;
+      req.destroy(error);
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (!error.url) error.url = requestedUrl;
+      complete({
+        statusCode:
+          Number.isFinite(Number(error.statusCode)) && Number(error.statusCode) >= 0
+            ? Number(error.statusCode)
+            : 0,
+        error,
+      });
+    });
   });
 }
 
@@ -948,7 +997,7 @@ async function fetchBbcLiveTextEntriesByDetailsUrl(detailsUrl, options = {}) {
   while (page <= maxPages) {
     const pageUrl = buildBbcLiveTextPageUrl(normalized, page);
     if (!pageUrl) break;
-    const html = await fetchHtml(pageUrl);
+    const html = await fetchHtml(pageUrl, { source: "bbc_match_details" });
     const parsed = parseLiveTextEntriesFromHtml(html);
     totalPages = parsed.pagination.totalPages || totalPages;
     parsed.entries.forEach((entry) => {
@@ -1831,7 +1880,7 @@ async function fetchDetailsWithCache(detailsUrl, matchStatus, homeTeam = null, a
   }
 
   try {
-    const html = await fetchHtml(detailsUrl);
+    const html = await fetchHtml(detailsUrl, { source: "bbc_live_scores" });
     const parsed = parseMatchDetailsFromHtml(html, homeTeam, awayTeam);
 
     // Only cache completed matches to ensure fresh data for live matches
@@ -3257,7 +3306,7 @@ async function fetchBbcScoresFixturesByDate(dateString, options = {}) {
   const fallbackDate = normalizeDateOnly(dateString);
   const timeZone = options.timeZone || DEFAULT_BBC_MATCH_TIMEZONE;
   const url = resolveScoresFixturesDateUrl(options.baseUrl || DEFAULT_BBC_URL, fallbackDate);
-  const html = await fetchHtml(url);
+  const html = await fetchHtml(url, { source: "bbc_scores_fixtures_range" });
   const matches = parseScheduledMatchesFromJson(html, {
     fallbackDate,
     timeZone,
@@ -3313,7 +3362,7 @@ function toScoreValue(value) {
 
 async function fetchBbcFixtures(url = DEFAULT_BBC_URL) {
   pruneDetailsCache(Date.now());
-  const html = await fetchHtml(url);
+  const html = await fetchHtml(url, { source: "bbc_live_scores" });
   const $ = cheerio.load(html);
   const fromDom = parseMatchesFromDom($);
   const fromJson = parseMatchesFromJson(html);
@@ -3348,7 +3397,7 @@ async function fetchBbcMatchByDetailsUrl(detailsUrl) {
   const normalizedTarget = normalizeDetailsUrlKey(validatedTarget);
   if (!normalizedTarget) return null;
 
-  const html = await fetchHtml(validatedTarget);
+  const html = await fetchHtml(validatedTarget, { source: "bbc_match_details" });
   const $ = cheerio.load(html);
   const fromDom = parseMatchesFromDom($);
   const fromJson = parseMatchesFromJson(html);
@@ -3445,6 +3494,7 @@ module.exports = {
   fetchBbcScoresFixturesByDateRange,
   fetchBbcMatchByDetailsUrl,
   fetchBbcLiveTextEntriesByDetailsUrl,
+  setBbcRequestObserver,
   parseMatchDetailsFromHtml,
   resolveScoresFixturesDateUrl,
   writeBbcFixtures,

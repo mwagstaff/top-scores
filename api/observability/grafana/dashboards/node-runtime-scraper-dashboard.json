@@ -1,16 +1,16 @@
 {
-  "uid": "top-scores-node-runtime",
-  "title": "top-scores API • Node.js Runtime Health",
+  "uid": "top-scores-scraper-node-runtime",
+  "title": "top-scores Scraper • Node.js Runtime Health",
   "tags": [
     "top-scores",
     "nodejs",
     "runtime",
     "performance",
-    "api"
+    "scraper"
   ],
   "timezone": "browser",
   "schemaVersion": 38,
-  "version": 5,
+  "version": 1,
   "refresh": "10s",
   "time": {
     "from": "now-6h",
@@ -37,19 +37,19 @@
       },
       "targets": [
         {
-          "expr": "process_resident_memory_bytes{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "process_resident_memory_bytes{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "RSS"
         },
         {
-          "expr": "process_virtual_memory_bytes{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "process_virtual_memory_bytes{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Virtual"
         },
         {
-          "expr": "nodejs_external_memory_bytes{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "nodejs_external_memory_bytes{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "External"
         },
         {
-          "expr": "nodejs_array_buffers_bytes{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "nodejs_array_buffers_bytes{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Array Buffers"
         }
       ]
@@ -74,19 +74,19 @@
       },
       "targets": [
         {
-          "expr": "nodejs_heap_size_used_bytes{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "nodejs_heap_size_used_bytes{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Heap Used"
         },
         {
-          "expr": "nodejs_heap_size_total_bytes{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "nodejs_heap_size_total_bytes{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Heap Total"
         },
         {
-          "expr": "nodejs_heap_size_physical_bytes{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "nodejs_heap_size_physical_bytes{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Heap Physical"
         },
         {
-          "expr": "nodejs_heap_size_limit_bytes{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "nodejs_heap_size_limit_bytes{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Heap Limit"
         }
       ]
@@ -111,7 +111,7 @@
       },
       "targets": [
         {
-          "expr": "100 * top_scores_process_cpu_usage_ratio{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "100 * top_scores_process_cpu_usage_ratio{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "CPU"
         }
       ]
@@ -136,19 +136,19 @@
       },
       "targets": [
         {
-          "expr": "1000 * nodejs_eventloop_lag_p50_seconds{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "1000 * nodejs_eventloop_lag_p50_seconds{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "p50"
         },
         {
-          "expr": "1000 * nodejs_eventloop_lag_p90_seconds{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "1000 * nodejs_eventloop_lag_p90_seconds{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "p90"
         },
         {
-          "expr": "1000 * nodejs_eventloop_lag_p99_seconds{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "1000 * nodejs_eventloop_lag_p99_seconds{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "p99"
         },
         {
-          "expr": "1000 * nodejs_eventloop_lag_max_seconds{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "1000 * nodejs_eventloop_lag_max_seconds{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "max"
         }
       ]
@@ -173,7 +173,7 @@
       },
       "targets": [
         {
-          "expr": "100 * nodejs_eventloop_utilization_ratio{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "100 * nodejs_eventloop_utilization_ratio{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "ELU"
         }
       ]
@@ -197,15 +197,15 @@
       },
       "targets": [
         {
-          "expr": "nodejs_active_handles_total{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "nodejs_active_handles_total{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Handles"
         },
         {
-          "expr": "nodejs_active_resources_total{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "nodejs_active_resources_total{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Resources"
         },
         {
-          "expr": "nodejs_active_requests_total{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "nodejs_active_requests_total{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Requests"
         }
       ]
@@ -229,15 +229,15 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_details_active_refresh_targets{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "top_scores_match_details_active_refresh_targets{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Active Targets"
         },
         {
-          "expr": "top_scores_match_details_backfill_tasks{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "top_scores_match_details_backfill_tasks{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Backfill Tasks"
         },
         {
-          "expr": "top_scores_match_details_warm_tasks{job=\"top-scores\",instance=~\".*:3011\"}",
+          "expr": "top_scores_match_details_warm_tasks{job=\"top-scores\",instance=~\".*:3013\"}",
           "legendFormat": "Warm Tasks"
         }
       ]
@@ -266,7 +266,7 @@
       },
       "targets": [
         {
-          "expr": "nodejs_heap_space_size_used_bytes{job=\"top-scores\",instance=~\".*:3011\",space!~\"read_only_space|shared_space|shared_trusted_space|shared_large_object_space|shared_trusted_large_object_space|trusted_space|trusted_large_object_space\"}",
+          "expr": "nodejs_heap_space_size_used_bytes{job=\"top-scores\",instance=~\".*:3013\",space!~\"read_only_space|shared_space|shared_trusted_space|shared_large_object_space|shared_trusted_large_object_space|trusted_space|trusted_large_object_space\"}",
           "legendFormat": "{{space}}"
         }
       ]
@@ -303,7 +303,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_process_uptime_seconds{job=\"top-scores\",instance=~\".*:3011\"}"
+          "expr": "top_scores_process_uptime_seconds{job=\"top-scores\",instance=~\".*:3013\"}"
         }
       ]
     },
@@ -339,7 +339,7 @@
       },
       "targets": [
         {
-          "expr": "1000 * process_start_time_seconds{job=\"top-scores\",instance=~\".*:3011\"}"
+          "expr": "1000 * process_start_time_seconds{job=\"top-scores\",instance=~\".*:3013\"}"
         }
       ]
     },
@@ -375,7 +375,7 @@
       },
       "targets": [
         {
-          "expr": "100 * nodejs_heap_utilization_ratio{job=\"top-scores\",instance=~\".*:3011\"}"
+          "expr": "100 * nodejs_heap_utilization_ratio{job=\"top-scores\",instance=~\".*:3013\"}"
         }
       ]
     },
@@ -411,7 +411,7 @@
       },
       "targets": [
         {
-          "expr": "100 * nodejs_heap_limit_utilization_ratio{job=\"top-scores\",instance=~\".*:3011\"}"
+          "expr": "100 * nodejs_heap_limit_utilization_ratio{job=\"top-scores\",instance=~\".*:3013\"}"
         }
       ]
     }

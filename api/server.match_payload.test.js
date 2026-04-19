@@ -3386,6 +3386,22 @@ test("withStableMatchDetailsState clears stale in-progress flags when a match is
   assert.equal(payload.in_progress, false);
 });
 
+test("resolveStableMatchScoreStatus converts stale live-looking statuses without kickoff metadata to FT", () => {
+  const scoreStatus = resolveStableMatchScoreStatus(
+    {
+      home_score: 1,
+      away_score: 0,
+      score_status: "74",
+      updated_at: "2026-03-07T12:15:00.000Z",
+    },
+    {
+      nowMs: Date.parse("2026-03-07T15:30:00.000Z"),
+    }
+  );
+
+  assert.equal(scoreStatus, "FT");
+});
+
 test("markMatchDetailsActive enables short-lived refresh tracking for requested ids", () => {
   assert.equal(markMatchDetailsActive(DETAILS_ID), true);
   assert.equal(isMatchDetailsActive(DETAILS_ID), true);
@@ -3442,6 +3458,27 @@ test("collectInProgressMatchDetailTargets keeps finished enrichment polling behi
     collectInProgressMatchDetailTargets().map((target) => target.id),
     [DETAILS_ID]
   );
+
+  clearFootballOperationalMemoryState();
+});
+
+test("collectInProgressMatchDetailTargets excludes stale live records with missing kickoff metadata", () => {
+  clearFootballOperationalMemoryState();
+
+  upsertMatchDetailsFromMatch(
+    baseMatch({
+      details_url: DETAILS_URL,
+      date: null,
+      time: null,
+      score_status: "74",
+      home_score: 1,
+      away_score: 0,
+      has_bbc_source: true,
+    }),
+    "2026-03-03T12:15:00.000Z"
+  );
+
+  assert.deepStrictEqual(collectInProgressMatchDetailTargets(), []);
 
   clearFootballOperationalMemoryState();
 });
