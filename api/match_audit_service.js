@@ -4,9 +4,10 @@ const path = require("path");
 const API_PREFIX = "/api/v1";
 const AUDIT_PORT = Number(process.env.AUDIT_PORT || 3015);
 const AUDIT_TIME_ZONE = process.env.AUDIT_TIME_ZONE || "Europe/London";
+const AUDIT_UNBOUNDED_START_DATE = process.env.AUDIT_UNBOUNDED_START_DATE || "1900-01-01";
 const AUDIT_LOOKBACK_DAYS = Number.isFinite(Number(process.env.AUDIT_LOOKBACK_DAYS))
-  ? Math.max(1, Math.floor(Number(process.env.AUDIT_LOOKBACK_DAYS)))
-  : 7;
+  ? Math.max(0, Math.floor(Number(process.env.AUDIT_LOOKBACK_DAYS)))
+  : 0;
 const AUDIT_POLL_INTERVAL_MS = Number.isFinite(Number(process.env.AUDIT_POLL_INTERVAL_MS))
   ? Math.max(30 * 1000, Math.floor(Number(process.env.AUDIT_POLL_INTERVAL_MS)))
   : 5 * 60 * 1000;
@@ -163,6 +164,7 @@ function buildPublicConfig() {
     port: AUDIT_PORT,
     poll_interval_ms: AUDIT_POLL_INTERVAL_MS,
     lookback_days: AUDIT_LOOKBACK_DAYS,
+    unbounded_start_date: AUDIT_UNBOUNDED_START_DATE,
     match_max_duration_ms: AUDIT_MATCH_MAX_DURATION_MS,
     auto_repair_enabled: AUDIT_AUTO_REPAIR_ENABLED,
     auto_repair_cooldown_ms: AUDIT_AUTO_REPAIR_COOLDOWN_MS,
@@ -293,6 +295,16 @@ function dateKeyInTimeZone(date, timeZone = AUDIT_TIME_ZONE) {
 
 function buildDateRangeWindow(nowMs = Date.now(), lookbackDays = AUDIT_LOOKBACK_DAYS) {
   const endDate = new Date(nowMs);
+  if (!Number.isFinite(lookbackDays) || lookbackDays <= 0) {
+    const end = dateKeyInTimeZone(endDate, AUDIT_TIME_ZONE);
+    return {
+      start: AUDIT_UNBOUNDED_START_DATE,
+      end,
+      dates: [],
+      current_day: end,
+      unbounded: true,
+    };
+  }
   const dates = [];
   for (let offset = lookbackDays; offset >= 0; offset -= 1) {
     dates.push(dateKeyInTimeZone(new Date(nowMs - offset * 24 * 60 * 60 * 1000), AUDIT_TIME_ZONE));
@@ -302,6 +314,7 @@ function buildDateRangeWindow(nowMs = Date.now(), lookbackDays = AUDIT_LOOKBACK_
     end: dates[dates.length - 1],
     dates,
     current_day: dateKeyInTimeZone(endDate, AUDIT_TIME_ZONE),
+    unbounded: false,
   };
 }
 
@@ -915,6 +928,7 @@ async function buildAuditReport(trigger = "interval") {
       start: window.start,
       end: window.end,
       lookback_days: AUDIT_LOOKBACK_DAYS,
+      unbounded: Boolean(window.unbounded),
       time_zone: AUDIT_TIME_ZONE,
     },
     summary,

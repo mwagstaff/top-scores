@@ -146,7 +146,8 @@ struct MatchCachePayload: Codable, Sendable {
 enum MatchCache {
     private nonisolated static let fileName = "matches-cache.json"
     private nonisolated static let knownGenerationsKey = "match_cache.known_server_generations"
-    private nonisolated static let currentCacheFormatVersion = 3
+    // Bump when cached match semantics change so persisted stale rows are discarded on upgrade.
+    private nonisolated static let currentCacheFormatVersion = 4
 
     nonisolated static func load(for snapshot: PreferencesSnapshot) -> MatchCachePayload? {
         guard let data = try? Data(contentsOf: cacheURL) else { return nil }

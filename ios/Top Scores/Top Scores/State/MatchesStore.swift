@@ -1032,10 +1032,15 @@ final class MatchesStore: ObservableObject {
 
         let today = Self.startOfToday()
         let historyStart = Self.dayOffset(-(resultsHistoryLoadDays - 1), from: today)
+        let hasPotentiallyStaleCachedResults = Self.containsPotentiallyStaleResults(
+            resultState.unfilteredMatches,
+            today: today
+        )
         let shouldReloadHistory =
             resultState.unfilteredMatches.isEmpty ||
             resultState.lastUpdated == nil ||
-            resultState.isUsingCache
+            resultState.isUsingCache ||
+            hasPotentiallyStaleCachedResults
         let loadRange = shouldReloadHistory ? (historyStart...today) : (today...today)
 
         Self.log(
@@ -1055,9 +1060,16 @@ final class MatchesStore: ObservableObject {
         }
 
         do {
-            let ifModifiedSince = resultState.lastValidatedSnapshot == preferences
+            let ifModifiedSince = resultState.lastValidatedSnapshot == preferences &&
+                !hasPotentiallyStaleCachedResults
                 ? resultState.lastUpdated
                 : nil
+            if hasPotentiallyStaleCachedResults {
+                Self.log(
+                    "results_refresh_force_revalidate reason=stale_cached_results " +
+                    "sample=\(Self.matchSample(resultState.unfilteredMatches))"
+                )
+            }
             let response = try await client.fetchMatchesInRange(
                 preferences: preferences,
                 mode: .results,
@@ -2308,6 +2320,21 @@ final class MatchesStore: ObservableObject {
             return false
         }
         return range.contains(date)
+    }
+
+    private nonisolated static func containsPotentiallyStaleResults(
+        _ matches: [Match],
+        today: Date
+    ) -> Bool {
+        let calendar = Calendar.current
+        return matches.contains { match in
+            guard let matchDay = match.dateOnly.map({ calendar.startOfDay(for: $0) }) else {
+                return false
+            }
+            guard matchDay < today else { return false }
+            let hasKnownStatus = !(match.scoreStatus?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            return !hasKnownStatus || !match.hasScore
+        }
     }
 
     private nonisolated static func loadedFixtureCoverageEnd(
