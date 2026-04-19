@@ -90,6 +90,7 @@ struct MatchesView: View {
     @State private var predictionErrorMessage: String?
     @State private var predictableDateKeys: Set<String> = []
     @State private var isSearchVisible = false
+    @State private var isSearchFieldFocused = false
     @State private var searchText = ""
     @State private var debouncedSearchText = ""
     @State private var filteredMatchDays: [MatchDay] = []
@@ -253,6 +254,7 @@ struct MatchesView: View {
         .onChange(of: isSelected) { _, selected in
             matchesStore.setModeVisibility(mode, isVisible: selected)
             guard selected else {
+                isSearchFieldFocused = false
                 didRunActivationForVisibleCycle = false
                 screenOpenedAt = nil
                 screenViewSentForActivation = false
@@ -303,6 +305,7 @@ struct MatchesView: View {
         }
         .onDisappear {
             matchesStore.setModeVisibility(mode, isVisible: false)
+            isSearchFieldFocused = false
             predictionTask?.cancel()
             predictorAvailabilityTask?.cancel()
             searchDebounceTask?.cancel()
@@ -669,6 +672,7 @@ struct MatchesView: View {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             isSearchVisible = true
                         }
+                        isSearchFieldFocused = true
                         rebuildSearchIndex(from: matchesStore.groupedMatches)
                         AppMetricsService.shared.fireActivity("search_activated", screen: mode.rawValue, apiBaseURL: preferences.apiBaseURL)
                     }
@@ -682,7 +686,11 @@ struct MatchesView: View {
             }
         } detail: {
             if isSearchVisible {
-                MatchSearchBar(text: $searchText, placeholder: "Search teams, leagues or channels")
+                MatchSearchBar(
+                    text: $searchText,
+                    isFocused: $isSearchFieldFocused,
+                    placeholder: "Search teams, leagues or channels"
+                )
                     .frame(height: 44)
                     .transition(.move(edge: .top).combined(with: .opacity))
 
@@ -731,7 +739,7 @@ struct MatchesView: View {
         searchText = ""
         debouncedSearchText = ""
         filteredMatchDays = []
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        isSearchFieldFocused = false
         withAnimation(.easeInOut(duration: 0.2)) {
             isSearchVisible = false
         }
@@ -1058,10 +1066,11 @@ private struct IndexedMatch {
 
 private struct MatchSearchBar: UIViewRepresentable {
     @Binding var text: String
+    @Binding var isFocused: Bool
     let placeholder: String
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, isFocused: $isFocused)
     }
 
     func makeUIView(context: Context) -> UISearchBar {
@@ -1079,21 +1088,52 @@ private struct MatchSearchBar: UIViewRepresentable {
         if searchBar.text != text {
             searchBar.text = text
         }
+        context.coordinator.updateFocus(for: searchBar, shouldFocus: isFocused)
     }
 
     final class Coordinator: NSObject, UISearchBarDelegate {
         private var text: Binding<String>
+        private var isFocused: Binding<Bool>
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, isFocused: Binding<Bool>) {
             self.text = text
+            self.isFocused = isFocused
         }
 
         func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
             text.wrappedValue = searchText
         }
 
+        func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) {
+            if !isFocused.wrappedValue {
+                isFocused.wrappedValue = true
+            }
+        }
+
+        func searchBarTextDidEndEditing(_ searchBar: UISearchBar) {
+            if isFocused.wrappedValue {
+                isFocused.wrappedValue = false
+            }
+        }
+
         func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
-            searchBar.resignFirstResponder()
+            isFocused.wrappedValue = false
+        }
+
+        func updateFocus(for searchBar: UISearchBar, shouldFocus: Bool) {
+            if shouldFocus {
+                guard !searchBar.isFirstResponder else { return }
+                guard searchBar.window != nil else {
+                    DispatchQueue.main.async { [weak searchBar] in
+                        guard let searchBar else { return }
+                        self.updateFocus(for: searchBar, shouldFocus: shouldFocus)
+                    }
+                    return
+                }
+                searchBar.becomeFirstResponder()
+            } else if searchBar.isFirstResponder {
+                searchBar.resignFirstResponder()
+            }
         }
     }
 }
