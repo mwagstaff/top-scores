@@ -1177,6 +1177,73 @@ test("mergeBbcAndLiveMatches collapses Bundesliga aliases onto the BBC-backed FT
   assert.equal(merged[0].has_bbc_source, true);
 });
 
+test("mergeBbcAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT rows", () => {
+  const veronaMerged = mergeBbcAndLiveMatches(
+    [
+      {
+        date: "2026-04-19",
+        time: "14:00",
+        league: "Serie A",
+        home_team: "Verona",
+        away_team: "AC Milan",
+        tv_channels: ["DAZN", "BBC Alba", "BBC iPlayer", "BBC Sport Website"],
+      },
+    ],
+    [
+      {
+        date: "2026-04-19",
+        time: "14:00",
+        league: "Italian Serie A",
+        home_team: "Hellas Verona",
+        away_team: "AC Milan",
+        home_score: 0,
+        away_score: 1,
+        score_status: "FT",
+        details_url: "https://www.bbc.co.uk/sport/football/live/c5yjjq5jlrmt",
+        has_bbc_source: true,
+      },
+    ]
+  );
+
+  assert.equal(veronaMerged.length, 1);
+  assert.equal(veronaMerged[0].league, "Serie A");
+  assert.equal(veronaMerged[0].home_team, "Hellas Verona");
+  assert.equal(veronaMerged[0].score_status, "FT");
+  assert.equal(veronaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/c5yjjq5jlrmt");
+
+  const pisaMerged = mergeBbcAndLiveMatches(
+    [
+      {
+        date: "2026-04-19",
+        time: "17:00",
+        league: "Serie A",
+        home_team: "Pisa",
+        away_team: "Genoa",
+        tv_channels: ["DAZN"],
+      },
+    ],
+    [
+      {
+        date: "2026-04-19",
+        time: "17:00",
+        league: "Italian Serie A",
+        home_team: "Pisa",
+        away_team: "Genoa",
+        home_score: 1,
+        away_score: 2,
+        score_status: "FT",
+        details_url: "https://www.bbc.co.uk/sport/football/live/cx2vvg0v3rpt",
+        has_bbc_source: true,
+      },
+    ]
+  );
+
+  assert.equal(pisaMerged.length, 1);
+  assert.equal(pisaMerged[0].league, "Serie A");
+  assert.equal(pisaMerged[0].score_status, "FT");
+  assert.equal(pisaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/cx2vvg0v3rpt");
+});
+
 test("collectAdminRogueMatchTargets only selects the exact rogue short-name row", () => {
   const { selectors, invalid } = normalizeAdminRogueMatchSelectors({
     matches: [
@@ -1647,6 +1714,66 @@ test("dedupeMatchListPayloads collapses Bundesliga alias rows and keeps the BBC 
   assert.equal(deduped[0].score_status, "FT");
   assert.equal(deduped[0].has_bbc_source, true);
   assert.equal(deduped[0].away_team, "Stuttgart");
+});
+
+test("dedupeMatchListPayloads collapses Serie A alias rows and keeps the BBC live match ids", () => {
+  const veronaDeduped = dedupeMatchListPayloads([
+    {
+      date: "2026-04-19",
+      time: "14:00",
+      league: "Serie A",
+      home_team: "Verona",
+      away_team: "AC Milan",
+      match_details_id: "syn7e079aaa69ff1abc",
+      tv_channels: ["DAZN", "BBC Alba", "BBC iPlayer", "BBC Sport Website"],
+    },
+    {
+      date: "2026-04-19",
+      time: "14:00",
+      league: "Italian Serie A",
+      home_team: "Hellas Verona",
+      away_team: "AC Milan",
+      match_details_id: "c5yjjq5jlrmt",
+      home_score: 0,
+      away_score: 1,
+      score_status: "FT",
+      has_bbc_source: true,
+    },
+  ]);
+
+  assert.equal(veronaDeduped.length, 1);
+  assert.equal(veronaDeduped[0].match_details_id, "c5yjjq5jlrmt");
+  assert.equal(veronaDeduped[0].league, "Italian Serie A");
+  assert.equal(veronaDeduped[0].score_status, "FT");
+
+  const pisaDeduped = dedupeMatchListPayloads([
+    {
+      date: "2026-04-19",
+      time: "17:00",
+      league: "Serie A",
+      home_team: "Pisa",
+      away_team: "Genoa",
+      match_details_id: "synd2aa8898becc3574",
+      tv_channels: ["DAZN"],
+    },
+    {
+      date: "2026-04-19",
+      time: "17:00",
+      league: "Italian Serie A",
+      home_team: "Pisa",
+      away_team: "Genoa",
+      match_details_id: "cx2vvg0v3rpt",
+      home_score: 1,
+      away_score: 2,
+      score_status: "FT",
+      has_bbc_source: true,
+    },
+  ]);
+
+  assert.equal(pisaDeduped.length, 1);
+  assert.equal(pisaDeduped[0].match_details_id, "cx2vvg0v3rpt");
+  assert.equal(pisaDeduped[0].league, "Italian Serie A");
+  assert.equal(pisaDeduped[0].score_status, "FT");
 });
 
 test("isListPayloadVisibleForMode excludes future same-day fixtures from results", () => {

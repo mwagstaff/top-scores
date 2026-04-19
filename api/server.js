@@ -1444,6 +1444,7 @@ function normalizeLeagueName(name) {
   const lowered = normalized.toLowerCase();
   const aliases = {
     "german bundesliga": "Bundesliga",
+    "italian serie a": "Serie A",
   };
   if (aliases[lowered]) {
     return aliases[lowered];
