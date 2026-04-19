@@ -117,6 +117,7 @@ function parseEnvBoolean(value, fallback = false) {
 const PORT = Number(process.env.PORT || 3011);
 const SCRAPER_PORT = Number(process.env.SCRAPER_PORT || 3013);
 const MONITOR_PORT = Number(process.env.MONITOR_PORT || 3014);
+const AUDIT_PORT = Number(process.env.AUDIT_PORT || 3015);
 const SOURCE_URL = process.env.SOURCE_URL || DEFAULT_URL;
 const OUTPUT_PATH = process.env.OUTPUT_PATH || DEFAULT_OUTPUT;
 const INTERVAL_MINUTES = Number(process.env.UPDATE_INTERVAL_MINUTES || 30);
@@ -1026,6 +1027,10 @@ function monitorRuntimeBaseUrl() {
   return `http://127.0.0.1:${MONITOR_PORT}`;
 }
 
+function auditRuntimeBaseUrl() {
+  return `http://127.0.0.1:${AUDIT_PORT}`;
+}
+
 async function requestMonitorRuntime(pathname, options = {}) {
   const url = new URL(pathname, monitorRuntimeBaseUrl());
   const query = options.query && typeof options.query === "object" ? options.query : null;
@@ -1096,6 +1101,85 @@ async function requestMonitorRuntime(pathname, options = {}) {
   return {
     status: response.status,
     payload,
+  };
+}
+
+async function requestAuditRuntime(pathname, options = {}) {
+  const url = new URL(pathname, auditRuntimeBaseUrl());
+  const query = options.query && typeof options.query === "object" ? options.query : null;
+  if (query) {
+    Object.entries(query).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      if (Array.isArray(value)) {
+        value.forEach((item) => {
+          if (item === undefined || item === null || item === "") return;
+          url.searchParams.append(key, String(item));
+        });
+        return;
+      }
+      url.searchParams.set(key, String(value));
+    });
+  }
+
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs)) ? Number(options.timeoutMs) : 20000;
+  const headers = {
+    Accept: options.accept || "application/json",
+    ...(options.headers && typeof options.headers === "object" ? options.headers : {}),
+  };
+  let body;
+  if (options.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(options.body);
+  }
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: options.method || "GET",
+      headers,
+      body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    const wrapped = new Error(
+      `[AuditRuntime] Request failed for ${url.pathname}: ${error && error.message ? error.message : error}`
+    );
+    wrapped.statusCode = 503;
+    throw wrapped;
+  }
+
+  const text = await response.text();
+  const contentType = response.headers.get("content-type") || "";
+  let payload = null;
+  if (text) {
+    if (contentType.includes("application/json")) {
+      try {
+        payload = JSON.parse(text);
+      } catch (_error) {
+        payload = { raw: text };
+      }
+    } else {
+      payload = text;
+    }
+  }
+
+  if (!response.ok) {
+    const wrapped = new Error(
+      payload && typeof payload === "object" && payload.message
+        ? payload.message
+        : payload && typeof payload === "object" && payload.error
+          ? payload.error
+          : `Audit runtime responded ${response.status}`
+    );
+    wrapped.statusCode = response.status;
+    wrapped.payload = payload;
+    throw wrapped;
+  }
+
+  return {
+    status: response.status,
+    payload,
+    headers: response.headers,
   };
 }
 
@@ -1356,6 +1440,13 @@ function normalizeLeagueName(name) {
         changed = true;
       }
     }
+  }
+  const lowered = normalized.toLowerCase();
+  const aliases = {
+    "german bundesliga": "Bundesliga",
+  };
+  if (aliases[lowered]) {
+    return aliases[lowered];
   }
   return normalized;
 }
@@ -10053,18 +10144,22 @@ function matchListPayloadIdentityKeys(payload) {
 
   const date = String(payload.date || "").trim();
   const time = normalizeTimeValue(payload.time);
-  const league = String(payload.league || "").trim().toLowerCase();
-  const homeTeam = normalizeTeamIdentity(payload.home_team);
-  const awayTeam = normalizeTeamIdentity(payload.away_team);
-  if (date || time || league || homeTeam || awayTeam) {
-    keys.push(`row:${date}|${time}|${league}|${homeTeam}|${awayTeam}`);
-  }
-  if (date && homeTeam && awayTeam) {
-    keys.push(`fixture:${date}|${homeTeam}|${awayTeam}`);
-    if (time) {
-      keys.push(`fixture_time:${date}|${time}|${homeTeam}|${awayTeam}`);
-    }
-  }
+  const league = normalizeLeagueName(payload.league || "").toLowerCase().trim();
+  const homeTeamKeys = identityTeamKeys(payload.home_team || "");
+  const awayTeamKeys = identityTeamKeys(payload.away_team || "");
+  homeTeamKeys.forEach((homeTeam) => {
+    awayTeamKeys.forEach((awayTeam) => {
+      if (date || time || league || homeTeam || awayTeam) {
+        keys.push(`row:${date}|${time}|${league}|${homeTeam}|${awayTeam}`);
+      }
+      if (date && homeTeam && awayTeam) {
+        keys.push(`fixture:${date}|${homeTeam}|${awayTeam}`);
+        if (time) {
+          keys.push(`fixture_time:${date}|${time}|${homeTeam}|${awayTeam}`);
+        }
+      }
+    });
+  });
 
   return Array.from(new Set(keys.filter(Boolean)));
 }
@@ -20515,6 +20610,10 @@ app.get("/admin/fantasy-reminders", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_fantasy_reminders_ui.html"));
 });
 
+app.get("/admin/audit-matches", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_match_audit_ui.html"));
+});
+
 app.get("/admin/harness", (_req, res) => {
   res.sendFile(path.join(__dirname, "test_harness_ui.html"));
 });
@@ -22852,12 +22951,27 @@ app.post(`${API_PREFIX}/live-activity/push-to-start-token`, async (req, res) => 
 
   try {
     const nowIso = new Date().toISOString();
+    const existingRecord = await getUserPreferences(resolvedDeviceToken);
+    const existingToken = existingRecord &&
+      existingRecord.liveActivity &&
+      existingRecord.liveActivity.pushToStartToken
+        ? String(existingRecord.liveActivity.pushToStartToken).trim()
+        : null;
+    const tokenChanged = existingToken !== normalizedToken;
+
+    const patch = {
+      pushToStartToken: normalizedToken,
+      pushToStartTokenUpdatedAt: nowIso,
+    };
+    // When the push-to-start token rotates, reset the attempt counter so the new
+    // token gets a full LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS budget.
+    if (tokenChanged) {
+      patch.pushToStartAttempts = 0;
+    }
+
     const saved = await updateUserLiveActivityState(
       resolvedDeviceToken,
-      {
-        pushToStartToken: normalizedToken,
-        pushToStartTokenUpdatedAt: nowIso,
-      },
+      patch,
       {
         isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
       }
@@ -22879,10 +22993,19 @@ app.post(`${API_PREFIX}/live-activity/push-to-start-token`, async (req, res) => 
 app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
-  const { deviceToken, activityId, activityPushToken, isDevelopmentBuild } = req.body || {};
+  const {
+    deviceToken,
+    activityId,
+    activityPushToken,
+    activityGeneratedAtEpochSeconds,
+    isDevelopmentBuild,
+  } = req.body || {};
   const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
   const normalizedActivityId = normalizeDeviceToken(activityId);
   const normalizedActivityPushToken = normalizeLiveActivityToken(activityPushToken);
+  const normalizedActivityGeneratedAtEpochSeconds = Number.isFinite(Number(activityGeneratedAtEpochSeconds))
+    ? Math.floor(Number(activityGeneratedAtEpochSeconds))
+    : null;
 
   if (!resolvedDeviceToken) {
     res.status(400).json({
@@ -22908,8 +23031,20 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
       deviceToken: resolvedDeviceToken,
       activityId: normalizedActivityId,
       activityPushToken: normalizedActivityPushToken,
+      activityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
       isDevelopmentBuild: resolvedIsDevelopmentBuild,
     });
+    if (
+      duplicateResolution.reason === "incoming_stale_duplicate_ended" ||
+      duplicateResolution.reason === "incoming_stale_duplicate_ignored"
+    ) {
+      res.status(200).json({
+        success: true,
+        duplicateResolution,
+        ignored: true,
+      });
+      return;
+    }
     if (
       duplicateResolution.reason === "end_failed" &&
       duplicateResolution.result &&
@@ -22931,7 +23066,9 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
         currentActivityId: normalizedActivityId,
         currentActivityPushToken: normalizedActivityPushToken,
         currentActivityTokenUpdatedAt: nowIso,
+        currentActivityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
         pendingStartAt: null,
+        pushToStartAttempts: 0,
       },
       {
         isDevelopmentBuild:
@@ -22981,8 +23118,50 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
 
   try {
     const nowIso = new Date().toISOString();
+
+    // Guard: if the request includes an activityId that does NOT match the server's
+    // stored currentActivityId, this call is reporting a stale or duplicate activity
+    // ending (e.g. from enforceSingleActiveActivity on the client). Clearing the
+    // current token in that case would immediately cause the server to fall back to
+    // push-to-start, spawning another duplicate and creating an infinite loop.
+    //
+    // Also guard when storedActivityId is null but a dispatch happened very recently
+    // (within 2 min): the survivor's token upload is likely still in flight and we
+    // should not wipe state before it arrives.
+    if (normalizedActivityId) {
+      const existingRecord = await getUserPreferences(resolvedDeviceToken);
+      const liveActivity = existingRecord && existingRecord.liveActivity && typeof existingRecord.liveActivity === "object"
+        ? existingRecord.liveActivity : {};
+      const storedActivityId = liveActivity.currentActivityId
+        ? String(liveActivity.currentActivityId).trim() : null;
+
+      if (storedActivityId && storedActivityId !== normalizedActivityId) {
+        console.log(
+          `[API] activity-ended ignored for stale/duplicate activity: reported=${normalizedActivityId.slice(0, 12)}... stored=${storedActivityId.slice(0, 12)}... device=${resolvedDeviceToken.slice(0, 12)}...`
+        );
+        res.status(200).json({ success: true, stale: true });
+        return;
+      }
+
+      // storedActivityId is null but a push was dispatched recently — token upload
+      // for the survivor is likely in flight. Ignore this ended call so we don't
+      // prematurely wipe state and trigger another push-to-start.
+      if (!storedActivityId) {
+        const lastDispatchAtMs = liveActivity.lastDispatchAt ? Date.parse(String(liveActivity.lastDispatchAt)) : null;
+        const PENDING_TOKEN_WINDOW_MS = 2 * 60 * 1000; // matches LIVE_ACTIVITY_PENDING_MAX_MS
+        if (lastDispatchAtMs && Number.isFinite(lastDispatchAtMs) && (Date.now() - lastDispatchAtMs) < PENDING_TOKEN_WINDOW_MS) {
+          console.log(
+            `[API] activity-ended ignored: no stored activityId but dispatch was recent (${Math.round((Date.now() - lastDispatchAtMs) / 1000)}s ago), token upload likely in flight. reported=${normalizedActivityId.slice(0, 12)}... device=${resolvedDeviceToken.slice(0, 12)}...`
+          );
+          res.status(200).json({ success: true, stale: true });
+          return;
+        }
+      }
+    }
+
     const patch = {
       currentActivityPushToken: null,
+      currentActivityGeneratedAtEpochSeconds: null,
       pendingStartAt: null,
       lastPayloadHash: null,
       lastScoreHash: null,
@@ -23079,6 +23258,7 @@ app.post(`${API_PREFIX}/live-activity/restart`, async (req, res) => {
       {
         currentActivityPushToken: null,
         currentActivityId: null,
+        currentActivityGeneratedAtEpochSeconds: null,
         pendingStartAt: null,
         lastPayloadHash: null,
         lastScoreHash: null,
@@ -24398,6 +24578,104 @@ app.get(`${API_PREFIX}/admin/bbc-history/realtime`, async (req, res) => {
   }
 });
 
+app.get(`${API_PREFIX}/audit/healthcheck`, async (_req, res) => {
+  try {
+    const response = await requestAuditRuntime("/healthcheck", {
+      method: "GET",
+      timeoutMs: 8000,
+    });
+    res.status(response.status).json(response.payload || {});
+  } catch (error) {
+    res.status(Number.isFinite(error && error.statusCode) ? error.statusCode : 503).json({
+      error: "Failed to reach audit runtime healthcheck",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/audit/metrics`, async (_req, res) => {
+  try {
+    const response = await requestAuditRuntime("/metrics", {
+      method: "GET",
+      accept: "text/plain",
+      timeoutMs: 8000,
+    });
+    res.set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+    res.status(response.status).send(typeof response.payload === "string" ? response.payload : "");
+  } catch (error) {
+    res.status(Number.isFinite(error && error.statusCode) ? error.statusCode : 503).type("text/plain").send(
+      `# audit metrics unavailable\n# ${error && error.message ? error.message : String(error)}\n`
+    );
+  }
+});
+
+app.get(`${API_PREFIX}/audit/summary`, async (req, res) => {
+  try {
+    const response = await requestAuditRuntime(`${API_PREFIX}/audit/summary`, {
+      method: "GET",
+      query: req.query,
+      timeoutMs: 15000,
+    });
+    res.status(response.status).json(response.payload || {});
+  } catch (error) {
+    res.status(Number.isFinite(error && error.statusCode) ? error.statusCode : 503).json({
+      error: "Failed to retrieve audit summary",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/audit/issues`, async (req, res) => {
+  try {
+    const response = await requestAuditRuntime(`${API_PREFIX}/audit/issues`, {
+      method: "GET",
+      query: req.query,
+      timeoutMs: 15000,
+    });
+    res.status(response.status).json(response.payload || {});
+  } catch (error) {
+    res.status(Number.isFinite(error && error.statusCode) ? error.statusCode : 503).json({
+      error: "Failed to retrieve audit issues",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
+app.post(`${API_PREFIX}/audit/run`, async (_req, res) => {
+  try {
+    const response = await requestAuditRuntime(`${API_PREFIX}/audit/run`, {
+      method: "POST",
+      body: {},
+      timeoutMs: 60000,
+    });
+    res.status(response.status).json(response.payload || {});
+  } catch (error) {
+    res.status(Number.isFinite(error && error.statusCode) ? error.statusCode : 503).json({
+      error: "Failed to trigger audit run",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
+app.post(`${API_PREFIX}/audit/matches/:matchId/rescrape`, async (req, res) => {
+  try {
+    const response = await requestAuditRuntime(
+      `${API_PREFIX}/audit/matches/${encodeURIComponent(req.params.matchId)}/rescrape`,
+      {
+        method: "POST",
+        body: req.body && typeof req.body === "object" ? req.body : {},
+        timeoutMs: 60000,
+      }
+    );
+    res.status(response.status).json(response.payload || {});
+  } catch (error) {
+    res.status(Number.isFinite(error && error.statusCode) ? error.statusCode : 503).json({
+      error: "Failed to trigger audit rescrape",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
 app.post(`${API_PREFIX}/admin/bbc-history/cleanup`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
@@ -25261,6 +25539,7 @@ async function endSupersededLiveActivityIfNeeded({
   deviceToken,
   activityId,
   activityPushToken,
+  activityGeneratedAtEpochSeconds,
   isDevelopmentBuild,
 }) {
   const liveActivityState =
@@ -25273,6 +25552,11 @@ async function endSupersededLiveActivityIfNeeded({
   const existingActivityPushToken = normalizeLiveActivityToken(
     liveActivityState.currentActivityPushToken
   );
+  const existingActivityGeneratedAtEpochSeconds = Number.isFinite(
+    Number(liveActivityState.currentActivityGeneratedAtEpochSeconds)
+  )
+    ? Math.floor(Number(liveActivityState.currentActivityGeneratedAtEpochSeconds))
+    : null;
 
   if (!existingActivityPushToken) {
     return { endedExisting: false, reason: "no_existing_activity" };
@@ -25282,6 +25566,52 @@ async function endSupersededLiveActivityIfNeeded({
     (!existingActivityId || !activityId || existingActivityId === activityId)
   ) {
     return { endedExisting: false, reason: "same_activity" };
+  }
+
+  const incomingIsOlderThanExisting =
+    Number.isFinite(existingActivityGeneratedAtEpochSeconds) &&
+    Number.isFinite(activityGeneratedAtEpochSeconds) &&
+    activityGeneratedAtEpochSeconds < existingActivityGeneratedAtEpochSeconds;
+  if (incomingIsOlderThanExisting) {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const result = await sendLiveActivityPush({
+      token: activityPushToken,
+      event: "end",
+      contentState: {
+        mode: "ended",
+        generatedAtEpochSeconds: timestamp,
+        delayMinutes: 0,
+        fantasyCurrentScore: null,
+        matches: [],
+      },
+      dismissalDate: timestamp,
+      isDevelopmentBuild,
+    });
+
+    if (result.success) {
+      return {
+        endedExisting: false,
+        reason: "incoming_stale_duplicate_ended",
+        previousActivityId: existingActivityId,
+        result,
+      };
+    }
+
+    if (isLiveActivityTerminalResult(result)) {
+      return {
+        endedExisting: false,
+        reason: "incoming_stale_duplicate_ignored",
+        previousActivityId: existingActivityId,
+        result,
+      };
+    }
+
+    return {
+      endedExisting: false,
+      reason: "end_failed",
+      previousActivityId: existingActivityId,
+      result,
+    };
   }
 
   const timestamp = Math.floor(Date.now() / 1000);
@@ -25743,6 +26073,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
           {
             currentActivityPushToken: null,
             currentActivityId: null,
+            currentActivityGeneratedAtEpochSeconds: null,
             pendingStartAt: null,
             lastMode: null,
             lastDispatchAt: new Date().toISOString(),
@@ -25866,6 +26197,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
         {
           currentActivityPushToken: null,
           currentActivityId: null,
+          currentActivityGeneratedAtEpochSeconds: null,
           pendingStartAt: null,
           lastPayloadHash: null,
           lastScoreHash: null,
@@ -26071,6 +26403,7 @@ app.post(`${API_PREFIX}/live-activity/test/end`, async (req, res) => {
         {
           currentActivityPushToken: null,
           currentActivityId: null,
+          currentActivityGeneratedAtEpochSeconds: null,
           pendingStartAt: null,
           lastMode: null,
           lastPayloadHash: null,
@@ -26110,6 +26443,7 @@ app.post(`${API_PREFIX}/live-activity/test/end`, async (req, res) => {
         {
           currentActivityPushToken: null,
           currentActivityId: null,
+          currentActivityGeneratedAtEpochSeconds: null,
           pendingStartAt: null,
           lastMode: null,
           lastPayloadHash: null,

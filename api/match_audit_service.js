@@ -22,10 +22,20 @@ const AUDIT_MATCH_PAGE_SIZE = Number.isFinite(Number(process.env.AUDIT_MATCH_PAG
 const AUDIT_MATCH_DETAIL_CONCURRENCY = Number.isFinite(Number(process.env.AUDIT_MATCH_DETAIL_CONCURRENCY))
   ? Math.max(1, Math.min(50, Math.floor(Number(process.env.AUDIT_MATCH_DETAIL_CONCURRENCY))))
   : 12;
+const AUDIT_AUTO_REPAIR_ENABLED = !["0", "false", "no", "off"].includes(
+  String(process.env.AUDIT_AUTO_REPAIR_ENABLED || "true").trim().toLowerCase()
+);
+const AUDIT_AUTO_REPAIR_COOLDOWN_MS = Number.isFinite(Number(process.env.AUDIT_AUTO_REPAIR_COOLDOWN_MS))
+  ? Math.max(60 * 1000, Math.floor(Number(process.env.AUDIT_AUTO_REPAIR_COOLDOWN_MS)))
+  : 15 * 60 * 1000;
+const AUDIT_AUTO_REPAIR_MAX_MATCHES_PER_RUN = Number.isFinite(Number(process.env.AUDIT_AUTO_REPAIR_MAX_MATCHES_PER_RUN))
+  ? Math.max(1, Math.min(100, Math.floor(Number(process.env.AUDIT_AUTO_REPAIR_MAX_MATCHES_PER_RUN))))
+  : 10;
 const AUDIT_MAIN_API_BASE_URL = (
   process.env.AUDIT_MAIN_API_BASE_URL ||
   process.env.MAIN_API_BASE_URL ||
-  "http://localhost:3000"
+  process.env.API_BASE_URL ||
+  `http://localhost:${process.env.PORT || 3011}`
 ).replace(/\/+$/, "");
 const AUDIT_MAIN_API_PREFIX = (
   process.env.AUDIT_MAIN_API_PREFIX ||
@@ -53,9 +63,46 @@ const NON_SCORE_TERMINAL_STATUSES = new Set([
   "ABANDONED",
 ]);
 
+const AUTO_REPAIR_ISSUE_CODES = new Set([
+  "missing_score_status_after_kickoff",
+  "missing_scores_after_kickoff",
+  "match_not_finished_after_max_window",
+  "missing_match_details_payload",
+  "incomplete_match_details_metadata",
+  "missing_match_details_status",
+  "match_details_status_mismatch",
+  "match_details_score_mismatch",
+]);
+
 let runtimeServer = null;
 const runtimeIntervalHandles = [];
 let runtimeShutdownPromise = null;
+const autoRepairLastTriggeredAtByMatchId = new Map();
+
+function buildEmptyCurrentRun() {
+  return {
+    trigger: null,
+    status: "idle",
+    stage: "idle",
+    started_at: null,
+    completed_at: null,
+    last_progress_at: null,
+    window_start: null,
+    window_end: null,
+    total_matches: 0,
+    matches_audited: 0,
+    matches_remaining: 0,
+    progress_ratio: 0,
+    detail_candidates: 0,
+    detail_checks_completed: 0,
+    issues_found: 0,
+    matches_per_second: 0,
+    auto_repair_candidates: 0,
+    auto_repair_attempted: 0,
+    auto_repair_succeeded: 0,
+    auto_repair_failed: 0,
+  };
+}
 
 const auditState = {
   running: false,
@@ -66,9 +113,14 @@ const auditState = {
   last_duration_ms: null,
   total_runs: 0,
   total_run_failures: 0,
+  total_matches_audited: 0,
   total_rescrapes_requested: 0,
   total_rescrapes_succeeded: 0,
   total_rescrapes_failed: 0,
+  total_auto_rescrapes_requested: 0,
+  total_auto_rescrapes_succeeded: 0,
+  total_auto_rescrapes_failed: 0,
+  current_run: buildEmptyCurrentRun(),
   current_report: buildEmptyAuditReport(),
 };
 
@@ -93,6 +145,10 @@ function buildEmptyAuditReport() {
       matches_with_issues: 0,
       issues_total: 0,
       healthy_matches: 0,
+      auto_repair_candidates: 0,
+      auto_repair_attempted: 0,
+      auto_repair_succeeded: 0,
+      auto_repair_failed: 0,
       issue_counts_by_code: {},
       issue_counts_by_severity: {},
       status_counts: {},
@@ -108,9 +164,44 @@ function buildPublicConfig() {
     poll_interval_ms: AUDIT_POLL_INTERVAL_MS,
     lookback_days: AUDIT_LOOKBACK_DAYS,
     match_max_duration_ms: AUDIT_MATCH_MAX_DURATION_MS,
+    auto_repair_enabled: AUDIT_AUTO_REPAIR_ENABLED,
+    auto_repair_cooldown_ms: AUDIT_AUTO_REPAIR_COOLDOWN_MS,
+    auto_repair_max_matches_per_run: AUDIT_AUTO_REPAIR_MAX_MATCHES_PER_RUN,
     time_zone: AUDIT_TIME_ZONE,
     upstream_api_root: AUDIT_MAIN_API_ROOT,
   };
+}
+
+function currentRunSnapshot() {
+  return auditState.current_run && typeof auditState.current_run === "object"
+    ? { ...auditState.current_run }
+    : buildEmptyCurrentRun();
+}
+
+function updateCurrentRun(patch = {}) {
+  const current = auditState.current_run && typeof auditState.current_run === "object"
+    ? auditState.current_run
+    : buildEmptyCurrentRun();
+  const next = {
+    ...current,
+    ...patch,
+  };
+  const totalMatches = Number.isFinite(Number(next.total_matches)) ? Math.max(0, Number(next.total_matches)) : 0;
+  const matchesAudited = Number.isFinite(Number(next.matches_audited))
+    ? Math.max(0, Math.min(totalMatches || Number(next.matches_audited), Number(next.matches_audited)))
+    : 0;
+  const startedAtMs = Date.parse(next.started_at || "");
+  const elapsedSeconds = Number.isFinite(startedAtMs)
+    ? Math.max(0, (Date.now() - startedAtMs) / 1000)
+    : 0;
+  next.total_matches = totalMatches;
+  next.matches_audited = matchesAudited;
+  next.matches_remaining = Math.max(0, totalMatches - matchesAudited);
+  next.progress_ratio = totalMatches > 0 ? Math.max(0, Math.min(1, matchesAudited / totalMatches)) : 0;
+  next.matches_per_second = elapsedSeconds > 0 ? matchesAudited / elapsedSeconds : 0;
+  next.last_progress_at = patch.last_progress_at || new Date().toISOString();
+  auditState.current_run = next;
+  return next;
 }
 
 function setNoStoreHeaders(res) {
@@ -636,46 +727,187 @@ async function fetchMatchDetailsPayload(matchId) {
   }
 }
 
+function autoRepairEligibleMatchIds(report, nowMs = Date.now()) {
+  if (!AUDIT_AUTO_REPAIR_ENABLED) return [];
+  const seen = new Set();
+  const eligible = [];
+  const issues = Array.isArray(report && report.issues) ? report.issues : [];
+  for (const issue of issues) {
+    const matchId = normalizeMatchId(issue && issue.match_id);
+    if (!matchId) continue;
+    if (!AUTO_REPAIR_ISSUE_CODES.has(String(issue && issue.code ? issue.code : ""))) continue;
+    if (seen.has(matchId)) continue;
+    const lastTriggeredAt = autoRepairLastTriggeredAtByMatchId.get(matchId) || 0;
+    if (Number.isFinite(lastTriggeredAt) && nowMs - lastTriggeredAt < AUDIT_AUTO_REPAIR_COOLDOWN_MS) {
+      continue;
+    }
+    seen.add(matchId);
+    eligible.push(matchId);
+    if (eligible.length >= AUDIT_AUTO_REPAIR_MAX_MATCHES_PER_RUN) {
+      break;
+    }
+  }
+  return eligible;
+}
+
+async function triggerRescrape(matchId, options = {}) {
+  const normalizedMatchId = normalizeMatchId(matchId);
+  if (!normalizedMatchId) {
+    const error = new Error("Invalid match id. Expected BBC match details id.");
+    error.status = 400;
+    throw error;
+  }
+
+  const mode = String(options.mode || "manual").trim().toLowerCase();
+  if (mode === "auto") {
+    auditState.total_auto_rescrapes_requested += 1;
+  } else {
+    auditState.total_rescrapes_requested += 1;
+  }
+
+  try {
+    const payload = await fetchJson(`${AUDIT_MAIN_API_ROOT}/admin/redis/matches/actions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "rescrape",
+        match_ids: [normalizedMatchId],
+      }),
+    });
+    if (mode === "auto") {
+      auditState.total_auto_rescrapes_succeeded += 1;
+    } else {
+      auditState.total_rescrapes_succeeded += 1;
+    }
+    return payload;
+  } catch (error) {
+    if (mode === "auto") {
+      auditState.total_auto_rescrapes_failed += 1;
+    } else {
+      auditState.total_rescrapes_failed += 1;
+    }
+    throw error;
+  }
+}
+
+async function autoRepairReportIssues(report, trigger = "interval") {
+  const eligibleMatchIds = autoRepairEligibleMatchIds(report, Date.now());
+  if (eligibleMatchIds.length === 0) {
+    return {
+      enabled: AUDIT_AUTO_REPAIR_ENABLED,
+      trigger,
+      candidates: 0,
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+      match_ids: [],
+      failures: [],
+    };
+  }
+
+  updateCurrentRun({
+    stage: "auto_repair",
+    auto_repair_candidates: eligibleMatchIds.length,
+  });
+
+  const failures = [];
+  let attempted = 0;
+  let succeeded = 0;
+  for (const matchId of eligibleMatchIds) {
+    attempted += 1;
+    autoRepairLastTriggeredAtByMatchId.set(matchId, Date.now());
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await triggerRescrape(matchId, { mode: "auto" });
+      succeeded += 1;
+    } catch (error) {
+      failures.push({
+        match_id: matchId,
+        error: error && error.message ? error.message : String(error),
+      });
+    }
+    updateCurrentRun({
+      auto_repair_attempted: attempted,
+      auto_repair_succeeded: succeeded,
+      auto_repair_failed: failures.length,
+    });
+  }
+
+  return {
+    enabled: AUDIT_AUTO_REPAIR_ENABLED,
+    trigger,
+    candidates: eligibleMatchIds.length,
+    attempted,
+    succeeded,
+    failed: failures.length,
+    match_ids: eligibleMatchIds,
+    failures,
+  };
+}
+
 async function buildAuditReport(trigger = "interval") {
   const nowMs = Date.now();
   const window = buildDateRangeWindow(nowMs, AUDIT_LOOKBACK_DAYS);
+  updateCurrentRun({
+    trigger,
+    status: "running",
+    stage: "fetching_matches",
+    started_at: new Date(nowMs).toISOString(),
+    completed_at: null,
+    window_start: window.start,
+    window_end: window.end,
+    total_matches: 0,
+    matches_audited: 0,
+    detail_candidates: 0,
+    detail_checks_completed: 0,
+    issues_found: 0,
+  });
   const matches = await fetchMatchesWindow(window);
 
-  const detailCandidates = matches.filter((match) => {
-    const kickoffMs = kickoffTimestampMs(match);
-    return Number.isFinite(kickoffMs) &&
-      nowMs >= kickoffMs &&
-      normalizeMatchId(match && match.match_details_id);
+  const detailCandidateIds = new Set(
+    matches.flatMap((match) => {
+      const kickoffMs = kickoffTimestampMs(match);
+      const matchId = normalizeMatchId(match && match.match_details_id);
+      return Number.isFinite(kickoffMs) && nowMs >= kickoffMs && matchId ? [matchId] : [];
+    })
+  );
+
+  updateCurrentRun({
+    stage: "auditing_matches",
+    total_matches: matches.length,
+    detail_candidates: detailCandidateIds.size,
   });
 
-  const detailsById = new Map();
-  await mapWithConcurrency(
-    detailCandidates,
+  const results = await mapWithConcurrency(
+    matches,
     AUDIT_MATCH_DETAIL_CONCURRENCY,
     async (match) => {
       const matchId = normalizeMatchId(match && match.match_details_id);
-      if (!matchId) return;
-      const result = await fetchMatchDetailsPayload(matchId);
-      detailsById.set(matchId, result);
+      const needsDetailPayload = Boolean(matchId && detailCandidateIds.has(matchId));
+      const detailResult = needsDetailPayload ? await fetchMatchDetailsPayload(matchId) : null;
+      const result = evaluateAuditIssues(match, {
+        nowMs,
+        matchDurationMs: AUDIT_MATCH_MAX_DURATION_MS,
+        detailPayload: detailResult && detailResult.ok ? detailResult.payload : null,
+        detailMissing: Boolean(detailResult && !detailResult.ok),
+      });
+      auditState.total_matches_audited += 1;
+      updateCurrentRun({
+        matches_audited: (auditState.current_run.matches_audited || 0) + 1,
+        detail_checks_completed:
+          (auditState.current_run.detail_checks_completed || 0) + (needsDetailPayload ? 1 : 0),
+        issues_found: (auditState.current_run.issues_found || 0) + result.issues.length,
+      });
+      return result;
     }
   );
-
-  const results = matches.map((match) => {
-    const matchId = normalizeMatchId(match && match.match_details_id);
-    const detailResult = matchId ? detailsById.get(matchId) : null;
-    return evaluateAuditIssues(match, {
-      nowMs,
-      matchDurationMs: AUDIT_MATCH_MAX_DURATION_MS,
-      detailPayload: detailResult && detailResult.ok ? detailResult.payload : null,
-      detailMissing: Boolean(detailResult && !detailResult.ok),
-    });
-  });
 
   const issues = results.flatMap((result) => result.issues);
   const matchesWithIssues = groupIssuesByMatch(results).filter((match) => match.issues.length > 0);
   const summary = summarizeAuditReport(results, issues);
-
-  return {
+  const report = {
     generated_at: new Date(nowMs).toISOString(),
     trigger,
     config: buildPublicConfig(),
@@ -689,6 +921,25 @@ async function buildAuditReport(trigger = "interval") {
     matches: matchesWithIssues,
     issues,
   };
+
+  const autoRepair = await autoRepairReportIssues(report, trigger);
+  report.auto_repair = autoRepair;
+  report.summary = {
+    ...summary,
+    auto_repair_candidates: autoRepair.candidates,
+    auto_repair_attempted: autoRepair.attempted,
+    auto_repair_succeeded: autoRepair.succeeded,
+    auto_repair_failed: autoRepair.failed,
+  };
+  updateCurrentRun({
+    stage: "finalizing",
+    auto_repair_candidates: autoRepair.candidates,
+    auto_repair_attempted: autoRepair.attempted,
+    auto_repair_succeeded: autoRepair.succeeded,
+    auto_repair_failed: autoRepair.failed,
+  });
+
+  return report;
 }
 
 async function runAuditCycle(trigger = "interval") {
@@ -707,12 +958,23 @@ async function runAuditCycle(trigger = "interval") {
     auditState.last_success_at = auditState.last_run_completed_at;
     auditState.last_error = null;
     auditState.last_duration_ms = Date.now() - startedAtMs;
+    updateCurrentRun({
+      status: "completed",
+      stage: "completed",
+      completed_at: auditState.last_run_completed_at,
+      matches_audited: report.summary && report.summary.matches_checked ? report.summary.matches_checked : 0,
+    });
     return report;
   } catch (error) {
     auditState.total_run_failures += 1;
     auditState.last_run_completed_at = new Date().toISOString();
     auditState.last_error = error && error.message ? error.message : String(error);
     auditState.last_duration_ms = null;
+    updateCurrentRun({
+      status: "failed",
+      stage: "failed",
+      completed_at: auditState.last_run_completed_at,
+    });
     throw error;
   } finally {
     auditState.running = false;
@@ -789,6 +1051,10 @@ function buildPrometheusMetricsText() {
   lines.push("# TYPE top_scores_match_audit_running gauge");
   pushPrometheusSample(lines, "top_scores_match_audit_running", auditState.running ? 1 : 0);
 
+  lines.push("# HELP top_scores_match_audit_matches_audited_total Total matches processed by the audit service.");
+  lines.push("# TYPE top_scores_match_audit_matches_audited_total counter");
+  pushPrometheusSample(lines, "top_scores_match_audit_matches_audited_total", auditState.total_matches_audited);
+
   lines.push("# HELP top_scores_match_audit_runs_total Total audit runs attempted.");
   lines.push("# TYPE top_scores_match_audit_runs_total counter");
   pushPrometheusSample(lines, "top_scores_match_audit_runs_total", auditState.total_runs);
@@ -829,6 +1095,23 @@ function buildPrometheusMetricsText() {
     Number.isFinite(reportGeneratedMs) ? Math.max(0, (nowMs - reportGeneratedMs) / 1000) : 0
   );
 
+  const currentRun = currentRunSnapshot();
+  lines.push("# HELP top_scores_match_audit_current_run_matches_total Current run total matches scheduled for audit.");
+  lines.push("# TYPE top_scores_match_audit_current_run_matches_total gauge");
+  pushPrometheusSample(lines, "top_scores_match_audit_current_run_matches_total", currentRun.total_matches || 0);
+
+  lines.push("# HELP top_scores_match_audit_current_run_matches_completed Current run matches audited so far.");
+  lines.push("# TYPE top_scores_match_audit_current_run_matches_completed gauge");
+  pushPrometheusSample(lines, "top_scores_match_audit_current_run_matches_completed", currentRun.matches_audited || 0);
+
+  lines.push("# HELP top_scores_match_audit_current_run_progress_ratio Current run completion ratio between 0 and 1.");
+  lines.push("# TYPE top_scores_match_audit_current_run_progress_ratio gauge");
+  pushPrometheusSample(lines, "top_scores_match_audit_current_run_progress_ratio", currentRun.progress_ratio || 0);
+
+  lines.push("# HELP top_scores_match_audit_current_run_matches_per_second Current run audit throughput in matches per second.");
+  lines.push("# TYPE top_scores_match_audit_current_run_matches_per_second gauge");
+  pushPrometheusSample(lines, "top_scores_match_audit_current_run_matches_per_second", currentRun.matches_per_second || 0);
+
   const summaryMetrics = {
     matches_checked: summary.matches_checked || 0,
     started_matches: summary.started_matches || 0,
@@ -839,6 +1122,10 @@ function buildPrometheusMetricsText() {
     matches_with_issues: summary.matches_with_issues || 0,
     issues_total: summary.issues_total || 0,
     healthy_matches: summary.healthy_matches || 0,
+    auto_repair_candidates: summary.auto_repair_candidates || 0,
+    auto_repair_attempted: summary.auto_repair_attempted || 0,
+    auto_repair_succeeded: summary.auto_repair_succeeded || 0,
+    auto_repair_failed: summary.auto_repair_failed || 0,
   };
   Object.entries(summaryMetrics).forEach(([name, value]) => {
     lines.push(`# HELP top_scores_match_audit_${name} Current audit summary value for ${name}.`);
@@ -890,6 +1177,18 @@ function buildPrometheusMetricsText() {
     status: "failed",
   });
 
+  lines.push("# HELP top_scores_match_audit_auto_rescrapes_total Automatic audit-triggered rescrape requests.");
+  lines.push("# TYPE top_scores_match_audit_auto_rescrapes_total counter");
+  pushPrometheusSample(lines, "top_scores_match_audit_auto_rescrapes_total", auditState.total_auto_rescrapes_requested, {
+    status: "requested",
+  });
+  pushPrometheusSample(lines, "top_scores_match_audit_auto_rescrapes_total", auditState.total_auto_rescrapes_succeeded, {
+    status: "succeeded",
+  });
+  pushPrometheusSample(lines, "top_scores_match_audit_auto_rescrapes_total", auditState.total_auto_rescrapes_failed, {
+    status: "failed",
+  });
+
   return `${lines.join("\n")}\n`;
 }
 
@@ -910,31 +1209,7 @@ function paginate(items, page, pageSize) {
 }
 
 async function triggerManualRescrape(matchId) {
-  const normalizedMatchId = normalizeMatchId(matchId);
-  if (!normalizedMatchId) {
-    const error = new Error("Invalid match id. Expected BBC match details id.");
-    error.status = 400;
-    throw error;
-  }
-
-  auditState.total_rescrapes_requested += 1;
-  try {
-    const payload = await fetchJson(`${AUDIT_MAIN_API_ROOT}/admin/redis/matches/actions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        action: "rescrape",
-        match_ids: [normalizedMatchId],
-      }),
-    });
-    auditState.total_rescrapes_succeeded += 1;
-    return payload;
-  } catch (error) {
-    auditState.total_rescrapes_failed += 1;
-    throw error;
-  }
+  return triggerRescrape(matchId, { mode: "manual" });
 }
 
 function createAuditServiceApp() {
@@ -952,6 +1227,7 @@ function createAuditServiceApp() {
       status: auditState.last_error ? "degraded" : stale ? "stale" : "ok",
       role: "match-audit",
       running: auditState.running,
+      current_run: currentRunSnapshot(),
       last_success_at: auditState.last_success_at,
       last_error: auditState.last_error,
       report_generated_at: auditState.current_report.generated_at,
@@ -993,6 +1269,7 @@ function createAuditServiceApp() {
     res.json({
       success: true,
       running: auditState.running,
+      current_run: currentRunSnapshot(),
       last_success_at: auditState.last_success_at,
       last_error: auditState.last_error,
       last_duration_ms: auditState.last_duration_ms,
@@ -1115,6 +1392,26 @@ async function shutdownAuditService() {
   return runtimeShutdownPromise;
 }
 
+async function runStartupAuditWithRetry(maxAttempts = 6, delayMs = 3000) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await runAuditCycle(attempt === 1 ? "startup" : "startup_retry");
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) {
+        break;
+      }
+      console.warn(
+        `[Audit] Startup audit attempt ${attempt}/${maxAttempts} failed: ${error && error.message ? error.message : error}`
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError || new Error("Startup audit failed");
+}
+
 function installSignalHandlers() {
   const handleSignal = (signal) => {
     console.log(`[Audit] ${signal} received, shutting down gracefully`);
@@ -1137,8 +1434,8 @@ function startAuditService() {
     console.log(`Match audit service listening on http://localhost:${AUDIT_PORT}`);
   });
 
-  void runAuditCycle("startup").catch((error) => {
-    console.error("[Audit] Initial audit run failed:", error.message || error);
+  void runStartupAuditWithRetry().catch((error) => {
+    console.error("[Audit] Initial audit run failed after retries:", error.message || error);
   });
 
   registerRuntimeInterval(() => {
@@ -1161,6 +1458,9 @@ module.exports = {
   shutdownAuditService,
   __private: {
     buildDateRangeWindow,
+    buildEmptyCurrentRun,
+    currentRunSnapshot,
+    updateCurrentRun,
     zonedDateTimeToUtcMs,
     kickoffTimestampMs,
     normalizeStatusToken,
@@ -1172,6 +1472,7 @@ module.exports = {
     summarizeAuditReport,
     buildPrometheusMetricsText,
     filteredIssuesFromReport,
+    autoRepairEligibleMatchIds,
     buildSyntheticAuditMatchId,
     normalizeMatchId,
   },

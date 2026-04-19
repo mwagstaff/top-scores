@@ -393,6 +393,16 @@ final class LiveActivitySyncService {
             survivor.id
         )
 
+        // Upload the survivor's push token BEFORE ending duplicates so the server
+        // registers the correct activity before any activity-ended call arrives.
+        // This prevents a race where activity-ended (for a duplicate) clears the
+        // server state before the survivor's token upload lands, causing the server
+        // to fire another push-to-start and creating an infinite loop.
+        if let survivorToken = survivor.pushToken {
+            await uploadActivityPushToken(activityID: survivor.id, tokenData: survivorToken)
+            NSLog("[LiveActivitySync] Pre-uploaded survivor token before ending duplicates %@", survivor.id)
+        }
+
         for duplicate in sortedActivities.dropFirst() {
             NSLog("[LiveActivitySync] Ending duplicate activity %@", duplicate.id)
             stopObserving(activityID: duplicate.id, cancelStateTask: true)
@@ -435,10 +445,12 @@ final class LiveActivitySyncService {
         guard shouldUpload else { return }
 
         guard let endpoint = await endpointURL(path: "live-activity/activity-token") else { return }
+        let generatedAtEpochSeconds = Self.currentContentState(for: activityID)?.generatedAtEpochSeconds
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "activityId": activityID,
             "activityPushToken": tokenHex,
+            "activityGeneratedAtEpochSeconds": generatedAtEpochSeconds as Any,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
         ]
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "activity-token")
@@ -605,6 +617,13 @@ final class LiveActivitySyncService {
 
     private static func shortHex(_ data: Data) -> String {
         String(hexString(from: data).prefix(16))
+    }
+
+    @available(iOS 16.1, *)
+    private static func currentContentState(
+        for activityID: String
+    ) -> TopScoresLiveActivityAttributes.ContentState? {
+        Activity<TopScoresLiveActivityAttributes>.activities.first(where: { $0.id == activityID })?.content.state
     }
 
     @available(iOS 16.1, *)

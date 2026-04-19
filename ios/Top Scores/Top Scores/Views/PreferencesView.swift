@@ -110,7 +110,7 @@ struct PreferencesView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Section("Competitions") {
+                    Section("Other competitions") {
                         Toggle("Enable competition filter", isOn: competitionFilterEnabledBinding)
 
                         if preferences.competitionFilterEnabled {
@@ -710,8 +710,11 @@ struct PreferencesView: View {
 
     private var filteredLeagues: [String] {
         let trimmed = leagueSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return viewModel.availableLeagues }
-        return viewModel.availableLeagues.filter { $0.localizedCaseInsensitiveContains(trimmed) }
+        let leagues = viewModel.availableLeagues.filter {
+            $0.localizedCaseInsensitiveCompare("Premier League") != .orderedSame
+        }
+        guard !trimmed.isEmpty else { return leagues }
+        return leagues.filter { $0.localizedCaseInsensitiveContains(trimmed) }
     }
 
     private var filteredChannels: [String] {

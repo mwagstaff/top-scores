@@ -4,7 +4,7 @@
   "tags": ["top-scores", "audit", "match-health", "reconciliation"],
   "timezone": "browser",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 3,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -13,8 +13,43 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Matches Checked",
+      "title": "Audit Service Up",
       "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "text": "Down" }, "1": { "text": "Up" } }, "type": "value" }
+          ],
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "max(top_scores_match_audit_info)",
+          "legendFormat": "audit service"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Matches Checked",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -37,7 +72,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_audit_matches_checked{job=\"top-scores-match-audit\"}",
+          "expr": "max(top_scores_match_audit_matches_checked)",
           "legendFormat": "matches checked"
         }
       ]
@@ -45,39 +80,6 @@
     {
       "type": "stat",
       "title": "Matches With Issues",
-      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 5 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
-        "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center"
-      },
-      "targets": [
-        {
-          "expr": "top_scores_match_audit_matches_with_issues{job=\"top-scores-match-audit\"}",
-          "legendFormat": "matches with issues"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Issues Total",
       "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
       "fieldConfig": {
         "defaults": {
@@ -103,7 +105,40 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_audit_issues_total{job=\"top-scores-match-audit\"}",
+          "expr": "max(top_scores_match_audit_matches_with_issues)",
+          "legendFormat": "matches with issues"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Issues Total",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "max(top_scores_match_audit_issues_total)",
           "legendFormat": "issues total"
         }
       ]
@@ -111,7 +146,7 @@
     {
       "type": "stat",
       "title": "Healthy Matches",
-      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -134,7 +169,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_audit_healthy_matches{job=\"top-scores-match-audit\"}",
+          "expr": "max(top_scores_match_audit_healthy_matches)",
           "legendFormat": "healthy matches"
         }
       ]
@@ -142,7 +177,7 @@
     {
       "type": "stat",
       "title": "Report Age (s)",
-      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "gridPos": { "x": 20, "y": 0, "w": 2, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -167,7 +202,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_audit_report_age_seconds{job=\"top-scores-match-audit\"}",
+          "expr": "max(top_scores_match_audit_report_age_seconds)",
           "legendFormat": "report age"
         }
       ]
@@ -175,7 +210,7 @@
     {
       "type": "stat",
       "title": "Run Failures",
-      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "gridPos": { "x": 22, "y": 0, "w": 2, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -200,15 +235,82 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_audit_run_failures_total{job=\"top-scores-match-audit\"}",
+          "expr": "max(top_scores_match_audit_run_failures_total)",
           "legendFormat": "run failures"
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Current Audit Progress",
+      "gridPos": { "x": 0, "y": 4, "w": 8, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 25 },
+              { "color": "green", "value": 100 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "expr": "100 * max(top_scores_match_audit_current_run_progress_ratio)",
+          "legendFormat": "progress"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Audit Progress Over Time",
+      "gridPos": { "x": 8, "y": 4, "w": 16, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "targets": [
+        {
+          "expr": "top_scores_match_audit_current_run_matches_completed",
+          "legendFormat": "matches completed"
+        },
+        {
+          "expr": "top_scores_match_audit_current_run_matches_total",
+          "legendFormat": "total matches"
+        },
+        {
+          "expr": "top_scores_match_audit_current_run_matches_per_second",
+          "legendFormat": "matches/s"
         }
       ]
     },
     {
       "type": "timeseries",
       "title": "Current Issue Counts by Code",
-      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -225,7 +327,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_audit_issue_count{job=\"top-scores-match-audit\"}",
+          "expr": "top_scores_match_audit_issue_count",
           "legendFormat": "{{code}} ({{severity}})"
         }
       ]
@@ -233,7 +335,7 @@
     {
       "type": "timeseries",
       "title": "Audit Coverage Stats",
-      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -250,30 +352,34 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_audit_matches_checked{job=\"top-scores-match-audit\"}",
+          "expr": "top_scores_match_audit_matches_checked",
           "legendFormat": "matches checked"
         },
         {
-          "expr": "top_scores_match_audit_started_matches{job=\"top-scores-match-audit\"}",
+          "expr": "top_scores_match_audit_started_matches",
           "legendFormat": "started matches"
         },
         {
-          "expr": "top_scores_match_audit_finished_expected_matches{job=\"top-scores-match-audit\"}",
+          "expr": "top_scores_match_audit_finished_expected_matches",
           "legendFormat": "expected finished"
         },
         {
-          "expr": "top_scores_match_audit_detail_candidates{job=\"top-scores-match-audit\"}",
+          "expr": "top_scores_match_audit_detail_candidates",
           "legendFormat": "detail candidates"
+        },
+        {
+          "expr": "rate(top_scores_match_audit_matches_audited_total[5m])",
+          "legendFormat": "audited/s (5m rate)"
         }
       ]
     },
     {
       "type": "table",
       "title": "Current Issue Matches",
-      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 12 },
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 12 },
       "targets": [
         {
-          "expr": "top_scores_match_audit_issue_match{job=\"top-scores-match-audit\"}",
+          "expr": "top_scores_match_audit_issue_match",
           "format": "table",
           "instant": true,
           "legendFormat": "{{match_id}}"

@@ -3,10 +3,13 @@ const assert = require("node:assert/strict");
 
 const {
   __private: {
+    autoRepairEligibleMatchIds,
+    buildEmptyCurrentRun,
     evaluateAuditIssues,
     groupIssuesByMatch,
     summarizeAuditReport,
     normalizeMatchId,
+    updateCurrentRun,
   },
 } = require("./match_audit_service");
 
@@ -155,4 +158,41 @@ test("summarizeAuditReport counts issues and healthy matches", () => {
   assert.equal(summary.matches_with_issues, 1);
   assert.equal(summary.healthy_matches, 1);
   assert.equal(summary.issue_counts_by_code.match_not_finished_after_max_window, 1);
+});
+
+test("updateCurrentRun computes progress and throughput", () => {
+  const baseline = buildEmptyCurrentRun();
+  updateCurrentRun(baseline);
+  const snapshot = updateCurrentRun({
+    trigger: "test",
+    status: "running",
+    stage: "auditing_matches",
+    started_at: new Date(Date.now() - 5000).toISOString(),
+    total_matches: 20,
+    matches_audited: 5,
+    detail_candidates: 8,
+    detail_checks_completed: 3,
+    issues_found: 2,
+  });
+
+  assert.equal(snapshot.matches_remaining, 15);
+  assert.equal(snapshot.progress_ratio, 0.25);
+  assert.equal(snapshot.detail_candidates, 8);
+  assert.equal(snapshot.detail_checks_completed, 3);
+  assert.equal(snapshot.issues_found, 2);
+  assert.equal(snapshot.matches_per_second > 0, true);
+});
+
+test("autoRepairEligibleMatchIds selects rescrapeable issue matches with ids", () => {
+  const report = {
+    issues: [
+      { match_id: "c36r36ngd87t", code: "missing_match_details_payload" },
+      { match_id: "c36r36ngd87t", code: "match_details_score_mismatch" },
+      { match_id: null, code: "missing_match_details_id" },
+      { match_id: "c222", code: "match_not_finished_after_max_window" },
+    ],
+  };
+
+  const eligible = autoRepairEligibleMatchIds(report, Date.now());
+  assert.deepEqual(eligible, ["c36r36ngd87t", "c222"]);
 });

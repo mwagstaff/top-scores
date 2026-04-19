@@ -692,6 +692,12 @@ function normalizeLiveActivityStatePatch(patch = {}) {
       patch.currentActivityTokenUpdatedAt
     );
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "currentActivityGeneratedAtEpochSeconds")) {
+    const numericGeneratedAt = Number(patch.currentActivityGeneratedAtEpochSeconds);
+    normalized.currentActivityGeneratedAtEpochSeconds = Number.isFinite(numericGeneratedAt)
+      ? Math.floor(numericGeneratedAt)
+      : null;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "lastEndedAt")) {
     normalized.lastEndedAt = normalizeOptionalToken(patch.lastEndedAt);
   }

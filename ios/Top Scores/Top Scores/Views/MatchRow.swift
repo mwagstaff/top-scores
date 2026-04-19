@@ -781,7 +781,14 @@ struct MatchRow: View {
         hasCompactBroadcastLogo: Bool
     ) -> Bool {
         let _ = hasCompactBroadcastLogo
-        return match.isUpcomingScorelessFixture || match.isPostponed || match.isFinished || match.isInProgress
+        if match.isPostponed || match.isFinished || match.isInProgress {
+            return true
+        }
+
+        // Keep compact fixture rows stable even when kickoff metadata is incomplete
+        // or the upstream status token is unknown. Upcoming no-score matches should
+        // still reserve the center slot for TV branding and the trailing slot for kickoff.
+        return !match.hasScore
     }
 
     private var shouldPlaceCompactKickoffInTrailingAccessory: Bool {

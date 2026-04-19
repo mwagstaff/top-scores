@@ -1137,6 +1137,46 @@ test("mergeBbcAndLiveMatches keeps BBC team names while merging live TV metadata
   assert.deepStrictEqual(merged[0].tv_channels, ["Sky Sports Football"]);
 });
 
+test("mergeBbcAndLiveMatches collapses Bundesliga aliases onto the BBC-backed FT row", () => {
+  const merged = mergeBbcAndLiveMatches(
+    [
+      {
+        date: "2026-04-19",
+        time: "16:30",
+        league: "Bundesliga",
+        home_team: "Bayern Munich",
+        away_team: "VfB Stuttgart",
+        tv_channels: ["Amazon Prime PPV"],
+        home_score: 4,
+        away_score: 2,
+        score_status: "90",
+      },
+    ],
+    [
+      {
+        date: "2026-04-19",
+        time: "16:30",
+        league: "German Bundesliga",
+        home_team: "Bayern Munich",
+        away_team: "Stuttgart",
+        tv_channels: [],
+        home_score: 4,
+        away_score: 2,
+        score_status: "FT",
+        details_url: "https://www.bbc.co.uk/sport/football/live/c89558d5d5nt",
+        has_bbc_source: true,
+      },
+    ]
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].league, "Bundesliga");
+  assert.equal(merged[0].away_team, "Stuttgart");
+  assert.equal(merged[0].score_status, "FT");
+  assert.equal(merged[0].details_url, "https://www.bbc.co.uk/sport/football/live/c89558d5d5nt");
+  assert.equal(merged[0].has_bbc_source, true);
+});
+
 test("collectAdminRogueMatchTargets only selects the exact rogue short-name row", () => {
   const { selectors, invalid } = normalizeAdminRogueMatchSelectors({
     matches: [
@@ -1572,6 +1612,41 @@ test("dedupeMatchListPayloads collapses duplicate fixtures even when one row lac
   assert.equal(deduped[0].away_score, 0);
   assert.equal(deduped[0].score_status, "FT");
   assert.deepEqual(deduped[0].tv_channels, ["BBC Sport Website"]);
+});
+
+test("dedupeMatchListPayloads collapses Bundesliga alias rows and keeps the BBC live match id", () => {
+  const deduped = dedupeMatchListPayloads([
+    {
+      date: "2026-04-19",
+      time: "16:30",
+      league: "Bundesliga",
+      home_team: "Bayern Munich",
+      away_team: "VfB Stuttgart",
+      match_details_id: "syn117060f1bbf79bb5",
+      home_score: 4,
+      away_score: 2,
+      score_status: "90",
+      tv_channels: ["Amazon Prime PPV"],
+    },
+    {
+      date: "2026-04-19",
+      time: "16:30",
+      league: "German Bundesliga",
+      home_team: "Bayern Munich",
+      away_team: "Stuttgart",
+      match_details_id: "c89558d5d5nt",
+      has_bbc_source: true,
+      home_score: 4,
+      away_score: 2,
+      score_status: "FT",
+    },
+  ]);
+
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0].match_details_id, "c89558d5d5nt");
+  assert.equal(deduped[0].score_status, "FT");
+  assert.equal(deduped[0].has_bbc_source, true);
+  assert.equal(deduped[0].away_team, "Stuttgart");
 });
 
 test("isListPayloadVisibleForMode excludes future same-day fixtures from results", () => {

@@ -1,4 +1,5 @@
 import {
+  type CompetitionWeightEntry,
   type Match,
   type MatchDayGroup,
   type MatchGroupSortOrder,
@@ -76,11 +77,60 @@ export class TeamRatingLookup {
   }
 }
 
+export class CompetitionWeightLookup {
+  private readonly exactByKey = new Map<string, number>();
+
+  constructor(entries: CompetitionWeightEntry[]) {
+    for (const entry of entries) {
+      const key = normalizedKey(entry.name);
+      if (key && !this.exactByKey.has(key)) {
+        this.exactByKey.set(key, entry.weight);
+      }
+    }
+  }
+
+  weight(leagueName: string): number | null {
+    // Try exact normalized match first
+    const key = normalizedKey(leagueName);
+    if (this.exactByKey.has(key)) {
+      return this.exactByKey.get(key) ?? null;
+    }
+
+    // Try prefix matching: league name may include a subcategory suffix (e.g. "Premier League: Round 35")
+    // Check if any stored key is a prefix of or contained within the query
+    const queryTokens = normalizedTokens(leagueName);
+    let bestWeight: number | null = null;
+    let bestScore = 0;
+    for (const [storedKey, storedWeight] of this.exactByKey) {
+      if (key.startsWith(storedKey) || storedKey.startsWith(key)) {
+        const shorter = Math.min(storedKey.length, key.length);
+        const longer = Math.max(storedKey.length, key.length);
+        const score = longer > 0 ? shorter / longer : 1;
+        if (score > bestScore) {
+          bestScore = score;
+          bestWeight = storedWeight;
+        }
+        continue;
+      }
+      // Dice coefficient on tokens for fuzzy fallback
+      const storedTokens = normalizedTokens(storedKey);
+      const dice = diceCoefficient(queryTokens, storedTokens);
+      if (dice > bestScore) {
+        bestScore = dice;
+        bestWeight = storedWeight;
+      }
+    }
+
+    return bestScore >= 0.7 ? bestWeight : null;
+  }
+}
+
 export function groupMatches(
   matches: Match[],
   mode: "fixtures" | "results",
   sortOrder: MatchGroupSortOrder,
-  ratingLookup: TeamRatingLookup
+  ratingLookup: TeamRatingLookup,
+  weightLookup: CompetitionWeightLookup = new CompetitionWeightLookup([])
 ): MatchDayGroup[] {
   const groupedByDate = new Map<string, Match[]>();
 
@@ -119,6 +169,7 @@ export function groupMatches(
         return {
           league,
           matches: sortedMatches,
+          competitionWeight: weightLookup.weight(league),
           totalTeamRating: leagueMatches.reduce(
             (total, match) => total + totalTeamRating(match, ratingLookup),
             0
@@ -211,6 +262,7 @@ export function parseKickoff(match: Match): Date | null {
 function compareLeagueSections(
   left: {
     league: string;
+    competitionWeight: number | null;
     totalTeamRating: number;
     leadingMatchRating: number;
     leadingKickoff: number;
@@ -219,6 +271,7 @@ function compareLeagueSections(
   },
   right: {
     league: string;
+    competitionWeight: number | null;
     totalTeamRating: number;
     leadingMatchRating: number;
     leadingKickoff: number;
@@ -227,6 +280,16 @@ function compareLeagueSections(
   },
   sortOrder: MatchGroupSortOrder
 ) {
+  // Competition weight is the primary sort key when available — higher weight first.
+  // Leagues with a known weight always rank above leagues without one.
+  if (left.competitionWeight !== null || right.competitionWeight !== null) {
+    const lw = left.competitionWeight ?? -1;
+    const rw = right.competitionWeight ?? -1;
+    if (lw !== rw) {
+      return rw - lw;
+    }
+  }
+
   switch (sortOrder) {
     case "kickoffThenTeamScore":
       if (left.leadingKickoff !== right.leadingKickoff) {

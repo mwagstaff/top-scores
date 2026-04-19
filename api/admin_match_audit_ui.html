@@ -109,6 +109,35 @@
       gap: 10px;
     }
 
+    .progress-shell {
+      display: grid;
+      gap: 10px;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #e7edf2;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #0f766e 0%, #14b8a6 100%);
+      transition: width 0.25s ease;
+    }
+
+    .progress-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
     .meta-card {
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -259,8 +288,8 @@
       <h1>Match Audit</h1>
       <p>Independent audit service for match state, finish-state, and match-details coverage.</p>
       <div class="links" style="margin-top: 10px;">
-        <a class="chip" href="/healthcheck" target="_blank" rel="noopener noreferrer">Healthcheck</a>
-        <a class="chip" href="/metrics" target="_blank" rel="noopener noreferrer">Metrics</a>
+        <a id="healthcheck-link" class="chip" href="/api/v1/audit/healthcheck" target="_blank" rel="noopener noreferrer">Healthcheck</a>
+        <a id="metrics-link" class="chip" href="/api/v1/audit/metrics" target="_blank" rel="noopener noreferrer">Metrics</a>
       </div>
     </section>
 
@@ -285,6 +314,10 @@
     </section>
 
     <section class="panel">
+      <div id="progress-panel" class="progress-shell"></div>
+    </section>
+
+    <section class="panel">
       <div id="summary-grid" class="summary-grid"></div>
     </section>
 
@@ -306,6 +339,7 @@
   <script>
     const statusEl = document.getElementById("status");
     const summaryGridEl = document.getElementById("summary-grid");
+    const progressPanelEl = document.getElementById("progress-panel");
     const issueSummaryEl = document.getElementById("issue-summary");
     const issueListEl = document.getElementById("issue-list");
     const severityFilterEl = document.getElementById("severity-filter");
@@ -314,16 +348,31 @@
     const runAuditButton = document.getElementById("run-audit");
     const prevPageButton = document.getElementById("prev-page");
     const nextPageButton = document.getElementById("next-page");
+    const healthcheckLinkEl = document.getElementById("healthcheck-link");
+    const metricsLinkEl = document.getElementById("metrics-link");
 
     const PAGE_SIZE = 50;
     let currentReport = null;
     let filteredMatches = [];
     let currentPage = 1;
 
+    function appBasePath() {
+      const pathname = window.location.pathname || "";
+      const adminIndex = pathname.indexOf("/admin/");
+      if (adminIndex >= 0) {
+        return pathname.slice(0, adminIndex) || "";
+      }
+      return "";
+    }
+
+    function auditApiBaseUrl() {
+      return `${window.location.origin}${appBasePath()}/api/v1/audit`;
+    }
+
     function upstreamAdminBaseUrl() {
       const root = currentReport && currentReport.config && currentReport.config.upstream_api_root
         ? String(currentReport.config.upstream_api_root)
-        : "http://localhost:3000/api/v1";
+        : `${window.location.origin}${appBasePath()}/api/v1`;
       return root.replace(/\/api\/v1\/?$/, "");
     }
 
@@ -353,6 +402,52 @@
         <div class="meta-card">
           <div class="label">${escapeHtml(label)}</div>
           <div class="value">${escapeHtml(value)}</div>
+        </div>
+      `;
+    }
+
+    function formatPercent(ratio) {
+      const safeRatio = Number.isFinite(Number(ratio)) ? Number(ratio) : 0;
+      return `${(safeRatio * 100).toFixed(1)}%`;
+    }
+
+    function formatDecimal(value, digits = 2) {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric.toFixed(digits) : "0.00";
+    }
+
+    function renderProgress(payload) {
+      const currentRun = payload && payload.current_run ? payload.current_run : null;
+      if (!currentRun) {
+        progressPanelEl.innerHTML = `<div class="empty">No audit run state available.</div>`;
+        return;
+      }
+      const percent = Number.isFinite(Number(currentRun.progress_ratio))
+        ? Math.max(0, Math.min(100, Number(currentRun.progress_ratio) * 100))
+        : 0;
+      const status = currentRun.status || (payload && payload.running ? "running" : "idle");
+      const stage = currentRun.stage || "idle";
+      progressPanelEl.innerHTML = `
+        <div class="progress-meta">
+          <div>
+            <strong>Current Audit</strong>
+            <span class="pill ${escapeHtml(status === "failed" ? "critical" : status === "running" ? "warning" : "ok")}">${escapeHtml(status)}</span>
+            <span class="muted">stage ${escapeHtml(stage)}</span>
+          </div>
+          <div class="muted">
+            ${escapeHtml(String(currentRun.matches_audited || 0))} / ${escapeHtml(String(currentRun.total_matches || 0))}
+            matches | ${escapeHtml(formatPercent(currentRun.progress_ratio || 0))}
+            | ${escapeHtml(formatDecimal(currentRun.matches_per_second || 0))} matches/s
+          </div>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" style="width: ${percent.toFixed(1)}%;"></div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-pill"><strong>Started</strong><br>${escapeHtml(currentRun.started_at || "—")}</div>
+          <div class="meta-pill"><strong>Last Progress</strong><br>${escapeHtml(currentRun.last_progress_at || "—")}</div>
+          <div class="meta-pill"><strong>Detail Checks</strong><br>${escapeHtml(String(currentRun.detail_checks_completed || 0))} / ${escapeHtml(String(currentRun.detail_candidates || 0))}</div>
+          <div class="meta-pill"><strong>Issues Found</strong><br>${escapeHtml(String(currentRun.issues_found || 0))}</div>
         </div>
       `;
     }
@@ -435,7 +530,7 @@
       statusEl.className = "status";
       statusEl.textContent = `Rescraping ${matchId}...`;
       try {
-        await fetchJson(`/api/v1/audit/matches/${encodeURIComponent(matchId)}/rescrape`, {
+        await fetchJson(`${auditApiBaseUrl()}/matches/${encodeURIComponent(matchId)}/rescrape`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -526,7 +621,7 @@
     async function loadReport() {
       statusEl.className = "status";
       statusEl.textContent = "Loading audit report...";
-      const payload = await fetchJson("/api/v1/audit/summary?limit=1000");
+      const payload = await fetchJson(`${auditApiBaseUrl()}/summary?limit=1000`);
       currentReport = payload.report || null;
 
       const codes = issueCodeOptions(currentReport);
@@ -535,13 +630,15 @@
         ...codes.map((code) => `<option value="${escapeHtml(code)}">${escapeHtml(code)}</option>`),
       ].join("");
 
+      renderProgress(payload || {});
       renderSummary(currentReport || {});
       applyFilters();
 
       statusEl.textContent =
         `Last success: ${payload.last_success_at || "n/a"} | ` +
         `Report: ${currentReport && currentReport.generated_at ? currentReport.generated_at : "n/a"} | ` +
-        `Running: ${payload.running ? "yes" : "no"}`;
+        `Running: ${payload.running ? "yes" : "no"} | ` +
+        `Progress: ${(payload.current_run && payload.current_run.matches_audited) || 0}/${(payload.current_run && payload.current_run.total_matches) || 0}`;
     }
 
     severityFilterEl.addEventListener("change", applyFilters);
@@ -559,13 +656,16 @@
       statusEl.className = "status";
       statusEl.textContent = "Running audit...";
       try {
-        await fetchJson("/api/v1/audit/run", { method: "POST" });
+        await fetchJson(`${auditApiBaseUrl()}/run`, { method: "POST" });
         await loadReport();
       } catch (error) {
         statusEl.className = "status error";
         statusEl.textContent = error && error.message ? error.message : String(error);
       }
     });
+
+    healthcheckLinkEl.href = `${auditApiBaseUrl()}/healthcheck`;
+    metricsLinkEl.href = `${auditApiBaseUrl()}/metrics`;
 
     void loadReport().catch((error) => {
       statusEl.className = "status error";

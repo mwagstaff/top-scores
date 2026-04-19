@@ -1,6 +1,7 @@
 import {
   channelApiQueryValues,
   selectableChannels,
+  type CompetitionWeightEntry,
   type LeagueTable,
   type LeagueTableRow,
   type LeagueTablesPayload,
@@ -23,9 +24,11 @@ import {
 let competitionsPromise: Promise<string[]> | null = null;
 let channelsPromise: Promise<string[]> | null = null;
 let teamRankingsPromise: Promise<TeamRankingEntry[]> | null = null;
+let competitionWeightsPromise: Promise<CompetitionWeightEntry[]> | null = null;
 let competitionsCache: string[] | null = null;
 let channelsCache: string[] | null = null;
 let teamRankingsCache: TeamRankingEntry[] | null = null;
+let competitionWeightsCache: CompetitionWeightEntry[] | null = null;
 const matchDetailsCache = new Map<string, MatchDetails>();
 const matchDetailsPromises = new Map<string, Promise<MatchDetails>>();
 
@@ -122,6 +125,32 @@ export function fetchTeamRankings(): Promise<TeamRankingEntry[]> {
       throw error;
     });
   return teamRankingsPromise;
+}
+
+export function fetchCompetitionWeights(): Promise<CompetitionWeightEntry[]> {
+  if (competitionWeightsCache) {
+    return Promise.resolve(competitionWeightsCache);
+  }
+
+  competitionWeightsPromise ||= requestJson<unknown[]>("/competition-weights")
+    .then((items) =>
+      items
+        .filter(
+          (item): item is { name: string; weight: number } =>
+            typeof (item as Record<string, unknown>)?.name === "string" &&
+            typeof (item as Record<string, unknown>)?.weight === "number"
+        )
+        .map((item) => ({ name: item.name, weight: item.weight }))
+    )
+    .then((items) => {
+      competitionWeightsCache = items;
+      return items;
+    })
+    .catch((error) => {
+      competitionWeightsPromise = null;
+      throw error;
+    });
+  return competitionWeightsPromise;
 }
 
 export function fetchMatchDetails(matchDetailsId: string): Promise<MatchDetails> {

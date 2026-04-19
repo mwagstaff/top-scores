@@ -268,7 +268,8 @@ struct MatchesView: View {
         .onChange(of: preferences.snapshot) { _, _ in
             guard isSelected else { return }
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-            NSLog("[MatchesView] snapshot_change mode=%@ snapshot=%@", mode.rawValue, debugSnapshotSummary(snapshot))
+            NSLog("[MatchesView] snapshot_change mode=%@ showAllMatches=%d epl_pref=%d effective_snapshot=%@",
+                  mode.rawValue, showAllMatches, preferences.englishPremierLeagueTeamsOnly, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
             scheduleGroupedSideEffects(for: matchesStore.groupedMatches, immediate: false)
         }
@@ -637,23 +638,48 @@ struct MatchesView: View {
             Image(systemName: mode.headingIconName)
                 .font(.system(size: 24, weight: .semibold))
         } accessory: {
-            Button {
-                if isSearchVisible {
-                    hideSearchAndClear()
-                } else {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isSearchVisible = true
+            HStack(spacing: 8) {
+                // EPL / All-competitions filter toggle
+                Button {
+                    let enabling = !preferences.englishPremierLeagueTeamsOnly
+                    NSLog("[MatchesView] epl_toggle mode=%@ enabling=%d showAllMatches=%d", mode.rawValue, enabling, preferences.showAllMatches)
+                    preferences.englishPremierLeagueTeamsOnly = enabling
+                    if enabling && preferences.showAllMatches {
+                        // showAllMatches forces unfilteredSnapshot, overriding all filters.
+                        // Clear it so the actual snapshot (including EPL filter) is used.
+                        preferences.showAllMatches = false
                     }
-                    rebuildSearchIndex(from: matchesStore.groupedMatches)
-                    AppMetricsService.shared.fireActivity("search_activated", screen: mode.rawValue, apiBaseURL: preferences.apiBaseURL)
+                } label: {
+                    FantasyLionIconView(size: 28)
+                        .foregroundStyle(preferences.englishPremierLeagueTeamsOnly ? Color.accentColor : Color.primary)
+                        .padding(8)
+                        .background(Circle().fill(
+                            preferences.englishPremierLeagueTeamsOnly
+                                ? AnyShapeStyle(Color.accentColor.opacity(0.15))
+                                : AnyShapeStyle(.ultraThinMaterial)
+                        ))
                 }
-            } label: {
-                Image(systemName: isSearchVisible ? "magnifyingglass.circle.fill" : "magnifyingglass")
-                    .font(.title3)
-                    .padding(10)
-                    .background(Circle().fill(.ultraThinMaterial))
+                .accessibilityLabel(preferences.englishPremierLeagueTeamsOnly ? "Premier League teams only – tap for all competitions" : "All competitions – tap for Premier League teams only")
+
+                // Search toggle
+                Button {
+                    if isSearchVisible {
+                        hideSearchAndClear()
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isSearchVisible = true
+                        }
+                        rebuildSearchIndex(from: matchesStore.groupedMatches)
+                        AppMetricsService.shared.fireActivity("search_activated", screen: mode.rawValue, apiBaseURL: preferences.apiBaseURL)
+                    }
+                } label: {
+                    Image(systemName: isSearchVisible ? "magnifyingglass.circle.fill" : "magnifyingglass")
+                        .font(.title3)
+                        .padding(10)
+                        .background(Circle().fill(.ultraThinMaterial))
+                }
+                .accessibilityLabel(isSearchVisible ? "Hide search and clear text" : "Show match search")
             }
-            .accessibilityLabel(isSearchVisible ? "Hide search and clear text" : "Show match search")
         } detail: {
             if isSearchVisible {
                 MatchSearchBar(text: $searchText, placeholder: "Search teams, leagues or channels")

@@ -235,6 +235,44 @@ struct Top_ScoresTests {
         #expect(updated.scoreStatus == "HT")
     }
 
+    @Test func compactFixtureLayout_keepsKickoffOnTrailingEdgeForUpcomingMatchWithUnknownStatus() async throws {
+        let match = makeMatch(
+            date: "",
+            time: "14:30",
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "scheduled"
+        )
+
+        #expect(
+            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+                match: match,
+                hasCompactBroadcastLogo: false
+            )
+        )
+    }
+
+    @Test func compactFixtureLayout_keepsKickoffOnTrailingEdgeForUpcomingMatchWithoutScores() async throws {
+        let match = makeMatch(
+            date: formattedDate(offsetDays: 1),
+            time: "18:30",
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: nil
+        )
+
+        #expect(
+            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
+                match: match,
+                hasCompactBroadcastLogo: true
+            )
+        )
+    }
+
     @Test func filterMatches_fixturesRequireBbcMatchEntry() async throws {
         let fixtures = [
             makeMatch(

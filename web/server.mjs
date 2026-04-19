@@ -56,6 +56,30 @@ const teamLogoAliases = new Map(
   })
 );
 
+let competitionWeightsCache = [];
+
+async function loadCompetitionWeights() {
+  try {
+    const response = await fetch(`${apiBaseUrl}/competitions/weights`);
+    if (response.ok) {
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        competitionWeightsCache = data.filter(
+          (entry) => typeof entry?.name === "string" && typeof entry?.weight === "number"
+        );
+        // eslint-disable-next-line no-console
+        console.log(`[web] Loaded ${competitionWeightsCache.length} competition weights`);
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(`[web] Failed to load competition weights: ${response.status}`);
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn(`[web] Failed to load competition weights: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 const app = express();
 app.disable("x-powered-by");
 
@@ -65,6 +89,10 @@ app.get("/healthcheck", (_req, res) => {
     apiBaseUrl,
     mode: isProduction ? "production" : "development",
   });
+});
+
+app.get("/competition-weights", (_req, res) => {
+  res.json(competitionWeightsCache);
 });
 
 app.get("/brand/app-icon", (_req, res) => {
@@ -199,6 +227,9 @@ app.use(
 );
 
 async function start() {
+  await loadCompetitionWeights();
+  setInterval(() => { void loadCompetitionWeights(); }, 24 * 60 * 60 * 1000);
+
   if (isProduction) {
     app.use("/assets", express.static(path.join(productionClientRoot, "assets")));
     app.use(express.static(productionClientRoot));

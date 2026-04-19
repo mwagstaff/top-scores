@@ -474,6 +474,54 @@ img    { display: block; }
   to { transform: rotate(360deg); }
 }
 
+/* EPL / All-competitions toggle pill */
+.epl-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  height: 2rem;
+  padding: 0 0.6rem 0 0.42rem;
+  border-radius: 999px;
+  border: 1px solid var(--surface-border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 150ms, background 150ms, border-color 150ms, opacity 150ms;
+  white-space: nowrap;
+}
+
+.epl-toggle-btn:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.epl-toggle-btn.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.epl-toggle-lion {
+  width: 1.1rem;
+  height: 1.1rem;
+  object-fit: contain;
+  flex-shrink: 0;
+  opacity: 1;
+  transition: opacity 150ms;
+}
+
+.epl-toggle-btn:not(.is-active) .epl-toggle-lion {
+  opacity: 0.30;
+  filter: grayscale(1);
+}
+
+.epl-toggle-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
 /* Collapsible search field */
 .match-search {
   padding: 0 0.85rem 0.5rem;

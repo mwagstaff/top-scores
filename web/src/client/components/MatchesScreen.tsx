@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
-import { fetchMatches, fetchTeamRankings } from "../api";
+import { fetchMatches, fetchTeamRankings, fetchCompetitionWeights } from "../api";
 import { usePreferences } from "../preferences";
-import { TeamRatingLookup, groupMatches } from "../matchGrouping";
+import { CompetitionWeightLookup, TeamRatingLookup, groupMatches } from "../matchGrouping";
 import { MatchCard } from "./MatchCard";
 import type { MatchDayGroup, MatchesMode } from "../types";
 
@@ -28,13 +28,17 @@ const initialState: ScreenState = {
 };
 
 export function MatchesScreen({ mode }: MatchesScreenProps) {
-  const { preferences } = usePreferences();
+  const { preferences, setPreferences } = usePreferences();
   const [searchText, setSearchText]   = useState("");
   const [showSearch, setShowSearch]   = useState(false);
   const [state, setState]             = useState<ScreenState>(initialState);
   const [reloadToken, reload]         = useReducer((v) => v + 1, 0);
 
   const requestKey = JSON.stringify({ mode, preferences, reloadToken });
+
+  const eplOnly = preferences.englishPremierLeagueTeamsOnly;
+  const toggleEplFilter = () =>
+    setPreferences({ englishPremierLeagueTeamsOnly: !eplOnly });
 
   useEffect(() => {
     const controller    = new AbortController();
@@ -59,8 +63,9 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
             ? fetchTeamRankings()
             : Promise.resolve([]);
 
-        const [rankings, payload] = await Promise.all([
+        const [rankings, weights, payload] = await Promise.all([
           rankingsPromise,
+          fetchCompetitionWeights().catch(() => []),
           fetchMatches(mode, preferences, controller.signal),
         ]);
 
@@ -70,7 +75,8 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           payload.matches,
           mode,
           preferences.matchGroupSortOrder,
-          new TeamRatingLookup(rankings)
+          new TeamRatingLookup(rankings),
+          new CompetitionWeightLookup(weights)
         );
 
         setState({
@@ -159,6 +165,23 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
               : null}
           </span>
         )}
+
+        {/* EPL / All competitions toggle */}
+        <button
+          type="button"
+          className={`epl-toggle-btn${eplOnly ? " is-active" : ""}`}
+          onClick={toggleEplFilter}
+          aria-label={eplOnly ? "Showing Premier League teams only – click for all competitions" : "Showing all competitions – click for Premier League teams only"}
+          title={eplOnly ? "Premier League teams" : "All competitions"}
+        >
+          <img
+            src="/generated-assets/fpl-lion.png"
+            alt=""
+            aria-hidden="true"
+            className="epl-toggle-lion"
+          />
+          <span className="epl-toggle-label">{eplOnly ? "Premier League" : "All competitions"}</span>
+        </button>
 
         {/* Search toggle */}
         <button

@@ -53,7 +53,16 @@ const LIVE_ACTIVITY_TEAM_RANKING_RETRY_MS = 5 * 60 * 1000;
 const LIVE_ACTIVITY_TEAM_RANKING_FETCH_TIMEOUT_MS = 15 * 1000;
 // If APNS accepts a start but the app never reports an activity token, retry quickly.
 const LIVE_ACTIVITY_PENDING_MAX_MS = 2 * 60 * 1000;
+// Stop firing push-to-start after this many consecutive unanswered attempts on the
+// same token (each attempt = one PENDING_MAX_MS window expiring without a token
+// response). iOS silently drops push-to-start when Live Activities are disabled or
+// rate-limited; continuing to hammer it wastes APNs budget and can trigger further
+// iOS suppression. The counter resets whenever an activity-token lands.
+const LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS = 5;
 const LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS = 30 * 60;
+// Re-push identical payloads this many seconds before stale-date expiry so iOS never
+// shows the staleness spinner during quiet periods (e.g. half-time, pre-kickoff).
+const LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS = 5 * 60;
 const LIVE_ACTIVITY_PAYLOAD_HARD_LIMIT_BYTES = 4096;
 const LIVE_ACTIVITY_PAYLOAD_WARN_BYTES = LIVE_ACTIVITY_PAYLOAD_HARD_LIMIT_BYTES - 256;
 const LIVE_ACTIVITY_STALE_LIVE_UPDATED_GRACE_MS = 5 * 60 * 1000;
@@ -5023,7 +5032,21 @@ async function persistLiveActivityPatch(user, patch = {}) {
 
 function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false, options = {}) {
   if (forceDispatch) return null;
+  const nowMs =
+    options && Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const lastDispatchAtMs = parseLiveActivityDispatchTimeMs(state);
+
   if (state.lastPayloadHash === payloadHash && state.lastMode === mode) {
+    // Even for identical payloads, send a heartbeat push when we are within
+    // LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS of the stale-date so iOS never shows
+    // the staleness spinner during quiet periods (e.g. half-time, pre-kickoff, FT).
+    if (lastDispatchAtMs !== null) {
+      const heartbeatThresholdMs =
+        (LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
+      if (nowMs - lastDispatchAtMs >= heartbeatThresholdMs) {
+        return null; // heartbeat: reset stale-date before it expires
+      }
+    }
     return "identical_payload";
   }
   if (state.lastMode !== mode) {
@@ -5039,9 +5062,6 @@ function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false,
     return null;
   }
 
-  const nowMs =
-    options && Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
-  const lastDispatchAtMs = parseLiveActivityDispatchTimeMs(state);
   if (lastDispatchAtMs === null) {
     return null;
   }
@@ -5111,6 +5131,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const pendingStartAtMs = Date.parse(String(state.pendingStartAt || ""));
   const hasPendingStart = Number.isFinite(pendingStartAtMs);
   const pendingAgeMs = hasPendingStart ? nowMs - pendingStartAtMs : 0;
+  const pushToStartAttempts = Number.isFinite(Number(state.pushToStartAttempts)) ? Math.max(0, Number(state.pushToStartAttempts)) : 0;
   const testHoldUntilMs = Date.parse(String(state.testHoldUntil || ""));
   const isTestHoldActive = Number.isFinite(testHoldUntilMs) && nowMs < testHoldUntilMs;
   const shouldDisplay = Boolean(presentation && presentation.mode && presentation.matches.length > 0);
@@ -5209,6 +5230,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     const patch = {
       currentActivityPushToken: null,
       currentActivityId: null,
+      currentActivityGeneratedAtEpochSeconds: null,
       pendingStartAt: null,
       lastPayloadHash: null,
       lastScoreHash: null,
@@ -5323,6 +5345,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       await persistLiveActivityPatch(user, {
         currentActivityPushToken: null,
         currentActivityId: null,
+        currentActivityGeneratedAtEpochSeconds: null,
         lastPayloadHash: null,
         lastScoreHash: null,
         lastMode: null,
@@ -5358,13 +5381,32 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     return;
   }
   if (hasPendingStart && pendingAgeMs >= LIVE_ACTIVITY_PENDING_MAX_MS) {
-    // Stale lock recovery for extreme edge cases (e.g. token callback never arrives).
+    // Stale lock recovery: start was accepted by APNs but no token callback arrived.
+    // Increment the attempt counter so we can stop after repeated failures.
+    const newAttemptCount = pushToStartAttempts + 1;
     await persistLiveActivityPatch(user, {
       pendingStartAt: null,
       lastPayloadHash: null,
       lastScoreHash: null,
       lastMode: null,
+      pushToStartAttempts: newAttemptCount,
     });
+    if (newAttemptCount >= LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS) {
+      console.log(
+        `[MatchMonitor] Push-to-start suppressed after ${newAttemptCount} unanswered attempts (Live Activities likely disabled on device): device=${shortDeviceToken(user && user.deviceToken)}`
+      );
+      return;
+    }
+  }
+
+  // Guard: stop hammering push-to-start if previous attempts have repeatedly gone
+  // unanswered. iOS silently drops these when Live Activities are disabled or the
+  // app has been rate-limited after rapid activity churn.
+  if (pushToStartAttempts >= LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS) {
+    monitorVerboseLog(
+      `[MatchMonitor] Push-to-start suppressed: ${pushToStartAttempts} unanswered attempts, device=${shortDeviceToken(user && user.deviceToken)}`
+    );
+    return;
   }
 
   const first = presentation.matches[0];

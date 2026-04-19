@@ -172,6 +172,11 @@ export interface TeamRankingEntry {
   aliases: string[];
 }
 
+export interface CompetitionWeightEntry {
+  name: string;
+  weight: number;
+}
+
 export const defaultPreferences: Preferences = {
   selectedLeagues: [
     "Premier League",
