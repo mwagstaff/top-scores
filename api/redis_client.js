@@ -33,6 +33,10 @@ const BBC_NOTIFICATION_HISTORY_TTL_SECONDS = parsePositiveIntOrFallback(
   process.env.BBC_NOTIFICATION_HISTORY_TTL_SECONDS,
   BBC_HISTORY_TTL_SECONDS
 );
+const BBC_REQUEST_HISTORY_TTL_SECONDS = parsePositiveIntOrFallback(
+  process.env.BBC_REQUEST_HISTORY_TTL_SECONDS,
+  24 * 60 * 60
+);
 const BBC_NOTIFICATION_IDEMPOTENCY_TTL_SECONDS = parsePositiveIntOrFallback(
   process.env.BBC_NOTIFICATION_IDEMPOTENCY_TTL_SECONDS,
   6 * 60 * 60
@@ -74,6 +78,8 @@ const BBC_NOTIFICATIONS_MATCH_DEVICE_INDEX_PREFIX =
 const BBC_NOTIFICATIONS_RECORD_PREFIX = `${DB_NAME}:bbc:notifications:record:`;
 const BBC_NOTIFICATION_IDEMPOTENCY_PREFIX =
   `${DB_NAME}:bbc:notifications:idempotency:`;
+const BBC_REQUESTS_INDEX_KEY = `${DB_NAME}:bbc:requests:index`;
+const BBC_REQUESTS_RECORD_PREFIX = `${DB_NAME}:bbc:requests:record:`;
 
 const FANTASY_REMINDERS_INDEX_KEY = `${DB_NAME}:fantasy:reminders:index`;
 const FANTASY_REMINDERS_DEVICE_INDEX_PREFIX = `${DB_NAME}:fantasy:reminders:device:`;
@@ -417,6 +423,7 @@ async function ensureRedisTtlPolicy(redisClient) {
       BBC_NOTIFICATIONS_INDEX_KEY,
       BBC_NOTIFICATION_HISTORY_TTL_SECONDS
     ),
+    ensureFiniteTtlForKey(redisClient, BBC_REQUESTS_INDEX_KEY, BBC_REQUEST_HISTORY_TTL_SECONDS),
     ensureFiniteTtlForKey(
       redisClient,
       FANTASY_REMINDERS_INDEX_KEY,
@@ -441,6 +448,7 @@ async function ensureRedisTtlPolicy(redisClient) {
       pattern: `${BBC_NOTIFICATION_IDEMPOTENCY_PREFIX}*`,
       ttl: BBC_NOTIFICATION_IDEMPOTENCY_TTL_SECONDS,
     },
+    { pattern: `${BBC_REQUESTS_RECORD_PREFIX}*`, ttl: BBC_REQUEST_HISTORY_TTL_SECONDS },
     {
       pattern: `${FANTASY_REMINDERS_RECORD_PREFIX}*`,
       ttl: FANTASY_REMINDER_HISTORY_TTL_SECONDS,
@@ -1069,6 +1077,55 @@ async function saveBbcNotificationHistory(payload) {
   }
 }
 
+async function saveBbcRequestHistory(payload) {
+  const source = String(payload && payload.source ? payload.source : "bbc_unknown").trim()
+    || "bbc_unknown";
+  const url = String(payload && payload.url ? payload.url : "").trim();
+  const statusCode =
+    Number.isFinite(Number(payload && payload.status_code)) && Number(payload.status_code) >= 0
+      ? Math.floor(Number(payload.status_code))
+      : 0;
+  const durationMs =
+    Number.isFinite(Number(payload && payload.duration_ms)) && Number(payload.duration_ms) >= 0
+      ? Math.round(Number(payload.duration_ms))
+      : null;
+  const timestampMs = numericTimestampMs(payload && payload.timestamp_ms);
+  const requestId = String(
+    payload && (payload.request_id || payload.requestId)
+      ? (payload.request_id || payload.requestId)
+      : randomRecordId()
+  );
+
+  const recordKey = `${BBC_REQUESTS_RECORD_PREFIX}${timestampMs}:${sanitizeTokenForKey(requestId)}`;
+  const record = {
+    request_id: requestId,
+    source,
+    url,
+    status_code: statusCode,
+    duration_ms: durationMs,
+    timestamp_ms: timestampMs,
+    timestamp: new Date(timestampMs).toISOString(),
+    ...payload,
+  };
+
+  try {
+    const redisClient = await getClient();
+    const transaction = redisClient.multi();
+    transaction.set(recordKey, JSON.stringify(record), { EX: BBC_REQUEST_HISTORY_TTL_SECONDS });
+    transaction.zAdd(BBC_REQUESTS_INDEX_KEY, [{ score: timestampMs, value: recordKey }]);
+    transaction.expire(BBC_REQUESTS_INDEX_KEY, BBC_REQUEST_HISTORY_TTL_SECONDS);
+    await transaction.exec();
+
+    const cutoffMs = pruneCutoffMs(BBC_REQUEST_HISTORY_TTL_SECONDS);
+    await pruneIndexEntries(redisClient, BBC_REQUESTS_INDEX_KEY, cutoffMs);
+
+    return record;
+  } catch (error) {
+    console.error("[Redis] Error saving BBC request history:", error);
+    throw error;
+  }
+}
+
 function buildBbcNotificationIdempotencyKey(notificationId) {
   const normalizedId = String(notificationId || "").trim();
   if (!normalizedId) {
@@ -1484,6 +1541,7 @@ function buildHistoryRetentionPolicy() {
   return {
     event_ttl_seconds: BBC_EVENT_HISTORY_TTL_SECONDS,
     notification_ttl_seconds: BBC_NOTIFICATION_HISTORY_TTL_SECONDS,
+    request_ttl_seconds: BBC_REQUEST_HISTORY_TTL_SECONDS,
     notification_idempotency_ttl_seconds: BBC_NOTIFICATION_IDEMPOTENCY_TTL_SECONDS,
     fantasy_reminder_ttl_seconds: FANTASY_REMINDER_HISTORY_TTL_SECONDS,
     fantasy_reminder_idempotency_ttl_seconds: FANTASY_REMINDER_SEND_IDEMPOTENCY_TTL_SECONDS,
@@ -2309,6 +2367,99 @@ async function getBbcMatchHistoryGrouped(options = {}) {
   }
 }
 
+function applyBbcRequestHistoryFilters(records, options = {}) {
+  const sourceFilter = String(options.source || "").trim().toLowerCase();
+  const urlQuery = String(options.url_query || "").trim().toLowerCase();
+  const statusCodeFilter =
+    Number.isFinite(Number(options.status_code)) && Number(options.status_code) >= 0
+      ? String(Math.floor(Number(options.status_code)))
+      : "";
+  const badOnly = Boolean(options.bad_only);
+
+  return records.filter((record) => {
+    if (
+      sourceFilter &&
+      String(record && record.source ? record.source : "").toLowerCase() !== sourceFilter
+    ) {
+      return false;
+    }
+    if (
+      statusCodeFilter &&
+      String(record && record.status_code ? record.status_code : 0) !== statusCodeFilter
+    ) {
+      return false;
+    }
+    if (badOnly && Number(record && record.status_code ? record.status_code : 0) < 400) {
+      return false;
+    }
+    if (
+      urlQuery &&
+      !String(record && record.url ? record.url : "").toLowerCase().includes(urlQuery)
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+async function getBbcRequestHistory(options = {}) {
+  const range = normalizeTimeRange(options.start_ms, options.end_ms);
+  const limit = parsePositiveIntOrFallback(options.limit, 500);
+
+  try {
+    const redisClient = await getClient();
+    const requestRecordsRaw = await getHistoryRecordsByRange(
+      redisClient,
+      BBC_REQUESTS_INDEX_KEY,
+      range.startMs,
+      range.endMs,
+      "bbc request"
+    );
+    const filterOptionsWithoutStatus = {
+      ...options,
+      status_code: undefined,
+      bad_only: false,
+    };
+    const baseFiltered = applyBbcRequestHistoryFilters(requestRecordsRaw, filterOptionsWithoutStatus);
+    const availableStatusCodes = Array.from(
+      new Set(
+        baseFiltered
+          .map((record) =>
+            Number.isFinite(Number(record && record.status_code))
+              ? Math.floor(Number(record.status_code))
+              : null
+          )
+          .filter((value) => value !== null)
+      )
+    ).sort((lhs, rhs) => lhs - rhs);
+    const filtered = applyBbcRequestHistoryFilters(requestRecordsRaw, options).sort(
+      (lhs, rhs) =>
+        numericTimestampMs(rhs && rhs.timestamp_ms) - numericTimestampMs(lhs && lhs.timestamp_ms)
+    );
+    const requests = limit > 0 ? filtered.slice(0, limit) : filtered;
+
+    return {
+      start_ms: range.startMs,
+      end_ms: range.endMs,
+      available_status_codes: availableStatusCodes,
+      count_requests: filtered.length,
+      returned_requests: requests.length,
+      requests,
+    };
+  } catch (error) {
+    console.error("[Redis] Error retrieving BBC request history:", error);
+    return {
+      start_ms: range.startMs,
+      end_ms: range.endMs,
+      available_status_codes: [],
+      count_requests: 0,
+      returned_requests: 0,
+      requests: [],
+      error: error.message,
+    };
+  }
+}
+
 async function getBbcRealtimeSnapshot(options = {}) {
   const matchIdFilter = String(options.match_id || "").trim();
   const deviceTokenFilter = String(options.device_token || "").trim();
@@ -2599,9 +2750,11 @@ module.exports = {
   getLiveActivityMatchTimelineSnapshotsAt: _withMetrics("get_live_activity_timeline", getLiveActivityMatchTimelineSnapshotsAt),
   saveBbcMatchEventHistory: _withMetrics("save_bbc_event_history", saveBbcMatchEventHistory),
   saveBbcNotificationHistory: _withMetrics("save_bbc_notification_history", saveBbcNotificationHistory),
+  saveBbcRequestHistory: _withMetrics("save_bbc_request_history", saveBbcRequestHistory),
   claimFantasyReminderSendIdempotency: _withMetrics("claim_fantasy_idempotency", claimFantasyReminderSendIdempotency),
   claimBbcNotificationIdempotency: _withMetrics("claim_bbc_notification_idempotency", claimBbcNotificationIdempotency),
   getBbcMatchHistoryGrouped: _withMetrics("get_bbc_history_grouped", getBbcMatchHistoryGrouped),
+  getBbcRequestHistory: _withMetrics("get_bbc_request_history", getBbcRequestHistory),
   getBbcRealtimeSnapshot: _withMetrics("get_bbc_realtime_snapshot", getBbcRealtimeSnapshot),
   cleanupBbcHistory: _withMetrics("cleanup_bbc_history", cleanupBbcHistory),
   saveOperationalDataset: _withMetrics("save_operational_dataset", saveOperationalDataset),

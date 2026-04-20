@@ -2386,13 +2386,21 @@ function trackSourceUpdateMetrics({ source, startedAtMs, success, recordsFetched
   }
 }
 
-function trackBbcHttpRequestMetric({ source, url, statusCode }) {
+function trackBbcHttpRequestMetric({ source, url, statusCode, durationMs, timestampMs }) {
   const normalizedSource = String(source || "bbc_unknown").trim() || "bbc_unknown";
   const normalizedStatusCode =
     Number.isFinite(Number(statusCode)) && Number(statusCode) >= 0
       ? String(Math.floor(Number(statusCode)))
       : "0";
   const normalizedUrl = String(url || "").trim();
+  const normalizedDurationMs =
+    Number.isFinite(Number(durationMs)) && Number(durationMs) >= 0
+      ? Math.round(Number(durationMs))
+      : null;
+  const normalizedTimestampMs =
+    Number.isFinite(Number(timestampMs)) && Number(timestampMs) > 0
+      ? Math.floor(Number(timestampMs))
+      : Date.now();
 
   const requestLabels = {
     source: normalizedSource,
@@ -2400,6 +2408,16 @@ function trackBbcHttpRequestMetric({ source, url, statusCode }) {
   };
   const requestKey = metricLabelKey(requestLabels);
   bbcHttpRequestMetrics.set(requestKey, (bbcHttpRequestMetrics.get(requestKey) || 0) + 1);
+
+  saveBbcRequestHistory({
+    source: normalizedSource,
+    url: normalizedUrl,
+    status_code: Number(normalizedStatusCode),
+    duration_ms: normalizedDurationMs,
+    timestamp_ms: normalizedTimestampMs,
+  }).catch((error) => {
+    console.error("[BBC Request History] Failed to persist request record:", error);
+  });
 
   if (Number(normalizedStatusCode) < 400 || !normalizedUrl) {
     return;
@@ -20770,6 +20788,10 @@ app.get("/admin/bbc-history", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_bbc_history_ui.html"));
 });
 
+app.get("/admin/bbc-requests", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_bbc_requests_ui.html"));
+});
+
 app.get("/admin/status", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin_status_ui.html"));
 });
@@ -23014,9 +23036,11 @@ const {
   getFantasyReminderRecord,
   getFantasyReminderRecords,
   getBbcMatchHistoryGrouped,
+  getBbcRequestHistory,
   getLiveActivityDebugRecords,
   getBbcRealtimeSnapshot,
   cleanupBbcHistory,
+  saveBbcRequestHistory,
   saveOperationalDataset,
   getOperationalDataset,
   getOperationalDatasets,
@@ -24714,6 +24738,73 @@ app.get(`${API_PREFIX}/admin/bbc-history`, async (req, res) => {
     res.status(500).json({
       error: "Failed to retrieve BBC history",
       message: error.message,
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/admin/bbc-requests`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const historyWindow = parseBbcHistoryWindow(req.query || {});
+  if (historyWindow.error) {
+    res.status(400).json({ error: historyWindow.error });
+    return;
+  }
+
+  const rawSource = req.query.source ? String(req.query.source).trim() : "";
+  const sourceFilter = rawSource || null;
+  const rawUrlQuery = req.query.url_query ? String(req.query.url_query).trim() : "";
+  const urlQueryFilter = rawUrlQuery || null;
+  const rawStatusCode = req.query.status_code ? String(req.query.status_code).trim() : "";
+  const statusCodeFilter =
+    rawStatusCode && Number.isFinite(Number(rawStatusCode)) && Number(rawStatusCode) >= 0
+      ? Math.floor(Number(rawStatusCode))
+      : null;
+  const badOnlyFilter =
+    String(req.query.bad_only || "").trim() === "1"
+    || String(req.query.bad_only || "").trim().toLowerCase() === "true";
+  const limit = parsePositiveInt(req.query.limit, 500, 1, 5000);
+
+  try {
+    const requestHistory = await getBbcRequestHistory({
+      start_ms: historyWindow.startMs,
+      end_ms: historyWindow.endMs,
+      source: sourceFilter || undefined,
+      url_query: urlQueryFilter || undefined,
+      status_code: statusCodeFilter !== null ? statusCodeFilter : undefined,
+      bad_only: badOnlyFilter,
+      limit,
+    });
+
+    const statusCode = requestHistory.error ? 500 : 200;
+    res.status(statusCode).json({
+      success: !requestHistory.error,
+      window: {
+        mode: historyWindow.mode,
+        start_ms: historyWindow.startMs,
+        end_ms: historyWindow.endMs,
+        start: new Date(historyWindow.startMs).toISOString(),
+        end: new Date(historyWindow.endMs).toISOString(),
+        hours: historyWindow.hours || null,
+        max_hours: MAX_BBC_HISTORY_QUERY_HOURS,
+      },
+      filters: {
+        source: sourceFilter,
+        url_query: urlQueryFilter,
+        status_code: statusCodeFilter,
+        bad_only: badOnlyFilter,
+        limit,
+      },
+      history_config: {
+        request_ttl_seconds: bbcHistoryConfig.request_ttl_seconds,
+      },
+      ...requestHistory,
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving BBC request history:", error);
+    res.status(500).json({
+      error: "Failed to retrieve BBC request history",
+      message: error.message || String(error),
     });
   }
 });

@@ -65,6 +65,7 @@ function notifyBbcLeagueTablesRequestObserver(event) {
 function fetchHtml(url) {
   return new Promise((resolve, reject) => {
     const requestedUrl = String(url || "").trim();
+    const startedAtMs = Date.now();
     const target = new URL(requestedUrl);
     const lib = target.protocol === "https:" ? https : http;
     let settled = false;
@@ -76,6 +77,8 @@ function fetchHtml(url) {
         source: "bbc_league_tables",
         url: requestedUrl,
         statusCode,
+        durationMs: Date.now() - startedAtMs,
+        timestampMs: Date.now(),
       });
       if (error) {
         reject(error);

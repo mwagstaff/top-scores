@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BBC Request History</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --ink: #0f1720;
+      --muted: #4b5563;
+      --line: #d8dee6;
+      --accent: #0f766e;
+      --accent-soft: #d5f4f0;
+      --warn: #b45309;
+      --fail: #b91c1c;
+      --ok: #166534;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #eef4f7 0%, #f6f8fa 100%);
+      color: var(--ink);
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 32, 0.05);
+    }
+
+    h1, h2 {
+      margin: 0 0 8px;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    form {
+      display: grid;
+      gap: 12px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    input,
+    select,
+    button {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    input:focus,
+    select:focus {
+      outline: 2px solid rgba(15, 118, 110, 0.25);
+      border-color: var(--accent);
+    }
+
+    button {
+      border: 0;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .actions button {
+      width: auto;
+      min-width: 120px;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #f9fbfc;
+    }
+
+    .stat .label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .stat .value {
+      font-size: 1.2rem;
+      margin-top: 2px;
+      font-weight: 700;
+    }
+
+    .status {
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .status.error {
+      color: var(--fail);
+    }
+
+    .status.ok {
+      color: var(--ok);
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 980px;
+      background: #fff;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 0.9rem;
+    }
+
+    th {
+      background: #f8fafc;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    tr:hover td {
+      background: #f8fbfb;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.82rem;
+      word-break: break-all;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      color: #111827;
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .pill.fail {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .pill.warn {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .empty {
+      padding: 20px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    @media (max-width: 960px) {
+      .row,
+      .summary {
+        grid-template-columns: 1fr;
+      }
+
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .actions button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="panel">
+      <h1>BBC Request History</h1>
+      <p>Raw upstream BBC request log retained in Redis for recent troubleshooting. Default view is from local midnight to now.</p>
+    </section>
+
+    <section class="panel">
+      <form id="filtersForm">
+        <div class="row">
+          <div>
+            <label for="start">Start</label>
+            <input id="start" name="start" type="datetime-local">
+          </div>
+          <div>
+            <label for="end">End</label>
+            <input id="end" name="end" type="datetime-local">
+          </div>
+          <div>
+            <label for="source">Source</label>
+            <select id="source" name="source">
+              <option value="">All BBC sources</option>
+              <option value="bbc_live_scores">Live Scores</option>
+              <option value="bbc_scores_fixtures_range">Scores/Fixtures Range</option>
+              <option value="bbc_match_details">Match Details</option>
+              <option value="bbc_premier_league_table">Premier League Table</option>
+              <option value="bbc_league_tables">League Tables</option>
+            </select>
+          </div>
+          <div>
+            <label for="status_code">Status Code</label>
+            <select id="status_code" name="status_code">
+              <option value="">All available codes</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div style="grid-column: span 3;">
+            <label for="url_query">URL Contains</label>
+            <input id="url_query" name="url_query" type="text" placeholder="e.g. c043pne0q3kt">
+          </div>
+          <div>
+            <label for="limit">Limit</label>
+            <input id="limit" name="limit" type="number" min="1" max="5000" step="1" value="500">
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="submit">Load Requests</button>
+          <button type="button" id="badRequestsButton" class="secondary">Bad Requests</button>
+          <button type="button" id="todayButton" class="secondary">Today</button>
+          <button type="button" id="lastHourButton" class="secondary">Last Hour</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="summary" id="summary">
+        <div class="stat"><div class="label">Window Start</div><div class="value" id="summaryStart">-</div></div>
+        <div class="stat"><div class="label">Window End</div><div class="value" id="summaryEnd">-</div></div>
+        <div class="stat"><div class="label">Matched Requests</div><div class="value" id="summaryCount">0</div></div>
+        <div class="stat"><div class="label">Returned Rows</div><div class="value" id="summaryReturned">0</div></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Results</h2>
+      <p class="status" id="statusText">Waiting for query.</p>
+      <div class="table-wrap" style="margin-top: 12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Source</th>
+              <th>Status</th>
+              <th>Duration</th>
+              <th>URL</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody">
+            <tr><td colspan="5" class="empty">No data loaded yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    function buildApiBasePrefix() {
+      const pathname = String(window.location.pathname || "");
+      const adminSuffixPattern = /\/admin\/bbc-requests\/?$/;
+      const basePrefix = pathname.replace(adminSuffixPattern, "");
+      return basePrefix && basePrefix !== "/" ? basePrefix : "";
+    }
+
+    const API_BASE_PREFIX = buildApiBasePrefix();
+    const API_URL = `${API_BASE_PREFIX}/api/v1/admin/bbc-requests`;
+
+    const form = document.getElementById("filtersForm");
+    const startInput = document.getElementById("start");
+    const endInput = document.getElementById("end");
+    const sourceInput = document.getElementById("source");
+    const statusCodeInput = document.getElementById("status_code");
+    const urlQueryInput = document.getElementById("url_query");
+    const limitInput = document.getElementById("limit");
+    const badRequestsButton = document.getElementById("badRequestsButton");
+    const resultsBody = document.getElementById("resultsBody");
+    const statusText = document.getElementById("statusText");
+    const summaryStart = document.getElementById("summaryStart");
+    const summaryEnd = document.getElementById("summaryEnd");
+    const summaryCount = document.getElementById("summaryCount");
+    const summaryReturned = document.getElementById("summaryReturned");
+    let badOnlyMode = false;
+
+    function pad(value) {
+      return String(value).padStart(2, "0");
+    }
+
+    function toDatetimeLocalValue(date) {
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    function setTodayRange() {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      startInput.value = toDatetimeLocalValue(start);
+      endInput.value = toDatetimeLocalValue(now);
+    }
+
+    function setLastHourRange() {
+      const now = new Date();
+      const start = new Date(now.getTime() - 60 * 60 * 1000);
+      startInput.value = toDatetimeLocalValue(start);
+      endInput.value = toDatetimeLocalValue(now);
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString();
+    }
+
+    function formatDuration(value) {
+      if (!Number.isFinite(Number(value)) || Number(value) < 0) return "-";
+      return `${Math.round(Number(value))} ms`;
+    }
+
+    function statusPill(statusCode) {
+      const code = Number(statusCode) || 0;
+      let css = "";
+      if (code >= 500) css = "fail";
+      else if (code >= 400) css = "warn";
+      return `<span class="pill ${css}">${escapeHtml(code || "-")}</span>`;
+    }
+
+    function populateStatusCodeOptions(values, selectedValue = "") {
+      const numericValues = Array.isArray(values)
+        ? values
+            .map((value) => (Number.isFinite(Number(value)) ? Math.floor(Number(value)) : null))
+            .filter((value) => value !== null)
+        : [];
+      const deduped = Array.from(new Set(numericValues)).sort((lhs, rhs) => lhs - rhs);
+      const currentValue = selectedValue ? String(selectedValue) : String(statusCodeInput.value || "");
+
+      statusCodeInput.innerHTML = [
+        '<option value="">All available codes</option>',
+        ...deduped.map((code) => `<option value="${escapeHtml(code)}">${escapeHtml(code)}</option>`),
+      ].join("");
+
+      if (currentValue && deduped.includes(Number(currentValue))) {
+        statusCodeInput.value = currentValue;
+      }
+    }
+
+    function buildQueryString() {
+      const params = new URLSearchParams();
+      if (startInput.value) {
+        params.set("start", new Date(startInput.value).toISOString());
+      }
+      if (endInput.value) {
+        params.set("end", new Date(endInput.value).toISOString());
+      }
+      if (sourceInput.value) params.set("source", sourceInput.value);
+      if (statusCodeInput.value) params.set("status_code", statusCodeInput.value);
+      if (badOnlyMode) params.set("bad_only", "1");
+      if (urlQueryInput.value.trim()) params.set("url_query", urlQueryInput.value.trim());
+      if (limitInput.value) params.set("limit", limitInput.value);
+      return params.toString();
+    }
+
+    function renderRows(requests) {
+      if (!Array.isArray(requests) || requests.length === 0) {
+        resultsBody.innerHTML = '<tr><td colspan="5" class="empty">No matching BBC requests found for this filter.</td></tr>';
+        return;
+      }
+
+      resultsBody.innerHTML = requests.map((request) => `
+        <tr>
+          <td>${escapeHtml(formatDateTime(request.timestamp || request.timestamp_ms))}</td>
+          <td>${escapeHtml(request.source || "-")}</td>
+          <td>${statusPill(request.status_code)}</td>
+          <td>${escapeHtml(formatDuration(request.duration_ms))}</td>
+          <td class="mono">${escapeHtml(request.url || "-")}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function loadRequests() {
+      statusText.textContent = "Loading BBC request history...";
+      statusText.className = "status";
+
+      try {
+        const response = await fetch(`${API_URL}?${buildQueryString()}`);
+        const payload = await response.json();
+
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error || payload.message || `HTTP ${response.status}`);
+        }
+
+        summaryStart.textContent = formatDateTime(payload.window && payload.window.start);
+        summaryEnd.textContent = formatDateTime(payload.window && payload.window.end);
+        summaryCount.textContent = String(payload.count_requests || 0);
+        summaryReturned.textContent = String(payload.returned_requests || 0);
+        populateStatusCodeOptions(payload.available_status_codes || [], payload.filters && payload.filters.status_code);
+        renderRows(payload.requests || []);
+
+        const ttlHours = payload.history_config && Number(payload.history_config.request_ttl_seconds) > 0
+          ? Math.round(Number(payload.history_config.request_ttl_seconds) / 3600)
+          : null;
+        const statusPrefix = badOnlyMode
+          ? `Loaded ${payload.returned_requests || 0} bad-request rows`
+          : `Loaded ${payload.returned_requests || 0} rows`;
+        statusText.textContent = ttlHours
+          ? `${statusPrefix} from Redis-backed request history. Retention is about ${ttlHours} hours.`
+          : `${statusPrefix} from Redis-backed request history.`;
+        statusText.className = "status ok";
+      } catch (error) {
+        resultsBody.innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(error.message || String(error))}</td></tr>`;
+        statusText.textContent = error.message || String(error);
+        statusText.className = "status error";
+      }
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      badOnlyMode = false;
+      loadRequests();
+    });
+
+    statusCodeInput.addEventListener("change", () => {
+      if (statusCodeInput.value) {
+        badOnlyMode = false;
+      }
+    });
+
+    badRequestsButton.addEventListener("click", () => {
+      statusCodeInput.value = "";
+      badOnlyMode = true;
+      loadRequests();
+    });
+
+    document.getElementById("todayButton").addEventListener("click", () => {
+      setTodayRange();
+      badOnlyMode = false;
+      loadRequests();
+    });
+
+    document.getElementById("lastHourButton").addEventListener("click", () => {
+      setLastHourRange();
+      badOnlyMode = false;
+      loadRequests();
+    });
+
+    setTodayRange();
+    loadRequests();
+  </script>
+</body>
+</html>

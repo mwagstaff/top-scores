@@ -115,6 +115,7 @@ function fetchHtml(url, options = {}) {
   return new Promise((resolve, reject) => {
     const source = String(options.source || "bbc_unknown").trim() || "bbc_unknown";
     const requestedUrl = String(url || "").trim();
+    const startedAtMs = Date.now();
     // Add cache-busting query parameter with current timestamp
     const target = new URL(requestedUrl);
     target.searchParams.set('_t', Date.now().toString());
@@ -127,6 +128,8 @@ function fetchHtml(url, options = {}) {
         source,
         url: requestedUrl,
         statusCode,
+        durationMs: Date.now() - startedAtMs,
+        timestampMs: Date.now(),
       });
       if (error) {
         reject(error);
