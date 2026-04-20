@@ -7,7 +7,7 @@ const AUDIT_TIME_ZONE = process.env.AUDIT_TIME_ZONE || "Europe/London";
 const AUDIT_UNBOUNDED_START_DATE = process.env.AUDIT_UNBOUNDED_START_DATE || "1900-01-01";
 const AUDIT_LOOKBACK_DAYS = Number.isFinite(Number(process.env.AUDIT_LOOKBACK_DAYS))
   ? Math.max(0, Math.floor(Number(process.env.AUDIT_LOOKBACK_DAYS)))
-  : 0;
+  : 7;
 const AUDIT_INTERVAL_LOOKBACK_DAYS = Number.isFinite(Number(process.env.AUDIT_INTERVAL_LOOKBACK_DAYS))
   ? Math.max(0, Math.floor(Number(process.env.AUDIT_INTERVAL_LOOKBACK_DAYS)))
   : AUDIT_LOOKBACK_DAYS === 0
@@ -115,6 +115,7 @@ const auditState = {
   last_run_started_at: null,
   last_run_completed_at: null,
   last_success_at: null,
+  next_run_scheduled_at: null,
   last_error: null,
   last_duration_ms: null,
   total_runs: 0,
@@ -1116,6 +1117,15 @@ function buildPrometheusMetricsText() {
     Number.isFinite(auditState.last_duration_ms) ? auditState.last_duration_ms / 1000 : 0
   );
 
+  const nextRunScheduledMs = Date.parse(auditState.next_run_scheduled_at || "");
+  lines.push("# HELP top_scores_match_audit_next_run_timestamp_seconds Unix timestamp of the next scheduled interval audit run.");
+  lines.push("# TYPE top_scores_match_audit_next_run_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_match_audit_next_run_timestamp_seconds",
+    Number.isFinite(nextRunScheduledMs) ? nextRunScheduledMs / 1000 : 0
+  );
+
   lines.push("# HELP top_scores_match_audit_report_age_seconds Age of the current audit report snapshot.");
   lines.push("# TYPE top_scores_match_audit_report_age_seconds gauge");
   pushPrometheusSample(
@@ -1423,7 +1433,12 @@ function createAuditServiceApp() {
 }
 
 function registerRuntimeInterval(callback, intervalMs) {
-  const handle = setInterval(callback, intervalMs);
+  auditState.next_run_scheduled_at = new Date(Date.now() + intervalMs).toISOString();
+  const wrappedCallback = () => {
+    auditState.next_run_scheduled_at = new Date(Date.now() + intervalMs).toISOString();
+    return callback();
+  };
+  const handle = setInterval(wrappedCallback, intervalMs);
   runtimeIntervalHandles.push(handle);
   if (typeof handle.unref === "function") {
     handle.unref();
@@ -1432,6 +1447,7 @@ function registerRuntimeInterval(callback, intervalMs) {
 }
 
 function clearRuntimeIntervals() {
+  auditState.next_run_scheduled_at = null;
   while (runtimeIntervalHandles.length > 0) {
     clearInterval(runtimeIntervalHandles.pop());
   }
@@ -1546,5 +1562,6 @@ module.exports = {
     autoRepairEligibleMatchIds,
     buildSyntheticAuditMatchId,
     normalizeMatchId,
+    auditState,
   },
 };

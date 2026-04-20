@@ -10,6 +10,8 @@ const {
     summarizeAuditReport,
     normalizeMatchId,
     updateCurrentRun,
+    buildPrometheusMetricsText,
+    auditState,
   },
 } = require("./match_audit_service");
 
@@ -181,6 +183,27 @@ test("updateCurrentRun computes progress and throughput", () => {
   assert.equal(snapshot.detail_checks_completed, 3);
   assert.equal(snapshot.issues_found, 2);
   assert.equal(snapshot.matches_per_second > 0, true);
+});
+
+test("buildPrometheusMetricsText includes scheduled next run timestamp", () => {
+  const previousNextRun = auditState.next_run_scheduled_at;
+  const previousLastDuration = auditState.last_duration_ms;
+  const previousLastSuccess = auditState.last_success_at;
+
+  try {
+    auditState.next_run_scheduled_at = "2026-04-20T12:05:00.000Z";
+    auditState.last_duration_ms = 42000;
+    auditState.last_success_at = "2026-04-20T12:00:00.000Z";
+
+    const metrics = buildPrometheusMetricsText();
+
+    assert.match(metrics, /top_scores_match_audit_last_duration_seconds 42(?:\.0+)?/);
+    assert.match(metrics, /top_scores_match_audit_next_run_timestamp_seconds 1776686700(?:\.0+)?/);
+  } finally {
+    auditState.next_run_scheduled_at = previousNextRun;
+    auditState.last_duration_ms = previousLastDuration;
+    auditState.last_success_at = previousLastSuccess;
+  }
 });
 
 test("autoRepairEligibleMatchIds selects rescrapeable issue matches with ids", () => {
