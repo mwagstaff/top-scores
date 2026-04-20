@@ -769,6 +769,14 @@ button.match-row:hover {
   object-fit: contain;
 }
 
+.mc-tv-more {
+  font-size: 0.65rem;
+  opacity: 0.45;
+  line-height: 1;
+  align-self: flex-end;
+  margin-bottom: 0.05rem;
+}
+
 /* Right status column: FT / AET / 45' / 15:00 / P 3-4 */
 .mc-right {
   font-size: 0.75rem;
@@ -842,6 +850,30 @@ button.match-row:hover {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+/* TV channels in expanded panel */
+.details-tv-channels {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.details-tv-channel-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.details-tv-channel-logo {
+  width: 2rem;
+  height: 1.25rem;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.details-tv-channel-name {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
 }
 
 /* Timeline events */

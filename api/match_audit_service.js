@@ -858,6 +858,9 @@ async function triggerRescrape(matchId, options = {}) {
       body: JSON.stringify({
         action: "rescrape",
         match_ids: [normalizedMatchId],
+        request_initiator: "audit_service",
+        request_reason: mode === "auto" ? "audit_auto_rescrape" : "audit_manual_rescrape",
+        request_trigger: mode === "auto" ? "audit_auto_repair" : "audit_manual_request",
       }),
     });
     if (mode === "auto") {

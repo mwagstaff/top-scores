@@ -2386,7 +2386,16 @@ function trackSourceUpdateMetrics({ source, startedAtMs, success, recordsFetched
   }
 }
 
-function trackBbcHttpRequestMetric({ source, url, statusCode, durationMs, timestampMs }) {
+function trackBbcHttpRequestMetric({
+  source,
+  initiator,
+  reason,
+  trigger,
+  url,
+  statusCode,
+  durationMs,
+  timestampMs,
+}) {
   const normalizedSource = String(source || "bbc_unknown").trim() || "bbc_unknown";
   const normalizedStatusCode =
     Number.isFinite(Number(statusCode)) && Number(statusCode) >= 0
@@ -2411,6 +2420,9 @@ function trackBbcHttpRequestMetric({ source, url, statusCode, durationMs, timest
 
   saveBbcRequestHistory({
     source: normalizedSource,
+    initiator: String(initiator || "").trim() || null,
+    reason: String(reason || "").trim() || null,
+    trigger: String(trigger || "").trim() || null,
     url: normalizedUrl,
     status_code: Number(normalizedStatusCode),
     duration_ms: normalizedDurationMs,
@@ -7531,7 +7543,11 @@ async function updateTeamShortNamesCache(options = {}) {
       TEAM_SHORT_NAMES_SCRAPE_CONCURRENCY,
       async (candidate) => {
         try {
-          const fetched = await fetchBbcMatchByDetailsUrl(candidate.details_url);
+          const fetched = await fetchBbcMatchByDetailsUrl(candidate.details_url, {
+            initiator: "scraper",
+            reason: "team_short_names_scrape",
+            trigger,
+          });
           matchesScraped += 1;
           const result = rememberTeamShortNamesFromMatch(fetched, {
             updated_at: updatedAt,
@@ -9503,7 +9519,11 @@ function scheduleMatchDetailsBackfill(payload, options = {}) {
 
   const task = (async () => {
     try {
-      const fetched = await fetchBbcMatchByDetailsUrl(payload.details_url);
+      const fetched = await fetchBbcMatchByDetailsUrl(payload.details_url, {
+        initiator: "scraper",
+        reason: "async_match_details_backfill",
+        trigger,
+      });
       if (!fetched) {
         matchDetailsBackfillNextAttemptAt.set(
           matchId,
@@ -9683,7 +9703,11 @@ async function backfillIncompleteMatchDetailsOnStartup(options = {}) {
   await mapWithConcurrency(candidates, STARTUP_BACKFILL_CONCURRENCY, async ({ payload }) => {
     const matchId = normalizeMatchDetailsId(payload.id);
     try {
-      const fetched = await fetchBbcMatchByDetailsUrl(payload.details_url);
+      const fetched = await fetchBbcMatchByDetailsUrl(payload.details_url, {
+        initiator: "scraper",
+        reason: "startup_backfill",
+        trigger,
+      });
       if (!fetched) {
         startupBackfillFailed++;
         startupBackfillRemaining--;
@@ -9850,7 +9874,14 @@ async function refreshInProgressMatchDetails(options = {}) {
       MATCH_DETAILS_POLL_CONCURRENCY,
       async (target) => {
         try {
-          const fetched = await fetchBbcMatchByDetailsUrl(target.details_url);
+          const fetched = await fetchBbcMatchByDetailsUrl(target.details_url, {
+            initiator: "scraper",
+            reason:
+              target.kind === "finished_enrichment"
+                ? "scheduled_match_details_finished_enrichment"
+                : "scheduled_match_details_refresh",
+            trigger,
+          });
           if (!fetched) return;
           const combined = buildMergedMatchDetailsCandidate(
             target.seed_match,
@@ -15651,6 +15682,18 @@ async function rescrapeCanonicalMatchDetailsByIds(matchIds, options = {}) {
     typeof options.source === "string" && options.source.trim()
       ? options.source.trim()
       : "admin_redis_matches";
+  const requestInitiator =
+    typeof options.request_initiator === "string" && options.request_initiator.trim()
+      ? options.request_initiator.trim()
+      : "admin_api";
+  const requestReason =
+    typeof options.request_reason === "string" && options.request_reason.trim()
+      ? options.request_reason.trim()
+      : "admin_redis_match_rescrape";
+  const requestTrigger =
+    typeof options.request_trigger === "string" && options.request_trigger.trim()
+      ? options.request_trigger.trim()
+      : requestReason;
   const refreshedIds = [];
   const failed = [];
 
@@ -15667,7 +15710,11 @@ async function rescrapeCanonicalMatchDetailsByIds(matchIds, options = {}) {
         const detailsUrl =
           String((existingPayload && existingPayload.details_url) || "").trim() ||
           `https://www.bbc.co.uk/sport/football/live/${matchId}`;
-        const fetched = await fetchBbcMatchByDetailsUrl(detailsUrl);
+        const fetched = await fetchBbcMatchByDetailsUrl(detailsUrl, {
+          initiator: requestInitiator,
+          reason: requestReason,
+          trigger: requestTrigger,
+        });
         if (!fetched) {
           failed.push({ match_id: matchId, error: "No BBC match payload returned." });
           return;
@@ -17617,7 +17664,13 @@ async function updateBbcMatches(options = {}) {
   });
   try {
     const previousMatches = cachedBbcMatches;
-    const matches = filterMatchesByCompetition(await fetchBbcFixtures(BBC_SOURCE_URL));
+    const matches = filterMatchesByCompetition(
+      await fetchBbcFixtures(BBC_SOURCE_URL, {
+        initiator: "scraper",
+        reason: "bbc_live_scores_poll",
+        trigger,
+      })
+    );
     const filteredMatches = filterStaleBbcMatches(matches, cachedBbcMatches);
     const matchesChanged =
       hashComparablePayload(filteredMatches) !== hashComparablePayload(previousMatches);
@@ -17715,6 +17768,9 @@ async function updateBbcRangeMatches(options = {}) {
         futureDays: BBC_RANGE_FUTURE_DAYS,
         concurrency: BBC_RANGE_CONCURRENCY,
         timeZone: BBC_RANGE_MATCH_TIMEZONE,
+        initiator: "scraper",
+        reason: "bbc_scores_fixtures_range_poll",
+        trigger,
       })
     );
     cachedBbcRangeMatches = matches;
@@ -17784,7 +17840,11 @@ async function updatePremierLeagueTeams(options = {}) {
     interval_ms: EPL_INTERVAL_MS,
   });
   try {
-    const teams = await fetchPremierLeagueTeams(EPL_SOURCE_URL);
+    const teams = await fetchPremierLeagueTeams(EPL_SOURCE_URL, {
+      initiator: "scraper",
+      reason: "bbc_premier_league_table_poll",
+      trigger,
+    });
     if (!Array.isArray(teams) || teams.length === 0) {
       recordRuntimeComponentFailure(
         COMPONENT_SOURCE_BBC_TABLES_PREMIER_TEAMS,
@@ -17864,7 +17924,11 @@ async function updateLeagueTables(options = {}) {
   });
 
   try {
-    const { tables, errors } = await fetchLeagueTables(LEAGUE_TABLE_SOURCES);
+    const { tables, errors } = await fetchLeagueTables(LEAGUE_TABLE_SOURCES, {
+      initiator: "scraper",
+      reason: "bbc_league_tables_poll",
+      trigger,
+    });
 
     if (Array.isArray(errors) && errors.length > 0) {
       errors.forEach((error) => {
@@ -22717,7 +22781,11 @@ app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
     MATCH_DETAILS_POLL_CONCURRENCY,
     async (candidate) => {
       try {
-        const fetched = await fetchBbcMatchByDetailsUrl(candidate.payload.details_url);
+        const fetched = await fetchBbcMatchByDetailsUrl(candidate.payload.details_url, {
+          initiator: "admin_api",
+          reason: "admin_backfill_matches",
+          trigger: "admin_backfill_matches",
+        });
         if (fetched) {
           const combined = buildMergedMatchDetailsCandidate(
             candidate.payload,
@@ -24494,6 +24562,20 @@ app.post(`${API_PREFIX}/admin/redis/matches/actions`, async (req, res) => {
 
   const nowIso = new Date().toISOString();
   const source = "admin_redis_matches";
+  const requestInitiator =
+    typeof payload.request_initiator === "string" && payload.request_initiator.trim()
+      ? payload.request_initiator.trim()
+      : "admin_api";
+  const requestReason =
+    typeof payload.request_reason === "string" && payload.request_reason.trim()
+      ? payload.request_reason.trim()
+      : action === "rescrape"
+        ? "admin_redis_match_rescrape"
+        : "admin_redis_match_delete";
+  const requestTrigger =
+    typeof payload.request_trigger === "string" && payload.request_trigger.trim()
+      ? payload.request_trigger.trim()
+      : requestReason;
 
   try {
     const result =
@@ -24505,6 +24587,9 @@ app.post(`${API_PREFIX}/admin/redis/matches/actions`, async (req, res) => {
         : await rescrapeCanonicalMatchDetailsByIds(matchIds, {
           updated_at: nowIso,
           source,
+          request_initiator: requestInitiator,
+          request_reason: requestReason,
+          request_trigger: requestTrigger,
         });
 
     res.status(200).json({
@@ -25178,6 +25263,9 @@ app.post(`${API_PREFIX}/admin/bbc-state/backfill-range`, async (req, res) => {
         endDate,
         concurrency,
         timeZone: BBC_RANGE_MATCH_TIMEZONE,
+        initiator: "admin_api",
+        reason: "admin_bbc_range_refetch",
+        trigger: "admin_bbc_range_refetch",
       })
     );
 

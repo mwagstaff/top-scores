@@ -191,6 +191,10 @@
       word-break: break-all;
     }
 
+    .wrap {
+      word-break: break-word;
+    }
+
     .pill {
       display: inline-block;
       padding: 3px 8px;
@@ -253,7 +257,7 @@
             <input id="end" name="end" type="datetime-local">
           </div>
           <div>
-            <label for="source">Source</label>
+            <label for="source">BBC Source</label>
             <select id="source" name="source">
               <option value="">All BBC sources</option>
               <option value="bbc_live_scores">Live Scores</option>
@@ -308,14 +312,16 @@
           <thead>
             <tr>
               <th>Time</th>
-              <th>Source</th>
+              <th>BBC Source</th>
+              <th>Initiator</th>
+              <th>Reason</th>
               <th>Status</th>
               <th>Duration</th>
               <th>URL</th>
             </tr>
           </thead>
           <tbody id="resultsBody">
-            <tr><td colspan="5" class="empty">No data loaded yet.</td></tr>
+            <tr><td colspan="7" class="empty">No data loaded yet.</td></tr>
           </tbody>
         </table>
       </div>
@@ -392,6 +398,15 @@
       return `${Math.round(Number(value))} ms`;
     }
 
+    function formatReason(request) {
+      const reason = String(request && request.reason ? request.reason : "").trim();
+      const trigger = String(request && request.trigger ? request.trigger : "").trim();
+      if (reason && trigger && trigger !== reason) {
+        return `${reason} (${trigger})`;
+      }
+      return reason || trigger || "-";
+    }
+
     function statusPill(statusCode) {
       const code = Number(statusCode) || 0;
       let css = "";
@@ -437,7 +452,7 @@
 
     function renderRows(requests) {
       if (!Array.isArray(requests) || requests.length === 0) {
-        resultsBody.innerHTML = '<tr><td colspan="5" class="empty">No matching BBC requests found for this filter.</td></tr>';
+        resultsBody.innerHTML = '<tr><td colspan="7" class="empty">No matching BBC requests found for this filter.</td></tr>';
         return;
       }
 
@@ -445,6 +460,8 @@
         <tr>
           <td>${escapeHtml(formatDateTime(request.timestamp || request.timestamp_ms))}</td>
           <td>${escapeHtml(request.source || "-")}</td>
+          <td class="wrap">${escapeHtml(request.initiator || "-")}</td>
+          <td class="wrap">${escapeHtml(formatReason(request))}</td>
           <td>${statusPill(request.status_code)}</td>
           <td>${escapeHtml(formatDuration(request.duration_ms))}</td>
           <td class="mono">${escapeHtml(request.url || "-")}</td>
@@ -482,7 +499,7 @@
           : `${statusPrefix} from Redis-backed request history.`;
         statusText.className = "status ok";
       } catch (error) {
-        resultsBody.innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(error.message || String(error))}</td></tr>`;
+        resultsBody.innerHTML = `<tr><td colspan="7" class="empty">${escapeHtml(error.message || String(error))}</td></tr>`;
         statusText.textContent = error.message || String(error);
         statusText.className = "status error";
       }

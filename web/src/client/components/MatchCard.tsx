@@ -140,15 +140,16 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
           </div>
         ) : showTv ? (
           <div className="mc-tv">
-            {match.tvChannels.slice(0, 2).map((ch) => (
-              <img
-                key={`${match.id}-tv-${ch}`}
-                src={`/logos/tv/${encodeURIComponent(ch)}`}
-                alt=""
-                className="mc-tv-logo"
-                onError={(e) => { e.currentTarget.style.display = "none"; }}
-              />
-            ))}
+            <img
+              key={`${match.id}-tv-0`}
+              src={`/logos/tv/${encodeURIComponent(match.tvChannels[0])}`}
+              alt=""
+              className="mc-tv-logo"
+              onError={(e) => { e.currentTarget.style.display = "none"; }}
+            />
+            {new Set(match.tvChannels.map(tvLogoBrand)).size > 1 && (
+              <span className="mc-tv-more">+</span>
+            )}
           </div>
         ) : null}
         {/* Two-legged aggregate sub-label */}
@@ -218,7 +219,7 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
           ) : detailsError ? (
             <div className="match-details-message is-error">{detailsError}</div>
           ) : details ? (
-            <ExpandedMatchDetails details={details} />
+            <ExpandedMatchDetails details={details} tvChannels={match.tvChannels} />
           ) : (
             <div className="match-details-message">No additional match details available.</div>
           )}
@@ -228,6 +229,20 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
   );
 }
 
+
+// ── TV logo brand key (mirrors server resolveTvLogo brand detection) ──
+function tvLogoBrand(ch: string): string {
+  const n = ch.toLowerCase();
+  if (n.includes("amazon"))                              return "amazon";
+  if (n.includes("apple"))                               return "apple";
+  if (n.includes("bbc"))                                 return "bbc";
+  if (n.includes("channel 4") || n.includes("channel4")) return "channel4";
+  if (n.includes("hbo"))                                 return "hbo max";
+  if (n.includes("itv"))                                 return "itv";
+  if (n.includes("sky"))                                 return "sky";
+  if (n.includes("tnt"))                                 return "tnt";
+  return n;
+}
 
 // ── Team badge (logo with initials fallback) ──────────────────────
 
@@ -261,16 +276,34 @@ function TeamBadge({ teamName, missing, onMissing }: TeamBadgeProps) {
 
 // ── Expanded match details ────────────────────────────────────────
 
-function ExpandedMatchDetails({ details }: { details: MatchDetails }) {
+function ExpandedMatchDetails({ details, tvChannels = [] }: { details: MatchDetails; tvChannels?: string[] }) {
   const timelineEntries   = useMemo(() => buildTimelineEntries(details), [details]);
   const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
 
-  if (timelineEntries.length === 0 && !hasCompleteLineups) {
+  if (timelineEntries.length === 0 && !hasCompleteLineups && tvChannels.length === 0) {
     return <div className="match-details-message">No additional match details available.</div>;
   }
 
   return (
     <div className="match-details-body">
+      {tvChannels.length > 0 && (
+        <section className="details-section">
+          <div className="details-section-title">TV Coverage</div>
+          <div className="details-tv-channels">
+            {tvChannels.map((channel) => (
+              <div key={channel} className="details-tv-channel-row">
+                <img
+                  src={`/logos/tv/${encodeURIComponent(channel)}`}
+                  alt=""
+                  className="details-tv-channel-logo"
+                  onError={(e) => { e.currentTarget.style.display = "none"; }}
+                />
+                <span className="details-tv-channel-name">{channel}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       {timelineEntries.length > 0 && (
         <section className="details-section">
           <div className="details-section-title">Key events</div>

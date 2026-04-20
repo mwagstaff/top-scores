@@ -48,6 +48,23 @@ const BBC_POSTPONED_STATUSES = new Set(["POSTPONED", "MATCH POSTPONED"]);
 const bbcDetailsCache = new Map();
 let bbcRequestObserver = null;
 
+function withBbcRequestMetadata(options = {}, defaults = {}) {
+  const next = options && typeof options === "object" ? { ...options } : {};
+  if (!String(next.source || "").trim() && defaults.source) {
+    next.source = defaults.source;
+  }
+  if (!String(next.initiator || next.request_source || "").trim()) {
+    next.initiator = defaults.initiator || "scraper";
+  }
+  if (!String(next.reason || next.request_reason || "").trim()) {
+    next.reason = defaults.reason || "bbc_fetch";
+  }
+  if (!String(next.trigger || "").trim() && defaults.trigger) {
+    next.trigger = defaults.trigger;
+  }
+  return next;
+}
+
 function setBbcRequestObserver(observer) {
   bbcRequestObserver = typeof observer === "function" ? observer : null;
 }
@@ -114,6 +131,9 @@ const STATUS_ALIASES = new Map([
 function fetchHtml(url, options = {}) {
   return new Promise((resolve, reject) => {
     const source = String(options.source || "bbc_unknown").trim() || "bbc_unknown";
+    const initiator = String(options.initiator || options.request_source || "").trim() || null;
+    const reason = String(options.reason || options.request_reason || "").trim() || null;
+    const trigger = String(options.trigger || "").trim() || null;
     const requestedUrl = String(url || "").trim();
     const startedAtMs = Date.now();
     // Add cache-busting query parameter with current timestamp
@@ -126,6 +146,9 @@ function fetchHtml(url, options = {}) {
       settled = true;
       notifyBbcRequestObserver({
         source,
+        initiator,
+        reason,
+        trigger,
         url: requestedUrl,
         statusCode,
         durationMs: Date.now() - startedAtMs,
@@ -1000,7 +1023,13 @@ async function fetchBbcLiveTextEntriesByDetailsUrl(detailsUrl, options = {}) {
   while (page <= maxPages) {
     const pageUrl = buildBbcLiveTextPageUrl(normalized, page);
     if (!pageUrl) break;
-    const html = await fetchHtml(pageUrl, { source: "bbc_match_details" });
+    const html = await fetchHtml(
+      pageUrl,
+      withBbcRequestMetadata(options, {
+        initiator: "scraper",
+        reason: "bbc_live_text_fetch",
+      })
+    );
     const parsed = parseLiveTextEntriesFromHtml(html);
     totalPages = parsed.pagination.totalPages || totalPages;
     parsed.entries.forEach((entry) => {
@@ -1883,7 +1912,14 @@ async function fetchDetailsWithCache(detailsUrl, matchStatus, homeTeam = null, a
   }
 
   try {
-    const html = await fetchHtml(detailsUrl, { source: "bbc_live_scores" });
+    const html = await fetchHtml(
+      detailsUrl,
+      withBbcRequestMetadata(options, {
+        initiator: "scraper",
+        reason: "bbc_live_details_enrichment",
+        source: "bbc_live_scores",
+      })
+    );
     const parsed = parseMatchDetailsFromHtml(html, homeTeam, awayTeam);
 
     // Only cache completed matches to ensure fresh data for live matches
@@ -3309,7 +3345,14 @@ async function fetchBbcScoresFixturesByDate(dateString, options = {}) {
   const fallbackDate = normalizeDateOnly(dateString);
   const timeZone = options.timeZone || DEFAULT_BBC_MATCH_TIMEZONE;
   const url = resolveScoresFixturesDateUrl(options.baseUrl || DEFAULT_BBC_URL, fallbackDate);
-  const html = await fetchHtml(url, { source: "bbc_scores_fixtures_range" });
+  const html = await fetchHtml(
+    url,
+    withBbcRequestMetadata(options, {
+      initiator: "scraper",
+      reason: "bbc_scores_fixtures_range_fetch",
+      source: "bbc_scores_fixtures_range",
+    })
+  );
   const matches = parseScheduledMatchesFromJson(html, {
     fallbackDate,
     timeZone,
@@ -3363,9 +3406,16 @@ function toScoreValue(value) {
   return Number.isFinite(num) ? num : value;
 }
 
-async function fetchBbcFixtures(url = DEFAULT_BBC_URL) {
+async function fetchBbcFixtures(url = DEFAULT_BBC_URL, options = {}) {
   pruneDetailsCache(Date.now());
-  const html = await fetchHtml(url, { source: "bbc_live_scores" });
+  const html = await fetchHtml(
+    url,
+    withBbcRequestMetadata(options, {
+      initiator: "scraper",
+      reason: "bbc_live_scores_fetch",
+      source: "bbc_live_scores",
+    })
+  );
   const $ = cheerio.load(html);
   const fromDom = parseMatchesFromDom($);
   const fromJson = parseMatchesFromJson(html);
@@ -3395,12 +3445,19 @@ function selectMatchCandidateByDetailsUrl(candidates, normalizedTarget) {
   );
 }
 
-async function fetchBbcMatchByDetailsUrl(detailsUrl) {
+async function fetchBbcMatchByDetailsUrl(detailsUrl, options = {}) {
   const validatedTarget = normalizeDetailsUrl(detailsUrl);
   const normalizedTarget = normalizeDetailsUrlKey(validatedTarget);
   if (!normalizedTarget) return null;
 
-  const html = await fetchHtml(validatedTarget, { source: "bbc_match_details" });
+  const html = await fetchHtml(
+    validatedTarget,
+    withBbcRequestMetadata(options, {
+      initiator: "scraper",
+      reason: "bbc_match_details_fetch",
+      source: "bbc_match_details",
+    })
+  );
   const $ = cheerio.load(html);
   const fromDom = parseMatchesFromDom($);
   const fromJson = parseMatchesFromJson(html);

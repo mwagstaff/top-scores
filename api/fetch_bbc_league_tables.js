@@ -62,9 +62,12 @@ function notifyBbcLeagueTablesRequestObserver(event) {
   }
 }
 
-function fetchHtml(url) {
+function fetchHtml(url, options = {}) {
   return new Promise((resolve, reject) => {
     const requestedUrl = String(url || "").trim();
+    const initiator = String(options.initiator || "").trim() || "scraper";
+    const reason = String(options.reason || "").trim() || "bbc_league_tables_fetch";
+    const trigger = String(options.trigger || "").trim() || null;
     const startedAtMs = Date.now();
     const target = new URL(requestedUrl);
     const lib = target.protocol === "https:" ? https : http;
@@ -75,6 +78,9 @@ function fetchHtml(url) {
       settled = true;
       notifyBbcLeagueTablesRequestObserver({
         source: "bbc_league_tables",
+        initiator,
+        reason,
+        trigger,
         url: requestedUrl,
         statusCode,
         durationMs: Date.now() - startedAtMs,
@@ -99,7 +105,7 @@ function fetchHtml(url) {
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           const redirect = new URL(res.headers.location, target).toString();
           res.resume();
-          fetchHtml(redirect).then(resolve).catch(reject);
+          fetchHtml(redirect, options).then(resolve).catch(reject);
           return;
         }
 
@@ -328,13 +334,18 @@ function extractLeagueTableFromHtml(html, source) {
   };
 }
 
-async function fetchLeagueTable(source) {
-  const html = await fetchHtml(source.url);
+async function fetchLeagueTable(source, options = {}) {
+  const html = await fetchHtml(source.url, {
+    ...options,
+    reason: options.reason || `bbc_league_table_fetch:${source.id}`,
+  });
   return extractLeagueTableFromHtml(html, source);
 }
 
-async function fetchLeagueTables(sources = LEAGUE_TABLE_SOURCES) {
-  const settled = await Promise.allSettled(sources.map((source) => fetchLeagueTable(source)));
+async function fetchLeagueTables(sources = LEAGUE_TABLE_SOURCES, options = {}) {
+  const settled = await Promise.allSettled(
+    sources.map((source) => fetchLeagueTable(source, options))
+  );
   const tables = [];
   const errors = [];
 

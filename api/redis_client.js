@@ -2367,6 +2367,51 @@ async function getBbcMatchHistoryGrouped(options = {}) {
   }
 }
 
+function inferBbcRequestHistoryMetadata(record) {
+  const source = String(record && record.source ? record.source : "").trim();
+  const url = String(record && record.url ? record.url : "").trim();
+  const existingInitiator = String(record && record.initiator ? record.initiator : "").trim();
+  const existingReason = String(record && record.reason ? record.reason : "").trim();
+  const existingTrigger = String(record && record.trigger ? record.trigger : "").trim();
+
+  let inferredInitiator = existingInitiator;
+  let inferredReason = existingReason;
+  let inferredTrigger = existingTrigger;
+
+  if (!inferredInitiator) {
+    inferredInitiator = "scraper";
+  }
+
+  if (!inferredReason) {
+    if (source === "bbc_live_scores") {
+      inferredReason = url.includes("/live/")
+        ? "bbc_live_details_enrichment"
+        : "bbc_live_scores_fetch";
+    } else if (source === "bbc_scores_fixtures_range") {
+      inferredReason = "bbc_scores_fixtures_range_fetch";
+    } else if (source === "bbc_match_details") {
+      inferredReason = "bbc_match_details_fetch";
+    } else if (source === "bbc_premier_league_table") {
+      inferredReason = "bbc_premier_league_table_fetch";
+    } else if (source === "bbc_league_tables") {
+      inferredReason = "bbc_league_tables_fetch";
+    } else {
+      inferredReason = "bbc_fetch";
+    }
+  }
+
+  if (!inferredTrigger) {
+    inferredTrigger = inferredReason;
+  }
+
+  return {
+    ...record,
+    initiator: inferredInitiator,
+    reason: inferredReason,
+    trigger: inferredTrigger,
+  };
+}
+
 function applyBbcRequestHistoryFilters(records, options = {}) {
   const sourceFilter = String(options.source || "").trim().toLowerCase();
   const urlQuery = String(options.url_query || "").trim().toLowerCase();
@@ -2376,7 +2421,9 @@ function applyBbcRequestHistoryFilters(records, options = {}) {
       : "";
   const badOnly = Boolean(options.bad_only);
 
-  return records.filter((record) => {
+  return records
+    .map((record) => inferBbcRequestHistoryMetadata(record))
+    .filter((record) => {
     if (
       sourceFilter &&
       String(record && record.source ? record.source : "").toLowerCase() !== sourceFilter

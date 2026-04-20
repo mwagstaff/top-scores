@@ -2258,6 +2258,7 @@ private final class WidgetTvLogoResolver {
         "tnt": "TVLogoTNT",
         "apple": "TVLogoApple",
         "channel4": "TVLogoChannel4",
+        "hbomax": "TVLogoHBOMax",
         "nologo": "TVLogoFallback"
     ]
     private let lock = NSLock()
@@ -2420,7 +2421,7 @@ private final class WidgetTvLogoResolver {
 
         // Last-resort: explicit per-resource lookup via Bundle.main.path(forResource:ofType:)
         // This is the most direct Bundle API and works even when enumeration-based approaches fail.
-        let knownLogoNames = ["amazon", "bbc", "sky", "itv", "tnt", "apple", "channel 4", "_noLogo"]
+        let knownLogoNames = ["amazon", "bbc", "sky", "itv", "tnt", "apple", "channel 4", "hbo max", "_noLogo"]
         for name in knownLogoNames {
             let key = Self.normalizedKey(name)
             guard normalizedLookup[key] == nil else { continue }
@@ -2712,7 +2713,9 @@ private final class WidgetTvLogoResolver {
         ("mlsseasonpass", "apple"),
         ("bbc", "bbc"),
         ("itv", "itv"),
-        ("channel4", "channel4")
+        ("channel4", "channel4"),
+        ("hbomax", "hbomax"),
+        ("hbo", "hbomax")
     ]
 }
 

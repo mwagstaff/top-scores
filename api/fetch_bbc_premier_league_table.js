@@ -57,9 +57,12 @@ const TEAM_NAME_KEYS = [
 
 const TEAM_OBJECT_KEYS = ["team", "club", "participant", "competitor", "side"];
 
-function fetchHtml(url) {
+function fetchHtml(url, options = {}) {
   return new Promise((resolve, reject) => {
     const requestedUrl = String(url || "").trim();
+    const initiator = String(options.initiator || "").trim() || "scraper";
+    const reason = String(options.reason || "").trim() || "bbc_premier_league_table_fetch";
+    const trigger = String(options.trigger || "").trim() || null;
     const startedAtMs = Date.now();
     const target = new URL(requestedUrl);
     const lib = target.protocol === "https:" ? https : http;
@@ -70,6 +73,9 @@ function fetchHtml(url) {
       settled = true;
       notifyBbcPremierLeagueRequestObserver({
         source: "bbc_premier_league_table",
+        initiator,
+        reason,
+        trigger,
         url: requestedUrl,
         statusCode,
         durationMs: Date.now() - startedAtMs,
@@ -94,7 +100,7 @@ function fetchHtml(url) {
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           const redirect = new URL(res.headers.location, target).toString();
           res.resume();
-          fetchHtml(redirect).then(resolve).catch(reject);
+          fetchHtml(redirect, options).then(resolve).catch(reject);
           return;
         }
 
@@ -517,8 +523,8 @@ function extractPremierLeagueTeamsFromHtml(html) {
   return rows.map((row) => row.team);
 }
 
-async function fetchPremierLeagueTeams(url = DEFAULT_BBC_TABLES_URL) {
-  const html = await fetchHtml(url);
+async function fetchPremierLeagueTeams(url = DEFAULT_BBC_TABLES_URL, options = {}) {
+  const html = await fetchHtml(url, options);
   return extractPremierLeagueTeamsFromHtml(html);
 }
 

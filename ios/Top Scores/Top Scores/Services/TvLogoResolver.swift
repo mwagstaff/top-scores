@@ -179,6 +179,8 @@ final class TvLogoResolver {
         ("mlsseasonpass", "apple"),
         ("bbc", "bbc"),
         ("itv", "itv"),
-        ("channel4", "channel4")
+        ("channel4", "channel4"),
+        ("hbomax", "hbomax"),
+        ("hbo", "hbomax")
     ]
 }
