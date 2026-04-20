@@ -7,15 +7,22 @@ const AUDIT_TIME_ZONE = process.env.AUDIT_TIME_ZONE || "Europe/London";
 const AUDIT_UNBOUNDED_START_DATE = process.env.AUDIT_UNBOUNDED_START_DATE || "1900-01-01";
 const AUDIT_LOOKBACK_DAYS = Number.isFinite(Number(process.env.AUDIT_LOOKBACK_DAYS))
   ? Math.max(0, Math.floor(Number(process.env.AUDIT_LOOKBACK_DAYS)))
-  : 7;
+  : 0;
 const AUDIT_INTERVAL_LOOKBACK_DAYS = Number.isFinite(Number(process.env.AUDIT_INTERVAL_LOOKBACK_DAYS))
   ? Math.max(0, Math.floor(Number(process.env.AUDIT_INTERVAL_LOOKBACK_DAYS)))
   : AUDIT_LOOKBACK_DAYS === 0
-    ? 7
+    ? 0
     : AUDIT_LOOKBACK_DAYS;
-const AUDIT_POLL_INTERVAL_MS = Number.isFinite(Number(process.env.AUDIT_POLL_INTERVAL_MS))
-  ? Math.max(30 * 1000, Math.floor(Number(process.env.AUDIT_POLL_INTERVAL_MS)))
-  : 5 * 60 * 1000;
+const AUDIT_SCHEDULE_HOUR = Number.isFinite(Number(process.env.AUDIT_SCHEDULE_HOUR))
+  ? Math.max(0, Math.min(23, Math.floor(Number(process.env.AUDIT_SCHEDULE_HOUR))))
+  : 0;
+const AUDIT_SCHEDULE_MINUTE = Number.isFinite(Number(process.env.AUDIT_SCHEDULE_MINUTE))
+  ? Math.max(0, Math.min(59, Math.floor(Number(process.env.AUDIT_SCHEDULE_MINUTE))))
+  : 0;
+const AUDIT_SCHEDULE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const AUDIT_STALE_AFTER_MS = Number.isFinite(Number(process.env.AUDIT_STALE_AFTER_MS))
+  ? Math.max(60 * 1000, Math.floor(Number(process.env.AUDIT_STALE_AFTER_MS)))
+  : AUDIT_SCHEDULE_INTERVAL_MS + 6 * 60 * 60 * 1000;
 const AUDIT_MATCH_MAX_DURATION_MS = Number.isFinite(Number(process.env.AUDIT_MATCH_MAX_DURATION_MS))
   ? Math.max(60 * 60 * 1000, Math.floor(Number(process.env.AUDIT_MATCH_MAX_DURATION_MS)))
   : 3 * 60 * 60 * 1000;
@@ -27,7 +34,10 @@ const AUDIT_MATCH_PAGE_SIZE = Number.isFinite(Number(process.env.AUDIT_MATCH_PAG
   : 2000;
 const AUDIT_MATCH_DETAIL_CONCURRENCY = Number.isFinite(Number(process.env.AUDIT_MATCH_DETAIL_CONCURRENCY))
   ? Math.max(1, Math.min(50, Math.floor(Number(process.env.AUDIT_MATCH_DETAIL_CONCURRENCY))))
-  : 12;
+  : 3;
+const AUDIT_MATCH_DETAIL_MIN_INTERVAL_MS = Number.isFinite(Number(process.env.AUDIT_MATCH_DETAIL_MIN_INTERVAL_MS))
+  ? Math.max(0, Math.floor(Number(process.env.AUDIT_MATCH_DETAIL_MIN_INTERVAL_MS)))
+  : 250;
 const AUDIT_AUTO_REPAIR_ENABLED = !["0", "false", "no", "off"].includes(
   String(process.env.AUDIT_AUTO_REPAIR_ENABLED || "true").trim().toLowerCase()
 );
@@ -81,9 +91,10 @@ const AUTO_REPAIR_ISSUE_CODES = new Set([
 ]);
 
 let runtimeServer = null;
-const runtimeIntervalHandles = [];
+let runtimeScheduleHandle = null;
 let runtimeShutdownPromise = null;
 const autoRepairLastTriggeredAtByMatchId = new Map();
+let nextDetailFetchNotBeforeMs = 0;
 
 function buildEmptyCurrentRun() {
   return {
@@ -168,17 +179,42 @@ function buildEmptyAuditReport() {
 function buildPublicConfig() {
   return {
     port: AUDIT_PORT,
-    poll_interval_ms: AUDIT_POLL_INTERVAL_MS,
+    schedule_hour: AUDIT_SCHEDULE_HOUR,
+    schedule_minute: AUDIT_SCHEDULE_MINUTE,
+    schedule_interval_ms: AUDIT_SCHEDULE_INTERVAL_MS,
+    stale_after_ms: AUDIT_STALE_AFTER_MS,
     lookback_days: AUDIT_LOOKBACK_DAYS,
     interval_lookback_days: AUDIT_INTERVAL_LOOKBACK_DAYS,
     unbounded_start_date: AUDIT_UNBOUNDED_START_DATE,
     match_max_duration_ms: AUDIT_MATCH_MAX_DURATION_MS,
+    match_detail_concurrency: AUDIT_MATCH_DETAIL_CONCURRENCY,
+    match_detail_min_interval_ms: AUDIT_MATCH_DETAIL_MIN_INTERVAL_MS,
     auto_repair_enabled: AUDIT_AUTO_REPAIR_ENABLED,
     auto_repair_cooldown_ms: AUDIT_AUTO_REPAIR_COOLDOWN_MS,
     auto_repair_max_matches_per_run: AUDIT_AUTO_REPAIR_MAX_MATCHES_PER_RUN,
     time_zone: AUDIT_TIME_ZONE,
     upstream_api_root: AUDIT_MAIN_API_ROOT,
   };
+}
+
+function timeStringFromHourMinute(hour = 0, minute = 0) {
+  const normalizedHour = Math.max(0, Math.min(23, Math.floor(Number(hour) || 0)));
+  const normalizedMinute = Math.max(0, Math.min(59, Math.floor(Number(minute) || 0)));
+  return `${String(normalizedHour).padStart(2, "0")}:${String(normalizedMinute).padStart(2, "0")}`;
+}
+
+function computeNextScheduledRunAt(nowMs = Date.now()) {
+  const now = new Date(nowMs);
+  const scheduledTime = timeStringFromHourMinute(AUDIT_SCHEDULE_HOUR, AUDIT_SCHEDULE_MINUTE);
+  const baseDateKey = dateKeyInTimeZone(now, AUDIT_TIME_ZONE);
+  for (let offset = 0; offset < 7; offset += 1) {
+    const candidateDateKey = addDaysToDateKey(baseDateKey, offset);
+    const candidateMs = zonedDateTimeToUtcMs(candidateDateKey, scheduledTime, AUDIT_TIME_ZONE);
+    if (Number.isFinite(candidateMs) && candidateMs > nowMs + 1000) {
+      return candidateMs;
+    }
+  }
+  return nowMs + AUDIT_SCHEDULE_INTERVAL_MS;
 }
 
 function resolveAuditLookbackDays(trigger = "interval") {
@@ -306,6 +342,15 @@ function getDatePartsInTimeZone(date, timeZone = AUDIT_TIME_ZONE) {
 function dateKeyInTimeZone(date, timeZone = AUDIT_TIME_ZONE) {
   const parts = getDatePartsInTimeZone(date, timeZone);
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function addDaysToDateKey(dateKey, days = 0) {
+  const match = String(dateKey || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const shiftedDate = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days, 12, 0, 0)
+  );
+  return shiftedDate.toISOString().slice(0, 10);
 }
 
 function buildDateRangeWindow(nowMs = Date.now(), lookbackDays = AUDIT_LOOKBACK_DAYS) {
@@ -682,6 +727,16 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
+async function throttleMatchDetailFetch() {
+  if (AUDIT_MATCH_DETAIL_MIN_INTERVAL_MS <= 0) return;
+  const nowMs = Date.now();
+  const waitMs = Math.max(0, nextDetailFetchNotBeforeMs - nowMs);
+  nextDetailFetchNotBeforeMs = Math.max(nextDetailFetchNotBeforeMs, nowMs) + AUDIT_MATCH_DETAIL_MIN_INTERVAL_MS;
+  if (waitMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+}
+
 async function fetchJson(url, options = {}) {
   const controller = new AbortController();
   const timeoutMs = Number.isFinite(options.timeoutMs)
@@ -745,6 +800,7 @@ async function fetchMatchesWindow(window) {
 
 async function fetchMatchDetailsPayload(matchId) {
   try {
+    await throttleMatchDetailFetch();
     const payload = await fetchJson(`${AUDIT_MAIN_API_ROOT}/matches/${encodeURIComponent(matchId)}`);
     return { ok: true, payload };
   } catch (error) {
@@ -1258,15 +1314,29 @@ function createAuditServiceApp() {
 
   app.get("/healthcheck", (_req, res) => {
     setNoStoreHeaders(res);
+    const currentRun = currentRunSnapshot();
+    const nowMs = Date.now();
     const reportGeneratedMs = Date.parse(auditState.current_report.generated_at || "");
     const stale = Number.isFinite(reportGeneratedMs)
-      ? Date.now() - reportGeneratedMs > AUDIT_POLL_INTERVAL_MS * 2
+      ? nowMs - reportGeneratedMs > AUDIT_STALE_AFTER_MS
       : true;
+    const lastProgressMs = Date.parse(currentRun.last_progress_at || "");
+    const progressing = auditState.running && Number.isFinite(lastProgressMs)
+      ? nowMs - lastProgressMs <= Math.max(30 * 1000, AUDIT_HTTP_TIMEOUT_MS * 2)
+      : false;
+    const auditStatus = auditState.last_error
+      ? "degraded"
+      : stale
+        ? "stale"
+        : "ok";
     res.json({
-      status: auditState.last_error ? "degraded" : stale ? "stale" : "ok",
+      status: "ok",
       role: "match-audit",
+      audit_status: auditStatus,
+      ready: auditStatus === "ok" || progressing,
+      progressing,
       running: auditState.running,
-      current_run: currentRunSnapshot(),
+      current_run: currentRun,
       last_success_at: auditState.last_success_at,
       last_error: auditState.last_error,
       report_generated_at: auditState.current_report.generated_at,
@@ -1432,24 +1502,39 @@ function createAuditServiceApp() {
   return app;
 }
 
-function registerRuntimeInterval(callback, intervalMs) {
-  auditState.next_run_scheduled_at = new Date(Date.now() + intervalMs).toISOString();
-  const wrappedCallback = () => {
-    auditState.next_run_scheduled_at = new Date(Date.now() + intervalMs).toISOString();
-    return callback();
-  };
-  const handle = setInterval(wrappedCallback, intervalMs);
-  runtimeIntervalHandles.push(handle);
-  if (typeof handle.unref === "function") {
-    handle.unref();
+function registerScheduledAuditRun(callback) {
+  const nextRunMs = computeNextScheduledRunAt(Date.now());
+  auditState.next_run_scheduled_at = Number.isFinite(nextRunMs)
+    ? new Date(nextRunMs).toISOString()
+    : null;
+  const delayMs = Number.isFinite(nextRunMs)
+    ? Math.max(1000, nextRunMs - Date.now())
+    : AUDIT_SCHEDULE_INTERVAL_MS;
+  runtimeScheduleHandle = setTimeout(async () => {
+    runtimeScheduleHandle = null;
+    const followingRunMs = computeNextScheduledRunAt(Date.now() + 1000);
+    auditState.next_run_scheduled_at = Number.isFinite(followingRunMs)
+      ? new Date(followingRunMs).toISOString()
+      : null;
+    try {
+      await callback();
+    } finally {
+      if (runtimeServer) {
+        registerScheduledAuditRun(callback);
+      }
+    }
+  }, delayMs);
+  if (typeof runtimeScheduleHandle.unref === "function") {
+    runtimeScheduleHandle.unref();
   }
-  return handle;
+  return runtimeScheduleHandle;
 }
 
 function clearRuntimeIntervals() {
   auditState.next_run_scheduled_at = null;
-  while (runtimeIntervalHandles.length > 0) {
-    clearInterval(runtimeIntervalHandles.pop());
+  if (runtimeScheduleHandle) {
+    clearTimeout(runtimeScheduleHandle);
+    runtimeScheduleHandle = null;
   }
 }
 
@@ -1521,15 +1606,11 @@ function startAuditService() {
     console.log(`Match audit service listening on http://localhost:${AUDIT_PORT}`);
   });
 
-  void runStartupAuditWithRetry().catch((error) => {
-    console.error("[Audit] Initial audit run failed after retries:", error.message || error);
-  });
-
-  registerRuntimeInterval(() => {
-    void runAuditCycle("interval").catch((error) => {
+  registerScheduledAuditRun(async () => {
+    await runAuditCycle("interval").catch((error) => {
       console.error("[Audit] Interval audit run failed:", error.message || error);
     });
-  }, AUDIT_POLL_INTERVAL_MS);
+  });
 
   installSignalHandlers();
   return runtimeServer;
@@ -1545,6 +1626,7 @@ module.exports = {
   shutdownAuditService,
   __private: {
     buildDateRangeWindow,
+    computeNextScheduledRunAt,
     buildEmptyCurrentRun,
     currentRunSnapshot,
     updateCurrentRun,

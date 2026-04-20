@@ -332,7 +332,7 @@ inject_datasource_in_dashboard() {
 
 import_dashboard_file() {
   local file="$1"
-  local normalized_file uid title payload
+  local normalized_file uid title payload response status message
 
   normalized_file="$(mktemp)"
   cp "$file" "$normalized_file"
@@ -350,7 +350,17 @@ import_dashboard_file() {
     }' "$normalized_file")"
 
   rm -f "$normalized_file"
-  curl_json -X POST "$API/dashboards/db" -d "$payload" | jq -r '.status // .message'
+  response="$(curl_json -X POST "$API/dashboards/db" -d "$payload")"
+  status="$(jq -r '.status // empty' <<< "$response")"
+  message="$(jq -r '.message // empty' <<< "$response")"
+
+  if [[ "$status" != "success" ]]; then
+    echo "Failed to import dashboard \"$title\" (uid=$uid): ${status:-unknown-status} ${message}" >&2
+    jq -c . <<< "$response" >&2
+    exit 1
+  fi
+
+  echo "$status"
 }
 
 shopt -s nullglob

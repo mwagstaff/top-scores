@@ -5,6 +5,7 @@ const {
   __private: {
     autoRepairEligibleMatchIds,
     buildEmptyCurrentRun,
+    computeNextScheduledRunAt,
     evaluateAuditIssues,
     groupIssuesByMatch,
     summarizeAuditReport,
@@ -183,6 +184,14 @@ test("updateCurrentRun computes progress and throughput", () => {
   assert.equal(snapshot.detail_checks_completed, 3);
   assert.equal(snapshot.issues_found, 2);
   assert.equal(snapshot.matches_per_second > 0, true);
+});
+
+test("computeNextScheduledRunAt targets the next London midnight", () => {
+  const sameDay = computeNextScheduledRunAt(Date.parse("2026-04-20T21:15:00.000Z"));
+  const nextDay = computeNextScheduledRunAt(Date.parse("2026-04-20T23:30:00.000Z"));
+
+  assert.equal(new Date(sameDay).toISOString(), "2026-04-20T23:00:00.000Z");
+  assert.equal(new Date(nextDay).toISOString(), "2026-04-21T23:00:00.000Z");
 });
 
 test("buildPrometheusMetricsText includes scheduled next run timestamp", () => {
