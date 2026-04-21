@@ -181,6 +181,12 @@ final class TvLogoResolver {
         ("itv", "itv"),
         ("channel4", "channel4"),
         ("hbomax", "hbomax"),
-        ("hbo", "hbomax")
+        ("hbo", "hbomax"),
+        ("dazn", "dazn"),
+        ("disneyplus", "disneyplus"),
+        ("disney", "disneyplus"),
+        ("premiersports", "premiersports"),
+        ("laligatv", "laligatv"),
+        ("laliga", "laligatv")
     ]
 }

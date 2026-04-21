@@ -121,7 +121,9 @@ export function AppShell({ children }: PropsWithChildren) {
       {/* Sticky header: brand · tabs (desktop) · theme toggle */}
       <header className="app-header">
         <div className="brand">
-          <img src="/generated-assets/app-icon.png" alt="" className="brand-logo" />
+          <a href="/">
+            <img src="/generated-assets/app-icon.png" alt="" className="brand-logo" />
+          </a>
           <span className="brand-name">Top Scores</span>
         </div>
 

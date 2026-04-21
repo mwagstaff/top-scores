@@ -82,31 +82,6 @@ export function TablesScreen() {
 
   return (
     <section className="screen-panel">
-      <header className="screen-header">
-        <div>
-          <div className="screen-kicker">Tables</div>
-          <h2>Tables</h2>
-          <p>Standings, form, and rank bands across available competitions.</p>
-          {state.error ? (
-            <div className="inline-message is-error tables-status-message">{state.error}</div>
-          ) : state.refreshing ? (
-            <div className="inline-message tables-status-message">Refreshing tables...</div>
-          ) : state.lastUpdated ? (
-            <div className="inline-message tables-status-message">
-              Updated {formatLastUpdated(state.lastUpdated)}
-            </div>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          className="ghost-button"
-          onClick={() => reload()}
-          disabled={state.refreshing}
-        >
-          {state.refreshing ? "Refreshing..." : "Refresh tables"}
-        </button>
-      </header>
-
       {state.loading ? (
         <div className="empty-state">Loading tables...</div>
       ) : sortedLeagues.length === 0 ? (
@@ -117,7 +92,6 @@ export function TablesScreen() {
       ) : (
         <div className="tables-stack">
           <label className="field-stack tables-competition-field">
-            <span>Competition</span>
             <select
               className="select-field"
               value={selectedLeague?.leagueID || ""}
@@ -147,13 +121,6 @@ function LeagueTableCard({ league }: { league: LeagueTable }) {
   }, [league.id]);
 
   return (
-    <section className="league-table-card">
-      <div className="league-table-card-header">
-        <div>
-          <h3>{league.leagueName}</h3>
-          {visibleStageName ? <p>{visibleStageName}</p> : null}
-        </div>
-      </div>
 
       <div className="league-table">
         <div className="league-table-heading">
@@ -214,7 +181,6 @@ function LeagueTableCard({ league }: { league: LeagueTable }) {
           );
         })}
       </div>
-    </section>
   );
 }
 

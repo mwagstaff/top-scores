@@ -24536,6 +24536,60 @@ app.get(`${API_PREFIX}/admin/redis/matches`, async (req, res) => {
   }
 });
 
+app.get(`${API_PREFIX}/admin/audit/future-fixtures`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    const [bbcRangeDataset, redisSnapshot] = await Promise.all([
+      getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
+      getPreferredOperationalMatchDetailsSnapshotSafe(),
+    ]);
+
+    const todayDateKey = new Date().toISOString().slice(0, 10);
+    const bbcMatches = (Array.isArray(bbcRangeDataset.items) ? bbcRangeDataset.items : [])
+      .map((match) => normalizeMatchRecord(match))
+      .filter((match) => match && match.date && match.date >= todayDateKey)
+      .sort((lhs, rhs) => sortAdminMatchesByKickoff(lhs, rhs, "asc"));
+
+    const redisMatches = Object.values(redisSnapshot.records || {})
+      .map((payload) => toOperationalAdminMatchPayload(payload))
+      .filter((match) => match && match.date && match.date >= todayDateKey)
+      .sort((lhs, rhs) => sortAdminMatchesByKickoff(lhs, rhs, "asc"));
+
+    const coverageEnd = Array.isArray(bbcMatches) && bbcMatches.length > 0
+      ? bbcMatches.reduce((latest, match) => {
+        const date = String(match && match.date ? match.date : "");
+        return !latest || date > latest ? date : latest;
+      }, "")
+      : null;
+
+    res.status(200).json({
+      success: true,
+      generated_at: new Date().toISOString(),
+      redis_matches: redisMatches,
+      bbc_matches: bbcMatches,
+      coverage: {
+        start: todayDateKey,
+        end: coverageEnd,
+        bbc_range_future_days: BBC_RANGE_FUTURE_DAYS,
+      },
+      sources: {
+        redis: redisSnapshot && redisSnapshot.source ? redisSnapshot.source : "unknown",
+        bbc_range: bbcRangeDataset && bbcRangeDataset.source ? bbcRangeDataset.source : "unknown",
+      },
+      updated_at: {
+        redis: redisSnapshot && redisSnapshot.updated_at ? redisSnapshot.updated_at : null,
+        bbc_range: bbcRangeDataset && bbcRangeDataset.updated_at ? bbcRangeDataset.updated_at : null,
+      },
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving audit future fixture sources:", error);
+    res.status(500).json({
+      error: "Failed to retrieve audit future fixture sources",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
 app.post(`${API_PREFIX}/admin/redis/matches/actions`, async (req, res) => {
   setCacheOnlyHeaders(res);
 

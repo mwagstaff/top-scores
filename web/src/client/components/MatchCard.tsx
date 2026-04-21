@@ -3,6 +3,7 @@ import { fetchMatchDetails, shouldRetryMatchDetails } from "../api";
 import {
   aggregateSummary,
   displayStatus,
+  isMatchFinished,
   isMatchLive,
 } from "../matchGrouping";
 import { type ResolvedTeamColors, useTeamColorCatalog } from "../teamColors";
@@ -40,11 +41,13 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
   const detailPanelId = `match-details-${match.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
   // Derived display state
-  const hasScore  = typeof match.homeScore === "number" && typeof match.awayScore === "number";
-  // Show TV logos only for upcoming/live fixtures (live always has a score, so this is effectively only upcoming)
-  const showTv    = !hasScore && match.tvChannels.length > 0;
+  const hasScore   = typeof match.homeScore === "number" && typeof match.awayScore === "number";
+  const hasTvLogo  = match.tvChannels.length > 0;
+  // Show TV logo in centre for upcoming fixtures; for live matches with scores, show flanking scores instead
+  const showTvOnly = !hasScore && hasTvLogo;
+  const showLiveScore = isLive && hasScore;
   // Right column: penalty result overrides; otherwise the status string (FT / AET / 45' / 15:00)
-  const rightText = match.penaltyResult ?? status;
+  const rightText  = match.penaltyResult ?? status;
 
   // Sync details when match prop updates (e.g. from live polling)
   useEffect(() => {
@@ -132,13 +135,23 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
 
       {/* Centre column: score OR TV logos */}
       <div className="match-center">
-        {hasScore ? (
+        {showLiveScore ? (
           <div className="mc-score">
             <span className="mc-num">{match.homeScore}</span>
-            <span className="mc-sep">—</span>
+            {hasTvLogo ? (
+              <img
+                key={`${match.id}-tv-0`}
+                src={`/logos/tv/${encodeURIComponent(match.tvChannels[0])}`}
+                alt=""
+                className="mc-tv-logo"
+                onError={(e) => { e.currentTarget.style.display = "none"; }}
+              />
+            ) : (
+              <span className="mc-sep">—</span>
+            )}
             <span className="mc-num">{match.awayScore}</span>
           </div>
-        ) : showTv ? (
+        ) : showTvOnly ? (
           <div className="mc-tv">
             <img
               key={`${match.id}-tv-0`}
@@ -147,11 +160,18 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
               className="mc-tv-logo"
               onError={(e) => { e.currentTarget.style.display = "none"; }}
             />
-            {new Set(match.tvChannels.map(tvLogoBrand)).size > 1 && (
-              <span className="mc-tv-more">+</span>
-            )}
           </div>
-        ) : null}
+        ) : hasScore ? (
+          <div className="mc-score">
+            <span className="mc-num">{match.homeScore}</span>
+            <span className="mc-sep">—</span>
+            <span className="mc-num">{match.awayScore}</span>
+          </div>
+        ) : (
+          <div className="mc-sep">
+            vs
+          </div>
+        )}
         {/* Two-legged aggregate sub-label */}
         {aggregateText && <div className="mc-agg">{aggregateText}</div>}
       </div>
@@ -219,7 +239,7 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
           ) : detailsError ? (
             <div className="match-details-message is-error">{detailsError}</div>
           ) : details ? (
-            <ExpandedMatchDetails details={details} tvChannels={match.tvChannels} />
+            <ExpandedMatchDetails details={details} tvChannels={match.tvChannels} isFinished={isMatchFinished(match)} />
           ) : (
             <div className="match-details-message">No additional match details available.</div>
           )}
@@ -237,8 +257,12 @@ function tvLogoBrand(ch: string): string {
   if (n.includes("apple"))                               return "apple";
   if (n.includes("bbc"))                                 return "bbc";
   if (n.includes("channel 4") || n.includes("channel4")) return "channel4";
+  if (n.includes("dazn"))                                return "dazn";
+  if (n.includes("disney"))                              return "disney+";
   if (n.includes("hbo"))                                 return "hbo max";
   if (n.includes("itv"))                                 return "itv";
+  if (n.includes("laliga"))                              return "laliga tv";
+  if (n.includes("premier sports") || n.includes("premiersports")) return "premier sports";
   if (n.includes("sky"))                                 return "sky";
   if (n.includes("tnt"))                                 return "tnt";
   return n;
@@ -276,17 +300,19 @@ function TeamBadge({ teamName, missing, onMissing }: TeamBadgeProps) {
 
 // ── Expanded match details ────────────────────────────────────────
 
-function ExpandedMatchDetails({ details, tvChannels = [] }: { details: MatchDetails; tvChannels?: string[] }) {
+function ExpandedMatchDetails({ details, tvChannels = [], isFinished = false }: { details: MatchDetails; tvChannels?: string[]; isFinished?: boolean }) {
   const timelineEntries   = useMemo(() => buildTimelineEntries(details), [details]);
   const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
 
-  if (timelineEntries.length === 0 && !hasCompleteLineups && tvChannels.length === 0) {
+  const showTvSection = !isFinished && tvChannels.length > 0;
+
+  if (timelineEntries.length === 0 && !hasCompleteLineups && !showTvSection) {
     return <div className="match-details-message">No additional match details available.</div>;
   }
 
   return (
     <div className="match-details-body">
-      {tvChannels.length > 0 && (
+      {showTvSection && (
         <section className="details-section">
           <div className="details-section-title">TV Coverage</div>
           <div className="details-tv-channels">

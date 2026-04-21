@@ -128,7 +128,6 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
   // Filter matches by search query (min 3 chars to trigger)
   const displayedGroups = useMemo(() => {
     const query = searchText.trim().toLowerCase();
-    if (query.length < 3) return state.groups;
 
     return state.groups
       .map((day) => ({
@@ -137,6 +136,10 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           .map((league) => ({
             ...league,
             matches: league.matches.filter((match) => {
+              if (mode === "fixtures" && (match.scoreStatus || "").trim().toUpperCase() === "POSTPONED") {
+                return false;
+              }
+              if (query.length < 3) return true;
               const haystack = [
                 match.homeTeam, match.awayTeam,
                 match.league, match.leagueSubcategory ?? "",
@@ -148,7 +151,7 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           .filter((league) => league.matches.length > 0),
       }))
       .filter((day) => day.leagues.length > 0);
-  }, [searchText, state.groups]);
+  }, [mode, searchText, state.groups]);
 
   const title = mode === "fixtures" ? "Fixtures" : "Results";
 
@@ -171,8 +174,8 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           type="button"
           className={`epl-toggle-btn${eplOnly ? " is-active" : ""}`}
           onClick={toggleEplFilter}
-          aria-label={eplOnly ? "Showing Premier League teams only – click for all competitions" : "Showing all competitions – click for Premier League teams only"}
-          title={eplOnly ? "Premier League teams" : "All competitions"}
+          aria-label={eplOnly ? "Showing matches with Premier League teams only – click for all competitions" : "Showing all competitions – click for matches with Premier League teams only"}
+          title={eplOnly ? "Show matches for all competitions" : "Show only matches involving Premier League teams"}
         >
           <img
             src="/generated-assets/fpl-lion.png"
@@ -180,7 +183,7 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
             aria-hidden="true"
             className="epl-toggle-lion"
           />
-          <span className="epl-toggle-label">{eplOnly ? "Premier League" : "All competitions"}</span>
+          <span className="epl-toggle-label">{eplOnly ? "Matches with Premier League teams" : "Showing matches for all competitions"}</span>
         </button>
 
         {/* Search toggle */}

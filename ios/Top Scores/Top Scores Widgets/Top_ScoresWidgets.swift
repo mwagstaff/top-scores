@@ -586,7 +586,12 @@ private enum WidgetChannelSelection {
     private static let specialKeywords: [String: String] = [
         "Amazon (all)": "amazon",
         "BBC (all)": "bbc",
+        "DAZN (all)": "dazn",
+        "Disney+ (all)": "disneyplus",
+        "HBO Max (all)": "hbomax",
         "ITV (all)": "itv",
+        "LaLiga TV (all)": "laligatv",
+        "Premier Sports (all)": "premiersports",
         "Sky (all)": "sky",
         "TNT (all)": "tnt"
     ]
@@ -2259,6 +2264,10 @@ private final class WidgetTvLogoResolver {
         "apple": "TVLogoApple",
         "channel4": "TVLogoChannel4",
         "hbomax": "TVLogoHBOMax",
+        "dazn": "TVLogoDAZN",
+        "disneyplus": "TVLogoDisneyPlus",
+        "premiersports": "TVLogoPremierSports",
+        "laligatv": "TVLogoLaLigaTV",
         "nologo": "TVLogoFallback"
     ]
     private let lock = NSLock()
@@ -2421,7 +2430,7 @@ private final class WidgetTvLogoResolver {
 
         // Last-resort: explicit per-resource lookup via Bundle.main.path(forResource:ofType:)
         // This is the most direct Bundle API and works even when enumeration-based approaches fail.
-        let knownLogoNames = ["amazon", "bbc", "sky", "itv", "tnt", "apple", "channel 4", "hbo max", "_noLogo"]
+        let knownLogoNames = ["amazon", "bbc", "sky", "itv", "tnt", "apple", "channel 4", "hbo max", "dazn", "disney+", "premier sports", "laliga tv", "_noLogo"]
         for name in knownLogoNames {
             let key = Self.normalizedKey(name)
             guard normalizedLookup[key] == nil else { continue }
@@ -2715,7 +2724,13 @@ private final class WidgetTvLogoResolver {
         ("itv", "itv"),
         ("channel4", "channel4"),
         ("hbomax", "hbomax"),
-        ("hbo", "hbomax")
+        ("hbo", "hbomax"),
+        ("dazn", "dazn"),
+        ("disneyplus", "disneyplus"),
+        ("disney", "disneyplus"),
+        ("premiersports", "premiersports"),
+        ("laligatv", "laligatv"),
+        ("laliga", "laligatv")
     ]
 }
 

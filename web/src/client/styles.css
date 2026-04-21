@@ -727,6 +727,8 @@ button.match-row:hover {
   align-items: center;
   justify-content: center;
   gap: 0.3rem;
+  padding-left: 10px;
+  padding-right: 10px;
 }
 
 .mc-num {
@@ -1223,7 +1225,7 @@ button.match-row:hover {
 
 /* ── 12. LEAGUE TABLES ───────────────────────────────────────── */
 
-.tables-stack { display: grid; gap: 0.9rem; }
+.tables-stack { display: grid; gap: 0.9rem; padding-inline: 1rem; }
 
 .tables-status-message {
   margin-top: 0.75rem;

@@ -5,11 +5,14 @@ const {
   __private: {
     autoRepairEligibleMatchIds,
     buildEmptyCurrentRun,
+    buildFutureRedisFixtureAuditResults,
     computeNextScheduledRunAt,
     evaluateAuditIssues,
     groupIssuesByMatch,
+    mergeAuditResults,
     summarizeAuditReport,
     normalizeMatchId,
+    resolveTeamAlias,
     updateCurrentRun,
     buildPrometheusMetricsText,
     auditState,
@@ -192,6 +195,109 @@ test("computeNextScheduledRunAt targets the next London midnight", () => {
 
   assert.equal(new Date(sameDay).toISOString(), "2026-04-20T23:00:00.000Z");
   assert.equal(new Date(nextDay).toISOString(), "2026-04-21T23:00:00.000Z");
+});
+
+test("buildFutureRedisFixtureAuditResults flags future redis fixtures absent from BBC listing", () => {
+  const results = buildFutureRedisFixtureAuditResults(
+    [
+      {
+        match_id: "syn9ac5773a676f5286",
+        date: "2026-04-28",
+        time: "00:00",
+        league: "UEFA Champions League",
+        home_team: "Atletico Madrid",
+        away_team: "Arsenal",
+        has_bbc_source: true,
+      },
+    ],
+    [
+      {
+        match_details_id: "c-real-match",
+        date: "2026-04-28",
+        time: "20:00",
+        league: "UEFA Champions League",
+        home_team: "Paris Saint-Germain",
+        away_team: "Bayern Munich",
+      },
+    ],
+    {
+      nowMs: Date.parse("2026-04-20T12:00:00.000Z"),
+      coverageEnd: "2026-07-19",
+    }
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].issues[0].code, "future_fixture_missing_from_bbc_listing");
+  assert.equal(results[0].summary.match_id, "syn9ac5773a676f5286");
+});
+
+test("resolveTeamAlias maps known aliases to canonical names", () => {
+  assert.equal(resolveTeamAlias("Athletic Club"), "Athletic Bilbao");
+  assert.equal(resolveTeamAlias("Real Mallorca"), "Mallorca");
+  assert.equal(resolveTeamAlias("Athletic Bilbao"), "Athletic Bilbao");
+  assert.equal(resolveTeamAlias("Unknown FC"), "Unknown FC");
+});
+
+test("buildFutureRedisFixtureAuditResults matches Redis fixture via team alias (Athletic Bilbao = Athletic Club)", () => {
+  const results = buildFutureRedisFixtureAuditResults(
+    [
+      {
+        match_id: "syn9d037fcc02bda76d",
+        date: "2026-04-21",
+        time: "18:00",
+        league: "Spanish La Liga",
+        home_team: "Athletic Bilbao",
+        away_team: "Osasuna",
+        has_bbc_source: true,
+      },
+    ],
+    [
+      {
+        date: "2026-04-21",
+        time: "18:00",
+        league: "Spanish La Liga",
+        home_team: "Athletic Club",
+        away_team: "Osasuna",
+      },
+    ],
+    {
+      nowMs: Date.parse("2026-04-20T12:00:00.000Z"),
+      coverageEnd: "2026-07-19",
+    }
+  );
+
+  assert.equal(results.length, 0, "should not flag Athletic Bilbao as missing when BBC lists Athletic Club");
+});
+
+test("mergeAuditResults appends reconciliation issues onto existing matches", () => {
+  const base = [
+    {
+      summary: {
+        match_id: "syn9ac5773a676f5286",
+        audit_match_id: "syn9ac5773a676f5286",
+      },
+      issues: [],
+    },
+  ];
+  const extra = [
+    {
+      summary: {
+        match_id: "syn9ac5773a676f5286",
+        audit_match_id: "syn9ac5773a676f5286",
+      },
+      issues: [
+        {
+          key: "syn9ac5773a676f5286:future_fixture_missing_from_bbc_listing",
+          code: "future_fixture_missing_from_bbc_listing",
+        },
+      ],
+    },
+  ];
+
+  const merged = mergeAuditResults(base, extra);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].issues.length, 1);
+  assert.equal(merged[0].issues[0].code, "future_fixture_missing_from_bbc_listing");
 });
 
 test("buildPrometheusMetricsText includes scheduled next run timestamp", () => {

@@ -308,7 +308,7 @@
           <input id="search-filter" type="text" placeholder="team, league, match id">
         </div>
         <div class="actions">
-          <button id="run-audit">Run Audit Now</button>
+          <button id="run-audit">Run audit now</button>
         </div>
       </div>
     </section>
@@ -466,6 +466,7 @@
 
     function renderSummary(report) {
       const summary = report.summary || {};
+      const reconciliation = report.reconciliation || {};
       summaryGridEl.innerHTML = [
         metaCard("Matches Checked", summary.matches_checked || 0),
         metaCard("Started Matches", summary.started_matches || 0),
@@ -473,6 +474,8 @@
         metaCard("Detail Candidates", summary.detail_candidates || 0),
         metaCard("Matches With Issues", summary.matches_with_issues || 0),
         metaCard("Issues Total", summary.issues_total || 0),
+        metaCard("Future Redis Fixtures", reconciliation.future_redis_matches_checked || 0),
+        metaCard("Future Fixtures Missing From BBC", reconciliation.future_redis_matches_missing_from_bbc || 0),
       ].join("");
     }
 
@@ -561,12 +564,18 @@
 
       issueListEl.innerHTML = items.map((match) => {
         const issues = Array.isArray(match.issues) ? match.issues : [];
-        const adminBaseUrl = upstreamAdminBaseUrl();
-        const bbcUrl = match.match_id
+        const adminBaseUrl = "/top-scores";
+        const isSyntheticMatchId = /^syn/i.test(String(match && match.match_id ? match.match_id : ""));
+        const bbcUrl = match.match_id && !isSyntheticMatchId
           ? `https://www.bbc.co.uk/sport/football/live/${encodeURIComponent(match.match_id)}`
-          : null;
+          : match.date
+            ? `https://www.bbc.co.uk/sport/football/scores-fixtures/${encodeURIComponent(match.date)}`
+            : null;
         const redisUrl = match.match_id
           ? `${adminBaseUrl}/admin/redis/matches/${encodeURIComponent(match.match_id)}`
+          : null;
+        const jsonUrl = match.match_id
+          ? `${adminBaseUrl}/api/v1/matches/${encodeURIComponent(match.match_id)}`
           : null;
 
         return `
@@ -600,10 +609,11 @@
             <div class="issue-foot">
               <div class="links">
                 ${redisUrl ? `<a class="chip" href="${escapeHtml(redisUrl)}" target="_blank" rel="noopener noreferrer">Redis Match</a>` : ""}
+                ${jsonUrl ? `<a class="chip" href="${escapeHtml(jsonUrl)}" target="_blank" rel="noopener noreferrer">Match JSON</a>` : ""}
                 ${bbcUrl ? `<a class="chip" href="${escapeHtml(bbcUrl)}" target="_blank" rel="noopener noreferrer">BBC Match</a>` : ""}
               </div>
               <div class="actions">
-                <button ${match.match_id ? "" : "disabled"} data-rescrape="${escapeHtml(match.match_id || "")}">Re-scrape BBC</button>
+                <button ${match.match_id && !isSyntheticMatchId ? "" : "disabled"} data-rescrape="${escapeHtml(match.match_id || "")}">Re-scrape BBC</button>
               </div>
             </div>
           </div>

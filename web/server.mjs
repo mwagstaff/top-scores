@@ -400,8 +400,14 @@ function resolveTvLogo(channelName) {
   if (normalized.includes("channel 4") || normalized.includes("channel4")) {
     return tvLogoIndex.get("channel 4") || null;
   }
+  if (normalized.includes("dazn")) return tvLogoIndex.get("dazn") || null;
+  if (normalized.includes("disney")) return tvLogoIndex.get("disney+") || null;
   if (normalized.includes("hbo")) return tvLogoIndex.get("hbo max") || null;
   if (normalized.includes("itv")) return tvLogoIndex.get("itv") || null;
+  if (normalized.includes("laliga")) return tvLogoIndex.get("laliga tv") || null;
+  if (normalized.includes("premier sports") || normalized.includes("premiersports")) {
+    return tvLogoIndex.get("premier sports") || null;
+  }
   if (normalized.includes("sky")) return tvLogoIndex.get("sky") || null;
   if (normalized.includes("tnt")) return tvLogoIndex.get("tnt") || null;
   return null;

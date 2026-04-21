@@ -1,4 +1,5 @@
 const express = require("express");
+const fs = require("fs");
 const path = require("path");
 
 const API_PREFIX = "/api/v1";
@@ -272,6 +273,51 @@ function normalizeText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function normalizeFixtureIdentityToken(value) {
+  return normalizeText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function loadTeamAliases() {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, "team_aliases.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed.aliases === "object" ? parsed.aliases : {};
+  } catch {
+    return {};
+  }
+}
+
+const TEAM_ALIASES = loadTeamAliases();
+
+function resolveTeamAlias(name) {
+  const normalized = normalizeText(name);
+  return TEAM_ALIASES[normalized] || normalized;
+}
+
+function toAuditMatchRecord(match) {
+  if (!match || typeof match !== "object") return null;
+  const record = {
+    ...match,
+    match_details_id:
+      match.match_details_id ||
+      match.match_id ||
+      match.id ||
+      null,
+    details_url: match.details_url || null,
+    date: match.date ? String(match.date) : null,
+    time: match.time ? String(match.time) : null,
+    league: match.league ? String(match.league) : null,
+    home_team: match.home_team ? String(match.home_team) : null,
+    away_team: match.away_team ? String(match.away_team) : null,
+  };
+  return record;
+}
+
 function normalizeStatusToken(value) {
   const normalized = normalizeText(value).toUpperCase();
   if (!normalized) return "";
@@ -447,6 +493,124 @@ function createIssue(match, code, severity, message, details = null) {
     away_score: parseNumericScore(match && match.away_score),
     details,
   };
+}
+
+function buildFutureFixturePresenceLookup(matches = []) {
+  const byMatchId = new Set();
+  const byLooseKey = new Set();
+
+  (Array.isArray(matches) ? matches : []).forEach((rawMatch) => {
+    const match = toAuditMatchRecord(rawMatch);
+    if (!match) return;
+    const matchId = normalizeMatchId(match.match_details_id);
+    if (matchId) {
+      byMatchId.add(matchId);
+    }
+    const looseKey = [
+      match.date || "",
+      normalizeFixtureIdentityToken(match.league || ""),
+      normalizeFixtureIdentityToken(resolveTeamAlias(match.home_team || "")),
+      normalizeFixtureIdentityToken(resolveTeamAlias(match.away_team || "")),
+    ].join("|");
+    if (looseKey !== "|||") {
+      byLooseKey.add(looseKey);
+    }
+  });
+
+  return { byMatchId, byLooseKey };
+}
+
+function buildFutureRedisFixtureAuditResults(redisMatches = [], bbcMatches = [], options = {}) {
+  const nowMs = Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+  const coverageEnd = normalizeText(options.coverageEnd);
+  const lookup = buildFutureFixturePresenceLookup(bbcMatches);
+
+  return (Array.isArray(redisMatches) ? redisMatches : []).flatMap((rawMatch) => {
+    const match = toAuditMatchRecord(rawMatch);
+    if (!match || !match.date || !match.home_team || !match.away_team) return [];
+    if (coverageEnd && match.date > coverageEnd) return [];
+
+    const kickoffMs = kickoffTimestampMs(match);
+    if (!Number.isFinite(kickoffMs) || kickoffMs <= nowMs) return [];
+
+    const matchId = normalizeMatchId(match.match_details_id);
+    if (matchId && lookup.byMatchId.has(matchId)) return [];
+
+    const looseKey = [
+      match.date,
+      normalizeFixtureIdentityToken(match.league || ""),
+      normalizeFixtureIdentityToken(resolveTeamAlias(match.home_team || "")),
+      normalizeFixtureIdentityToken(resolveTeamAlias(match.away_team || "")),
+    ].join("|");
+    if (lookup.byLooseKey.has(looseKey)) return [];
+
+    return [
+      {
+        summary: summarizeMatch(match),
+        kickoff_ts_ms: kickoffMs,
+        should_have_kicked_off: false,
+        should_be_finished: false,
+        should_have_detail_payload: false,
+        issues: [
+          createIssue(
+            match,
+            "future_fixture_missing_from_bbc_listing",
+            "warning",
+            "Future fixture exists in Redis but could not be found in the BBC Scores & Fixtures listing for that date.",
+            {
+              coverage_end: coverageEnd || null,
+              source: "redis_future_vs_bbc_range",
+              has_bbc_source: rawMatch && rawMatch.has_bbc_source === true,
+            }
+          ),
+        ],
+      },
+    ];
+  });
+}
+
+function mergeAuditResults(primaryResults = [], additionalResults = []) {
+  const merged = Array.isArray(primaryResults) ? primaryResults.map((result) => ({
+    ...result,
+    issues: Array.isArray(result && result.issues) ? result.issues.slice() : [],
+  })) : [];
+  const byAuditMatchId = new Map();
+
+  merged.forEach((result, index) => {
+    const key = result && result.summary ? result.summary.audit_match_id : null;
+    if (key) {
+      byAuditMatchId.set(key, index);
+    }
+  });
+
+  (Array.isArray(additionalResults) ? additionalResults : []).forEach((result) => {
+    const key = result && result.summary ? result.summary.audit_match_id : null;
+    if (!key || !byAuditMatchId.has(key)) {
+      merged.push({
+        ...result,
+        issues: Array.isArray(result && result.issues) ? result.issues.slice() : [],
+      });
+      if (key) {
+        byAuditMatchId.set(key, merged.length - 1);
+      }
+      return;
+    }
+
+    const target = merged[byAuditMatchId.get(key)];
+    const existingIssueKeys = new Set(
+      (Array.isArray(target.issues) ? target.issues : []).map((issue) => String(issue && issue.key ? issue.key : ""))
+    );
+    (Array.isArray(result && result.issues) ? result.issues : []).forEach((issue) => {
+      const issueKey = String(issue && issue.key ? issue.key : "");
+      if (issueKey && existingIssueKeys.has(issueKey)) return;
+      target.issues.push(issue);
+      if (issueKey) {
+        existingIssueKeys.add(issueKey);
+      }
+    });
+  });
+
+  return merged;
 }
 
 function summarizeMatch(match) {
@@ -798,6 +962,10 @@ async function fetchMatchesWindow(window) {
   return matches;
 }
 
+async function fetchFutureFixtureSources() {
+  return fetchJson(`${AUDIT_MAIN_API_ROOT}/admin/audit/future-fixtures`);
+}
+
 async function fetchMatchDetailsPayload(matchId) {
   try {
     await throttleMatchDetailFetch();
@@ -952,7 +1120,10 @@ async function buildAuditReport(trigger = "interval") {
     detail_checks_completed: 0,
     issues_found: 0,
   });
-  const matches = await fetchMatchesWindow(window);
+  const [matches, futureFixtureSources] = await Promise.all([
+    fetchMatchesWindow(window),
+    fetchFutureFixtureSources().catch(() => null),
+  ]);
 
   const detailCandidateIds = new Set(
     matches.flatMap((match) => {
@@ -992,9 +1163,25 @@ async function buildAuditReport(trigger = "interval") {
     }
   );
 
-  const issues = results.flatMap((result) => result.issues);
-  const matchesWithIssues = groupIssuesByMatch(results).filter((match) => match.issues.length > 0);
-  const summary = summarizeAuditReport(results, issues);
+  const futureFixtureResults = futureFixtureSources
+    ? buildFutureRedisFixtureAuditResults(
+      futureFixtureSources.redis_matches,
+      futureFixtureSources.bbc_matches,
+      {
+        nowMs,
+        coverageEnd:
+          futureFixtureSources &&
+          futureFixtureSources.coverage &&
+          futureFixtureSources.coverage.end
+            ? futureFixtureSources.coverage.end
+            : null,
+      }
+    )
+    : [];
+  const mergedResults = mergeAuditResults(results, futureFixtureResults);
+  const issues = mergedResults.flatMap((result) => result.issues);
+  const matchesWithIssues = groupIssuesByMatch(mergedResults).filter((match) => match.issues.length > 0);
+  const summary = summarizeAuditReport(mergedResults, issues);
   const report = {
     generated_at: new Date(nowMs).toISOString(),
     trigger,
@@ -1009,6 +1196,24 @@ async function buildAuditReport(trigger = "interval") {
     summary,
     matches: matchesWithIssues,
     issues,
+    reconciliation: {
+      future_redis_matches_checked: Array.isArray(futureFixtureSources && futureFixtureSources.redis_matches)
+        ? futureFixtureSources.redis_matches.length
+        : 0,
+      future_redis_matches_missing_from_bbc: futureFixtureResults.length,
+      coverage:
+        futureFixtureSources && futureFixtureSources.coverage
+          ? futureFixtureSources.coverage
+          : null,
+      sources:
+        futureFixtureSources && futureFixtureSources.sources
+          ? futureFixtureSources.sources
+          : null,
+      updated_at:
+        futureFixtureSources && futureFixtureSources.updated_at
+          ? futureFixtureSources.updated_at
+          : null,
+    },
   };
 
   const autoRepair = await autoRepairReportIssues(report, trigger);
@@ -1629,9 +1834,12 @@ module.exports = {
   shutdownAuditService,
   __private: {
     buildDateRangeWindow,
+    buildFutureRedisFixtureAuditResults,
+    buildFutureFixturePresenceLookup,
     computeNextScheduledRunAt,
     buildEmptyCurrentRun,
     currentRunSnapshot,
+    mergeAuditResults,
     updateCurrentRun,
     zonedDateTimeToUtcMs,
     kickoffTimestampMs,
@@ -1647,6 +1855,7 @@ module.exports = {
     autoRepairEligibleMatchIds,
     buildSyntheticAuditMatchId,
     normalizeMatchId,
+    resolveTeamAlias,
     auditState,
   },
 };
