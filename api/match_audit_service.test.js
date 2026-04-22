@@ -15,6 +15,9 @@ const {
     resolveTeamAlias,
     updateCurrentRun,
     buildPrometheusMetricsText,
+    sleepMs,
+    isRetryableDetailError,
+    computeRetryDelayMs,
     auditState,
   },
 } = require("./match_audit_service");
@@ -319,6 +322,118 @@ test("buildPrometheusMetricsText includes scheduled next run timestamp", () => {
     auditState.last_duration_ms = previousLastDuration;
     auditState.last_success_at = previousLastSuccess;
   }
+});
+
+test("evaluateAuditIssues does not flag match_details_status_mismatch when both statuses are in-progress", () => {
+  const result = evaluateAuditIssues(
+    baseMatch({
+      score_status: "7'",
+      home_score: 0,
+      away_score: 0,
+    }),
+    {
+      nowMs: Date.parse("2026-04-18T19:55:00Z"),
+      detailPayload: {
+        date: "2026-04-18",
+        time: "19:45",
+        league: "Italian Serie A",
+        home_team: "Roma",
+        away_team: "Atalanta",
+        home_score: 0,
+        away_score: 0,
+        score_status: "12'",
+      },
+    }
+  );
+
+  assert.equal(
+    result.issues.some((issue) => issue.code === "match_details_status_mismatch"),
+    false,
+    "should not flag mismatch when both list and detail are in-progress minute statuses"
+  );
+});
+
+test("evaluateAuditIssues still flags match_details_status_mismatch when statuses differ meaningfully", () => {
+  const result = evaluateAuditIssues(
+    baseMatch({ score_status: "FT" }),
+    {
+      nowMs: Date.parse("2026-04-18T22:30:00Z"),
+      detailPayload: {
+        date: "2026-04-18",
+        time: "19:45",
+        league: "Italian Serie A",
+        home_team: "Roma",
+        away_team: "Atalanta",
+        home_score: 1,
+        away_score: 1,
+        score_status: "HT",
+      },
+    }
+  );
+
+  assert.equal(
+    result.issues.some((issue) => issue.code === "match_details_status_mismatch"),
+    true,
+    "should flag mismatch when list says FT but detail says HT"
+  );
+});
+
+test("isRetryableDetailError returns true for network errors, timeouts, and 5xx", () => {
+  const networkError = new Error("ECONNREFUSED");
+  assert.equal(isRetryableDetailError(networkError), true);
+
+  const abortError = new Error("The operation was aborted");
+  abortError.name = "AbortError";
+  assert.equal(isRetryableDetailError(abortError), true);
+
+  const err408 = new Error("Request Timeout");
+  err408.status = 408;
+  assert.equal(isRetryableDetailError(err408), true);
+
+  const err429 = new Error("Too Many Requests");
+  err429.status = 429;
+  assert.equal(isRetryableDetailError(err429), true);
+
+  const err503 = new Error("Service Unavailable");
+  err503.status = 503;
+  assert.equal(isRetryableDetailError(err503), true);
+});
+
+test("isRetryableDetailError returns false for 404 and 4xx client errors", () => {
+  const err404 = new Error("Not Found");
+  err404.status = 404;
+  assert.equal(isRetryableDetailError(err404), false);
+
+  const err400 = new Error("Bad Request");
+  err400.status = 400;
+  assert.equal(isRetryableDetailError(err400), false);
+
+  const err403 = new Error("Forbidden");
+  err403.status = 403;
+  assert.equal(isRetryableDetailError(err403), false);
+});
+
+test("computeRetryDelayMs produces exponentially growing delays within bounds", () => {
+  const base = 500;
+  const max = 5000;
+  const factor = 2.0;
+
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const delay = computeRetryDelayMs(attempt, base, max, factor);
+    assert.equal(delay >= 0, true, `attempt ${attempt}: delay should be >= 0`);
+    assert.equal(delay <= max * 1.25, true, `attempt ${attempt}: delay should not far exceed max`);
+  }
+
+  // Attempt 1 should be near base (500ms ± 25%)
+  const delay1 = computeRetryDelayMs(1, base, max, factor);
+  assert.equal(delay1 >= 375 && delay1 <= 625, true, `attempt 1 delay ${delay1} should be near 500ms`);
+});
+
+test("sleepMs resolves after approximately the specified duration", async () => {
+  const start = Date.now();
+  await sleepMs(20);
+  const elapsed = Date.now() - start;
+  assert.equal(elapsed >= 10, true, "sleepMs(20) should take at least 10ms");
 });
 
 test("autoRepairEligibleMatchIds selects rescrapeable issue matches with ids", () => {

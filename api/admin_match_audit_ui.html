@@ -258,6 +258,14 @@
       color: var(--muted);
     }
 
+    .issue-explanation {
+      display: block;
+      margin-top: 4px;
+      font-size: 0.83rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
     .empty {
       padding: 10px 0;
       color: var(--muted);
@@ -334,6 +342,19 @@
       </div>
       <div id="issue-list" class="issue-list" style="margin-top: 12px;"></div>
     </section>
+
+    <section class="panel">
+      <div class="toolbar">
+        <div>
+          <h2 style="margin-bottom: 4px;">Deleted Matches</h2>
+          <p id="deleted-summary">Future fixtures flagged as deleted (missing from BBC listing). Entries expire after 7 days.</p>
+        </div>
+        <div class="actions">
+          <button id="refresh-deleted">Refresh</button>
+        </div>
+      </div>
+      <div id="deleted-list" class="issue-list" style="margin-top: 12px;"></div>
+    </section>
   </div>
 
   <script>
@@ -350,6 +371,32 @@
     const nextPageButton = document.getElementById("next-page");
     const healthcheckLinkEl = document.getElementById("healthcheck-link");
     const metricsLinkEl = document.getElementById("metrics-link");
+    const deletedListEl = document.getElementById("deleted-list");
+    const deletedSummaryEl = document.getElementById("deleted-summary");
+    const refreshDeletedButton = document.getElementById("refresh-deleted");
+
+    const ISSUE_EXPLANATIONS = {
+      missing_score_status_after_kickoff:
+        "The match has passed its scheduled kick-off time but no score status (e.g. '45\u2032', 'HT', 'FT') has arrived from the BBC. This usually means the scraper failed to fetch or parse the live update. Check the BBC page directly to confirm the match is underway.",
+      missing_scores_after_kickoff:
+        "The match has passed its scheduled kick-off time but home/away scores are missing. The BBC feed may not have returned score data yet, or the match may have been postponed without a corresponding status update.",
+      match_not_finished_after_max_window:
+        "The match is more than 3 hours past kick-off but has not been marked as finished (FT, AET, or PENS). It may still be processing a live update, the match went to extra time, or the BBC status failed to update. Check the BBC page directly.",
+      missing_match_details_id:
+        "This match entry has no BBC match details ID, so detailed event data (goals, cards, timeline) cannot be fetched. Expected for some synthetic fixtures but unusual for started matches.",
+      missing_match_details_payload:
+        "The match has a BBC details ID but the details page could not be retrieved. The scraper may have been temporarily unable to reach the BBC, or the page may have been removed. This is often a transient network issue \u2014 re-scraping usually resolves it.",
+      incomplete_match_details_metadata:
+        "The match details payload was retrieved but is missing key fields such as date, time, league, or team names. The BBC details page structure may have changed or the data was partially written.",
+      missing_match_details_status:
+        "The match details payload was retrieved but contains no score status. The BBC details page may not yet have reported a final state, or the status field was not parsed correctly.",
+      match_details_status_mismatch:
+        "The score status shown in the match listing (e.g. \u2018AET\u2019) differs from the status on the BBC match details page (e.g. \u2018PENS\u2019). This can happen when the two data sources update at slightly different times. If the statuses are both end-of-match states the data is likely correct.",
+      match_details_score_mismatch:
+        "The scoreline in the match listing disagrees with the scoreline on the BBC match details page. One source may not have updated yet, or there may be a data consistency issue between the two payloads.",
+      future_fixture_missing_from_bbc_listing:
+        "A future match exists in Redis but could not be found in the current BBC Scores \u0026 Fixtures listing for that date. The match may have been postponed, cancelled, or rescheduled. If this persists across audit runs the match will be flagged as deleted.",
+    };
 
     const PAGE_SIZE = 50;
     let currentReport = null;
@@ -467,6 +514,7 @@
     function renderSummary(report) {
       const summary = report.summary || {};
       const reconciliation = report.reconciliation || {};
+      const deletion = report.deletion || {};
       summaryGridEl.innerHTML = [
         metaCard("Matches Checked", summary.matches_checked || 0),
         metaCard("Started Matches", summary.started_matches || 0),
@@ -476,7 +524,57 @@
         metaCard("Issues Total", summary.issues_total || 0),
         metaCard("Future Redis Fixtures", reconciliation.future_redis_matches_checked || 0),
         metaCard("Future Fixtures Missing From BBC", reconciliation.future_redis_matches_missing_from_bbc || 0),
+        metaCard("Matches Deleted This Run", deletion.skipped ? "skipped" : (deletion.deleted || 0)),
       ].join("");
+    }
+
+    function renderDeletedMatches(matches) {
+      if (!Array.isArray(matches) || matches.length === 0) {
+        deletedSummaryEl.textContent = "No matches are currently flagged as deleted.";
+        deletedListEl.innerHTML = `<div class="empty">No deleted matches found.</div>`;
+        return;
+      }
+      deletedSummaryEl.textContent = `${matches.length} match${matches.length !== 1 ? "es" : ""} currently flagged as deleted. Entries expire 7 days after deletion.`;
+      const adminBaseUrl = "/top-scores";
+      deletedListEl.innerHTML = matches.map((m) => {
+        const redisUrl = m.match_id ? `${adminBaseUrl}/admin/redis/matches/${encodeURIComponent(m.match_id)}` : null;
+        const expiresAt = m.expires_at ? new Date(m.expires_at).toLocaleString() : "unknown";
+        return `
+          <div class="issue-card warning">
+            <div class="issue-head">
+              <div>
+                <div class="match-title">${escapeHtml(m.home_team || "Unknown")} vs ${escapeHtml(m.away_team || "Unknown")}</div>
+                <div class="match-subtitle">
+                  ${escapeHtml(m.league || "Unknown competition")} |
+                  ${escapeHtml(m.date || "—")} ${escapeHtml(m.time || "")} |
+                  id ${escapeHtml(m.match_id || "—")}
+                </div>
+              </div>
+              <span class="pill warning">deleted</span>
+            </div>
+            <div class="meta-row">
+              <div class="meta-pill"><strong>Deleted At</strong><br>${escapeHtml(m.deleted_at ? new Date(m.deleted_at).toLocaleString() : "—")}</div>
+              <div class="meta-pill"><strong>Expires At</strong><br>${escapeHtml(expiresAt)}</div>
+              <div class="meta-pill"><strong>Reason</strong><br>${escapeHtml(m.reason || "—")}</div>
+            </div>
+            <div class="issue-foot">
+              <div class="links">
+                ${redisUrl ? `<a class="chip" href="${escapeHtml(redisUrl)}" target="_blank" rel="noopener noreferrer">Redis Match</a>` : ""}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function loadDeletedMatches() {
+      try {
+        const payload = await fetchJson(`${upstreamAdminBaseUrl()}/api/v1/admin/audit/deleted-matches`);
+        renderDeletedMatches(Array.isArray(payload.deleted_matches) ? payload.deleted_matches : []);
+      } catch (error) {
+        deletedSummaryEl.textContent = "Failed to load deleted matches.";
+        deletedListEl.innerHTML = `<div class="empty error">${escapeHtml(error && error.message ? error.message : String(error))}</div>`;
+      }
     }
 
     function applyFilters() {
@@ -599,12 +697,15 @@
               <div class="meta-pill"><strong>Detail Candidate</strong><br>${match.should_have_detail_payload ? "Yes" : "No"}</div>
             </div>
             <ul>
-              ${issues.map((issue) => `
-                <li>
-                  <span class="pill ${escapeHtml(issue.severity || "warning")}">${escapeHtml(issue.code || "issue")}</span>
-                  <span class="muted">${escapeHtml(issue.message || "")}</span>
-                </li>
-              `).join("")}
+              ${issues.map((issue) => {
+                const explanation = ISSUE_EXPLANATIONS[issue.code] || "";
+                return `
+                  <li>
+                    <span class="pill ${escapeHtml(issue.severity || "warning")}">${escapeHtml(issue.code || "issue")}</span>
+                    ${explanation ? `<span class="issue-explanation">${escapeHtml(explanation)}</span>` : `<span class="muted">${escapeHtml(issue.message || "")}</span>`}
+                  </li>
+                `;
+              }).join("")}
             </ul>
             <div class="issue-foot">
               <div class="links">
@@ -674,6 +775,8 @@
       }
     });
 
+    refreshDeletedButton.addEventListener("click", () => void loadDeletedMatches());
+
     healthcheckLinkEl.href = `${auditApiBaseUrl()}/healthcheck`;
     metricsLinkEl.href = `${auditApiBaseUrl()}/metrics`;
 
@@ -681,6 +784,7 @@
       statusEl.className = "status error";
       statusEl.textContent = error && error.message ? error.message : String(error);
     });
+    void loadDeletedMatches();
   </script>
 </body>
 </html>

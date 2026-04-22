@@ -1,6 +1,8 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+let nodemailer = null;
+try { nodemailer = require("nodemailer"); } catch { /* optional */ }
 
 const API_PREFIX = "/api/v1";
 const AUDIT_PORT = Number(process.env.AUDIT_PORT || 3015);
@@ -39,6 +41,18 @@ const AUDIT_MATCH_DETAIL_CONCURRENCY = Number.isFinite(Number(process.env.AUDIT_
 const AUDIT_MATCH_DETAIL_MIN_INTERVAL_MS = Number.isFinite(Number(process.env.AUDIT_MATCH_DETAIL_MIN_INTERVAL_MS))
   ? Math.max(0, Math.floor(Number(process.env.AUDIT_MATCH_DETAIL_MIN_INTERVAL_MS)))
   : 250;
+const AUDIT_DETAIL_MAX_ATTEMPTS = Number.isFinite(Number(process.env.AUDIT_DETAIL_MAX_ATTEMPTS))
+  ? Math.max(1, Math.min(10, Math.floor(Number(process.env.AUDIT_DETAIL_MAX_ATTEMPTS))))
+  : 3;
+const AUDIT_DETAIL_RETRY_BASE_DELAY_MS = Number.isFinite(Number(process.env.AUDIT_DETAIL_RETRY_BASE_DELAY_MS))
+  ? Math.max(100, Math.floor(Number(process.env.AUDIT_DETAIL_RETRY_BASE_DELAY_MS)))
+  : 500;
+const AUDIT_DETAIL_RETRY_MAX_DELAY_MS = Number.isFinite(Number(process.env.AUDIT_DETAIL_RETRY_MAX_DELAY_MS))
+  ? Math.max(500, Math.floor(Number(process.env.AUDIT_DETAIL_RETRY_MAX_DELAY_MS)))
+  : 5000;
+const AUDIT_DETAIL_RETRY_BACKOFF_FACTOR = Number.isFinite(Number(process.env.AUDIT_DETAIL_RETRY_BACKOFF_FACTOR))
+  ? Math.max(1, Math.min(10, Number(process.env.AUDIT_DETAIL_RETRY_BACKOFF_FACTOR)))
+  : 2.0;
 const AUDIT_AUTO_REPAIR_ENABLED = !["0", "false", "no", "off"].includes(
   String(process.env.AUDIT_AUTO_REPAIR_ENABLED || "true").trim().toLowerCase()
 );
@@ -59,6 +73,29 @@ const AUDIT_MAIN_API_PREFIX = (
   API_PREFIX
 ).replace(/\/+$/, "");
 const AUDIT_MAIN_API_ROOT = `${AUDIT_MAIN_API_BASE_URL}${AUDIT_MAIN_API_PREFIX}`;
+
+const AUDIT_DELETION_ENABLED = !["0", "false", "no", "off"].includes(
+  String(process.env.AUDIT_DELETION_ENABLED || "true").trim().toLowerCase()
+);
+const AUDIT_DELETION_ISSUES_THRESHOLD = Number.isFinite(Number(process.env.AUDIT_DELETION_ISSUES_THRESHOLD))
+  ? Math.max(1, Math.floor(Number(process.env.AUDIT_DELETION_ISSUES_THRESHOLD)))
+  : 50;
+
+// const AUDIT_EMAIL_ENABLED = !["0", "false", "no", "off"].includes(
+//   String(process.env.AUDIT_EMAIL_ENABLED || "true").trim().toLowerCase()
+// );
+const AUDIT_EMAIL_ENABLED = false; // temporarily disable email for now since we don't have a means of sending right now
+const AUDIT_EMAIL_TO = (process.env.AUDIT_EMAIL_TO || "mike.wagstaff@gmail.com").trim();
+const AUDIT_EMAIL_FROM = (process.env.AUDIT_EMAIL_FROM || process.env.AUDIT_EMAIL_SMTP_USER || "").trim();
+const AUDIT_EMAIL_SMTP_HOST = (process.env.AUDIT_EMAIL_SMTP_HOST || "").trim();
+const AUDIT_EMAIL_SMTP_PORT = Number.isFinite(Number(process.env.AUDIT_EMAIL_SMTP_PORT))
+  ? Math.floor(Number(process.env.AUDIT_EMAIL_SMTP_PORT))
+  : 587;
+const AUDIT_EMAIL_SMTP_USER = (process.env.AUDIT_EMAIL_SMTP_USER || "").trim();
+const AUDIT_EMAIL_SMTP_PASS = (process.env.AUDIT_EMAIL_SMTP_PASS || "").trim();
+const AUDIT_EMAIL_SMTP_SECURE = ["1", "true", "yes", "on"].includes(
+  String(process.env.AUDIT_EMAIL_SMTP_SECURE || "false").trim().toLowerCase()
+);
 
 const FINAL_STATUS_TOKENS = new Set([
   "FT",
@@ -747,15 +784,25 @@ function evaluateAuditIssues(match, options = {}) {
         )
       );
     } else if (normalizedStatus && normalizeStatusToken(detailStatus) !== normalizedStatus) {
-      issues.push(
-        createIssue(
-          match,
-          "match_details_status_mismatch",
-          "warning",
-          "List payload and match details payload disagree on score_status.",
-          { list_status: status, detail_status: detailStatus }
-        )
-      );
+      // PENS and AET are treated as equivalent: the list payload normalises penalty
+      // shootout results to AET during merging, so the details page (which retains PENS)
+      // will always disagree. This is expected and not a data problem.
+      const PENS_AET_TOKENS = new Set(["PENS", "PEN", "PEN.", "AET"]);
+      const listIsPensOrAet = PENS_AET_TOKENS.has(normalizedStatus);
+      const detailIsPensOrAet = PENS_AET_TOKENS.has(normalizeStatusToken(detailStatus));
+      // Both in-progress (e.g. "7'" vs "12'"): clock drift between list scrape and detail fetch.
+      const bothInProgress = isInProgressStatus(normalizedStatus) && isInProgressStatus(normalizeStatusToken(detailStatus));
+      if (!(listIsPensOrAet && detailIsPensOrAet) && !bothInProgress) {
+        issues.push(
+          createIssue(
+            match,
+            "match_details_status_mismatch",
+            "warning",
+            "List payload and match details payload disagree on score_status.",
+            { list_status: status, detail_status: detailStatus }
+          )
+        );
+      }
     }
 
     if (
@@ -966,17 +1013,64 @@ async function fetchFutureFixtureSources() {
   return fetchJson(`${AUDIT_MAIN_API_ROOT}/admin/audit/future-fixtures`);
 }
 
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableDetailError(error) {
+  if (!error) return false;
+  const name = String(error.name || "");
+  if (name === "AbortError") return true;
+  const status = Number.isFinite(error.status) ? error.status : null;
+  if (status === null) return true; // network error (no HTTP status)
+  if (status === 408 || status === 429) return true;
+  if (status >= 500 && status <= 599) return true;
+  return false;
+}
+
+function computeRetryDelayMs(attempt, baseMs, maxMs, factor) {
+  const exponential = baseMs * Math.pow(factor, attempt - 1);
+  const capped = Math.min(exponential, maxMs);
+  // Add ±25% jitter
+  const jitter = capped * 0.25 * (Math.random() * 2 - 1);
+  return Math.max(0, Math.round(capped + jitter));
+}
+
 async function fetchMatchDetailsPayload(matchId) {
-  try {
-    await throttleMatchDetailFetch();
-    const payload = await fetchJson(`${AUDIT_MAIN_API_ROOT}/matches/${encodeURIComponent(matchId)}`);
-    return { ok: true, payload };
-  } catch (error) {
-    if (error && error.status === 404) {
-      return { ok: false, missing: true, error: error.message || String(error) };
+  let lastError = null;
+  for (let attempt = 1; attempt <= AUDIT_DETAIL_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await throttleMatchDetailFetch();
+      // eslint-disable-next-line no-await-in-loop
+      const payload = await fetchJson(`${AUDIT_MAIN_API_ROOT}/matches/${encodeURIComponent(matchId)}`);
+      return { ok: true, payload };
+    } catch (error) {
+      if (error && error.status === 404) {
+        return { ok: false, missing: true, error: error.message || String(error) };
+      }
+      lastError = error;
+      if (!isRetryableDetailError(error) || attempt >= AUDIT_DETAIL_MAX_ATTEMPTS) {
+        break;
+      }
+      const delayMs = computeRetryDelayMs(
+        attempt,
+        AUDIT_DETAIL_RETRY_BASE_DELAY_MS,
+        AUDIT_DETAIL_RETRY_MAX_DELAY_MS,
+        AUDIT_DETAIL_RETRY_BACKOFF_FACTOR
+      );
+      console.warn(
+        `[Audit] fetchMatchDetails attempt ${attempt}/${AUDIT_DETAIL_MAX_ATTEMPTS} failed for ${matchId}: ${error && error.message ? error.message : error}. Retrying in ${delayMs}ms.`
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await sleepMs(delayMs);
     }
-    return { ok: false, missing: false, error: error && error.message ? error.message : String(error) };
   }
+  return {
+    ok: false,
+    missing: false,
+    error: lastError && lastError.message ? lastError.message : String(lastError),
+  };
 }
 
 function autoRepairEligibleMatchIds(report, nowMs = Date.now()) {
@@ -1100,6 +1194,145 @@ async function autoRepairReportIssues(report, trigger = "interval") {
     match_ids: eligibleMatchIds,
     failures,
   };
+}
+
+async function markFutureFixturesAsDeleted(issues = []) {
+  const candidates = issues.filter(
+    (issue) => issue && issue.code === "future_fixture_missing_from_bbc_listing" && issue.match_id
+  );
+  if (candidates.length === 0) {
+    return { enabled: AUDIT_DELETION_ENABLED, skipped: true, reason: "no_candidates", deleted: 0, failed: 0, results: [], errors: [] };
+  }
+
+  const matchIdsSeen = new Set();
+  const uniqueCandidates = candidates.filter((issue) => {
+    if (matchIdsSeen.has(issue.match_id)) return false;
+    matchIdsSeen.add(issue.match_id);
+    return true;
+  });
+
+  const metadataList = uniqueCandidates.map((issue) => ({
+    match_id: issue.match_id,
+    home_team: issue.home_team || null,
+    away_team: issue.away_team || null,
+    date: issue.date || null,
+    time: issue.time || null,
+    league: issue.league || null,
+    reason: "audit_future_fixture_missing_from_bbc",
+  }));
+
+  try {
+    const payload = await fetchJson(`${AUDIT_MAIN_API_ROOT}/admin/audit/matches/mark-deleted`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        match_ids: uniqueCandidates.map((i) => i.match_id),
+        metadata: metadataList,
+      }),
+    });
+    return {
+      enabled: AUDIT_DELETION_ENABLED,
+      skipped: false,
+      deleted: payload.deleted || 0,
+      failed: payload.failed || 0,
+      results: payload.results || [],
+      errors: payload.errors || [],
+    };
+  } catch (error) {
+    return {
+      enabled: AUDIT_DELETION_ENABLED,
+      skipped: false,
+      deleted: 0,
+      failed: uniqueCandidates.length,
+      results: [],
+      errors: [{ error: error && error.message ? error.message : String(error) }],
+    };
+  }
+}
+
+function buildAuditEmailSubject(report, deletionResult) {
+  const issueCount = report && report.summary ? (report.summary.matches_with_issues || 0) : 0;
+  const deletedCount = deletionResult ? (deletionResult.deleted || 0) : 0;
+  return `Top Scores match audit - ${issueCount} match${issueCount !== 1 ? "es" : ""} with potential issues, ${deletedCount} match${deletedCount !== 1 ? "es" : ""} deleted`;
+}
+
+function buildAuditEmailBody(report, deletionResult) {
+  const summary = report && report.summary ? report.summary : {};
+  const reconciliation = report && report.reconciliation ? report.reconciliation : {};
+  const deletion = deletionResult || {};
+  const matches = Array.isArray(report && report.matches) ? report.matches : [];
+
+  const lines = [
+    `Match Audit Report`,
+    `Generated: ${report && report.generated_at ? report.generated_at : "unknown"}`,
+    `Trigger: ${report && report.trigger ? report.trigger : "unknown"}`,
+    ``,
+    `=== SUMMARY ===`,
+    `Matches checked: ${summary.matches_checked || 0}`,
+    `Matches with issues: ${summary.matches_with_issues || 0}`,
+    `Issues total: ${summary.issues_total || 0}`,
+    `Healthy matches: ${summary.healthy_matches || 0}`,
+    `Future Redis fixtures checked: ${reconciliation.future_redis_matches_checked || 0}`,
+    `Future fixtures missing from BBC: ${reconciliation.future_redis_matches_missing_from_bbc || 0}`,
+    ``,
+    `=== DELETION ===`,
+    `Deletion enabled: ${deletion.enabled !== false ? "yes" : "no"}`,
+    deletion.skipped ? `Skipped: ${deletion.reason || "unknown"}` : `Matches deleted: ${deletion.deleted || 0}`,
+    deletion.failed > 0 ? `Deletion failures: ${deletion.failed}` : null,
+    ``,
+  ].filter((line) => line !== null);
+
+  if (deletion.results && deletion.results.length > 0) {
+    lines.push(`=== DELETED MATCHES ===`);
+    deletion.results.forEach((r) => {
+      lines.push(`  - ${r.home_team || "?"} vs ${r.away_team || "?"} | ${r.date || "?"} ${r.time || ""} | ${r.league || "?"} | id: ${r.match_id}`);
+    });
+    lines.push(``);
+  }
+
+  if (matches.length > 0) {
+    lines.push(`=== MATCHES WITH ISSUES ===`);
+    matches.slice(0, 50).forEach((match) => {
+      const issues = Array.isArray(match.issues) ? match.issues : [];
+      lines.push(`  ${match.home_team || "?"} vs ${match.away_team || "?"} | ${match.date || "?"} | ${match.league || "?"}`);
+      issues.forEach((issue) => {
+        lines.push(`    [${issue.severity || "?"}] ${issue.code}: ${issue.message || ""}`);
+      });
+    });
+    if (matches.length > 50) {
+      lines.push(`  ... and ${matches.length - 50} more`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+async function sendAuditSummaryEmail(report, deletionResult) {
+  if (!AUDIT_EMAIL_ENABLED) return { sent: false, reason: "disabled" };
+  if (!nodemailer) return { sent: false, reason: "nodemailer_not_installed" };
+  if (!AUDIT_EMAIL_SMTP_HOST) return { sent: false, reason: "smtp_not_configured" };
+  if (!AUDIT_EMAIL_TO) return { sent: false, reason: "no_recipient" };
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: AUDIT_EMAIL_SMTP_HOST,
+      port: AUDIT_EMAIL_SMTP_PORT,
+      secure: AUDIT_EMAIL_SMTP_SECURE,
+      auth: AUDIT_EMAIL_SMTP_USER ? { user: AUDIT_EMAIL_SMTP_USER, pass: AUDIT_EMAIL_SMTP_PASS } : undefined,
+    });
+    const subject = buildAuditEmailSubject(report, deletionResult);
+    const text = buildAuditEmailBody(report, deletionResult);
+    await transporter.sendMail({
+      from: AUDIT_EMAIL_FROM || AUDIT_EMAIL_SMTP_USER,
+      to: AUDIT_EMAIL_TO,
+      subject,
+      text,
+    });
+    return { sent: true, to: AUDIT_EMAIL_TO, subject };
+  } catch (error) {
+    console.error("[Audit] Failed to send summary email:", error && error.message ? error.message : error);
+    return { sent: false, reason: "send_error", error: error && error.message ? error.message : String(error) };
+  }
 }
 
 async function buildAuditReport(trigger = "interval") {
@@ -1226,12 +1459,39 @@ async function buildAuditReport(trigger = "interval") {
     auto_repair_failed: autoRepair.failed,
   };
   updateCurrentRun({
-    stage: "finalizing",
+    stage: "deleting_stale_fixtures",
     auto_repair_candidates: autoRepair.candidates,
     auto_repair_attempted: autoRepair.attempted,
     auto_repair_succeeded: autoRepair.succeeded,
     auto_repair_failed: autoRepair.failed,
   });
+
+  // Mark future fixtures missing from BBC as deleted, guarded by total issue count threshold.
+  const matchesWithIssueCount = report.summary.matches_with_issues || 0;
+  const deletionSuppressed = !AUDIT_DELETION_ENABLED || matchesWithIssueCount >= AUDIT_DELETION_ISSUES_THRESHOLD;
+  let deletionResult;
+  if (deletionSuppressed) {
+    deletionResult = {
+      enabled: AUDIT_DELETION_ENABLED,
+      skipped: true,
+      reason: !AUDIT_DELETION_ENABLED ? "disabled" : `issue_threshold_exceeded (${matchesWithIssueCount} >= ${AUDIT_DELETION_ISSUES_THRESHOLD})`,
+      deleted: 0,
+      failed: 0,
+      results: [],
+      errors: [],
+    };
+  } else {
+    deletionResult = await markFutureFixturesAsDeleted(issues);
+  }
+  report.deletion = deletionResult;
+  report.summary = {
+    ...report.summary,
+    matches_deleted: deletionResult.deleted || 0,
+  };
+
+  updateCurrentRun({ stage: "finalizing" });
+  const emailResult = await sendAuditSummaryEmail(report, deletionResult);
+  report.email = emailResult;
 
   return report;
 }
@@ -1856,6 +2116,12 @@ module.exports = {
     buildSyntheticAuditMatchId,
     normalizeMatchId,
     resolveTeamAlias,
+    markFutureFixturesAsDeleted,
+    buildAuditEmailSubject,
+    buildAuditEmailBody,
+    sleepMs,
+    isRetryableDetailError,
+    computeRetryDelayMs,
     auditState,
   },
 };

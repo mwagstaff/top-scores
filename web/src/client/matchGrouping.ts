@@ -101,6 +101,7 @@ export class CompetitionWeightLookup {
     const queryTokens = normalizedTokens(leagueName);
     let bestWeight: number | null = null;
     let bestScore = 0;
+    let hasPrefixMatch = false;
     for (const [storedKey, storedWeight] of this.exactByKey) {
       if (key.startsWith(storedKey) || storedKey.startsWith(key)) {
         const shorter = Math.min(storedKey.length, key.length);
@@ -109,6 +110,7 @@ export class CompetitionWeightLookup {
         if (score > bestScore) {
           bestScore = score;
           bestWeight = storedWeight;
+          hasPrefixMatch = true;
         }
         continue;
       }
@@ -121,7 +123,9 @@ export class CompetitionWeightLookup {
       }
     }
 
-    return bestScore >= 0.7 ? bestWeight : null;
+    // Prefix matches are structural — bypass the fuzzy threshold.
+    // Fuzzy (dice) matches require >= 0.7 confidence.
+    return hasPrefixMatch || bestScore >= 0.7 ? bestWeight : null;
   }
 }
 

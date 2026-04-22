@@ -469,11 +469,14 @@ final class LiveActivitySyncService {
     @available(iOS 16.1, *)
     private func requestLiveActivityReconcile() async -> TopScoresLiveActivityAttributes.ContentState? {
         guard let endpoint = await endpointURL(path: "live-activity/reconcile") else { return nil }
+        let activeActivities = Activity<TopScoresLiveActivityAttributes>.activities
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
             "force": true,
-            "trigger": "app_foreground"
+            "trigger": "app_foreground",
+            "activeActivityCount": activeActivities.count,
+            "activeActivityIds": activeActivities.map { $0.id }
         ]
         guard let responseData = await sendJSONRequestReturningData(url: endpoint, payload: payload, logContext: "live-activity-reconcile") else {
             return nil
@@ -493,6 +496,7 @@ final class LiveActivitySyncService {
     private func startForegroundActivityIfNeeded(contentState: TopScoresLiveActivityAttributes.ContentState) async {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             NSLog("[LiveActivitySync] Foreground start skipped: activities not enabled")
+            await reportForegroundStartFailed(reason: "activities_not_enabled")
             return
         }
         do {
@@ -507,7 +511,18 @@ final class LiveActivitySyncService {
             beginObserving(activity)
         } catch {
             NSLog("[LiveActivitySync] Foreground start failed: %@", error.localizedDescription)
+            await reportForegroundStartFailed(reason: error.localizedDescription)
         }
+    }
+
+    private func reportForegroundStartFailed(reason: String) async {
+        guard let endpoint = await endpointURL(path: "live-activity/foreground-start-failed") else { return }
+        let payload: [String: Any] = [
+            "deviceToken": DeviceIdentity.currentToken,
+            "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
+            "error": reason
+        ]
+        await sendJSONRequest(url: endpoint, payload: payload, logContext: "foreground-start-failed")
     }
 
     private func fetchServerDebugState() async {

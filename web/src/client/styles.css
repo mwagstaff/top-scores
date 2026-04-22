@@ -679,8 +679,17 @@ button.match-row:hover {
   min-width: 0;
 }
 
-.match-team-home { text-align: right; }
-.match-team-away { text-align: left;  }
+.match-team-home {
+  text-align: right;
+  gap: 0.4rem;
+  margin-right: 10px;
+}
+
+.match-team-away {
+  text-align: left;
+  gap: 0.4rem;
+  margin-left: 10px;
+}
 
 /* Team logo / fallback initials badge */
 .team-logo,
@@ -727,8 +736,6 @@ button.match-row:hover {
   align-items: center;
   justify-content: center;
   gap: 0.3rem;
-  padding-left: 10px;
-  padding-right: 10px;
 }
 
 .mc-num {
@@ -769,6 +776,7 @@ button.match-row:hover {
   width: auto;
   max-width: 2.8rem;
   object-fit: contain;
+  margin: 0 6px;
 }
 
 .mc-tv-more {

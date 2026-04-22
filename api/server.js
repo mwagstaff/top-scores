@@ -21167,11 +21167,14 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       mergedDataset,
       bbcRangeDataset,
       redisMatchDetailsSnapshot,
+      deletedMatchIdList,
     ] = await Promise.all([
       getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
         getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
       memoryMatchDetailsSnapshot ? Promise.resolve(null) : getOperationalMatchDetailsSnapshotSafe(),
+      getDeletedMatchIds().catch(() => []),
     ]);
+    const deletedMatchIdSet = new Set(deletedMatchIdList);
     timings.dataset_load_ms = Date.now() - stageStartedAtMs;
     const canonicalLookup = memoryMatchDetailsSnapshot
       ? memoryMatchDetailsSnapshot.lookup
@@ -21240,7 +21243,10 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
         dateTo,
         manualMappings,
       })
-    );
+    ).filter((match) => {
+      const matchId = String(match && match.match_details_id ? match.match_details_id : "").toLowerCase();
+      return !matchId || !deletedMatchIdSet.has(matchId);
+    });
     timings.base_filter_ms = Date.now() - stageStartedAtMs;
 
     if (eplOnly || homeNations || majorTournaments) {
@@ -23120,6 +23126,10 @@ const {
   deleteOperationalMatchDetailsRecords,
   saveOperationalMatchWriteLogEntries,
   getOperationalMatchWriteLog,
+  markMatchDeleted,
+  getDeletedMatchIds,
+  getDeletedMatches,
+  unmarkMatchDeleted,
   __historyConfig: bbcHistoryConfig,
   getRedisMetrics,
 } = require("./redis_client");
@@ -23488,6 +23498,56 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
     res.status(500).json({
       error: "Failed to mark live activity as ended",
       message: error.message,
+    });
+  }
+});
+
+// Report that Activity.request() failed in the foreground so the server can clear the
+// pending lock and increment the attempt counter without waiting for PENDING_MAX_MS.
+app.post(`${API_PREFIX}/live-activity/foreground-start-failed`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const { deviceToken, isDevelopmentBuild, error } = req.body || {};
+  const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
+
+  if (!resolvedDeviceToken) {
+    res.status(400).json({
+      error: "Missing device token (X-Device-Token header or deviceToken body field).",
+    });
+    return;
+  }
+
+  try {
+    const existingRecord = await getUserPreferences(resolvedDeviceToken);
+    const state =
+      existingRecord && existingRecord.liveActivity && typeof existingRecord.liveActivity === "object"
+        ? existingRecord.liveActivity
+        : {};
+    const currentAttempts = Number.isFinite(Number(state.pushToStartAttempts))
+      ? Math.max(0, Number(state.pushToStartAttempts))
+      : 0;
+    const newAttempts = currentAttempts + 1;
+
+    await updateUserLiveActivityState(
+      resolvedDeviceToken,
+      {
+        pendingStartAt: null,
+        pushToStartAttempts: newAttempts,
+      },
+      {
+        isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
+      }
+    );
+
+    console.log(
+      `[API] Foreground start failed: device=${resolvedDeviceToken.slice(0, 12)}... error="${String(error || "unknown")}" attempts=${newAttempts}`
+    );
+    res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("[API] Error handling foreground-start-failed:", err);
+    res.status(500).json({
+      error: "Failed to process foreground start failure",
+      message: err.message,
     });
   }
 });
@@ -24539,10 +24599,12 @@ app.get(`${API_PREFIX}/admin/redis/matches`, async (req, res) => {
 app.get(`${API_PREFIX}/admin/audit/future-fixtures`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   try {
-    const [bbcRangeDataset, redisSnapshot] = await Promise.all([
+    const [bbcRangeDataset, redisSnapshot, deletedMatchIdList] = await Promise.all([
       getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
       getPreferredOperationalMatchDetailsSnapshotSafe(),
+      getDeletedMatchIds().catch(() => []),
     ]);
+    const deletedMatchIdSet = new Set(deletedMatchIdList);
 
     const todayDateKey = new Date().toISOString().slice(0, 10);
     const bbcMatches = (Array.isArray(bbcRangeDataset.items) ? bbcRangeDataset.items : [])
@@ -24552,7 +24614,11 @@ app.get(`${API_PREFIX}/admin/audit/future-fixtures`, async (_req, res) => {
 
     const redisMatches = Object.values(redisSnapshot.records || {})
       .map((payload) => toOperationalAdminMatchPayload(payload))
-      .filter((match) => match && match.date && match.date >= todayDateKey)
+      .filter((match) => {
+        if (!match || !match.date || match.date < todayDateKey) return false;
+        const matchId = String(match.match_id || match.id || "").toLowerCase();
+        return !matchId || !deletedMatchIdSet.has(matchId);
+      })
       .sort((lhs, rhs) => sortAdminMatchesByKickoff(lhs, rhs, "asc"));
 
     const coverageEnd = Array.isArray(bbcMatches) && bbcMatches.length > 0
@@ -24585,6 +24651,86 @@ app.get(`${API_PREFIX}/admin/audit/future-fixtures`, async (_req, res) => {
     console.error("[API] Error retrieving audit future fixture sources:", error);
     res.status(500).json({
       error: "Failed to retrieve audit future fixture sources",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
+app.get(`${API_PREFIX}/admin/audit/deleted-matches`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    const matches = await getDeletedMatches();
+    res.status(200).json({
+      success: true,
+      deleted_matches: matches,
+      count: matches.length,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("[API] Error retrieving deleted matches:", error);
+    res.status(500).json({
+      error: "Failed to retrieve deleted matches",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
+app.post(`${API_PREFIX}/admin/audit/matches/mark-deleted`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const rawIds = Array.isArray(body.match_ids) ? body.match_ids : [];
+  const matchIds = rawIds.map((id) => String(id || "").trim().toLowerCase()).filter(Boolean);
+  if (matchIds.length === 0) {
+    res.status(400).json({ error: "Provide one or more valid match_ids." });
+    return;
+  }
+  const metadata = body.metadata && typeof body.metadata === "object" ? body.metadata : {};
+  try {
+    const results = [];
+    const errors = [];
+    await Promise.all(
+      matchIds.map(async (matchId) => {
+        try {
+          const matchMeta = (Array.isArray(metadata) ? metadata : []).find((m) => m && m.match_id === matchId) || metadata;
+          const record = await markMatchDeleted(matchId, matchMeta);
+          results.push(record);
+        } catch (error) {
+          errors.push({ match_id: matchId, error: error && error.message ? error.message : String(error) });
+        }
+      })
+    );
+    res.status(200).json({
+      success: true,
+      requested: matchIds.length,
+      deleted: results.length,
+      failed: errors.length,
+      results,
+      errors,
+      executed_at: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("[API] Error marking matches as deleted:", error);
+    res.status(500).json({
+      error: "Failed to mark matches as deleted",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
+app.delete(`${API_PREFIX}/admin/audit/matches/:matchId/deleted`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const matchId = String(req.params.matchId || "").trim().toLowerCase();
+  if (!matchId) {
+    res.status(400).json({ error: "Invalid match id." });
+    return;
+  }
+  try {
+    await unmarkMatchDeleted(matchId);
+    res.status(200).json({ success: true, match_id: matchId, undeleted_at: new Date().toISOString() });
+  } catch (error) {
+    console.error("[API] Error unmarking match as deleted:", error);
+    res.status(500).json({
+      error: "Failed to unmark match as deleted",
       message: error && error.message ? error.message : String(error),
     });
   }
@@ -27636,6 +27782,25 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
         ? _req.body.userDeviceToken
         : _req.body?.deviceToken;
     const userDeviceToken = _req.deviceToken || normalizeDeviceToken(explicitDeviceToken);
+
+    // If the app explicitly reports it has no active activities, clear any stale
+    // pendingStartAt immediately — the device's word is authoritative.
+    const reportedActiveCount = typeof _req.body?.activeActivityCount === "number"
+      ? _req.body.activeActivityCount : null;
+    if (reportedActiveCount === 0 && userDeviceToken) {
+      try {
+        const record = await getUserPreferences(userDeviceToken);
+        const pendingStartAt = record && record.liveActivity && record.liveActivity.pendingStartAt
+          ? record.liveActivity.pendingStartAt : null;
+        if (pendingStartAt) {
+          await updateUserLiveActivityState(userDeviceToken, { pendingStartAt: null });
+          console.log(`[API] Cleared stale pendingStartAt on reconcile (device reports 0 activities): device=${userDeviceToken.slice(0, 12)}...`);
+        }
+      } catch (_err) {
+        // Non-fatal
+      }
+    }
+
     const result = await matchMonitor.runLiveActivityEvaluationNow({
       userDeviceToken,
       trigger: typeof _req.body?.trigger === "string" ? _req.body.trigger : "",

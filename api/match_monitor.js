@@ -5131,7 +5131,14 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const pendingStartAtMs = Date.parse(String(state.pendingStartAt || ""));
   const hasPendingStart = Number.isFinite(pendingStartAtMs);
   const pendingAgeMs = hasPendingStart ? nowMs - pendingStartAtMs : 0;
-  const pushToStartAttempts = Number.isFinite(Number(state.pushToStartAttempts)) ? Math.max(0, Number(state.pushToStartAttempts)) : 0;
+  const pushToStartAttempts = (() => {
+    const raw = Number.isFinite(Number(state.pushToStartAttempts)) ? Math.max(0, Number(state.pushToStartAttempts)) : 0;
+    if (raw === 0) return 0;
+    // Reset across UTC day boundaries so each new match day gets a full attempt budget.
+    const lastStartDay = state.lastStartAt ? String(state.lastStartAt).slice(0, 10) : null;
+    const today = new Date(nowMs).toISOString().slice(0, 10);
+    return (lastStartDay && lastStartDay !== today) ? 0 : raw;
+  })();
   const testHoldUntilMs = Date.parse(String(state.testHoldUntil || ""));
   const isTestHoldActive = Number.isFinite(testHoldUntilMs) && nowMs < testHoldUntilMs;
   const shouldDisplay = Boolean(presentation && presentation.mode && presentation.matches.length > 0);
@@ -5354,11 +5361,32 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     return;
   }
 
+  const trigger = String(options && options.trigger ? options.trigger : "");
+
+  // Stale lock recovery runs for ALL triggers, including app_foreground, so that the
+  // first foreground after PENDING_MAX_MS clears the stuck lock immediately rather than
+  // waiting for the next background eval loop tick.
+  if (hasPendingStart && pendingAgeMs >= LIVE_ACTIVITY_PENDING_MAX_MS) {
+    const newAttemptCount = pushToStartAttempts + 1;
+    await persistLiveActivityPatch(user, {
+      pendingStartAt: null,
+      lastPayloadHash: null,
+      lastScoreHash: null,
+      lastMode: null,
+      pushToStartAttempts: newAttemptCount,
+    });
+    if (newAttemptCount >= LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS) {
+      console.log(
+        `[MatchMonitor] Push-to-start suppressed after ${newAttemptCount} unanswered attempts (Live Activities likely disabled on device): device=${shortDeviceToken(user && user.deviceToken)}`
+      );
+      return;
+    }
+  }
+
   // When the app is in the foreground it calls the reconcile endpoint, which returns a
   // foregroundStart content state so the app can call Activity.request() directly.
   // Skip push-to-start here to avoid a race between the two creation paths that would
   // produce duplicate activities (one of which enforceSingleActiveActivity would then end).
-  const trigger = String(options && options.trigger ? options.trigger : "");
   if (trigger === "app_foreground") return;
   if (!pushToStartToken) return;
   if (hasPendingStart && pendingAgeMs < LIVE_ACTIVITY_PENDING_MAX_MS) {
@@ -5379,24 +5407,6 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       pending_max_seconds: Math.round(LIVE_ACTIVITY_PENDING_MAX_MS / 1000),
     });
     return;
-  }
-  if (hasPendingStart && pendingAgeMs >= LIVE_ACTIVITY_PENDING_MAX_MS) {
-    // Stale lock recovery: start was accepted by APNs but no token callback arrived.
-    // Increment the attempt counter so we can stop after repeated failures.
-    const newAttemptCount = pushToStartAttempts + 1;
-    await persistLiveActivityPatch(user, {
-      pendingStartAt: null,
-      lastPayloadHash: null,
-      lastScoreHash: null,
-      lastMode: null,
-      pushToStartAttempts: newAttemptCount,
-    });
-    if (newAttemptCount >= LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS) {
-      console.log(
-        `[MatchMonitor] Push-to-start suppressed after ${newAttemptCount} unanswered attempts (Live Activities likely disabled on device): device=${shortDeviceToken(user && user.deviceToken)}`
-      );
-      return;
-    }
   }
 
   // Guard: stop hammering push-to-start if previous attempts have repeatedly gone

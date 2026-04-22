@@ -92,6 +92,9 @@ const OPERATIONAL_MATCH_DETAILS_PREFIX = `${DB_NAME}:operational:match_details:`
 const OPERATIONAL_MATCH_DETAILS_INDEX_KEY = `${DB_NAME}:operational:match_details:index`;
 const OPERATIONAL_MATCH_DETAILS_META_KEY = `${DB_NAME}:operational:match_details:meta`;
 const OPERATIONAL_MATCH_WRITE_LOG_PREFIX = `${DB_NAME}:operational:match_write_log:`;
+const DELETED_MATCH_PREFIX = `${DB_NAME}:operational:match_deleted:`;
+const DELETED_MATCHES_INDEX_KEY = `${DB_NAME}:operational:deleted_matches_index`;
+const DELETED_MATCH_TTL_SECONDS = 7 * 24 * 60 * 60;
 const LIVE_ACTIVITY_DEBUG_DEVICE_INDEX_PREFIX = `${DB_NAME}:live_activity:debug:device:`;
 const LIVE_ACTIVITY_DEBUG_RECORD_PREFIX = `${DB_NAME}:live_activity:debug:record:`;
 const LIVE_ACTIVITY_MATCH_TIMELINE_INDEX_PREFIX = `${DB_NAME}:live_activity:timeline:match:`;
@@ -2781,6 +2784,77 @@ function recordRedisOpForTests(operation, durationMs, opts = {}) {
   _recordRedisOp(operation, durationMs, opts);
 }
 
+async function markMatchDeleted(matchId, metadata = {}) {
+  const normalizedId = String(matchId || "").trim().toLowerCase();
+  if (!normalizedId) throw new Error("matchId is required");
+  const key = `${DELETED_MATCH_PREFIX}${normalizedId}`;
+  const nowMs = Date.now();
+  const expiryMs = nowMs + DELETED_MATCH_TTL_SECONDS * 1000;
+  const record = {
+    match_id: normalizedId,
+    deleted_at: new Date(nowMs).toISOString(),
+    expires_at: new Date(expiryMs).toISOString(),
+    home_team: metadata.home_team || null,
+    away_team: metadata.away_team || null,
+    date: metadata.date || null,
+    time: metadata.time || null,
+    league: metadata.league || null,
+    reason: metadata.reason || "audit_future_fixture_missing_from_bbc",
+  };
+  const redisClient = await getClient();
+  await Promise.all([
+    redisClient.set(key, JSON.stringify(record), { EX: DELETED_MATCH_TTL_SECONDS }),
+    redisClient.zAdd(DELETED_MATCHES_INDEX_KEY, [{ score: expiryMs, value: normalizedId }]),
+  ]);
+  return record;
+}
+
+async function getDeletedMatchIds() {
+  try {
+    const redisClient = await getClient();
+    const nowMs = Date.now();
+    await redisClient.zRemRangeByScore(DELETED_MATCHES_INDEX_KEY, "-inf", String(nowMs - 1));
+    const ids = await redisClient.zRangeByScore(DELETED_MATCHES_INDEX_KEY, nowMs, "+inf");
+    return Array.isArray(ids) ? ids : [];
+  } catch (error) {
+    console.error("[Redis] Error retrieving deleted match ids:", error);
+    return [];
+  }
+}
+
+async function getDeletedMatches() {
+  try {
+    const redisClient = await getClient();
+    const nowMs = Date.now();
+    await redisClient.zRemRangeByScore(DELETED_MATCHES_INDEX_KEY, "-inf", String(nowMs - 1));
+    const ids = await redisClient.zRangeByScore(DELETED_MATCHES_INDEX_KEY, nowMs, "+inf");
+    if (!ids || ids.length === 0) return [];
+    const keys = ids.map((id) => `${DELETED_MATCH_PREFIX}${id}`);
+    const values = await redisClient.mGet(keys);
+    const records = [];
+    values.forEach((raw, index) => {
+      if (!raw) return;
+      const parsed = safeJsonParse(raw, `deleted match ${ids[index]}`);
+      if (parsed) records.push(parsed);
+    });
+    return records;
+  } catch (error) {
+    console.error("[Redis] Error retrieving deleted matches:", error);
+    return [];
+  }
+}
+
+async function unmarkMatchDeleted(matchId) {
+  const normalizedId = String(matchId || "").trim().toLowerCase();
+  if (!normalizedId) throw new Error("matchId is required");
+  const key = `${DELETED_MATCH_PREFIX}${normalizedId}`;
+  const redisClient = await getClient();
+  await Promise.all([
+    redisClient.del(key),
+    redisClient.zRem(DELETED_MATCHES_INDEX_KEY, normalizedId),
+  ]);
+}
+
 module.exports = {
   getClient,
   saveUserPreferences: _withMetrics("save_user_preferences", saveUserPreferences),
@@ -2814,6 +2888,10 @@ module.exports = {
   deleteOperationalMatchDetailsRecords: _withMetrics("delete_match_details", deleteOperationalMatchDetailsRecords),
   saveOperationalMatchWriteLogEntries: _withMetrics("save_match_write_log", saveOperationalMatchWriteLogEntries),
   getOperationalMatchWriteLog: _withMetrics("get_match_write_log", getOperationalMatchWriteLog),
+  markMatchDeleted: _withMetrics("mark_match_deleted", markMatchDeleted),
+  getDeletedMatchIds: _withMetrics("get_deleted_match_ids", getDeletedMatchIds),
+  getDeletedMatches: _withMetrics("get_deleted_matches", getDeletedMatches),
+  unmarkMatchDeleted: _withMetrics("unmark_match_deleted", unmarkMatchDeleted),
   closeRedisConnection,
   getRedisMetrics,
   __historyConfig: buildHistoryRetentionPolicy(),
