@@ -22,6 +22,8 @@ export interface Match {
   time: string;
   homeTeam: string;
   awayTeam: string;
+  homeShortName?: string | null;
+  awayShortName?: string | null;
   league: string;
   leagueSubcategory?: string | null;
   tvChannels: string[];
