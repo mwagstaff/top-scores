@@ -1356,14 +1356,33 @@ async function getLiveActivityMatchTimelineSnapshotsAt(matchIds = [], targetMs =
           return;
         }
 
+        let latest = null;
+        let maxHomeScore = null;
+        let maxAwayScore = null;
         for (let index = members.length - 1; index >= 0; index -= 1) {
           const member = members[index];
           const parsed = safeJsonParse(member, `live activity match timeline ${matchId}`);
           if (!parsed || typeof parsed !== "object") {
             continue;
           }
-          result[matchId] = parsed;
-          return;
+          if (!latest) {
+            latest = parsed;
+          }
+          const homeScore = Number(parsed.home_score);
+          const awayScore = Number(parsed.away_score);
+          if (Number.isFinite(homeScore)) {
+            maxHomeScore = maxHomeScore === null ? homeScore : Math.max(maxHomeScore, homeScore);
+          }
+          if (Number.isFinite(awayScore)) {
+            maxAwayScore = maxAwayScore === null ? awayScore : Math.max(maxAwayScore, awayScore);
+          }
+        }
+        if (latest) {
+          result[matchId] = {
+            ...latest,
+            home_score: maxHomeScore !== null ? maxHomeScore : latest.home_score,
+            away_score: maxAwayScore !== null ? maxAwayScore : latest.away_score,
+          };
         }
       })
     );

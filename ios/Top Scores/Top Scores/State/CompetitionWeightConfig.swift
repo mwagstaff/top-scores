@@ -56,6 +56,9 @@ enum CompetitionWeightConfig {
         "efl cup": "english league cup",
         "carabao cup": "english league cup",
         "uefa europa conference league": "uefa conference league",
+        "spanish la liga": "la liga",
+        "italian serie a": "serie a",
+        "german bundesliga": "bundesliga",
     ]
     private nonisolated static let displayAliases: [String: String] = [
         "english league cup": "English League Cup",

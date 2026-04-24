@@ -620,8 +620,29 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="liveActivityPreset">Layout preset</label>
-                    <select id="liveActivityPreset"></select>
+                    <label for="liveActivityScenario">Widget scenario</label>
+                    <select id="liveActivityScenario">
+                        <option value="upcoming">Upcoming matches</option>
+                        <option value="live">In-progress matches</option>
+                        <option value="live_scores_time">In-play scores + match time</option>
+                        <option value="live_aggregate">In-play aggregate scores</option>
+                        <option value="finished">Full-time matches</option>
+                        <option value="finished_aggregate">Full-time aggregate scores</option>
+                        <option value="mixed_live_upcoming">Live + upcoming rows</option>
+                        <option value="mixed_finished_upcoming">Finished + upcoming rows</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="liveActivityMatchCount">Number of matches</label>
+                    <select id="liveActivityMatchCount">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4" selected>4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                    </select>
                 </div>
 
                 <div class="form-group">
@@ -921,6 +942,48 @@
     <script>
         let pollInterval = null;
         let liveActivityPresets = [];
+        const liveActivityScenarioDefinitions = {
+            upcoming: {
+                label: 'Upcoming matches',
+                description: 'Shared row layout with TV logos in the centre and kick-off times on the right.',
+                preferredPresetIds: ['multi_upcoming', 'multi_upcoming_4_matches']
+            },
+            live: {
+                label: 'In-progress matches',
+                description: 'Shared row layout with in-play scores in the centre and live match times on the right.',
+                preferredPresetIds: ['multi_live', 'multi_live_4_matches']
+            },
+            live_scores_time: {
+                label: 'In-play scores + match time',
+                description: 'Live matches with varied clocks and scorelines to validate spacing under match-time pressure.',
+                preferredPresetIds: ['multi_live', 'multi_live_scores_and_time', 'multi_live_4_matches']
+            },
+            live_aggregate: {
+                label: 'In-play aggregate scores',
+                description: 'Live matches that include aggregate score context beneath the main in-play score.',
+                preferredPresetIds: ['multi_live', 'multi_live_aggregate_scores', 'multi_live_4_matches']
+            },
+            finished: {
+                label: 'Full-time matches',
+                description: 'Finished fixtures in the shared row layout with final scores and FT status.',
+                preferredPresetIds: ['multi_finished', 'multi_finished_4_matches']
+            },
+            finished_aggregate: {
+                label: 'Full-time aggregate scores',
+                description: 'Finished fixtures that retain aggregate score context in the shared row layout.',
+                preferredPresetIds: ['multi_finished', 'multi_finished_aggregate_scores', 'multi_finished_4_matches']
+            },
+            mixed_live_upcoming: {
+                label: 'Live + upcoming rows',
+                description: 'Mixed shared layout with a live row followed by upcoming rows.',
+                preferredPresetIds: ['single_live_trailing_footer', 'single_live_trailing']
+            },
+            mixed_finished_upcoming: {
+                label: 'Finished + upcoming rows',
+                description: 'Mixed shared layout with a finished row followed by upcoming rows.',
+                preferredPresetIds: ['single_finished_trailing']
+            }
+        };
         let recentHarnessMatches = [];
         let selectedHarnessMatchId = null;
         let currentHarnessMatchId = null;
@@ -1012,6 +1075,14 @@
             if (savedDeviceToken) {
                 document.getElementById('liveActivityDeviceToken').value = savedDeviceToken;
             }
+            const savedScenario = localStorage.getItem(liveActivityStorageKeys.presetId);
+            if (savedScenario && liveActivityScenarioDefinitions[savedScenario]) {
+                document.getElementById('liveActivityScenario').value = savedScenario;
+            }
+            const savedMatchCount = localStorage.getItem('liveActivity.matchCount');
+            if (savedMatchCount && ['1', '2', '3', '4', '5', '6'].includes(savedMatchCount)) {
+                document.getElementById('liveActivityMatchCount').value = savedMatchCount;
+            }
         }
 
         function persistLiveActivityInputs() {
@@ -1022,51 +1093,113 @@
                 localStorage.removeItem(liveActivityStorageKeys.deviceToken);
             }
 
-            const presetId = document.getElementById('liveActivityPreset').value;
-            if (presetId) {
-                localStorage.setItem(liveActivityStorageKeys.presetId, presetId);
+            const scenario = document.getElementById('liveActivityScenario').value;
+            if (scenario) {
+                localStorage.setItem(liveActivityStorageKeys.presetId, scenario);
             } else {
                 localStorage.removeItem(liveActivityStorageKeys.presetId);
             }
+
+            localStorage.setItem(
+                'liveActivity.matchCount',
+                document.getElementById('liveActivityMatchCount').value || '4'
+            );
         }
 
-        function selectedLiveActivityPreset() {
-            const presetId = document.getElementById('liveActivityPreset').value;
-            return liveActivityPresets.find((preset) => preset.id === presetId) || null;
+        function selectedLiveActivityScenario() {
+            return document.getElementById('liveActivityScenario').value || 'upcoming';
         }
 
-        function applyLiveActivityPreset(preset) {
-            if (!preset) return;
-            document.getElementById('liveActivityDelayMinutes').value = Number.isFinite(Number(preset.delayMinutes))
+        function presetById(id) {
+            return liveActivityPresets.find((preset) => preset.id === id) || null;
+        }
+
+        function selectedLiveActivityBasePreset() {
+            const scenario = selectedLiveActivityScenario();
+            const definition = liveActivityScenarioDefinitions[scenario];
+            const requiredCount = selectedLiveActivityMatchCount();
+            if (!definition) {
+                return liveActivityPresets[0] || null;
+            }
+            const preferredPresets = definition.preferredPresetIds
+                .map((presetId) => presetById(presetId))
+                .filter(Boolean);
+            const largeEnoughPreset = preferredPresets.find((preset) =>
+                Array.isArray(preset.payload && preset.payload.matches) &&
+                preset.payload.matches.length >= requiredCount
+            );
+            if (largeEnoughPreset) {
+                return largeEnoughPreset;
+            }
+            for (const presetId of definition.preferredPresetIds) {
+                const preset = presetById(presetId);
+                if (preset) return preset;
+            }
+            return liveActivityPresets[0] || null;
+        }
+
+        function selectedLiveActivityMatchCount() {
+            const parsed = Number(document.getElementById('liveActivityMatchCount').value || 4);
+            if (!Number.isFinite(parsed)) return 4;
+            return Math.max(1, Math.min(6, Math.floor(parsed)));
+        }
+
+        function composedLiveActivityTestPayload() {
+            const preset = selectedLiveActivityBasePreset();
+            const scenario = selectedLiveActivityScenario();
+            const rowCount = selectedLiveActivityMatchCount();
+            if (!preset || !preset.payload) {
+                return {
+                    mode: 'multi_upcoming',
+                    matches: [],
+                };
+            }
+            const payload = JSON.parse(JSON.stringify(preset.payload));
+            if (Array.isArray(payload.matches)) {
+                payload.matches = payload.matches.slice(0, rowCount);
+            } else {
+                payload.matches = [];
+            }
+            if (scenario === 'mixed_live_upcoming' || scenario === 'mixed_finished_upcoming') {
+                payload.matches = payload.matches.slice(0, Math.max(2, rowCount));
+            }
+            return payload;
+        }
+
+        function applyLiveActivityScenarioDefaults() {
+            const composedPayload = composedLiveActivityTestPayload();
+            const preset = selectedLiveActivityBasePreset();
+            document.getElementById('liveActivityDelayMinutes').value = Number.isFinite(Number(preset && preset.delayMinutes))
                 ? Number(preset.delayMinutes)
                 : 0;
             document.getElementById('liveActivityFantasyScore').value =
-                Number.isFinite(Number(preset.fantasyCurrentScore))
-                    ? Number(preset.fantasyCurrentScore)
+                Number.isFinite(Number(composedPayload.fantasyCurrentScore))
+                    ? Number(composedPayload.fantasyCurrentScore)
                     : '';
             document.getElementById('liveActivityAlertTitle').value = 'Top Scores Test';
-            document.getElementById('liveActivityAlertBody').value = `Live Activity test: ${preset.label}`;
+            const definition = liveActivityScenarioDefinitions[selectedLiveActivityScenario()];
+            document.getElementById('liveActivityAlertBody').value = `Live Activity test: ${definition ? definition.label : 'Widget scenario'}`;
         }
 
         function renderLiveActivityPresetDescription() {
-            const preset = selectedLiveActivityPreset();
+            const scenario = selectedLiveActivityScenario();
+            const definition = liveActivityScenarioDefinitions[scenario];
+            const preset = selectedLiveActivityBasePreset();
+            const composedPayload = composedLiveActivityTestPayload();
             const descriptionEl = document.getElementById('liveActivityPresetDescription');
-            if (!preset) {
-                descriptionEl.textContent = 'Choose a preset to see which Live Activity layout it exercises.';
+            if (!preset || !definition) {
+                descriptionEl.textContent = 'Choose a widget scenario to see which Live Activity layout it exercises.';
                 return;
             }
 
             descriptionEl.innerHTML = `
-                <strong>${escapeHtml(preset.label)}</strong><br>
-                ${escapeHtml(preset.description)}<br>
-                <span class="muted">Mode: ${escapeHtml(preset.mode || 'unknown')} • Matches: ${escapeHtml(preset.matchCount || 0)} • Delay: ${escapeHtml(preset.delayMinutes || 0)}m${preset.fantasyCurrentScore != null ? ` • Fantasy: ${escapeHtml(preset.fantasyCurrentScore)}` : ''}</span>
+                <strong>${escapeHtml(definition.label)}</strong><br>
+                ${escapeHtml(definition.description)}<br>
+                <span class="muted">Mode: ${escapeHtml(composedPayload.mode || 'unknown')} • Matches: ${escapeHtml(Array.isArray(composedPayload.matches) ? composedPayload.matches.length : 0)} • Base preset: ${escapeHtml(preset.label)}${Number.isFinite(Number(composedPayload.fantasyCurrentScore)) ? ` • Fantasy: ${escapeHtml(composedPayload.fantasyCurrentScore)}` : ''}</span>
             `;
         }
 
         async function loadLiveActivityPresets() {
-            const select = document.getElementById('liveActivityPreset');
-            select.innerHTML = '<option value="">Loading presets...</option>';
-
             try {
                 const response = await fetch(`${LIVE_ACTIVITY_API_BASE}/presets`);
                 const payload = await response.json();
@@ -1075,29 +1208,17 @@
                 }
 
                 liveActivityPresets = payload.presets;
-                select.innerHTML = '';
-                liveActivityPresets.forEach((preset) => {
-                    const option = document.createElement('option');
-                    option.value = preset.id;
-                    option.textContent = preset.label;
-                    select.appendChild(option);
-                });
-
                 const savedPresetId = localStorage.getItem(liveActivityStorageKeys.presetId);
-                const defaultPresetId =
-                    (savedPresetId && liveActivityPresets.some((preset) => preset.id === savedPresetId))
-                        ? savedPresetId
-                        : (liveActivityPresets.find((preset) => preset.id === 'single_live_trailing_footer') || liveActivityPresets[0] || {}).id;
-                if (defaultPresetId) {
-                    select.value = defaultPresetId;
-                    applyLiveActivityPreset(selectedLiveActivityPreset());
+                const scenarioSelect = document.getElementById('liveActivityScenario');
+                if (savedPresetId && liveActivityScenarioDefinitions[savedPresetId]) {
+                    scenarioSelect.value = savedPresetId;
                 }
+                applyLiveActivityScenarioDefaults();
                 renderLiveActivityPresetDescription();
             } catch (err) {
                 console.error('Failed to load live activity presets:', err);
-                select.innerHTML = '<option value="">Unable to load presets</option>';
                 document.getElementById('liveActivityPresetDescription').textContent =
-                    'Failed to load presets from the server. Make sure the main API is running.';
+                    'Failed to load widget test presets from the server. Make sure the main API is running.';
             }
         }
 
@@ -1115,7 +1236,7 @@
 
             const payload = {
                 userDeviceToken: deviceToken,
-                presetId: document.getElementById('liveActivityPreset').value || undefined,
+                ...composedLiveActivityTestPayload(),
                 delayMinutes: Number(document.getElementById('liveActivityDelayMinutes').value || 0),
                 title: document.getElementById('liveActivityAlertTitle').value.trim() || 'Top Scores Test',
                 body: document.getElementById('liveActivityAlertBody').value.trim() || 'Live Activity test push',
@@ -1661,7 +1782,7 @@
             }
 
             container.style.display = 'block';
-            rowsEl.innerHTML = entries.slice(0, 8).map(entry => `
+            rowsEl.innerHTML = entries.slice(0, 6).map(entry => `
                 <div class="live-text-entry">
                     <div class="live-text-minute">${entry.minute || '-'}</div>
                     <div class="live-text-body">${entry.text || ''}</div>
@@ -1928,12 +2049,15 @@
             await refreshHarnessState();
             startPolling();
 
-            const presetSelect = document.getElementById('liveActivityPreset');
-            presetSelect.addEventListener('change', () => {
-                applyLiveActivityPreset(selectedLiveActivityPreset());
+            const scenarioSelect = document.getElementById('liveActivityScenario');
+            const matchCountSelect = document.getElementById('liveActivityMatchCount');
+            const refreshLiveActivityScenario = () => {
+                applyLiveActivityScenarioDefaults();
                 renderLiveActivityPresetDescription();
                 persistLiveActivityInputs();
-            });
+            };
+            scenarioSelect.addEventListener('change', refreshLiveActivityScenario);
+            matchCountSelect.addEventListener('change', refreshLiveActivityScenario);
 
             document.getElementById('liveActivityDeviceToken').addEventListener('change', persistLiveActivityInputs);
             document.getElementById('liveActivityDeviceToken').addEventListener('blur', persistLiveActivityInputs);

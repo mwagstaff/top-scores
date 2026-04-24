@@ -499,6 +499,7 @@ test("buildNotificationPayload preserves score-correction metadata for APNS deli
 });
 
 test("shouldSkipLiveActivityUpdate bypasses payload dedupe when forceDispatch is enabled", () => {
+  const nowMs = Date.parse("2026-03-13T12:01:00.000Z");
   const state = {
     lastPayloadHash: "abc123",
     lastScoreHash: "score123",
@@ -507,11 +508,23 @@ test("shouldSkipLiveActivityUpdate bypasses payload dedupe when forceDispatch is
   };
 
   assert.equal(
-    __testHooks.shouldSkipLiveActivityUpdate(state, "abc123", "multi_live", false),
+    __testHooks.shouldSkipLiveActivityUpdate(
+      state,
+      "abc123",
+      "multi_live",
+      false,
+      { nowMs }
+    ),
     true
   );
   assert.equal(
-    __testHooks.shouldSkipLiveActivityUpdate(state, "abc123", "multi_live", true),
+    __testHooks.shouldSkipLiveActivityUpdate(
+      state,
+      "abc123",
+      "multi_live",
+      true,
+      { nowMs }
+    ),
     false
   );
 });
@@ -568,7 +581,7 @@ test("shouldSkipLiveActivityUpdate throttles live non-score changes to once per 
   );
 });
 
-test("shouldSkipLiveActivityUpdate dispatches live score changes immediately", () => {
+test("shouldSkipLiveActivityUpdate suppresses live score changes during the startup quiet window", () => {
   const state = {
     lastPayloadHash: "old-payload",
     lastScoreHash: "score123",
@@ -581,11 +594,18 @@ test("shouldSkipLiveActivityUpdate dispatches live score changes immediately", (
       scoreHash: "score456",
       nowMs: Date.parse("2026-03-13T12:00:15.000Z"),
     }),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_live", false, {
+      scoreHash: "score456",
+      nowMs: Date.parse("2026-03-13T12:01:01.000Z"),
+    }),
     false
   );
 });
 
-test("shouldSkipLiveActivityUpdate dispatches non-live changes immediately", () => {
+test("shouldSkipLiveActivityUpdate suppresses upcoming-mode churn before heartbeat window", () => {
   const state = {
     lastPayloadHash: "old-payload",
     lastScoreHash: "score123",
@@ -597,6 +617,37 @@ test("shouldSkipLiveActivityUpdate dispatches non-live changes immediately", () 
     __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_upcoming", false, {
       scoreHash: "score123",
       nowMs: Date.parse("2026-03-13T12:00:15.000Z"),
+    }),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_upcoming", false, {
+      scoreHash: "score123",
+      nowMs: Date.parse("2026-03-13T12:25:10.000Z"),
+    }),
+    false
+  );
+});
+
+test("shouldSkipLiveActivityUpdate suppresses finished-mode churn before heartbeat window", () => {
+  const state = {
+    lastPayloadHash: "old-payload",
+    lastScoreHash: "score123",
+    lastMode: "multi_finished",
+    lastDispatchAt: "2026-03-13T12:00:00.000Z",
+  };
+
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_finished", false, {
+      scoreHash: "score123",
+      nowMs: Date.parse("2026-03-13T12:00:15.000Z"),
+    }),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_finished", false, {
+      scoreHash: "score123",
+      nowMs: Date.parse("2026-03-13T12:25:10.000Z"),
     }),
     false
   );
@@ -1816,6 +1867,61 @@ test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly 
   );
 
   assert.deepStrictEqual(contentState.matches[0].tvChannels, ["Amazon"]);
+});
+
+test("buildLiveActivityContentState preserves provided short names for compact widget rendering", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_live",
+    [
+      {
+        match_details_id: "cshortname123",
+        date: "2026-04-22",
+        time: "19:45",
+        league: "La Liga",
+        home_team: "Real Sociedad",
+        away_team: "Atletico Madrid",
+        home_short_name: "Sociedad",
+        away_short_name: "Atletico",
+        home_score: 1,
+        away_score: 0,
+        score_status: "55",
+        tv_channels: ["LaLigaTV"],
+      },
+    ],
+    0,
+    Date.parse("2026-04-22T18:56:00Z")
+  );
+
+  assert.equal(contentState.matches[0].homeTeam, "Real Sociedad");
+  assert.equal(contentState.matches[0].awayTeam, "Atletico Madrid");
+  assert.equal(contentState.matches[0].homeShortName, "Sociedad");
+  assert.equal(contentState.matches[0].awayShortName, "Atletico");
+});
+
+test("buildLiveActivityContentState falls back to team aliases for compact widget rendering", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_upcoming",
+    [
+      {
+        match_details_id: "csalford123",
+        date: "2026-04-23",
+        time: "20:00",
+        league: "League Two",
+        home_team: "Salford City",
+        away_team: "Bromley",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+        tv_channels: ["Sky Sports"],
+      },
+    ],
+    0,
+    Date.parse("2026-04-23T10:00:00Z")
+  );
+
+  assert.equal(contentState.matches[0].homeTeam, "Salford City");
+  assert.equal(contentState.matches[0].homeShortName, "Salford");
+  assert.equal(contentState.matches[0].awayShortName, undefined);
 });
 
 test("buildLiveActivityContentState de-dupes duplicate match ids and keeps the freshest snapshot", () => {
@@ -3618,7 +3724,7 @@ test("buildLiveActivityPresentationForUser keeps delayed minute and score aligne
   assert.equal(presentation.matches[0].away_score, 3);
 });
 
-test("compareLiveActivityMatches sorts later kickoffs first", () => {
+test("compareLiveActivityMatches sorts earlier kickoffs first", () => {
   const laterKickoffMatch = {
     match_details_id: "later",
     league: "Premier League",
@@ -3642,8 +3748,8 @@ test("compareLiveActivityMatches sorts later kickoffs first", () => {
     time: "17:30",
   };
 
-  const sorted = [earlierKickoffMatch, laterKickoffMatch].sort(__testHooks.compareLiveActivityMatches);
-  assert.equal(sorted[0].match_details_id, "later");
+  const sorted = [laterKickoffMatch, earlierKickoffMatch].sort(__testHooks.compareLiveActivityMatches);
+  assert.equal(sorted[0].match_details_id, "earlier");
 });
 
 test("compareUpcomingLiveActivityMatches sorts earlier kickoffs first", () => {
@@ -3734,7 +3840,7 @@ test("compareUpcomingLiveActivityMatches sorts higher total team score first for
   assert.equal(sorted[0].match_details_id, "high");
 });
 
-test("buildLiveActivityPresentationForUser sorts upcoming matches by kickoff then total team score", () => {
+test("buildLiveActivityPresentationForUser sorts upcoming matches within a competition by kickoff then total team score", () => {
   const nowMs = Date.now();
   const firstKickoff = formatLocalDateTimeParts(nowMs + 10 * 60 * 1000);
   const secondKickoff = formatLocalDateTimeParts(nowMs + 12 * 60 * 1000);
@@ -3787,7 +3893,88 @@ test("buildLiveActivityPresentationForUser sorts upcoming matches by kickoff the
   assert.equal(presentation.matches[1].match_details_id, "c05vqzv88jnt");
 });
 
-test("buildLiveActivityPresentationForUser orders mixed live and full-time matches by latest kickoff first", () => {
+test("buildLiveActivityPresentationForUser orders upcoming matches by competition weight before later lower-weight kickoffs", () => {
+  const nowMs = Date.now();
+  const laLigaEarly = formatLocalDateTimeParts(nowMs + 2 * 60 * 60 * 1000);
+  const laLigaMid = formatLocalDateTimeParts(nowMs + 3 * 60 * 60 * 1000);
+  const leagueTwo = formatLocalDateTimeParts(nowMs + 4 * 60 * 60 * 1000);
+  const laLigaLate = formatLocalDateTimeParts(nowMs + 4.5 * 60 * 60 * 1000);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(),
+    [
+      {
+        state: null,
+        match: {
+          match_details_id: "la-liga-early",
+          date: laLigaEarly.date,
+          time: laLigaEarly.time,
+          league: "La Liga",
+          home_team: "Levante",
+          away_team: "Sevilla",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+      {
+        state: null,
+        match: {
+          match_details_id: "la-liga-mid",
+          date: laLigaMid.date,
+          time: laLigaMid.time,
+          league: "La Liga",
+          home_team: "Rayo Vallecano",
+          away_team: "Espanyol",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+      {
+        state: null,
+        match: {
+          match_details_id: "league-two",
+          date: leagueTwo.date,
+          time: leagueTwo.time,
+          league: "League Two",
+          home_team: "Salford City",
+          away_team: "Bromley",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+      {
+        state: null,
+        match: {
+          match_details_id: "la-liga-late",
+          date: laLigaLate.date,
+          time: laLigaLate.time,
+          league: "La Liga",
+          home_team: "Real Oviedo",
+          away_team: "Villarreal",
+          home_score: null,
+          away_score: null,
+          score_status: null,
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "multi_upcoming");
+  assert.deepEqual(
+    presentation.matches.map((match) => match.match_details_id),
+    ["la-liga-early", "la-liga-mid", "la-liga-late", "league-two"]
+  );
+});
+
+test("buildLiveActivityPresentationForUser orders mixed live and full-time matches by earliest kickoff first", () => {
   const nowMs = Date.now();
   const liveKickoff = formatLocalDateTimeParts(nowMs - 3 * 60 * 60 * 1000);
   const finishedKickoff = formatLocalDateTimeParts(nowMs - 55 * 60 * 1000);
@@ -3845,7 +4032,7 @@ test("buildLiveActivityPresentationForUser orders mixed live and full-time match
   assert.equal(presentation.mode, "multi_live");
   assert.deepEqual(
     presentation.matches.map((match) => match.match_details_id),
-    ["finished-first", "live-now"]
+    ["live-now", "finished-first"]
   );
 });
 
@@ -3992,7 +4179,7 @@ test("buildLiveActivityPresentationForUser keeps recent full-time matches visibl
   assert.equal(expired.matches.length, 0);
 });
 
-test("buildLiveActivityPresentationForUser caps live activity payloads to 8 matches", () => {
+test("buildLiveActivityPresentationForUser caps live activity payloads to 4 matches", () => {
   const nowMs = Date.now();
   const kickoff = formatLocalDateTimeParts(nowMs - 20 * 60 * 1000);
 
@@ -4035,7 +4222,7 @@ test("buildLiveActivityPresentationForUser caps live activity payloads to 8 matc
   );
 
   assert.equal(presentation.mode, "multi_live");
-  assert.equal(presentation.matches.length, 8);
+  assert.equal(presentation.matches.length, 4);
 });
 
 test("does not emit delayed kickoff when first live status seen is HT", () => {

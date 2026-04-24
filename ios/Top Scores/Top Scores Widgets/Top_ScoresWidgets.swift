@@ -8,6 +8,33 @@ private enum WidgetAppGroupConfig {
     static let identifier = "group.dev.skynolimit.topscores"
     static let sharedMatchesFileName = "shared-matches.json"
     static let competitionCatalogWeightsDataKey = "catalog.competitionWeightsData"
+    static let liveActivityDiagnosticsKey = "live_activity.diagnostics"
+    static let liveActivityDiagnosticsFileName = "live-activity-diagnostics.log"
+}
+
+private enum WidgetSharedDiagnosticsBridge {
+    private static let maxEntries = 80
+
+    static func append(_ message: String) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(timestamp)] \(trimmed)\n"
+
+        guard let url = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: WidgetAppGroupConfig.identifier)?
+            .appendingPathComponent(WidgetAppGroupConfig.liveActivityDiagnosticsFileName)
+        else { return }
+
+        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var lines = existing.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        lines.append(String(line.dropLast()))
+        if lines.count > maxEntries {
+            lines.removeFirst(lines.count - maxEntries)
+        }
+        let output = lines.joined(separator: "\n") + "\n"
+        try? output.write(to: url, atomically: true, encoding: .utf8)
+    }
 }
 
 private struct WidgetPreferencesSnapshot: Codable, Equatable {
@@ -554,11 +581,45 @@ private enum LiveActivityRenderDiagnostics {
         let inserted = loggedKeys.insert(key).inserted
         lock.unlock()
         guard inserted else { return }
+        WidgetSharedDiagnosticsBridge.append("[LiveActivityWidget] render surface=\(surface) \(summary(for: state))")
         NSLog("[LiveActivityWidget] render surface=%@ %@", surface, summary(for: state))
     }
 
+    static func logBodyEvaluationIfNeeded(
+        state: TopScoresLiveActivityAttributes.ContentState,
+        surface: String,
+        extra: String? = nil
+    ) {
+        var key = "\(surface)|body|\(state.mode)|\(state.generatedAtEpochSeconds)"
+        if let extra, !extra.isEmpty {
+            key.append("|\(extra)")
+        }
+        lock.lock()
+        let inserted = loggedKeys.insert(key).inserted
+        lock.unlock()
+        guard inserted else { return }
+        if let extra, !extra.isEmpty {
+            WidgetSharedDiagnosticsBridge.append("[LiveActivityWidget] body surface=\(surface) extra=\(extra) \(summary(for: state))")
+            NSLog("[LiveActivityWidget] body surface=%@ extra=%@ %@", surface, extra, summary(for: state))
+        } else {
+            WidgetSharedDiagnosticsBridge.append("[LiveActivityWidget] body surface=\(surface) \(summary(for: state))")
+            NSLog("[LiveActivityWidget] body surface=%@ %@", surface, summary(for: state))
+        }
+    }
+
+    static func logLogoResolutionIfNeeded(kind: String, name: String, result: String) {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = "logo|\(kind)|\(normalizedName)|\(result)"
+        lock.lock()
+        let inserted = loggedKeys.insert(key).inserted
+        lock.unlock()
+        guard inserted else { return }
+        WidgetSharedDiagnosticsBridge.append("[LiveActivityWidget] logo kind=\(kind) name=\(normalizedName) result=\(result)")
+        NSLog("[LiveActivityWidget] logo kind=%@ name=%@ result=%@", kind, normalizedName, result)
+    }
+
     static func summary(for state: TopScoresLiveActivityAttributes.ContentState) -> String {
-        let matches = state.matches.prefix(4).map { match -> String in
+        let matches = state.matches.prefix(6).map { match -> String in
             let score: String
             if match.hasScore, let home = match.homeScore, let away = match.awayScore {
                 let homeText = match.homeWonOnPenalties ? "\(home) (P)" : "\(home)"
@@ -924,6 +985,9 @@ private enum WidgetCompetitionWeightConfig {
         "efl cup": "english league cup",
         "carabao cup": "english league cup",
         "uefa europa conference league": "uefa conference league",
+        "spanish la liga": "la liga",
+        "italian serie a": "serie a",
+        "german bundesliga": "bundesliga",
     ]
 
     static func weight(for competitionName: String) -> Double? {
@@ -1715,11 +1779,13 @@ private final class WidgetTeamLogoResolver {
     func image(
         for teamName: String,
         alternateNames: [String] = [],
+        variant: WidgetLogoAssetVariant = .standard,
         idealPointSize: CGFloat? = nil
     ) -> UIImage? {
         let cacheKey = Self.cacheKey(
             for: teamName,
             alternateNames: alternateNames,
+            variant: variant,
             idealPointSize: idealPointSize
         )
 
@@ -1733,9 +1799,10 @@ private final class WidgetTeamLogoResolver {
         if let image = resolveAssetImage(
             for: teamName,
             alternateNames: alternateNames,
+            variant: variant,
             idealPointSize: idealPointSize
         ) ??
-            resolveAssetFallbackImage(idealPointSize: idealPointSize) {
+            resolveAssetFallbackImage(variant: variant, idealPointSize: idealPointSize) {
             lock.lock()
             cache[cacheKey] = image
             lock.unlock()
@@ -1754,6 +1821,16 @@ private final class WidgetTeamLogoResolver {
         }
 
         return image
+    }
+
+    func assetName(
+        for teamName: String,
+        alternateNames: [String] = [],
+        variant: WidgetLogoAssetVariant = .standard
+    ) -> String? {
+        let baseAssetName = resolveAssetName(for: teamName, alternateNames: alternateNames)
+        return preferredAssetName(from: baseAssetName, variant: variant) ??
+            preferredAssetName(from: fallbackAssetName, variant: variant)
     }
 
     private func loadLogos() {
@@ -1841,23 +1918,39 @@ private final class WidgetTeamLogoResolver {
     private func resolveAssetImage(
         for teamName: String,
         alternateNames: [String] = [],
+        variant: WidgetLogoAssetVariant,
         idealPointSize: CGFloat?
     ) -> UIImage? {
-        guard let assetName = resolveAssetName(for: teamName, alternateNames: alternateNames) else {
+        let baseAssetName = resolveAssetName(for: teamName, alternateNames: alternateNames)
+        guard let assetName = preferredAssetName(from: baseAssetName, variant: variant) else {
             return nil
         }
         return imageFromAssets(named: assetName, idealPointSize: idealPointSize)
     }
 
-    private func resolveAssetFallbackImage(idealPointSize: CGFloat?) -> UIImage? {
-        if let fallbackAssetName {
+    private func preferredAssetName(from baseAssetName: String?, variant: WidgetLogoAssetVariant) -> String? {
+        guard let baseAssetName else { return nil }
+        for candidate in variant.candidateAssetNames(for: baseAssetName) {
+            if directAssetName(for: candidate) != nil {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    private func resolveAssetFallbackImage(
+        variant: WidgetLogoAssetVariant,
+        idealPointSize: CGFloat?
+    ) -> UIImage? {
+        if let fallbackAssetName = preferredAssetName(from: fallbackAssetName, variant: variant) {
             if let image = imageFromAssets(named: fallbackAssetName, idealPointSize: idealPointSize) {
                 return image
             }
         }
 
         for candidate in [fallbackName, "\(fallbackName) 1"] {
-            if let image = imageFromAssets(named: candidate, idealPointSize: idealPointSize) {
+            if let resolved = preferredAssetName(from: candidate, variant: variant),
+               let image = imageFromAssets(named: resolved, idealPointSize: idealPointSize) {
                 return image
             }
         }
@@ -1877,13 +1970,14 @@ private final class WidgetTeamLogoResolver {
     private static func cacheKey(
         for teamName: String,
         alternateNames: [String],
+        variant: WidgetLogoAssetVariant,
         idealPointSize: CGFloat?
     ) -> String {
         let normalized = lookupCandidates(for: teamName, alternateNames: alternateNames)
             .map(normalizedKey)
             .joined(separator: "|")
         let pixelSize = Int(maxPixelSize(for: idealPointSize).rounded())
-        return "\(normalized)|\(pixelSize)"
+        return "\(variant.cacheKeyPrefix)|\(normalized)|\(pixelSize)"
     }
 
     private static func maxPixelSize(for idealPointSize: CGFloat?) -> CGFloat {
@@ -2251,6 +2345,33 @@ private final class WidgetTeamLogoResolver {
     }
 }
 
+private enum WidgetLogoAssetVariant {
+    case standard
+    case liveActivity
+
+    var cacheKeyPrefix: String {
+        switch self {
+        case .standard:
+            return "std"
+        case .liveActivity:
+            return "la"
+        }
+    }
+
+    func candidateAssetNames(for baseName: String) -> [String] {
+        switch self {
+        case .standard:
+            return [baseName]
+        case .liveActivity:
+            return [
+                "\(baseName) Live Activity",
+                "\(baseName)LiveActivity",
+                baseName,
+            ]
+        }
+    }
+}
+
 private final class WidgetTvLogoResolver {
     static let shared = WidgetTvLogoResolver()
 
@@ -2281,6 +2402,7 @@ private final class WidgetTvLogoResolver {
     func image(
         for channelName: String,
         allowsFallback: Bool = true,
+        variant: WidgetLogoAssetVariant = .standard,
         idealPointSize: CGFloat? = nil
     ) -> UIImage? {
         let normalizedRequest = Self.normalizedKey(channelName)
@@ -2289,6 +2411,7 @@ private final class WidgetTvLogoResolver {
         let cacheKey = Self.cacheKey(
             for: channelName,
             allowsFallback: allowsFallback,
+            variant: variant,
             idealPointSize: idealPointSize
         )
         lock.lock()
@@ -2302,6 +2425,7 @@ private final class WidgetTvLogoResolver {
         if let assetImage = assetImage(
             for: channelName,
             allowsFallback: allowsFallback,
+            variant: variant,
             idealPointSize: idealPointSize
         ) {
             lock.lock()
@@ -2354,8 +2478,13 @@ private final class WidgetTvLogoResolver {
         return nil
     }
 
-    func assetName(for channelName: String, allowsFallback: Bool = true) -> String? {
-        resolveAssetName(for: channelName, allowsFallback: allowsFallback)
+    func assetName(
+        for channelName: String,
+        allowsFallback: Bool = true,
+        variant: WidgetLogoAssetVariant = .standard
+    ) -> String? {
+        let baseAssetName = resolveAssetName(for: channelName, allowsFallback: allowsFallback)
+        return preferredAssetName(from: baseAssetName, variant: variant)
     }
 
     private func loadLogos() {
@@ -2455,9 +2584,11 @@ private final class WidgetTvLogoResolver {
     private func assetImage(
         for channelName: String,
         allowsFallback: Bool,
+        variant: WidgetLogoAssetVariant,
         idealPointSize: CGFloat?
     ) -> UIImage? {
-        guard let assetName = resolveAssetName(for: channelName, allowsFallback: allowsFallback) else {
+        let baseAssetName = resolveAssetName(for: channelName, allowsFallback: allowsFallback)
+        guard let assetName = preferredAssetName(from: baseAssetName, variant: variant) else {
             return nil
         }
 
@@ -2476,11 +2607,12 @@ private final class WidgetTvLogoResolver {
     private static func cacheKey(
         for channelName: String,
         allowsFallback: Bool,
+        variant: WidgetLogoAssetVariant,
         idealPointSize: CGFloat?
     ) -> String {
         let normalized = normalizedKey(channelName)
         let pixelSize = Int(maxPixelSize(for: idealPointSize).rounded())
-        return "\(allowsFallback ? "fallback" : "strict")|\(normalized)|\(pixelSize)"
+        return "\(variant.cacheKeyPrefix)|\(allowsFallback ? "fallback" : "strict")|\(normalized)|\(pixelSize)"
     }
 
     private static func maxPixelSize(for idealPointSize: CGFloat?) -> CGFloat {
@@ -2574,6 +2706,18 @@ private final class WidgetTvLogoResolver {
 
         if allowsFallback {
             return assetCatalogNames[Self.normalizedKey(fallbackName)]
+        }
+        return nil
+    }
+
+    private func preferredAssetName(from baseAssetName: String?, variant: WidgetLogoAssetVariant) -> String? {
+        guard let baseAssetName else { return nil }
+        for candidate in variant.candidateAssetNames(for: baseAssetName) {
+            for bundle in logoBundles() {
+                if UIImage(named: candidate, in: bundle, compatibleWith: nil) != nil {
+                    return candidate
+                }
+            }
         }
         return nil
     }
@@ -2738,22 +2882,42 @@ private final class WidgetTvLogoResolver {
 private struct TopScoresLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TopScoresLiveActivityAttributes.self) { context in
+            let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                state: context.state,
+                surface: "activity_configuration_lock_screen"
+            )
             TopScoresLiveActivityLockScreenView(state: context.state)
                 .activityBackgroundTint(Color(red: 0.03, green: 0.04, blue: 0.09))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
-            DynamicIsland {
+            let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                state: context.state,
+                surface: "activity_configuration_dynamic_island"
+            )
+            return DynamicIsland {
                 DynamicIslandExpandedRegion(.center) {
                     TopScoresLiveActivityExpandedView(state: context.state)
                 }
             } compactLeading: {
+                let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                    state: context.state,
+                    surface: "dynamic_island_compact_leading"
+                )
                 Text(compactLeadingText(state: context.state))
                     .font(.caption2.weight(.semibold))
             } compactTrailing: {
+                let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                    state: context.state,
+                    surface: "dynamic_island_compact_trailing"
+                )
                 Text(compactTrailingText(state: context.state))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.white.opacity(compactTrailingOpacity(state: context.state)))
             } minimal: {
+                let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                    state: context.state,
+                    surface: "dynamic_island_minimal"
+                )
                 Text("TS")
                     .font(.caption2.weight(.bold))
             }
@@ -2767,15 +2931,12 @@ private struct TopScoresLiveActivityWidget: Widget {
 
     private func compactTrailingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
         guard let first = LiveActivityMatchDisplayFilter.displayMatches(for: state).first else { return "" }
-        if (state.mode.contains("live") || state.mode.contains("finished")),
-           let home = first.homeScore,
-           let away = first.awayScore {
-            let homeText = first.homeWonOnPenalties ? "\(home) (P)" : "\(home)"
-            let awayText = first.awayWonOnPenalties ? "\(away) (P)" : "\(away)"
-            return "\(homeText)-\(awayText)"
+        if let home = first.homeScore, let away = first.awayScore {
+            return "\(home)-\(away)"
         }
-        if state.mode.contains("finished") {
-            return first.matchTime ?? first.time
+        if let matchTime = first.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !matchTime.isEmpty {
+            return matchTime
         }
         return first.time
     }
@@ -2795,13 +2956,15 @@ private struct TopScoresLiveActivityWidget: Widget {
 private struct TopScoresLiveActivityLockScreenView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
     var pinsFooterToBottom: Bool = true
+    private let maxPrimaryMatches = 6
+    private let maxTrailingUpcomingMatches = 5
 
     private var displayMatches: [TopScoresLiveActivityMatchState] {
-        LiveActivityMatchDisplayFilter.displayMatches(for: state)
+        Array(LiveActivityMatchDisplayFilter.displayMatches(for: state).prefix(maxPrimaryMatches))
     }
 
     private var trailingDisplayMatches: [TopScoresLiveActivityMatchState] {
-        LiveActivityMatchDisplayFilter.trailingDisplayMatches(for: state)
+        Array(LiveActivityMatchDisplayFilter.trailingDisplayMatches(for: state).prefix(maxTrailingUpcomingMatches))
     }
 
     var body: some View {
@@ -2816,6 +2979,11 @@ private struct TopScoresLiveActivityLockScreenView: View {
         let hasFooterContent = delayBannerText != nil || fantasyScoreText != nil
         let usesDenseLayout = isMultiMode || hasTrailingUpcoming
         let usesCompactSingleCardLayout = hasTrailingUpcoming || hasFooterContent
+        let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+            state: state,
+            surface: "lock_screen_body",
+            extra: "matches=\(matches.count)|trailing=\(trailingUpcoming.count)|dense=\(usesDenseLayout)"
+        )
         Group {
             if pinsFooterToBottom && hasFooterContent {
                 VStack(spacing: 0) {
@@ -2851,7 +3019,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
         }
         .id(viewIdentity)
         .task(id: viewIdentity) {
-            LiveActivityRenderDiagnostics.logIfNeeded(state: state, surface: "lock_screen")
+            LiveActivityRenderDiagnostics.logIfNeeded(state: state, surface: "lock_screen_task")
         }
     }
 
@@ -2866,67 +3034,71 @@ private struct TopScoresLiveActivityLockScreenView: View {
             switch state.mode {
             case "single_upcoming":
                 if let match = matches.first {
-                    SingleUpcomingMatchView(match: match)
+                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                        state: state,
+                        surface: "lock_screen_multi_consistent",
+                        extra: "mode=\(state.mode) matches=1"
+                    )
+                    UnifiedMultiMatchListView(matches: [match])
                 } else {
                     EmptyLiveActivityView()
                 }
             case "single_live":
-                VStack(alignment: .leading, spacing: 6) {
-                    if let match = matches.first {
-                        SingleLiveMatchView(match: match, compact: usesCompactSingleCardLayout)
-                    } else {
-                        EmptyLiveActivityView()
-                    }
-                    if hasTrailingUpcoming {
-                        Rectangle()
-                            .fill(.white.opacity(0.16))
-                            .frame(height: 1)
-                        MultiMatchListView(matches: trailingUpcoming, live: false, maxMatches: 4, compact: true)
-                    }
+                if let match = matches.first {
+                    let displayMatches = [match] + (hasTrailingUpcoming ? trailingUpcoming : [])
+                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                        state: state,
+                        surface: "lock_screen_multi_consistent",
+                        extra: "mode=\(state.mode) matches=\(displayMatches.count)"
+                    )
+                    UnifiedMultiMatchListView(matches: displayMatches)
+                } else {
+                    EmptyLiveActivityView()
                 }
             case "single_finished":
-                VStack(alignment: .leading, spacing: 6) {
-                    if let match = matches.first {
-                        SingleFinishedMatchView(match: match, compact: usesCompactSingleCardLayout)
-                    } else {
-                        EmptyLiveActivityView()
-                    }
-                    if hasTrailingUpcoming {
-                        Rectangle()
-                            .fill(.white.opacity(0.16))
-                            .frame(height: 1)
-                        MultiMatchListView(matches: trailingUpcoming, live: false, maxMatches: 4, compact: true)
-                    }
+                if let match = matches.first {
+                    let displayMatches = [match] + (hasTrailingUpcoming ? trailingUpcoming : [])
+                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                        state: state,
+                        surface: "lock_screen_multi_consistent",
+                        extra: "mode=\(state.mode) matches=\(displayMatches.count)"
+                    )
+                    UnifiedMultiMatchListView(matches: displayMatches)
+                } else {
+                    EmptyLiveActivityView()
                 }
             case "multi_upcoming":
                 if matches.isEmpty {
                     EmptyLiveActivityView()
                 } else {
-                    MultiMatchListView(
-                        matches: matches,
-                        live: false,
-                        prefersSingleColumn: matches.count == 2
+                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                        state: state,
+                        surface: "lock_screen_multi_consistent",
+                        extra: "mode=\(state.mode) matches=\(matches.count)"
                     )
+                    UnifiedMultiMatchListView(matches: matches)
                 }
             case "multi_live":
                 if matches.isEmpty {
                     EmptyLiveActivityView()
                 } else {
-                    MultiMatchListView(
-                        matches: matches,
-                        live: true,
-                        prefersSingleColumn: matches.count == 2
+                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                        state: state,
+                        surface: "lock_screen_multi_consistent",
+                        extra: "mode=\(state.mode) matches=\(matches.count)"
                     )
+                    UnifiedMultiMatchListView(matches: matches)
                 }
             case "multi_finished":
                 if matches.isEmpty {
                     EmptyLiveActivityView()
                 } else {
-                    MultiMatchListView(
-                        matches: matches,
-                        live: true,
-                        prefersSingleColumn: matches.count == 2
+                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+                        state: state,
+                        surface: "lock_screen_multi_consistent",
+                        extra: "mode=\(state.mode) matches=\(matches.count)"
                     )
+                    UnifiedMultiMatchListView(matches: matches)
                 }
             case "ended":
                 EndedLiveActivityView()
@@ -3025,11 +3197,19 @@ private struct TopScoresLiveActivityLockScreenView: View {
 @available(iOSApplicationExtension 16.1, *)
 private struct TopScoresLiveActivityExpandedView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
+    private let maxExpandedMatches = 3
 
     var body: some View {
+        let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
+            state: state,
+            surface: "dynamic_island_expanded_body"
+        )
         VStack(alignment: .leading, spacing: 4) {
             titleView
-            TopScoresLiveActivityLockScreenView(state: state, pinsFooterToBottom: false)
+            MinimalExpandedActivitySummaryView(state: cappedState)
+        }
+        .task(id: "\(state.mode)|\(state.generatedAtEpochSeconds)|expanded") {
+            LiveActivityRenderDiagnostics.logIfNeeded(state: state, surface: "dynamic_island_expanded_task")
         }
     }
 
@@ -3053,6 +3233,102 @@ private struct TopScoresLiveActivityExpandedView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var cappedState: TopScoresLiveActivityAttributes.ContentState {
+        TopScoresLiveActivityAttributes.ContentState(
+            mode: state.mode,
+            generatedAtEpochSeconds: state.generatedAtEpochSeconds,
+            delayMinutes: state.delayMinutes,
+            fantasyCurrentScore: state.fantasyCurrentScore,
+            matches: Array(state.matches.prefix(maxExpandedMatches))
+        )
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct MinimalExpandedActivitySummaryView: View {
+    let state: TopScoresLiveActivityAttributes.ContentState
+
+    private var visibleMatches: [TopScoresLiveActivityMatchState] {
+        Array(LiveActivityMatchDisplayFilter.displayMatches(for: state).prefix(3))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(visibleMatches.enumerated()), id: \.element.renderIdentity) { index, match in
+                HStack(spacing: 8) {
+                    Text(match.displayHomeTeam)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Text(centerText(for: match))
+                        .font(centerFont(for: match))
+                        .foregroundStyle(.white.opacity(centerOpacity(for: match)))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .frame(width: 56, alignment: .center)
+
+                    Text(match.displayAwayTeam)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+
+                    Text(trailingText(for: match))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineLimit(1)
+                        .frame(width: 34, alignment: .trailing)
+                }
+
+                if index < visibleMatches.count - 1 {
+                    Rectangle()
+                        .fill(.white.opacity(0.12))
+                        .frame(height: 1)
+                }
+            }
+        }
+    }
+
+    private func centerText(for match: TopScoresLiveActivityMatchState) -> String {
+        if let home = match.homeScore, let away = match.awayScore {
+            return "\(home)-\(away)"
+        }
+        return match.time
+    }
+
+    private func centerFont(for match: TopScoresLiveActivityMatchState) -> Font {
+        if match.homeScore != nil, match.awayScore != nil {
+            return .caption.monospacedDigit().weight(.bold)
+        }
+        return .caption2.monospacedDigit().weight(.semibold)
+    }
+
+    private func centerOpacity(for match: TopScoresLiveActivityMatchState) -> Double {
+        if match.isFinished, match.homeScore != nil, match.awayScore != nil {
+            return LiveActivityScoreStyle.finishedOpacity
+        }
+        return 1.0
+    }
+
+    private func trailingText(for match: TopScoresLiveActivityMatchState) -> String {
+        if state.mode == "multi_live" || state.mode == "single_live" {
+            let liveTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !liveTime.isEmpty {
+                return liveTime
+            }
+        }
+        let primaryChannel = match.tvChannels
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? ""
+        if !primaryChannel.isEmpty {
+            return String(primaryChannel.prefix(4)).uppercased()
+        }
+        return match.time
     }
 }
 
@@ -3436,27 +3712,6 @@ private struct LiveActivityUpcomingIndicator: View {
                             style: .continuous
                         )
                     )
-                    .task(id: "\(primaryChannel)|\(assetName)|asset") {
-                        NSLog("[LiveActivityWidget] upcoming_indicator asset channel=%@ asset=%@", primaryChannel, assetName)
-                    }
-            } else if let image = WidgetTvLogoResolver.shared.image(
-                for: primaryChannel,
-                allowsFallback: false,
-                idealPointSize: logoSize
-            ) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: logoSize * 1.8, height: logoSize)
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: max(2, logoSize * 0.18),
-                            style: .continuous
-                        )
-                    )
-                    .task(id: "\(primaryChannel)|file") {
-                        NSLog("[LiveActivityWidget] upcoming_indicator file channel=%@", primaryChannel)
-                    }
             } else {
                 Text(channelBadgeText(for: primaryChannel))
                     .font(channelBadgeFont)
@@ -3467,17 +3722,11 @@ private struct LiveActivityUpcomingIndicator: View {
                         RoundedRectangle(cornerRadius: max(3, logoSize * 0.22), style: .continuous)
                             .fill(.white.opacity(0.12))
                     )
-                    .task(id: "\(primaryChannel)|missing") {
-                        NSLog("[LiveActivityWidget] upcoming_indicator missing channel=%@ channels=%@", primaryChannel, channels.joined(separator: ","))
-                    }
             }
         } else {
             Text("vs")
                 .font(fallbackVsFont)
                 .foregroundStyle(.white.opacity(0.6))
-                .task(id: "no-channel") {
-                    NSLog("[LiveActivityWidget] upcoming_indicator no_channel channels=%@", channels.joined(separator: ","))
-                }
         }
     }
 
@@ -3801,6 +4050,7 @@ private struct MultiMatchListView: View {
     var maxMatches: Int = 8
     var compact: Bool = false
     var prefersSingleColumn: Bool = false
+    var forceSingleColumn: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -3856,7 +4106,164 @@ private struct MultiMatchListView: View {
     }
 
     private var usesSingleColumnLayout: Bool {
-        prefersSingleColumn && !compact && visibleMatches.count == 2
+        forceSingleColumn || (prefersSingleColumn && !compact && visibleMatches.count == 2)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct UnifiedMultiMatchListView: View {
+    let matches: [TopScoresLiveActivityMatchState]
+
+    private var visibleMatches: [TopScoresLiveActivityMatchState] {
+        Array(matches.prefix(6))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(visibleMatches.enumerated()), id: \.element.renderIdentity) { index, match in
+                HStack(spacing: 8) {
+                    Text(match.displayHomeTeam)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+
+                    centerContent(for: match)
+                        .frame(width: 78, alignment: .center)
+
+                    Text(match.displayAwayTeam)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    trailingContent(for: match)
+                        .frame(width: 44, alignment: .trailing)
+                }
+                .padding(.vertical, 4)
+
+                if index < visibleMatches.count - 1 {
+                    Rectangle()
+                        .fill(.white.opacity(0.12))
+                        .frame(height: 1)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func centerContent(for match: TopScoresLiveActivityMatchState) -> some View {
+        switch rowKind(for: match) {
+        case .upcoming:
+            Group {
+                if let primary = primaryChannel(for: match) {
+                    LiveActivityChannelLogo(channelName: primary, size: 12)
+                } else {
+                    Text("vs")
+                        .font(.caption2.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(1)
+                }
+            }
+        case .live, .finished:
+            Text(primaryStatusText(for: match))
+                .font(primaryStatusFont(for: match))
+                .foregroundStyle(.white.opacity(primaryStatusOpacity(for: match)))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+
+    @ViewBuilder
+    private func trailingContent(for match: TopScoresLiveActivityMatchState) -> some View {
+        Text(trailingStatusText(for: match))
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.white.opacity(rowKind(for: match) == .upcoming ? 0.72 : 0.65))
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+    }
+
+    private enum RowKind {
+        case upcoming
+        case live
+        case finished
+    }
+
+    private func rowKind(for match: TopScoresLiveActivityMatchState) -> RowKind {
+        if match.isFinished {
+            return .finished
+        }
+        if match.isInProgress || match.homeScore != nil || match.awayScore != nil {
+            return .live
+        }
+        return .upcoming
+    }
+
+    private func primaryChannel(for match: TopScoresLiveActivityMatchState) -> String? {
+        let primary = match.tvChannels.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !primary.isEmpty else { return nil }
+        return primary
+    }
+
+    private func primaryStatusText(for match: TopScoresLiveActivityMatchState) -> String {
+        guard let home = match.homeScore, let away = match.awayScore else {
+            return fallbackStatusText(for: match)
+        }
+        if let aggregateHome = match.resolvedAggregateHomeScore,
+           let aggregateAway = match.resolvedAggregateAwayScore,
+           match.hasDisplayableAggregateScore {
+            return "(\(aggregateHome)) \(home)-\(away) (\(aggregateAway))"
+        }
+        return "\(home)-\(away)"
+    }
+
+    private func primaryStatusFont(for match: TopScoresLiveActivityMatchState) -> Font {
+        if match.homeScore != nil, match.awayScore != nil {
+            return .caption.monospacedDigit().weight(.bold)
+        }
+        return .caption2.monospacedDigit().weight(.semibold)
+    }
+
+    private func primaryStatusOpacity(for match: TopScoresLiveActivityMatchState) -> Double {
+        match.isFinished ? LiveActivityScoreStyle.finishedOpacity : 1.0
+    }
+
+    private func trailingStatusText(for match: TopScoresLiveActivityMatchState) -> String {
+        switch rowKind(for: match) {
+        case .upcoming:
+            return match.time
+        case .finished:
+            return "FT"
+        case .live:
+            let liveTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !liveTime.isEmpty {
+                return liveTime
+            }
+            if let displayStatus = formattedMatchTime(for: match)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !displayStatus.isEmpty {
+                return displayStatus
+            }
+            return match.time
+        }
+    }
+
+    private func fallbackStatusText(for match: TopScoresLiveActivityMatchState) -> String {
+        if let displayStatus = formattedMatchTime(for: match)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !displayStatus.isEmpty {
+            return displayStatus
+        }
+        return match.time
+    }
+
+    private func formattedMatchTime(for match: TopScoresLiveActivityMatchState) -> String? {
+        let normalized = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty else { return nil }
+        let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
+        if normalized.range(of: minutePattern, options: .regularExpression) != nil {
+            let minuteValue = normalized.replacingOccurrences(of: "'", with: "")
+            return "\(minuteValue)'"
+        }
+        return normalized
     }
 }
 
@@ -3879,48 +4286,38 @@ private struct MultiMatchEntryCell: View {
     var body: some View {
         Group {
             if expanded {
-                HStack(spacing: 10) {
-                    HStack(spacing: 7) {
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         LiveActivityTeamLogo(
                             teamName: match.homeTeam,
                             alternateNames: [match.homeShortName].compactMap { $0 },
-                            size: logoSize
+                            size: 18
                         )
-                            .frame(width: logoSize, alignment: .center)
-
                         Text(match.displayHomeTeam)
-                            .font(teamNameFont)
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(.white.opacity(0.92))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    centerMatchStateView
-                        .frame(width: scoreSlotWidth, alignment: .center)
-
-                    HStack(spacing: 7) {
-                        Text(match.displayAwayTeam)
-                            .font(teamNameFont)
-                            .foregroundStyle(.white.opacity(0.92))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .multilineTextAlignment(.leading)
+                    }
 
+                    expandedCenterText
+                        .frame(width: 50, alignment: .center)
+
+                    HStack(spacing: 6) {
+                        Text(match.displayAwayTeam)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                         LiveActivityTeamLogo(
                             teamName: match.awayTeam,
                             alternateNames: [match.awayShortName].compactMap { $0 },
-                            size: logoSize
+                            size: 18
                         )
-                            .frame(width: logoSize, alignment: .center)
                     }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
 
-                    trailingMetadataView
-                        .frame(width: trailingSlotWidth, alignment: .trailing)
+                    expandedTrailingMetadata
+                        .frame(width: 38, alignment: .trailing)
                 }
             } else if live {
                 HStack(spacing: 0) {
@@ -4069,6 +4466,22 @@ private struct MultiMatchEntryCell: View {
         live ? (match.matchTime ?? match.time) : match.time
     }
 
+    private var expandedCenterText: some View {
+        Group {
+            if let home = match.homeScore, let away = match.awayScore {
+                Text("\(home)-\(away)")
+                    .font(.caption.monospacedDigit().weight(.bold))
+                    .foregroundStyle(.white.opacity(scoreOpacity))
+                    .lineLimit(1)
+            } else {
+                Text(match.time)
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(1)
+            }
+        }
+    }
+
     private var primaryChannelName: String {
         let primary = match.tvChannels
             .lazy
@@ -4163,6 +4576,22 @@ private struct MultiMatchEntryCell: View {
         }
     }
 
+    @ViewBuilder
+    private var expandedTrailingMetadata: some View {
+        if let primary = match.tvChannels.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !primary.isEmpty {
+            LiveActivityChannelLogo(channelName: primary, size: 14)
+        } else if live {
+            Text(timeText)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.65))
+                .lineLimit(1)
+        } else {
+            Color.clear
+                .frame(width: 14, height: 14)
+        }
+    }
+
     private var logoSize: CGFloat {
         expanded ? 24 : 20
     }
@@ -4247,14 +4676,27 @@ private struct LiveActivityTeamLogo: View {
     let size: CGFloat
 
     var body: some View {
+        let resolvedAssetName = WidgetTeamLogoResolver.shared.assetName(
+            for: teamName,
+            alternateNames: alternateNames,
+            variant: .liveActivity
+        )
+        let resolvedImage = WidgetTeamLogoResolver.shared.image(
+            for: teamName,
+            alternateNames: alternateNames,
+            variant: .liveActivity,
+            idealPointSize: size
+        )
+        let _ = LiveActivityRenderDiagnostics.logLogoResolutionIfNeeded(
+            kind: "team",
+            name: teamName,
+            result: resolvedAssetName ?? "fallback_initial"
+        )
         Group {
-            if let image = WidgetTeamLogoResolver.shared.image(
-                for: teamName,
-                alternateNames: alternateNames,
-                idealPointSize: size
-            ) {
-                Image(uiImage: image)
+            if let resolvedImage {
+                Image(uiImage: resolvedImage)
                     .resizable()
+                    .renderingMode(.original)
                     .scaledToFit()
             } else {
                 Circle()
@@ -4277,10 +4719,25 @@ private struct LiveActivityChannelLogo: View {
     let size: CGFloat
 
     var body: some View {
+        let resolvedAssetName = WidgetTvLogoResolver.shared.assetName(
+            for: channelName,
+            variant: .liveActivity
+        )
+        let resolvedImage = WidgetTvLogoResolver.shared.image(
+            for: channelName,
+            variant: .liveActivity,
+            idealPointSize: size
+        )
+        let _ = LiveActivityRenderDiagnostics.logLogoResolutionIfNeeded(
+            kind: "channel",
+            name: channelName,
+            result: resolvedAssetName ?? "fallback_tv"
+        )
         Group {
-            if let image = WidgetTvLogoResolver.shared.image(for: channelName, idealPointSize: size) {
-                Image(uiImage: image)
+            if let resolvedImage {
+                Image(uiImage: resolvedImage)
                     .resizable()
+                    .renderingMode(.original)
                     .scaledToFit()
             } else {
                 RoundedRectangle(cornerRadius: 3)

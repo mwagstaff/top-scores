@@ -1,5 +1,7 @@
 import Foundation
 import os
+import SwiftUI
+import UIKit
 #if canImport(ActivityKit)
 import ActivityKit
 
@@ -133,19 +135,26 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
 
 final class LiveActivitySyncService {
     static let shared = LiveActivitySyncService()
+    private let maxMatchesPerActivityPayload = 4
 
     private let lock = NSLock()
     private var started = false
     private var lastForegroundReconcileAt: Date?
+    private var lastObservedScenePhase: ScenePhase = .background
     private let foregroundReconcileMinInterval: TimeInterval = 15
     private var pushToStartTask: Task<Void, Never>?
     private var activityUpdatesTask: Task<Void, Never>?
+    private var foregroundReconcileTask: Task<Void, Never>?
     private var observedActivityIDs = Set<String>()
     private var activityPushTokenTasks: [String: Task<Void, Never>] = [:]
     private var activityContentTasks: [String: Task<Void, Never>] = [:]
     private var activityStateTasks: [String: Task<Void, Never>] = [:]
     private var lastUploadedPushToStartTokenHex: String?
+    private var pendingPushToStartTokenData: Data?
     private var lastUploadedActivityPushTokenHexByActivityID: [String: String] = [:]
+    private var pendingForegroundStartContentState: TopScoresLiveActivityAttributes.ContentState?
+    private var pendingForegroundStartRetryTask: Task<Void, Never>?
+    private var foregroundReconcileInFlight = false
 
     private init() {}
 
@@ -165,6 +174,7 @@ final class LiveActivitySyncService {
             pushToStartTask = Task(priority: .background) {
                 for await tokenData in Activity<TopScoresLiveActivityAttributes>.pushToStartTokenUpdates {
                     await self.uploadPushToStartToken(tokenData)
+                    self.flushSharedWidgetDiagnostics()
                 }
             }
             NSLog("[LiveActivitySync] Monitoring push-to-start token updates")
@@ -183,6 +193,7 @@ final class LiveActivitySyncService {
 
             activityUpdatesTask = Task(priority: .background) {
                 for await activity in Activity<TopScoresLiveActivityAttributes>.activityUpdates {
+                    self.flushSharedWidgetDiagnostics()
                     self.beginObserving(activity)
                     // Deduplicate immediately when a new activity appears (e.g. a second
                     // push-to-start while one is already active) so the lock screen never
@@ -196,7 +207,10 @@ final class LiveActivitySyncService {
             NSLog("[LiveActivitySync] Monitoring activity push token updates")
         }
 
-        reconcileOnForeground()
+        // Foreground reconciliation must wait until the app's scene is actually active.
+        // start() now runs from didFinishLaunching so activity observers come up early,
+        // but triggering a foreground Activity.request here can race before the scene
+        // reaches .active and fail with "Target is not foreground".
     }
 
     func reconcileOnForeground() {
@@ -204,15 +218,68 @@ final class LiveActivitySyncService {
         let now = Date()
         lock.lock()
         if let last = lastForegroundReconcileAt,
-           now.timeIntervalSince(last) < foregroundReconcileMinInterval {
+           now.timeIntervalSince(last) < foregroundReconcileMinInterval,
+           lastObservedScenePhase == .active {
+            NSLog(
+                "[LiveActivitySync] reconcileOnForeground skipped due to rate limit elapsed=%.2f",
+                now.timeIntervalSince(last)
+            )
             lock.unlock()
             return
         }
         lastForegroundReconcileAt = now
         lock.unlock()
 
-        Task(priority: .background) {
+        NSLog(
+            "[LiveActivitySync] reconcileOnForeground scheduling activeCount=%d",
+            Activity<TopScoresLiveActivityAttributes>.activities.count
+        )
+        flushSharedWidgetDiagnostics()
+
+        let shouldStartTask = lock.withLock { () -> Bool in
+            if foregroundReconcileInFlight {
+                NSLog("[LiveActivitySync] reconcileOnForeground skipped: reconcile already in flight")
+                return false
+            }
+            foregroundReconcileInFlight = true
+            return true
+        }
+        guard shouldStartTask else { return }
+
+        let task = Task(priority: .background) {
             await self.reconcileLiveActivityStateOnForeground()
+            self.lock.withLock {
+                self.foregroundReconcileInFlight = false
+                self.foregroundReconcileTask = nil
+            }
+        }
+        lock.withLock {
+            foregroundReconcileTask = task
+        }
+    }
+
+    func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        let pendingStartToRetry: TopScoresLiveActivityAttributes.ContentState?
+        let pendingPushToStartTokenData: Data?
+        lock.lock()
+        lastObservedScenePhase = newPhase
+        pendingStartToRetry = newPhase == .active ? pendingForegroundStartContentState : nil
+        pendingPushToStartTokenData = newPhase != .active ? self.pendingPushToStartTokenData : nil
+        if newPhase != .active {
+            lastForegroundReconcileAt = nil
+        }
+        lock.unlock()
+
+        if newPhase != .active, let pendingPushToStartTokenData {
+            Task(priority: .background) {
+                await self.uploadPushToStartToken(pendingPushToStartTokenData)
+            }
+        }
+
+        if newPhase == .active, let pendingStartToRetry {
+            Task(priority: .userInitiated) {
+                await self.retryPendingForegroundStartIfNeeded(contentState: pendingStartToRetry)
+            }
         }
     }
 
@@ -234,6 +301,7 @@ final class LiveActivitySyncService {
             String(describing: activity.activityState),
             Self.contentStateSummary(Self.currentContentState(for: activity))
         )
+        flushSharedWidgetDiagnostics()
 
         if let tokenData = activity.pushToken {
             NSLog(
@@ -241,9 +309,7 @@ final class LiveActivitySyncService {
                 activityID,
                 Self.shortHex(tokenData)
             )
-            Task(priority: .background) {
-                await self.uploadActivityPushToken(activityID: activityID, tokenData: tokenData)
-            }
+            enqueueActivityPushTokenUpload(activityID: activityID, tokenData: tokenData)
         }
 
         let pushTokenTask = Task(priority: .background) {
@@ -253,7 +319,8 @@ final class LiveActivitySyncService {
                     activityID,
                     Self.shortHex(tokenData)
                 )
-                await self.uploadActivityPushToken(activityID: activityID, tokenData: tokenData)
+                self.flushSharedWidgetDiagnostics()
+                self.enqueueActivityPushTokenUpload(activityID: activityID, tokenData: tokenData)
             }
         }
 
@@ -267,6 +334,7 @@ final class LiveActivitySyncService {
                         content.staleDate?.description ?? "nil",
                         Self.contentStateSummary(content.state)
                     )
+                    self.flushSharedWidgetDiagnostics()
                 }
             }
         } else {
@@ -281,6 +349,7 @@ final class LiveActivitySyncService {
                     activityID,
                     String(describing: state)
                 )
+                self.flushSharedWidgetDiagnostics()
                 if state == .ended {
                     ended = true
                     await self.uploadActivityEnded(activityID: activityID)
@@ -318,19 +387,28 @@ final class LiveActivitySyncService {
         }
     }
 
+    private func enqueueActivityPushTokenUpload(activityID: String, tokenData: Data) {
+        Task.detached(priority: .background) { [weak self] in
+            guard let self else { return }
+            await self.uploadActivityPushToken(activityID: activityID, tokenData: tokenData)
+        }
+    }
+
     @available(iOS 16.1, *)
     private func reconcileLiveActivityStateOnForeground() async {
         let signpost = PerformanceSignposter.liveActivity.beginInterval("LiveActivityForegroundReconcile")
         defer { PerformanceSignposter.liveActivity.endInterval("LiveActivityForegroundReconcile", signpost) }
 
-        if #available(iOS 17.2, *),
-           let pushToStartToken = Activity<TopScoresLiveActivityAttributes>.pushToStartToken {
-            await uploadPushToStartToken(pushToStartToken)
-        }
+        guard !Task.isCancelled else { return }
+        NSLog(
+            "[LiveActivitySync] reconcileLiveActivityStateOnForeground begin activeCount=%d",
+            Activity<TopScoresLiveActivityAttributes>.activities.count
+        )
+        flushSharedWidgetDiagnostics()
 
         let activeActivities = await enforceSingleActiveActivity(among: Activity<TopScoresLiveActivityAttributes>.activities)
         if activeActivities.isEmpty {
-            await uploadActivityEnded(activityID: "")
+            NSLog("[LiveActivitySync] Foreground reconcile found no active local activities")
         } else {
             for activity in activeActivities {
                 NSLog(
@@ -354,11 +432,18 @@ final class LiveActivitySyncService {
         }
 
         let reconcileResponse = await requestLiveActivityReconcile()
+        guard !Task.isCancelled else { return }
         // If no active activity and the server has live content, start one directly
         // so push-to-start (which requires background) is not the only path.
         // Re-check Activity.activities here rather than using the snapshot captured before
         // the HTTP call, in case a push-to-start arrived during the round-trip.
         let currentActivities = Activity<TopScoresLiveActivityAttributes>.activities
+        NSLog(
+            "[LiveActivitySync] reconcile response currentActiveCount=%d hasForegroundStart=%d",
+            currentActivities.count,
+            reconcileResponse == nil ? 0 : 1
+        )
+        flushSharedWidgetDiagnostics()
         if currentActivities.isEmpty, let contentState = reconcileResponse {
             await startForegroundActivityIfNeeded(contentState: contentState)
         }
@@ -415,10 +500,22 @@ final class LiveActivitySyncService {
 
     private func uploadPushToStartToken(_ tokenData: Data) async {
         let tokenHex = Self.hexString(from: tokenData)
+        let isAppActive = await MainActor.run {
+            UIApplication.shared.applicationState == .active
+        }
+        if isAppActive {
+            lock.withLock {
+                pendingPushToStartTokenData = tokenData
+            }
+            NSLog("[LiveActivitySync] Deferring push-to-start token upload while app is active")
+            return
+        }
+
         let shouldUpload = lock.withLock {
             let shouldUpload = lastUploadedPushToStartTokenHex != tokenHex
             if shouldUpload {
                 lastUploadedPushToStartTokenHex = tokenHex
+                pendingPushToStartTokenData = nil
             }
             return shouldUpload
         }
@@ -456,6 +553,27 @@ final class LiveActivitySyncService {
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "activity-token")
     }
 
+    private func uploadActivityStarted(
+        activityID: String,
+        generatedAtEpochSeconds: Int?,
+        contentState: TopScoresLiveActivityAttributes.ContentState
+    ) async {
+        guard let endpoint = await endpointURL(path: "live-activity/activity-started") else { return }
+        let encoder = JSONEncoder()
+        let encodedContentState = try? encoder.encode(contentState)
+        let contentStateJSONObject = encodedContentState.flatMap { data in
+            try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        }
+        let payload: [String: Any] = [
+            "deviceToken": DeviceIdentity.currentToken,
+            "activityId": activityID,
+            "activityGeneratedAtEpochSeconds": generatedAtEpochSeconds as Any,
+            "contentState": contentStateJSONObject as Any,
+            "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
+        ]
+        await sendJSONRequest(url: endpoint, payload: payload, logContext: "activity-started")
+    }
+
     private func uploadActivityEnded(activityID: String) async {
         guard let endpoint = await endpointURL(path: "live-activity/activity-ended") else { return }
         let payload: [String: Any] = [
@@ -473,7 +591,7 @@ final class LiveActivitySyncService {
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
-            "force": true,
+            "force": activeActivities.isEmpty,
             "trigger": "app_foreground",
             "activeActivityCount": activeActivities.count,
             "activeActivityIds": activeActivities.map { $0.id }
@@ -489,7 +607,15 @@ final class LiveActivitySyncService {
         guard let contentStateData = try? JSONSerialization.data(withJSONObject: rawContentState),
               let contentState = try? JSONDecoder().decode(TopScoresLiveActivityAttributes.ContentState.self, from: contentStateData)
         else { return nil }
-        return contentState
+        let sanitized = sanitizedContentState(contentState)
+        if sanitized.matches.count != contentState.matches.count {
+            NSLog(
+                "[LiveActivitySync] Trimmed foreground content state matches from %d to %d",
+                contentState.matches.count,
+                sanitized.matches.count
+            )
+        }
+        return sanitized
     }
 
     @available(iOS 16.1, *)
@@ -499,19 +625,104 @@ final class LiveActivitySyncService {
             await reportForegroundStartFailed(reason: "activities_not_enabled")
             return
         }
+        let isAppActive = await MainActor.run {
+            UIApplication.shared.applicationState == .active
+        }
+        guard isAppActive else {
+            NSLog("[LiveActivitySync] Foreground start skipped: app is not active")
+            lock.withLock {
+                pendingForegroundStartContentState = contentState
+            }
+            schedulePendingForegroundStartRetry()
+            return
+        }
         do {
             let attributes = TopScoresLiveActivityAttributes(appScope: "top-scores")
+            let sanitizedState = sanitizedContentState(contentState)
             let activity = try Activity.request(
                 attributes: attributes,
-                content: .init(state: contentState, staleDate: nil),
+                content: .init(state: sanitizedState, staleDate: nil),
                 pushType: .token
             )
             NSLog("[LiveActivitySync] Foreground start succeeded activityId=%@", activity.id)
+            flushSharedWidgetDiagnostics()
+            lock.withLock {
+                pendingForegroundStartContentState = nil
+                pendingForegroundStartRetryTask?.cancel()
+                pendingForegroundStartRetryTask = nil
+            }
+            await uploadActivityStarted(
+                activityID: activity.id,
+                generatedAtEpochSeconds: sanitizedState.generatedAtEpochSeconds,
+                contentState: sanitizedState
+            )
             // Register immediately — don't rely solely on activityUpdatesTask picking this up
             beginObserving(activity)
         } catch {
             NSLog("[LiveActivitySync] Foreground start failed: %@", error.localizedDescription)
             await reportForegroundStartFailed(reason: error.localizedDescription)
+        }
+    }
+
+    @available(iOS 16.1, *)
+    private func retryPendingForegroundStartIfNeeded(
+        contentState: TopScoresLiveActivityAttributes.ContentState
+    ) async {
+        let shouldRetry = lock.withLock {
+            guard let pendingForegroundStartContentState else { return false }
+            return pendingForegroundStartContentState == contentState
+        }
+        guard shouldRetry else { return }
+        guard Activity<TopScoresLiveActivityAttributes>.activities.isEmpty else {
+            lock.withLock {
+                pendingForegroundStartContentState = nil
+            }
+            return
+        }
+        NSLog("[LiveActivitySync] Retrying pending foreground start on active scene")
+        await startForegroundActivityIfNeeded(contentState: contentState)
+    }
+
+    private func schedulePendingForegroundStartRetry() {
+        let shouldSchedule = lock.withLock {
+            if pendingForegroundStartRetryTask != nil {
+                return false
+            }
+            return pendingForegroundStartContentState != nil
+        }
+        guard shouldSchedule else { return }
+
+        let task = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            defer {
+                self.lock.withLock {
+                    self.pendingForegroundStartRetryTask = nil
+                }
+            }
+            for _ in 0..<120 {
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
+
+                let pendingContentState = self.lock.withLock { self.pendingForegroundStartContentState }
+                guard let pendingContentState else { return }
+
+                let isAppActive = await MainActor.run {
+                    UIApplication.shared.applicationState == .active
+                }
+                guard isAppActive else { continue }
+
+                guard #available(iOS 16.1, *) else { return }
+                if Activity<TopScoresLiveActivityAttributes>.activities.isEmpty {
+                    NSLog("[LiveActivitySync] Retrying pending foreground start after delayed active transition")
+                    await self.startForegroundActivityIfNeeded(contentState: pendingContentState)
+                }
+                return
+            }
+        }
+
+        lock.withLock {
+            pendingForegroundStartRetryTask = task
         }
     }
 
@@ -626,6 +837,37 @@ final class LiveActivitySyncService {
         }
     }
 
+    private func flushSharedWidgetDiagnostics() {
+        guard let url = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: AppGroupConfig.identifier)?
+            .appendingPathComponent(AppGroupConfig.liveActivityDiagnosticsFileName)
+        else { return }
+        guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return }
+        let entries = contents
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard !entries.isEmpty else { return }
+
+        try? FileManager.default.removeItem(at: url)
+        for entry in entries {
+            NSLog("%@", entry)
+        }
+    }
+
+    private func sanitizedContentState(
+        _ state: TopScoresLiveActivityAttributes.ContentState
+    ) -> TopScoresLiveActivityAttributes.ContentState {
+        let trimmedMatches = Array(state.matches.prefix(maxMatchesPerActivityPayload))
+        guard trimmedMatches.count != state.matches.count else { return state }
+        return TopScoresLiveActivityAttributes.ContentState(
+            mode: state.mode,
+            generatedAtEpochSeconds: state.generatedAtEpochSeconds,
+            delayMinutes: state.delayMinutes,
+            fantasyCurrentScore: state.fantasyCurrentScore,
+            matches: trimmedMatches
+        )
+    }
+
     private static func hexString(from data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
     }
@@ -671,6 +913,9 @@ final class LiveActivitySyncService {
         let currentActivityTokenUpdatedAt = String(describing: liveActivity?["currentActivityTokenUpdatedAt"] ?? "nil")
         let mode = String(describing: serverPresentation?["mode"] ?? "nil")
         let delayMinutes = String(describing: serverPresentation?["delayMinutes"] ?? "nil")
+        let payloadMetrics = (serverPresentation?["debug"] as? [String: Any])?["payloadMetrics"] as? [String: Any]
+        let contentStateBytes = String(describing: payloadMetrics?["contentStateBytes"] ?? "nil")
+        let archiveEstimateBytes = String(describing: payloadMetrics?["archiveEstimateBytes"] ?? "nil")
         let matches = (serverPresentation?["matches"] as? [[String: Any]] ?? []).prefix(4).map { match in
             let homeTeam = String(describing: match["homeTeam"] ?? "")
             let awayTeam = String(describing: match["awayTeam"] ?? "")
@@ -682,7 +927,7 @@ final class LiveActivitySyncService {
             return "\(homeTeam) v \(awayTeam) \(homeScore)-\(awayScore) \(matchTime) ch=[\(channelStr)]"
         }.joined(separator: " | ")
         let fantasyScore = String(describing: serverPresentation?["fantasyCurrentScore"] ?? "nil")
-        return "activityId=\(currentActivityId) tokenUpdatedAt=\(currentActivityTokenUpdatedAt) lastDispatchAt=\(lastDispatchAt) serverMode=\(mode) delay=\(delayMinutes) ff=\(fantasyScore) matches=[\(matches)]"
+        return "activityId=\(currentActivityId) tokenUpdatedAt=\(currentActivityTokenUpdatedAt) lastDispatchAt=\(lastDispatchAt) serverMode=\(mode) delay=\(delayMinutes) ff=\(fantasyScore) contentStateBytes=\(contentStateBytes) archiveEstimateBytes=\(archiveEstimateBytes) matches=[\(matches)]"
     }
 }
 #else

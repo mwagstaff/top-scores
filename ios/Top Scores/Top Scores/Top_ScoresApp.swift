@@ -38,6 +38,8 @@ struct Top_ScoresApp: App {
                 .environmentObject(fantasyViewModel)
         }
         .onChange(of: scenePhase) { _, newPhase in
+            NSLog("[TopScoresApp] scenePhase changed to %@", String(describing: newPhase))
+            LiveActivitySyncService.shared.handleScenePhaseChange(newPhase)
             switch newPhase {
             case .background:
                 deferredStartupWorkTask?.cancel()
@@ -47,6 +49,7 @@ struct Top_ScoresApp: App {
                     hasInProgressMatches: matchesStore.hasInProgressMatches
                 )
             case .active:
+                NSLog("[TopScoresApp] scenePhase active -> reconcileOnForeground")
                 LiveActivitySyncService.shared.reconcileOnForeground()
                 scheduleDeferredStartupWork(snapshot: preferences.snapshot)
             default:
@@ -122,18 +125,18 @@ struct Top_ScoresApp: App {
 }
 
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    private let liveActivityStartupDelayNanos: UInt64 = 5_000_000_000
     private let notificationAuthorizationDelayNanos: UInt64 = 12_000_000_000
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         PerformanceSignposter.startup.emitEvent("AppDidFinishLaunching")
         UNUserNotificationCenter.current().delegate = self
-        Task {
-            try? await Task.sleep(nanoseconds: liveActivityStartupDelayNanos)
-            let signpost = PerformanceSignposter.startup.beginInterval("LiveActivityStartup")
-            defer { PerformanceSignposter.startup.endInterval("LiveActivityStartup", signpost) }
-            LiveActivitySyncService.shared.start()
-        }
+        // start() only creates background Tasks — calling it here (before scenePhase
+        // transitions to .active) ensures activityUpdatesTask is running before
+        // reconcileOnForeground() fires, preventing a race where the server dispatches
+        // a push-to-start into an unobserved window and creates a duplicate activity.
+        let signpost = PerformanceSignposter.startup.beginInterval("LiveActivityStartup")
+        LiveActivitySyncService.shared.start()
+        PerformanceSignposter.startup.endInterval("LiveActivityStartup", signpost)
 
         Task {
             try? await Task.sleep(nanoseconds: notificationAuthorizationDelayNanos)

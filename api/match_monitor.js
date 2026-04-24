@@ -17,8 +17,11 @@ const { sendNotification, sendLiveActivityPush } = require("./apns_client");
 const { fetchBbcLiveTextEntriesByDetailsUrl } = require("./fetch_bbc_scores");
 const liveActivityMetrics = require("./live_activity_metrics");
 const fantasyScore = require("./fantasy_score");
+const { DEFAULT_COMPETITION_WEIGHTS } = require("./config");
 const crypto = require("crypto");
 const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.json");
+const TEAM_SHORT_NAMES_PAYLOAD = require("./team_short_names.json");
+const TEAM_ALIASES_PAYLOAD = require("./team_aliases.json");
 const { teamIdentityNames, teamIdentityKeys } = require("./team_identity");
 
 // Configuration
@@ -44,10 +47,11 @@ const MATCH_MONITOR_VERBOSE_LOG_ENABLED = process.env.MATCH_MONITOR_VERBOSE_LOG 
 const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG === "1";
 const LIVE_ACTIVITY_EVAL_INTERVAL_MS = 15 * 1000;
 const LIVE_ACTIVITY_NON_SCORE_UPDATE_MIN_INTERVAL_MS = 60 * 1000;
+const LIVE_ACTIVITY_LIVE_STARTUP_QUIET_WINDOW_MS = 60 * 1000;
 const LIVE_ACTIVITY_EVAL_STALL_TIMEOUT_MS = 30 * 1000;
 const LIVE_ACTIVITY_STARTUP_KICK_DELAYS_MS = [0, 3000, 9000];
-// Keep server payloads aligned with the widget's 8 visible live-activity slots.
-const LIVE_ACTIVITY_MAX_MATCHES = 8;
+// Keep server payloads within the widget's rendering budget.
+const LIVE_ACTIVITY_MAX_MATCHES = 4;
 const LIVE_ACTIVITY_TEAM_RANKING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_TEAM_RANKING_RETRY_MS = 5 * 60 * 1000;
 const LIVE_ACTIVITY_TEAM_RANKING_FETCH_TIMEOUT_MS = 15 * 1000;
@@ -113,6 +117,23 @@ let liveActivityPremierLeagueTeamLookup = null;
 let liveActivityMatchDetailsProvider = null;
 let liveActivityOperationalMatchesProvider = null;
 let canonicalMatchStateWriter = null;
+let liveActivityTeamShortNameLookup = buildLiveActivityTeamShortNameLookup(
+  TEAM_SHORT_NAMES_PAYLOAD
+);
+const LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP = Object.entries(
+  TEAM_ALIASES_PAYLOAD && typeof TEAM_ALIASES_PAYLOAD.aliases === "object"
+    ? TEAM_ALIASES_PAYLOAD.aliases
+    : {}
+).reduce(
+  (result, [name, alias]) => {
+    const normalizedName = normalizeLiveActivityTeamShortNameKey(name);
+    const normalizedAlias = String(alias || "").trim();
+    if (!normalizedName || !normalizedAlias) return result;
+    result.set(normalizedName, normalizedAlias);
+    return result;
+  },
+  new Map()
+);
 
 // Match status helpers - mirrors server.js MATCH_STATUS_* constants
 const MATCH_STATUS_MINUTE_PATTERN = /^(\d{1,3})(?:\+(\d{1,2}))?'?$/;
@@ -125,6 +146,67 @@ const SNAPSHOT_NULL_CLEAR_FIELDS = new Set(["aggregate_home_score", "aggregate_a
 
 function shortDeviceToken(deviceToken) {
   return String(deviceToken || "").slice(0, 12);
+}
+
+function normalizeLiveActivityTeamShortNameKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildLiveActivityTeamShortNameLookup(payload) {
+  const sourcePayload = payload && typeof payload === "object" ? payload : {};
+  const entryCandidates = Array.isArray(sourcePayload.entries)
+    ? sourcePayload.entries
+    : sourcePayload.short_names && typeof sourcePayload.short_names === "object"
+      ? Object.entries(sourcePayload.short_names).map(([name, shortName]) => ({
+        name,
+        short_name: shortName,
+      }))
+      : [];
+  const lookup = new Map();
+  entryCandidates.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const name = String(entry.name || "").trim();
+    const shortName = String(entry.short_name || "").trim();
+    const key = normalizeLiveActivityTeamShortNameKey(name);
+    if (!key || !shortName) return;
+    lookup.set(key, shortName);
+  });
+  return lookup;
+}
+
+function refreshLiveActivityTeamShortNameLookup(datasetRecord = null) {
+  const payload =
+    datasetRecord && datasetRecord.payload && typeof datasetRecord.payload === "object"
+      ? datasetRecord.payload
+      : TEAM_SHORT_NAMES_PAYLOAD;
+  const nextLookup = buildLiveActivityTeamShortNameLookup(payload);
+  if (nextLookup.size > 0) {
+    liveActivityTeamShortNameLookup = nextLookup;
+  } else if (!liveActivityTeamShortNameLookup || liveActivityTeamShortNameLookup.size === 0) {
+    liveActivityTeamShortNameLookup = buildLiveActivityTeamShortNameLookup(TEAM_SHORT_NAMES_PAYLOAD);
+  }
+}
+
+function resolveLiveActivityTeamShortName(shortNameValue, fullNameValue) {
+  const explicitShortName = String(shortNameValue || "").trim();
+  const fullName = String(fullNameValue || "").trim();
+  if (explicitShortName && explicitShortName !== fullName) {
+    return explicitShortName;
+  }
+  if (!fullName) return null;
+  const key = normalizeLiveActivityTeamShortNameKey(fullName);
+  if (!key) return null;
+  const resolved = liveActivityTeamShortNameLookup.get(key);
+  const aliasResolved = LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP.get(key);
+  const resolvedValue = resolved || aliasResolved;
+  if (!resolvedValue) return null;
+  const trimmed = String(resolvedValue).trim();
+  return trimmed && trimmed !== fullName ? trimmed : null;
 }
 
 function monitorVerboseLog(...args) {
@@ -3473,6 +3555,17 @@ const LIVE_ACTIVITY_COMPETITION_STAGE_PATTERNS = [
   /\s+Leg\s+\d+$/i,
 ];
 
+const LIVE_ACTIVITY_COMPETITION_WEIGHTS = Object.entries(DEFAULT_COMPETITION_WEIGHTS || {}).reduce(
+  (result, [name, value]) => {
+    const canonical = normalizeLiveActivityCompetitionFilterName(name);
+    const weight = Number(value);
+    if (!canonical || !Number.isFinite(weight)) return result;
+    result[canonical] = weight;
+    return result;
+  },
+  {}
+);
+
 function normalizeLiveActivityCompetitionFilterName(value) {
   let normalized = String(value || "").replace(/\s+/g, " ").trim();
   if (!normalized) return "";
@@ -3499,9 +3592,230 @@ function normalizeLiveActivityCompetitionFilterName(value) {
     "efl cup": "english league cup",
     "carabao cup": "english league cup",
     "uefa europa conference league": "uefa conference league",
+    "spanish la liga": "la liga",
+    "italian serie a": "serie a",
+    "german bundesliga": "bundesliga",
   };
 
   return aliases[normalized] || normalized;
+}
+
+function stripLiveActivityCompetitionStageDescriptors(value) {
+  let normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const pattern of LIVE_ACTIVITY_COMPETITION_STAGE_PATTERNS) {
+      if (pattern.test(normalized)) {
+        normalized = normalized.replace(pattern, "").trim();
+        normalized = normalized.replace(/[-:–]\s*$/, "").trim();
+        changed = true;
+      }
+    }
+  }
+
+  return normalized;
+}
+
+function liveActivityCompetitionDisplayName(value) {
+  const stripped = stripLiveActivityCompetitionStageDescriptors(value);
+  return String(stripped || value || "").replace(/\s+/g, " ").trim();
+}
+
+function liveActivityCompetitionWeight(match) {
+  const displayLeague = liveActivityCompetitionDisplayName(match && match.league);
+  const displayWeight = LIVE_ACTIVITY_COMPETITION_WEIGHTS[
+    normalizeLiveActivityCompetitionFilterName(displayLeague)
+  ];
+  if (Number.isFinite(displayWeight)) return displayWeight;
+
+  const rawWeight = LIVE_ACTIVITY_COMPETITION_WEIGHTS[
+    normalizeLiveActivityCompetitionFilterName(match && match.league)
+  ];
+  return Number.isFinite(rawWeight) ? rawWeight : 0;
+}
+
+function liveActivityUpcomingSortOrderFromPreferences(prefs) {
+  const value =
+    prefs && typeof prefs.matchGroupSortOrder === "string"
+      ? String(prefs.matchGroupSortOrder).trim()
+      : "";
+  switch (value) {
+    case "alphabetical":
+    case "teamScore":
+    case "kickoffThenAlphabetical":
+    case "kickoffThenTeamScore":
+      return value;
+    default:
+      return "kickoffThenTeamScore";
+  }
+}
+
+function liveActivityUpcomingMatchesWithinCompetition(matches, prefs = {}) {
+  const sortOrder = liveActivityUpcomingSortOrderFromPreferences(prefs);
+  const premierLeagueMatchesFirst = prefs && prefs.premierLeagueMatchesFirst === true;
+
+  return [...(Array.isArray(matches) ? matches : [])].sort((lhs, rhs) => {
+    switch (sortOrder) {
+      case "teamScore": {
+        if (premierLeagueMatchesFirst) {
+          const lhsEpl =
+            isEnglishPremierLeagueTeam(lhs && lhs.home_team) ||
+            isEnglishPremierLeagueTeam(lhs && lhs.away_team);
+          const rhsEpl =
+            isEnglishPremierLeagueTeam(rhs && rhs.home_team) ||
+            isEnglishPremierLeagueTeam(rhs && rhs.away_team);
+          if (lhsEpl !== rhsEpl) return lhsEpl ? -1 : 1;
+        }
+        const lhsTeamScore = liveActivityTeamScoreTotal(lhs);
+        const rhsTeamScore = liveActivityTeamScoreTotal(rhs);
+        if (lhsTeamScore !== rhsTeamScore) return rhsTeamScore - lhsTeamScore;
+        break;
+      }
+      case "alphabetical": {
+        if (premierLeagueMatchesFirst) {
+          const lhsEpl =
+            isEnglishPremierLeagueTeam(lhs && lhs.home_team) ||
+            isEnglishPremierLeagueTeam(lhs && lhs.away_team);
+          const rhsEpl =
+            isEnglishPremierLeagueTeam(rhs && rhs.home_team) ||
+            isEnglishPremierLeagueTeam(rhs && rhs.away_team);
+          if (lhsEpl !== rhsEpl) return lhsEpl ? -1 : 1;
+        }
+        const homeCompare = String(lhs && lhs.home_team ? lhs.home_team : "").localeCompare(
+          String(rhs && rhs.home_team ? rhs.home_team : ""),
+          undefined,
+          { sensitivity: "base" }
+        );
+        if (homeCompare !== 0) return homeCompare;
+        const awayCompare = String(lhs && lhs.away_team ? lhs.away_team : "").localeCompare(
+          String(rhs && rhs.away_team ? rhs.away_team : ""),
+          undefined,
+          { sensitivity: "base" }
+        );
+        if (awayCompare !== 0) return awayCompare;
+        break;
+      }
+      case "kickoffThenAlphabetical": {
+        const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
+        const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
+        if (leftKickoff !== rightKickoff) return leftKickoff - rightKickoff;
+        if (premierLeagueMatchesFirst) {
+          const lhsEpl =
+            isEnglishPremierLeagueTeam(lhs && lhs.home_team) ||
+            isEnglishPremierLeagueTeam(lhs && lhs.away_team);
+          const rhsEpl =
+            isEnglishPremierLeagueTeam(rhs && rhs.home_team) ||
+            isEnglishPremierLeagueTeam(rhs && rhs.away_team);
+          if (lhsEpl !== rhsEpl) return lhsEpl ? -1 : 1;
+        }
+        const homeCompare = String(lhs && lhs.home_team ? lhs.home_team : "").localeCompare(
+          String(rhs && rhs.home_team ? rhs.home_team : ""),
+          undefined,
+          { sensitivity: "base" }
+        );
+        if (homeCompare !== 0) return homeCompare;
+        const awayCompare = String(lhs && lhs.away_team ? lhs.away_team : "").localeCompare(
+          String(rhs && rhs.away_team ? rhs.away_team : ""),
+          undefined,
+          { sensitivity: "base" }
+        );
+        if (awayCompare !== 0) return awayCompare;
+        break;
+      }
+      case "kickoffThenTeamScore":
+      default: {
+        const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
+        const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
+        if (leftKickoff !== rightKickoff) return leftKickoff - rightKickoff;
+        if (premierLeagueMatchesFirst) {
+          const lhsEpl =
+            isEnglishPremierLeagueTeam(lhs && lhs.home_team) ||
+            isEnglishPremierLeagueTeam(lhs && lhs.away_team);
+          const rhsEpl =
+            isEnglishPremierLeagueTeam(rhs && rhs.home_team) ||
+            isEnglishPremierLeagueTeam(rhs && rhs.away_team);
+          if (lhsEpl !== rhsEpl) return lhsEpl ? -1 : 1;
+        }
+        const lhsTeamScore = liveActivityTeamScoreTotal(lhs);
+        const rhsTeamScore = liveActivityTeamScoreTotal(rhs);
+        if (lhsTeamScore !== rhsTeamScore) return rhsTeamScore - lhsTeamScore;
+        break;
+      }
+    }
+
+    const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
+    const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
+    if (leftKickoff !== rightKickoff) return leftKickoff - rightKickoff;
+
+    const homeCompare = String(lhs && lhs.home_team ? lhs.home_team : "").localeCompare(
+      String(rhs && rhs.home_team ? rhs.home_team : ""),
+      undefined,
+      { sensitivity: "base" }
+    );
+    if (homeCompare !== 0) return homeCompare;
+
+    const awayCompare = String(lhs && lhs.away_team ? lhs.away_team : "").localeCompare(
+      String(rhs && rhs.away_team ? rhs.away_team : ""),
+      undefined,
+      { sensitivity: "base" }
+    );
+    if (awayCompare !== 0) return awayCompare;
+
+    return String(lhs && lhs.match_details_id ? lhs.match_details_id : "").localeCompare(
+      String(rhs && rhs.match_details_id ? rhs.match_details_id : ""),
+      undefined,
+      { sensitivity: "base" }
+    );
+  });
+}
+
+function sortUpcomingMatchesForLiveActivity(matches, prefs = {}) {
+  const grouped = new Map();
+  for (const match of Array.isArray(matches) ? matches : []) {
+    const groupName = liveActivityCompetitionDisplayName(match && match.league) || String(match && match.league || "").trim();
+    const key = normalizeLiveActivityCompetitionFilterName(groupName) || normalizeLiveActivityCompetitionFilterName(match && match.league) || groupName;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        groupName: groupName || String(match && match.league || "").trim(),
+        matches: [],
+      });
+    }
+    grouped.get(key).matches.push(match);
+  }
+
+  return Array.from(grouped.values())
+    .map((group) => {
+      const sortedMatches = liveActivityUpcomingMatchesWithinCompetition(group.matches, prefs);
+      const leadingMatch = sortedMatches[0] || null;
+      return {
+        groupName: group.groupName,
+        matches: sortedMatches,
+        weight: liveActivityCompetitionWeight(leadingMatch),
+        leadingKickoff: Number(parseMatchDateTimeMs(leadingMatch) || 0),
+        leadingTeamScore: liveActivityTeamScoreTotal(leadingMatch),
+      };
+    })
+    .sort((lhs, rhs) => {
+      if (lhs.weight !== rhs.weight) return rhs.weight - lhs.weight;
+
+      const sortOrder = liveActivityUpcomingSortOrderFromPreferences(prefs);
+      if (sortOrder === "kickoffThenAlphabetical" || sortOrder === "kickoffThenTeamScore") {
+        if (lhs.leadingKickoff !== rhs.leadingKickoff) return lhs.leadingKickoff - rhs.leadingKickoff;
+        if (sortOrder === "kickoffThenTeamScore" && lhs.leadingTeamScore !== rhs.leadingTeamScore) {
+          return rhs.leadingTeamScore - lhs.leadingTeamScore;
+        }
+      } else if (lhs.leadingTeamScore !== rhs.leadingTeamScore) {
+        return rhs.leadingTeamScore - lhs.leadingTeamScore;
+      }
+
+      return String(lhs.groupName || "").localeCompare(String(rhs.groupName || ""), undefined, {
+        sensitivity: "base",
+      });
+    })
+    .flatMap((group) => group.matches);
 }
 
 function liveActivityPreferenceLeagueMatchesSelectedLeagues(selectedLeagues, leagueName) {
@@ -3586,7 +3900,9 @@ async function resolveLiveActivityOperationalMatches(detailsRecords, options = {
     "merged_matches",
     "bbc_range_matches",
     "recent_matches",
+    "team_short_names",
   ]);
+  refreshLiveActivityTeamShortNameLookup(datasetRecords.team_short_names || null);
   const fallbackMatches = [
     ...(Array.isArray(datasetRecords.merged_matches && datasetRecords.merged_matches.payload)
       ? datasetRecords.merged_matches.payload
@@ -3962,9 +4278,13 @@ async function loadRedisDelayedSnapshotsByMatchId(matchIds, delayMinutes, nowMs 
 }
 
 function compareLiveActivityMatches(lhs, rhs) {
+  const lhsWeight = liveActivityCompetitionWeight(lhs);
+  const rhsWeight = liveActivityCompetitionWeight(rhs);
+  if (lhsWeight !== rhsWeight) return rhsWeight - lhsWeight;
+
   const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
   const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
-  if (leftKickoff !== rightKickoff) return rightKickoff - leftKickoff;
+  if (leftKickoff !== rightKickoff) return leftKickoff - rightKickoff;
 
   const lhsTeamScore = liveActivityTeamScoreTotal(lhs);
   const rhsTeamScore = liveActivityTeamScoreTotal(rhs);
@@ -4764,7 +5084,9 @@ function buildLiveActivityContentState(
   nowMs = Date.now(),
   fantasyCurrentScore = null
 ) {
-  const normalizedMatches = dedupeLiveActivityMatches(matches).map((rawMatch) => {
+  const normalizedMatches = dedupeLiveActivityMatches(matches)
+    .slice(0, LIVE_ACTIVITY_MAX_MATCHES)
+    .map((rawMatch) => {
     const match = mode.includes("upcoming")
       ? sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state")
       : rawMatch;
@@ -4777,6 +5099,20 @@ function buildLiveActivityContentState(
       homeTeam: String(match.home_team || ""),
       awayTeam: String(match.away_team || ""),
     };
+    const homeShortName = resolveLiveActivityTeamShortName(
+      match.home_short_name ?? match.homeShortName,
+      normalizedMatch.homeTeam
+    );
+    if (homeShortName) {
+      normalizedMatch.homeShortName = homeShortName;
+    }
+    const awayShortName = resolveLiveActivityTeamShortName(
+      match.away_short_name ?? match.awayShortName,
+      normalizedMatch.awayTeam
+    );
+    if (awayShortName) {
+      normalizedMatch.awayShortName = awayShortName;
+    }
     const leagueSubcategory =
       match && match.league_subcategory !== undefined && match.league_subcategory !== null
         ? String(match.league_subcategory).trim()
@@ -4817,8 +5153,8 @@ function buildLiveActivityContentState(
     if (tvChannels.length > 0) {
       normalizedMatch.tvChannels = tvChannels;
     }
-    return normalizedMatch;
-  });
+      return normalizedMatch;
+    });
 
   const contentState = {
     mode,
@@ -4955,6 +5291,10 @@ function isLiveActivityUpcomingMode(mode) {
   return typeof mode === "string" && mode.includes("upcoming");
 }
 
+function isLiveActivityFinishedMode(mode) {
+  return typeof mode === "string" && mode.includes("finished");
+}
+
 function parseLiveActivityDispatchTimeMs(state) {
   const dispatchAtMs = Date.parse(String(state && state.lastDispatchAt ? state.lastDispatchAt : ""));
   return Number.isFinite(dispatchAtMs) ? dispatchAtMs : null;
@@ -5040,16 +5380,48 @@ function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false,
     // Even for identical payloads, send a heartbeat push when we are within
     // LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS of the stale-date so iOS never shows
     // the staleness spinner during quiet periods (e.g. half-time, pre-kickoff, FT).
-    if (lastDispatchAtMs !== null) {
-      const heartbeatThresholdMs =
-        (LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
-      if (nowMs - lastDispatchAtMs >= heartbeatThresholdMs) {
-        return null; // heartbeat: reset stale-date before it expires
-      }
+    // If lastDispatchAtMs is null the activity has never received an update push
+    // (e.g. just started via push-to-start) — treat this as past threshold so the
+    // first update is always dispatched and the stale-date is established.
+    if (lastDispatchAtMs === null) {
+      return null; // first update after push-to-start: always dispatch
+    }
+    const heartbeatThresholdMs =
+      (LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
+    if (nowMs - lastDispatchAtMs >= heartbeatThresholdMs) {
+      return null; // heartbeat: reset stale-date before it expires
     }
     return "identical_payload";
   }
   if (state.lastMode !== mode) {
+    return null;
+  }
+  if (isLiveActivityUpcomingMode(mode)) {
+    // Upcoming activities are mostly static. In practice, repeated update pushes for
+    // the same upcoming layout have been the most reliable way to push the widget
+    // into the greyed-out spinner state, even when the content delta is minor.
+    // Keep upcoming activities quiet until there is a real mode transition
+    // (e.g. upcoming -> live) or the stale-date heartbeat window is reached.
+    if (lastDispatchAtMs !== null) {
+      const heartbeatThresholdMs =
+        (LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
+      if (nowMs - lastDispatchAtMs < heartbeatThresholdMs) {
+        return "upcoming_quiet_mode";
+      }
+    }
+    return null;
+  }
+  if (isLiveActivityFinishedMode(mode)) {
+    // Finished activities are effectively static. Repeated update pushes for small
+    // ordering/name/channel deltas have also been observed to destabilize the widget
+    // after a successful start, so keep them quiet until the stale-date heartbeat.
+    if (lastDispatchAtMs !== null) {
+      const heartbeatThresholdMs =
+        (LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
+      if (nowMs - lastDispatchAtMs < heartbeatThresholdMs) {
+        return "finished_quiet_mode";
+      }
+    }
     return null;
   }
   if (!isLiveActivityLiveMode(mode)) {
@@ -5058,6 +5430,12 @@ function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false,
 
   const scoreHash =
     options && Object.prototype.hasOwnProperty.call(options, "scoreHash") ? options.scoreHash : null;
+  if (
+    lastDispatchAtMs !== null &&
+    nowMs - lastDispatchAtMs < LIVE_ACTIVITY_LIVE_STARTUP_QUIET_WINDOW_MS
+  ) {
+    return "live_startup_quiet_window";
+  }
   if (scoreHash && state.lastScoreHash !== scoreHash) {
     return null;
   }
@@ -5711,14 +6089,14 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
   const sortedLiveAndFinished = [...sortedLive, ...sortedFinished]
     .sort(compareLiveActivityMatches)
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
-  const sortedRecentKickoff = recentKickoffMatches
-    .map(annotateMatchWithLiveActivityTeamRatings)
-    .sort(compareUpcomingLiveActivityMatches)
-    .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
-  const sortedUpcoming = upcomingMatches
-    .map(annotateMatchWithLiveActivityTeamRatings)
-    .sort(compareUpcomingLiveActivityMatches)
-    .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
+  const sortedRecentKickoff = sortUpcomingMatchesForLiveActivity(
+    recentKickoffMatches.map(annotateMatchWithLiveActivityTeamRatings),
+    prefs
+  ).slice(0, LIVE_ACTIVITY_MAX_MATCHES);
+  const sortedUpcoming = sortUpcomingMatchesForLiveActivity(
+    upcomingMatches.map(annotateMatchWithLiveActivityTeamRatings),
+    prefs
+  ).slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const mode = liveActivityModeForMatches(
     sortedLive,
     sortedFinished,
@@ -6639,6 +7017,7 @@ module.exports = {
     penaltyShootoutWinnerSide,
     shouldStopMonitoringAsIrrelevant,
     buildLiveActivityContentState,
+    liveActivityPayloadMetrics,
     buildLiveActivityPayloadHash,
     buildLiveActivityScoreHash,
     buildLiveActivityPresentationForUser,
@@ -6647,6 +7026,7 @@ module.exports = {
     resetFantasyScoreContext: fantasyScore.resetFantasyScoreContext,
     compareLiveActivityMatches,
     compareUpcomingLiveActivityMatches,
+    sortUpcomingMatchesForLiveActivity,
     buildLiveActivityEntriesForUser,
     buildLiveActivityOperationalMatches,
     canonicalLiveActivityMatchesFromDetailsRecords,

@@ -53,6 +53,9 @@ The test harness now lives inside the main API server:
 3. Paste that value into the `Live Activity Harness` section of the browser UI.
 4. Click `Refresh device state` to confirm the server has the device's push-to-start token and, if applicable, the current activity push token.
 5. Choose a layout preset such as:
+   - `Multi Live 1 Match`, `Multi Live 2 Matches`, `Multi Live 3 Matches`, and `Multi Live 4 Matches` to verify the row-count cases explicitly
+   - `Multi Live Scores + Time` to validate in-progress rows with clocks and scores
+   - `Multi Live Aggregate Scores` to validate rows that include aggregate score context
    - `Single Live + Footer Stress` to exercise the crowded single-match layout with trailing fixtures and footer content
    - `Multi Live Dense` to stress the multi-match presentation with footer content
    - `Single Finished + Trailing Fixtures` to inspect completed-match styling

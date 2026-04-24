@@ -661,6 +661,8 @@ const TEAM_RANKING_DEFAULT_ELO = Number.isFinite(SERVER_CONFIG.teamRankingDefaul
 
 const app = express();
 const API_PREFIX = "/api/v1";
+const LIVE_ACTIVITY_PENDING_START_GRACE_MS = 15 * 1000;
+const LIVE_ACTIVITY_RECENT_DISPATCH_WINDOW_MS = 2 * 60 * 1000;
 const APP_DATA_SOURCE = "redis-operational";
 const DEVICE_TOKEN_HEADER = "x-device-token";
 const parsedRedisReconciliationIntervalMs = Number(
@@ -23288,6 +23290,88 @@ app.post(`${API_PREFIX}/live-activity/push-to-start-token`, async (req, res) => 
 });
 
 // Save active Live Activity push token so server can send update/end events.
+app.post(`${API_PREFIX}/live-activity/activity-started`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const {
+    deviceToken,
+    activityId,
+    activityGeneratedAtEpochSeconds,
+    contentState,
+    isDevelopmentBuild,
+  } = req.body || {};
+  const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
+  const normalizedActivityId = normalizeDeviceToken(activityId);
+  const normalizedActivityGeneratedAtEpochSeconds = Number.isFinite(Number(activityGeneratedAtEpochSeconds))
+    ? Math.floor(Number(activityGeneratedAtEpochSeconds))
+    : null;
+
+  if (!resolvedDeviceToken) {
+    res.status(400).json({
+      error: "Missing device token (X-Device-Token header or deviceToken body field).",
+    });
+    return;
+  }
+  if (!normalizedActivityId) {
+    res.status(400).json({
+      error: "Missing or invalid activityId.",
+    });
+    return;
+  }
+
+  try {
+    const nowIso = new Date().toISOString();
+    const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
+    const normalizedContentState =
+      contentState && typeof contentState === "object" && !Array.isArray(contentState)
+        ? contentState
+        : null;
+    const lastMode =
+      normalizedContentState && normalizedContentState.mode
+        ? String(normalizedContentState.mode)
+        : null;
+    const lastPayloadHash = normalizedContentState
+      && hooks &&
+      typeof hooks.buildLiveActivityPayloadHash === "function"
+      ? hooks.buildLiveActivityPayloadHash(normalizedContentState)
+      : null;
+    const lastScoreHash = normalizedContentState
+      && hooks &&
+      typeof hooks.buildLiveActivityScoreHash === "function"
+      ? hooks.buildLiveActivityScoreHash(normalizedContentState)
+      : null;
+    const saved = await updateUserLiveActivityState(
+      resolvedDeviceToken,
+      {
+        currentActivityId: normalizedActivityId,
+        currentActivityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
+        pendingStartAt: null,
+        pushToStartAttempts: 0,
+        lastStartAt: nowIso,
+        lastDispatchAt: nowIso,
+        lastMode,
+        lastPayloadHash,
+        lastScoreHash,
+      },
+      {
+        isDevelopmentBuild:
+          typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
+      }
+    );
+    res.status(200).json({
+      success: true,
+      data: saved,
+    });
+  } catch (error) {
+    console.error("[API] Error saving live activity started state:", error);
+    res.status(500).json({
+      error: "Failed to save live activity started state",
+      message: error.message,
+    });
+  }
+});
+
+// Save active Live Activity push token so server can send update/end events.
 app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
@@ -23416,6 +23500,33 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
 
   try {
     const nowIso = new Date().toISOString();
+
+    if (!normalizedActivityId) {
+      const existingRecord = await getUserPreferences(resolvedDeviceToken);
+      const liveActivity =
+        existingRecord && existingRecord.liveActivity && typeof existingRecord.liveActivity === "object"
+          ? existingRecord.liveActivity
+          : {};
+      const pendingStartAtMs = liveActivity.pendingStartAt
+        ? Date.parse(String(liveActivity.pendingStartAt))
+        : null;
+      const lastDispatchAtMs = liveActivity.lastDispatchAt
+        ? Date.parse(String(liveActivity.lastDispatchAt))
+        : null;
+      const recentWindowMs = 2 * 60 * 1000;
+      const hasFreshPendingStart = Number.isFinite(pendingStartAtMs) &&
+        (Date.now() - pendingStartAtMs) < recentWindowMs;
+      const hasRecentDispatch = Number.isFinite(lastDispatchAtMs) &&
+        (Date.now() - lastDispatchAtMs) < recentWindowMs;
+
+      if (hasFreshPendingStart || hasRecentDispatch) {
+        console.log(
+          `[API] activity-ended ignored for blank activityId during recent live activity dispatch: device=${resolvedDeviceToken.slice(0, 12)}... pendingStart=${hasFreshPendingStart} recentDispatch=${hasRecentDispatch}`
+        );
+        res.status(200).json({ success: true, stale: true });
+        return;
+      }
+    }
 
     // Guard: if the request includes an activityId that does NOT match the server's
     // stored currentActivityId, this call is reporting a stale or duplicate activity
@@ -23992,6 +24103,52 @@ function summarizeAdminLiveActivityState(record, nowMs = Date.now()) {
       Date.parse(String(liveActivity.testHoldUntil || "").trim()) > nowMs,
     raw_state: liveActivity,
   };
+}
+
+function liveActivityHasCurrentServerActivity(liveActivityState) {
+  const state = liveActivityState && typeof liveActivityState === "object" ? liveActivityState : {};
+  const currentActivityId = state.currentActivityId ? String(state.currentActivityId).trim() : "";
+  const currentActivityPushToken = state.currentActivityPushToken
+    ? String(state.currentActivityPushToken).trim()
+    : "";
+  return Boolean(currentActivityId || currentActivityPushToken);
+}
+
+function liveActivityFreshCurrentServerActivityAgeMs(liveActivityState, nowMs = Date.now()) {
+  const state = liveActivityState && typeof liveActivityState === "object" ? liveActivityState : {};
+  const currentActivityTokenUpdatedAtMs = state.currentActivityTokenUpdatedAt
+    ? Date.parse(String(state.currentActivityTokenUpdatedAt))
+    : null;
+  const lastStartAtMs = state.lastStartAt
+    ? Date.parse(String(state.lastStartAt))
+    : null;
+  const candidates = [currentActivityTokenUpdatedAtMs, lastStartAtMs].filter(Number.isFinite);
+  if (!candidates.length) return null;
+  const freshestMs = Math.max(...candidates);
+  return Math.max(0, nowMs - freshestMs);
+}
+
+function liveActivityHasFreshCurrentServerActivity(liveActivityState, nowMs = Date.now()) {
+  if (!liveActivityHasCurrentServerActivity(liveActivityState)) {
+    return false;
+  }
+  const ageMs = liveActivityFreshCurrentServerActivityAgeMs(liveActivityState, nowMs);
+  return Number.isFinite(ageMs) && ageMs < LIVE_ACTIVITY_RECENT_DISPATCH_WINDOW_MS;
+}
+
+function liveActivityPendingStartAgeMs(liveActivityState, nowMs = Date.now()) {
+  const state = liveActivityState && typeof liveActivityState === "object" ? liveActivityState : {};
+  const pendingStartAtMs = state.pendingStartAt ? Date.parse(String(state.pendingStartAt)) : null;
+  if (!Number.isFinite(pendingStartAtMs)) return null;
+  return Math.max(0, nowMs - pendingStartAtMs);
+}
+
+function liveActivityPendingStartIsBlocking(liveActivityState, nowMs = Date.now()) {
+  if (liveActivityHasCurrentServerActivity(liveActivityState)) {
+    return false;
+  }
+  const ageMs = liveActivityPendingStartAgeMs(liveActivityState, nowMs);
+  return Number.isFinite(ageMs) && ageMs < LIVE_ACTIVITY_PENDING_START_GRACE_MS;
 }
 
 async function resolveCanonicalLiveActivityOperationalMatches() {
@@ -25582,8 +25739,12 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
     ? explicitTotalTeamScore
     : (Number.isFinite(homeTeamScore) ? homeTeamScore : 0) +
       (Number.isFinite(awayTeamScore) ? awayTeamScore : 0);
+  const homeTeam = String(match.homeTeam || match.home_team || fallbackHome).trim();
+  const awayTeam = String(match.awayTeam || match.away_team || fallbackAway).trim();
+  const homeShortNameRaw = String(match.homeShortName ?? match.home_short_name ?? "").trim();
+  const awayShortNameRaw = String(match.awayShortName ?? match.away_short_name ?? "").trim();
 
-  return {
+  const normalized = {
     matchId: String(match.matchId || match.match_id || `test_match_${index + 1}`).trim(),
     date: String(match.date || now.toISOString().split("T")[0]).trim(),
     time: String(match.time || fallbackKickoff).trim(),
@@ -25594,8 +25755,8 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
         : match.league_subcategory !== undefined && match.league_subcategory !== null
           ? String(match.league_subcategory).trim()
           : null,
-    homeTeam: String(match.homeTeam || match.home_team || fallbackHome).trim(),
-    awayTeam: String(match.awayTeam || match.away_team || fallbackAway).trim(),
+    homeTeam,
+    awayTeam,
     homeScore: Number.isFinite(Number(match.homeScore)) ? Number(match.homeScore) : null,
     awayScore: Number.isFinite(Number(match.awayScore)) ? Number(match.awayScore) : null,
     aggregateHomeScore: Number.isFinite(Number(match.aggregateHomeScore))
@@ -25622,6 +25783,13 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
           .slice(0, 3)
       : ["TNT Sports 1"],
   };
+  if (homeShortNameRaw && homeShortNameRaw !== homeTeam) {
+    normalized.homeShortName = homeShortNameRaw;
+  }
+  if (awayShortNameRaw && awayShortNameRaw !== awayTeam) {
+    normalized.awayShortName = awayShortNameRaw;
+  }
+  return normalized;
 }
 
 function defaultLiveActivityTestMatches(mode, now = new Date()) {
@@ -25966,16 +26134,21 @@ function buildLiveActivityTestPresets(now = new Date()) {
     defaultLiveActivityTestMatches("multi_live", now)
   );
   const trailingUpcoming = makeUpcomingLiveActivityTestMatches(multiLive.slice(0, 4));
-  const multiUpcoming = makeUpcomingLiveActivityTestMatches(multiLive.slice(0, 4));
+  const multiUpcoming = makeUpcomingLiveActivityTestMatches(multiLive.slice(0, 6));
   const multiFinished = cloneLiveActivityTestMatches(
     defaultLiveActivityTestMatches("multi_finished", now)
   );
+  const multiFinishedAggregate = multiFinished
+    .filter((match) =>
+      Number.isFinite(Number(match.aggregateHomeScore)) &&
+      Number.isFinite(Number(match.aggregateAwayScore))
+    );
 
   return [
     {
       id: "single_upcoming",
       label: "Single Upcoming",
-      description: "One upcoming fixture with aggregate score and TV badge.",
+      description: "One upcoming fixture in the shared single-row Live Activity layout.",
       payload: {
         mode: "single_upcoming",
         matches: singleUpcoming,
@@ -25984,7 +26157,7 @@ function buildLiveActivityTestPresets(now = new Date()) {
     {
       id: "single_live",
       label: "Single Live",
-      description: "One live match with no footer or trailing fixtures.",
+      description: "One live match in the shared single-row Live Activity layout.",
       payload: {
         mode: "single_live",
         matches: singleLive,
@@ -25993,7 +26166,7 @@ function buildLiveActivityTestPresets(now = new Date()) {
     {
       id: "single_live_trailing",
       label: "Single Live + Trailing Fixtures",
-      description: "Primary live match plus four upcoming fixtures beneath it.",
+      description: "A live row followed by upcoming rows in the shared multi-row layout.",
       payload: {
         mode: "single_live",
         matches: [...singleLive, ...trailingUpcoming],
@@ -26003,7 +26176,7 @@ function buildLiveActivityTestPresets(now = new Date()) {
       id: "single_live_trailing_footer",
       label: "Single Live + Footer Stress",
       description:
-        "Primary live match, four trailing upcoming fixtures, a delay banner, and a fantasy score.",
+        "Shared multi-row layout with a live row, upcoming rows, a delay banner, and a fantasy score.",
       payload: {
         mode: "single_live",
         delayMinutes: 8,
@@ -26014,7 +26187,7 @@ function buildLiveActivityTestPresets(now = new Date()) {
     {
       id: "single_finished_trailing",
       label: "Single Finished + Trailing Fixtures",
-      description: "A finished match with the upcoming-fixtures rail still visible underneath.",
+      description: "A finished row followed by upcoming rows in the shared multi-row layout.",
       payload: {
         mode: "single_finished",
         matches: [...singleFinished, ...trailingUpcoming],
@@ -26023,39 +26196,168 @@ function buildLiveActivityTestPresets(now = new Date()) {
     {
       id: "multi_upcoming",
       label: "Multi Upcoming",
-      description: "Four upcoming fixtures in the two-column multi-match layout.",
+      description: "Upcoming fixtures in the shared single-row Live Activity layout.",
       payload: {
         mode: "multi_upcoming",
         matches: multiUpcoming,
       },
     },
     {
-      id: "multi_live",
-      label: "Multi Live",
-      description: "Four simultaneous live fixtures in the standard multi-match layout.",
+      id: "multi_upcoming_1_match",
+      label: "Multi Upcoming 1 Match",
+      description: "One upcoming fixture in the shared multi-match layout.",
+      payload: {
+        mode: "multi_upcoming",
+        matches: multiUpcoming.slice(0, 1),
+      },
+    },
+    {
+      id: "multi_upcoming_2_matches",
+      label: "Multi Upcoming 2 Matches",
+      description: "Two upcoming fixtures in the shared multi-match layout.",
+      payload: {
+        mode: "multi_upcoming",
+        matches: multiUpcoming.slice(0, 2),
+      },
+    },
+    {
+      id: "multi_upcoming_3_matches",
+      label: "Multi Upcoming 3 Matches",
+      description: "Three upcoming fixtures in the shared multi-match layout.",
+      payload: {
+        mode: "multi_upcoming",
+        matches: multiUpcoming.slice(0, 3),
+      },
+    },
+    {
+      id: "multi_upcoming_4_matches",
+      label: "Multi Upcoming 4 Matches",
+      description: "Four upcoming fixtures in the shared multi-match layout.",
+      payload: {
+        mode: "multi_upcoming",
+        matches: multiUpcoming.slice(0, 4),
+      },
+    },
+    {
+      id: "multi_live_1_match",
+      label: "Multi Live 1 Match",
+      description: "A single live match in the shared multi-match layout.",
+      payload: {
+        mode: "multi_live",
+        matches: multiLive.slice(0, 1),
+      },
+    },
+    {
+      id: "multi_live_2_matches",
+      label: "Multi Live 2 Matches",
+      description: "Two live matches in the shared multi-match layout.",
+      payload: {
+        mode: "multi_live",
+        matches: multiLive.slice(0, 2),
+      },
+    },
+    {
+      id: "multi_live_3_matches",
+      label: "Multi Live 3 Matches",
+      description: "Three live matches in the shared multi-match layout.",
+      payload: {
+        mode: "multi_live",
+        matches: multiLive.slice(0, 3),
+      },
+    },
+    {
+      id: "multi_live_4_matches",
+      label: "Multi Live 4 Matches",
+      description: "Four live matches matching the production payload cap in the shared layout.",
       payload: {
         mode: "multi_live",
         matches: multiLive.slice(0, 4),
       },
     },
     {
-      id: "multi_live_dense",
-      label: "Multi Live Dense",
-      description: "Eight live fixtures with both delay and fantasy footer content.",
+      id: "multi_live_scores_and_time",
+      label: "Multi Live Scores + Time",
+      description: "Live matches with scorelines and varied match clocks in the shared layout.",
       payload: {
         mode: "multi_live",
-        delayMinutes: 4,
-        fantasyCurrentScore: 72,
-        matches: multiLive.slice(0, 8),
+        matches: multiLive.slice(1, 5),
+      },
+    },
+    {
+      id: "multi_live_aggregate_scores",
+      label: "Multi Live Aggregate Scores",
+      description: "Live matches with aggregate score context in the shared multi-match layout.",
+      payload: {
+        mode: "multi_live",
+        matches: multiLive
+          .filter((match) =>
+            Number.isFinite(Number(match.aggregateHomeScore)) &&
+            Number.isFinite(Number(match.aggregateAwayScore))
+          )
+          .slice(0, 4),
+      },
+    },
+    {
+      id: "multi_live",
+      label: "Multi Live",
+      description: "Live fixtures in the shared multi-match layout.",
+      payload: {
+        mode: "multi_live",
+        matches: multiLive.slice(0, 6),
       },
     },
     {
       id: "multi_finished",
       label: "Multi Finished",
-      description: "Finished fixtures using the completed-match styling and opacity.",
+      description: "Finished fixtures in the shared multi-match layout.",
       payload: {
         mode: "multi_finished",
         matches: multiFinished.slice(0, 6),
+      },
+    },
+    {
+      id: "multi_finished_1_match",
+      label: "Multi Finished 1 Match",
+      description: "One finished fixture in the shared multi-match layout.",
+      payload: {
+        mode: "multi_finished",
+        matches: multiFinished.slice(0, 1),
+      },
+    },
+    {
+      id: "multi_finished_2_matches",
+      label: "Multi Finished 2 Matches",
+      description: "Two finished fixtures in the shared multi-match layout.",
+      payload: {
+        mode: "multi_finished",
+        matches: multiFinished.slice(0, 2),
+      },
+    },
+    {
+      id: "multi_finished_3_matches",
+      label: "Multi Finished 3 Matches",
+      description: "Three finished fixtures in the shared multi-match layout.",
+      payload: {
+        mode: "multi_finished",
+        matches: multiFinished.slice(0, 3),
+      },
+    },
+    {
+      id: "multi_finished_4_matches",
+      label: "Multi Finished 4 Matches",
+      description: "Four finished fixtures in the shared multi-match layout.",
+      payload: {
+        mode: "multi_finished",
+        matches: multiFinished.slice(0, 4),
+      },
+    },
+    {
+      id: "multi_finished_aggregate_scores",
+      label: "Multi Finished Aggregate Scores",
+      description: "Finished fixtures with aggregate score context in the shared layout.",
+      payload: {
+        mode: "multi_finished",
+        matches: (multiFinishedAggregate.length > 0 ? multiFinishedAggregate : multiFinished).slice(0, 4),
       },
     },
     {
@@ -26405,6 +26707,12 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
               presentation.fantasyCurrentScore
             )
             : null;
+        const payloadMetrics =
+          contentState &&
+          hooks &&
+          typeof hooks.liveActivityPayloadMetrics === "function"
+            ? hooks.liveActivityPayloadMetrics(contentState)
+            : null;
         const liveActivityDebugRecords = await getLiveActivityDebugRecords({
           device_token: resolvedDeviceToken,
           limit: 10,
@@ -26449,6 +26757,7 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
             }))
             : [],
           debug: {
+            payloadMetrics,
             currentDateKey: londonDateKey(nowMs),
             operationalMatchCount: Array.isArray(operationalMatches) ? operationalMatches.length : 0,
             monitoredEntryCount: Array.isArray(monitoredEntries) ? monitoredEntries.length : 0,
@@ -26512,6 +26821,7 @@ app.get(`${API_PREFIX}/live-activity/test/presets`, (_req, res) => {
         ? Number(payload.fantasyCurrentScore)
         : null,
       matchCount: Array.isArray(payload.matches) ? payload.matches.length : 0,
+      payload,
     };
   });
 
@@ -26581,15 +26891,14 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
     const fallbackStartOnUpdateFailure = payload.fallbackStartOnUpdateFailure === true;
     const testHoldSeconds = normalizeLiveActivityTestHoldSeconds(payload.testHoldSeconds, 300);
     const testHoldUntil = new Date((timestamp + testHoldSeconds) * 1000).toISOString();
-    const pendingStartAtMs = Date.parse(String(liveActivityState.pendingStartAt || ""));
-    const hasPendingStart = Number.isFinite(pendingStartAtMs);
+    const pendingStartAgeMs = liveActivityPendingStartAgeMs(liveActivityState);
+    const hasPendingStart = Number.isFinite(pendingStartAgeMs);
     const pendingStartAgeSeconds = hasPendingStart
-      ? Math.max(0, Math.floor(Date.now() / 1000 - pendingStartAtMs / 1000))
+      ? Math.max(0, Math.floor(pendingStartAgeMs / 1000))
       : null;
-    const pendingStartIsFresh =
-      hasPendingStart &&
-      pendingStartAgeSeconds !== null &&
-      pendingStartAgeSeconds < LIVE_ACTIVITY_TEST_PENDING_START_MAX_SECONDS;
+    const pendingStartIsFresh = hasPendingStart &&
+      pendingStartAgeMs < LIVE_ACTIVITY_TEST_PENDING_START_MAX_SECONDS * 1000;
+    const pendingStartIsBlocking = liveActivityPendingStartIsBlocking(liveActivityState);
 
     if (hasPendingStart && !pendingStartIsFresh) {
       await updateUserLiveActivityState(
@@ -26607,7 +26916,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
       );
     }
 
-    if (!activityPushToken && pendingStartIsFresh && !forceStart) {
+    if (!activityPushToken && pendingStartIsFresh && pendingStartIsBlocking && !forceStart) {
       res.status(200).json({
         success: true,
         userDeviceToken,
@@ -27214,13 +27523,33 @@ async function bootstrapOperationalState(options = {}) {
 let operationalBootstrapPromise = Promise.resolve();
 const runtimeIntervalHandles = [];
 
-function registerRuntimeInterval(callback, intervalMs) {
-  const handle = setInterval(callback, intervalMs);
-  runtimeIntervalHandles.push(handle);
-  if (typeof handle.unref === "function") {
-    handle.unref();
+function registerRuntimeInterval(callback, intervalMs, options = {}) {
+  const normalizedInitialDelayMs = Number(
+    options && Object.prototype.hasOwnProperty.call(options, "initialDelayMs")
+      ? options.initialDelayMs
+      : 0
+  );
+  const initialDelayMs =
+    Number.isFinite(normalizedInitialDelayMs) && normalizedInitialDelayMs > 0
+      ? Math.floor(normalizedInitialDelayMs)
+      : 0;
+
+  const startInterval = () => {
+    const handle = setInterval(callback, intervalMs);
+    runtimeIntervalHandles.push(handle);
+    if (typeof handle.unref === "function") {
+      handle.unref();
+    }
+    return handle;
+  };
+
+  if (initialDelayMs <= 0) {
+    return startInterval();
   }
-  return handle;
+
+  return registerRuntimeTimeout(() => {
+    startInterval();
+  }, initialDelayMs);
 }
 
 function registerRuntimeTimeout(callback, delayMs) {
@@ -27390,31 +27719,35 @@ function startScraperIntervals() {
   }, interval);
 
   const bbcInterval = Number.isFinite(BBC_INTERVAL_MS) && BBC_INTERVAL_MS > 0 ? BBC_INTERVAL_MS : 30 * 1000;
+  const bbcIntervalOffsetMs = Math.min(5 * 1000, Math.max(0, bbcInterval - 1000));
   registerRuntimeInterval(() => {
     void updateBbcMatches({ trigger: "interval" });
-  }, bbcInterval);
+  }, bbcInterval, { initialDelayMs: bbcIntervalOffsetMs });
 
   const bbcRangeInterval =
     Number.isFinite(BBC_RANGE_INTERVAL_MS) && BBC_RANGE_INTERVAL_MS > 0
       ? BBC_RANGE_INTERVAL_MS
       : 60 * 60 * 1000;
+  const bbcRangeIntervalOffsetMs = Math.min(35 * 1000, Math.max(0, bbcRangeInterval - 1000));
   registerRuntimeInterval(() => {
     void updateBbcRangeMatches({ trigger: "interval" });
-  }, bbcRangeInterval);
+  }, bbcRangeInterval, { initialDelayMs: bbcRangeIntervalOffsetMs });
 
   const eplInterval =
     Number.isFinite(EPL_INTERVAL_MS) && EPL_INTERVAL_MS > 0 ? EPL_INTERVAL_MS : 24 * 60 * 60 * 1000;
+  const eplIntervalOffsetMs = Math.min(90 * 1000, Math.max(0, eplInterval - 1000));
   registerRuntimeInterval(() => {
     void updatePremierLeagueTeams({ trigger: "interval" });
-  }, eplInterval);
+  }, eplInterval, { initialDelayMs: eplIntervalOffsetMs });
 
   const leagueTablesInterval =
     Number.isFinite(LEAGUE_TABLES_INTERVAL_MS) && LEAGUE_TABLES_INTERVAL_MS > 0
       ? LEAGUE_TABLES_INTERVAL_MS
       : 2 * 60 * 1000;
+  const leagueTablesIntervalOffsetMs = Math.min(65 * 1000, Math.max(0, leagueTablesInterval - 1000));
   registerRuntimeInterval(() => {
     void updateLeagueTables({ trigger: "interval" });
-  }, leagueTablesInterval);
+  }, leagueTablesInterval, { initialDelayMs: leagueTablesIntervalOffsetMs });
 
   const clubEloInterval =
     Number.isFinite(CLUB_ELO_INTERVAL_MS) && CLUB_ELO_INTERVAL_MS > 0
@@ -27450,10 +27783,14 @@ function startScraperIntervals() {
 
   registerRuntimeInterval(() => {
     void updateTeamShortNamesCache({ trigger: "interval" });
-  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS);
+  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS, {
+    initialDelayMs: Math.min(95 * 1000, Math.max(0, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS - 1000)),
+  });
   registerRuntimeInterval(() => {
     void syncTeamShortNamesCacheToRedis({ trigger: "interval" });
-  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS);
+  }, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS, {
+    initialDelayMs: Math.min(115 * 1000, Math.max(0, TEAM_SHORT_NAMES_SCRAPE_INTERVAL_MS - 1000)),
+  });
 
   operationalBootstrapPromise
     .then(() =>
@@ -27777,24 +28114,55 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
     const forceDispatch = force === "1" || force === "true" || force === "yes";
     const allowEndRaw = String(_req.query.allowEnd || _req.body?.allowEnd || "").trim().toLowerCase();
     const allowEnd = allowEndRaw === "1" || allowEndRaw === "true" || allowEndRaw === "yes";
+    const trigger =
+      typeof _req.body?.trigger === "string" && _req.body.trigger.trim()
+        ? _req.body.trigger.trim()
+        : "";
     const explicitDeviceToken =
       typeof _req.body?.userDeviceToken === "string"
         ? _req.body.userDeviceToken
         : _req.body?.deviceToken;
     const userDeviceToken = _req.deviceToken || normalizeDeviceToken(explicitDeviceToken);
-
     // If the app explicitly reports it has no active activities, clear any stale
-    // pendingStartAt immediately — the device's word is authoritative.
+    // pendingStartAt, but only when it is actually stale. A fresh push-to-start can
+    // legitimately leave the app reporting zero local activities for a brief window
+    // while iOS delivers the activity, and clearing the lock immediately causes
+    // duplicate starts.
     const reportedActiveCount = typeof _req.body?.activeActivityCount === "number"
       ? _req.body.activeActivityCount : null;
     if (reportedActiveCount === 0 && userDeviceToken) {
       try {
         const record = await getUserPreferences(userDeviceToken);
-        const pendingStartAt = record && record.liveActivity && record.liveActivity.pendingStartAt
-          ? record.liveActivity.pendingStartAt : null;
+        const liveActivity =
+          record && record.liveActivity && typeof record.liveActivity === "object"
+            ? record.liveActivity
+            : {};
+        const pendingStartAt = liveActivity.pendingStartAt ? liveActivity.pendingStartAt : null;
+        const lastDispatchAtMs = liveActivity.lastDispatchAt
+          ? Date.parse(String(liveActivity.lastDispatchAt))
+          : null;
+        const hasRecentDispatch = Number.isFinite(lastDispatchAtMs) &&
+          (Date.now() - lastDispatchAtMs) < LIVE_ACTIVITY_RECENT_DISPATCH_WINDOW_MS;
+        const pendingStartIsFresh = liveActivityPendingStartIsBlocking(liveActivity);
+        const hasCurrentServerActivity = liveActivityHasCurrentServerActivity(liveActivity);
+        const hasFreshCurrentServerActivity = liveActivityHasFreshCurrentServerActivity(liveActivity);
         if (pendingStartAt) {
-          await updateUserLiveActivityState(userDeviceToken, { pendingStartAt: null });
-          console.log(`[API] Cleared stale pendingStartAt on reconcile (device reports 0 activities): device=${userDeviceToken.slice(0, 12)}...`);
+          if (!pendingStartIsFresh && !hasRecentDispatch) {
+            await updateUserLiveActivityState(userDeviceToken, { pendingStartAt: null });
+            console.log(`[API] Cleared stale pendingStartAt on reconcile (device reports 0 activities): device=${userDeviceToken.slice(0, 12)}...`);
+          } else {
+            console.log(`[API] Preserved fresh pendingStartAt on reconcile (device reports 0 activities): device=${userDeviceToken.slice(0, 12)}...`);
+          }
+        }
+        if (hasCurrentServerActivity && !hasFreshCurrentServerActivity && !pendingStartIsFresh && !hasRecentDispatch) {
+          await updateUserLiveActivityState(userDeviceToken, {
+            currentActivityId: null,
+            currentActivityPushToken: null,
+            currentActivityTokenUpdatedAt: null,
+          });
+          console.log(
+            `[API] Cleared stale current live activity state on reconcile (device reports 0 activities): device=${userDeviceToken.slice(0, 12)}...`
+          );
         }
       } catch (_err) {
         // Non-fatal
@@ -27803,7 +28171,7 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
 
     const result = await matchMonitor.runLiveActivityEvaluationNow({
       userDeviceToken,
-      trigger: typeof _req.body?.trigger === "string" ? _req.body.trigger : "",
+      trigger,
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
     });
@@ -27815,8 +28183,27 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
       try {
         const record = await getUserPreferences(userDeviceToken);
         if (record) {
+          const liveActivity =
+            record.liveActivity && typeof record.liveActivity === "object"
+              ? record.liveActivity
+              : {};
+          const lastDispatchAtMs = liveActivity.lastDispatchAt
+            ? Date.parse(String(liveActivity.lastDispatchAt))
+            : null;
+          const hasFreshPendingStart = liveActivityPendingStartIsBlocking(liveActivity);
+          const hasRecentDispatch = Number.isFinite(lastDispatchAtMs) &&
+            (Date.now() - lastDispatchAtMs) < LIVE_ACTIVITY_RECENT_DISPATCH_WINDOW_MS;
+          const hasFreshCurrentServerActivity = liveActivityHasFreshCurrentServerActivity(liveActivity);
+          const allowForegroundStartFromForegroundClient =
+            trigger === "app_foreground" && reportedActiveCount === 0;
+          const shouldSuppressForegroundStart =
+            (!allowForegroundStartFromForegroundClient && hasFreshCurrentServerActivity) ||
+            hasFreshPendingStart ||
+            (!allowForegroundStartFromForegroundClient && hasRecentDispatch && hasFreshCurrentServerActivity);
+
           const hooks = matchMonitor.__testHooks;
           if (
+            !shouldSuppressForegroundStart &&
             hooks &&
             typeof hooks.monitoredMatchStatesSnapshot === "function" &&
             typeof hooks.buildLiveActivityEntriesForUser === "function" &&
