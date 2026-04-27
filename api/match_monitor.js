@@ -64,6 +64,11 @@ const LIVE_ACTIVITY_PENDING_MAX_MS = 2 * 60 * 1000;
 // iOS suppression. The counter resets whenever an activity-token lands.
 const LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS = 5;
 const LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS = 30 * 60;
+const LIVE_ACTIVITY_STATIC_STALE_AFTER_SECONDS = 4 * 60 * 60;
+// If iOS dismisses a started activity almost immediately, avoid re-starting the
+// same quiet/upcoming card in a loop. Live and just-kicked-off matches may still
+// break through because they are time-sensitive.
+const LIVE_ACTIVITY_DISMISSED_START_COOLDOWN_MS = 10 * 60 * 1000;
 // Re-push identical payloads this many seconds before stale-date expiry so iOS never
 // shows the staleness spinner during quiet periods (e.g. half-time, pre-kickoff).
 const LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS = 5 * 60;
@@ -73,6 +78,13 @@ const LIVE_ACTIVITY_STALE_LIVE_UPDATED_GRACE_MS = 5 * 60 * 1000;
 const LIVE_ACTIVITY_STALE_LIVE_KICKOFF_GRACE_MS = 2 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_FINISHED_RETENTION_MS = 8 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_DELAY_SNAPSHOT_STALE_TOLERANCE_MS = Math.max(POLL_INTERVAL_MS * 3, 60 * 1000);
+// Default active window for Live Activities (Europe/London local time).
+// Outside this window the server ends any running activity that has no live/recent-kickoff
+// matches, and suppresses push-to-start. This conserves the Apple 8-hour daily budget and
+// avoids overnight stale-spinner states. The window is bypassed when matches are in play.
+const LIVE_ACTIVITY_WINDOW_START_HOUR = 8;  // 08:00 Europe/London
+const LIVE_ACTIVITY_WINDOW_END_HOUR = 23;   // 23:00 Europe/London
+const LIVE_ACTIVITY_WINDOW_TIMEZONE = "Europe/London";
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
 const FANTASY_DEADLINE_REMINDER_EVAL_INTERVAL_MS = 60 * 1000;
@@ -134,6 +146,35 @@ const LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP = Object.entries(
   },
   new Map()
 );
+const LIVE_ACTIVITY_TEAM_DISPLAY_ALIAS_LOOKUP = Object.entries(
+  TEAM_ALIASES_PAYLOAD && typeof TEAM_ALIASES_PAYLOAD.aliases === "object"
+    ? TEAM_ALIASES_PAYLOAD.aliases
+    : {}
+).reduce(
+  (result, [alias, canonicalName]) => {
+    const normalizedAlias = normalizeLiveActivityTeamShortNameKey(alias);
+    const normalizedCanonicalName = normalizeLiveActivityTeamShortNameKey(canonicalName);
+    const displayAlias = String(alias || "").trim();
+    const canonicalDisplayName = String(canonicalName || "").trim();
+    if (
+      !normalizedAlias ||
+      !normalizedCanonicalName ||
+      normalizedAlias === normalizedCanonicalName ||
+      !displayAlias ||
+      !canonicalDisplayName
+    ) {
+      return result;
+    }
+    if (shouldUseLiveActivityAliasAsDisplayShortName(displayAlias, canonicalDisplayName)) {
+      const existing = result.get(normalizedCanonicalName);
+      if (!existing || displayAlias.length < String(existing).length) {
+        result.set(normalizedCanonicalName, displayAlias);
+      }
+    }
+    return result;
+  },
+  new Map()
+);
 
 // Match status helpers - mirrors server.js MATCH_STATUS_* constants
 const MATCH_STATUS_MINUTE_PATTERN = /^(\d{1,3})(?:\+(\d{1,2}))?'?$/;
@@ -179,6 +220,21 @@ function buildLiveActivityTeamShortNameLookup(payload) {
   return lookup;
 }
 
+function shouldUseLiveActivityAliasAsDisplayShortName(alias, canonicalName) {
+  const trimmedAlias = String(alias || "").trim();
+  const trimmedCanonicalName = String(canonicalName || "").trim();
+  if (!trimmedAlias || !trimmedCanonicalName) return false;
+  if (trimmedAlias === trimmedAlias.toUpperCase() && /^[A-Z]{2,4}$/.test(trimmedAlias)) {
+    return false;
+  }
+  if (/\b(?:afc|fc|cf|sc)\b/i.test(trimmedAlias)) {
+    return false;
+  }
+  const aliasTokenCount = normalizeLiveActivityTeamShortNameKey(trimmedAlias).split(" ").filter(Boolean).length;
+  const canonicalTokenCount = normalizeLiveActivityTeamShortNameKey(trimmedCanonicalName).split(" ").filter(Boolean).length;
+  return trimmedAlias.length < trimmedCanonicalName.length || aliasTokenCount < canonicalTokenCount;
+}
+
 function refreshLiveActivityTeamShortNameLookup(datasetRecord = null) {
   const payload =
     datasetRecord && datasetRecord.payload && typeof datasetRecord.payload === "object"
@@ -202,8 +258,9 @@ function resolveLiveActivityTeamShortName(shortNameValue, fullNameValue) {
   const key = normalizeLiveActivityTeamShortNameKey(fullName);
   if (!key) return null;
   const resolved = liveActivityTeamShortNameLookup.get(key);
+  const displayAliasResolved = LIVE_ACTIVITY_TEAM_DISPLAY_ALIAS_LOOKUP.get(key);
   const aliasResolved = LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP.get(key);
-  const resolvedValue = resolved || aliasResolved;
+  const resolvedValue = resolved || displayAliasResolved || aliasResolved;
   if (!resolvedValue) return null;
   const trimmed = String(resolvedValue).trim();
   return trimmed && trimmed !== fullName ? trimmed : null;
@@ -5186,7 +5243,15 @@ function liveActivityPayloadMetrics(contentState) {
   };
 }
 
-function logLiveActivityPayloadDiagnostics(user, event, presentation, contentState, nowMs, payloadHash) {
+function logLiveActivityPayloadDiagnostics(
+  user,
+  event,
+  presentation,
+  contentState,
+  nowMs,
+  payloadHash,
+  context = {}
+) {
   const metrics = liveActivityPayloadMetrics(contentState);
   liveActivityMetrics.recordPayloadSample({
     event,
@@ -5200,10 +5265,17 @@ function logLiveActivityPayloadDiagnostics(user, event, presentation, contentSta
     kind: "archive_estimate",
     bytes: metrics.archiveEstimateBytes,
   });
-  const staleAtEpochSeconds = Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS;
+  const staleAfterSeconds = liveActivityStaleAfterSecondsForMode(
+    presentation && presentation.mode ? presentation.mode : null
+  );
+  const staleAtEpochSeconds = Math.floor(nowMs / 1000) + staleAfterSeconds;
   const matchSummaries = Array.isArray(contentState && contentState.matches)
     ? contentState.matches.map((match) => ({
       match_id: String(match && match.matchId ? match.matchId : ""),
+      home: String(match && match.homeTeam ? match.homeTeam : ""),
+      away: String(match && match.awayTeam ? match.awayTeam : ""),
+      home_short: match && match.homeShortName ? String(match.homeShortName) : null,
+      away_short: match && match.awayShortName ? String(match.awayShortName) : null,
       score:
         Number.isFinite(match && match.homeScore) && Number.isFinite(match && match.awayScore)
           ? `${match.homeScore}-${match.awayScore}`
@@ -5222,10 +5294,11 @@ function logLiveActivityPayloadDiagnostics(user, event, presentation, contentSta
     delay_minutes: Number(presentation && presentation.delayMinutes ? presentation.delayMinutes : 0),
     matches: matchSummaries,
     stale_at: new Date(staleAtEpochSeconds * 1000).toISOString(),
-    seconds_until_stale: LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
+    seconds_until_stale: staleAfterSeconds,
+    ...context,
   };
 
-  monitorVerboseLog(`[MatchMonitor] Live Activity payload ${JSON.stringify(diagnostics)}`);
+  console.log(`[MatchMonitor] Live Activity payload ${JSON.stringify(diagnostics)}`);
 
   if (
     metrics.contentStateBytes >= LIVE_ACTIVITY_PAYLOAD_WARN_BYTES ||
@@ -5239,6 +5312,57 @@ function logLiveActivityPayloadDiagnostics(user, event, presentation, contentSta
       })}`
     );
   }
+}
+
+function liveActivityDispatchReason({
+  state = {},
+  mode = "",
+  payloadHash = null,
+  scoreHash = null,
+  forceDispatch = false,
+  trigger = "",
+  nowMs = Date.now(),
+  pushKind = "",
+} = {}) {
+  if (pushKind === "start") {
+    if (trigger) return `push_to_start_${trigger}`;
+    return "push_to_start_monitor";
+  }
+  if (pushKind === "end") {
+    return "end_requested";
+  }
+  if (forceDispatch) return "force_dispatch";
+  const lastDispatchAtMs = parseLiveActivityDispatchTimeMs(state);
+  if (state.lastMode !== mode) return "mode_changed";
+  if (state.lastPayloadHash !== payloadHash) return "payload_changed";
+  if (scoreHash && state.lastScoreHash !== scoreHash) return "score_changed";
+  if (lastDispatchAtMs === null) return "first_update_after_start";
+  const heartbeatThresholdMs = liveActivityHeartbeatThresholdMsForMode(mode);
+  if (nowMs - lastDispatchAtMs >= heartbeatThresholdMs) return "stale_heartbeat";
+  return "unknown_allowed_update";
+}
+
+function logLiveActivityDispatchDecision(user, details = {}) {
+  const payload = {
+    user_device_short: shortDeviceToken(user && user.deviceToken),
+    trigger: details.trigger || null,
+    source: details.source || "match_monitor",
+    event: details.event || null,
+    reason: details.reason || null,
+    mode: details.mode || null,
+    push_token_kind: details.push_token_kind || null,
+    current_activity_id: details.current_activity_id || null,
+    force_dispatch: Boolean(details.force_dispatch),
+    payload_hash_prefix: details.payload_hash ? String(details.payload_hash).slice(0, 12) : null,
+    score_hash_prefix: details.score_hash ? String(details.score_hash).slice(0, 12) : null,
+    last_payload_hash_prefix: details.last_payload_hash ? String(details.last_payload_hash).slice(0, 12) : null,
+    last_score_hash_prefix: details.last_score_hash ? String(details.last_score_hash).slice(0, 12) : null,
+    last_mode: details.last_mode || null,
+    last_dispatch_at: details.last_dispatch_at || null,
+    stale_date: details.stale_date || null,
+    match_count: Number.isFinite(Number(details.match_count)) ? Number(details.match_count) : null,
+  };
+  console.log(`[MatchMonitor] Live Activity dispatch decision ${JSON.stringify(payload)}`);
 }
 
 function stableHash(value) {
@@ -5298,6 +5422,18 @@ function isLiveActivityFinishedMode(mode) {
 function parseLiveActivityDispatchTimeMs(state) {
   const dispatchAtMs = Date.parse(String(state && state.lastDispatchAt ? state.lastDispatchAt : ""));
   return Number.isFinite(dispatchAtMs) ? dispatchAtMs : null;
+}
+
+function liveActivityStaleAfterSecondsForMode(mode) {
+  if (isLiveActivityUpcomingMode(mode) || isLiveActivityFinishedMode(mode)) {
+    return LIVE_ACTIVITY_STATIC_STALE_AFTER_SECONDS;
+  }
+  return LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS;
+}
+
+function liveActivityHeartbeatThresholdMsForMode(mode) {
+  const staleAfterSeconds = liveActivityStaleAfterSecondsForMode(mode);
+  return Math.max(0, staleAfterSeconds - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
 }
 
 function buildLiveActivityApsPayload(event, contentState, options = {}) {
@@ -5386,8 +5522,7 @@ function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false,
     if (lastDispatchAtMs === null) {
       return null; // first update after push-to-start: always dispatch
     }
-    const heartbeatThresholdMs =
-      (LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
+    const heartbeatThresholdMs = liveActivityHeartbeatThresholdMsForMode(mode);
     if (nowMs - lastDispatchAtMs >= heartbeatThresholdMs) {
       return null; // heartbeat: reset stale-date before it expires
     }
@@ -5403,8 +5538,7 @@ function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false,
     // Keep upcoming activities quiet until there is a real mode transition
     // (e.g. upcoming -> live) or the stale-date heartbeat window is reached.
     if (lastDispatchAtMs !== null) {
-      const heartbeatThresholdMs =
-        (LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
+      const heartbeatThresholdMs = liveActivityHeartbeatThresholdMsForMode(mode);
       if (nowMs - lastDispatchAtMs < heartbeatThresholdMs) {
         return "upcoming_quiet_mode";
       }
@@ -5416,8 +5550,7 @@ function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false,
     // ordering/name/channel deltas have also been observed to destabilize the widget
     // after a successful start, so keep them quiet until the stale-date heartbeat.
     if (lastDispatchAtMs !== null) {
-      const heartbeatThresholdMs =
-        (LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
+      const heartbeatThresholdMs = liveActivityHeartbeatThresholdMsForMode(mode);
       if (nowMs - lastDispatchAtMs < heartbeatThresholdMs) {
         return "finished_quiet_mode";
       }
@@ -5490,6 +5623,43 @@ function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = 
   return liveActivitySkipReason(state, payloadHash, mode, forceDispatch, options) !== null;
 }
 
+/**
+ * Returns the current hour (0–23) in Europe/London, falling back to UTC on error.
+ */
+function londonHour(nowMs) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: LIVE_ACTIVITY_WINDOW_TIMEZONE,
+      hour: "numeric",
+      hour12: false,
+    }).formatToParts(new Date(nowMs));
+    const hourPart = parts.find((p) => p.type === "hour");
+    const h = hourPart ? parseInt(hourPart.value, 10) : NaN;
+    return Number.isFinite(h) ? h : new Date(nowMs).getUTCHours();
+  } catch {
+    return new Date(nowMs).getUTCHours();
+  }
+}
+
+/**
+ * Returns true when the current time falls within the default Live Activity active window
+ * (LIVE_ACTIVITY_WINDOW_START_HOUR to LIVE_ACTIVITY_WINDOW_END_HOUR, Europe/London).
+ */
+function isWithinLiveActivityActiveWindow(nowMs) {
+  const h = londonHour(nowMs);
+  return h >= LIVE_ACTIVITY_WINDOW_START_HOUR && h < LIVE_ACTIVITY_WINDOW_END_HOUR;
+}
+
+/**
+ * Returns true when the presentation mode indicates at least one match is currently live
+ * or at very recent kickoff. These modes override the active-window gate so the server
+ * keeps the activity running even outside 08:00–23:00.
+ */
+function isLiveOrRecentKickoffMode(mode) {
+  if (!mode || typeof mode !== "string") return false;
+  return mode.includes("live") || mode.includes("recent_kickoff");
+}
+
 function shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, options = {}, state = {}) {
   if (!activityPushToken || !String(activityPushToken).trim()) {
     return false;
@@ -5500,15 +5670,48 @@ function shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, options = 
   return isLiveActivityUpcomingMode(state && state.lastMode);
 }
 
+function liveActivityTokenlessCurrentActivityIsBlocking(state = {}, nowMs = Date.now()) {
+  const currentActivityId = String(state.currentActivityId || "").trim();
+  const activityPushToken = String(state.currentActivityPushToken || "").trim();
+  const lastStartAtMs = Date.parse(String(state.lastStartAt || ""));
+  if (!currentActivityId || activityPushToken || !Number.isFinite(lastStartAtMs)) {
+    return false;
+  }
+  const ageMs = nowMs - lastStartAtMs;
+  return ageMs >= 0 && ageMs < LIVE_ACTIVITY_PENDING_MAX_MS;
+}
+
+function liveActivityRecentDismissalCooldownIsBlocking(state = {}, mode = "", nowMs = Date.now()) {
+  if (isLiveOrRecentKickoffMode(mode)) {
+    return false;
+  }
+  const lastEndedAtMs = Date.parse(String(state.lastEndedAt || ""));
+  if (!Number.isFinite(lastEndedAtMs)) {
+    return false;
+  }
+  const ageMs = nowMs - lastEndedAtMs;
+  return ageMs >= 0 && ageMs < LIVE_ACTIVITY_DISMISSED_START_COOLDOWN_MS;
+}
+
 async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(), options = {}) {
   const state = user && user.liveActivity && typeof user.liveActivity === "object" ? user.liveActivity : {};
   const forceDispatch = Boolean(options && options.forceDispatch);
   const preserveExistingOnEmpty = Boolean(options && options.preserveExistingOnEmpty);
   const pushToStartToken = String(state.pushToStartToken || "").trim();
   const activityPushToken = String(state.currentActivityPushToken || "").trim();
+  const currentActivityId = String(state.currentActivityId || "").trim();
+  const lastStartAtMs = Date.parse(String(state.lastStartAt || ""));
   const pendingStartAtMs = Date.parse(String(state.pendingStartAt || ""));
   const hasPendingStart = Number.isFinite(pendingStartAtMs);
   const pendingAgeMs = hasPendingStart ? nowMs - pendingStartAtMs : 0;
+  const tokenlessCurrentActivityAgeMs =
+    currentActivityId && !activityPushToken && Number.isFinite(lastStartAtMs)
+      ? nowMs - lastStartAtMs
+      : null;
+  const hasFreshTokenlessCurrentActivity = liveActivityTokenlessCurrentActivityIsBlocking(
+    state,
+    nowMs
+  );
   const pushToStartAttempts = (() => {
     const raw = Number.isFinite(Number(state.pushToStartAttempts)) ? Math.max(0, Number(state.pushToStartAttempts)) : 0;
     if (raw === 0) return 0;
@@ -5520,6 +5723,31 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const testHoldUntilMs = Date.parse(String(state.testHoldUntil || ""));
   const isTestHoldActive = Number.isFinite(testHoldUntilMs) && nowMs < testHoldUntilMs;
   const shouldDisplay = Boolean(presentation && presentation.mode && presentation.matches.length > 0);
+  const trigger = String(options && options.trigger ? options.trigger : "");
+
+  console.log(
+    `[MatchMonitor] Live Activity evaluation ${JSON.stringify({
+      user_device_short: shortDeviceToken(user && user.deviceToken),
+      trigger: trigger || null,
+      force_dispatch: forceDispatch,
+      preserve_existing_on_empty: preserveExistingOnEmpty,
+      mode: presentation && presentation.mode ? presentation.mode : null,
+      match_count: presentation && Array.isArray(presentation.matches) ? presentation.matches.length : 0,
+      should_display: shouldDisplay,
+      current_activity_id: currentActivityId || null,
+      activity_token_present: Boolean(activityPushToken),
+      push_to_start_token_present: Boolean(pushToStartToken),
+      pending_start_present: hasPendingStart,
+      pending_age_seconds: hasPendingStart ? Math.max(0, Math.round(pendingAgeMs / 1000)) : null,
+      tokenless_current_activity_age_seconds:
+        tokenlessCurrentActivityAgeMs === null
+          ? null
+          : Math.max(0, Math.round(tokenlessCurrentActivityAgeMs / 1000)),
+      last_mode: state && state.lastMode ? String(state.lastMode) : null,
+      last_dispatch_at: state && state.lastDispatchAt ? String(state.lastDispatchAt) : null,
+      last_ended_at: state && state.lastEndedAt ? String(state.lastEndedAt) : null,
+    })}`
+  );
 
   if (!shouldDisplay) {
     if (
@@ -5571,7 +5799,17 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
         lastMode: null,
       });
     }
-    if (!activityPushToken) return;
+    if (!activityPushToken) {
+      console.log(
+        `[MatchMonitor] Live Activity decision ${JSON.stringify({
+          user_device_short: shortDeviceToken(user && user.deviceToken),
+          trigger: trigger || null,
+          decision_type: "no_display_no_activity_token",
+          reason: "no_matches_and_no_running_activity",
+        })}`
+      );
+      return;
+    }
     const endedContentState = {
       mode: "ended",
       generatedAtEpochSeconds: Math.floor(nowMs / 1000),
@@ -5582,6 +5820,17 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       timestamp: Math.floor(nowMs / 1000),
       dismissalDate: Math.floor(nowMs / 1000),
     });
+    logLiveActivityDispatchDecision(user, {
+      source: "match_monitor",
+      trigger,
+      event: "end",
+      reason: "no_matches",
+      mode: "ended",
+      push_token_kind: "activity",
+      current_activity_id: state && state.currentActivityId ? String(state.currentActivityId) : null,
+      force_dispatch: forceDispatch,
+      match_count: 0,
+    });
     const endDispatchStartedAtMs = Date.now();
     const result = await sendLiveActivityPush({
       token: activityPushToken,
@@ -5591,6 +5840,18 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
     });
     const endDispatchCompletedAtMs = Date.now();
+    console.log(
+      `[MatchMonitor] Live Activity push result ${JSON.stringify({
+        user_device_short: shortDeviceToken(user && user.deviceToken),
+        event: "end",
+        reason: "no_matches",
+        status: result.success ? "success" : "failure",
+        environment: result && result.environment ? result.environment : null,
+        elapsed_ms: Math.max(0, endDispatchCompletedAtMs - endDispatchStartedAtMs),
+        error: result && result.error ? String(result.error) : null,
+        is_terminal: Boolean(result && result.isTerminal),
+      })}`
+    );
     liveActivityMetrics.recordPush({
       event: "end",
       status: result.success ? "success" : "failure",
@@ -5599,6 +5860,9 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     await persistLiveActivityDebug(user, {
       record_type: "push",
       dispatch_kind: "end",
+      source: "match_monitor",
+      trigger: trigger || null,
+      dispatch_reason: "no_matches",
       status: result.success ? "success" : "failure",
       mode: "ended",
       environment: result && result.environment ? result.environment : null,
@@ -5638,6 +5902,117 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     return;
   }
 
+  // --- Active-window gate ---
+  // Outside 08:00–23:00 Europe/London, end any running activity and suppress push-to-start
+  // UNLESS at least one match is currently live or at very recent kickoff.
+  const withinActiveWindow = isWithinLiveActivityActiveWindow(nowMs);
+  if (!withinActiveWindow && !isLiveOrRecentKickoffMode(presentation.mode)) {
+    if (!activityPushToken) {
+      console.log(
+        `[MatchMonitor] Live Activity decision ${JSON.stringify({
+          user_device_short: shortDeviceToken(user && user.deviceToken),
+          trigger: trigger || null,
+          decision_type: "outside_active_window_no_activity_token",
+          reason: "outside_active_window_suppress_push_to_start",
+          mode: presentation.mode,
+        })}`
+      );
+      return;
+    } // No activity running; skip push-to-start outside window.
+
+    const windowEndContentState = {
+      mode: "ended",
+      generatedAtEpochSeconds: Math.floor(nowMs / 1000),
+      delayMinutes: 0,
+      matches: [],
+    };
+    const windowEndRawPayload = buildLiveActivityApsPayload("end", windowEndContentState, {
+      timestamp: Math.floor(nowMs / 1000),
+      dismissalDate: Math.floor(nowMs / 1000),
+    });
+    logLiveActivityDispatchDecision(user, {
+      source: "match_monitor",
+      trigger,
+      event: "end",
+      reason: "outside_active_window",
+      mode: "ended",
+      push_token_kind: "activity",
+      current_activity_id: state && state.currentActivityId ? String(state.currentActivityId) : null,
+      force_dispatch: forceDispatch,
+      match_count: 0,
+    });
+    const windowEndStartedAtMs = Date.now();
+    const windowEndResult = await sendLiveActivityPush({
+      token: activityPushToken,
+      event: "end",
+      contentState: windowEndContentState,
+      dismissalDate: Math.floor(nowMs / 1000),
+      isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+    });
+    const windowEndCompletedAtMs = Date.now();
+    console.log(
+      `[MatchMonitor] Live Activity push result ${JSON.stringify({
+        user_device_short: shortDeviceToken(user && user.deviceToken),
+        event: "end",
+        reason: "outside_active_window",
+        status: windowEndResult.success ? "success" : "failure",
+        environment: windowEndResult && windowEndResult.environment ? windowEndResult.environment : null,
+        elapsed_ms: Math.max(0, windowEndCompletedAtMs - windowEndStartedAtMs),
+        error: windowEndResult && windowEndResult.error ? String(windowEndResult.error) : null,
+        is_terminal: Boolean(windowEndResult && windowEndResult.isTerminal),
+      })}`
+    );
+    liveActivityMetrics.recordPush({
+      event: "end",
+      status: windowEndResult.success ? "success" : "failure",
+      isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+    });
+    await persistLiveActivityDebug(user, {
+      record_type: "push",
+      dispatch_kind: "end",
+      source: "match_monitor",
+      trigger: trigger || null,
+      dispatch_reason: "outside_active_window",
+      status: windowEndResult.success ? "success" : "failure",
+      mode: "ended",
+      environment: windowEndResult && windowEndResult.environment ? windowEndResult.environment : null,
+      elapsed_ms: Math.max(0, windowEndCompletedAtMs - windowEndStartedAtMs),
+      dispatch_started_at: new Date(windowEndStartedAtMs).toISOString(),
+      dispatch_completed_at: new Date(windowEndCompletedAtMs).toISOString(),
+      push_token_kind: "activity",
+      current_activity_id: state && state.currentActivityId ? String(state.currentActivityId) : null,
+      error: windowEndResult && windowEndResult.error ? String(windowEndResult.error) : null,
+      is_terminal: Boolean(windowEndResult && windowEndResult.isTerminal),
+      raw_payload: windowEndRawPayload,
+      content_state: windowEndContentState,
+    });
+    const windowEndPatch = {
+      currentActivityPushToken: null,
+      currentActivityId: null,
+      currentActivityGeneratedAtEpochSeconds: null,
+      pendingStartAt: null,
+      lastPayloadHash: null,
+      lastScoreHash: null,
+      lastMode: null,
+      lastDispatchAt: new Date(nowMs).toISOString(),
+      lastEndedAt: new Date(nowMs).toISOString(),
+      testHoldUntil: null,
+    };
+    if (windowEndResult.success) {
+      liveActivityMetrics.markActivityInactive({ deviceToken: user.deviceToken });
+      liveActivityMetrics.recordEnd({
+        isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
+        reason: "outside_active_window",
+      });
+    }
+    if (!windowEndResult.success && !isTerminalLiveActivityError(windowEndResult)) {
+      return;
+    }
+    await persistLiveActivityPatch(user, windowEndPatch);
+    return;
+  }
+  // --- End active-window gate ---
+
   const contentState = buildLiveActivityContentState(
     presentation.mode,
     presentation.matches,
@@ -5674,20 +6049,72 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       });
       return;
     }
-    logLiveActivityPayloadDiagnostics(user, "update", presentation, contentState, nowMs, payloadHash);
+    const updateReason = liveActivityDispatchReason({
+      state,
+      mode: presentation.mode,
+      payloadHash,
+      scoreHash,
+      forceDispatch,
+      trigger,
+      nowMs,
+      pushKind: "update",
+    });
+    logLiveActivityPayloadDiagnostics(user, "update", presentation, contentState, nowMs, payloadHash, {
+      trigger: trigger || null,
+      dispatch_reason: updateReason,
+      force_dispatch: forceDispatch,
+      current_activity_id: state && state.currentActivityId ? String(state.currentActivityId) : null,
+      last_mode: state && state.lastMode ? String(state.lastMode) : null,
+      last_dispatch_at: state && state.lastDispatchAt ? String(state.lastDispatchAt) : null,
+      last_payload_hash_prefix: state && state.lastPayloadHash ? String(state.lastPayloadHash).slice(0, 12) : null,
+      last_score_hash_prefix: state && state.lastScoreHash ? String(state.lastScoreHash).slice(0, 12) : null,
+    });
+    const updateStaleDate = Math.floor(nowMs / 1000) +
+      liveActivityStaleAfterSecondsForMode(presentation.mode);
+    logLiveActivityDispatchDecision(user, {
+      source: "match_monitor",
+      trigger,
+      event: "update",
+      reason: updateReason,
+      mode: presentation.mode,
+      push_token_kind: "activity",
+      current_activity_id: state && state.currentActivityId ? String(state.currentActivityId) : null,
+      force_dispatch: forceDispatch,
+      payload_hash: payloadHash,
+      score_hash: scoreHash,
+      last_payload_hash: state && state.lastPayloadHash ? String(state.lastPayloadHash) : null,
+      last_score_hash: state && state.lastScoreHash ? String(state.lastScoreHash) : null,
+      last_mode: state && state.lastMode ? String(state.lastMode) : null,
+      last_dispatch_at: state && state.lastDispatchAt ? String(state.lastDispatchAt) : null,
+      stale_date: new Date(updateStaleDate * 1000).toISOString(),
+      match_count: contentState.matches.length,
+    });
     const updateRawPayload = buildLiveActivityApsPayload("update", contentState, {
       timestamp: Math.floor(nowMs / 1000),
-      staleDate: Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
+      staleDate: updateStaleDate,
     });
     const updateDispatchStartedAtMs = Date.now();
     const updateResult = await sendLiveActivityPush({
       token: activityPushToken,
       event: "update",
       contentState,
-      staleDate: Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
+      staleDate: updateStaleDate,
       isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
     });
     const updateDispatchCompletedAtMs = Date.now();
+    console.log(
+      `[MatchMonitor] Live Activity push result ${JSON.stringify({
+        user_device_short: shortDeviceToken(user && user.deviceToken),
+        event: "update",
+        reason: updateReason,
+        status: updateResult.success ? "success" : "failure",
+        environment: updateResult && updateResult.environment ? updateResult.environment : null,
+        elapsed_ms: Math.max(0, updateDispatchCompletedAtMs - updateDispatchStartedAtMs),
+        error: updateResult && updateResult.error ? String(updateResult.error) : null,
+        is_terminal: Boolean(updateResult && updateResult.isTerminal),
+        current_activity_id: state && state.currentActivityId ? String(state.currentActivityId) : null,
+      })}`
+    );
     liveActivityMetrics.recordPush({
       event: "update",
       status: updateResult.success ? "success" : "failure",
@@ -5696,6 +6123,9 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     await persistLiveActivityDebug(user, {
       record_type: "push",
       dispatch_kind: "update",
+      source: "match_monitor",
+      trigger: trigger || null,
+      dispatch_reason: updateReason,
       status: updateResult.success ? "success" : "failure",
       mode: presentation.mode,
       environment: updateResult && updateResult.environment ? updateResult.environment : null,
@@ -5738,9 +6168,6 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     }
     return;
   }
-
-  const trigger = String(options && options.trigger ? options.trigger : "");
-
   // Stale lock recovery runs for ALL triggers, including app_foreground, so that the
   // first foreground after PENDING_MAX_MS clears the stuck lock immediately rather than
   // waiting for the next background eval loop tick.
@@ -5761,12 +6188,54 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     }
   }
 
+  if (hasFreshTokenlessCurrentActivity) {
+    monitorVerboseLog(
+      `[MatchMonitor] Live Activity activity token wait ${JSON.stringify({
+        user_device_short: shortDeviceToken(user && user.deviceToken),
+        reason: "activity_token_wait",
+        current_activity_id: currentActivityId,
+        tokenless_age_seconds: Math.max(0, Math.round(tokenlessCurrentActivityAgeMs / 1000)),
+        pending_max_seconds: Math.round(LIVE_ACTIVITY_PENDING_MAX_MS / 1000),
+      })}`
+    );
+    await persistLiveActivityDebug(user, {
+      record_type: "decision",
+      decision_type: "activity_token_wait",
+      current_activity_id: currentActivityId,
+      pending_age_seconds: Math.max(0, Math.round(tokenlessCurrentActivityAgeMs / 1000)),
+      pending_max_seconds: Math.round(LIVE_ACTIVITY_PENDING_MAX_MS / 1000),
+    });
+    return;
+  }
+
   // When the app is in the foreground it calls the reconcile endpoint, which returns a
   // foregroundStart content state so the app can call Activity.request() directly.
   // Skip push-to-start here to avoid a race between the two creation paths that would
   // produce duplicate activities (one of which enforceSingleActiveActivity would then end).
-  if (trigger === "app_foreground") return;
-  if (!pushToStartToken) return;
+  if (trigger === "app_foreground") {
+    console.log(
+      `[MatchMonitor] Live Activity decision ${JSON.stringify({
+        user_device_short: shortDeviceToken(user && user.deviceToken),
+        trigger,
+        decision_type: "foreground_skip_push_to_start",
+        reason: "foreground_client_uses_activity_request",
+        mode: presentation.mode,
+      })}`
+    );
+    return;
+  }
+  if (!pushToStartToken) {
+    console.log(
+      `[MatchMonitor] Live Activity decision ${JSON.stringify({
+        user_device_short: shortDeviceToken(user && user.deviceToken),
+        trigger: trigger || null,
+        decision_type: "missing_push_to_start_token",
+        reason: "cannot_start_without_push_to_start_token",
+        mode: presentation.mode,
+      })}`
+    );
+    return;
+  }
   if (hasPendingStart && pendingAgeMs < LIVE_ACTIVITY_PENDING_MAX_MS) {
     // A start push already succeeded; wait for activity push token from app and avoid duplicate starts.
     monitorVerboseLog(
@@ -5783,6 +6252,31 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       pending_start_at: state && state.pendingStartAt ? String(state.pendingStartAt) : null,
       pending_age_seconds: Math.max(0, Math.round(pendingAgeMs / 1000)),
       pending_max_seconds: Math.round(LIVE_ACTIVITY_PENDING_MAX_MS / 1000),
+    });
+    return;
+  }
+
+  if (liveActivityRecentDismissalCooldownIsBlocking(state, presentation.mode, nowMs)) {
+    const lastEndedAtMs = Date.parse(String(state.lastEndedAt || ""));
+    const cooldownAgeSeconds = Number.isFinite(lastEndedAtMs)
+      ? Math.max(0, Math.round((nowMs - lastEndedAtMs) / 1000))
+      : null;
+    monitorVerboseLog(
+      `[MatchMonitor] Live Activity recent dismissal cooldown ${JSON.stringify({
+        user_device_short: shortDeviceToken(user && user.deviceToken),
+        reason: "recent_dismissal_cooldown",
+        mode: presentation.mode,
+        cooldown_age_seconds: cooldownAgeSeconds,
+        cooldown_max_seconds: Math.round(LIVE_ACTIVITY_DISMISSED_START_COOLDOWN_MS / 1000),
+      })}`
+    );
+    await persistLiveActivityDebug(user, {
+      record_type: "decision",
+      decision_type: "recent_dismissal_cooldown",
+      mode: presentation.mode,
+      last_ended_at: state && state.lastEndedAt ? String(state.lastEndedAt) : null,
+      cooldown_age_seconds: cooldownAgeSeconds,
+      cooldown_max_seconds: Math.round(LIVE_ACTIVITY_DISMISSED_START_COOLDOWN_MS / 1000),
     });
     return;
   }
@@ -5806,10 +6300,43 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const body = first
     ? `${first.home_team} vs ${first.away_team}`
     : "Top Scores";
-  logLiveActivityPayloadDiagnostics(user, "start", presentation, contentState, nowMs, payloadHash);
+  const startReason = liveActivityDispatchReason({
+    state,
+    mode: presentation.mode,
+    payloadHash,
+    scoreHash,
+    forceDispatch,
+    trigger,
+    nowMs,
+    pushKind: "start",
+  });
+  logLiveActivityPayloadDiagnostics(user, "start", presentation, contentState, nowMs, payloadHash, {
+    trigger: trigger || null,
+    dispatch_reason: startReason,
+    force_dispatch: forceDispatch,
+  });
+  const startStaleDate = Math.floor(nowMs / 1000) +
+    liveActivityStaleAfterSecondsForMode(presentation.mode);
+  logLiveActivityDispatchDecision(user, {
+    source: "match_monitor",
+    trigger,
+    event: "start",
+    reason: startReason,
+    mode: presentation.mode,
+    push_token_kind: "push_to_start",
+    force_dispatch: forceDispatch,
+    payload_hash: payloadHash,
+    score_hash: scoreHash,
+    last_payload_hash: state && state.lastPayloadHash ? String(state.lastPayloadHash) : null,
+    last_score_hash: state && state.lastScoreHash ? String(state.lastScoreHash) : null,
+    last_mode: state && state.lastMode ? String(state.lastMode) : null,
+    last_dispatch_at: state && state.lastDispatchAt ? String(state.lastDispatchAt) : null,
+    stale_date: new Date(startStaleDate * 1000).toISOString(),
+    match_count: contentState.matches.length,
+  });
   const startRawPayload = buildLiveActivityApsPayload("start", contentState, {
     timestamp: Math.floor(nowMs / 1000),
-    staleDate: Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
+    staleDate: startStaleDate,
     alert: {
       title,
       body,
@@ -5822,7 +6349,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     attributesType: LIVE_ACTIVITY_ATTRIBUTES_TYPE,
     attributes: LIVE_ACTIVITY_ATTRIBUTES,
     contentState,
-    staleDate: Math.floor(nowMs / 1000) + LIVE_ACTIVITY_DEFAULT_STALE_AFTER_SECONDS,
+    staleDate: startStaleDate,
     alert: {
       title,
       body,
@@ -5830,6 +6357,18 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
   });
   const startDispatchCompletedAtMs = Date.now();
+  console.log(
+    `[MatchMonitor] Live Activity push result ${JSON.stringify({
+      user_device_short: shortDeviceToken(user && user.deviceToken),
+      event: "start",
+      reason: startReason,
+      status: startResult.success ? "success" : "failure",
+      environment: startResult && startResult.environment ? startResult.environment : null,
+      elapsed_ms: Math.max(0, startDispatchCompletedAtMs - startDispatchStartedAtMs),
+      error: startResult && startResult.error ? String(startResult.error) : null,
+      is_terminal: Boolean(startResult && startResult.isTerminal),
+    })}`
+  );
   liveActivityMetrics.recordPush({
     event: "start",
     status: startResult.success ? "success" : "failure",
@@ -5838,6 +6377,8 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   await persistLiveActivityDebug(user, {
     record_type: "push",
     dispatch_kind: "start",
+    source: "match_monitor",
+    dispatch_reason: startReason,
     status: startResult.success ? "success" : "failure",
     mode: presentation.mode,
     trigger: trigger || null,
@@ -7053,6 +7594,9 @@ module.exports = {
     shouldSuppressPreKickoffScoresForLiveActivity,
     shouldSkipLiveActivityUpdate,
     shouldPreserveExistingLiveActivityOnEmpty,
+    liveActivityTokenlessCurrentActivityIsBlocking,
+    liveActivityRecentDismissalCooldownIsBlocking,
+    liveActivityStaleAfterSecondsForMode,
     updateScoreReversionState,
   },
 };

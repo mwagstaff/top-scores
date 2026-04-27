@@ -13290,12 +13290,41 @@ function matchIsMajorTournament(match) {
   return MAJOR_TOURNAMENT_PATTERNS.some((pattern) => pattern.test(normalizedLeague));
 }
 
+function matchIsMajorUefaClubKnockoutFixture(match) {
+  if (!match) return false;
+
+  const normalizedLeague = normalizeCompetitionFilterName(match.league || "");
+  const descriptor = [
+    match.league || "",
+    match.league_subcategory || "",
+  ]
+    .map((value) => String(value).replace(/\s+/g, " ").trim().toLowerCase())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  const majorUefaClubCompetitions = new Set([
+    "uefa champions league",
+    "uefa europa league",
+    "uefa conference league",
+  ]);
+
+  if (!majorUefaClubCompetitions.has(normalizedLeague) || !descriptor) {
+    return false;
+  }
+
+  return /\b(?:quarter(?:\s|-)?finals?|semi(?:\s|-)?finals?|final)\b/i.test(descriptor);
+}
+
 function matchPassesCategoryFilters(match, options = {}) {
   const predicates = [];
   if (options.eplOnly) {
     predicates.push((candidate) =>
       matchIncludesPremierLeagueTeam(candidate, options.premierLeagueTeams)
     );
+  }
+  if (options.majorUefa) {
+    predicates.push(matchIsMajorUefaClubKnockoutFixture);
   }
   if (options.homeNations) {
     predicates.push(matchIncludesHomeNation);
@@ -21223,6 +21252,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const dateFrom = range.start;
     const dateTo = range.end;
     const eplOnly = isTruthyParam(req.query.epl_only);
+    const majorUefa = isTruthyParam(req.query.major_uefa);
     const homeNations = isTruthyParam(req.query.home_nations);
     const majorTournaments = isTruthyParam(req.query.major_tournaments);
 
@@ -21251,11 +21281,12 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     });
     timings.base_filter_ms = Date.now() - stageStartedAtMs;
 
-    if (eplOnly || homeNations || majorTournaments) {
+    if (eplOnly || majorUefa || homeNations || majorTournaments) {
       stageStartedAtMs = Date.now();
       filtered = filtered.filter((match) =>
         matchPassesCategoryFilters(match, {
           eplOnly,
+          majorUefa,
           homeNations,
           majorTournaments,
           premierLeagueTeams: premierLeagueDataset.items,
@@ -23205,12 +23236,23 @@ app.post(`${API_PREFIX}/preferences`, async (req, res) => {
       }
     );
     if (preferencesSaveShouldTriggerLiveActivityReconcile(req.body)) {
+      const reconcileTrigger = liveActivityReconcileTriggerForPreferencesSave(req.body);
+      console.log(
+        `[API] Live Activity reconcile queued from preferences ${JSON.stringify({
+          device: resolvedDeviceToken.slice(0, 12),
+          trigger: reconcileTrigger,
+          force: false,
+          has_preferences_patch: Object.prototype.hasOwnProperty.call(req.body || {}, "preferences"),
+          has_fantasy_patch: Object.prototype.hasOwnProperty.call(req.body || {}, "fantasy"),
+          has_live_activity_patch: Object.prototype.hasOwnProperty.call(req.body || {}, "liveActivity"),
+        })}`
+      );
       void triggerMonitorRuntimeRequest(`${API_PREFIX}/live-activity/reconcile`, {
         method: "POST",
         body: {
           userDeviceToken: resolvedDeviceToken,
-          trigger: liveActivityReconcileTriggerForPreferencesSave(req.body),
-          force: true,
+          trigger: reconcileTrigger,
+          force: false,
         },
         timeoutMs: 15000,
       });
@@ -23344,11 +23386,13 @@ app.post(`${API_PREFIX}/live-activity/activity-started`, async (req, res) => {
       resolvedDeviceToken,
       {
         currentActivityId: normalizedActivityId,
+        currentActivityPushToken: null,
+        currentActivityTokenUpdatedAt: null,
         currentActivityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
         pendingStartAt: null,
         pushToStartAttempts: 0,
         lastStartAt: nowIso,
-        lastDispatchAt: nowIso,
+        lastDispatchAt: normalizedContentState ? nowIso : null,
         lastMode,
         lastPayloadHash,
         lastScoreHash,
@@ -23357,6 +23401,22 @@ app.post(`${API_PREFIX}/live-activity/activity-started`, async (req, res) => {
         isDevelopmentBuild:
           typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
       }
+    );
+    console.log(
+      `[API] Live Activity activity-started ${JSON.stringify({
+        device: resolvedDeviceToken.slice(0, 12),
+        activity_id: normalizedActivityId,
+        mode: lastMode,
+        generated_at: normalizedActivityGeneratedAtEpochSeconds,
+        content_state_present: Boolean(normalizedContentState),
+        match_count:
+          normalizedContentState && Array.isArray(normalizedContentState.matches)
+            ? normalizedContentState.matches.length
+            : null,
+        last_payload_hash_prefix: lastPayloadHash ? String(lastPayloadHash).slice(0, 12) : null,
+        last_score_hash_prefix: lastScoreHash ? String(lastScoreHash).slice(0, 12) : null,
+        is_development_build: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : null,
+      })}`
     );
     res.status(200).json({
       success: true,
@@ -23416,6 +23476,16 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
       activityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
       isDevelopmentBuild: resolvedIsDevelopmentBuild,
     });
+    console.log(
+      `[API] Live Activity activity-token received ${JSON.stringify({
+        device: resolvedDeviceToken.slice(0, 12),
+        activity_id: normalizedActivityId,
+        token_prefix: normalizedActivityPushToken.slice(0, 16),
+        generated_at: normalizedActivityGeneratedAtEpochSeconds,
+        duplicate_resolution: duplicateResolution && duplicateResolution.reason ? duplicateResolution.reason : null,
+        is_development_build: resolvedIsDevelopmentBuild,
+      })}`
+    );
     if (
       duplicateResolution.reason === "incoming_stale_duplicate_ended" ||
       duplicateResolution.reason === "incoming_stale_duplicate_ignored"
@@ -23456,6 +23526,14 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
         isDevelopmentBuild:
           typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
       }
+    );
+    console.log(
+      `[API] Live Activity activity-token saved ${JSON.stringify({
+        device: resolvedDeviceToken.slice(0, 12),
+        activity_id: normalizedActivityId,
+        token_prefix: normalizedActivityPushToken.slice(0, 16),
+        duplicate_resolution: duplicateResolution && duplicateResolution.reason ? duplicateResolution.reason : null,
+      })}`
     );
     const activeResult = liveActivityMetrics.markActivityActive({
       deviceToken: resolvedDeviceToken,
@@ -23568,6 +23646,11 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
       }
     }
 
+    const acceptedRecord = await getUserPreferences(resolvedDeviceToken);
+    const acceptedLiveActivity =
+      acceptedRecord && acceptedRecord.liveActivity && typeof acceptedRecord.liveActivity === "object"
+        ? acceptedRecord.liveActivity
+        : {};
     const patch = {
       currentActivityPushToken: null,
       currentActivityGeneratedAtEpochSeconds: null,
@@ -23577,12 +23660,8 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
       lastMode: null,
       lastEndedAt: nowIso,
       testHoldUntil: null,
+      currentActivityId: null,
     };
-    if (normalizedActivityId) {
-      patch.currentActivityId = normalizedActivityId;
-    } else {
-      patch.currentActivityId = null;
-    }
     const saved = await updateUserLiveActivityState(
       resolvedDeviceToken,
       patch,
@@ -23600,6 +23679,21 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
         reason: String(reason || "user"),
       });
     }
+    console.log(
+      `[API] Live Activity activity-ended accepted ${JSON.stringify({
+        device: resolvedDeviceToken.slice(0, 12),
+        activity_id: normalizedActivityId || null,
+        reason: String(reason || "user"),
+        previous_activity_id: acceptedLiveActivity.currentActivityId
+          ? String(acceptedLiveActivity.currentActivityId)
+          : null,
+        had_activity_token: Boolean(acceptedLiveActivity.currentActivityPushToken),
+        previous_mode: acceptedLiveActivity.lastMode ? String(acceptedLiveActivity.lastMode) : null,
+        previous_dispatch_at: acceptedLiveActivity.lastDispatchAt
+          ? String(acceptedLiveActivity.lastDispatchAt)
+          : null,
+      })}`
+    );
     res.status(200).json({
       success: true,
       data: saved,
@@ -28123,6 +28217,22 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
         ? _req.body.userDeviceToken
         : _req.body?.deviceToken;
     const userDeviceToken = _req.deviceToken || normalizeDeviceToken(explicitDeviceToken);
+    console.log(
+      `[API] Live Activity reconcile request ${JSON.stringify({
+        device: userDeviceToken ? userDeviceToken.slice(0, 12) : null,
+        trigger: trigger || null,
+        force: forceDispatch,
+        allow_end: allowEnd,
+        active_activity_count:
+          typeof _req.body?.activeActivityCount === "number"
+            ? _req.body.activeActivityCount
+            : null,
+        active_activity_ids: Array.isArray(_req.body?.activeActivityIds)
+          ? _req.body.activeActivityIds
+          : [],
+        via_runtime: isMonitorRuntime(),
+      })}`
+    );
     // If the app explicitly reports it has no active activities, clear any stale
     // pendingStartAt, but only when it is actually stale. A fresh push-to-start can
     // legitimately leave the app reporting zero local activities for a brief window
@@ -28175,6 +28285,15 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
     });
+    console.log(
+      `[API] Live Activity reconcile monitor result ${JSON.stringify({
+        device: userDeviceToken ? userDeviceToken.slice(0, 12) : null,
+        trigger: trigger || null,
+        force: forceDispatch,
+        preserve_existing_on_empty: forceDispatch && !allowEnd,
+        result,
+      })}`
+    );
 
     // Build foreground-start content state so the app can call Activity.request()
     // when it is in the foreground and push-to-start can't reach it.
@@ -28256,6 +28375,27 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
               );
 
               foregroundStart = { contentState };
+              console.log(
+                `[API] Live Activity foregroundStart prepared ${JSON.stringify({
+                  device: userDeviceToken.slice(0, 12),
+                  trigger: trigger || null,
+                  mode: contentState.mode || null,
+                  match_count: Array.isArray(contentState.matches) ? contentState.matches.length : 0,
+                  generated_at: contentState.generatedAtEpochSeconds || null,
+                  payload_hash_prefix:
+                    hooks && typeof hooks.buildLiveActivityPayloadHash === "function"
+                      ? String(hooks.buildLiveActivityPayloadHash(contentState)).slice(0, 12)
+                      : null,
+                  matches: Array.isArray(contentState.matches)
+                    ? contentState.matches.slice(0, 4).map((match) => ({
+                        home: match.homeTeam || null,
+                        away: match.awayTeam || null,
+                        home_short: match.homeShortName || null,
+                        away_short: match.awayShortName || null,
+                      }))
+                    : [],
+                })}`
+              );
             }
           }
         }

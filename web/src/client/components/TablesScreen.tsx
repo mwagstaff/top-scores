@@ -115,10 +115,25 @@ export function TablesScreen() {
 function LeagueTableCard({ league }: { league: LeagueTable }) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const visibleStageName = normalizeStageName(league.stageName);
+  const groups = league.groups.length > 0
+    ? league.groups
+    : [{ name: visibleStageName, rows: league.rows }];
 
   useEffect(() => {
     setExpandedRows(new Set());
   }, [league.id]);
+
+  const toggleRow = (rowID: string) => {
+    setExpandedRows((current) => {
+      const next = new Set(current);
+      if (next.has(rowID)) {
+        next.delete(rowID);
+      } else {
+        next.add(rowID);
+      }
+      return next;
+    });
+  };
 
   return (
 
@@ -135,51 +150,55 @@ function LeagueTableCard({ league }: { league: LeagueTable }) {
 
         <div className="table-divider" />
 
-        {league.rows.map((row, index) => {
-          const isExpanded = expandedRows.has(row.id);
-          const boundary = isBenefitBoundary(league.rows, index);
+        {groups.map((group, groupIndex) => (
+          <div className="league-table-group" key={`${group.name || "table"}-${groupIndex}`}>
+            {group.name ? (
+              <div className="league-table-group-title">
+                {visibleStageName && !group.name.toLowerCase().includes("phase")
+                  ? `${visibleStageName} ${group.name}`
+                  : group.name}
+              </div>
+            ) : null}
 
-          return (
-            <div className="league-table-row-wrap" key={row.id}>
-              <button
-                type="button"
-                className="league-table-row"
-                onClick={() =>
-                  setExpandedRows((current) => {
-                    const next = new Set(current);
-                    if (next.has(row.id)) {
-                      next.delete(row.id);
-                    } else {
-                      next.add(row.id);
-                    }
-                    return next;
-                  })
-                }
-                aria-expanded={isExpanded}
-              >
-                <span className="table-cell table-cell-position">{row.position}</span>
-                <TableTeamLogo teamName={row.team} />
-                <span className="table-cell table-cell-team table-team-name">{row.team}</span>
-                <span className="table-cell table-cell-played">{row.played}</span>
-                <span className="table-cell table-cell-goal-difference table-cell-muted">
-                  {signedNumber(row.goalDifference)}
-                </span>
-                <span className="table-cell table-cell-points table-cell-strong">{row.points}</span>
-                <span className={`table-expand-chevron${isExpanded ? " is-expanded" : ""}`} aria-hidden="true">
-                  <svg viewBox="0 0 20 20">
-                    <path d="m5 7 5 5 5-5" />
-                  </svg>
-                </span>
-              </button>
+            {group.rows.map((row, index) => {
+              const isExpanded = expandedRows.has(row.id);
+              const boundary = isBenefitBoundary(group.rows, index);
 
-              {isExpanded ? <LeagueTableExpandedRow row={row} /> : null}
+              return (
+                <div className="league-table-row-wrap" key={`${groupIndex}-${row.id}`}>
+                  <button
+                    type="button"
+                    className="league-table-row"
+                    onClick={() => toggleRow(row.id)}
+                    aria-expanded={isExpanded}
+                  >
+                    <span className="table-cell table-cell-position">{row.position}</span>
+                    <TableTeamLogo teamName={row.team} />
+                    <span className="table-cell table-cell-team table-team-name">{row.team}</span>
+                    <span className="table-cell table-cell-played">{row.played}</span>
+                    <span className="table-cell table-cell-goal-difference table-cell-muted">
+                      {signedNumber(row.goalDifference)}
+                    </span>
+                    <span className="table-cell table-cell-points table-cell-strong">{row.points}</span>
+                    <span className={`table-expand-chevron${isExpanded ? " is-expanded" : ""}`} aria-hidden="true">
+                      <svg viewBox="0 0 20 20">
+                        <path d="m5 7 5 5 5-5" />
+                      </svg>
+                    </span>
+                  </button>
 
-              {index < league.rows.length - 1 ? (
-                <div className={`table-divider${boundary ? " is-thick" : ""}`} />
-              ) : null}
-            </div>
-          );
-        })}
+                  {isExpanded ? <LeagueTableExpandedRow row={row} /> : null}
+
+                  {index < group.rows.length - 1 ? (
+                    <div className={`table-divider${boundary ? " is-thick" : ""}`} />
+                  ) : null}
+                </div>
+              );
+            })}
+
+            {groupIndex < groups.length - 1 ? <div className="table-divider is-group-divider" /> : null}
+          </div>
+        ))}
       </div>
   );
 }

@@ -12,6 +12,9 @@ const apiBaseUrl = (process.env.TOP_SCORES_API_BASE_URL ||
 const port = Number(process.env.PORT || 3020);
 const isProduction = process.env.NODE_ENV === "production";
 const debugProxyThresholdMs = Number(process.env.TOP_SCORES_WEB_PROXY_SLOW_MS || 500);
+const apiRetryAttempts = Math.max(1, Math.floor(numberSetting("TOP_SCORES_WEB_API_RETRY_ATTEMPTS", 6)));
+const apiRetryBaseDelayMs = Math.max(0, numberSetting("TOP_SCORES_WEB_API_RETRY_BASE_MS", 500));
+const apiRetryMaxDelayMs = Math.max(apiRetryBaseDelayMs, numberSetting("TOP_SCORES_WEB_API_RETRY_MAX_MS", 8000));
 const generatedAssetsRoot = isProduction
   ? path.join(productionClientRoot, "generated-assets")
   : path.join(__dirname, "public", "generated-assets");
@@ -60,7 +63,9 @@ let competitionWeightsCache = [];
 
 async function loadCompetitionWeights() {
   try {
-    const response = await fetch(`${apiBaseUrl}/competitions/weights`);
+    const response = await fetchApiWithRetry(`${apiBaseUrl}/competitions/weights`, undefined, {
+      label: "competition weights",
+    });
     if (response.ok) {
       const data = await response.json();
       if (Array.isArray(data)) {
@@ -182,10 +187,13 @@ app.use(
         apiBaseUrl.endsWith("/") ? apiBaseUrl : `${apiBaseUrl}/`
       );
 
-      const upstream = await fetch(target, {
+      const upstream = await fetchApiWithRetry(target, {
         method: req.method,
         headers: buildProxyHeaders(req.headers),
         body: shouldSendBody(req.method) ? req.body : undefined,
+      }, {
+        attempts: shouldRetryProxyRequest(req.method) ? apiRetryAttempts : 1,
+        label: `proxy ${req.method} ${req.originalUrl}`,
       });
       const upstreamHeadersReceivedAtMs = Date.now();
 
@@ -268,6 +276,62 @@ async function start() {
 
 start();
 
+async function fetchApiWithRetry(resource, init, options = {}) {
+  const attempts = Math.max(1, Number(options.attempts || apiRetryAttempts));
+  const label = options.label || "api request";
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(resource, init);
+      if (!isRetryableApiStatus(response.status) || attempt === attempts) {
+        return response;
+      }
+
+      await response.body?.cancel();
+      const delayMs = retryDelayMs(attempt);
+      logRetry(label, attempt, attempts, delayMs, `status ${response.status}`);
+      await sleepMs(delayMs);
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts || !isRetryableFetchError(error)) {
+        throw error;
+      }
+
+      const delayMs = retryDelayMs(attempt);
+      logRetry(label, attempt, attempts, delayMs, error instanceof Error ? error.message : String(error));
+      await sleepMs(delayMs);
+    }
+  }
+
+  throw lastError || new Error(`Failed ${label}`);
+}
+
+function isRetryableApiStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function isRetryableFetchError(_error) {
+  return true;
+}
+
+function retryDelayMs(attempt) {
+  const exponentialDelay = apiRetryBaseDelayMs * (2 ** Math.max(0, attempt - 1));
+  const jitter = Math.floor(Math.random() * Math.min(250, Math.max(1, apiRetryBaseDelayMs / 2)));
+  return Math.min(apiRetryMaxDelayMs, exponentialDelay + jitter);
+}
+
+function sleepMs(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function logRetry(label, attempt, attempts, delayMs, reason) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[web][api-retry] ${label} attempt=${attempt}/${attempts} retry_in_ms=${delayMs} reason=${reason}`
+  );
+}
+
 function buildProxyHeaders(sourceHeaders) {
   const headers = new Headers();
   const allowedHeaders = ["accept", "content-type", "if-none-match", "if-modified-since"];
@@ -288,6 +352,15 @@ function buildProxyHeaders(sourceHeaders) {
 
 function shouldSendBody(method) {
   return !["GET", "HEAD"].includes(String(method || "GET").toUpperCase());
+}
+
+function shouldRetryProxyRequest(method) {
+  return ["GET", "HEAD"].includes(String(method || "GET").toUpperCase());
+}
+
+function numberSetting(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function buildTeamLogoIndex() {

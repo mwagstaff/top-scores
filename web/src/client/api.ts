@@ -3,6 +3,7 @@ import {
   selectableChannels,
   type CompetitionWeightEntry,
   type LeagueTable,
+  type LeagueTableGroup,
   type LeagueTableRow,
   type LeagueTablesPayload,
   type MatchAssistProvider,
@@ -256,15 +257,8 @@ function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: numb
 
   params.set("start", formatDateParam(mode === "fixtures" ? today : startDate));
   params.set("end", formatDateParam(mode === "fixtures" ? endDate : today));
-  params.set("filter_mode", "intersection");
   params.set("page", String(page));
   params.set("page_size", "200");
-
-  if (preferences.competitionFilterEnabled) {
-    for (const league of preferences.selectedLeagues) {
-      params.append("league", league);
-    }
-  }
 
   if (mode === "fixtures" && preferences.channelFilterEnabled) {
     for (const channel of channelApiQueryValues(preferences.selectedChannels)) {
@@ -274,6 +268,9 @@ function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: numb
 
   if (preferences.englishPremierLeagueTeamsOnly) {
     params.set("epl_only", "true");
+  }
+  if (preferences.englishPremierLeagueTeamsOnly && preferences.majorUEFAClubGamesEnabled) {
+    params.set("major_uefa", "true");
   }
 
   return params;
@@ -299,6 +296,8 @@ function normalizeMatch(raw: Record<string, unknown>): Match {
     time,
     homeTeam,
     awayTeam,
+    homeShortName: optionalString(raw.home_short_name),
+    awayShortName: optionalString(raw.away_short_name),
     league,
     leagueSubcategory: optionalString(raw.league_subcategory),
     tvChannels: Array.isArray(raw.tv_channels)
@@ -338,6 +337,8 @@ function normalizeMatchDetails(raw: Record<string, unknown>): MatchDetails {
     league: optionalString(raw.league),
     homeTeam: optionalString(raw.home_team),
     awayTeam: optionalString(raw.away_team),
+    homeShortName: optionalString(raw.home_short_name),
+    awayShortName: optionalString(raw.away_short_name),
     homeScore: optionalNumber(raw.home_score),
     awayScore: optionalNumber(raw.away_score),
     aggregateHomeScore: optionalNumber(raw.aggregate_home_score),
@@ -375,9 +376,30 @@ function normalizeLeagueTables(value: unknown): LeagueTable[] {
       stageName: optionalString(source.stage_name),
       sourceUrl: optionalString(source.source_url),
       updatedAt: optionalString(source.updated_at),
+      groups: normalizeLeagueTableGroups(source.groups),
       rows: normalizeLeagueTableRows(source.rows),
     };
   });
+}
+
+function normalizeLeagueTableGroups(value: unknown): LeagueTableGroup[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.reduce<LeagueTableGroup[]>((groups, item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    const rows = normalizeLeagueTableRows(source.rows);
+    if (rows.length === 0) {
+      return groups;
+    }
+
+    groups.push({
+      name: optionalString(source.name),
+      rows,
+    });
+    return groups;
+  }, []);
 }
 
 function normalizeLeagueTableRows(value: unknown): LeagueTableRow[] {

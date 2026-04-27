@@ -12,6 +12,7 @@ export interface Preferences {
   competitionFilterEnabled: boolean;
   channelFilterEnabled: boolean;
   englishPremierLeagueTeamsOnly: boolean;
+  majorUEFAClubGamesEnabled: boolean;
   refreshIntervalMinutes: number;
   matchGroupSortOrder: MatchGroupSortOrder;
 }
@@ -97,6 +98,8 @@ export interface MatchDetails {
   league?: string | null;
   homeTeam?: string | null;
   awayTeam?: string | null;
+  homeShortName?: string | null;
+  awayShortName?: string | null;
   homeScore?: number | null;
   awayScore?: number | null;
   aggregateHomeScore?: number | null;
@@ -153,6 +156,11 @@ export interface LeagueTableRow {
   rankStatus?: string | null;
 }
 
+export interface LeagueTableGroup {
+  name?: string | null;
+  rows: LeagueTableRow[];
+}
+
 export interface LeagueTable {
   id: string;
   leagueID: string;
@@ -160,6 +168,7 @@ export interface LeagueTable {
   stageName?: string | null;
   sourceUrl?: string | null;
   updatedAt?: string | null;
+  groups: LeagueTableGroup[];
   rows: LeagueTableRow[];
 }
 
@@ -192,6 +201,7 @@ export const defaultPreferences: Preferences = {
   competitionFilterEnabled: false,
   channelFilterEnabled: false,
   englishPremierLeagueTeamsOnly: true,
+  majorUEFAClubGamesEnabled: true,
   refreshIntervalMinutes: 10,
   matchGroupSortOrder: "kickoffThenTeamScore",
 };

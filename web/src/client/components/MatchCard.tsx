@@ -23,9 +23,10 @@ import type {
 interface MatchCardProps {
   match: Match;
   highlightToday?: boolean;
+  useShortTeamNames?: boolean;
 }
 
-export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
+export function MatchCard({ match, highlightToday = false, useShortTeamNames = false }: MatchCardProps) {
   const [homeLogoMissing, setHomeLogoMissing] = useState(false);
   const [awayLogoMissing, setAwayLogoMissing] = useState(false);
   const [isExpanded, setIsExpanded]           = useState(false);
@@ -48,6 +49,8 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
   const showLiveScore = isLive && hasScore;
   // Right column: penalty result overrides; otherwise the status string (FT / AET / 45' / 15:00)
   const rightText  = match.penaltyResult ?? status;
+  const homeDisplayName = displayTeamName(match.homeTeam, match.homeShortName, useShortTeamNames);
+  const awayDisplayName = displayTeamName(match.awayTeam, match.awayShortName, useShortTeamNames);
 
   // Sync details when match prop updates (e.g. from live polling)
   useEffect(() => {
@@ -130,7 +133,7 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
 
       {/* Home team name – right-aligned */}
       <div className="match-team-name match-team-home" title={match.homeTeam}>
-        {match.homeTeam}
+        {homeDisplayName}
       </div>
 
       {/* Centre column: score OR TV logos */}
@@ -178,7 +181,7 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
 
       {/* Away team name – left-aligned */}
       <div className="match-team-name match-team-away" title={match.awayTeam}>
-        {match.awayTeam}
+        {awayDisplayName}
       </div>
 
       {/* Away logo */}
@@ -247,6 +250,15 @@ export function MatchCard({ match, highlightToday = false }: MatchCardProps) {
       )}
     </article>
   );
+}
+
+function displayTeamName(fullName: string, shortName: string | null | undefined, useShortName: boolean): string {
+  if (!useShortName) {
+    return fullName;
+  }
+
+  const trimmed = shortName?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : fullName;
 }
 
 

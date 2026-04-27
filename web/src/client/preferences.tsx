@@ -26,6 +26,7 @@ const legacyDefaultPreferences = normalizePreferences({
   competitionFilterEnabled: true,
   channelFilterEnabled: true,
   englishPremierLeagueTeamsOnly: false,
+  majorUEFAClubGamesEnabled: true,
   refreshIntervalMinutes: 10,
   matchGroupSortOrder: "alphabetical" as MatchGroupSortOrder,
 });
@@ -98,6 +99,7 @@ function preferencesEqual(left: Preferences, right: Preferences): boolean {
     left.competitionFilterEnabled === right.competitionFilterEnabled &&
     left.channelFilterEnabled === right.channelFilterEnabled &&
     left.englishPremierLeagueTeamsOnly === right.englishPremierLeagueTeamsOnly &&
+    left.majorUEFAClubGamesEnabled === right.majorUEFAClubGamesEnabled &&
     left.refreshIntervalMinutes === right.refreshIntervalMinutes &&
     left.matchGroupSortOrder === right.matchGroupSortOrder &&
     arrayEqual(left.selectedLeagues, right.selectedLeagues) &&

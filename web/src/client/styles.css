@@ -522,6 +522,80 @@ img    { display: block; }
   letter-spacing: 0.01em;
 }
 
+/* Competitions dropdown */
+.comp-dropdown {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.comp-dropdown-chevron {
+  width: 0.65rem;
+  height: 0.65rem;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 150ms;
+  flex-shrink: 0;
+  margin-left: 0.05rem;
+}
+
+.comp-dropdown-panel {
+  position: fixed;
+  z-index: 9999;
+  min-width: 17rem;
+  max-height: 22rem;
+  overflow-y: auto;
+  background: var(--surface-strong);
+  border: 1px solid var(--surface-border);
+  border-radius: 0.85rem;
+  padding: 0.35rem 0;
+  box-shadow: var(--shadow);
+}
+
+.comp-dropdown-sep {
+  height: 1px;
+  background: var(--surface-border);
+  margin: 0.3rem 0;
+}
+
+.comp-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.42rem 0.9rem;
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--text);
+  user-select: none;
+  transition: background 100ms;
+}
+
+.comp-option:hover {
+  background: var(--accent-soft);
+}
+
+.comp-option input[type="radio"],
+.comp-option input[type="checkbox"] {
+  width: 0.85rem;
+  height: 0.85rem;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.comp-option .epl-toggle-lion {
+  width: 0.9rem;
+  height: 0.9rem;
+  opacity: 1;
+  filter: none;
+}
+
+.comp-list {
+  /* intentionally unstyled – items use .comp-option */
+}
+
 /* Collapsible search field */
 .match-search {
   padding: 0 0.85rem 0.5rem;
@@ -1279,6 +1353,13 @@ button.match-row:hover {
   font-weight: 700;
 }
 
+.league-table-group-title {
+  padding: 0.7rem 0.7rem 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
 .league-table-row {
   width: 100%;
   border: 0;
@@ -1347,6 +1428,11 @@ button.match-row:hover {
 .table-divider.is-thick {
   height: 2.5px;
   background: color-mix(in srgb, var(--text-muted) 42%, transparent);
+}
+
+.table-divider.is-group-divider {
+  height: 2.5px;
+  background: color-mix(in srgb, var(--text-muted) 34%, transparent);
 }
 
 .league-table-expanded {

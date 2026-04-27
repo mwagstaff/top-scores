@@ -136,6 +136,8 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
 final class LiveActivitySyncService {
     static let shared = LiveActivitySyncService()
     private let maxMatchesPerActivityPayload = 4
+    private let foregroundActivityStaleAfter: TimeInterval = 30 * 60
+    private let staticForegroundActivityStaleAfter: TimeInterval = 4 * 60 * 60
 
     private let lock = NSLock()
     private var started = false
@@ -350,9 +352,12 @@ final class LiveActivitySyncService {
                     String(describing: state)
                 )
                 self.flushSharedWidgetDiagnostics()
-                if state == .ended {
+                if state == .ended || state == .dismissed {
                     ended = true
-                    await self.uploadActivityEnded(activityID: activityID)
+                    await self.uploadActivityEnded(
+                        activityID: activityID,
+                        reason: state == .dismissed ? "dismissed" : "ended"
+                    )
                     break
                 }
             }
@@ -522,6 +527,11 @@ final class LiveActivitySyncService {
         guard shouldUpload else { return }
 
         guard let endpoint = await endpointURL(path: "live-activity/push-to-start-token") else { return }
+        NSLog(
+            "[LiveActivitySync] Upload push-to-start token token=%@ appState=%@",
+            Self.shortHex(tokenData),
+            await MainActor.run { String(describing: UIApplication.shared.applicationState) }
+        )
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "pushToStartToken": tokenHex,
@@ -543,6 +553,12 @@ final class LiveActivitySyncService {
 
         guard let endpoint = await endpointURL(path: "live-activity/activity-token") else { return }
         let generatedAtEpochSeconds = Self.currentContentState(for: activityID)?.generatedAtEpochSeconds
+        NSLog(
+            "[LiveActivitySync] Upload activity token activityId=%@ token=%@ generatedAt=%@",
+            activityID,
+            Self.shortHex(tokenData),
+            String(describing: generatedAtEpochSeconds)
+        )
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "activityId": activityID,
@@ -564,6 +580,13 @@ final class LiveActivitySyncService {
         let contentStateJSONObject = encodedContentState.flatMap { data in
             try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         }
+        NSLog(
+            "[LiveActivitySync] Upload activity-started activityId=%@ generatedAt=%@ contentBytes=%d %@",
+            activityID,
+            String(describing: generatedAtEpochSeconds),
+            encodedContentState?.count ?? 0,
+            Self.contentStateSummary(contentState)
+        )
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "activityId": activityID,
@@ -574,11 +597,24 @@ final class LiveActivitySyncService {
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "activity-started")
     }
 
-    private func uploadActivityEnded(activityID: String) async {
+    private func uploadActivityEnded(activityID: String, reason: String = "ended") async {
         guard let endpoint = await endpointURL(path: "live-activity/activity-ended") else { return }
+        let activeCount: Int
+        if #available(iOS 16.1, *) {
+            activeCount = Activity<TopScoresLiveActivityAttributes>.activities.count
+        } else {
+            activeCount = -1
+        }
+        NSLog(
+            "[LiveActivitySync] Upload activity-ended activityId=%@ reason=%@ activeCount=%d",
+            activityID,
+            reason,
+            activeCount
+        )
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "activityId": activityID,
+            "reason": reason,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
         ]
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "activity-ended")
@@ -596,18 +632,36 @@ final class LiveActivitySyncService {
             "activeActivityCount": activeActivities.count,
             "activeActivityIds": activeActivities.map { $0.id }
         ]
+        NSLog(
+            "[LiveActivitySync] Reconcile request activeCount=%d force=%d ids=%@",
+            activeActivities.count,
+            activeActivities.isEmpty ? 1 : 0,
+            activeActivities.map { $0.id }.joined(separator: ",")
+        )
         guard let responseData = await sendJSONRequestReturningData(url: endpoint, payload: payload, logContext: "live-activity-reconcile") else {
             return nil
         }
+        NSLog("[LiveActivitySync] Reconcile response bytes=%d", responseData.count)
         guard
             let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
             let foregroundStart = json["foregroundStart"] as? [String: Any],
             let rawContentState = foregroundStart["contentState"]
-        else { return nil }
+        else {
+            NSLog("[LiveActivitySync] Reconcile response has no foregroundStart")
+            return nil
+        }
         guard let contentStateData = try? JSONSerialization.data(withJSONObject: rawContentState),
               let contentState = try? JSONDecoder().decode(TopScoresLiveActivityAttributes.ContentState.self, from: contentStateData)
-        else { return nil }
+        else {
+            NSLog("[LiveActivitySync] Reconcile foregroundStart decode failed")
+            return nil
+        }
         let sanitized = sanitizedContentState(contentState)
+        NSLog(
+            "[LiveActivitySync] Reconcile foregroundStart contentBytes=%d %@",
+            contentStateData.count,
+            Self.contentStateSummary(sanitized)
+        )
         if sanitized.matches.count != contentState.matches.count {
             NSLog(
                 "[LiveActivitySync] Trimmed foreground content state matches from %d to %d",
@@ -634,17 +688,29 @@ final class LiveActivitySyncService {
                 pendingForegroundStartContentState = contentState
             }
             schedulePendingForegroundStartRetry()
+            await requestDeferredForegroundPushToStart(contentState: contentState)
             return
         }
         do {
             let attributes = TopScoresLiveActivityAttributes(appScope: "top-scores")
             let sanitizedState = sanitizedContentState(contentState)
+            let staleAfterSeconds = staleAfter(for: sanitizedState)
+            let staleDate = Date().addingTimeInterval(staleAfterSeconds)
+            NSLog(
+                "[LiveActivitySync] Foreground Activity.request begin staleAfter=%.0f %@",
+                staleAfterSeconds,
+                Self.contentStateSummary(sanitizedState)
+            )
             let activity = try Activity.request(
                 attributes: attributes,
-                content: .init(state: sanitizedState, staleDate: nil),
+                content: .init(state: sanitizedState, staleDate: staleDate),
                 pushType: .token
             )
-            NSLog("[LiveActivitySync] Foreground start succeeded activityId=%@", activity.id)
+            NSLog(
+                "[LiveActivitySync] Foreground start succeeded activityId=%@ staleDate=%@",
+                activity.id,
+                staleDate.description
+            )
             flushSharedWidgetDiagnostics()
             lock.withLock {
                 pendingForegroundStartContentState = nil
@@ -662,6 +728,35 @@ final class LiveActivitySyncService {
             NSLog("[LiveActivitySync] Foreground start failed: %@", error.localizedDescription)
             await reportForegroundStartFailed(reason: error.localizedDescription)
         }
+    }
+
+    private func staleAfter(for contentState: TopScoresLiveActivityAttributes.ContentState) -> TimeInterval {
+        if contentState.mode.contains("upcoming") || contentState.mode.contains("finished") {
+            return staticForegroundActivityStaleAfter
+        }
+        return foregroundActivityStaleAfter
+    }
+
+    @available(iOS 16.1, *)
+    private func requestDeferredForegroundPushToStart(
+        contentState: TopScoresLiveActivityAttributes.ContentState
+    ) async {
+        guard let endpoint = await endpointURL(path: "live-activity/reconcile") else { return }
+        let activeActivities = Activity<TopScoresLiveActivityAttributes>.activities
+        let payload: [String: Any] = [
+            "deviceToken": DeviceIdentity.currentToken,
+            "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
+            "force": true,
+            "trigger": "foreground_start_deferred",
+            "activeActivityCount": activeActivities.count,
+            "activeActivityIds": activeActivities.map { $0.id },
+        ]
+        NSLog(
+            "[LiveActivitySync] Requesting deferred push-to-start after inactive foreground response activeCount=%d %@",
+            activeActivities.count,
+            Self.contentStateSummary(contentState)
+        )
+        await sendJSONRequest(url: endpoint, payload: payload, logContext: "live-activity-deferred-push-start")
     }
 
     @available(iOS 16.1, *)
@@ -793,6 +888,13 @@ final class LiveActivitySyncService {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            NSLog(
+                "[LiveActivitySync] %@ request url=%@ payload=%@ bytes=%d",
+                logContext,
+                url.absoluteString,
+                Self.requestPayloadSummary(payload),
+                request.httpBody?.count ?? 0
+            )
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 NSLog("[LiveActivitySync] %@ failed: invalid response type", logContext)
@@ -803,7 +905,7 @@ final class LiveActivitySyncService {
                 NSLog("[LiveActivitySync] %@ failed: HTTP %d - %@", logContext, httpResponse.statusCode, body)
                 return nil
             }
-            NSLog("[LiveActivitySync] %@ succeeded: HTTP %d", logContext, httpResponse.statusCode)
+            NSLog("[LiveActivitySync] %@ succeeded: HTTP %d bytes=%d", logContext, httpResponse.statusCode, data.count)
             return data
         } catch {
             NSLog("[LiveActivitySync] %@ failed: %@", logContext, error.localizedDescription)
@@ -820,6 +922,13 @@ final class LiveActivitySyncService {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            NSLog(
+                "[LiveActivitySync] %@ request url=%@ payload=%@ bytes=%d",
+                logContext,
+                url.absoluteString,
+                Self.requestPayloadSummary(payload),
+                request.httpBody?.count ?? 0
+            )
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 NSLog("[LiveActivitySync] %@ failed: invalid response type", logContext)
@@ -831,10 +940,52 @@ final class LiveActivitySyncService {
                 NSLog("[LiveActivitySync] %@ failed: HTTP %d - %@", logContext, httpResponse.statusCode, body)
                 return
             }
-            NSLog("[LiveActivitySync] %@ succeeded: HTTP %d", logContext, httpResponse.statusCode)
+            NSLog("[LiveActivitySync] %@ succeeded: HTTP %d bytes=%d", logContext, httpResponse.statusCode, data.count)
         } catch {
             NSLog("[LiveActivitySync] %@ failed: %@", logContext, error.localizedDescription)
         }
+    }
+
+    private static func requestPayloadSummary(_ payload: [String: Any]) -> String {
+        let summarized = payload.reduce(into: [String: Any]()) { result, entry in
+            let key = entry.key
+            if key.lowercased().contains("token") {
+                result[key] = shortString(String(describing: entry.value))
+            } else if key == "contentState", let state = entry.value as? [String: Any] {
+                let matches = state["matches"] as? [[String: Any]] ?? []
+                result[key] = [
+                    "mode": state["mode"] ?? "nil",
+                    "generatedAtEpochSeconds": state["generatedAtEpochSeconds"] ?? "nil",
+                    "delayMinutes": state["delayMinutes"] ?? "nil",
+                    "matchCount": matches.count,
+                    "matches": matches.prefix(4).map { match in
+                        [
+                            "homeTeam": match["homeTeam"] ?? "",
+                            "awayTeam": match["awayTeam"] ?? "",
+                            "homeShortName": match["homeShortName"] ?? "nil",
+                            "awayShortName": match["awayShortName"] ?? "nil",
+                            "matchTime": match["matchTime"] ?? "nil",
+                        ]
+                    },
+                ]
+            } else if key == "activeActivityIds", let ids = entry.value as? [String] {
+                result[key] = ids
+            } else {
+                result[key] = entry.value
+            }
+        }
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: summarized, options: [.sortedKeys]),
+            let string = String(data: data, encoding: .utf8)
+        else {
+            return String(describing: summarized)
+        }
+        return string
+    }
+
+    private static func shortString(_ value: String) -> String {
+        guard value.count > 16 else { return value }
+        return "\(value.prefix(16))..."
     }
 
     private func flushSharedWidgetDiagnostics() {

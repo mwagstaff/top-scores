@@ -300,16 +300,34 @@ private struct LeagueTableCard: View {
             VStack(spacing: 0) {
                 headingRow
                 tableSeparator(isThick: false)
-                ForEach(Array(league.rows.enumerated()), id: \.element.id) { index, row in
-                    rowView(row)
-                    if index < league.rows.count - 1 {
-                        tableSeparator(isThick: isBenefitBoundary(after: index))
+                ForEach(Array(displayGroups.enumerated()), id: \.element.id) { groupIndex, group in
+                    if let heading = groupHeading(for: group) {
+                        groupHeadingRow(heading)
+                    }
+
+                    ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
+                        rowView(row)
+                        if index < group.rows.count - 1 {
+                            tableSeparator(isThick: isBenefitBoundary(in: group.rows, after: index))
+                        }
+                    }
+
+                    if groupIndex < displayGroups.count - 1 {
+                        tableSeparator(isThick: true)
                     }
                 }
             }
             .background(.thinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
+    }
+
+    private var displayGroups: [LeagueTableGroup] {
+        let groupsWithRows = league.groups.filter { !$0.rows.isEmpty }
+        if !groupsWithRows.isEmpty {
+            return groupsWithRows
+        }
+        return [LeagueTableGroup(name: visibleStageName, rows: league.rows)]
     }
 
     private var visibleStageName: String? {
@@ -338,6 +356,16 @@ private struct LeagueTableCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .foregroundStyle(.secondary)
+    }
+
+    private func groupHeadingRow(_ title: String) -> some View {
+        Text(title)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
     }
 
     private func rowView(_ row: LeagueTableRow) -> some View {
@@ -420,10 +448,20 @@ private struct LeagueTableCard: View {
             .frame(height: isThick ? 2.5 : 1)
     }
 
-    private func isBenefitBoundary(after index: Int) -> Bool {
-        guard index >= 0, index < league.rows.count - 1 else { return false }
-        let current = normalizedRankStatus(league.rows[index].rankStatus)
-        let next = normalizedRankStatus(league.rows[index + 1].rankStatus)
+    private func groupHeading(for group: LeagueTableGroup) -> String? {
+        let name = String(group.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        guard let visibleStageName else { return name }
+        if name.range(of: "phase", options: [.caseInsensitive, .diacriticInsensitive]) != nil {
+            return name
+        }
+        return "\(visibleStageName) \(name)"
+    }
+
+    private func isBenefitBoundary(in rows: [LeagueTableRow], after index: Int) -> Bool {
+        guard index >= 0, index < rows.count - 1 else { return false }
+        let current = normalizedRankStatus(rows[index].rankStatus)
+        let next = normalizedRankStatus(rows[index + 1].rankStatus)
         return current != next
     }
 

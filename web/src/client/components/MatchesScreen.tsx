@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
-import { fetchMatches, fetchTeamRankings, fetchCompetitionWeights } from "../api";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { fetchMatches, fetchTeamRankings, fetchCompetitionWeights, fetchCompetitions } from "../api";
 import { usePreferences } from "../preferences";
 import { CompetitionWeightLookup, TeamRatingLookup, groupMatches } from "../matchGrouping";
+import { useShouldUseShortTeamNames } from "../useResponsiveTeamNames";
 import { MatchCard } from "./MatchCard";
+import type { ChangeEvent } from "react";
 import type { MatchDayGroup, MatchesMode } from "../types";
 
 interface MatchesScreenProps {
@@ -28,17 +31,20 @@ const initialState: ScreenState = {
 };
 
 export function MatchesScreen({ mode }: MatchesScreenProps) {
-  const { preferences, setPreferences } = usePreferences();
+  const { preferences } = usePreferences();
   const [searchText, setSearchText]   = useState("");
   const [showSearch, setShowSearch]   = useState(false);
   const [state, setState]             = useState<ScreenState>(initialState);
   const [reloadToken, reload]         = useReducer((v) => v + 1, 0);
+  const useShortTeamNames             = useShouldUseShortTeamNames();
+
+  // Client-side competition filter – null means "show all", string[] means "show only these".
+  // This is intentionally NOT part of server preferences: the server always fetches the
+  // full set (or EPL-only), and we filter the results here. This avoids fragile server-side
+  // league-name matching when many leagues are sent as params.
+  const [customCompetitions, setCustomCompetitions] = useState<string[] | null>(null);
 
   const requestKey = JSON.stringify({ mode, preferences, reloadToken });
-
-  const eplOnly = preferences.englishPremierLeagueTeamsOnly;
-  const toggleEplFilter = () =>
-    setPreferences({ englishPremierLeagueTeamsOnly: !eplOnly });
 
   useEffect(() => {
     const controller    = new AbortController();
@@ -125,7 +131,13 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
     };
   }, [requestKey]);
 
-  // Filter matches by search query (min 3 chars to trigger)
+  // Build a lowercase set for O(1) lookups when a custom filter is active.
+  const customCompetitionSet = useMemo(
+    () => (customCompetitions !== null ? new Set(customCompetitions.map((c) => c.toLowerCase())) : null),
+    [customCompetitions]
+  );
+
+  // Filter matches by search query (min 3 chars) and client-side competition selection.
   const displayedGroups = useMemo(() => {
     const query = searchText.trim().toLowerCase();
 
@@ -137,6 +149,10 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
             ...league,
             matches: league.matches.filter((match) => {
               if (mode === "fixtures" && (match.scoreStatus || "").trim().toUpperCase() === "POSTPONED") {
+                return false;
+              }
+              // Client-side competition filter
+              if (customCompetitionSet && !customCompetitionSet.has(match.league.toLowerCase())) {
                 return false;
               }
               if (query.length < 3) return true;
@@ -151,7 +167,7 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           .filter((league) => league.matches.length > 0),
       }))
       .filter((day) => day.leagues.length > 0);
-  }, [mode, searchText, state.groups]);
+  }, [mode, searchText, state.groups, customCompetitionSet]);
 
   const title = mode === "fixtures" ? "Fixtures" : "Results";
 
@@ -169,22 +185,11 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           </span>
         )}
 
-        {/* EPL / All competitions toggle */}
-        <button
-          type="button"
-          className={`epl-toggle-btn${eplOnly ? " is-active" : ""}`}
-          onClick={toggleEplFilter}
-          aria-label={eplOnly ? "Showing matches with Premier League teams only – click for all competitions" : "Showing all competitions – click for matches with Premier League teams only"}
-          title={eplOnly ? "Show matches for all competitions" : "Show only matches involving Premier League teams"}
-        >
-          <img
-            src="/generated-assets/fpl-lion.png"
-            alt=""
-            aria-hidden="true"
-            className="epl-toggle-lion"
-          />
-          <span className="epl-toggle-label">{eplOnly ? "Matches with Premier League teams" : "Showing matches for all competitions"}</span>
-        </button>
+        {/* Competitions dropdown */}
+        <CompetitionsDropdown
+          customCompetitions={customCompetitions}
+          onCustomCompetitionsChange={setCustomCompetitions}
+        />
 
         {/* Search toggle */}
         <button
@@ -263,6 +268,7 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
                         key={match.id}
                         match={match}
                         highlightToday={day.isToday}
+                        useShortTeamNames={useShortTeamNames}
                       />
                     ))}
                   </div>
@@ -280,6 +286,214 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
         </div>
       )}
     </section>
+  );
+}
+
+interface PanelPos { top: number; right: number }
+
+interface CompetitionsDropdownProps {
+  customCompetitions: string[] | null;
+  onCustomCompetitionsChange: (value: string[] | null) => void;
+}
+
+function CompetitionsDropdown({ customCompetitions, onCustomCompetitionsChange }: CompetitionsDropdownProps) {
+  const { preferences, setPreferences } = usePreferences();
+  const [isOpen, setIsOpen] = useState(false);
+  const [competitions, setCompetitions] = useState<string[]>([]);
+  const [panelPos, setPanelPos] = useState<PanelPos>({ top: 0, right: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const eplOnly = preferences.englishPremierLeagueTeamsOnly;
+  const majorUEFAClubGamesEnabled = preferences.majorUEFAClubGamesEnabled;
+  const customFilter = customCompetitions !== null;
+
+  useEffect(() => {
+    void fetchCompetitions().then(setCompetitions).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (!triggerRef.current?.contains(target) && !panelRef.current?.contains(target)) {
+        setIsOpen(false);
+      }
+    };
+
+    // Dismiss on scroll/resize, but NOT when the user scrolls inside the panel itself.
+    const handleScroll = (e: Event) => {
+      if (panelRef.current?.contains(e.target as Node)) return;
+      setIsOpen(false);
+    };
+
+    const handleResize = () => setIsOpen(false);
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+    window.addEventListener("resize", handleResize, { passive: true });
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("scroll", handleScroll, { capture: true });
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [isOpen]);
+
+  const openDropdown = () => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPanelPos({
+        top: rect.bottom + 5,
+        right: window.innerWidth - rect.right,
+      });
+    }
+    setIsOpen((v) => !v);
+  };
+
+  // Option 1: show all matches, no EPL filter, no competition filter.
+  const handleSelectAll = () => {
+    setPreferences({ englishPremierLeagueTeamsOnly: false });
+    onCustomCompetitionsChange(null);
+  };
+
+  // Option 2: EPL teams only server filter – does NOT touch the competition filter.
+  const handleSelectEplOnly = () => {
+    setPreferences({ englishPremierLeagueTeamsOnly: true });
+  };
+
+  const handleToggleMajorUEFAClubGames = (event: ChangeEvent<HTMLInputElement>) => {
+    setPreferences({ majorUEFAClubGamesEnabled: event.target.checked });
+  };
+
+  // Toggle a single competition in the client-side filter.
+  // When not yet in custom mode, initialise from the full list and remove (or add) the tapped item.
+  const handleToggleCompetition = (competition: string) => {
+    const base = customFilter
+      ? new Set(customCompetitions)
+      : new Set(competitions); // treat all as checked when no custom filter active
+
+    if (base.has(competition)) {
+      base.delete(competition);
+    } else {
+      base.add(competition);
+    }
+
+    const newSelected = [...base];
+    // If every competition is back to checked, revert to "no filter" state.
+    const allChecked = newSelected.length === competitions.length;
+    onCustomCompetitionsChange(allChecked ? null : newSelected);
+  };
+
+  let label: string;
+  if (eplOnly && customFilter) {
+    const n = customCompetitions.length;
+    label = n === 1 ? "PL teams · 1 competition" : `PL teams · ${n} competitions`;
+  } else if (eplOnly) {
+    label = "Premier League teams";
+  } else if (customFilter) {
+    const n = customCompetitions.length;
+    label = n === 1 ? "1 competition" : `${n} competitions`;
+  } else {
+    label = "All competitions";
+  }
+
+  const panel = (
+    <div
+      ref={panelRef}
+      className="comp-dropdown-panel"
+      role="dialog"
+      aria-label="Filter competitions"
+      style={{ top: panelPos.top, right: panelPos.right }}
+    >
+      <label className="comp-option">
+        <input
+          type="radio"
+          name="comp-mode"
+          checked={!eplOnly}
+          onChange={handleSelectAll}
+        />
+        <span>All matches across all competitions</span>
+      </label>
+
+      <label className="comp-option comp-option--epl">
+        <input
+          type="radio"
+          name="comp-mode"
+          checked={eplOnly}
+          onChange={handleSelectEplOnly}
+        />
+        <img
+          src="/generated-assets/fpl-lion.png"
+          alt=""
+          aria-hidden="true"
+          className="epl-toggle-lion"
+        />
+        <span>Matches with Premier League teams only</span>
+      </label>
+
+      <div className="comp-dropdown-sep" />
+
+      <label className="comp-option comp-option--major-uefa">
+        <input
+          type="checkbox"
+          checked={majorUEFAClubGamesEnabled}
+          onChange={handleToggleMajorUEFAClubGames}
+        />
+        <span>Major UEFA games</span>
+      </label>
+
+      {competitions.length > 0 && <div className="comp-dropdown-sep" />}
+
+      {competitions.length > 0 && (
+        <div className="comp-list">
+          {competitions.map((comp) => {
+            const isChecked = !customFilter || customCompetitions.includes(comp);
+            return (
+              <label key={comp} className="comp-option">
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => handleToggleCompetition(comp)}
+                />
+                <span>{comp}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="comp-dropdown">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`epl-toggle-btn comp-dropdown-trigger${eplOnly || customFilter ? " is-active" : ""}`}
+        onClick={openDropdown}
+        aria-haspopup="true"
+        aria-expanded={isOpen}
+      >
+        <img
+          src="/generated-assets/fpl-lion.png"
+          alt=""
+          aria-hidden="true"
+          className="epl-toggle-lion"
+        />
+        <span className="epl-toggle-label">{label}</span>
+        <svg
+          className="comp-dropdown-chevron"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          style={{ transform: isOpen ? "rotate(180deg)" : undefined }}
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+
+      {isOpen && createPortal(panel, document.body)}
+    </div>
   );
 }
 

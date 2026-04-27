@@ -619,7 +619,7 @@ private enum LiveActivityRenderDiagnostics {
     }
 
     static func summary(for state: TopScoresLiveActivityAttributes.ContentState) -> String {
-        let matches = state.matches.prefix(6).map { match -> String in
+        let matches = state.matches.prefix(4).map { match -> String in
             let score: String
             if match.hasScore, let home = match.homeScore, let away = match.awayScore {
                 let homeText = match.homeWonOnPenalties ? "\(home) (P)" : "\(home)"
@@ -2956,7 +2956,7 @@ private struct TopScoresLiveActivityWidget: Widget {
 private struct TopScoresLiveActivityLockScreenView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
     var pinsFooterToBottom: Bool = true
-    private let maxPrimaryMatches = 6
+    private let maxPrimaryMatches = 4
     private let maxTrailingUpcomingMatches = 5
 
     private var displayMatches: [TopScoresLiveActivityMatchState] {
@@ -4115,7 +4115,7 @@ private struct UnifiedMultiMatchListView: View {
     let matches: [TopScoresLiveActivityMatchState]
 
     private var visibleMatches: [TopScoresLiveActivityMatchState] {
-        Array(matches.prefix(6))
+        Array(matches.prefix(4))
     }
 
     var body: some View {

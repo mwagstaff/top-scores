@@ -38,6 +38,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
     let stageName: String?
     let sourceURL: String?
     let updatedAt: String?
+    let groups: [LeagueTableGroup]
     let rows: [LeagueTableRow]
 
     nonisolated var id: String {
@@ -50,6 +51,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         case stageName = "stage_name"
         case sourceURL = "source_url"
         case updatedAt = "updated_at"
+        case groups
         case rows
     }
 
@@ -59,6 +61,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         stageName: String?,
         sourceURL: String?,
         updatedAt: String?,
+        groups: [LeagueTableGroup] = [],
         rows: [LeagueTableRow]
     ) {
         self.leagueID = leagueID
@@ -66,6 +69,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         self.stageName = stageName
         self.sourceURL = sourceURL
         self.updatedAt = updatedAt
+        self.groups = groups
         self.rows = rows
     }
 
@@ -76,6 +80,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         stageName = try container.decodeIfPresent(String.self, forKey: .stageName)
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        groups = try container.decodeIfPresent([LeagueTableGroup].self, forKey: .groups) ?? []
         rows = try container.decodeIfPresent([LeagueTableRow].self, forKey: .rows) ?? []
     }
 
@@ -86,6 +91,39 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(stageName, forKey: .stageName)
         try container.encodeIfPresent(sourceURL, forKey: .sourceURL)
         try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try container.encode(groups, forKey: .groups)
+        try container.encode(rows, forKey: .rows)
+    }
+}
+
+struct LeagueTableGroup: Identifiable, Codable, Hashable, Sendable {
+    let name: String?
+    let rows: [LeagueTableRow]
+
+    nonisolated var id: String {
+        let rowIDs = rows.map(\.id).joined(separator: "|")
+        return "\(name ?? "table")-\(rowIDs)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case rows
+    }
+
+    nonisolated init(name: String?, rows: [LeagueTableRow]) {
+        self.name = name
+        self.rows = rows
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        rows = try container.decodeIfPresent([LeagueTableRow].self, forKey: .rows) ?? []
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(name, forKey: .name)
         try container.encode(rows, forKey: .rows)
     }
 }

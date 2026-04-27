@@ -625,6 +625,13 @@ test("shouldSkipLiveActivityUpdate suppresses upcoming-mode churn before heartbe
       scoreHash: "score123",
       nowMs: Date.parse("2026-03-13T12:25:10.000Z"),
     }),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_upcoming", false, {
+      scoreHash: "score123",
+      nowMs: Date.parse("2026-03-13T15:55:10.000Z"),
+    }),
     false
   );
 });
@@ -648,6 +655,13 @@ test("shouldSkipLiveActivityUpdate suppresses finished-mode churn before heartbe
     __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_finished", false, {
       scoreHash: "score123",
       nowMs: Date.parse("2026-03-13T12:25:10.000Z"),
+    }),
+    true
+  );
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "new-payload", "multi_finished", false, {
+      scoreHash: "score123",
+      nowMs: Date.parse("2026-03-13T15:55:10.000Z"),
     }),
     false
   );
@@ -694,6 +708,77 @@ test("shouldPreserveExistingLiveActivityOnEmpty keeps active activity during for
     __testHooks.shouldPreserveExistingLiveActivityOnEmpty("", {
       preserveExistingOnEmpty: true,
     }),
+    false
+  );
+});
+
+test("liveActivityTokenlessCurrentActivityIsBlocking waits for a fresh activity token", () => {
+  const nowMs = Date.parse("2026-04-25T10:08:30.000Z");
+  assert.equal(
+    __testHooks.liveActivityTokenlessCurrentActivityIsBlocking(
+      {
+        currentActivityId: "41DF902B-11B3-4387-93B4-21335F7DDEA3",
+        currentActivityPushToken: null,
+        lastStartAt: "2026-04-25T10:08:04.000Z",
+      },
+      nowMs
+    ),
+    true
+  );
+  assert.equal(
+    __testHooks.liveActivityTokenlessCurrentActivityIsBlocking(
+      {
+        currentActivityId: "41DF902B-11B3-4387-93B4-21335F7DDEA3",
+        currentActivityPushToken: "802bd62c3f4d",
+        lastStartAt: "2026-04-25T10:08:04.000Z",
+      },
+      nowMs
+    ),
+    false
+  );
+  assert.equal(
+    __testHooks.liveActivityTokenlessCurrentActivityIsBlocking(
+      {
+        currentActivityId: "41DF902B-11B3-4387-93B4-21335F7DDEA3",
+        currentActivityPushToken: null,
+        lastStartAt: "2026-04-25T10:05:00.000Z",
+      },
+      nowMs
+    ),
+    false
+  );
+});
+
+test("liveActivityRecentDismissalCooldownIsBlocking suppresses quiet push-to-start churn", () => {
+  const nowMs = Date.parse("2026-04-25T10:48:30.000Z");
+  assert.equal(
+    __testHooks.liveActivityRecentDismissalCooldownIsBlocking(
+      {
+        lastEndedAt: "2026-04-25T10:47:45.000Z",
+      },
+      "multi_upcoming",
+      nowMs
+    ),
+    true
+  );
+  assert.equal(
+    __testHooks.liveActivityRecentDismissalCooldownIsBlocking(
+      {
+        lastEndedAt: "2026-04-25T10:47:45.000Z",
+      },
+      "multi_live",
+      nowMs
+    ),
+    false
+  );
+  assert.equal(
+    __testHooks.liveActivityRecentDismissalCooldownIsBlocking(
+      {
+        lastEndedAt: "2026-04-25T10:30:00.000Z",
+      },
+      "multi_upcoming",
+      nowMs
+    ),
     false
   );
 });
@@ -1922,6 +2007,56 @@ test("buildLiveActivityContentState falls back to team aliases for compact widge
   assert.equal(contentState.matches[0].homeTeam, "Salford City");
   assert.equal(contentState.matches[0].homeShortName, "Salford");
   assert.equal(contentState.matches[0].awayShortName, undefined);
+});
+
+test("buildLiveActivityContentState uses display aliases for Premier League compact names", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_upcoming",
+    [
+      {
+        match_details_id: "cwestham123",
+        date: "2026-04-25",
+        time: "12:30",
+        league: "Premier League",
+        home_team: "West Ham United",
+        away_team: "Everton",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+      },
+      {
+        match_details_id: "cwolves123",
+        date: "2026-04-25",
+        time: "15:00",
+        league: "Premier League",
+        home_team: "Wolverhampton Wanderers",
+        away_team: "Tottenham Hotspur",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+      },
+      {
+        match_details_id: "castonvilla123",
+        date: "2026-04-25",
+        time: "12:30",
+        league: "Premier League",
+        home_team: "Aston Villa",
+        away_team: "Crystal Palace",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+      },
+    ],
+    0,
+    Date.parse("2026-04-25T10:00:00Z")
+  );
+
+  assert.equal(contentState.matches[0].homeShortName, "West Ham");
+  assert.equal(contentState.matches[0].awayShortName, undefined);
+  assert.equal(contentState.matches[1].homeShortName, "Wolves");
+  assert.equal(contentState.matches[1].awayShortName, "Spurs");
+  assert.equal(contentState.matches[2].homeShortName, undefined);
+  assert.equal(contentState.matches[2].awayShortName, undefined);
 });
 
 test("buildLiveActivityContentState de-dupes duplicate match ids and keeps the freshest snapshot", () => {

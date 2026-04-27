@@ -272,28 +272,82 @@ function scoreRoundCandidate(round) {
   return score;
 }
 
-function chooseBestRound(tournaments) {
+function phaseOrdinal(value) {
+  const text = normalizeText(value).toLowerCase();
+  const match = text.match(/\b(\d+)(?:st|nd|rd|th)?\s+phase\b/);
+  if (!match) return 0;
+  return toInteger(match[1], { min: 0 }) || 0;
+}
+
+function maxParticipantMatchesPlayed(rounds) {
+  let maxPlayed = 0;
+  for (const round of rounds) {
+    const participants = Array.isArray(round && round.participants) ? round.participants : [];
+    for (const participant of participants) {
+      const played = toInteger(participant && participant.matchesPlayed, { min: 0 }) || 0;
+      if (played > maxPlayed) {
+        maxPlayed = played;
+      }
+    }
+  }
+  return maxPlayed;
+}
+
+function scoreStageCandidate(stage, rounds, stageIndex) {
+  const rowCount = rounds.reduce(
+    (total, round) => total + (Array.isArray(round && round.participants) ? round.participants.length : 0),
+    0
+  );
+  const scoredRounds = rounds.reduce((total, round) => total + scoreRoundCandidate(round), 0);
+
+  return (
+    phaseOrdinal(stage && stage.name) * 10000000 +
+    maxParticipantMatchesPlayed(rounds) * 100000 +
+    rowCount * 100 +
+    scoredRounds -
+    stageIndex
+  );
+}
+
+function chooseBestStage(tournaments) {
   let best = null;
   for (const tournament of tournaments) {
     const stages = Array.isArray(tournament && tournament.stages) ? tournament.stages : [];
-    for (const stage of stages) {
-      const rounds = Array.isArray(stage && stage.rounds) ? stage.rounds : [];
-      for (const round of rounds) {
+    for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) {
+      const stage = stages[stageIndex];
+      const rounds = (Array.isArray(stage && stage.rounds) ? stage.rounds : []).filter((round) => {
         const participants = Array.isArray(round && round.participants) ? round.participants : [];
-        if (participants.length === 0) continue;
-        const candidate = {
-          tournament,
-          stage,
-          round,
-          score: scoreRoundCandidate(round),
-        };
-        if (!best || candidate.score > best.score) {
-          best = candidate;
-        }
+        return participants.length > 0;
+      });
+      if (rounds.length === 0) continue;
+
+      const candidate = {
+        tournament,
+        stage,
+        rounds,
+        score: scoreStageCandidate(stage, rounds, stageIndex),
+      };
+      if (!best || candidate.score > best.score) {
+        best = candidate;
       }
     }
   }
   return best;
+}
+
+function normalizedRoundName(round, fallback) {
+  return normalizeText((round && round.name) || fallback) || null;
+}
+
+function normalizeRoundRows(round, positionOffset = 0) {
+  return (Array.isArray(round && round.participants) ? round.participants : [])
+    .map(normalizeParticipant)
+    .filter(Boolean)
+    .sort((left, right) => left.position - right.position)
+    .map((row) => ({
+      ...row,
+      position: row.position + positionOffset,
+    }));
 }
 
 function extractLeagueTableFromHtml(html, source) {
@@ -310,15 +364,28 @@ function extractLeagueTableFromHtml(html, source) {
   const tournaments = Array.isArray(footballTableData.tournaments)
     ? footballTableData.tournaments
     : [];
-  const best = chooseBestRound(tournaments);
+  const best = chooseBestStage(tournaments);
   if (!best) {
     throw new Error("Could not find round participants in football table payload");
   }
 
-  const rows = best.round.participants
-    .map(normalizeParticipant)
-    .filter(Boolean)
-    .sort((left, right) => left.position - right.position);
+  const groups = best.rounds
+    .map((round, index) => {
+      const rows = normalizeRoundRows(round);
+      if (!rows.length) return null;
+      return {
+        name: normalizedRoundName(round, best.rounds.length > 1 ? `Group ${index + 1}` : null),
+        rows,
+      };
+    })
+    .filter(Boolean);
+
+  let positionOffset = 0;
+  const rows = best.rounds.flatMap((round) => {
+    const roundRows = normalizeRoundRows(round, positionOffset);
+    positionOffset += roundRows.length;
+    return roundRows;
+  });
 
   if (!rows.length) {
     throw new Error("Could not parse participant rows from football table payload");
@@ -330,6 +397,7 @@ function extractLeagueTableFromHtml(html, source) {
     stage_name: normalizeText(best.stage && best.stage.name) || null,
     source_url: source.url,
     updated_at: normalizeText(best.tournament && best.tournament.lastUpdated) || null,
+    groups: groups.length > 1 ? groups : [],
     rows,
   };
 }
@@ -407,6 +475,7 @@ module.exports = {
   extractLeagueTableFromHtml,
   fetchLeagueTable,
   fetchLeagueTables,
+  chooseBestStage,
   setBbcLeagueTablesRequestObserver,
   writeLeagueTables,
 };
