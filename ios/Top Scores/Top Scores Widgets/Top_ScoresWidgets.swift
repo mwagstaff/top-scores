@@ -2956,68 +2956,101 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
         Array(LiveActivityMatchDisplayFilter.displayMatches(for: state).prefix(4))
     }
 
-    private var footerText: String {
-        var parts: [String] = []
+    private var delayBannerText: String? {
         if isStale {
-            parts.append("Delayed")
-        } else if state.delayMinutes > 0 {
-            parts.append("Delayed \(state.delayMinutes)m")
+            return "Delayed | Tap to open"
         }
-        if let score = state.fantasyCurrentScore {
-            parts.append("FPL \(score)")
+        if state.delayMinutes > 0 {
+            return "Delayed \(state.delayMinutes) m | Tap to open"
         }
-        return parts.joined(separator: " | ")
+        return nil
+    }
+
+    private var fantasyScoreText: String? {
+        guard let fantasyCurrentScore = state.fantasyCurrentScore else { return nil }
+        return "\(fantasyCurrentScore)"
+    }
+
+    private var hasFooterContent: Bool {
+        delayBannerText != nil || fantasyScoreText != nil
+    }
+
+    private var topScoresBlue: Color {
+        Color(red: 0.00, green: 0.48, blue: 1.00)
+    }
+
+    private var fantasyRed: Color {
+        Color(red: 0.85, green: 0.12, blue: 0.33)
+    }
+
+    private var footerBannerBackground: LinearGradient {
+        if fantasyScoreText == nil {
+            return LinearGradient(
+                colors: [topScoresBlue, topScoresBlue],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
+        return LinearGradient(
+            stops: [
+                .init(color: topScoresBlue, location: 0.0),
+                .init(color: topScoresBlue, location: 0.58),
+                .init(color: fantasyRed.opacity(0.9), location: 0.82),
+                .init(color: fantasyRed, location: 1.0),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ForEach(visibleMatches, id: \.matchId) { match in
-                HStack(spacing: 7) {
-                    Text(match.displayHomeTeam)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-
-                    if hasTvLogo(match) {
-                        LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 13)
-                    } else {
-                        Text(centerText(for: match))
-                            .font(.caption.weight(.semibold))
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(visibleMatches, id: \.matchId) { match in
+                    HStack(spacing: 7) {
+                        Text(match.displayHomeTeam)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                            .frame(width: 48)
-                            .foregroundStyle(.white.opacity(0.9))
-                    }
+                            .minimumScaleFactor(0.72)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
 
-                    Text(match.displayAwayTeam)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if hasTvLogo(match) {
+                            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 13)
+                        } else {
+                            Text(centerText(for: match))
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                                .frame(width: 48)
+                                .foregroundStyle(.white.opacity(0.9))
+                        }
 
-                    if hasTvLogo(match) {
-                        Text(centerText(for: match))
-                            .font(.caption.weight(.semibold))
+                        Text(match.displayAwayTeam)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                            .frame(width: 42, alignment: .trailing)
-                            .foregroundStyle(.white.opacity(0.9))
+                            .minimumScaleFactor(0.72)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if hasTvLogo(match) {
+                            Text(centerText(for: match))
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                                .frame(width: 42, alignment: .trailing)
+                                .foregroundStyle(.white.opacity(0.9))
+                        }
                     }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, hasFooterContent ? 6 : 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            if !footerText.isEmpty {
-                Text(footerText)
-                    .font(.caption2.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .foregroundStyle(.white.opacity(isStale ? 0.95 : 0.72))
-                    .padding(.top, 1)
+            if hasFooterContent {
+                footerBanner
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -3034,6 +3067,42 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
 
     private func hasTvLogo(_ match: TopScoresLiveActivityMatchState) -> Bool {
         LiveActivityTvLogoAsset.assetName(for: match.tvLogoKey) != nil
+    }
+
+    @ViewBuilder
+    private var footerBanner: some View {
+        HStack(spacing: 8) {
+            if let delayBannerText {
+                Text(delayBannerText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                    .layoutPriority(1)
+            }
+
+            Spacer(minLength: 0)
+
+            if let fantasyScoreText {
+                HStack(spacing: 4) {
+                    Image("FantasyPremierLeagueLion")
+                        .resizable()
+                        .renderingMode(.original)
+                        .scaledToFit()
+                        .frame(width: 13, height: 13)
+
+                    Text(fantasyScoreText)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .layoutPriority(2)
+            }
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity)
+        .background(footerBannerBackground)
+        .clipShape(RoundedCornerShape(radius: 18, corners: [.bottomLeft, .bottomRight]))
     }
 }
 
