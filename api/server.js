@@ -663,6 +663,7 @@ const app = express();
 const API_PREFIX = "/api/v1";
 const LIVE_ACTIVITY_PENDING_START_GRACE_MS = 15 * 1000;
 const LIVE_ACTIVITY_RECENT_DISPATCH_WINDOW_MS = 2 * 60 * 1000;
+const LIVE_ACTIVITY_ENDED_TOMBSTONE_WINDOW_MS = 15 * 60 * 1000;
 const APP_DATA_SOURCE = "redis-operational";
 const DEVICE_TOKEN_HEADER = "x-device-token";
 const parsedRedisReconciliationIntervalMs = Number(
@@ -23145,6 +23146,7 @@ const {
   getBbcMatchHistoryGrouped,
   getBbcRequestHistory,
   getLiveActivityDebugRecords,
+  saveLiveActivityDebugRecord,
   getBbcRealtimeSnapshot,
   cleanupBbcHistory,
   saveBbcRequestHistory,
@@ -23363,6 +23365,23 @@ app.post(`${API_PREFIX}/live-activity/activity-started`, async (req, res) => {
 
   try {
     const nowIso = new Date().toISOString();
+    const existingRecord = await getUserPreferences(resolvedDeviceToken);
+    const existingLiveActivity =
+      existingRecord && existingRecord.liveActivity && typeof existingRecord.liveActivity === "object"
+        ? existingRecord.liveActivity
+        : {};
+    if (liveActivityEndedTombstoneMatches(existingLiveActivity, normalizedActivityId)) {
+      console.log(
+        `[API] Live Activity activity-started ignored for recently ended activity ${JSON.stringify({
+          device: resolvedDeviceToken.slice(0, 12),
+          activity_id: normalizedActivityId,
+          last_ended_at: existingLiveActivity.lastEndedAt || null,
+          last_ended_reason: existingLiveActivity.lastEndedReason || null,
+        })}`
+      );
+      res.status(200).json({ success: true, ignored: true, reason: "recently_ended_activity" });
+      return;
+    }
     const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
     const normalizedContentState =
       contentState && typeof contentState === "object" && !Array.isArray(contentState)
@@ -23464,10 +23483,31 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
 
   try {
     const existingRecord = await getUserPreferences(resolvedDeviceToken);
+    const existingLiveActivity =
+      existingRecord && existingRecord.liveActivity && typeof existingRecord.liveActivity === "object"
+        ? existingRecord.liveActivity
+        : {};
     const resolvedIsDevelopmentBuild =
       typeof isDevelopmentBuild === "boolean"
         ? isDevelopmentBuild
         : Boolean(existingRecord && existingRecord.isDevelopmentBuild);
+    if (liveActivityEndedTombstoneMatches(existingLiveActivity, normalizedActivityId)) {
+      console.log(
+        `[API] Live Activity activity-token ignored for recently ended activity ${JSON.stringify({
+          device: resolvedDeviceToken.slice(0, 12),
+          activity_id: normalizedActivityId,
+          token_prefix: normalizedActivityPushToken.slice(0, 16),
+          last_ended_at: existingLiveActivity.lastEndedAt || null,
+          last_ended_reason: existingLiveActivity.lastEndedReason || null,
+        })}`
+      );
+      res.status(200).json({
+        success: true,
+        ignored: true,
+        reason: "recently_ended_activity",
+      });
+      return;
+    }
     const duplicateResolution = await endSupersededLiveActivityIfNeeded({
       existingRecord,
       deviceToken: resolvedDeviceToken,
@@ -23565,9 +23605,24 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
 app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
-  const { deviceToken, activityId, isDevelopmentBuild, reason } = req.body || {};
+  const {
+    deviceToken,
+    activityId,
+    isDevelopmentBuild,
+    reason,
+    activeActivityCount,
+    activityGeneratedAtEpochSeconds,
+  } = req.body || {};
   const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
   const normalizedActivityId = normalizeDeviceToken(activityId);
+  const normalizedActiveActivityCount = Number.isFinite(Number(activeActivityCount))
+    ? Math.max(0, Math.floor(Number(activeActivityCount)))
+    : null;
+  const normalizedActivityGeneratedAtEpochSeconds = Number.isFinite(Number(activityGeneratedAtEpochSeconds))
+    ? Math.floor(Number(activityGeneratedAtEpochSeconds))
+    : null;
+  const normalizedReason = String(reason || "user");
+  const reportsNoLocalActivities = normalizedActiveActivityCount === 0;
 
   if (!resolvedDeviceToken) {
     res.status(400).json({
@@ -23623,17 +23678,23 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
         ? String(liveActivity.currentActivityId).trim() : null;
 
       if (storedActivityId && storedActivityId !== normalizedActivityId) {
-        console.log(
-          `[API] activity-ended ignored for stale/duplicate activity: reported=${normalizedActivityId.slice(0, 12)}... stored=${storedActivityId.slice(0, 12)}... device=${resolvedDeviceToken.slice(0, 12)}...`
-        );
-        res.status(200).json({ success: true, stale: true });
-        return;
+        if (reportsNoLocalActivities) {
+          console.log(
+            `[API] activity-ended accepting mismatched activity because client reports no local activities: reported=${normalizedActivityId.slice(0, 12)}... stored=${storedActivityId.slice(0, 12)}... reason=${normalizedReason} device=${resolvedDeviceToken.slice(0, 12)}...`
+          );
+        } else {
+          console.log(
+            `[API] activity-ended ignored for stale/duplicate activity: reported=${normalizedActivityId.slice(0, 12)}... stored=${storedActivityId.slice(0, 12)}... activeCount=${normalizedActiveActivityCount} device=${resolvedDeviceToken.slice(0, 12)}...`
+          );
+          res.status(200).json({ success: true, stale: true });
+          return;
+        }
       }
 
       // storedActivityId is null but a push was dispatched recently — token upload
       // for the survivor is likely in flight. Ignore this ended call so we don't
       // prematurely wipe state and trigger another push-to-start.
-      if (!storedActivityId) {
+      if (!storedActivityId && !reportsNoLocalActivities) {
         const lastDispatchAtMs = liveActivity.lastDispatchAt ? Date.parse(String(liveActivity.lastDispatchAt)) : null;
         const PENDING_TOKEN_WINDOW_MS = 2 * 60 * 1000; // matches LIVE_ACTIVITY_PENDING_MAX_MS
         if (lastDispatchAtMs && Number.isFinite(lastDispatchAtMs) && (Date.now() - lastDispatchAtMs) < PENDING_TOKEN_WINDOW_MS) {
@@ -23659,6 +23720,10 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
       lastScoreHash: null,
       lastMode: null,
       lastEndedAt: nowIso,
+      lastEndedActivityId: normalizedActivityId || acceptedLiveActivity.currentActivityId || null,
+      lastEndedActivityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
+      lastEndedReason: normalizedReason,
+      lastEndedActiveActivityCount: normalizedActiveActivityCount,
       testHoldUntil: null,
       currentActivityId: null,
     };
@@ -23683,7 +23748,9 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
       `[API] Live Activity activity-ended accepted ${JSON.stringify({
         device: resolvedDeviceToken.slice(0, 12),
         activity_id: normalizedActivityId || null,
-        reason: String(reason || "user"),
+        reason: normalizedReason,
+        active_activity_count: normalizedActiveActivityCount,
+        activity_generated_at: normalizedActivityGeneratedAtEpochSeconds,
         previous_activity_id: acceptedLiveActivity.currentActivityId
           ? String(acceptedLiveActivity.currentActivityId)
           : null,
@@ -23752,6 +23819,70 @@ app.post(`${API_PREFIX}/live-activity/foreground-start-failed`, async (req, res)
     console.error("[API] Error handling foreground-start-failed:", err);
     res.status(500).json({
       error: "Failed to process foreground start failure",
+      message: err.message,
+    });
+  }
+});
+
+// Ingest diagnostics written by the widget extension into the shared app-group
+// container. Widget extensions cannot perform network I/O, so the app flushes these
+// lines on foreground/activity observer events.
+app.post(`${API_PREFIX}/live-activity/widget-diagnostics`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const {
+    deviceToken,
+    isDevelopmentBuild,
+    entries,
+    activeActivityCount,
+    activeActivities,
+  } = req.body || {};
+  const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
+  const normalizedEntries = Array.isArray(entries)
+    ? entries
+        .map((entry) => String(entry || "").trim())
+        .filter(Boolean)
+        .slice(-80)
+    : [];
+
+  if (!resolvedDeviceToken) {
+    res.status(400).json({
+      error: "Missing device token (X-Device-Token header or deviceToken body field).",
+    });
+    return;
+  }
+  if (normalizedEntries.length === 0) {
+    res.status(200).json({ success: true, saved: false, reason: "empty_entries" });
+    return;
+  }
+
+  try {
+    await saveLiveActivityDebugRecord(resolvedDeviceToken, {
+      record_type: "client_widget_diagnostics",
+      source: "ios_app_group_flush",
+      status: "received",
+      is_development_build: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : null,
+      active_activity_count: Number.isFinite(Number(activeActivityCount))
+        ? Number(activeActivityCount)
+        : null,
+      active_activities: Array.isArray(activeActivities) ? activeActivities.slice(0, 8) : [],
+      entry_count: normalizedEntries.length,
+      entries: normalizedEntries,
+    });
+    console.log(
+      `[API] Live Activity widget diagnostics ${JSON.stringify({
+        device: resolvedDeviceToken.slice(0, 12),
+        entries: normalizedEntries.length,
+        active_activity_count: Number.isFinite(Number(activeActivityCount))
+          ? Number(activeActivityCount)
+          : null,
+      })}`
+    );
+    res.status(200).json({ success: true, saved: true, entryCount: normalizedEntries.length });
+  } catch (err) {
+    console.error("[API] Error saving widget diagnostics:", err);
+    res.status(500).json({
+      error: "Failed to save widget diagnostics",
       message: err.message,
     });
   }
@@ -23968,6 +24099,7 @@ function preferenceObjectToSearchText(preferences) {
 
 const ADMIN_DEVICE_SUFFIX_LENGTH = 8;
 const ADMIN_DEVICE_NOTIFICATIONS_LIMIT = 100;
+const ADMIN_DEVICE_SCHEDULED_UPDATES_LIMIT = 250;
 const ADMIN_DEVICE_LIST_PAGE_SIZE_MAX = 50;
 const ADMIN_DEVICE_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -24045,6 +24177,7 @@ function summarizeAdminDeviceRecord(record, suffixCounts = new Map()) {
 
 function buildAdminDeviceNotificationEntry(record) {
   const matchContext = record && record.match && typeof record.match === "object" ? record.match : {};
+  const journeyContext = buildAdminJourneyContext(record);
   return {
     notification_id: record && record.notification_id ? String(record.notification_id) : null,
     timestamp_ms: adminHistoryTimestampMs(record && record.timestamp_ms),
@@ -24073,6 +24206,108 @@ function buildAdminDeviceNotificationEntry(record) {
       date: matchContext.date || null,
       time: matchContext.time || null,
     },
+    journey: journeyContext,
+    payload: record,
+  };
+}
+
+function adminFindValueByAliases(value, aliases, depth = 0, visited = new Set()) {
+  if (!value || typeof value !== "object" || depth > 5 || visited.has(value)) return null;
+  visited.add(value);
+
+  for (const alias of aliases) {
+    if (!Object.prototype.hasOwnProperty.call(value, alias)) continue;
+    const candidate = value[alias];
+    if (candidate === undefined || candidate === null) continue;
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    if (typeof candidate === "number" && Number.isFinite(candidate)) return String(candidate);
+  }
+
+  for (const child of Object.values(value)) {
+    if (!child || typeof child !== "object") continue;
+    const found = adminFindValueByAliases(child, aliases, depth + 1, visited);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function adminTimestampFromJourneyValue(value) {
+  const direct = Number(value);
+  if (Number.isFinite(direct) && direct > 0) return Math.floor(direct);
+  const parsed = Date.parse(String(value || "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildAdminJourneyContext(record) {
+  const startStation = adminFindValueByAliases(record, [
+    "start_station",
+    "startStation",
+    "origin_station",
+    "originStation",
+    "from_station",
+    "fromStation",
+    "origin",
+    "from",
+  ]);
+  const endStation = adminFindValueByAliases(record, [
+    "end_station",
+    "endStation",
+    "destination_station",
+    "destinationStation",
+    "to_station",
+    "toStation",
+    "destination",
+    "to",
+  ]);
+  const departureValue = adminFindValueByAliases(record, [
+    "departure_time",
+    "departureTime",
+    "departure_at",
+    "departureAt",
+    "start_time",
+    "startTime",
+    "starts_at",
+    "startsAt",
+  ]);
+  const arrivalValue = adminFindValueByAliases(record, [
+    "arrival_time",
+    "arrivalTime",
+    "arrival_at",
+    "arrivalAt",
+    "end_time",
+    "endTime",
+    "ends_at",
+    "endsAt",
+  ]);
+  const scheduledValue = adminFindValueByAliases(record, [
+    "scheduled_for",
+    "scheduledFor",
+    "scheduled_at",
+    "scheduledAt",
+    "scheduled_time",
+    "scheduledTime",
+    "notification_time",
+    "notificationTime",
+  ]);
+
+  return {
+    start_station: startStation,
+    end_station: endStation,
+    departure_time: departureValue,
+    departure_time_ms: adminTimestampFromJourneyValue(departureValue),
+    arrival_time: arrivalValue,
+    arrival_time_ms: adminTimestampFromJourneyValue(arrivalValue),
+    scheduled_time: scheduledValue,
+    scheduled_time_ms: adminTimestampFromJourneyValue(scheduledValue),
+  };
+}
+
+function buildAdminScheduledJourneyUpdateEntry(record, nowMs = Date.now()) {
+  const reminder = buildAdminFantasyReminderEntry(record, nowMs);
+  return {
+    ...reminder,
+    journey: buildAdminJourneyContext(record),
     payload: record,
   };
 }
@@ -24453,6 +24688,14 @@ app.get(`${API_PREFIX}/admin/devices/:deviceSuffix`, async (req, res) => {
       .slice(0, ADMIN_DEVICE_NOTIFICATIONS_LIMIT)
       .map(buildAdminDeviceNotificationEntry);
     const nowMs = Date.now();
+    const scheduledJourneyUpdateRecords = await getFantasyReminderRecords({
+      device_token: deviceToken,
+      order: "desc",
+    });
+    const normalizedScheduledJourneyUpdates = scheduledJourneyUpdateRecords
+      .map((entry) => buildAdminScheduledJourneyUpdateEntry(entry, nowMs));
+    const limitedScheduledJourneyUpdates = normalizedScheduledJourneyUpdates
+      .slice(0, ADMIN_DEVICE_SCHEDULED_UPDATES_LIMIT);
     const liveActivityDebugRecords = await getLiveActivityDebugRecords({
       device_token: deviceToken,
       limit: 40,
@@ -24486,6 +24729,14 @@ app.get(`${API_PREFIX}/admin/devices/:deviceSuffix`, async (req, res) => {
         total_notifications: notificationRecords.length,
         returned_notifications: limitedNotifications.length,
         status_counts: buildAdminDeviceNotificationStatusCounts(notificationRecords),
+      },
+      scheduled_journey_updates: {
+        source: "fantasy_reminders",
+        total: normalizedScheduledJourneyUpdates.length,
+        returned: limitedScheduledJourneyUpdates.length,
+        limit: ADMIN_DEVICE_SCHEDULED_UPDATES_LIMIT,
+        status_counts: buildAdminFantasyReminderStatusCounts(scheduledJourneyUpdateRecords, nowMs),
+        data: limitedScheduledJourneyUpdates,
       },
       live_activity: {
         state: summarizeAdminLiveActivityState(record, nowMs),
@@ -25821,6 +26072,33 @@ function liveActivityNowTimeLabel(now = new Date()) {
   });
 }
 
+function liveActivityTestTvLogoKey(channels = []) {
+  const values = Array.isArray(channels) ? channels : [];
+  for (const channel of values) {
+    const normalized = String(channel || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    if (!normalized) continue;
+    if (
+      normalized.includes("amazonprime") ||
+      normalized.includes("primevideo") ||
+      normalized.includes("amazon")
+    ) return "amazon";
+    if (normalized.includes("tntsports") || normalized === "tnt" || normalized.includes("btsport")) {
+      return "tnt";
+    }
+    if (normalized.includes("skysports") || normalized === "sky") return "sky";
+    if (normalized.includes("appletv") || normalized.includes("mlsseasonpass")) return "apple";
+    if (normalized.includes("bbc")) return "bbc";
+    if (normalized.includes("itv")) return "itv";
+    if (normalized.includes("channel4")) return "channel4";
+    if (normalized.includes("hbomax") || normalized.includes("hbo")) return "hbomax";
+    if (normalized.includes("dazn")) return "dazn";
+    if (normalized.includes("disney")) return "disneyplus";
+    if (normalized.includes("premiersports")) return "premiersports";
+    if (normalized.includes("laligatv") || normalized.includes("laliga")) return "laligatv";
+  }
+  return null;
+}
+
 function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
   const match = rawMatch && typeof rawMatch === "object" ? rawMatch : {};
   const fallbackKickoff = liveActivityNowTimeLabel(now);
@@ -25882,6 +26160,16 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
   }
   if (awayShortNameRaw && awayShortNameRaw !== awayTeam) {
     normalized.awayShortName = awayShortNameRaw;
+  }
+  if (match.homeLogoKey || match.home_logo_key) {
+    normalized.homeLogoKey = String(match.homeLogoKey || match.home_logo_key).trim();
+  }
+  if (match.awayLogoKey || match.away_logo_key) {
+    normalized.awayLogoKey = String(match.awayLogoKey || match.away_logo_key).trim();
+  }
+  const tvLogoKey = match.tvLogoKey || match.tv_logo_key || liveActivityTestTvLogoKey(normalized.tvChannels);
+  if (tvLogoKey) {
+    normalized.tvLogoKey = String(tvLogoKey).trim();
   }
   return normalized;
 }
@@ -26519,6 +26807,18 @@ function resolveLiveActivityTestUserDeviceToken(req, body = {}) {
   const fromUserField = normalizeDeviceToken(body.userDeviceToken);
   if (fromUserField) return fromUserField;
   return normalizeDeviceToken(body.deviceToken);
+}
+
+function liveActivityEndedTombstoneMatches(liveActivity, activityId) {
+  if (!liveActivity || typeof liveActivity !== "object" || !activityId) return false;
+  const lastEndedActivityId = normalizeDeviceToken(liveActivity.lastEndedActivityId);
+  if (!lastEndedActivityId || lastEndedActivityId !== activityId) return false;
+  const lastEndedAtMs = liveActivity.lastEndedAt ? Date.parse(String(liveActivity.lastEndedAt)) : null;
+  return (
+    Number.isFinite(lastEndedAtMs) &&
+    Date.now() - lastEndedAtMs >= 0 &&
+    Date.now() - lastEndedAtMs < LIVE_ACTIVITY_ENDED_TOMBSTONE_WINDOW_MS
+  );
 }
 
 async function endSupersededLiveActivityIfNeeded({

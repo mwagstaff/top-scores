@@ -306,6 +306,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let awayTeam: String
     let homeShortName: String?
     let awayShortName: String?
+    let homeLogoKey: String?
+    let awayLogoKey: String?
     let homeScore: Int?
     let awayScore: Int?
     let aggregateHomeScore: Int?
@@ -315,6 +317,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let matchTime: String?
     let penaltyWinner: String?
     let tvChannels: [String]
+    let tvLogoKey: String?
 
     enum CodingKeys: String, CodingKey {
         case matchId
@@ -326,6 +329,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         case awayTeam
         case homeShortName
         case awayShortName
+        case homeLogoKey
+        case awayLogoKey
         case homeScore
         case awayScore
         case aggregateHomeScore
@@ -335,6 +340,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         case matchTime
         case penaltyWinner
         case tvChannels
+        case tvLogoKey
     }
 
     init(
@@ -347,6 +353,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         awayTeam: String,
         homeShortName: String? = nil,
         awayShortName: String? = nil,
+        homeLogoKey: String? = nil,
+        awayLogoKey: String? = nil,
         homeScore: Int? = nil,
         awayScore: Int? = nil,
         aggregateHomeScore: Int? = nil,
@@ -355,7 +363,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         firstLegAwayScore: Int? = nil,
         matchTime: String? = nil,
         penaltyWinner: String? = nil,
-        tvChannels: [String] = []
+        tvChannels: [String] = [],
+        tvLogoKey: String? = nil
     ) {
         self.matchId = matchId
         self.date = date
@@ -366,6 +375,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         self.awayTeam = awayTeam
         self.homeShortName = homeShortName
         self.awayShortName = awayShortName
+        self.homeLogoKey = homeLogoKey
+        self.awayLogoKey = awayLogoKey
         self.homeScore = homeScore
         self.awayScore = awayScore
         self.aggregateHomeScore = aggregateHomeScore
@@ -375,6 +386,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         self.matchTime = matchTime
         self.penaltyWinner = penaltyWinner
         self.tvChannels = tvChannels
+        self.tvLogoKey = tvLogoKey
     }
 
     init(from decoder: Decoder) throws {
@@ -388,6 +400,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         awayTeam = try container.decode(String.self, forKey: .awayTeam)
         homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
         awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
+        homeLogoKey = try container.decodeIfPresent(String.self, forKey: .homeLogoKey)
+        awayLogoKey = try container.decodeIfPresent(String.self, forKey: .awayLogoKey)
         homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
         awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
         aggregateHomeScore = try container.decodeIfPresent(Int.self, forKey: .aggregateHomeScore)
@@ -397,6 +411,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         matchTime = try container.decodeIfPresent(String.self, forKey: .matchTime)
         penaltyWinner = try container.decodeIfPresent(String.self, forKey: .penaltyWinner)
         tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
+        tvLogoKey = try container.decodeIfPresent(String.self, forKey: .tvLogoKey)
     }
 
     var hasScore: Bool {
@@ -568,71 +583,6 @@ private enum LiveActivityMatchDisplayFilter {
         for state: TopScoresLiveActivityAttributes.ContentState
     ) -> [TopScoresLiveActivityMatchState] {
         Array(deduplicatedMatches(from: state.matches).dropFirst())
-    }
-}
-
-private enum LiveActivityRenderDiagnostics {
-    private static let lock = NSLock()
-    private static var loggedKeys = Set<String>()
-
-    static func logIfNeeded(state: TopScoresLiveActivityAttributes.ContentState, surface: String) {
-        let key = "\(surface)|\(state.mode)|\(state.generatedAtEpochSeconds)|\(summary(for: state))"
-        lock.lock()
-        let inserted = loggedKeys.insert(key).inserted
-        lock.unlock()
-        guard inserted else { return }
-        WidgetSharedDiagnosticsBridge.append("[LiveActivityWidget] render surface=\(surface) \(summary(for: state))")
-        NSLog("[LiveActivityWidget] render surface=%@ %@", surface, summary(for: state))
-    }
-
-    static func logBodyEvaluationIfNeeded(
-        state: TopScoresLiveActivityAttributes.ContentState,
-        surface: String,
-        extra: String? = nil
-    ) {
-        var key = "\(surface)|body|\(state.mode)|\(state.generatedAtEpochSeconds)"
-        if let extra, !extra.isEmpty {
-            key.append("|\(extra)")
-        }
-        lock.lock()
-        let inserted = loggedKeys.insert(key).inserted
-        lock.unlock()
-        guard inserted else { return }
-        if let extra, !extra.isEmpty {
-            WidgetSharedDiagnosticsBridge.append("[LiveActivityWidget] body surface=\(surface) extra=\(extra) \(summary(for: state))")
-            NSLog("[LiveActivityWidget] body surface=%@ extra=%@ %@", surface, extra, summary(for: state))
-        } else {
-            WidgetSharedDiagnosticsBridge.append("[LiveActivityWidget] body surface=\(surface) \(summary(for: state))")
-            NSLog("[LiveActivityWidget] body surface=%@ %@", surface, summary(for: state))
-        }
-    }
-
-    static func logLogoResolutionIfNeeded(kind: String, name: String, result: String) {
-        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = "logo|\(kind)|\(normalizedName)|\(result)"
-        lock.lock()
-        let inserted = loggedKeys.insert(key).inserted
-        lock.unlock()
-        guard inserted else { return }
-        WidgetSharedDiagnosticsBridge.append("[LiveActivityWidget] logo kind=\(kind) name=\(normalizedName) result=\(result)")
-        NSLog("[LiveActivityWidget] logo kind=%@ name=%@ result=%@", kind, normalizedName, result)
-    }
-
-    static func summary(for state: TopScoresLiveActivityAttributes.ContentState) -> String {
-        let matches = state.matches.prefix(4).map { match -> String in
-            let score: String
-            if match.hasScore, let home = match.homeScore, let away = match.awayScore {
-                let homeText = match.homeWonOnPenalties ? "\(home) (P)" : "\(home)"
-                let awayText = match.awayWonOnPenalties ? "\(away) (P)" : "\(away)"
-                score = "\(homeText)-\(awayText)"
-            } else if let suppressed = match.suppressedScoreSummary {
-                score = "suppressed:\(suppressed)"
-            } else {
-                score = "nil"
-            }
-            return "\(match.displayHomeTeam) v \(match.displayAwayTeam) \(score) \(match.matchTime ?? "nil")"
-        }.joined(separator: " | ")
-        return "mode=\(state.mode) generatedAt=\(state.generatedAtEpochSeconds) delay=\(state.delayMinutes) matches=\(state.matches.count) [\(matches)]"
     }
 }
 
@@ -2882,42 +2832,22 @@ private final class WidgetTvLogoResolver {
 private struct TopScoresLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TopScoresLiveActivityAttributes.self) { context in
-            let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                state: context.state,
-                surface: "activity_configuration_lock_screen"
-            )
-            TopScoresLiveActivityLockScreenView(state: context.state)
+            TopScoresLiveActivityMinimalLockScreenView(state: context.state, isStale: context.isStale)
                 .activityBackgroundTint(Color(red: 0.03, green: 0.04, blue: 0.09))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
-            let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                state: context.state,
-                surface: "activity_configuration_dynamic_island"
-            )
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.center) {
-                    TopScoresLiveActivityExpandedView(state: context.state)
+                    TopScoresLiveActivityMinimalExpandedView(state: context.state, isStale: context.isStale)
                 }
             } compactLeading: {
-                let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                    state: context.state,
-                    surface: "dynamic_island_compact_leading"
-                )
                 Text(compactLeadingText(state: context.state))
                     .font(.caption2.weight(.semibold))
             } compactTrailing: {
-                let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                    state: context.state,
-                    surface: "dynamic_island_compact_trailing"
-                )
                 Text(compactTrailingText(state: context.state))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.white.opacity(compactTrailingOpacity(state: context.state)))
             } minimal: {
-                let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                    state: context.state,
-                    surface: "dynamic_island_minimal"
-                )
                 Text("TS")
                     .font(.caption2.weight(.bold))
             }
@@ -2953,8 +2883,209 @@ private struct TopScoresLiveActivityWidget: Widget {
 }
 
 @available(iOSApplicationExtension 16.1, *)
+private enum LiveActivityTvLogoAsset {
+    static func assetName(for key: String?) -> String? {
+        switch normalized(key) {
+        case "amazon":
+            return "TVLogoAmazon"
+        case "bbc":
+            return "TVLogoBBC"
+        case "itv":
+            return "TVLogoITV"
+        case "sky":
+            return "TVLogoSky"
+        case "tnt":
+            return "TVLogoTNT"
+        case "apple":
+            return "TVLogoApple"
+        case "channel4":
+            return "TVLogoChannel4"
+        case "hbomax":
+            return "TVLogoHBOMax"
+        case "dazn":
+            return "TVLogoDAZN"
+        case "disneyplus":
+            return "TVLogoDisneyPlus"
+        case "premiersports":
+            return "TVLogoPremierSports"
+        case "laligatv":
+            return "TVLogoLaLigaTV"
+        default:
+            return nil
+        }
+    }
+
+    private static func normalized(_ key: String?) -> String {
+        String(key ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: "", options: .regularExpression)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct LiveActivityPrecomputedTvLogo: View {
+    let logoKey: String?
+    let height: CGFloat
+
+    var body: some View {
+        Group {
+            if let assetName = LiveActivityTvLogoAsset.assetName(for: logoKey) {
+                Image(assetName)
+                    .resizable()
+                    .renderingMode(.original)
+                    .scaledToFit()
+            } else {
+                Image(systemName: "tv")
+                    .font(.system(size: max(8, height * 0.75), weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.58))
+            }
+        }
+        .frame(width: height * 1.85, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: max(2, height * 0.18), style: .continuous))
+        .accessibilityHidden(true)
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct TopScoresLiveActivityMinimalLockScreenView: View {
+    let state: TopScoresLiveActivityAttributes.ContentState
+    let isStale: Bool
+
+    private var visibleMatches: [TopScoresLiveActivityMatchState] {
+        Array(LiveActivityMatchDisplayFilter.displayMatches(for: state).prefix(4))
+    }
+
+    private var footerText: String {
+        var parts: [String] = []
+        if isStale {
+            parts.append("Delayed")
+        } else if state.delayMinutes > 0 {
+            parts.append("Delayed \(state.delayMinutes)m")
+        }
+        if let score = state.fantasyCurrentScore {
+            parts.append("FPL \(score)")
+        }
+        return parts.joined(separator: " | ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(visibleMatches, id: \.matchId) { match in
+                HStack(spacing: 7) {
+                    Text(match.displayHomeTeam)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+
+                    if hasTvLogo(match) {
+                        LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 13)
+                    } else {
+                        Text(centerText(for: match))
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(width: 48)
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+
+                    Text(match.displayAwayTeam)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if hasTvLogo(match) {
+                        Text(centerText(for: match))
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(width: 42, alignment: .trailing)
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+            }
+
+            if !footerText.isEmpty {
+                Text(footerText)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .foregroundStyle(.white.opacity(isStale ? 0.95 : 0.72))
+                    .padding(.top, 1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func centerText(for match: TopScoresLiveActivityMatchState) -> String {
+        if match.hasScore, let home = match.homeScore, let away = match.awayScore {
+            return "\(home)-\(away)"
+        }
+        if let matchTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !matchTime.isEmpty {
+            return matchTime
+        }
+        return match.time
+    }
+
+    private func hasTvLogo(_ match: TopScoresLiveActivityMatchState) -> Bool {
+        LiveActivityTvLogoAsset.assetName(for: match.tvLogoKey) != nil
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+private struct TopScoresLiveActivityMinimalExpandedView: View {
+    let state: TopScoresLiveActivityAttributes.ContentState
+    let isStale: Bool
+
+    private var visibleMatches: [TopScoresLiveActivityMatchState] {
+        Array(LiveActivityMatchDisplayFilter.displayMatches(for: state).prefix(4))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(visibleMatches, id: \.matchId) { match in
+                HStack(spacing: 6) {
+                    Text(match.displayHomeTeam)
+                        .lineLimit(1)
+                    if hasTvLogo(match) {
+                        LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 10)
+                    }
+                    Text(centerText(for: match))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(match.displayAwayTeam)
+                        .lineLimit(1)
+                }
+                .font(.caption2.weight(.semibold))
+            }
+        }
+    }
+
+    private func centerText(for match: TopScoresLiveActivityMatchState) -> String {
+        if match.hasScore, let home = match.homeScore, let away = match.awayScore {
+            return "\(home)-\(away)"
+        }
+        if let matchTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !matchTime.isEmpty {
+            return matchTime
+        }
+        return match.time
+    }
+
+    private func hasTvLogo(_ match: TopScoresLiveActivityMatchState) -> Bool {
+        LiveActivityTvLogoAsset.assetName(for: match.tvLogoKey) != nil
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
 private struct TopScoresLiveActivityLockScreenView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
+    let isStale: Bool
     var pinsFooterToBottom: Bool = true
     private let maxPrimaryMatches = 4
     private let maxTrailingUpcomingMatches = 5
@@ -2979,11 +3110,6 @@ private struct TopScoresLiveActivityLockScreenView: View {
         let hasFooterContent = delayBannerText != nil || fantasyScoreText != nil
         let usesDenseLayout = isMultiMode || hasTrailingUpcoming
         let usesCompactSingleCardLayout = hasTrailingUpcoming || hasFooterContent
-        let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-            state: state,
-            surface: "lock_screen_body",
-            extra: "matches=\(matches.count)|trailing=\(trailingUpcoming.count)|dense=\(usesDenseLayout)"
-        )
         Group {
             if pinsFooterToBottom && hasFooterContent {
                 VStack(spacing: 0) {
@@ -3018,9 +3144,6 @@ private struct TopScoresLiveActivityLockScreenView: View {
             }
         }
         .id(viewIdentity)
-        .task(id: viewIdentity) {
-            LiveActivityRenderDiagnostics.logIfNeeded(state: state, surface: "lock_screen_task")
-        }
     }
 
     @ViewBuilder
@@ -3034,11 +3157,6 @@ private struct TopScoresLiveActivityLockScreenView: View {
             switch state.mode {
             case "single_upcoming":
                 if let match = matches.first {
-                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                        state: state,
-                        surface: "lock_screen_multi_consistent",
-                        extra: "mode=\(state.mode) matches=1"
-                    )
                     UnifiedMultiMatchListView(matches: [match])
                 } else {
                     EmptyLiveActivityView()
@@ -3046,11 +3164,6 @@ private struct TopScoresLiveActivityLockScreenView: View {
             case "single_live":
                 if let match = matches.first {
                     let displayMatches = [match] + (hasTrailingUpcoming ? trailingUpcoming : [])
-                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                        state: state,
-                        surface: "lock_screen_multi_consistent",
-                        extra: "mode=\(state.mode) matches=\(displayMatches.count)"
-                    )
                     UnifiedMultiMatchListView(matches: displayMatches)
                 } else {
                     EmptyLiveActivityView()
@@ -3058,11 +3171,6 @@ private struct TopScoresLiveActivityLockScreenView: View {
             case "single_finished":
                 if let match = matches.first {
                     let displayMatches = [match] + (hasTrailingUpcoming ? trailingUpcoming : [])
-                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                        state: state,
-                        surface: "lock_screen_multi_consistent",
-                        extra: "mode=\(state.mode) matches=\(displayMatches.count)"
-                    )
                     UnifiedMultiMatchListView(matches: displayMatches)
                 } else {
                     EmptyLiveActivityView()
@@ -3071,33 +3179,18 @@ private struct TopScoresLiveActivityLockScreenView: View {
                 if matches.isEmpty {
                     EmptyLiveActivityView()
                 } else {
-                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                        state: state,
-                        surface: "lock_screen_multi_consistent",
-                        extra: "mode=\(state.mode) matches=\(matches.count)"
-                    )
                     UnifiedMultiMatchListView(matches: matches)
                 }
             case "multi_live":
                 if matches.isEmpty {
                     EmptyLiveActivityView()
                 } else {
-                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                        state: state,
-                        surface: "lock_screen_multi_consistent",
-                        extra: "mode=\(state.mode) matches=\(matches.count)"
-                    )
                     UnifiedMultiMatchListView(matches: matches)
                 }
             case "multi_finished":
                 if matches.isEmpty {
                     EmptyLiveActivityView()
                 } else {
-                    let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-                        state: state,
-                        surface: "lock_screen_multi_consistent",
-                        extra: "mode=\(state.mode) matches=\(matches.count)"
-                    )
                     UnifiedMultiMatchListView(matches: matches)
                 }
             case "ended":
@@ -3197,19 +3290,13 @@ private struct TopScoresLiveActivityLockScreenView: View {
 @available(iOSApplicationExtension 16.1, *)
 private struct TopScoresLiveActivityExpandedView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
+    let isStale: Bool
     private let maxExpandedMatches = 3
 
     var body: some View {
-        let _ = LiveActivityRenderDiagnostics.logBodyEvaluationIfNeeded(
-            state: state,
-            surface: "dynamic_island_expanded_body"
-        )
         VStack(alignment: .leading, spacing: 4) {
             titleView
             MinimalExpandedActivitySummaryView(state: cappedState)
-        }
-        .task(id: "\(state.mode)|\(state.generatedAtEpochSeconds)|expanded") {
-            LiveActivityRenderDiagnostics.logIfNeeded(state: state, surface: "dynamic_island_expanded_task")
         }
     }
 
@@ -4641,11 +4728,14 @@ private extension TopScoresLiveActivityMatchState {
             league,
             homeTeam,
             awayTeam,
+            homeLogoKey ?? "nil",
+            awayLogoKey ?? "nil",
             homeScore.map(String.init) ?? "nil",
             awayScore.map(String.init) ?? "nil",
             aggregateHomeScore.map(String.init) ?? "nil",
             aggregateAwayScore.map(String.init) ?? "nil",
             matchTime ?? "nil",
+            tvLogoKey ?? "nil",
         ]
         return parts.joined(separator: "|")
     }
@@ -4676,21 +4766,11 @@ private struct LiveActivityTeamLogo: View {
     let size: CGFloat
 
     var body: some View {
-        let resolvedAssetName = WidgetTeamLogoResolver.shared.assetName(
-            for: teamName,
-            alternateNames: alternateNames,
-            variant: .liveActivity
-        )
         let resolvedImage = WidgetTeamLogoResolver.shared.image(
             for: teamName,
             alternateNames: alternateNames,
             variant: .liveActivity,
             idealPointSize: size
-        )
-        let _ = LiveActivityRenderDiagnostics.logLogoResolutionIfNeeded(
-            kind: "team",
-            name: teamName,
-            result: resolvedAssetName ?? "fallback_initial"
         )
         Group {
             if let resolvedImage {
@@ -4719,19 +4799,10 @@ private struct LiveActivityChannelLogo: View {
     let size: CGFloat
 
     var body: some View {
-        let resolvedAssetName = WidgetTvLogoResolver.shared.assetName(
-            for: channelName,
-            variant: .liveActivity
-        )
         let resolvedImage = WidgetTvLogoResolver.shared.image(
             for: channelName,
             variant: .liveActivity,
             idealPointSize: size
-        )
-        let _ = LiveActivityRenderDiagnostics.logLogoResolutionIfNeeded(
-            kind: "channel",
-            name: channelName,
-            result: resolvedAssetName ?? "fallback_tv"
         )
         Group {
             if let resolvedImage {

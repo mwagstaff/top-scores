@@ -239,11 +239,15 @@ export function isMatchFinished(match: Match): boolean {
 }
 
 export function aggregateSummary(match: Match): string | null {
-  if (
-    typeof match.aggregateHomeScore === "number" &&
-    typeof match.aggregateAwayScore === "number"
-  ) {
-    return `Agg: ${match.aggregateHomeScore}-${match.aggregateAwayScore}`;
+  const firstLegHome = match.firstLegHomeScore;
+  const firstLegAway = match.firstLegAwayScore;
+
+  if (typeof firstLegHome === "number" && typeof firstLegAway === "number") {
+    const homeScore = typeof match.homeScore === "number" ? match.homeScore : 0;
+    const awayScore = typeof match.awayScore === "number" ? match.awayScore : 0;
+    const aggHome = firstLegHome + homeScore;
+    const aggAway = firstLegAway + awayScore;
+    return `Agg: ${aggHome}-${aggAway}`;
   }
 
   return null;

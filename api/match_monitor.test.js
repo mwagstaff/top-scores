@@ -557,6 +557,33 @@ test("buildLiveActivityPayloadHash ignores generatedAtEpochSeconds", () => {
   );
 });
 
+test("shouldSkipLiveActivityUpdate suppresses passive static upcoming mode churn", () => {
+  const state = {
+    lastPayloadHash: "single-payload",
+    lastScoreHash: "single-score",
+    lastMode: "single_upcoming",
+    lastDispatchAt: "2026-04-28T08:27:17.000Z",
+  };
+
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "multi-payload", "multi_upcoming", false, {
+      scoreHash: "multi-score",
+      nowMs: Date.parse("2026-04-28T08:29:15.000Z"),
+      trigger: "preferences_and_fantasy_sync",
+    }),
+    true
+  );
+
+  assert.equal(
+    __testHooks.shouldSkipLiveActivityUpdate(state, "multi-payload", "multi_upcoming", false, {
+      scoreHash: "multi-score",
+      nowMs: Date.parse("2026-04-28T08:29:15.000Z"),
+      trigger: "app_foreground",
+    }),
+    false
+  );
+});
+
 test("shouldSkipLiveActivityUpdate throttles live non-score changes to once per minute", () => {
   const state = {
     lastPayloadHash: "old-payload",
@@ -1952,6 +1979,9 @@ test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly 
   );
 
   assert.deepStrictEqual(contentState.matches[0].tvChannels, ["Amazon"]);
+  assert.equal(contentState.matches[0].tvLogoKey, "amazon");
+  assert.equal(contentState.matches[0].homeLogoKey, "Newcastle United");
+  assert.equal(contentState.matches[0].awayLogoKey, "Barcelona");
 });
 
 test("buildLiveActivityContentState preserves provided short names for compact widget rendering", () => {

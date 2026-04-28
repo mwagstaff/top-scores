@@ -16,6 +16,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let awayTeam: String
     let homeShortName: String?
     let awayShortName: String?
+    let homeLogoKey: String?
+    let awayLogoKey: String?
     let homeScore: Int?
     let awayScore: Int?
     let aggregateHomeScore: Int?
@@ -25,6 +27,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let matchTime: String?
     let penaltyWinner: String?
     let tvChannels: [String]
+    let tvLogoKey: String?
 
     enum CodingKeys: String, CodingKey {
         case matchId
@@ -36,6 +39,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         case awayTeam
         case homeShortName
         case awayShortName
+        case homeLogoKey
+        case awayLogoKey
         case homeScore
         case awayScore
         case aggregateHomeScore
@@ -45,6 +50,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         case matchTime
         case penaltyWinner
         case tvChannels
+        case tvLogoKey
     }
 
     init(
@@ -57,6 +63,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         awayTeam: String,
         homeShortName: String? = nil,
         awayShortName: String? = nil,
+        homeLogoKey: String? = nil,
+        awayLogoKey: String? = nil,
         homeScore: Int? = nil,
         awayScore: Int? = nil,
         aggregateHomeScore: Int? = nil,
@@ -65,7 +73,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         firstLegAwayScore: Int? = nil,
         matchTime: String? = nil,
         penaltyWinner: String? = nil,
-        tvChannels: [String] = []
+        tvChannels: [String] = [],
+        tvLogoKey: String? = nil
     ) {
         self.matchId = matchId
         self.date = date
@@ -76,6 +85,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         self.awayTeam = awayTeam
         self.homeShortName = homeShortName
         self.awayShortName = awayShortName
+        self.homeLogoKey = homeLogoKey
+        self.awayLogoKey = awayLogoKey
         self.homeScore = homeScore
         self.awayScore = awayScore
         self.aggregateHomeScore = aggregateHomeScore
@@ -85,6 +96,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         self.matchTime = matchTime
         self.penaltyWinner = penaltyWinner
         self.tvChannels = tvChannels
+        self.tvLogoKey = tvLogoKey
     }
 
     init(from decoder: Decoder) throws {
@@ -98,6 +110,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         awayTeam = try container.decode(String.self, forKey: .awayTeam)
         homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
         awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
+        homeLogoKey = try container.decodeIfPresent(String.self, forKey: .homeLogoKey)
+        awayLogoKey = try container.decodeIfPresent(String.self, forKey: .awayLogoKey)
         homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
         awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
         aggregateHomeScore = try container.decodeIfPresent(Int.self, forKey: .aggregateHomeScore)
@@ -107,6 +121,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         matchTime = try container.decodeIfPresent(String.self, forKey: .matchTime)
         penaltyWinner = try container.decodeIfPresent(String.self, forKey: .penaltyWinner)
         tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
+        tvLogoKey = try container.decodeIfPresent(String.self, forKey: .tvLogoKey)
     }
 
     var displayHomeTeam: String {
@@ -151,6 +166,7 @@ final class LiveActivitySyncService {
     private var activityPushTokenTasks: [String: Task<Void, Never>] = [:]
     private var activityContentTasks: [String: Task<Void, Never>] = [:]
     private var activityStateTasks: [String: Task<Void, Never>] = [:]
+    private var endedActivityIDs = Set<String>()
     private var lastUploadedPushToStartTokenHex: String?
     private var pendingPushToStartTokenData: Data?
     private var lastUploadedActivityPushTokenHexByActivityID: [String: String] = [:]
@@ -261,6 +277,7 @@ final class LiveActivitySyncService {
     }
 
     func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        flushSharedWidgetDiagnostics()
         let pendingStartToRetry: TopScoresLiveActivityAttributes.ContentState?
         let pendingPushToStartTokenData: Data?
         lock.lock()
@@ -305,6 +322,25 @@ final class LiveActivitySyncService {
         )
         flushSharedWidgetDiagnostics()
 
+        if activity.activityState == .ended || activity.activityState == .dismissed {
+            lock.withLock {
+                endedActivityIDs.insert(activityID)
+                observedActivityIDs.remove(activityID)
+            }
+            NSLog(
+                "[LiveActivitySync] Activity %@ was already %@ when observation began; suppressing token upload",
+                activityID,
+                String(describing: activity.activityState)
+            )
+            Task(priority: .background) {
+                await self.uploadActivityEnded(
+                    activityID: activityID,
+                    reason: activity.activityState == .dismissed ? "dismissed" : "ended"
+                )
+            }
+            return
+        }
+
         if let tokenData = activity.pushToken {
             NSLog(
                 "[LiveActivitySync] Existing activity push token %@ token=%@",
@@ -322,6 +358,14 @@ final class LiveActivitySyncService {
                     Self.shortHex(tokenData)
                 )
                 self.flushSharedWidgetDiagnostics()
+                if activity.activityState == .ended || activity.activityState == .dismissed {
+                    NSLog(
+                        "[LiveActivitySync] Ignoring token update for inactive activity %@ state=%@",
+                        activityID,
+                        String(describing: activity.activityState)
+                    )
+                    break
+                }
                 self.enqueueActivityPushTokenUpload(activityID: activityID, tokenData: tokenData)
             }
         }
@@ -354,6 +398,9 @@ final class LiveActivitySyncService {
                 self.flushSharedWidgetDiagnostics()
                 if state == .ended || state == .dismissed {
                     ended = true
+                    self.lock.withLock {
+                        self.endedActivityIDs.insert(activityID)
+                    }
                     await self.uploadActivityEnded(
                         activityID: activityID,
                         reason: state == .dismissed ? "dismissed" : "ended"
@@ -542,14 +589,22 @@ final class LiveActivitySyncService {
 
     private func uploadActivityPushToken(activityID: String, tokenData: Data) async {
         let tokenHex = Self.hexString(from: tokenData)
-        let shouldUpload = lock.withLock {
+        let uploadDecision = lock.withLock {
+            if endedActivityIDs.contains(activityID) {
+                return (shouldUpload: false, suppressedEnded: true)
+            }
             let shouldUpload = lastUploadedActivityPushTokenHexByActivityID[activityID] != tokenHex
             if shouldUpload {
                 lastUploadedActivityPushTokenHexByActivityID[activityID] = tokenHex
             }
-            return shouldUpload
+            return (shouldUpload: shouldUpload, suppressedEnded: false)
         }
-        guard shouldUpload else { return }
+        guard uploadDecision.shouldUpload else {
+            if uploadDecision.suppressedEnded {
+                NSLog("[LiveActivitySync] Suppressed activity token upload for ended activity %@", activityID)
+            }
+            return
+        }
 
         guard let endpoint = await endpointURL(path: "live-activity/activity-token") else { return }
         let generatedAtEpochSeconds = Self.currentContentState(for: activityID)?.generatedAtEpochSeconds
@@ -614,6 +669,8 @@ final class LiveActivitySyncService {
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "activityId": activityID,
+            "activityGeneratedAtEpochSeconds": Self.currentContentState(for: activityID)?.generatedAtEpochSeconds as Any,
+            "activeActivityCount": activeCount,
             "reason": reason,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
         ]
@@ -1003,6 +1060,39 @@ final class LiveActivitySyncService {
         for entry in entries {
             NSLog("%@", entry)
         }
+        Task(priority: .background) {
+            await self.uploadWidgetDiagnostics(entries)
+        }
+    }
+
+    private func uploadWidgetDiagnostics(_ entries: [String]) async {
+        guard !entries.isEmpty else { return }
+        guard let endpoint = await endpointURL(path: "live-activity/widget-diagnostics") else { return }
+
+        var activeActivitySummaries: [[String: Any]] = []
+        var activeActivityCount = 0
+        if #available(iOS 16.1, *) {
+            let activities = Activity<TopScoresLiveActivityAttributes>.activities
+            activeActivityCount = activities.count
+            activeActivitySummaries = activities.prefix(8).map { activity in
+                let state = Self.currentContentState(for: activity)
+                return [
+                    "activityId": activity.id,
+                    "activityState": String(describing: activity.activityState),
+                    "pushTokenPresent": activity.pushToken == nil ? false : true,
+                    "content": Self.contentStateSummary(state),
+                ]
+            }
+        }
+
+        let payload: [String: Any] = [
+            "deviceToken": DeviceIdentity.currentToken,
+            "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
+            "entries": Array(entries.suffix(80)),
+            "activeActivityCount": activeActivityCount,
+            "activeActivities": activeActivitySummaries,
+        ]
+        await sendJSONRequest(url: endpoint, payload: payload, logContext: "widget-diagnostics")
     }
 
     private func sanitizedContentState(
@@ -1050,7 +1140,7 @@ final class LiveActivitySyncService {
                 score = "nil"
             }
             let channels = match.tvChannels.isEmpty ? "noCh" : match.tvChannels.joined(separator: ",")
-            return "\(match.displayHomeTeam) v \(match.displayAwayTeam) \(score) \(match.matchTime ?? "nil") ch=[\(channels)]"
+            return "\(match.displayHomeTeam) v \(match.displayAwayTeam) \(score) \(match.matchTime ?? "nil") ch=[\(channels)] tvLogo=\(match.tvLogoKey ?? "nil")"
         }.joined(separator: " | ")
         let fantasyScoreSummary = state.fantasyCurrentScore.map { " ff=\($0)" } ?? ""
         return "mode=\(state.mode) generatedAt=\(state.generatedAtEpochSeconds) delay=\(state.delayMinutes)\(fantasyScoreSummary) matches=\(state.matches.count) [\(matches)]"

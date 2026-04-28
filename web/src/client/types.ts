@@ -32,6 +32,8 @@ export interface Match {
   awayScore?: number | null;
   aggregateHomeScore?: number | null;
   aggregateAwayScore?: number | null;
+  firstLegHomeScore?: number | null;
+  firstLegAwayScore?: number | null;
   scoreStatus?: string | null;
   penaltyResult?: string | null;
   detailsUrl?: string | null;

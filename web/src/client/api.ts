@@ -307,6 +307,8 @@ function normalizeMatch(raw: Record<string, unknown>): Match {
     awayScore: optionalNumber(raw.away_score),
     aggregateHomeScore: optionalNumber(raw.aggregate_home_score),
     aggregateAwayScore: optionalNumber(raw.aggregate_away_score),
+    firstLegHomeScore: optionalNumber(raw.first_leg_home_score),
+    firstLegAwayScore: optionalNumber(raw.first_leg_away_score),
     scoreStatus: optionalString(raw.score_status),
     penaltyResult: optionalString(raw.penalty_result),
     detailsUrl: optionalString(raw.details_url),

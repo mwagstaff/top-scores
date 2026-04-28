@@ -23,6 +23,8 @@ const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.j
 const TEAM_SHORT_NAMES_PAYLOAD = require("./team_short_names.json");
 const TEAM_ALIASES_PAYLOAD = require("./team_aliases.json");
 const { teamIdentityNames, teamIdentityKeys } = require("./team_identity");
+const fs = require("fs");
+const path = require("path");
 
 // Configuration
 const POLL_INTERVAL_MS = 10 * 1000; // Poll every 10 seconds for monitored matches
@@ -88,6 +90,14 @@ const LIVE_ACTIVITY_WINDOW_TIMEZONE = "Europe/London";
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
 const FANTASY_DEADLINE_REMINDER_EVAL_INTERVAL_MS = 60 * 1000;
+const LIVE_ACTIVITY_TEAM_LOGO_ASSETS_PATH = path.join(
+  __dirname,
+  "..",
+  "ios",
+  "Top Scores",
+  "Top Scores Widgets",
+  "team_logo_assets.json"
+);
 const FANTASY_DEADLINE_REMINDER_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
 const FANTASY_DEADLINE_REMINDER_DEFAULT_TIMEZONE = "Europe/London";
 const LIVE_ACTIVITY_TEAM_RATING_STOP_WORDS = new Set([
@@ -3160,6 +3170,46 @@ function canonicalLiveActivityChannelName(channelName) {
   return String(channelName || "").trim() || null;
 }
 
+function canonicalLiveActivityTvLogoKey(channelName) {
+  const normalizedChannel = normalizeTextToken(channelName).replace(/[^a-z0-9]+/g, "");
+  if (!normalizedChannel) return null;
+  if (
+    normalizedChannel.includes("amazonprime") ||
+    normalizedChannel.includes("primevideo") ||
+    normalizedChannel.includes("amazon")
+  ) {
+    return "amazon";
+  }
+  if (
+    normalizedChannel.includes("tntsports") ||
+    normalizedChannel === "tnt" ||
+    normalizedChannel.includes("btsport")
+  ) {
+    return "tnt";
+  }
+  if (normalizedChannel.includes("skysports") || normalizedChannel === "sky") {
+    return "sky";
+  }
+  if (
+    normalizedChannel.includes("mlsseasonpass") ||
+    normalizedChannel.includes("appletv") ||
+    normalizedChannel === "apple"
+  ) {
+    return "apple";
+  }
+  if (normalizedChannel.includes("bbc")) return "bbc";
+  if (normalizedChannel.includes("itv")) return "itv";
+  if (normalizedChannel.includes("channel4")) return "channel4";
+  if (normalizedChannel.includes("hbomax") || normalizedChannel.includes("hbo")) return "hbomax";
+  if (normalizedChannel.includes("dazn")) return "dazn";
+  if (normalizedChannel.includes("disney")) return "disneyplus";
+  if (normalizedChannel.includes("premiersports")) return "premiersports";
+  if (normalizedChannel.includes("laligatv") || normalizedChannel.includes("laliga")) {
+    return "laligatv";
+  }
+  return null;
+}
+
 function canonicalLiveActivityChannels(channels) {
   const output = [];
   const seen = new Set();
@@ -3174,6 +3224,93 @@ function canonicalLiveActivityChannels(channels) {
   }
 
   return output;
+}
+
+function canonicalLiveActivityTvLogoKeys(channels) {
+  const output = [];
+  const seen = new Set();
+
+  for (const channel of Array.isArray(channels) ? channels : []) {
+    const key = canonicalLiveActivityTvLogoKey(channel);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(key);
+  }
+
+  return output;
+}
+
+let liveActivityTeamLogoAssetLookup = null;
+
+function buildLiveActivityTeamLogoAssetLookup() {
+  const lookup = new Map();
+  let assetNames = [];
+
+  try {
+    const payload = fs.readFileSync(LIVE_ACTIVITY_TEAM_LOGO_ASSETS_PATH, "utf8");
+    const parsed = JSON.parse(payload);
+    assetNames = Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn(
+      "[MatchMonitor] Failed to load live activity team logo asset catalog:",
+      error && error.message ? error.message : error
+    );
+  }
+
+  for (const rawName of assetNames) {
+    const assetName = String(rawName || "").trim();
+    if (!assetName) continue;
+    const keys = new Set([
+      normalizeLiveActivityTeamShortNameKey(assetName),
+      normalizeLiveActivityTeamKey(assetName),
+    ]);
+    for (const key of keys) {
+      if (key && !lookup.has(key)) {
+        lookup.set(key, assetName);
+      }
+    }
+  }
+
+  return lookup;
+}
+
+function resolveLiveActivityTeamLogoKey(teamName, shortName = null) {
+  if (!liveActivityTeamLogoAssetLookup) {
+    liveActivityTeamLogoAssetLookup = buildLiveActivityTeamLogoAssetLookup();
+  }
+  if (!liveActivityTeamLogoAssetLookup || liveActivityTeamLogoAssetLookup.size === 0) {
+    return null;
+  }
+
+  const candidates = [];
+  const addCandidate = (value) => {
+    const trimmed = String(value || "").trim();
+    if (trimmed && !candidates.includes(trimmed)) {
+      candidates.push(trimmed);
+    }
+  };
+
+  addCandidate(teamName);
+  addCandidate(shortName);
+
+  const teamKey = normalizeLiveActivityTeamShortNameKey(teamName);
+  const shortKey = normalizeLiveActivityTeamShortNameKey(shortName);
+  addCandidate(liveActivityTeamShortNameLookup.get(teamKey));
+  addCandidate(LIVE_ACTIVITY_TEAM_DISPLAY_ALIAS_LOOKUP.get(teamKey));
+  addCandidate(LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP.get(teamKey));
+  addCandidate(LIVE_ACTIVITY_TEAM_DISPLAY_ALIAS_LOOKUP.get(shortKey));
+  addCandidate(LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP.get(shortKey));
+
+  for (const candidate of candidates) {
+    const spacedKey = normalizeLiveActivityTeamShortNameKey(candidate);
+    const compactKey = normalizeLiveActivityTeamKey(candidate);
+    const resolved =
+      liveActivityTeamLogoAssetLookup.get(spacedKey) ||
+      liveActivityTeamLogoAssetLookup.get(compactKey);
+    if (resolved) return resolved;
+  }
+
+  return null;
 }
 
 const LIVE_ACTIVITY_FIXTURE_TOKEN_STOP_WORDS = new Set([
@@ -5144,72 +5281,85 @@ function buildLiveActivityContentState(
   const normalizedMatches = dedupeLiveActivityMatches(matches)
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES)
     .map((rawMatch) => {
-    const match = mode.includes("upcoming")
-      ? sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state")
-      : rawMatch;
-    const aggregate = resolveLiveActivityAggregateScores(match);
-    const normalizedMatch = {
-      matchId: String(match.match_details_id || ""),
-      date: String(match.date || ""),
-      time: String(match.time || ""),
-      league: String(match.league || ""),
-      homeTeam: String(match.home_team || ""),
-      awayTeam: String(match.away_team || ""),
-    };
-    const homeShortName = resolveLiveActivityTeamShortName(
-      match.home_short_name ?? match.homeShortName,
-      normalizedMatch.homeTeam
-    );
-    if (homeShortName) {
-      normalizedMatch.homeShortName = homeShortName;
-    }
-    const awayShortName = resolveLiveActivityTeamShortName(
-      match.away_short_name ?? match.awayShortName,
-      normalizedMatch.awayTeam
-    );
-    if (awayShortName) {
-      normalizedMatch.awayShortName = awayShortName;
-    }
-    const leagueSubcategory =
-      match && match.league_subcategory !== undefined && match.league_subcategory !== null
-        ? String(match.league_subcategory).trim()
-        : "";
-    if (leagueSubcategory) {
-      normalizedMatch.leagueSubcategory = leagueSubcategory;
-    }
-    const homeScore = toNumericScore(match.home_score);
-    if (homeScore !== null) {
-      normalizedMatch.homeScore = homeScore;
-    }
-    const awayScore = toNumericScore(match.away_score);
-    if (awayScore !== null) {
-      normalizedMatch.awayScore = awayScore;
-    }
-    const firstLegHomeScore = toNumericScore(match.first_leg_home_score);
-    const firstLegAwayScore = toNumericScore(match.first_leg_away_score);
-    if (firstLegHomeScore !== null && firstLegAwayScore !== null) {
-      normalizedMatch.firstLegHomeScore = firstLegHomeScore;
-      normalizedMatch.firstLegAwayScore = firstLegAwayScore;
-    } else {
-      if (aggregate.home !== null) {
-        normalizedMatch.aggregateHomeScore = aggregate.home;
+      const match = mode.includes("upcoming")
+        ? sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state")
+        : rawMatch;
+      const aggregate = resolveLiveActivityAggregateScores(match);
+      const normalizedMatch = {
+        matchId: String(match.match_details_id || ""),
+        date: String(match.date || ""),
+        time: String(match.time || ""),
+        league: String(match.league || ""),
+        homeTeam: String(match.home_team || ""),
+        awayTeam: String(match.away_team || ""),
+      };
+      const homeShortName = resolveLiveActivityTeamShortName(
+        match.home_short_name ?? match.homeShortName,
+        normalizedMatch.homeTeam
+      );
+      if (homeShortName) {
+        normalizedMatch.homeShortName = homeShortName;
       }
-      if (aggregate.away !== null) {
-        normalizedMatch.aggregateAwayScore = aggregate.away;
+      const awayShortName = resolveLiveActivityTeamShortName(
+        match.away_short_name ?? match.awayShortName,
+        normalizedMatch.awayTeam
+      );
+      if (awayShortName) {
+        normalizedMatch.awayShortName = awayShortName;
       }
-    }
-    const matchTime = displayStatusToken(match.score_status);
-    if (matchTime) {
-      normalizedMatch.matchTime = matchTime;
-    }
-    const penaltyWinner = penaltyShootoutWinnerSide(match);
-    if (penaltyWinner) {
-      normalizedMatch.penaltyWinner = penaltyWinner;
-    }
-    const tvChannels = canonicalLiveActivityChannels(match.tv_channels).slice(0, 1);
-    if (tvChannels.length > 0) {
-      normalizedMatch.tvChannels = tvChannels;
-    }
+      const homeLogoKey = resolveLiveActivityTeamLogoKey(normalizedMatch.homeTeam, homeShortName);
+      if (homeLogoKey) {
+        normalizedMatch.homeLogoKey = homeLogoKey;
+      }
+      const awayLogoKey = resolveLiveActivityTeamLogoKey(normalizedMatch.awayTeam, awayShortName);
+      if (awayLogoKey) {
+        normalizedMatch.awayLogoKey = awayLogoKey;
+      }
+      const leagueSubcategory =
+        match && match.league_subcategory !== undefined && match.league_subcategory !== null
+          ? String(match.league_subcategory).trim()
+          : "";
+      if (leagueSubcategory) {
+        normalizedMatch.leagueSubcategory = leagueSubcategory;
+      }
+      const homeScore = toNumericScore(match.home_score);
+      if (homeScore !== null) {
+        normalizedMatch.homeScore = homeScore;
+      }
+      const awayScore = toNumericScore(match.away_score);
+      if (awayScore !== null) {
+        normalizedMatch.awayScore = awayScore;
+      }
+      const firstLegHomeScore = toNumericScore(match.first_leg_home_score);
+      const firstLegAwayScore = toNumericScore(match.first_leg_away_score);
+      if (firstLegHomeScore !== null && firstLegAwayScore !== null) {
+        normalizedMatch.firstLegHomeScore = firstLegHomeScore;
+        normalizedMatch.firstLegAwayScore = firstLegAwayScore;
+      } else {
+        if (aggregate.home !== null) {
+          normalizedMatch.aggregateHomeScore = aggregate.home;
+        }
+        if (aggregate.away !== null) {
+          normalizedMatch.aggregateAwayScore = aggregate.away;
+        }
+      }
+      const matchTime = displayStatusToken(match.score_status);
+      if (matchTime) {
+        normalizedMatch.matchTime = matchTime;
+      }
+      const penaltyWinner = penaltyShootoutWinnerSide(match);
+      if (penaltyWinner) {
+        normalizedMatch.penaltyWinner = penaltyWinner;
+      }
+      const rawTvChannels = match.tv_channels || match.tvChannels;
+      const tvChannels = canonicalLiveActivityChannels(rawTvChannels).slice(0, 1);
+      if (tvChannels.length > 0) {
+        normalizedMatch.tvChannels = tvChannels;
+      }
+      const tvLogoKey = canonicalLiveActivityTvLogoKeys(rawTvChannels)[0];
+      if (tvLogoKey) {
+        normalizedMatch.tvLogoKey = tvLogoKey;
+      }
       return normalizedMatch;
     });
 
@@ -5415,6 +5565,10 @@ function isLiveActivityUpcomingMode(mode) {
   return typeof mode === "string" && mode.includes("upcoming");
 }
 
+function isLiveActivityStaticMode(mode) {
+  return isLiveActivityUpcomingMode(mode) || isLiveActivityFinishedMode(mode);
+}
+
 function isLiveActivityFinishedMode(mode) {
   return typeof mode === "string" && mode.includes("finished");
 }
@@ -5511,6 +5665,7 @@ function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false,
   const nowMs =
     options && Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const lastDispatchAtMs = parseLiveActivityDispatchTimeMs(state);
+  const trigger = String(options && options.trigger ? options.trigger : "").trim();
 
   if (state.lastPayloadHash === payloadHash && state.lastMode === mode) {
     // Even for identical payloads, send a heartbeat push when we are within
@@ -5527,6 +5682,17 @@ function liveActivitySkipReason(state, payloadHash, mode, forceDispatch = false,
       return null; // heartbeat: reset stale-date before it expires
     }
     return "identical_payload";
+  }
+  if (
+    trigger === "preferences_and_fantasy_sync" &&
+    isLiveActivityStaticMode(state.lastMode) &&
+    isLiveActivityStaticMode(mode) &&
+    lastDispatchAtMs !== null
+  ) {
+    const heartbeatThresholdMs = liveActivityHeartbeatThresholdMsForMode(mode);
+    if (nowMs - lastDispatchAtMs < heartbeatThresholdMs) {
+      return "static_preferences_sync_quiet_mode";
+    }
   }
   if (state.lastMode !== mode) {
     return null;
@@ -5593,6 +5759,7 @@ function logLiveActivitySkipDiagnostics(user, presentation, contentState, state,
   const lastDispatchAtMs = parseLiveActivityDispatchTimeMs(state);
   const diagnostics = {
     user_device_short: shortDeviceToken(user && user.deviceToken),
+    trigger: options && options.trigger ? String(options.trigger) : null,
     reason,
     mode: presentation && presentation.mode ? presentation.mode : null,
     payload_hash_prefix: payloadHash ? payloadHash.slice(0, 12) : null,
@@ -6027,17 +6194,20 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     const skipReason = liveActivitySkipReason(state, payloadHash, presentation.mode, forceDispatch, {
       scoreHash,
       nowMs,
+      trigger,
     });
     if (skipReason) {
       logLiveActivitySkipDiagnostics(user, presentation, contentState, state, skipReason, {
         payloadHash,
         scoreHash,
         nowMs,
+        trigger,
       });
       await persistLiveActivityDebug(user, {
         record_type: "decision",
         decision_type: "skip",
         decision_reason: skipReason,
+        trigger: trigger || null,
         mode: presentation.mode,
         payload_hash: payloadHash,
         score_hash: scoreHash,
