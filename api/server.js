@@ -26099,6 +26099,38 @@ function liveActivityTestTvLogoKey(channels = []) {
   return null;
 }
 
+const LIVE_ACTIVITY_TEST_TEAM_SHORT_NAMES = new Map(
+  Object.entries({
+    "Borussia Dortmund": "Dortmund",
+    "Norwich City": "Norwich",
+    "Sheffield Wednesday": "Sheff Wed",
+    "Inter Milan": "Inter",
+    "Manchester City": "Man City",
+    "Manchester United": "Man United",
+    "Newcastle United": "Newcastle",
+    "Nottingham Forest": "Nottm Forest",
+    "Paris Saint-Germain": "PSG",
+    "Real Madrid": "Real Madrid",
+    "Real Sociedad": "Sociedad",
+    "Tottenham Hotspur": "Spurs",
+    "West Ham United": "West Ham",
+    "Wolverhampton Wanderers": "Wolves",
+  }).map(([name, shortName]) => [normalizeTeamShortNameKey(name), shortName])
+);
+
+function liveActivityTestTeamDisplayName(teamName, explicitShortName = "") {
+  const trimmedTeamName = String(teamName || "").trim();
+  const trimmedShortName = String(explicitShortName || "").trim();
+  if (trimmedShortName && trimmedShortName !== trimmedTeamName) {
+    return trimmedShortName;
+  }
+  const resolvedShortName = resolveApiTeamShortName(trimmedTeamName);
+  if (resolvedShortName && resolvedShortName !== trimmedTeamName) {
+    return resolvedShortName;
+  }
+  return LIVE_ACTIVITY_TEST_TEAM_SHORT_NAMES.get(normalizeTeamShortNameKey(trimmedTeamName)) || trimmedTeamName;
+}
+
 function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
   const match = rawMatch && typeof rawMatch === "object" ? rawMatch : {};
   const fallbackKickoff = liveActivityNowTimeLabel(now);
@@ -26115,6 +26147,8 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
   const awayTeam = String(match.awayTeam || match.away_team || fallbackAway).trim();
   const homeShortNameRaw = String(match.homeShortName ?? match.home_short_name ?? "").trim();
   const awayShortNameRaw = String(match.awayShortName ?? match.away_short_name ?? "").trim();
+  const homeDisplayName = liveActivityTestTeamDisplayName(homeTeam, homeShortNameRaw);
+  const awayDisplayName = liveActivityTestTeamDisplayName(awayTeam, awayShortNameRaw);
 
   const normalized = {
     matchId: String(match.matchId || match.match_id || `test_match_${index + 1}`).trim(),
@@ -26127,8 +26161,8 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
         : match.league_subcategory !== undefined && match.league_subcategory !== null
           ? String(match.league_subcategory).trim()
           : null,
-    homeTeam,
-    awayTeam,
+    homeTeam: homeDisplayName,
+    awayTeam: awayDisplayName,
     homeScore: Number.isFinite(Number(match.homeScore)) ? Number(match.homeScore) : null,
     awayScore: Number.isFinite(Number(match.awayScore)) ? Number(match.awayScore) : null,
     aggregateHomeScore: Number.isFinite(Number(match.aggregateHomeScore))
@@ -26155,12 +26189,6 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
           .slice(0, 3)
       : ["TNT Sports 1"],
   };
-  if (homeShortNameRaw && homeShortNameRaw !== homeTeam) {
-    normalized.homeShortName = homeShortNameRaw;
-  }
-  if (awayShortNameRaw && awayShortNameRaw !== awayTeam) {
-    normalized.awayShortName = awayShortNameRaw;
-  }
   if (match.homeLogoKey || match.home_logo_key) {
     normalized.homeLogoKey = String(match.homeLogoKey || match.home_logo_key).trim();
   }

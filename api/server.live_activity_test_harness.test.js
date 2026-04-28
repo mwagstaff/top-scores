@@ -44,6 +44,10 @@ test("buildLiveActivityTestContentState uses preset defaults and explicit overri
   assert.equal(contentState.delayMinutes, 3);
   assert.equal(contentState.fantasyCurrentScore, 21);
   assert.equal(contentState.matches.length, 5);
+  assert.equal(contentState.matches[0].homeTeam, "Atalanta");
+  assert.equal(contentState.matches[0].awayTeam, "Dortmund");
+  assert.equal(contentState.matches[2].homeTeam, "Norwich");
+  assert.equal(contentState.matches[2].awayTeam, "Sheff Wed");
 });
 
 test("buildLiveActivityTestContentState returns an empty ended payload", () => {

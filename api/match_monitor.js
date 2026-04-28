@@ -5285,33 +5285,29 @@ function buildLiveActivityContentState(
         ? sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state")
         : rawMatch;
       const aggregate = resolveLiveActivityAggregateScores(match);
+      const fullHomeTeam = String(match.home_team || "");
+      const fullAwayTeam = String(match.away_team || "");
+      const homeShortName = resolveLiveActivityTeamShortName(
+        match.home_short_name ?? match.homeShortName,
+        fullHomeTeam
+      );
+      const awayShortName = resolveLiveActivityTeamShortName(
+        match.away_short_name ?? match.awayShortName,
+        fullAwayTeam
+      );
       const normalizedMatch = {
         matchId: String(match.match_details_id || ""),
         date: String(match.date || ""),
         time: String(match.time || ""),
         league: String(match.league || ""),
-        homeTeam: String(match.home_team || ""),
-        awayTeam: String(match.away_team || ""),
+        homeTeam: homeShortName || fullHomeTeam,
+        awayTeam: awayShortName || fullAwayTeam,
       };
-      const homeShortName = resolveLiveActivityTeamShortName(
-        match.home_short_name ?? match.homeShortName,
-        normalizedMatch.homeTeam
-      );
-      if (homeShortName) {
-        normalizedMatch.homeShortName = homeShortName;
-      }
-      const awayShortName = resolveLiveActivityTeamShortName(
-        match.away_short_name ?? match.awayShortName,
-        normalizedMatch.awayTeam
-      );
-      if (awayShortName) {
-        normalizedMatch.awayShortName = awayShortName;
-      }
-      const homeLogoKey = resolveLiveActivityTeamLogoKey(normalizedMatch.homeTeam, homeShortName);
+      const homeLogoKey = resolveLiveActivityTeamLogoKey(fullHomeTeam, homeShortName);
       if (homeLogoKey) {
         normalizedMatch.homeLogoKey = homeLogoKey;
       }
-      const awayLogoKey = resolveLiveActivityTeamLogoKey(normalizedMatch.awayTeam, awayShortName);
+      const awayLogoKey = resolveLiveActivityTeamLogoKey(fullAwayTeam, awayShortName);
       if (awayLogoKey) {
         normalizedMatch.awayLogoKey = awayLogoKey;
       }

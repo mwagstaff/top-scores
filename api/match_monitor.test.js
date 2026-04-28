@@ -1984,7 +1984,7 @@ test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly 
   assert.equal(contentState.matches[0].awayLogoKey, "Barcelona");
 });
 
-test("buildLiveActivityContentState preserves provided short names for compact widget rendering", () => {
+test("buildLiveActivityContentState sends provided short names as display-ready team names", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "multi_live",
     [
@@ -2007,13 +2007,13 @@ test("buildLiveActivityContentState preserves provided short names for compact w
     Date.parse("2026-04-22T18:56:00Z")
   );
 
-  assert.equal(contentState.matches[0].homeTeam, "Real Sociedad");
-  assert.equal(contentState.matches[0].awayTeam, "Atletico Madrid");
-  assert.equal(contentState.matches[0].homeShortName, "Sociedad");
-  assert.equal(contentState.matches[0].awayShortName, "Atletico");
+  assert.equal(contentState.matches[0].homeTeam, "Sociedad");
+  assert.equal(contentState.matches[0].awayTeam, "Atletico");
+  assert.equal(contentState.matches[0].homeShortName, undefined);
+  assert.equal(contentState.matches[0].awayShortName, undefined);
 });
 
-test("buildLiveActivityContentState falls back to team aliases for compact widget rendering", () => {
+test("buildLiveActivityContentState falls back to team aliases as display-ready team names", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "multi_upcoming",
     [
@@ -2034,12 +2034,12 @@ test("buildLiveActivityContentState falls back to team aliases for compact widge
     Date.parse("2026-04-23T10:00:00Z")
   );
 
-  assert.equal(contentState.matches[0].homeTeam, "Salford City");
-  assert.equal(contentState.matches[0].homeShortName, "Salford");
+  assert.equal(contentState.matches[0].homeTeam, "Salford");
+  assert.equal(contentState.matches[0].homeShortName, undefined);
   assert.equal(contentState.matches[0].awayShortName, undefined);
 });
 
-test("buildLiveActivityContentState uses display aliases for Premier League compact names", () => {
+test("buildLiveActivityContentState uses display aliases as Premier League team names", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "multi_upcoming",
     [
@@ -2081,10 +2081,13 @@ test("buildLiveActivityContentState uses display aliases for Premier League comp
     Date.parse("2026-04-25T10:00:00Z")
   );
 
-  assert.equal(contentState.matches[0].homeShortName, "West Ham");
+  assert.equal(contentState.matches[0].homeTeam, "West Ham");
+  assert.equal(contentState.matches[0].homeShortName, undefined);
   assert.equal(contentState.matches[0].awayShortName, undefined);
-  assert.equal(contentState.matches[1].homeShortName, "Wolves");
-  assert.equal(contentState.matches[1].awayShortName, "Spurs");
+  assert.equal(contentState.matches[1].homeTeam, "Wolves");
+  assert.equal(contentState.matches[1].awayTeam, "Spurs");
+  assert.equal(contentState.matches[1].homeShortName, undefined);
+  assert.equal(contentState.matches[1].awayShortName, undefined);
   assert.equal(contentState.matches[2].homeShortName, undefined);
   assert.equal(contentState.matches[2].awayShortName, undefined);
 });

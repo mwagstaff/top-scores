@@ -149,13 +149,11 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
     }
 
     var displayHomeTeam: String {
-        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? homeTeam : trimmed
+        homeTeam
     }
 
     var displayAwayTeam: String {
-        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? awayTeam : trimmed
+        awayTeam
     }
 
     var displayLeague: String {
