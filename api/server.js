@@ -26131,6 +26131,14 @@ function liveActivityTestTeamDisplayName(teamName, explicitShortName = "") {
   return LIVE_ACTIVITY_TEST_TEAM_SHORT_NAMES.get(normalizeTeamShortNameKey(trimmedTeamName)) || trimmedTeamName;
 }
 
+function liveActivityTestTeamLogoKey(teamName, displayName = "") {
+  const explicit = resolveKnownTeamLogoAsset(teamName);
+  if (explicit) return explicit;
+  const display = resolveKnownTeamLogoAsset(displayName);
+  if (display) return display;
+  return null;
+}
+
 function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
   const match = rawMatch && typeof rawMatch === "object" ? rawMatch : {};
   const fallbackKickoff = liveActivityNowTimeLabel(now);
@@ -26191,9 +26199,19 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
   };
   if (match.homeLogoKey || match.home_logo_key) {
     normalized.homeLogoKey = String(match.homeLogoKey || match.home_logo_key).trim();
+  } else {
+    const homeLogoKey = liveActivityTestTeamLogoKey(homeTeam, homeDisplayName);
+    if (homeLogoKey) {
+      normalized.homeLogoKey = homeLogoKey;
+    }
   }
   if (match.awayLogoKey || match.away_logo_key) {
     normalized.awayLogoKey = String(match.awayLogoKey || match.away_logo_key).trim();
+  } else {
+    const awayLogoKey = liveActivityTestTeamLogoKey(awayTeam, awayDisplayName);
+    if (awayLogoKey) {
+      normalized.awayLogoKey = awayLogoKey;
+    }
   }
   const tvLogoKey = match.tvLogoKey || match.tv_logo_key || liveActivityTestTvLogoKey(normalized.tvChannels);
   if (tvLogoKey) {
@@ -26682,6 +26700,15 @@ function buildLiveActivityTestPresets(now = new Date()) {
       payload: {
         mode: "multi_live",
         matches: multiLive.slice(0, 4),
+      },
+    },
+    {
+      id: "multi_live_dense",
+      label: "Multi Live Dense",
+      description: "Dense live multi-match layout for lock-screen render stress testing.",
+      payload: {
+        mode: "multi_live",
+        matches: multiLive.slice(0, 6),
       },
     },
     {
@@ -28561,11 +28588,11 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
         via_runtime: isMonitorRuntime(),
       })}`
     );
-    // If the app explicitly reports it has no active activities, clear any stale
-    // pendingStartAt, but only when it is actually stale. A fresh push-to-start can
-    // legitimately leave the app reporting zero local activities for a brief window
-    // while iOS delivers the activity, and clearing the lock immediately causes
-    // duplicate starts.
+    // If the app explicitly reports it has no active activities, trust that over
+    // server-side currentActivity* state. A stored activity push token only works
+    // while the corresponding local ActivityKit activity still exists; otherwise
+    // successful APNs "update" pushes disappear into a dead activity and no widget
+    // can be shown.
     const reportedActiveCount = typeof _req.body?.activeActivityCount === "number"
       ? _req.body.activeActivityCount : null;
     if (reportedActiveCount === 0 && userDeviceToken) {
@@ -28583,7 +28610,18 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
           (Date.now() - lastDispatchAtMs) < LIVE_ACTIVITY_RECENT_DISPATCH_WINDOW_MS;
         const pendingStartIsFresh = liveActivityPendingStartIsBlocking(liveActivity);
         const hasCurrentServerActivity = liveActivityHasCurrentServerActivity(liveActivity);
-        const hasFreshCurrentServerActivity = liveActivityHasFreshCurrentServerActivity(liveActivity);
+        const currentActivityId = liveActivity.currentActivityId
+          ? String(liveActivity.currentActivityId)
+          : null;
+        const reportedActivityIds = Array.isArray(_req.body?.activeActivityIds)
+          ? _req.body.activeActivityIds
+              .map((activityId) => normalizeDeviceToken(activityId))
+              .filter(Boolean)
+          : [];
+        const serverActivityMissingOnClient =
+          hasCurrentServerActivity &&
+          reportedActiveCount === 0 &&
+          (!currentActivityId || !reportedActivityIds.includes(currentActivityId));
         if (pendingStartAt) {
           if (!pendingStartIsFresh && !hasRecentDispatch) {
             await updateUserLiveActivityState(userDeviceToken, { pendingStartAt: null });
@@ -28592,14 +28630,22 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
             console.log(`[API] Preserved fresh pendingStartAt on reconcile (device reports 0 activities): device=${userDeviceToken.slice(0, 12)}...`);
           }
         }
-        if (hasCurrentServerActivity && !hasFreshCurrentServerActivity && !pendingStartIsFresh && !hasRecentDispatch) {
+        if (serverActivityMissingOnClient) {
           await updateUserLiveActivityState(userDeviceToken, {
             currentActivityId: null,
             currentActivityPushToken: null,
             currentActivityTokenUpdatedAt: null,
+            currentActivityGeneratedAtEpochSeconds: null,
           });
           console.log(
-            `[API] Cleared stale current live activity state on reconcile (device reports 0 activities): device=${userDeviceToken.slice(0, 12)}...`
+            `[API] Cleared server current live activity state on reconcile (client reports no matching activities): ${JSON.stringify({
+              device: userDeviceToken.slice(0, 12),
+              previous_activity_id: currentActivityId,
+              reported_active_count: reportedActiveCount,
+              reported_activity_ids: reportedActivityIds,
+              pending_start_fresh: pendingStartIsFresh,
+              recent_dispatch: hasRecentDispatch,
+            })}`
           );
         }
       } catch (_err) {

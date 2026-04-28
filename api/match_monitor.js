@@ -90,14 +90,27 @@ const LIVE_ACTIVITY_WINDOW_TIMEZONE = "Europe/London";
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
 const FANTASY_DEADLINE_REMINDER_EVAL_INTERVAL_MS = 60 * 1000;
-const LIVE_ACTIVITY_TEAM_LOGO_ASSETS_PATH = path.join(
-  __dirname,
-  "..",
-  "ios",
-  "Top Scores",
-  "Top Scores Widgets",
-  "team_logo_assets.json"
-);
+const LIVE_ACTIVITY_TEAM_LOGO_ASSETS_PATHS = [
+  process.env.LIVE_ACTIVITY_TEAM_LOGO_ASSETS_PATH,
+  path.join(__dirname, "team_logo_assets.json"),
+  path.join(process.cwd(), "team_logo_assets.json"),
+  path.join(
+    __dirname,
+    "..",
+    "ios",
+    "Top Scores",
+    "Top Scores Widgets",
+    "team_logo_assets.json"
+  ),
+  path.join(
+    __dirname,
+    "..",
+    "ios",
+    "Top Scores",
+    "Top Scores",
+    "team_logo_assets.json"
+  ),
+].filter(Boolean);
 const FANTASY_DEADLINE_REMINDER_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
 const FANTASY_DEADLINE_REMINDER_DEFAULT_TIMEZONE = "Europe/London";
 const LIVE_ACTIVITY_TEAM_RATING_STOP_WORDS = new Set([
@@ -274,6 +287,33 @@ function resolveLiveActivityTeamShortName(shortNameValue, fullNameValue) {
   if (!resolvedValue) return null;
   const trimmed = String(resolvedValue).trim();
   return trimmed && trimmed !== fullName ? trimmed : null;
+}
+
+function liveActivityTeamTokenCount(value) {
+  const key = normalizeLiveActivityTeamShortNameKey(value);
+  if (!key) return 0;
+  return key.split(" ").filter(Boolean).length;
+}
+
+function resolveLiveActivityDisplayTeamName({ explicitShortName, fullName, logoKey }) {
+  const trimmedShortName = String(explicitShortName || "").trim();
+  if (trimmedShortName) return trimmedShortName;
+
+  const trimmedFullName = String(fullName || "").trim();
+  const trimmedLogoKey = String(logoKey || "").trim();
+  if (!trimmedFullName) return trimmedLogoKey || null;
+  if (!trimmedLogoKey || trimmedLogoKey === trimmedFullName) return trimmedFullName;
+
+  const fullTokenCount = liveActivityTeamTokenCount(trimmedFullName);
+  const logoTokenCount = liveActivityTeamTokenCount(trimmedLogoKey);
+  if (
+    trimmedLogoKey.length < trimmedFullName.length &&
+    (logoTokenCount < fullTokenCount || fullTokenCount <= 1)
+  ) {
+    return trimmedLogoKey;
+  }
+
+  return trimmedFullName;
 }
 
 function monitorVerboseLog(...args) {
@@ -3241,19 +3281,71 @@ function canonicalLiveActivityTvLogoKeys(channels) {
 }
 
 let liveActivityTeamLogoAssetLookup = null;
+let liveActivityTeamLogoAssetCoreLookup = null;
+
+const LIVE_ACTIVITY_TEAM_LOGO_STOP_WORDS = new Set([
+  "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk",
+  "club", "de", "the", "and", "atletico", "athletic", "sporting",
+]);
+
+const LIVE_ACTIVITY_TEAM_LOGO_CLUB_AFFIX_WORDS = new Set([
+  "city", "town", "united", "rovers", "county", "albion", "wanderers",
+  "hotspur", "saint", "st", "calcio",
+]);
+
+function normalizeLiveActivityTeamLogoTokens(value, stripClubAffixes = false) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/'/g, "")
+    .replace(/\./g, " ")
+    .replace(/-/g, " ")
+    .replace(/_/g, " ")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .filter((token) => {
+      if (LIVE_ACTIVITY_TEAM_LOGO_STOP_WORDS.has(token)) return false;
+      if (stripClubAffixes && LIVE_ACTIVITY_TEAM_LOGO_CLUB_AFFIX_WORDS.has(token)) return false;
+      return true;
+    });
+}
+
+function normalizeLiveActivityTeamLogoCoreKey(value) {
+  return normalizeLiveActivityTeamLogoTokens(value, true).join("");
+}
 
 function buildLiveActivityTeamLogoAssetLookup() {
   const lookup = new Map();
+  const coreLookup = new Map();
   let assetNames = [];
+  let loadedPath = null;
 
-  try {
-    const payload = fs.readFileSync(LIVE_ACTIVITY_TEAM_LOGO_ASSETS_PATH, "utf8");
-    const parsed = JSON.parse(payload);
-    assetNames = Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
+  for (const candidatePath of LIVE_ACTIVITY_TEAM_LOGO_ASSETS_PATHS) {
+    try {
+      const payload = fs.readFileSync(candidatePath, "utf8");
+      const parsed = JSON.parse(payload);
+      if (Array.isArray(parsed)) {
+        assetNames = parsed;
+        loadedPath = candidatePath;
+        break;
+      }
+    } catch (_error) {
+      // Try the next deploy layout.
+    }
+  }
+
+  if (!loadedPath) {
     console.warn(
-      "[MatchMonitor] Failed to load live activity team logo asset catalog:",
-      error && error.message ? error.message : error
+      `[MatchMonitor] Failed to load live activity team logo asset catalog from paths: ${LIVE_ACTIVITY_TEAM_LOGO_ASSETS_PATHS.join(", ")}`
+    );
+  } else {
+    console.log(
+      `[MatchMonitor] Loaded live activity team logo asset catalog ${JSON.stringify({
+        path: loadedPath,
+        count: assetNames.length,
+      })}`
     );
   }
 
@@ -3269,8 +3361,15 @@ function buildLiveActivityTeamLogoAssetLookup() {
         lookup.set(key, assetName);
       }
     }
+    const coreKey = normalizeLiveActivityTeamLogoCoreKey(assetName);
+    if (coreKey) {
+      const existing = coreLookup.get(coreKey) || [];
+      existing.push(assetName);
+      coreLookup.set(coreKey, existing);
+    }
   }
 
+  liveActivityTeamLogoAssetCoreLookup = coreLookup;
   return lookup;
 }
 
@@ -3304,10 +3403,16 @@ function resolveLiveActivityTeamLogoKey(teamName, shortName = null) {
   for (const candidate of candidates) {
     const spacedKey = normalizeLiveActivityTeamShortNameKey(candidate);
     const compactKey = normalizeLiveActivityTeamKey(candidate);
+    const coreKey = normalizeLiveActivityTeamLogoCoreKey(candidate);
     const resolved =
       liveActivityTeamLogoAssetLookup.get(spacedKey) ||
       liveActivityTeamLogoAssetLookup.get(compactKey);
     if (resolved) return resolved;
+    const coreMatches =
+      coreKey && liveActivityTeamLogoAssetCoreLookup
+        ? Array.from(new Set(liveActivityTeamLogoAssetCoreLookup.get(coreKey) || []))
+        : [];
+    if (coreMatches.length === 1) return coreMatches[0];
   }
 
   return null;
@@ -5295,19 +5400,27 @@ function buildLiveActivityContentState(
         match.away_short_name ?? match.awayShortName,
         fullAwayTeam
       );
+      const homeLogoKey = resolveLiveActivityTeamLogoKey(fullHomeTeam, homeShortName);
+      const awayLogoKey = resolveLiveActivityTeamLogoKey(fullAwayTeam, awayShortName);
       const normalizedMatch = {
         matchId: String(match.match_details_id || ""),
         date: String(match.date || ""),
         time: String(match.time || ""),
         league: String(match.league || ""),
-        homeTeam: homeShortName || fullHomeTeam,
-        awayTeam: awayShortName || fullAwayTeam,
+        homeTeam: resolveLiveActivityDisplayTeamName({
+          explicitShortName: homeShortName,
+          fullName: fullHomeTeam,
+          logoKey: homeLogoKey,
+        }) || fullHomeTeam,
+        awayTeam: resolveLiveActivityDisplayTeamName({
+          explicitShortName: awayShortName,
+          fullName: fullAwayTeam,
+          logoKey: awayLogoKey,
+        }) || fullAwayTeam,
       };
-      const homeLogoKey = resolveLiveActivityTeamLogoKey(fullHomeTeam, homeShortName);
       if (homeLogoKey) {
         normalizedMatch.homeLogoKey = homeLogoKey;
       }
-      const awayLogoKey = resolveLiveActivityTeamLogoKey(fullAwayTeam, awayShortName);
       if (awayLogoKey) {
         normalizedMatch.awayLogoKey = awayLogoKey;
       }
@@ -5422,6 +5535,9 @@ function logLiveActivityPayloadDiagnostics(
       away: String(match && match.awayTeam ? match.awayTeam : ""),
       home_short: match && match.homeShortName ? String(match.homeShortName) : null,
       away_short: match && match.awayShortName ? String(match.awayShortName) : null,
+      home_logo: match && match.homeLogoKey ? String(match.homeLogoKey) : null,
+      away_logo: match && match.awayLogoKey ? String(match.awayLogoKey) : null,
+      tv_logo: match && match.tvLogoKey ? String(match.tvLogoKey) : null,
       score:
         Number.isFinite(match && match.homeScore) && Number.isFinite(match && match.awayScore)
           ? `${match.homeScore}-${match.awayScore}`

@@ -2013,6 +2013,58 @@ test("buildLiveActivityContentState sends provided short names as display-ready 
   assert.equal(contentState.matches[0].awayShortName, undefined);
 });
 
+test("buildLiveActivityContentState resolves actual fixture team logo keys from long names", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_upcoming",
+    [
+      {
+        match_details_id: "cj60j38yk0gt",
+        date: "2026-04-28",
+        time: "20:00",
+        league: "Champions League",
+        home_team: "Paris Saint-Germain",
+        away_team: "Bayern Munich",
+        home_short_name: "PSG",
+        away_short_name: "Bayern",
+        tv_channels: ["Amazon"],
+      },
+      {
+        match_details_id: "c5ywn6r7j59t",
+        date: "2026-04-28",
+        time: "19:45",
+        league: "League One",
+        home_team: "Northampton Town",
+        away_team: "Barnsley",
+        tv_channels: ["Sky Sports"],
+      },
+      {
+        match_details_id: "cz78xd9l4pvt",
+        date: "2026-04-28",
+        time: "19:45",
+        league: "League One",
+        home_team: "Peterborough United",
+        away_team: "Mansfield Town",
+        tv_channels: ["Sky Sports"],
+      },
+    ],
+    2,
+    Date.parse("2026-04-28T13:15:00Z")
+  );
+
+  assert.equal(contentState.matches[0].homeLogoKey, "Paris Saint-Germain");
+  assert.equal(contentState.matches[0].awayLogoKey, "Bayern Munich");
+  assert.equal(contentState.matches[0].homeTeam, "PSG");
+  assert.equal(contentState.matches[0].awayTeam, "Bayern");
+  assert.equal(contentState.matches[1].homeLogoKey, "Northampton");
+  assert.equal(contentState.matches[1].awayLogoKey, "Barnsley");
+  assert.equal(contentState.matches[1].homeTeam, "Northampton");
+  assert.equal(contentState.matches[1].awayTeam, "Barnsley");
+  assert.equal(contentState.matches[2].homeLogoKey, "Peterborough");
+  assert.equal(contentState.matches[2].awayLogoKey, "Mansfield");
+  assert.equal(contentState.matches[2].homeTeam, "Peterborough");
+  assert.equal(contentState.matches[2].awayTeam, "Mansfield");
+});
+
 test("buildLiveActivityContentState falls back to team aliases as display-ready team names", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "multi_upcoming",

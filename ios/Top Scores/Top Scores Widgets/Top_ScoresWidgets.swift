@@ -2946,6 +2946,40 @@ private struct LiveActivityPrecomputedTvLogo: View {
 }
 
 @available(iOSApplicationExtension 16.1, *)
+private struct LiveActivityPrecomputedTeamLogo: View {
+    let logoKey: String?
+    let teamName: String
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let assetName = assetName {
+                Image(assetName)
+                    .resizable()
+                    .renderingMode(.original)
+                    .scaledToFit()
+            } else {
+                Circle()
+                    .fill(Color.white.opacity(0.16))
+                    .overlay(
+                        Text(String(teamName.prefix(1)).uppercased())
+                            .font(.system(size: max(7, size * 0.48), weight: .bold))
+                            .foregroundStyle(.white.opacity(0.76))
+                    )
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+    }
+
+    private var assetName: String? {
+        let trimmed = logoKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
 private struct TopScoresLiveActivityMinimalLockScreenView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
     let isStale: Bool
@@ -3041,7 +3075,13 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
     }
 
     private func fixtureMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 5) {
+            LiveActivityPrecomputedTeamLogo(
+                logoKey: match.homeLogoKey,
+                teamName: match.displayHomeTeam,
+                size: 14
+            )
+
             Text(match.displayHomeTeam)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -3063,6 +3103,12 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                 .minimumScaleFactor(0.72)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            LiveActivityPrecomputedTeamLogo(
+                logoKey: match.awayLogoKey,
+                teamName: match.displayAwayTeam,
+                size: 14
+            )
+
             if hasTvLogo(match) {
                 Text(centerText(for: match))
                     .font(.caption.weight(.semibold))
@@ -3078,6 +3124,12 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
 
     private func scoredMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
         HStack(spacing: 4) {
+            LiveActivityPrecomputedTeamLogo(
+                logoKey: match.homeLogoKey,
+                teamName: match.displayHomeTeam,
+                size: 14
+            )
+
             Text(match.displayHomeTeam)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -3116,6 +3168,12 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            LiveActivityPrecomputedTeamLogo(
+                logoKey: match.awayLogoKey,
+                teamName: match.displayAwayTeam,
+                size: 14
+            )
 
             Text(matchTimeText(for: match))
                 .font(.caption2.weight(.bold))
@@ -3216,19 +3274,7 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(visibleMatches, id: \.matchId) { match in
-                HStack(spacing: 6) {
-                    Text(match.displayHomeTeam)
-                        .lineLimit(1)
-                    if hasTvLogo(match) {
-                        LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 10)
-                    }
-                    Text(centerText(for: match))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(match.displayAwayTeam)
-                        .lineLimit(1)
-                }
-                .font(.caption2.weight(.semibold))
+                matchRow(for: match)
             }
         }
     }
@@ -3246,6 +3292,118 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
 
     private func hasTvLogo(_ match: TopScoresLiveActivityMatchState) -> Bool {
         LiveActivityTvLogoAsset.assetName(for: match.tvLogoKey) != nil
+    }
+
+    @ViewBuilder
+    private func matchRow(for match: TopScoresLiveActivityMatchState) -> some View {
+        if match.hasScore {
+            scoredMatchRow(for: match)
+        } else {
+            fixtureMatchRow(for: match)
+        }
+    }
+
+    private func fixtureMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
+        HStack(spacing: 5) {
+            LiveActivityPrecomputedTeamLogo(
+                logoKey: match.homeLogoKey,
+                teamName: match.displayHomeTeam,
+                size: 11
+            )
+
+            Text(match.displayHomeTeam)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            if hasTvLogo(match) {
+                LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 10)
+            } else {
+                Text(centerText(for: match))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36)
+            }
+
+            Text(match.displayAwayTeam)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            LiveActivityPrecomputedTeamLogo(
+                logoKey: match.awayLogoKey,
+                teamName: match.displayAwayTeam,
+                size: 11
+            )
+
+            if hasTvLogo(match) {
+                Text(centerText(for: match))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, alignment: .trailing)
+            }
+        }
+        .font(.caption2.weight(.semibold))
+    }
+
+    private func scoredMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
+        HStack(spacing: 4) {
+            LiveActivityPrecomputedTeamLogo(
+                logoKey: match.homeLogoKey,
+                teamName: match.displayHomeTeam,
+                size: 11
+            )
+
+            Text(match.displayHomeTeam)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            Text(homeScoreText(for: match))
+                .font(.caption2.weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+
+            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 10)
+
+            Text(awayScoreText(for: match))
+                .font(.caption2.weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+
+            Text(match.displayAwayTeam)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            LiveActivityPrecomputedTeamLogo(
+                logoKey: match.awayLogoKey,
+                teamName: match.displayAwayTeam,
+                size: 11
+            )
+
+            Text(matchTimeText(for: match))
+                .font(.caption2.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 31, alignment: .trailing)
+        }
+        .font(.caption2.weight(.semibold))
+    }
+
+    private func homeScoreText(for match: TopScoresLiveActivityMatchState) -> String {
+        guard let homeScore = match.homeScore else { return "-" }
+        return match.homeWonOnPenalties ? "\(homeScore)P" : "\(homeScore)"
+    }
+
+    private func awayScoreText(for match: TopScoresLiveActivityMatchState) -> String {
+        guard let awayScore = match.awayScore else { return "-" }
+        return match.awayWonOnPenalties ? "\(awayScore)P" : "\(awayScore)"
+    }
+
+    private func matchTimeText(for match: TopScoresLiveActivityMatchState) -> String {
+        if let matchTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !matchTime.isEmpty {
+            return matchTime
+        }
+        return match.time
     }
 }
 
