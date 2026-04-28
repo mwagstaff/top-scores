@@ -3007,39 +3007,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(visibleMatches, id: \.matchId) { match in
-                    HStack(spacing: 7) {
-                        Text(match.displayHomeTeam)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-
-                        if hasTvLogo(match) {
-                            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 13)
-                        } else {
-                            Text(centerText(for: match))
-                                .font(.caption.weight(.semibold))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                                .frame(width: 48)
-                                .foregroundStyle(.white.opacity(0.9))
-                        }
-
-                        Text(match.displayAwayTeam)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        if hasTvLogo(match) {
-                            Text(centerText(for: match))
-                                .font(.caption.weight(.semibold))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                                .frame(width: 42, alignment: .trailing)
-                                .foregroundStyle(.white.opacity(0.9))
-                        }
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
+                    matchRow(for: match)
                 }
             }
             .padding(.horizontal, 12)
@@ -3065,8 +3033,140 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
         return match.time
     }
 
+    @ViewBuilder
+    private func matchRow(for match: TopScoresLiveActivityMatchState) -> some View {
+        if match.hasScore {
+            scoredMatchRow(for: match)
+        } else {
+            fixtureMatchRow(for: match)
+        }
+    }
+
+    private func fixtureMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
+        HStack(spacing: 7) {
+            Text(match.displayHomeTeam)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            if hasTvLogo(match) {
+                LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 13)
+            } else {
+                Text(centerText(for: match))
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(width: 48)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+
+            Text(match.displayAwayTeam)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if hasTvLogo(match) {
+                Text(centerText(for: match))
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(width: 42, alignment: .trailing)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.white)
+    }
+
+    private func scoredMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
+        HStack(spacing: 4) {
+            Text(match.displayHomeTeam)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            if let aggregateHomeText = aggregateHomeText(for: match) {
+                Text(aggregateHomeText)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.68))
+                    .lineLimit(1)
+            }
+
+            Text(homeScoreText(for: match))
+                .font(.caption.weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(minWidth: 12, alignment: .trailing)
+
+            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 13)
+                .padding(.horizontal, 2)
+
+            Text(awayScoreText(for: match))
+                .font(.caption.weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(minWidth: 12, alignment: .leading)
+
+            if let aggregateAwayText = aggregateAwayText(for: match) {
+                Text(aggregateAwayText)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.68))
+                    .lineLimit(1)
+            }
+
+            Text(match.displayAwayTeam)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(matchTimeText(for: match))
+                .font(.caption2.weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .foregroundStyle(.white.opacity(match.isFinished ? LiveActivityScoreStyle.finishedOpacity : 0.86))
+                .frame(width: 34, alignment: .trailing)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.white)
+    }
+
     private func hasTvLogo(_ match: TopScoresLiveActivityMatchState) -> Bool {
         LiveActivityTvLogoAsset.assetName(for: match.tvLogoKey) != nil
+    }
+
+    private func homeScoreText(for match: TopScoresLiveActivityMatchState) -> String {
+        guard let homeScore = match.homeScore else { return "-" }
+        return match.homeWonOnPenalties ? "\(homeScore)P" : "\(homeScore)"
+    }
+
+    private func awayScoreText(for match: TopScoresLiveActivityMatchState) -> String {
+        guard let awayScore = match.awayScore else { return "-" }
+        return match.awayWonOnPenalties ? "\(awayScore)P" : "\(awayScore)"
+    }
+
+    private func aggregateHomeText(for match: TopScoresLiveActivityMatchState) -> String? {
+        guard match.hasDisplayableAggregateScore,
+              let aggregateHomeScore = match.resolvedAggregateHomeScore else {
+            return nil
+        }
+        return "(\(aggregateHomeScore))"
+    }
+
+    private func aggregateAwayText(for match: TopScoresLiveActivityMatchState) -> String? {
+        guard match.hasDisplayableAggregateScore,
+              let aggregateAwayScore = match.resolvedAggregateAwayScore else {
+            return nil
+        }
+        return "(\(aggregateAwayScore))"
+    }
+
+    private func matchTimeText(for match: TopScoresLiveActivityMatchState) -> String {
+        if let matchTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !matchTime.isEmpty {
+            return matchTime
+        }
+        return match.time
     }
 
     @ViewBuilder
