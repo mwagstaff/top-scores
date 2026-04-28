@@ -4399,7 +4399,7 @@ test("buildLiveActivityPresentationForUser keeps recent full-time matches visibl
   assert.equal(expired.matches.length, 0);
 });
 
-test("buildLiveActivityPresentationForUser caps live activity payloads to 4 matches", () => {
+test("buildLiveActivityPresentationForUser caps live activity payloads to 6 matches", () => {
   const nowMs = Date.now();
   const kickoff = formatLocalDateTimeParts(nowMs - 20 * 60 * 1000);
 
@@ -4442,7 +4442,7 @@ test("buildLiveActivityPresentationForUser caps live activity payloads to 4 matc
   );
 
   assert.equal(presentation.mode, "multi_live");
-  assert.equal(presentation.matches.length, 4);
+  assert.equal(presentation.matches.length, 6);
 });
 
 test("does not emit delayed kickoff when first live status seen is HT", () => {

@@ -148,7 +148,7 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
 
 final class LiveActivitySyncService {
     static let shared = LiveActivitySyncService()
-    private let maxMatchesPerActivityPayload = 4
+    private let maxMatchesPerActivityPayload = 6
     private let foregroundActivityStaleAfter: TimeInterval = 30 * 60
     private let staticForegroundActivityStaleAfter: TimeInterval = 4 * 60 * 60
 
@@ -1013,7 +1013,7 @@ final class LiveActivitySyncService {
                     "generatedAtEpochSeconds": state["generatedAtEpochSeconds"] ?? "nil",
                     "delayMinutes": state["delayMinutes"] ?? "nil",
                     "matchCount": matches.count,
-                    "matches": matches.prefix(4).map { match in
+                    "matches": matches.prefix(6).map { match in
                         [
                             "homeTeam": match["homeTeam"] ?? "",
                             "awayTeam": match["awayTeam"] ?? "",
@@ -1130,7 +1130,7 @@ final class LiveActivitySyncService {
     }
 
     private static func contentStateSummary(_ state: TopScoresLiveActivityAttributes.ContentState) -> String {
-        let matches = state.matches.prefix(4).map { match in
+        let matches = state.matches.prefix(6).map { match in
             let score: String
             if let home = match.homeScore, let away = match.awayScore {
                 score = "\(home)-\(away)"
@@ -1155,7 +1155,7 @@ final class LiveActivitySyncService {
         let payloadMetrics = (serverPresentation?["debug"] as? [String: Any])?["payloadMetrics"] as? [String: Any]
         let contentStateBytes = String(describing: payloadMetrics?["contentStateBytes"] ?? "nil")
         let archiveEstimateBytes = String(describing: payloadMetrics?["archiveEstimateBytes"] ?? "nil")
-        let matches = (serverPresentation?["matches"] as? [[String: Any]] ?? []).prefix(4).map { match in
+        let matches = (serverPresentation?["matches"] as? [[String: Any]] ?? []).prefix(6).map { match in
             let homeTeam = String(describing: match["homeTeam"] ?? "")
             let awayTeam = String(describing: match["awayTeam"] ?? "")
             let homeScore = String(describing: match["homeScore"] ?? "nil")

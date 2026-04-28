@@ -2985,7 +2985,27 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
     let isStale: Bool
 
     private var visibleMatches: [TopScoresLiveActivityMatchState] {
-        Array(LiveActivityMatchDisplayFilter.displayMatches(for: state).prefix(4))
+        Array(LiveActivityMatchDisplayFilter.displayMatches(for: state).prefix(6))
+    }
+
+    private var usesDenseRows: Bool {
+        visibleMatches.count > 4
+    }
+
+    private var rowSpacing: CGFloat {
+        usesDenseRows ? 3 : 5
+    }
+
+    private var teamLogoSize: CGFloat {
+        usesDenseRows ? 12 : 14
+    }
+
+    private var tvLogoHeight: CGFloat {
+        usesDenseRows ? 11 : 13
+    }
+
+    private var rowFont: Font {
+        usesDenseRows ? .caption2.weight(.semibold) : .caption.weight(.semibold)
     }
 
     private var delayBannerText: String? {
@@ -3037,14 +3057,14 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: rowSpacing) {
                 ForEach(visibleMatches, id: \.matchId) { match in
                     matchRow(for: match)
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, hasFooterContent ? 6 : 8)
+            .padding(.top, usesDenseRows ? 7 : 8)
+            .padding(.bottom, hasFooterContent ? (usesDenseRows ? 5 : 6) : (usesDenseRows ? 7 : 8))
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if hasFooterContent {
@@ -3079,7 +3099,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
             LiveActivityPrecomputedTeamLogo(
                 logoKey: match.homeLogoKey,
                 teamName: match.displayHomeTeam,
-                size: 14
+                size: teamLogoSize
             )
 
             Text(match.displayHomeTeam)
@@ -3088,14 +3108,10 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
 
             if hasTvLogo(match) {
-                LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 13)
+                LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: tvLogoHeight)
             } else {
-                Text(centerText(for: match))
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(width: 48)
-                    .foregroundStyle(.white.opacity(0.9))
+                Color.clear
+                    .frame(width: usesDenseRows ? 16 : 18, height: tvLogoHeight)
             }
 
             Text(match.displayAwayTeam)
@@ -3106,19 +3122,17 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
             LiveActivityPrecomputedTeamLogo(
                 logoKey: match.awayLogoKey,
                 teamName: match.displayAwayTeam,
-                size: 14
+                size: teamLogoSize
             )
 
-            if hasTvLogo(match) {
-                Text(centerText(for: match))
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(width: 42, alignment: .trailing)
-                    .foregroundStyle(.white.opacity(0.9))
-            }
+            Text(centerText(for: match))
+                .font(rowFont)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: usesDenseRows ? 38 : 42, alignment: .trailing)
+                .foregroundStyle(.white.opacity(0.9))
         }
-        .font(.caption.weight(.semibold))
+        .font(rowFont)
         .foregroundStyle(.white)
     }
 
@@ -3127,7 +3141,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
             LiveActivityPrecomputedTeamLogo(
                 logoKey: match.homeLogoKey,
                 teamName: match.displayHomeTeam,
-                size: 14
+                size: teamLogoSize
             )
 
             Text(match.displayHomeTeam)
@@ -3143,16 +3157,16 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
             }
 
             Text(homeScoreText(for: match))
-                .font(.caption.weight(.bold))
+                .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
                 .monospacedDigit()
                 .lineLimit(1)
                 .frame(minWidth: 12, alignment: .trailing)
 
-            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 13)
+            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: tvLogoHeight)
                 .padding(.horizontal, 2)
 
             Text(awayScoreText(for: match))
-                .font(.caption.weight(.bold))
+                .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
                 .monospacedDigit()
                 .lineLimit(1)
                 .frame(minWidth: 12, alignment: .leading)
@@ -3172,7 +3186,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
             LiveActivityPrecomputedTeamLogo(
                 logoKey: match.awayLogoKey,
                 teamName: match.displayAwayTeam,
-                size: 14
+                size: teamLogoSize
             )
 
             Text(matchTimeText(for: match))
@@ -3183,7 +3197,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                 .foregroundStyle(.white.opacity(match.isFinished ? LiveActivityScoreStyle.finishedOpacity : 0.86))
                 .frame(width: 34, alignment: .trailing)
         }
-        .font(.caption.weight(.semibold))
+        .font(rowFont)
         .foregroundStyle(.white)
     }
 
@@ -3268,11 +3282,15 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
     let isStale: Bool
 
     private var visibleMatches: [TopScoresLiveActivityMatchState] {
-        Array(LiveActivityMatchDisplayFilter.displayMatches(for: state).prefix(4))
+        Array(LiveActivityMatchDisplayFilter.displayMatches(for: state).prefix(6))
+    }
+
+    private var usesDenseRows: Bool {
+        visibleMatches.count > 4
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: usesDenseRows ? 3 : 4) {
             ForEach(visibleMatches, id: \.matchId) { match in
                 matchRow(for: match)
             }
@@ -3318,10 +3336,8 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
             if hasTvLogo(match) {
                 LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 10)
             } else {
-                Text(centerText(for: match))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 36)
+                Color.clear
+                    .frame(width: 14, height: 10)
             }
 
             Text(match.displayAwayTeam)
@@ -3334,12 +3350,10 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
                 size: 11
             )
 
-            if hasTvLogo(match) {
-                Text(centerText(for: match))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 32, alignment: .trailing)
-            }
+            Text(centerText(for: match))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, alignment: .trailing)
         }
         .font(.caption2.weight(.semibold))
     }
@@ -3412,7 +3426,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
     let state: TopScoresLiveActivityAttributes.ContentState
     let isStale: Bool
     var pinsFooterToBottom: Bool = true
-    private let maxPrimaryMatches = 4
+    private let maxPrimaryMatches = 6
     private let maxTrailingUpcomingMatches = 5
 
     private var displayMatches: [TopScoresLiveActivityMatchState] {
@@ -4527,7 +4541,7 @@ private struct UnifiedMultiMatchListView: View {
     let matches: [TopScoresLiveActivityMatchState]
 
     private var visibleMatches: [TopScoresLiveActivityMatchState] {
-        Array(matches.prefix(4))
+        Array(matches.prefix(6))
     }
 
     var body: some View {
