@@ -361,7 +361,7 @@ private enum MatchGroupingEngine {
                     leadingMatchKickoff: memo.matchSortDate(for: leadingMatch),
                     leadingMatchHomeTeam: leadingMatch.homeTeam,
                     leadingMatchAwayTeam: leadingMatch.awayTeam,
-                    weight: competitionWeight(forCompetitionName: league)
+                    weight: leagueMatches.map { competitionWeight(for: $0) }.max() ?? 0
                 )
             }
             .sorted { lhs, rhs in
@@ -423,14 +423,7 @@ private enum MatchGroupingEngine {
     }
 
     nonisolated static func competitionWeight(for match: Match) -> Double {
-        if let displayWeight = CompetitionWeightConfig.weight(for: match.displayLeague) {
-            return displayWeight
-        }
-        return CompetitionWeightConfig.weight(for: match.league) ?? 0
-    }
-
-    nonisolated static func competitionWeight(forCompetitionName competitionName: String) -> Double {
-        CompetitionWeightConfig.weight(for: competitionName) ?? 0
+        match.competitionWeight ?? 0
     }
 
     private nonisolated static func matchIncludesPremierLeagueTeam(_ match: Match) -> Bool {
@@ -598,8 +591,6 @@ final class MatchesStore: ObservableObject {
     private let bbcLiveRefreshInterval: TimeInterval = 90
     private let cacheStateRefreshInterval: TimeInterval = 30
     private let configureRefreshInterval: TimeInterval = 30
-    private let fixturesInitialLoadDays = 14
-    private let fixturesFutureLoadDays = 90
     private let fixturesLazyBatchDays = 14
     private let fixturesLazyParallelRequests = 1
     private let fixturesLazyPageSize = 2000
@@ -627,6 +618,9 @@ final class MatchesStore: ObservableObject {
         let modeChanged = activeMode != mode
         let snapshotChanged = previousSnapshot != snapshot
         let dataSourceChanged = previousSnapshot?.apiBaseURL != snapshot.apiBaseURL
+        let serverFiltersChanged = previousSnapshot.map {
+            Self.serverFilterRequestKey(for: $0) != Self.serverFilterRequestKey(for: snapshot)
+        } ?? false
         let sortOrderChanged = previousSnapshot?.matchGroupSortOrder != snapshot.matchGroupSortOrder
         if sortOrderChanged {
             groupingRevision &+= 1
@@ -637,7 +631,8 @@ final class MatchesStore: ObservableObject {
         Self.log(
             "configure mode=\(mode.rawValue) selected_snapshot=\(Self.snapshotDebugSummary(snapshot)) " +
             "previous_snapshot=\(previousSnapshot.map(Self.snapshotDebugSummary) ?? "nil") " +
-            "snapshot_changed=\(snapshotChanged) data_source_changed=\(dataSourceChanged) mode_changed=\(modeChanged)"
+            "snapshot_changed=\(snapshotChanged) data_source_changed=\(dataSourceChanged) " +
+            "server_filters_changed=\(serverFiltersChanged) mode_changed=\(modeChanged)"
         )
 
         if dataSourceChanged || previousSnapshot == nil {
@@ -652,6 +647,8 @@ final class MatchesStore: ObservableObject {
 
         let currentModeState = state(for: mode)
         if dataSourceChanged ||
+            previousSnapshot == nil ||
+            serverFiltersChanged ||
             currentModeState.matches.isEmpty ||
             shouldRefreshOnConfigure(currentModeState) {
             startRefreshTask(preferences: snapshot, mode: mode, reason: "configure")
@@ -663,6 +660,7 @@ final class MatchesStore: ObservableObject {
         if mode != .results &&
             (
                 dataSourceChanged ||
+                serverFiltersChanged ||
                 previousSnapshot == nil ||
                 currentResultsState.unfilteredMatches.isEmpty ||
                 currentResultsState.isUsingCache
@@ -683,6 +681,18 @@ final class MatchesStore: ObservableObject {
         // Don’t turn simple tab switches into refreshes when nothing is live.
         // Automatic timer refresh and explicit pull-to-refresh still cover freshness.
         return state.matches.contains(where: \.isInProgress)
+    }
+
+    private nonisolated static func serverFilterRequestKey(for snapshot: PreferencesSnapshot) -> String {
+        [
+            "competition=\(snapshot.competitionFilterEnabled)",
+            "leagues=\(snapshot.selectedLeagues.sorted().joined(separator: "|"))",
+            "channels=\(snapshot.channelFilterEnabled):\(snapshot.selectedChannels.sorted().joined(separator: "|"))",
+            "epl=\(snapshot.effectiveEnglishPremierLeagueTeamsOnly)",
+            "major_uefa=\(snapshot.effectiveMajorUEFAClubGamesEnabled)",
+            "home_nations=\(snapshot.effectiveHomeNationsFilterEnabled)",
+            "major=\(snapshot.effectiveMajorTournamentsFilterEnabled)"
+        ].joined(separator: ";")
     }
 
     func stopAutoRefresh() {
@@ -719,16 +729,6 @@ final class MatchesStore: ObservableObject {
             reapplyLocalFilters(using: snapshot)
         }
 
-        if publishVisibleState {
-            publishState(for: activeMode)
-        }
-    }
-
-    func refreshCompetitionCatalog(using snapshot: PreferencesSnapshot, publishVisibleState: Bool) {
-        currentSnapshot = snapshot
-        groupingRevision &+= 1
-        reapplyLocalFilters(using: snapshot)
-        persistCombinedCacheAndSync(snapshot: snapshot)
         if publishVisibleState {
             publishState(for: activeMode)
         }
@@ -865,7 +865,7 @@ final class MatchesStore: ObservableObject {
         FixtureLoadDiagnosticsStore.shared.record(
             title: "Initial fixtures start",
             summary:
-                "window=\(Self.formatDateForLog(Self.startOfToday()))...\(Self.formatDateForLog(Self.dayOffset(fixturesInitialLoadDays - 1, from: Self.startOfToday()))) " +
+                "window=\(Self.formatDateForLog(Self.startOfToday()))...\(Self.formatDateForLog(Self.openEndedFixtureDate())) " +
                 "page_size=\(fixturesLazyPageSize) hydrate_states=false stored_before=\(fixtureState.unfilteredMatches.count)"
         )
 
@@ -882,8 +882,9 @@ final class MatchesStore: ObservableObject {
 
         do {
             let today = Self.startOfToday()
-            let initialEnd = Self.dayOffset(fixturesInitialLoadDays - 1, from: today)
-            let ifModifiedSince = fixtureState.lastValidatedSnapshot == preferences
+            let initialEnd = Self.openEndedFixtureDate()
+            let ifModifiedSince = fixtureState.lastValidatedSnapshot == preferences &&
+                fixtureState.fixtureCoverageEnd.map { $0 >= initialEnd } == true
                 ? fixtureState.lastUpdated
                 : nil
             let response = try await client.fetchMatchesInRange(
@@ -892,7 +893,7 @@ final class MatchesStore: ObservableObject {
                 startDate: today,
                 endDate: initialEnd,
                 pageSize: fixturesLazyPageSize,
-                includePreferenceFilters: false,
+                includePreferenceFilters: true,
                 hydrateStates: false,
                 ifModifiedSince: ifModifiedSince
             )
@@ -952,8 +953,6 @@ final class MatchesStore: ObservableObject {
                 nextState.lastUpdated,
                 response.lastUpdated ?? refreshCompletedAt
             )
-            // Keep the interactive refresh window small so pull-to-refresh returns quickly.
-            // Longer-range future fixtures are refreshed separately in background batches.
             nextState.fixtureCoverageEnd = initialEnd
             nextState.page = 0
             nextState.hasMore = false
@@ -985,7 +984,6 @@ final class MatchesStore: ObservableObject {
             }
             refreshTeamRatingLookup(apiBaseURL: effectiveSnapshot.apiBaseURL)
             updateRefreshTimer(using: effectiveSnapshot, matches: combinedLoadedMatches())
-            scheduleRemainingFixtureLoadingIfNeeded(preferences: effectiveSnapshot)
         } catch {
             if Self.isCancellationError(error) {
                 var cancelledState = state(for: .fixtures)
@@ -1076,7 +1074,7 @@ final class MatchesStore: ObservableObject {
                 startDate: loadRange.lowerBound,
                 endDate: loadRange.upperBound,
                 pageSize: resultsHistoryPageSize,
-                includePreferenceFilters: false,
+                includePreferenceFilters: true,
                 // Results can retain stale synthetic rows across full-history reloads unless
                 // we reconcile each list row with its current match-details state payload.
                 hydrateStates: true,
@@ -1414,29 +1412,8 @@ final class MatchesStore: ObservableObject {
     }
 
     private func fixtureLazyLoadRanges(for matches: [Match]) -> [ClosedRange<Date>] {
-        let today = Self.startOfToday()
-        let initialWindowEnd = Self.dayOffset(fixturesInitialLoadDays - 1, from: today)
-        let overallEnd = Self.dayOffset(fixturesFutureLoadDays - 1, from: today)
-        guard initialWindowEnd < overallEnd else { return [] }
-
-        let loadedUntil = state(for: .fixtures).fixtureCoverageEnd ?? Self.loadedFixtureCoverageEnd(
-            in: matches,
-            minimumDate: initialWindowEnd
-        )
-        let nextStart = Self.dayOffset(1, from: loadedUntil ?? initialWindowEnd)
-        guard nextStart <= overallEnd else { return [] }
-
-        var ranges: [ClosedRange<Date>] = []
-        var cursor = nextStart
-        while cursor <= overallEnd {
-            let end = min(
-                Self.dayOffset(fixturesLazyBatchDays - 1, from: cursor),
-                overallEnd
-            )
-            ranges.append(cursor...end)
-            cursor = Self.dayOffset(1, from: end)
-        }
-        return ranges
+        _ = matches
+        return []
     }
 
     private func resolvedSnapshot(for fallback: PreferencesSnapshot) -> PreferencesSnapshot {
@@ -1462,7 +1439,7 @@ final class MatchesStore: ObservableObject {
             startDate: range.lowerBound,
             endDate: range.upperBound,
             pageSize: pageSize,
-            includePreferenceFilters: false,
+            includePreferenceFilters: true,
             hydrateStates: false
         )
 
@@ -1987,17 +1964,6 @@ final class MatchesStore: ObservableObject {
         return value.uppercased()
     }
 
-    private nonisolated static let homeNationsTeamKeys: Set<String> = [
-        "England",
-        "Northern Ireland",
-        "Scotland",
-        "Wales",
-    ].map(TeamIdentityStore.normalizedKey).reduce(into: Set<String>()) { partialResult, key in
-        if !key.isEmpty {
-            partialResult.insert(key)
-        }
-    }
-
     fileprivate nonisolated static let premierLeagueTeamKeys: Set<String> = [
         "Arsenal",
         "Aston Villa",
@@ -2080,25 +2046,8 @@ final class MatchesStore: ObservableObject {
         snapshot: PreferencesSnapshot,
         mode: MatchesViewMode
     ) -> [Match] {
-        let safeguarded = applyCompetitionScrapeSafeguards(to: matches)
-        let competitionFiltered = applyCompetitionFilters(
-            to: safeguarded,
-            selectedLeagues: snapshot.selectedLeagues,
-            isEnabled: snapshot.competitionFilterEnabled,
-            englishPremierLeagueTeamsOnly: snapshot.effectiveEnglishPremierLeagueTeamsOnly,
-            majorUEFAClubGamesEnabled: snapshot.effectiveMajorUEFAClubGamesEnabled,
-            homeNationsFilterEnabled: snapshot.effectiveHomeNationsFilterEnabled,
-            majorTournamentsFilterEnabled: snapshot.effectiveMajorTournamentsFilterEnabled
-        )
-        let dateFiltered = filterMatches(competitionFiltered, for: mode)
-        guard mode == .fixtures, snapshot.channelFilterEnabled else { return dateFiltered }
-        return applyChannelFilters(to: dateFiltered, selectedChannels: snapshot.selectedChannels)
-    }
-
-    private static func applyCompetitionScrapeSafeguards(to matches: [Match]) -> [Match] {
-        matches.filter { match in
-            CompetitionWeightConfig.isAllowedCompetitionForPublicDisplay(match.league)
-        }
+        _ = snapshot
+        return filterMatches(matches, for: mode)
     }
 
     private final class MatchSortMemo: @unchecked Sendable {
@@ -2155,157 +2104,6 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private static func applyChannelFilters(to matches: [Match], selectedChannels: [String]) -> [Match] {
-        guard !selectedChannels.isEmpty else { return matches }
-
-        return matches.compactMap { match in
-            let relevantChannels = ChannelSelection.filterChannels(match.tvChannels, selectedOptions: selectedChannels)
-            guard !relevantChannels.isEmpty else { return nil }
-            return match.withTvChannels(relevantChannels)
-        }
-    }
-
-    private static func applyCompetitionFilters(
-        to matches: [Match],
-        selectedLeagues: [String],
-        isEnabled: Bool,
-        englishPremierLeagueTeamsOnly: Bool = false,
-        majorUEFAClubGamesEnabled: Bool = false,
-        homeNationsFilterEnabled: Bool = false,
-        majorTournamentsFilterEnabled: Bool = false
-    ) -> [Match] {
-        let selected = Set(selectedLeagues.map(CompetitionWeightConfig.canonicalFilterName))
-        let hasLeagueFilter = isEnabled && !selected.isEmpty
-        let hasCategoryFilters =
-            englishPremierLeagueTeamsOnly ||
-            majorUEFAClubGamesEnabled ||
-            homeNationsFilterEnabled ||
-            majorTournamentsFilterEnabled
-
-        guard hasLeagueFilter || hasCategoryFilters else { return matches }
-
-        return matches.filter { match in
-            let matchesSelectedLeague =
-                !hasLeagueFilter ||
-                selected.contains(CompetitionWeightConfig.canonicalFilterName(match.league))
-            guard matchesSelectedLeague else { return false }
-
-            guard hasCategoryFilters else { return true }
-            return matchPassesCompetitionCategoryFilters(
-                match,
-                englishPremierLeagueTeamsOnly: englishPremierLeagueTeamsOnly,
-                majorUEFAClubGamesEnabled: majorUEFAClubGamesEnabled,
-                homeNationsFilterEnabled: homeNationsFilterEnabled,
-                majorTournamentsFilterEnabled: majorTournamentsFilterEnabled
-            )
-        }
-    }
-
-    private static func matchPassesCompetitionCategoryFilters(
-        _ match: Match,
-        englishPremierLeagueTeamsOnly: Bool,
-        majorUEFAClubGamesEnabled: Bool,
-        homeNationsFilterEnabled: Bool,
-        majorTournamentsFilterEnabled: Bool
-    ) -> Bool {
-        let includesHomeNation = matchIncludesHomeNation(match)
-        let isMajorTournament = matchIsMajorTournament(match)
-
-        if matchIsInternationalCompetition(match) {
-            let includeAsMajorTournament = isMajorTournament && majorTournamentsFilterEnabled
-            let includeAsHomeNation = includesHomeNation && homeNationsFilterEnabled
-            return includeAsMajorTournament || includeAsHomeNation
-        }
-
-        if majorUEFAClubGamesEnabled && matchIsMajorUEFAClubKnockoutFixture(match) {
-            return true
-        }
-
-        return !englishPremierLeagueTeamsOnly || matchIncludesPremierLeagueTeam(match)
-    }
-
-    private static func matchIncludesPremierLeagueTeam(_ match: Match) -> Bool {
-        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
-        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
-        return !homeKeys.isDisjoint(with: premierLeagueTeamKeys) ||
-            !awayKeys.isDisjoint(with: premierLeagueTeamKeys)
-    }
-
-    private static func matchIncludesHomeNation(_ match: Match) -> Bool {
-        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
-        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
-        return !homeKeys.isDisjoint(with: homeNationsTeamKeys) ||
-            !awayKeys.isDisjoint(with: homeNationsTeamKeys)
-    }
-
-    private static func matchIsMajorTournament(_ match: Match) -> Bool {
-        let league = CompetitionWeightConfig.normalizeCompetitionName(match.league)
-        let subcategory = CompetitionWeightConfig.normalizeCompetitionName(match.leagueSubcategory ?? "")
-        guard !league.isEmpty else { return false }
-        if league.range(of: #"\bqualif(?:ying|ication)\b"#, options: .regularExpression) != nil ||
-            subcategory.range(of: #"\bqualif(?:ying|ication)\b"#, options: .regularExpression) != nil {
-            return false
-        }
-
-        return league.range(
-            of: #"^(?:fifa world cup(?:\s+\d{4})?|(?:uefa\s+)?european championship(?:\s+\d{4})?|(?:uefa\s+)?euro(?:\s+\d{4})?)$"#,
-            options: .regularExpression
-        ) != nil
-    }
-
-    private static func matchIsInternationalCompetition(_ match: Match) -> Bool {
-        let league = CompetitionWeightConfig.normalizeCompetitionName(match.league)
-        let subcategory = CompetitionWeightConfig.normalizeCompetitionName(match.leagueSubcategory ?? "")
-        guard !league.isEmpty else { return false }
-
-        let internationalPatterns = [
-            #"\bfifa\b"#,
-            #"\bworld cup\b"#,
-            #"\beuropean championship\b"#,
-            #"^(?:uefa\s+)?euro(?:\s+\d{4})?$"#,
-            #"\bnations league\b"#,
-            #"\bqualif(?:ying|ication)\b"#,
-            #"\bfriendly\b"#,
-            #"\binternational\b"#
-        ]
-
-        for pattern in internationalPatterns {
-            if league.range(of: pattern, options: .regularExpression) != nil ||
-                subcategory.range(of: pattern, options: .regularExpression) != nil {
-                return true
-            }
-        }
-
-        if matchIncludesHomeNation(match) {
-            return true
-        }
-
-        return false
-    }
-
-    private static func matchIsMajorUEFAClubKnockoutFixture(_ match: Match) -> Bool {
-        let league = CompetitionWeightConfig.canonicalFilterName(match.league)
-        let normalizedLeague = CompetitionWeightConfig.normalizeCompetitionName(match.league)
-        let subcategory = CompetitionWeightConfig.normalizeCompetitionName(match.leagueSubcategory ?? "")
-
-        let majorUEFAClubCompetitions: Set<String> = [
-            "uefa champions league",
-            "uefa europa league",
-            "uefa conference league"
-        ]
-
-        guard majorUEFAClubCompetitions.contains(league) else { return false }
-        let descriptor = [normalizedLeague, subcategory]
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        guard !descriptor.isEmpty else { return false }
-
-        return descriptor.range(
-            of: #"\b(?:quarter(?:\s|-)?finals?|semi(?:\s|-)?finals?|final)\b"#,
-            options: .regularExpression
-        ) != nil
-    }
-
     private nonisolated static func replacingMatches(
         in existing: [Match],
         with incoming: [Match],
@@ -2354,6 +2152,10 @@ final class MatchesStore: ObservableObject {
 
     private nonisolated static func dayOffset(_ value: Int, from date: Date) -> Date {
         Calendar.current.date(byAdding: .day, value: value, to: date) ?? date
+    }
+
+    private nonisolated static func openEndedFixtureDate() -> Date {
+        DateComponents(calendar: Calendar.current, year: 9999, month: 12, day: 31).date ?? .distantFuture
     }
 
     private nonisolated static func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {

@@ -8,7 +8,6 @@ enum WatchAppGroupConfig {
     static let sharedMatchesFileName = "shared-matches.json"
     static let matchesPayloadContextKey = "matches_payload"
     static let requestMatchesSyncMessageKey = "request_matches_sync"
-    static let competitionCatalogWeightsDataKey = "catalog.competitionWeightsData"
 }
 
 final class WatchMatchesStore: NSObject, ObservableObject {

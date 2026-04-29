@@ -221,6 +221,13 @@ test("toMatchListPayload preserves explicit BBC-source flag without requiring ma
   assert.equal(payload.match_details_id, undefined);
 });
 
+test("toMatchListPayload includes server-controlled competition weight", () => {
+  const payload = toMatchListPayload(baseMatch({ league: "FIFA World Cup" }));
+
+  assert.equal(payload.league, "FIFA World Cup 2026");
+  assert.equal(typeof payload.competition_weight, "number");
+});
+
 test("shouldRefreshCanonicalMatchDetailsFromBbcLive heals missing canonical records", () => {
   clearFootballOperationalMemoryState();
 

@@ -77,31 +77,34 @@ struct Top_ScoresTests {
         #expect(store.showsFantasyDataInFixtures)
     }
 
-    @Test func preferencesSnapshot_disablesCompetitionCategoryFlagsWhenMasterFilterIsOff() async throws {
+    @Test func preferencesSnapshot_keepsCategoryFlagsEffectiveWhenMasterFilterIsOff() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: PreferencesStore.defaultSelectedLeagues,
             selectedChannels: PreferencesStore.defaultSelectedChannels,
             competitionFilterEnabled: false,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: true,
+            majorUEFAClubGamesEnabled: true,
             homeNationsFilterEnabled: true,
             majorTournamentsFilterEnabled: true,
             apiBaseURL: PreferencesStore.defaultApiBaseURL,
             refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
         )
 
-        #expect(snapshot.effectiveEnglishPremierLeagueTeamsOnly == false)
-        #expect(snapshot.effectiveHomeNationsFilterEnabled == false)
-        #expect(snapshot.effectiveMajorTournamentsFilterEnabled == false)
+        #expect(snapshot.effectiveEnglishPremierLeagueTeamsOnly)
+        #expect(snapshot.effectiveMajorUEFAClubGamesEnabled)
+        #expect(snapshot.effectiveHomeNationsFilterEnabled)
+        #expect(snapshot.effectiveMajorTournamentsFilterEnabled)
     }
 
-    @Test func matchesPageQueryItems_omitCompetitionCategoryParamsWhenMasterFilterIsOff() async throws {
+    @Test func matchesPageQueryItems_includeCategoryParamsWhenMasterFilterIsOff() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: PreferencesStore.defaultSelectedLeagues,
             selectedChannels: PreferencesStore.defaultSelectedChannels,
             competitionFilterEnabled: false,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: true,
+            majorUEFAClubGamesEnabled: true,
             homeNationsFilterEnabled: true,
             majorTournamentsFilterEnabled: true,
             apiBaseURL: PreferencesStore.defaultApiBaseURL,
@@ -120,10 +123,10 @@ struct Top_ScoresTests {
 
         let names = Set(queryItems.map(\.name))
         #expect(!names.contains("league"))
-        #expect(!names.contains("epl_only"))
-        #expect(!names.contains("major_uefa"))
-        #expect(!names.contains("home_nations"))
-        #expect(!names.contains("major_tournaments"))
+        #expect(names.contains("epl_only"))
+        #expect(names.contains("major_uefa"))
+        #expect(names.contains("home_nations"))
+        #expect(names.contains("major_tournaments"))
     }
 
     @Test func matchesPageQueryItems_includeCompetitionCategoryParamsWhenMasterFilterIsOn() async throws {
@@ -234,6 +237,26 @@ struct Top_ScoresTests {
 
         #expect(updated.aggregateHomeScore == 3)
         #expect(updated.aggregateAwayScore == 3)
+    }
+
+    @Test func matchDecodesServerControlledCompetitionWeight() async throws {
+        let data = Data("""
+        {
+          "date": "2026-07-19",
+          "time": "20:00",
+          "home_team": "TBC",
+          "away_team": "TBC",
+          "league": "FIFA World Cup 2026",
+          "league_subcategory": "Final",
+          "competition_weight": 90,
+          "tv_channels": []
+        }
+        """.utf8)
+
+        let match = try JSONDecoder().decode(Match.self, from: data)
+
+        #expect(match.competitionWeight == 90)
+        #expect(match.displayLeague == "FIFA World Cup 2026: Final")
     }
 
     @Test func withDetails_preservesFinishedStatusWhenDetailsRegressToLiveMinute() async throws {
@@ -354,7 +377,7 @@ struct Top_ScoresTests {
         #expect(filtered.count == 1)
     }
 
-    @Test func applyPreferenceFilters_fixtures_supportLocalPremierLeagueTeamFiltering() async throws {
+    @Test func applyPreferenceFilters_fixtures_doesNotApplyCompetitionFilteringLocally() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: [],
             selectedChannels: [],
@@ -395,22 +418,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.map(\.id) == ["prem-team"])
-    }
-
-    @Test func competitionWeightConfig_canonicalFilterName_stripsUefaStageSuffixes() async throws {
-        #expect(
-            CompetitionWeightConfig.canonicalFilterName("UEFA Champions League Quarter-Final 2nd Leg") ==
-                CompetitionWeightConfig.normalizeCompetitionName("UEFA Champions League")
-        )
-        #expect(
-            CompetitionWeightConfig.canonicalFilterName("UEFA Europa League Semi-Final 1st Leg") ==
-                CompetitionWeightConfig.normalizeCompetitionName("UEFA Europa League")
-        )
-        #expect(
-            CompetitionWeightConfig.canonicalFilterName("FIFA World Cup") ==
-                CompetitionWeightConfig.normalizeCompetitionName("FIFA World Cup 2026")
-        )
+        #expect(filtered.compactMap(\.matchDetailsID) == ["prem-team", "non-prem-team"])
     }
 
     @Test func applyPreferenceFilters_fixtures_keepsStagedMajorUefaClubMatchesVisible() async throws {
@@ -456,7 +464,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.map(\.id) == ["arsenal-ucl"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-ucl", "league-one"])
     }
 
     @Test func applyPreferenceFilters_fixtures_supportLeagueSelectionForStagedUefaClubCompetitions() async throws {
@@ -502,7 +510,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.map(\.id) == ["arsenal-ucl"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-ucl", "laliga"])
     }
 
     @Test func applyPreferenceFilters_fixtures_supportLocalMajorTournamentFiltering() async throws {
@@ -557,7 +565,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.map(\.id) == ["world-cup-final", "major"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["world-cup-final", "major", "qualifying"])
     }
 
     @Test func hasBbcMatchEntry_acceptsLegacyBbcSportWebsiteChannel() async throws {

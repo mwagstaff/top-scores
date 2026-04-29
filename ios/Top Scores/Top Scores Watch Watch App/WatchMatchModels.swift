@@ -124,6 +124,7 @@ struct WatchMatch: Identifiable, Codable, Hashable {
     let awayShortName: String?
     let league: String
     let leagueSubcategory: String?
+    let competitionWeight: Double?
     let matchDetailsIDValue: String?
     let tvChannels: [String]
     let homeScore: Int?
@@ -191,6 +192,7 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
         league = try container.decode(String.self, forKey: .league)
         leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
+        competitionWeight = try container.decodeIfPresent(Double.self, forKey: .competitionWeight)
         matchDetailsIDValue = try container.decodeIfPresent(String.self, forKey: .matchDetailsIDValue)
         tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
         homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
@@ -214,6 +216,7 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         case awayShortName = "away_short_name"
         case league
         case leagueSubcategory = "league_subcategory"
+        case competitionWeight = "competition_weight"
         case matchDetailsIDValue = "match_details_id"
         case tvChannels = "tv_channels"
         case homeScore = "home_score"
@@ -329,7 +332,7 @@ enum WatchMatchGrouping {
                     league: league,
                     matches: sortedLeagueMatches,
                     firstKickoff: matchSortDate(for: firstMatch),
-                    weight: competitionWeight(forCompetitionName: league)
+                    weight: leagueMatches.map { competitionWeight(for: $0) }.max() ?? 0
                 )
             }
             .sorted { lhs, rhs in
@@ -355,14 +358,7 @@ enum WatchMatchGrouping {
     }
 
     private static func competitionWeight(for match: WatchMatch) -> Double {
-        if let displayWeight = WatchCompetitionWeightConfig.weight(for: match.displayLeague) {
-            return displayWeight
-        }
-        return WatchCompetitionWeightConfig.weight(for: match.league) ?? 0
-    }
-
-    private static func competitionWeight(forCompetitionName competitionName: String) -> Double {
-        WatchCompetitionWeightConfig.weight(for: competitionName) ?? 0
+        match.competitionWeight ?? 0
     }
 
     static func todaysMatchCount(_ matches: [WatchMatch]) -> Int {
@@ -373,121 +369,6 @@ enum WatchMatchGrouping {
                 count += 1
             }
         }
-    }
-}
-
-private enum WatchCompetitionWeightConfig {
-    private static let bootstrapWeightsByName: [String: Double] = [
-        "premier league": 100,
-        "uefa champions league": 90,
-        "fifa world cup 2026": 85,
-        "uefa europa league": 80,
-        "uefa conference league": 70,
-        "uefa nations league": 69,
-        "uefa super cup": 68,
-        "fa cup": 65,
-        "english league cup": 60,
-        "copa del rey": 58,
-        "la liga": 50,
-        "bundesliga": 48,
-        "serie a": 48,
-        "championship": 40,
-        "scottish premiership": 30,
-        "scottish championship": 25,
-        "scottish league one": 20,
-        "scottish league two": 15,
-        "league one": 14,
-        "league two": 12,
-        "international friendly": 10,
-    ]
-    private static let stagePatterns: [NSRegularExpression] = [
-        try! NSRegularExpression(pattern: #"\s*[-:–]\s*Round\s+\w+$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+\w+\s+Round$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Round\s+\w+$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Round\s+\d+$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Round\s+of\s+\d+$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Last\s+\d+$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Group\s+Stage$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Group\s+[A-Z]$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Quarter[- ]Finals?$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Semi[- ]Finals?$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Finals?$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Third[- ]Place\s+Play-?Off$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Play-?Offs?$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Qualifying$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Qualification$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Preliminary\s+Round$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+First\s+Leg$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Second\s+Leg$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+1st\s+Leg$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+2nd\s+Leg$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"\s+Leg\s+\d+$"#, options: [.caseInsensitive]),
-    ]
-    private static let trailingStageSeparatorPattern = try! NSRegularExpression(
-        pattern: #"[-:–]\s*$"#,
-        options: [.caseInsensitive]
-    )
-    private static let aliases: [String: String] = [
-        "efl cup": "english league cup",
-        "carabao cup": "english league cup",
-        "uefa europa conference league": "uefa conference league",
-    ]
-
-    static func weight(for competitionName: String) -> Double? {
-        let canonical = canonicalCompetitionName(competitionName)
-        guard !canonical.isEmpty else { return nil }
-        return loadWeights()[canonical]
-    }
-
-    private static func normalizeCompetitionName(_ competitionName: String) -> String {
-        competitionName
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-    }
-
-    private static func canonicalCompetitionName(_ competitionName: String) -> String {
-        let normalized = normalizeCompetitionName(competitionName)
-        guard !normalized.isEmpty else { return "" }
-        let stripped = stripStageDescriptors(from: normalized)
-        let canonical = stripped.isEmpty ? normalized : stripped
-        return aliases[canonical] ?? canonical
-    }
-
-    private static func loadWeights() -> [String: Double] {
-        guard let defaults = UserDefaults(suiteName: WatchAppGroupConfig.identifier),
-              let data = defaults.data(forKey: WatchAppGroupConfig.competitionCatalogWeightsDataKey),
-              let weights = try? JSONDecoder().decode([String: Double].self, from: data) else {
-            return bootstrapWeightsByName
-        }
-        return weights.isEmpty ? bootstrapWeightsByName : weights
-    }
-
-    private static func stripStageDescriptors(from competitionName: String) -> String {
-        var normalized = competitionName
-        var changed = true
-
-        while changed {
-            changed = false
-            for pattern in stagePatterns {
-                let range = NSRange(location: 0, length: normalized.utf16.count)
-                guard pattern.firstMatch(in: normalized, options: [], range: range) != nil else {
-                    continue
-                }
-
-                normalized = pattern
-                    .stringByReplacingMatches(in: normalized, options: [], range: range, withTemplate: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-
-                let separatorRange = NSRange(location: 0, length: normalized.utf16.count)
-                normalized = trailingStageSeparatorPattern
-                    .stringByReplacingMatches(in: normalized, options: [], range: separatorRange, withTemplate: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                changed = true
-            }
-        }
-
-        return normalized
     }
 }
 

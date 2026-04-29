@@ -25,9 +25,6 @@ enum AppGroupConfig {
     nonisolated static let showFantasyExpectedPointsKey = "preferences.showFantasyExpectedPoints"
     nonisolated static let showFantasyRealTimePointsKey = "preferences.showFantasyRealTimePoints"
     nonisolated static let showFantasyMatchPillsKey = "preferences.showFantasyMatchPills"
-    nonisolated static let competitionCatalogWeightsDataKey = "catalog.competitionWeightsData"
-    nonisolated static let competitionCatalogUpdatedAtKey = "catalog.competitionWeightsUpdatedAt"
-    nonisolated static let competitionCatalogFetchedAtKey = "catalog.competitionWeightsFetchedAt"
     nonisolated static let liveActivityDiagnosticsKey = "live_activity.diagnostics"
     nonisolated static let liveActivityDiagnosticsFileName = "live-activity-diagnostics.log"
 }

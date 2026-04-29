@@ -10327,6 +10327,10 @@ function toMatchListPayload(match, options = {}) {
     away_team: normalized.away_team,
     tv_channels: uniqueChannels(normalized.tv_channels),
   };
+  const competitionWeight = competitionWeightForLeagueName(normalized.league);
+  if (Number.isFinite(competitionWeight)) {
+    payload.competition_weight = competitionWeight;
+  }
 
   if (normalized.league_subcategory) {
     payload.league_subcategory = normalized.league_subcategory;
@@ -11267,6 +11271,15 @@ function buildCompetitionWeightsPayload() {
     name: entry.name,
     weight: entry.weight,
   }));
+}
+
+function competitionWeightForLeagueName(leagueName) {
+  const canonical = normalizeCompetitionFilterName(leagueName || "");
+  if (!canonical) return null;
+  const entry = buildCompetitionCatalog().find(
+    (candidate) => normalizeCompetitionFilterName(candidate.name) === canonical
+  );
+  return entry ? entry.weight : null;
 }
 
 function buildTeamList(matches, leagueFilter) {

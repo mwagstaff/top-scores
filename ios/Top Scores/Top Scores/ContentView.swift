@@ -69,7 +69,6 @@ struct ContentView: View {
 }
 
 private struct ContentLifecycleCoordinator: View {
-    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var matchesStore: MatchesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
@@ -101,15 +100,6 @@ private struct ContentLifecycleCoordinator: View {
             }
             .task(id: fantasyManagerEntryID) {
                 updateFantasyTabPresentation()
-            }
-            .task(id: preferences.apiBaseURL) {
-                await refreshCompetitionCatalogIfNeeded(force: true)
-            }
-            .onChange(of: scenePhase) { _, newPhase in
-                guard newPhase == .active else { return }
-                Task {
-                    await refreshCompetitionCatalogIfNeeded(force: false)
-                }
             }
             .onChange(of: preferences.snapshot) { _, _ in
                 guard selectedTab != 0, selectedTab != 1 else { return }
@@ -155,18 +145,6 @@ private struct ContentLifecycleCoordinator: View {
     private func isPremierLeagueMatch(_ match: Match) -> Bool {
         match.league.trimmingCharacters(in: .whitespacesAndNewlines)
             .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
-    }
-
-    private func refreshCompetitionCatalogIfNeeded(force: Bool) async {
-        let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-        let didRefresh = await CompetitionWeightConfig.refreshIfNeeded(
-            apiBaseURL: snapshot.apiBaseURL,
-            force: force
-        )
-        guard didRefresh else { return }
-        await MainActor.run {
-            matchesStore.refreshCompetitionCatalog(using: snapshot, publishVisibleState: true)
-        }
     }
 
     private func syncFantasyState(

@@ -4,7 +4,7 @@ struct APIClient {
     let baseURL: URL
     let session: URLSession
     private static let defaultPastDays = 90
-    private static let defaultFutureDays = 90
+    private static let openEndedFixtureEndDate = "9999-12-31"
     private static let matchStatesBatchLimit = 500
     private static let maxLoggedBodyLength = 240
     private static let retryDelayNanos: UInt64 = 350_000_000
@@ -29,13 +29,13 @@ struct APIClient {
         async let fixturesTask = fetchAllMatches(
             preferences: preferences,
             mode: .fixtures,
-            includePreferenceFilters: false,
+            includePreferenceFilters: true,
             hydrateStates: false
         )
         async let resultsTask = fetchAllMatches(
             preferences: preferences,
             mode: .results,
-            includePreferenceFilters: false,
+            includePreferenceFilters: true,
             hydrateStates: true
         )
         let fixtures = try await fixturesTask
@@ -582,11 +582,10 @@ struct APIClient {
     private func combinedDateRangeQueryItems(now: Date = Date()) -> [URLQueryItem] {
         let calendar = Calendar.current
         let startDate = calendar.date(byAdding: .day, value: -Self.defaultPastDays, to: now) ?? now
-        let endDate = calendar.date(byAdding: .day, value: Self.defaultFutureDays, to: now) ?? now
         let formatter = Self.dateFormatter
         return [
             URLQueryItem(name: "start", value: formatter.string(from: startDate)),
-            URLQueryItem(name: "end", value: formatter.string(from: endDate)),
+            URLQueryItem(name: "end", value: Self.openEndedFixtureEndDate),
         ]
     }
 
@@ -594,18 +593,18 @@ struct APIClient {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         let startDate: Date
-        let endDate: Date
 
         switch mode {
         case .fixtures:
             startDate = today
-            endDate = calendar.date(byAdding: .day, value: Self.defaultFutureDays, to: today) ?? today
+            return [
+                URLQueryItem(name: "start", value: Self.dateFormatter.string(from: startDate)),
+                URLQueryItem(name: "end", value: Self.openEndedFixtureEndDate),
+            ]
         case .results:
             startDate = calendar.date(byAdding: .day, value: -Self.defaultPastDays, to: today) ?? today
-            endDate = today
+            return dateRangeQueryItems(startDate: startDate, endDate: today)
         }
-
-        return dateRangeQueryItems(startDate: startDate, endDate: endDate)
     }
 
     private static func dateRangeQueryItems(startDate: Date, endDate: Date) -> [URLQueryItem] {

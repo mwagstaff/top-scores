@@ -359,6 +359,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let awayShortName: String?
     let league: String
     let leagueSubcategory: String?
+    let competitionWeight: Double?
     let detailsURL: String?
     let matchDetailsIDValue: String?
     let hasBbcSourceValue: Bool?
@@ -391,6 +392,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         awayShortName: String? = nil,
         league: String,
         leagueSubcategory: String? = nil,
+        competitionWeight: Double? = nil,
         detailsURL: String? = nil,
         matchDetailsID: String? = nil,
         hasBbcSource: Bool? = nil,
@@ -422,6 +424,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.awayShortName = awayShortName
         self.league = league
         self.leagueSubcategory = leagueSubcategory
+        self.competitionWeight = competitionWeight
         self.detailsURL = detailsURL
         self.matchDetailsIDValue = Self.normalizedMatchDetailsID(matchDetailsID)
         self.hasBbcSourceValue = hasBbcSource
@@ -579,7 +582,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     nonisolated var displayLeague: String {
-        let baseLeague = CompetitionWeightConfig.displayBaseCompetitionName(league)
+        let baseLeague = league.trimmingCharacters(in: .whitespacesAndNewlines)
         if let subcategory = leagueSubcategory, !subcategory.isEmpty {
             return "\(baseLeague): \(subcategory)"
         }
@@ -613,6 +616,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             awayShortName: awayShortName,
             league: league,
             leagueSubcategory: leagueSubcategory,
+            competitionWeight: competitionWeight,
             detailsURL: detailsURL,
             matchDetailsID: matchDetailsIDValue,
             hasBbcSource: hasBbcSourceValue,
@@ -648,6 +652,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             awayShortName: awayShortName,
             league: league,
             leagueSubcategory: leagueSubcategory,
+            competitionWeight: competitionWeight,
             detailsURL: detailsURL,
             matchDetailsID: matchDetailsIDValue,
             hasBbcSource: hasBbcSourceValue,
@@ -683,6 +688,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
         league = try container.decode(String.self, forKey: .league)
         leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
+        competitionWeight = try container.decodeIfPresent(Double.self, forKey: .competitionWeight)
         detailsURL = try container.decodeIfPresent(String.self, forKey: .detailsURL)
         matchDetailsIDValue = Self.normalizedMatchDetailsID(
             try container.decodeIfPresent(String.self, forKey: .matchDetailsIDValue)
@@ -719,6 +725,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case awayShortName = "away_short_name"
         case league
         case leagueSubcategory = "league_subcategory"
+        case competitionWeight = "competition_weight"
         case detailsURL = "details_url"
         case matchDetailsIDValue = "match_details_id"
         case hasBbcSourceValue = "has_bbc_source"
@@ -753,6 +760,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(awayShortName, forKey: .awayShortName)
         try container.encode(league, forKey: .league)
         try container.encodeIfPresent(leagueSubcategory, forKey: .leagueSubcategory)
+        try container.encodeIfPresent(competitionWeight, forKey: .competitionWeight)
         try container.encodeIfPresent(detailsURL, forKey: .detailsURL)
         try container.encodeIfPresent(matchDetailsIDValue, forKey: .matchDetailsIDValue)
         try container.encodeIfPresent(hasBbcSourceValue, forKey: .hasBbcSourceValue)
@@ -786,6 +794,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         lhs.awayShortName == rhs.awayShortName &&
         lhs.league == rhs.league &&
         lhs.leagueSubcategory == rhs.leagueSubcategory &&
+        lhs.competitionWeight == rhs.competitionWeight &&
         lhs.detailsURL == rhs.detailsURL &&
         lhs.matchDetailsIDValue == rhs.matchDetailsIDValue &&
         lhs.hasBbcSourceValue == rhs.hasBbcSourceValue &&
@@ -840,6 +849,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             awayShortName: details.awayShortName ?? awayShortName,
             league: details.league ?? league,
             leagueSubcategory: leagueSubcategory,
+            competitionWeight: competitionWeight,
             detailsURL: details.detailsURL ?? detailsURL,
             matchDetailsID: details.id,
             hasBbcSource: hasBbcSourceValue,

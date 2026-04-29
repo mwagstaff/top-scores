@@ -6,7 +6,7 @@ import { CompetitionWeightLookup, TeamRatingLookup, groupMatches } from "../matc
 import { useShouldUseShortTeamNames } from "../useResponsiveTeamNames";
 import { MatchCard } from "./MatchCard";
 import type { ChangeEvent } from "react";
-import type { MatchDayGroup, MatchesMode } from "../types";
+import type { MatchDayGroup, MatchesMode, Preferences } from "../types";
 
 interface MatchesScreenProps {
   mode: MatchesMode;
@@ -31,7 +31,7 @@ const initialState: ScreenState = {
 };
 
 export function MatchesScreen({ mode }: MatchesScreenProps) {
-  const { preferences } = usePreferences();
+  const { preferences, setPreferences } = usePreferences();
   const [searchText, setSearchText]   = useState("");
   const [showSearch, setShowSearch]   = useState(false);
   const [state, setState]             = useState<ScreenState>(initialState);
@@ -43,6 +43,47 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
   // full set (or EPL-only), and we filter the results here. This avoids fragile server-side
   // league-name matching when many leagues are sent as params.
   const [customCompetitions, setCustomCompetitions] = useState<string[] | null>(null);
+
+  // On mount: read URL search params and apply them so shared/bookmarked URLs work.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const updates: Partial<Preferences> = {};
+    if (params.get("filter") === "all") updates.englishPremierLeagueTeamsOnly = false;
+    else if (params.get("filter") === "epl") updates.englishPremierLeagueTeamsOnly = true;
+    if (params.get("uefa") === "0") updates.majorUEFAClubGamesEnabled = false;
+    if (params.get("nations") === "0") updates.homeNationsFilterEnabled = false;
+    if (params.get("majors") === "0") updates.majorTournamentsFilterEnabled = false;
+    if (Object.keys(updates).length > 0) setPreferences(updates);
+
+    const compsParam = params.get("comps");
+    if (compsParam) {
+      setCustomCompetitions(compsParam.split(",").map((c) => c.trim()).filter(Boolean));
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // After any user-driven filter change, update the URL so the current view can be bookmarked
+  // or shared. Skip the very first effect run to avoid clobbering URL params we just applied.
+  const skipFirstUrlSync = useRef(true);
+  useEffect(() => {
+    if (skipFirstUrlSync.current) {
+      skipFirstUrlSync.current = false;
+      return;
+    }
+    const params = new URLSearchParams();
+    if (!preferences.englishPremierLeagueTeamsOnly) params.set("filter", "all");
+    if (!preferences.majorUEFAClubGamesEnabled) params.set("uefa", "0");
+    if (!preferences.homeNationsFilterEnabled) params.set("nations", "0");
+    if (!preferences.majorTournamentsFilterEnabled) params.set("majors", "0");
+    if (customCompetitions !== null) params.set("comps", customCompetitions.join(","));
+    const qs = params.toString();
+    window.history.replaceState(null, "", qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+  }, [
+    preferences.englishPremierLeagueTeamsOnly,
+    preferences.majorUEFAClubGamesEnabled,
+    preferences.homeNationsFilterEnabled,
+    preferences.majorTournamentsFilterEnabled,
+    customCompetitions,
+  ]);
 
   const requestKey = JSON.stringify({ mode, preferences, reloadToken });
 
@@ -400,12 +441,12 @@ function CompetitionsDropdown({ customCompetitions, onCustomCompetitionsChange }
     const n = customCompetitions.length;
     label = n === 1 ? "PL teams · 1 competition" : `PL teams · ${n} competitions`;
   } else if (eplOnly) {
-    label = "Premier League teams";
+    label = "Matches with Premier League teams only";
   } else if (customFilter) {
     const n = customCompetitions.length;
     label = n === 1 ? "1 competition" : `${n} competitions`;
   } else {
-    label = "All competitions";
+    label = "All matches across all competitions";
   }
 
   const panel = (
