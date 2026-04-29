@@ -4,17 +4,17 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
 
 ## Repository Structure
 
-- [`api`](/Users/mwagstaff/dev/top-scores/api)
+- [`api`](api)
   - Main backend and data ingestion pipeline.
   - `server.js` is the primary API entry point.
   - `fetch_*.js` scripts pull data from BBC Sport, Football on TV, Club Elo, Football Database, and National Elo sources.
   - `redis_client.js` handles Redis-backed operational state and persistence.
   - Admin/test harness HTML files and API-side tests also live here.
-- [`ios`](/Users/mwagstaff/dev/top-scores/ios)
+- [`ios`](ios)
   - Native Apple client code.
-  - [`Top Scores`](/Users/mwagstaff/dev/top-scores/ios/Top%20Scores) contains the app, widgets, watch app, share extension, and tests.
+  - [`Top Scores`](ios/Top%20Scores) contains the app, widgets, watch app, share extension, and tests.
   - The app layer includes API access, local caching, shared app-group sync, widgets, watch sync, and background refresh handling.
-- [`web`](/Users/mwagstaff/dev/top-scores/web)
+- [`web`](web)
   - Web frontend and static assets.
   - Includes source under [`src`](/Users/mwagstaff/dev/top-scores/web/src), public assets, scripts, and built output.
 
@@ -33,19 +33,38 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
 - Admin and test tooling
   - The API includes admin pages, backfill tooling, and a test harness for simulated match flows.
 
+## Match Date Windows
+
+- Server BBC scores/fixtures scraping
+  - The scheduled BBC Scores & Fixtures range poller is configured in [`api/server.js`](api/server.js) with `BBC_RANGE_PAST_DAYS` and `BBC_RANGE_FUTURE_DAYS`.
+  - Defaults come from [`api/fetch_bbc_scores.js`](api/fetch_bbc_scores.js): 30 days look-back and 90 days look-forward, using the `Europe/London` match timezone.
+  - Operators can override the scheduled range with `BBC_RANGE_PAST_DAYS` and `BBC_RANGE_FUTURE_DAYS`. Values are floored and clamped to non-negative integers; there is no separate hard maximum in the scheduled poller code.
+  - The poller enumerates every date from `today - pastDays` through `today + futureDays`, fetches each BBC dated scores/fixtures page, then persists the deduplicated result as the BBC range dataset.
+- Server admin backfill
+  - The admin BBC range backfill endpoint in [`api/server.js`](api/server.js) accepts explicit `start_date` and `end_date` values and enforces a maximum span of 366 days per request.
+- Public matches API
+  - `GET /api/v1/matches` requires `start=YYYY-MM-DD` and `end=YYYY-MM-DD`, but the route only validates date format and `start <= end`; it does not impose its own maximum date span. Results are limited by the server-side cached/scraped datasets available at the time of the request.
+- iOS app client
+  - The main API client defaults in [`APIClient.swift`](ios/Top%20Scores/Top%20Scores/Services/APIClient.swift) are 90 days back and 90 days forward when it builds a combined match request.
+  - The interactive fixtures screen in [`MatchesStore.swift`](ios/Top%20Scores/Top%20Scores/State/MatchesStore.swift) initially loads 14 days from today, then lazily loads future fixtures in 14-day batches up to a 90-day future horizon.
+  - Results history in [`MatchesStore.swift`](ios/Top%20Scores/Top%20Scores/State/MatchesStore.swift) loads up to 90 days back.
+- Web client
+  - The web match query builder in [`web/src/client/api.ts`](web/src/client/api.ts) requests fixtures from today through 90 days forward.
+  - For results, it requests 30 days back through today.
+
 ## Important Documents
 
 - Cache invalidation / full correction runbook:
-  - [CACHE_INVALIDATION_RUNBOOK.md](/Users/mwagstaff/dev/top-scores/CACHE_INVALIDATION_RUNBOOK.md)
+  - [CACHE_INVALIDATION_RUNBOOK.md](CACHE_INVALIDATION_RUNBOOK.md)
 - Push notification notes:
-  - [PUSH_NOTIFICATIONS_README.md](/Users/mwagstaff/dev/top-scores/PUSH_NOTIFICATIONS_README.md)
+  - [PUSH_NOTIFICATIONS_README.md](PUSH_NOTIFICATIONS_README.md)
 - Live Activity troubleshooting runbook:
-  - [LIVE_ACTIVITY_TROUBLESHOOTING.md](/Users/mwagstaff/dev/top-scores/LIVE_ACTIVITY_TROUBLESHOOTING.md)
+  - [LIVE_ACTIVITY_TROUBLESHOOTING.md](LIVE_ACTIVITY_TROUBLESHOOTING.md)
 - Redis preference sync notes:
-  - [REDIS_PREFERENCES_SYNC.md](/Users/mwagstaff/dev/top-scores/REDIS_PREFERENCES_SYNC.md)
+  - [REDIS_PREFERENCES_SYNC.md](REDIS_PREFERENCES_SYNC.md)
 - Widget implementation notes:
-  - [WIDGET_IMPLEMENTATION.md](/Users/mwagstaff/dev/top-scores/WIDGET_IMPLEMENTATION.md)
+  - [WIDGET_IMPLEMENTATION.md](WIDGET_IMPLEMENTATION.md)
 - API backfill notes:
-  - [BACKFILL_README.md](/Users/mwagstaff/dev/top-scores/api/BACKFILL_README.md)
+  - [BACKFILL_README.md](api/BACKFILL_README.md)
 - API test harness notes:
-  - [TEST_HARNESS_README.md](/Users/mwagstaff/dev/top-scores/api/TEST_HARNESS_README.md)
+  - [TEST_HARNESS_README.md](api/TEST_HARNESS_README.md)

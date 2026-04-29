@@ -174,6 +174,9 @@ struct APIClient {
         if includePreferenceFilters && preferences.effectiveEnglishPremierLeagueTeamsOnly {
             queryItems.append(URLQueryItem(name: "epl_only", value: "true"))
         }
+        if includePreferenceFilters && preferences.effectiveMajorUEFAClubGamesEnabled {
+            queryItems.append(URLQueryItem(name: "major_uefa", value: "true"))
+        }
         if includePreferenceFilters && preferences.effectiveHomeNationsFilterEnabled {
             queryItems.append(URLQueryItem(name: "home_nations", value: "true"))
         }

@@ -32,6 +32,7 @@ let teamRankingsCache: TeamRankingEntry[] | null = null;
 let competitionWeightsCache: CompetitionWeightEntry[] | null = null;
 const matchDetailsCache = new Map<string, MatchDetails>();
 const matchDetailsPromises = new Map<string, Promise<MatchDetails>>();
+const OPEN_ENDED_FIXTURE_END_DATE = "9999-12-31";
 
 export async function fetchMatches(
   mode: MatchesMode,
@@ -158,6 +159,14 @@ export function fetchMatchDetails(matchDetailsId: string): Promise<MatchDetails>
   return fetchMatchDetailsInternal(matchDetailsId, false);
 }
 
+export function clearMatchDetailsCache(matchDetailsId: string): void {
+  const id = matchDetailsId.trim();
+  if (id) {
+    matchDetailsCache.delete(id);
+    matchDetailsPromises.delete(id);
+  }
+}
+
 function fetchMatchDetailsInternal(matchDetailsId: string, forceRefresh: boolean): Promise<MatchDetails> {
   const normalizedId = matchDetailsId.trim();
   if (!normalizedId) {
@@ -245,10 +254,8 @@ function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: numb
   const params = new URLSearchParams();
   const today = new Date();
   const startDate = new Date(today);
-  const endDate = new Date(today);
 
   if (mode === "fixtures") {
-    endDate.setDate(endDate.getDate() + 90);
     params.set("sort", "asc");
   } else {
     startDate.setDate(startDate.getDate() - 30);
@@ -256,7 +263,7 @@ function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: numb
   }
 
   params.set("start", formatDateParam(mode === "fixtures" ? today : startDate));
-  params.set("end", formatDateParam(mode === "fixtures" ? endDate : today));
+  params.set("end", mode === "fixtures" ? OPEN_ENDED_FIXTURE_END_DATE : formatDateParam(today));
   params.set("page", String(page));
   params.set("page_size", "200");
 
@@ -271,6 +278,12 @@ function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: numb
   }
   if (preferences.englishPremierLeagueTeamsOnly && preferences.majorUEFAClubGamesEnabled) {
     params.set("major_uefa", "true");
+  }
+  if (preferences.englishPremierLeagueTeamsOnly && preferences.homeNationsFilterEnabled) {
+    params.set("home_nations", "true");
+  }
+  if (preferences.englishPremierLeagueTeamsOnly && preferences.majorTournamentsFilterEnabled) {
+    params.set("major_tournaments", "true");
   }
 
   return params;

@@ -54,6 +54,27 @@ test("buildLiveActivityTestContentState uses preset defaults and explicit overri
   assert.equal(contentState.matches[2].awayLogoKey, "Sheff Wed");
 });
 
+test("buildLiveActivityTestContentState includes team logo keys for dense in-progress payloads", () => {
+  const contentState = buildLiveActivityTestContentState(
+    {
+      presetId: "multi_live_dense",
+    },
+    FIXED_NOW
+  );
+
+  assert.equal(contentState.mode, "multi_live");
+  assert.equal(contentState.matches.length, 6);
+  for (const match of contentState.matches) {
+    assert.ok(match.homeLogoKey, `${match.homeTeam} should include homeLogoKey`);
+    assert.ok(match.awayLogoKey, `${match.awayTeam} should include awayLogoKey`);
+    assert.ok(match.tvLogoKey, `${match.homeTeam} v ${match.awayTeam} should include tvLogoKey`);
+  }
+  assert.equal(contentState.matches[0].homeLogoKey, "Atalanta");
+  assert.equal(contentState.matches[0].awayLogoKey, "Borussia Dortmund");
+  assert.equal(contentState.matches[5].homeLogoKey, "Liverpool");
+  assert.equal(contentState.matches[5].awayLogoKey, "Everton");
+});
+
 test("buildLiveActivityTestContentState returns an empty ended payload", () => {
   const contentState = buildLiveActivityTestContentState(
     {

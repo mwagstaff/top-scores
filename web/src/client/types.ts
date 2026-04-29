@@ -13,6 +13,8 @@ export interface Preferences {
   channelFilterEnabled: boolean;
   englishPremierLeagueTeamsOnly: boolean;
   majorUEFAClubGamesEnabled: boolean;
+  homeNationsFilterEnabled: boolean;
+  majorTournamentsFilterEnabled: boolean;
   refreshIntervalMinutes: number;
   matchGroupSortOrder: MatchGroupSortOrder;
 }
@@ -204,6 +206,8 @@ export const defaultPreferences: Preferences = {
   channelFilterEnabled: false,
   englishPremierLeagueTeamsOnly: true,
   majorUEFAClubGamesEnabled: true,
+  homeNationsFilterEnabled: true,
+  majorTournamentsFilterEnabled: true,
   refreshIntervalMinutes: 10,
   matchGroupSortOrder: "kickoffThenTeamScore",
 };

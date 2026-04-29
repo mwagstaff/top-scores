@@ -535,9 +535,19 @@ const RECENT_OUTPUT_PATH =
   process.env.RECENT_OUTPUT_PATH || path.join(__dirname, "recent_matches.json");
 const MISSING_TEAM_LOGOS_OUTPUT_PATH =
   process.env.MISSING_TEAM_LOGOS_OUTPUT_PATH || path.join(__dirname, "missing_team_logos.json");
-const TEAM_LOGO_ASSETS_PATH =
-  process.env.TEAM_LOGO_ASSETS_PATH ||
-  path.join(__dirname, "..", "ios", "Top Scores", "Top Scores", "team_logo_assets.json");
+const TEAM_LOGO_ASSETS_PATHS = [
+  process.env.TEAM_LOGO_ASSETS_PATH,
+  path.join(__dirname, "team_logo_assets.json"),
+  path.join(process.cwd(), "team_logo_assets.json"),
+  path.join(__dirname, "..", "ios", "Top Scores", "Top Scores", "team_logo_assets.json"),
+  path.join(
+    process.cwd(),
+    "ios",
+    "Top Scores",
+    "Top Scores",
+    "team_logo_assets.json"
+  ),
+].filter(Boolean);
 const RECENT_CACHE_HOURS = Number(process.env.RECENT_CACHE_HOURS || 24);
 const RECENT_CACHE_MS = Number.isFinite(RECENT_CACHE_HOURS)
   ? RECENT_CACHE_HOURS * 60 * 60 * 1000
@@ -1480,6 +1490,7 @@ function normalizeLeagueName(name) {
   }
   const lowered = normalized.toLowerCase();
   const aliases = {
+    "fifa world cup": "FIFA World Cup 2026",
     "german bundesliga": "Bundesliga",
     "italian serie a": "Serie A",
     "spanish la liga": "La Liga",
@@ -1494,6 +1505,9 @@ function normalizeCompetitionFilterName(name) {
   const normalized = normalizeLeagueName(name || "");
   if (!normalized) return "";
   const lowered = normalized.toLowerCase();
+  if (lowered === "fifa world cup") {
+    return "fifa world cup 2026";
+  }
   if (/^fifa world cup(?: 2026)? qualifying\b/.test(lowered)) {
     return "fifa world cup 2026";
   }
@@ -2037,8 +2051,16 @@ function loadKnownTeamLogoCatalog() {
   resetKnownTeamLogoCatalog();
 
   try {
-    if (!fs.existsSync(TEAM_LOGO_ASSETS_PATH)) return;
-    const raw = fs.readFileSync(TEAM_LOGO_ASSETS_PATH, "utf8");
+    const catalogPath = TEAM_LOGO_ASSETS_PATHS.find((candidatePath) =>
+      fs.existsSync(candidatePath)
+    );
+    if (!catalogPath) {
+      console.warn(
+        `Failed to load team logo assets catalog from paths: ${TEAM_LOGO_ASSETS_PATHS.join(", ")}`
+      );
+      return;
+    }
+    const raw = fs.readFileSync(catalogPath, "utf8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return;
     parsed.forEach((name) => registerKnownTeamLogoName(name));
@@ -26856,6 +26878,35 @@ function buildLiveActivityTestContentState(payload = {}, now = new Date()) {
   return contentState;
 }
 
+function logLiveActivityTestContentState(source, contentState) {
+  const matches = Array.isArray(contentState && contentState.matches)
+    ? contentState.matches.slice(0, 6).map((match) => ({
+        matchId: match.matchId || null,
+        home: match.homeTeam || null,
+        away: match.awayTeam || null,
+        homeLogoKey: match.homeLogoKey || null,
+        awayLogoKey: match.awayLogoKey || null,
+        tvLogoKey: match.tvLogoKey || null,
+        score:
+          Number.isFinite(Number(match.homeScore)) && Number.isFinite(Number(match.awayScore))
+            ? `${match.homeScore}-${match.awayScore}`
+            : null,
+        matchTime: match.matchTime || null,
+      }))
+    : [];
+  console.log(
+    `[LiveActivityTest] contentState ${JSON.stringify({
+      source,
+      mode: contentState && contentState.mode,
+      matchCount: Array.isArray(contentState && contentState.matches)
+        ? contentState.matches.length
+        : 0,
+      delayMinutes: contentState && contentState.delayMinutes,
+      matches,
+    })}`
+  );
+}
+
 function resolveLiveActivityTestUserDeviceToken(req, body = {}) {
   const headerToken = req.deviceToken ? normalizeDeviceToken(req.deviceToken) : "";
   if (headerToken) return headerToken;
@@ -27322,6 +27373,7 @@ app.post(`${API_PREFIX}/live-activity/test/start`, async (req, res) => {
     const pushToStartToken = explicitPushToStartToken || storedPushToStartToken;
     const forceStart = payload.forceStart === true;
     const contentState = buildLiveActivityTestContentState(payload);
+    logLiveActivityTestContentState("start", contentState);
     if (!pushToStartToken) {
       res.status(400).json({
         error:
@@ -27673,6 +27725,7 @@ app.post(`${API_PREFIX}/live-activity/test/update`, async (req, res) => {
         ? payload.isDevelopmentBuild
         : Boolean(record && record.isDevelopmentBuild);
     const contentState = buildLiveActivityTestContentState(payload);
+    logLiveActivityTestContentState("update", contentState);
     const timestamp = Math.floor(Date.now() / 1000);
 
     const result = await sendLiveActivityPush({

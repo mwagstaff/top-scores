@@ -3068,10 +3068,11 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if hasFooterContent {
+                Spacer(minLength: 0)
                 footerBanner
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private func centerText(for match: TopScoresLiveActivityMatchState) -> String {
@@ -3110,7 +3111,9 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
             if hasTvLogo(match) {
                 LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: tvLogoHeight)
             } else {
-                Color.clear
+                Text("vs")
+                    .font(.system(size: usesDenseRows ? 7 : 8, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.42))
                     .frame(width: usesDenseRows ? 16 : 18, height: tvLogoHeight)
             }
 
@@ -3336,7 +3339,9 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
             if hasTvLogo(match) {
                 LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 10)
             } else {
-                Color.clear
+                Text("vs")
+                    .font(.system(size: 7, weight: .semibold))
+                    .foregroundStyle(.secondary.opacity(0.7))
                     .frame(width: 14, height: 10)
             }
 

@@ -14,6 +14,18 @@ import {
 } from "./types";
 
 const storageKey = "top-scores.web.preferences.v1";
+const previousEplOnlyDefaultPreferences = normalizePreferences({
+  ...defaultPreferences,
+  englishPremierLeagueTeamsOnly: true,
+  homeNationsFilterEnabled: false,
+  majorTournamentsFilterEnabled: false,
+});
+const previousAllCompetitionsDefaultPreferences = normalizePreferences({
+  ...defaultPreferences,
+  englishPremierLeagueTeamsOnly: false,
+  homeNationsFilterEnabled: true,
+  majorTournamentsFilterEnabled: true,
+});
 const legacyDefaultPreferences = normalizePreferences({
   selectedLeagues: [
     "Premier League",
@@ -27,6 +39,8 @@ const legacyDefaultPreferences = normalizePreferences({
   channelFilterEnabled: true,
   englishPremierLeagueTeamsOnly: false,
   majorUEFAClubGamesEnabled: true,
+  homeNationsFilterEnabled: true,
+  majorTournamentsFilterEnabled: true,
   refreshIntervalMinutes: 10,
   matchGroupSortOrder: "alphabetical" as MatchGroupSortOrder,
 });
@@ -88,7 +102,11 @@ function loadPreferences(): Preferences {
     }
 
     const parsed = normalizePreferences(JSON.parse(raw) as Partial<Preferences>);
-    return preferencesEqual(parsed, legacyDefaultPreferences) ? defaultPreferences : parsed;
+    return preferencesEqual(parsed, legacyDefaultPreferences) ||
+      preferencesEqual(parsed, previousEplOnlyDefaultPreferences) ||
+      preferencesEqual(parsed, previousAllCompetitionsDefaultPreferences)
+      ? defaultPreferences
+      : parsed;
   } catch {
     return defaultPreferences;
   }
@@ -100,6 +118,8 @@ function preferencesEqual(left: Preferences, right: Preferences): boolean {
     left.channelFilterEnabled === right.channelFilterEnabled &&
     left.englishPremierLeagueTeamsOnly === right.englishPremierLeagueTeamsOnly &&
     left.majorUEFAClubGamesEnabled === right.majorUEFAClubGamesEnabled &&
+    left.homeNationsFilterEnabled === right.homeNationsFilterEnabled &&
+    left.majorTournamentsFilterEnabled === right.majorTournamentsFilterEnabled &&
     left.refreshIntervalMinutes === right.refreshIntervalMinutes &&
     left.matchGroupSortOrder === right.matchGroupSortOrder &&
     arrayEqual(left.selectedLeagues, right.selectedLeagues) &&

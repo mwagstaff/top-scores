@@ -55,6 +55,7 @@ enum CompetitionWeightConfig {
     private nonisolated static let aliases: [String: String] = [
         "efl cup": "english league cup",
         "carabao cup": "english league cup",
+        "fifa world cup": "fifa world cup 2026",
         "uefa europa conference league": "uefa conference league",
         "spanish la liga": "la liga",
         "italian serie a": "serie a",

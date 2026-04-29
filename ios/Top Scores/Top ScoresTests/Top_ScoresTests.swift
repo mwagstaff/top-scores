@@ -121,8 +121,40 @@ struct Top_ScoresTests {
         let names = Set(queryItems.map(\.name))
         #expect(!names.contains("league"))
         #expect(!names.contains("epl_only"))
+        #expect(!names.contains("major_uefa"))
         #expect(!names.contains("home_nations"))
         #expect(!names.contains("major_tournaments"))
+    }
+
+    @Test func matchesPageQueryItems_includeCompetitionCategoryParamsWhenMasterFilterIsOn() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: PreferencesStore.defaultSelectedLeagues,
+            selectedChannels: PreferencesStore.defaultSelectedChannels,
+            competitionFilterEnabled: true,
+            channelFilterEnabled: false,
+            englishPremierLeagueTeamsOnly: true,
+            majorUEFAClubGamesEnabled: true,
+            homeNationsFilterEnabled: true,
+            majorTournamentsFilterEnabled: true,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+        let queryItems = APIClient.matchesPageQueryItems(
+            preferences: snapshot,
+            mode: .fixtures,
+            page: 1,
+            pageSize: 120,
+            dateRangeQueryItems: [
+                URLQueryItem(name: "start", value: "2026-04-01"),
+                URLQueryItem(name: "end", value: "2026-07-31")
+            ]
+        )
+
+        let names = Set(queryItems.map(\.name))
+        #expect(names.contains("epl_only"))
+        #expect(names.contains("major_uefa"))
+        #expect(names.contains("home_nations"))
+        #expect(names.contains("major_tournaments"))
     }
 
     @Test func matchesPageQueryItems_omitAllPreferenceFiltersWhenDisabledForRequest() async throws {
@@ -153,6 +185,7 @@ struct Top_ScoresTests {
         #expect(!names.contains("league"))
         #expect(!names.contains("channel"))
         #expect(!names.contains("epl_only"))
+        #expect(!names.contains("major_uefa"))
         #expect(!names.contains("home_nations"))
         #expect(!names.contains("major_tournaments"))
     }
@@ -374,6 +407,10 @@ struct Top_ScoresTests {
             CompetitionWeightConfig.canonicalFilterName("UEFA Europa League Semi-Final 1st Leg") ==
                 CompetitionWeightConfig.normalizeCompetitionName("UEFA Europa League")
         )
+        #expect(
+            CompetitionWeightConfig.canonicalFilterName("FIFA World Cup") ==
+                CompetitionWeightConfig.normalizeCompetitionName("FIFA World Cup 2026")
+        )
     }
 
     @Test func applyPreferenceFilters_fixtures_keepsStagedMajorUefaClubMatchesVisible() async throws {
@@ -484,6 +521,17 @@ struct Top_ScoresTests {
             Match(
                 date: formattedDate(offsetDays: 2),
                 time: "20:00",
+                homeTeam: "TBC",
+                awayTeam: "TBC",
+                league: "FIFA World Cup",
+                leagueSubcategory: "Final",
+                matchDetailsID: "world-cup-final",
+                hasBbcSource: true,
+                tvChannels: []
+            ),
+            Match(
+                date: formattedDate(offsetDays: 2),
+                time: "20:00",
                 homeTeam: "England",
                 awayTeam: "France",
                 league: "UEFA European Championship 2028",
@@ -509,7 +557,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.map(\.id) == ["major"])
+        #expect(filtered.map(\.id) == ["world-cup-final", "major"])
     }
 
     @Test func hasBbcMatchEntry_acceptsLegacyBbcSportWebsiteChannel() async throws {

@@ -715,6 +715,10 @@ test("normalizeMatchStatusValue canonicalizes penalty shootout progress tallies"
 
 test("normalizeCompetitionFilterName maps World Cup qualifying competitions to the World Cup family", () => {
   assert.equal(
+    normalizeCompetitionFilterName("FIFA World Cup"),
+    "fifa world cup 2026"
+  );
+  assert.equal(
     normalizeCompetitionFilterName("FIFA World Cup Qualifying - European"),
     "fifa world cup 2026"
   );
@@ -722,6 +726,7 @@ test("normalizeCompetitionFilterName maps World Cup qualifying competitions to t
     normalizeCompetitionFilterName("FIFA World Cup 2026 Qualifying Semi-Final"),
     "fifa world cup 2026"
   );
+  assert.equal(isAllowedCompetition("FIFA World Cup"), true);
   assert.equal(isAllowedCompetition("FIFA World Cup Qualifying - European"), true);
   assert.equal(isAllowedCompetition("Ukraine Premier League"), false);
   assert.equal(isAllowedCompetition("Scottish Championship"), true);

@@ -306,6 +306,8 @@ function CompetitionsDropdown({ customCompetitions, onCustomCompetitionsChange }
 
   const eplOnly = preferences.englishPremierLeagueTeamsOnly;
   const majorUEFAClubGamesEnabled = preferences.majorUEFAClubGamesEnabled;
+  const homeNationsFilterEnabled = preferences.homeNationsFilterEnabled;
+  const majorTournamentsFilterEnabled = preferences.majorTournamentsFilterEnabled;
   const customFilter = customCompetitions !== null;
 
   useEffect(() => {
@@ -364,6 +366,14 @@ function CompetitionsDropdown({ customCompetitions, onCustomCompetitionsChange }
 
   const handleToggleMajorUEFAClubGames = (event: ChangeEvent<HTMLInputElement>) => {
     setPreferences({ majorUEFAClubGamesEnabled: event.target.checked });
+  };
+
+  const handleToggleHomeNations = (event: ChangeEvent<HTMLInputElement>) => {
+    setPreferences({ homeNationsFilterEnabled: event.target.checked });
+  };
+
+  const handleToggleMajorTournaments = (event: ChangeEvent<HTMLInputElement>) => {
+    setPreferences({ majorTournamentsFilterEnabled: event.target.checked });
   };
 
   // Toggle a single competition in the client-side filter.
@@ -441,6 +451,24 @@ function CompetitionsDropdown({ customCompetitions, onCustomCompetitionsChange }
           onChange={handleToggleMajorUEFAClubGames}
         />
         <span>Major UEFA games</span>
+      </label>
+
+      <label className="comp-option comp-option--international">
+        <input
+          type="checkbox"
+          checked={homeNationsFilterEnabled}
+          onChange={handleToggleHomeNations}
+        />
+        <span>International: Home nations</span>
+      </label>
+
+      <label className="comp-option comp-option--international">
+        <input
+          type="checkbox"
+          checked={majorTournamentsFilterEnabled}
+          onChange={handleToggleMajorTournaments}
+        />
+        <span>International: Major tournaments</span>
       </label>
 
       {competitions.length > 0 && <div className="comp-dropdown-sep" />}

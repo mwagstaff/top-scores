@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { fetchMatchDetails, shouldRetryMatchDetails } from "../api";
+import { clearMatchDetailsCache, fetchMatchDetails, shouldRetryMatchDetails } from "../api";
 import {
   aggregateSummary,
   displayStatus,
@@ -93,6 +93,18 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
 
     return () => { cancelled = true; };
   }, [details, detailsError, isExpanded, match.matchDetailsId]);
+
+  // If the match has since ended but cached details pre-date the final whistle, clear and re-fetch
+  useEffect(() => {
+    if (!details || !match.matchDetailsId) return;
+    const matchFinished = isMatchFinished(match);
+    const detailsFinished = ["FT", "AET"].includes((details.scoreStatus ?? "").trim().toUpperCase());
+    if (matchFinished && !detailsFinished) {
+      clearMatchDetailsCache(match.matchDetailsId);
+      setDetails(null);
+      retriedIncompleteDetailsIdRef.current = null;
+    }
+  }, [match, details]);
 
   // Retry once if details came back incomplete
   useEffect(() => {

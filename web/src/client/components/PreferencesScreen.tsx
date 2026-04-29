@@ -120,6 +120,42 @@ export function PreferencesScreen() {
           </p>
 
           <label className="toggle-row">
+            <span>Major UEFA games</span>
+            <input
+              type="checkbox"
+              checked={preferences.majorUEFAClubGamesEnabled}
+              onChange={(event) =>
+                setPreferences({ majorUEFAClubGamesEnabled: event.target.checked })
+              }
+            />
+          </label>
+
+          <label className="toggle-row">
+            <span>International: Home nations</span>
+            <input
+              type="checkbox"
+              checked={preferences.homeNationsFilterEnabled}
+              onChange={(event) =>
+                setPreferences({ homeNationsFilterEnabled: event.target.checked })
+              }
+            />
+          </label>
+
+          <label className="toggle-row">
+            <span>International: Major tournaments</span>
+            <input
+              type="checkbox"
+              checked={preferences.majorTournamentsFilterEnabled}
+              onChange={(event) =>
+                setPreferences({ majorTournamentsFilterEnabled: event.target.checked })
+              }
+            />
+          </label>
+          <p className="field-copy">
+            These extra filters apply when Premier League teams only is enabled.
+          </p>
+
+          <label className="toggle-row">
             <span>Enable competition filter</span>
             <input
               type="checkbox"
