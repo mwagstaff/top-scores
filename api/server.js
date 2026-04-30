@@ -14175,28 +14175,42 @@ function setOperationalCacheStateHeaders(res, state = operationalCacheState) {
   });
 }
 
-async function hydrateOperationalStateFromRedis() {
+async function hydrateOperationalStateFromRedis(options = {}) {
   const startedAtMs = Date.now();
+  const shouldHydrateMatchDetails =
+    !(options && options.skipMatchDetails) && !isMonitorRuntime();
+  const hydrateDatasets = isMonitorRuntime()
+    ? [
+        OP_DATASET_LIVE_MATCHES,
+        OP_DATASET_BBC_LIVE_MATCHES,
+        OP_DATASET_BBC_RANGE_MATCHES,
+        OP_DATASET_RECENT_MATCHES,
+        OP_DATASET_MERGED_MATCHES,
+        OP_DATASET_CACHE_STATE,
+      ]
+    : [
+        OP_DATASET_LIVE_MATCHES,
+        OP_DATASET_BBC_LIVE_MATCHES,
+        OP_DATASET_BBC_RANGE_MATCHES,
+        OP_DATASET_RECENT_MATCHES,
+        OP_DATASET_MERGED_MATCHES,
+        OP_DATASET_PREMIER_LEAGUE_TEAMS,
+        OP_DATASET_LEAGUE_TABLES,
+        OP_DATASET_CLUB_ELO_TEAMS,
+        OP_DATASET_FOOTBALL_DATABASE_TEAMS,
+        OP_DATASET_NATIONAL_ELO_TEAMS,
+        OP_DATASET_MISSING_TEAM_LOGOS,
+        OP_DATASET_TEAM_SHORT_NAMES,
+        OP_DATASET_CACHE_STATE,
+      ];
   recordRuntimeComponentStart(COMPONENT_OPERATIONAL_REDIS, {
     operation: "hydrate_operational_state",
   });
   try {
-    const datasetRecords = await getOperationalDatasets([
-      OP_DATASET_LIVE_MATCHES,
-      OP_DATASET_BBC_LIVE_MATCHES,
-      OP_DATASET_BBC_RANGE_MATCHES,
-      OP_DATASET_RECENT_MATCHES,
-      OP_DATASET_MERGED_MATCHES,
-      OP_DATASET_PREMIER_LEAGUE_TEAMS,
-      OP_DATASET_LEAGUE_TABLES,
-      OP_DATASET_CLUB_ELO_TEAMS,
-      OP_DATASET_FOOTBALL_DATABASE_TEAMS,
-      OP_DATASET_NATIONAL_ELO_TEAMS,
-      OP_DATASET_MISSING_TEAM_LOGOS,
-      OP_DATASET_TEAM_SHORT_NAMES,
-      OP_DATASET_CACHE_STATE,
-    ]);
-    const matchDetailsSnapshot = await getAllOperationalMatchDetails();
+    const datasetRecords = await getOperationalDatasets(hydrateDatasets);
+    const matchDetailsSnapshot = shouldHydrateMatchDetails
+      ? await getAllOperationalMatchDetails()
+      : null;
 
     const liveRecord = datasetRecords[OP_DATASET_LIVE_MATCHES];
     if (liveRecord && Array.isArray(liveRecord.payload)) {
@@ -14473,6 +14487,19 @@ function cacheStateGenerationForDomain(state, domain) {
     : 0;
 }
 
+function filterCacheStateDomainsForRuntimeRefresh(domains, options = {}) {
+  const selectedDomains = Array.isArray(domains) ? domains.filter(Boolean) : [];
+  const role =
+    options && typeof options.runtimeRole === "string" && options.runtimeRole.trim()
+      ? options.runtimeRole.trim()
+      : runtimeRole;
+  if (role !== "monitor") {
+    return selectedDomains;
+  }
+
+  return selectedDomains.filter((domain) => domain === "matches" || domain === "bbc_live");
+}
+
 async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
   const normalized = normalizeCacheStateDomains(domains);
   const selectedDomains = normalized.domains;
@@ -14724,7 +14751,8 @@ async function pollCacheStateAndRefreshFromRedis(options = {}) {
           cacheStateGenerationForDomain(remoteState, domain) >
           cacheStateGenerationForDomain(operationalCacheState, domain)
       );
-      if (changedDomains.length === 0) {
+      const reloadDomains = filterCacheStateDomainsForRuntimeRefresh(changedDomains);
+      if (reloadDomains.length === 0) {
         operationalCacheState = remoteState;
         const durationMs = Date.now() - startedAtMs;
         if (
@@ -14733,13 +14761,13 @@ async function pollCacheStateAndRefreshFromRedis(options = {}) {
           durationMs >= DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS
         ) {
           logPerformanceDiagnostic(
-            `[OperationalState][refresh] trigger=${trigger} changed_domains=none duration_ms=${durationMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
+            `[OperationalState][refresh] trigger=${trigger} changed_domains=${changedDomains.length ? changedDomains.join(",") : "none"} reloaded_domains=none duration_ms=${durationMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
           );
         }
         return { reloaded_domains: [] };
       }
 
-      const result = await reloadOperationalStateDomainsFromRedis(changedDomains, options);
+      const result = await reloadOperationalStateDomainsFromRedis(reloadDomains, options);
       operationalCacheState = remoteState;
       const durationMs = Date.now() - startedAtMs;
       if (
@@ -14748,7 +14776,7 @@ async function pollCacheStateAndRefreshFromRedis(options = {}) {
         durationMs >= DEBUG_OPERATIONAL_REFRESH_THRESHOLD_MS
       ) {
         logPerformanceDiagnostic(
-          `[OperationalState][refresh] trigger=${trigger} changed_domains=${changedDomains.join(",")} duration_ms=${durationMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
+          `[OperationalState][refresh] trigger=${trigger} changed_domains=${changedDomains.join(",")} reloaded_domains=${reloadDomains.join(",")} duration_ms=${durationMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
         );
       }
       return result;
@@ -15157,6 +15185,9 @@ function mergePreferredOperationalMatchDetailsSnapshots(memorySnapshot, redisSna
 async function getPreferredOperationalMatchDetailsSnapshotSafe() {
   const memorySnapshot = currentOperationalMatchDetailsMemorySnapshot();
   if (memorySnapshot && memorySnapshot.total > 0) {
+    return { ...memorySnapshot, redis_total: 0, redis_error: null };
+  }
+  if (isMonitorRuntime()) {
     return { ...memorySnapshot, redis_total: 0, redis_error: null };
   }
   const redisSnapshot = await getOperationalMatchDetailsSnapshotSafe();
@@ -16375,6 +16406,9 @@ function liveActivityOperationalMatchesForResponse() {
 
 async function resolveLiveActivityOperationalFallbackMatches() {
   const memoryMatches = liveActivityOperationalMatchesForResponse();
+  if (memoryMatches.length > 0) {
+    return memoryMatches;
+  }
 
   try {
     const datasetRecords = await getOperationalDatasets([
@@ -28179,7 +28213,7 @@ async function bootstrapOperationalState(options = {}) {
   });
   loadMissingTeamLogosFromDisk();
 
-  await hydrateOperationalStateFromRedis();
+  await hydrateOperationalStateFromRedis({ skipMatchDetails: mode === "monitor" });
   let seedResult = { seeded: false, reason: "redis_has_state" };
 
   if (mode === "scraper") {
@@ -28205,8 +28239,7 @@ async function bootstrapOperationalState(options = {}) {
     void syncTeamShortNamesCacheToRedis({ trigger: "startup_bootstrap" });
     void pollCacheStateAndRefreshFromRedis({ trigger: "startup_bootstrap" });
   } else if (mode === "monitor") {
-    const readiness = await inspectOperationalStateReadiness();
-    if (!readiness.ready) {
+    if (cachedMergedMatches.length === 0 || !operationalCacheState.updated_at) {
       clearFootballOperationalMemoryState();
     }
     void pollCacheStateAndRefreshFromRedis({ trigger: "startup_bootstrap" });
@@ -28408,13 +28441,6 @@ function startApiIntervals() {
 }
 
 function startMonitorIntervals() {
-  const matchDetailsPollInterval =
-    Number.isFinite(MATCH_DETAILS_POLL_INTERVAL_MS) && MATCH_DETAILS_POLL_INTERVAL_MS > 0
-      ? MATCH_DETAILS_POLL_INTERVAL_MS
-      : 10 * 1000;
-  registerRuntimeInterval(() => {
-    void refreshInProgressMatchDetails({ trigger: "interval" });
-  }, matchDetailsPollInterval);
   startCacheStateWatcher();
 }
 
@@ -28697,6 +28723,14 @@ const matchMonitor = require("./match_monitor");
 
 const SERVER_BASE_URL = `http://localhost:${PORT}${API_PREFIX}`;
 matchMonitor.setLiveActivityMatchDetailsProvider(() => {
+  const memorySnapshot = currentMatchDetailsLookupSnapshot();
+  if (memorySnapshot && memorySnapshot.lookup instanceof Map && memorySnapshot.lookup.size > 0) {
+    return memorySnapshot.lookup;
+  }
+  if (isMonitorRuntime()) {
+    return {};
+  }
+
   return getPreferredOperationalMatchDetailsSnapshotSafe().then((snapshot) =>
     snapshot && snapshot.records ? snapshot.records : {}
   );
@@ -29329,6 +29363,7 @@ module.exports = {
     resolveApiTeamShortName,
     applyTeamShortNamesToApiValue,
     collectTeamShortNameScrapeCandidates,
+    filterCacheStateDomainsForRuntimeRefresh,
     normalizeCompetitionFilterName,
     normalizeMatchesListMode,
     isAllowedCompetition,

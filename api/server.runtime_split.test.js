@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   __private: {
     buildDefaultOperationalCacheState,
+    filterCacheStateDomainsForRuntimeRefresh,
     normalizeCacheStateDomains,
   },
   startApiRuntime,
@@ -30,6 +31,27 @@ test("normalizeCacheStateDomains accepts teams tables and team short name aliase
     domains: ["teams", "tables", "team_short_names"],
     invalid: [],
   });
+});
+
+test("filterCacheStateDomainsForRuntimeRefresh avoids monitor match details churn", () => {
+  assert.deepEqual(
+    filterCacheStateDomainsForRuntimeRefresh(["matches", "match_details", "teams", "bbc_live"], {
+      runtimeRole: "monitor",
+    }),
+    ["matches", "bbc_live"]
+  );
+  assert.deepEqual(
+    filterCacheStateDomainsForRuntimeRefresh(["match_details"], {
+      runtimeRole: "monitor",
+    }),
+    []
+  );
+  assert.deepEqual(
+    filterCacheStateDomainsForRuntimeRefresh(["match_details"], {
+      runtimeRole: "api",
+    }),
+    ["match_details"]
+  );
 });
 
 test("server exports explicit api monitor and scraper runtime starters", () => {

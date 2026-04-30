@@ -4234,18 +4234,25 @@ async function resolveLiveActivityOperationalMatches(detailsRecords, options = {
   return buildLiveActivityOperationalMatches(detailsRecords, fallbackMatches);
 }
 
+const londonDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/London",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 function currentLondonDateKey(nowMs = Date.now()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/London",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(nowMs));
+  return londonDateKeyFormatter.format(new Date(nowMs));
 }
 
 function isLiveActivityMatchOnCurrentDate(match, nowMs = Date.now()) {
   const dateKey = String(match && match.date ? match.date : "").trim();
   return Boolean(dateKey) && dateKey === currentLondonDateKey(nowMs);
+}
+
+function isLiveActivityMatchOnDateKey(match, dateKey) {
+  const matchDateKey = String(match && match.date ? match.date : "").trim();
+  return Boolean(matchDateKey) && matchDateKey === dateKey;
 }
 
 function canonicalLiveActivityChannelsForMatch(match) {
@@ -4257,10 +4264,11 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
   const englishPremierLeagueTeamsOnly = prefs.englishPremierLeagueTeamsOnly === true;
   const majorUEFAClubGamesEnabled = prefs.majorUEFAClubGamesEnabled === true;
+  const todayDateKey = currentLondonDateKey(nowMs);
 
   return (Array.isArray(matches) ? matches : [])
     .filter((match) => match && typeof match === "object")
-    .filter((match) => isLiveActivityMatchOnCurrentDate(match, nowMs))
+    .filter((match) => isLiveActivityMatchOnDateKey(match, todayDateKey))
     .filter((match) => !isPostponedMatchStatus(match && match.score_status))
     .filter((match) => {
       if (
@@ -5922,13 +5930,15 @@ function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = 
 /**
  * Returns the current hour (0–23) in Europe/London, falling back to UTC on error.
  */
+const londonHourFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: LIVE_ACTIVITY_WINDOW_TIMEZONE,
+  hour: "numeric",
+  hour12: false,
+});
+
 function londonHour(nowMs) {
   try {
-    const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: LIVE_ACTIVITY_WINDOW_TIMEZONE,
-      hour: "numeric",
-      hour12: false,
-    }).formatToParts(new Date(nowMs));
+    const parts = londonHourFormatter.formatToParts(new Date(nowMs));
     const hourPart = parts.find((p) => p.type === "hour");
     const h = hourPart ? parseInt(hourPart.value, 10) : NaN;
     return Number.isFinite(h) ? h : new Date(nowMs).getUTCHours();
