@@ -3200,7 +3200,7 @@ test("buildLiveActivityPresentationForUser prefers Redis delayed snapshot over s
   assert.equal(presentation.matches[0].away_score, 2);
 });
 
-test("buildLiveActivityPresentationForUser does not inherit notification delay", () => {
+test("buildLiveActivityPresentationForUser uses notification delay when no dedicated live activity delay is configured", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 23 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -3257,10 +3257,10 @@ test("buildLiveActivityPresentationForUser does not inherit notification delay",
   );
 
   assert.equal(presentation.mode, "single_live");
-  assert.equal(presentation.delayMinutes, 0);
+  assert.equal(presentation.delayMinutes, 5);
   assert.equal(presentation.matches.length, 1);
-  assert.equal(presentation.matches[0].score_status, "86");
-  assert.equal(presentation.matches[0].home_score, 4);
+  assert.equal(presentation.matches[0].score_status, "81");
+  assert.equal(presentation.matches[0].home_score, 3);
   assert.equal(presentation.matches[0].away_score, 0);
 });
 
@@ -3794,7 +3794,7 @@ test("buildLiveActivityPresentationForUser preserves delayed scores when current
   const kickoff = formatLocalDateTimeParts(kickoffMs);
 
   const presentation = __testHooks.buildLiveActivityPresentationForUser(
-    { preferences: { liveActivityDelayMinutes: 5 } },
+    { preferences: { notificationDelayMinutes: 5 } },
     [
       {
         state: {
@@ -3880,7 +3880,7 @@ test("buildLiveActivityPresentationForUser keeps delayed minute and score aligne
   const kickoff = formatLocalDateTimeParts(kickoffMs);
 
   const presentation = __testHooks.buildLiveActivityPresentationForUser(
-    { preferences: { liveActivityDelayMinutes: 5 } },
+    { preferences: { notificationDelayMinutes: 5 } },
     [
       {
         state: {
@@ -3942,6 +3942,76 @@ test("buildLiveActivityPresentationForUser keeps delayed minute and score aligne
   assert.equal(presentation.matches[0].score_status, "74");
   assert.equal(presentation.matches[0].home_score, 0);
   assert.equal(presentation.matches[0].away_score, 3);
+});
+
+test("buildLiveActivityPresentationForUser avoids stale delayed score regression in stoppage time", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 94 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    { preferences: { notificationDelayMinutes: 2 } },
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "forest-villa",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "UEFA Europa League",
+            home_team: "Forest",
+            away_team: "Aston Villa",
+            home_score: 1,
+            away_score: 0,
+            score_status: "90+4",
+            home_goal_scorers: [],
+            away_goal_scorers: [],
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              timestampMs: nowMs - 2 * 60 * 1000,
+              match: {
+                match_details_id: "forest-villa",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "UEFA Europa League",
+                home_team: "Forest",
+                away_team: "Aston Villa",
+                home_score: 0,
+                away_score: 0,
+                score_status: "90+2",
+                home_goal_scorers: [],
+                away_goal_scorers: [],
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "forest-villa",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "UEFA Europa League",
+          home_team: "Forest",
+          away_team: "Aston Villa",
+          home_score: 1,
+          away_score: 0,
+          score_status: "90+4",
+          home_goal_scorers: [],
+          away_goal_scorers: [],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.delayMinutes, 2);
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "90+2");
+  assert.equal(presentation.matches[0].home_score, 1);
+  assert.equal(presentation.matches[0].away_score, 0);
 });
 
 test("compareLiveActivityMatches sorts earlier kickoffs first", () => {

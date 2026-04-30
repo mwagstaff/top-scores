@@ -28973,7 +28973,14 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
             );
             const delayMinutes =
               record && record.preferences && typeof record.preferences === "object"
-                ? Math.max(0, Number(record.preferences.liveActivityDelayMinutes ?? 0))
+                ? Math.max(
+                  0,
+                  Number(
+                    record.preferences.liveActivityDelayMinutes ??
+                      record.preferences.notificationDelayMinutes ??
+                      0
+                  )
+                )
                 : 0;
             const delayedSnapshotsByMatchId =
               delayMinutes > 0

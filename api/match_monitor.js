@@ -480,8 +480,6 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
     currentMatch.away_goal_scorers,
     delayedMatch && delayedMatch.away_goal_scorers
   );
-  const hasGoalTimeline =
-    Array.isArray(homeGoalTimeline) || Array.isArray(awayGoalTimeline);
   const timelineHomeGoals = countGoalsUpToMinute(homeGoalTimeline, resolvedDelayedMinute);
   const timelineAwayGoals = countGoalsUpToMinute(awayGoalTimeline, resolvedDelayedMinute);
   const delayedHomeScore = toNumericScore(delayedMatch && delayedMatch.home_score);
@@ -494,6 +492,7 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
     Number.isFinite(currentHomeScore) && timelineHomeGoalCount >= currentHomeScore;
   const awayTimelineComplete =
     Number.isFinite(currentAwayScore) && timelineAwayGoalCount >= currentAwayScore;
+  const hasGoalTimeline = timelineHomeGoalCount > 0 || timelineAwayGoalCount > 0;
 
   if (hasGoalTimeline) {
     return {
@@ -511,6 +510,24 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
     return {
       home_score: null,
       away_score: null,
+      score_status: resolvedDelayedStatus,
+    };
+  }
+
+  if (currentMinute >= 90 && resolvedDelayedMinute >= 90) {
+    return {
+      home_score:
+        Number.isFinite(currentHomeScore) &&
+        Number.isFinite(delayedHomeScore) &&
+        currentHomeScore > delayedHomeScore
+          ? currentHomeScore
+          : delayedMatch.home_score,
+      away_score:
+        Number.isFinite(currentAwayScore) &&
+        Number.isFinite(delayedAwayScore) &&
+        currentAwayScore > delayedAwayScore
+          ? currentAwayScore
+          : delayedMatch.away_score,
       score_status: resolvedDelayedStatus,
     };
   }
@@ -4900,7 +4917,7 @@ function liveActivityDelayMinutesFromPreferences(prefs) {
   if (prefs.liveActivityDelayMinutes !== undefined && prefs.liveActivityDelayMinutes !== null) {
     return Math.max(0, Number(prefs.liveActivityDelayMinutes || 0));
   }
-  return 0;
+  return Math.max(0, Number(prefs.notificationDelayMinutes || 0));
 }
 
 function calculateFantasyCurrentScore(fantasyState) {
