@@ -698,6 +698,12 @@ function normalizeLiveActivityStatePatch(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "pushToStartTokenUpdatedAt")) {
     normalized.pushToStartTokenUpdatedAt = normalizeOptionalToken(patch.pushToStartTokenUpdatedAt);
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "pushToStartAttempts")) {
+    const numericAttempts = Number(patch.pushToStartAttempts);
+    normalized.pushToStartAttempts = Number.isFinite(numericAttempts)
+      ? Math.max(0, Math.floor(numericAttempts))
+      : 0;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "currentActivityTokenUpdatedAt")) {
     normalized.currentActivityTokenUpdatedAt = normalizeOptionalToken(
       patch.currentActivityTokenUpdatedAt
@@ -2921,6 +2927,8 @@ module.exports = {
     normalizeFantasyReminderStatus,
     attachRedisMetricMeta,
     readRedisMetricMeta,
+    normalizeLiveActivityStatePatch,
+    mergedLiveActivityState,
     buildUserPreferencesKey,
     userPreferencesTokenFromKey,
     resetRedisMetricsForTests,

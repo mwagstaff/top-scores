@@ -3200,7 +3200,7 @@ test("buildLiveActivityPresentationForUser prefers Redis delayed snapshot over s
   assert.equal(presentation.matches[0].away_score, 2);
 });
 
-test("buildLiveActivityPresentationForUser uses notification delay when no dedicated live activity delay is configured", () => {
+test("buildLiveActivityPresentationForUser does not inherit notification delay", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 23 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -3257,10 +3257,10 @@ test("buildLiveActivityPresentationForUser uses notification delay when no dedic
   );
 
   assert.equal(presentation.mode, "single_live");
-  assert.equal(presentation.delayMinutes, 5);
+  assert.equal(presentation.delayMinutes, 0);
   assert.equal(presentation.matches.length, 1);
-  assert.equal(presentation.matches[0].score_status, "81");
-  assert.equal(presentation.matches[0].home_score, 3);
+  assert.equal(presentation.matches[0].score_status, "86");
+  assert.equal(presentation.matches[0].home_score, 4);
   assert.equal(presentation.matches[0].away_score, 0);
 });
 
@@ -3794,7 +3794,7 @@ test("buildLiveActivityPresentationForUser preserves delayed scores when current
   const kickoff = formatLocalDateTimeParts(kickoffMs);
 
   const presentation = __testHooks.buildLiveActivityPresentationForUser(
-    { preferences: { notificationDelayMinutes: 5 } },
+    { preferences: { liveActivityDelayMinutes: 5 } },
     [
       {
         state: {
@@ -3880,7 +3880,7 @@ test("buildLiveActivityPresentationForUser keeps delayed minute and score aligne
   const kickoff = formatLocalDateTimeParts(kickoffMs);
 
   const presentation = __testHooks.buildLiveActivityPresentationForUser(
-    { preferences: { notificationDelayMinutes: 5 } },
+    { preferences: { liveActivityDelayMinutes: 5 } },
     [
       {
         state: {

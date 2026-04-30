@@ -4900,7 +4900,7 @@ function liveActivityDelayMinutesFromPreferences(prefs) {
   if (prefs.liveActivityDelayMinutes !== undefined && prefs.liveActivityDelayMinutes !== null) {
     return Math.max(0, Number(prefs.liveActivityDelayMinutes || 0));
   }
-  return Math.max(0, Number(prefs.notificationDelayMinutes || 0));
+  return 0;
 }
 
 function calculateFantasyCurrentScore(fantasyState) {
@@ -6466,8 +6466,8 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       console.log(
         `[MatchMonitor] Push-to-start suppressed after ${newAttemptCount} unanswered attempts (Live Activities likely disabled on device): device=${shortDeviceToken(user && user.deviceToken)}`
       );
-      return;
     }
+    return;
   }
 
   if (hasFreshTokenlessCurrentActivity) {
