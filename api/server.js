@@ -903,6 +903,8 @@ let bbcUpdating = false;
 let cachedBbcRangeMatches = [];
 let bbcRangeLastUpdated = null;
 let bbcRangeUpdating = false;
+const BBC_RANGE_PROGRESS_WINDOWS = Object.freeze(["past", "today", "future", "all"]);
+let bbcRangeScrapeProgress = buildEmptyBbcRangeScrapeProgress();
 let cachedMergedMatches = [];
 let cachedRecentMatches = [];
 let recentLastUpdated = null;
@@ -2409,6 +2411,142 @@ function trackSourceUpdateMetrics({ source, startedAtMs, success, recordsFetched
       );
     }
   }
+}
+
+function buildBbcRangeProgressWindow() {
+  return {
+    total: 0,
+    completed: 0,
+    succeeded: 0,
+    failed: 0,
+  };
+}
+
+function buildEmptyBbcRangeScrapeProgress() {
+  return {
+    running: false,
+    started_at: null,
+    completed_at: null,
+    start_date: null,
+    end_date: null,
+    today_date: null,
+    windows: BBC_RANGE_PROGRESS_WINDOWS.reduce((acc, window) => {
+      acc[window] = buildBbcRangeProgressWindow();
+      return acc;
+    }, {}),
+  };
+}
+
+function normalizeMetricDateOnly(value) {
+  const raw = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
+}
+
+function formatMetricDateInTimeZone(date, timeZone) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${byType.year}-${byType.month}-${byType.day}`;
+  } catch (_error) {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+function bbcRangeProgressWindowForDate(date, todayDate) {
+  const normalizedDate = normalizeMetricDateOnly(date);
+  const normalizedToday = normalizeMetricDateOnly(todayDate);
+  if (!normalizedDate || !normalizedToday) return null;
+  if (normalizedDate < normalizedToday) return "past";
+  if (normalizedDate > normalizedToday) return "future";
+  return "today";
+}
+
+function recordBbcRangeWindowTotal(windows, window) {
+  if (!window || !windows[window]) return;
+  windows[window].total += 1;
+  windows.all.total += 1;
+}
+
+function recordBbcRangeWindowCompletion(windows, window, success) {
+  if (!window || !windows[window]) return;
+  [window, "all"].forEach((key) => {
+    windows[key].completed += 1;
+    if (success) {
+      windows[key].succeeded += 1;
+    } else {
+      windows[key].failed += 1;
+    }
+  });
+}
+
+function handleBbcRangeScrapeProgress(event) {
+  if (!event || typeof event !== "object") return;
+
+  if (event.event === "start") {
+    const todayDate = formatMetricDateInTimeZone(new Date(), BBC_RANGE_MATCH_TIMEZONE);
+    const next = buildEmptyBbcRangeScrapeProgress();
+    next.running = true;
+    next.started_at = new Date().toISOString();
+    next.completed_at = null;
+    next.start_date = normalizeMetricDateOnly(event.startDate);
+    next.end_date = normalizeMetricDateOnly(event.endDate);
+    next.today_date = todayDate;
+    (Array.isArray(event.dates) ? event.dates : []).forEach((date) => {
+      recordBbcRangeWindowTotal(next.windows, bbcRangeProgressWindowForDate(date, todayDate));
+    });
+    bbcRangeScrapeProgress = next;
+    return;
+  }
+
+  if (event.event === "date_complete") {
+    const todayDate =
+      bbcRangeScrapeProgress.today_date || formatMetricDateInTimeZone(new Date(), BBC_RANGE_MATCH_TIMEZONE);
+    recordBbcRangeWindowCompletion(
+      bbcRangeScrapeProgress.windows,
+      bbcRangeProgressWindowForDate(event.date, todayDate),
+      event.success !== false
+    );
+    return;
+  }
+
+  if (event.event === "complete") {
+    bbcRangeScrapeProgress.running = false;
+    bbcRangeScrapeProgress.completed_at = new Date().toISOString();
+  }
+}
+
+function finishBbcRangeScrapeProgress() {
+  if (!bbcRangeScrapeProgress.running) return;
+  bbcRangeScrapeProgress.running = false;
+  bbcRangeScrapeProgress.completed_at = new Date().toISOString();
+}
+
+function bbcRangeMatchDateTimestampSeconds(match) {
+  const date = normalizeMetricDateOnly(match && match.date);
+  if (!date) return null;
+  const timestamp = Date.parse(`${date}T00:00:00.000Z`);
+  return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : null;
+}
+
+function bbcRangeMatchDateCoverage(matches) {
+  const timestamps = (Array.isArray(matches) ? matches : [])
+    .map(bbcRangeMatchDateTimestampSeconds)
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+  if (timestamps.length === 0) {
+    return {
+      earliest: 0,
+      latest: 0,
+    };
+  }
+  return {
+    earliest: Math.min(...timestamps),
+    latest: Math.max(...timestamps),
+  };
 }
 
 function trackBbcHttpRequestMetric({
@@ -5442,6 +5580,57 @@ function buildPrometheusMetricsText() {
         source,
       });
     });
+
+  const bbcRangeCoverage = bbcRangeMatchDateCoverage(cachedBbcRangeMatches);
+  lines.push("# HELP top_scores_bbc_range_match_date_timestamp_seconds Earliest and latest match dates currently held in the BBC scores and fixtures range cache.");
+  lines.push("# TYPE top_scores_bbc_range_match_date_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_bbc_range_match_date_timestamp_seconds",
+    bbcRangeCoverage.earliest,
+    { boundary: "earliest" }
+  );
+  pushPrometheusSample(
+    lines,
+    "top_scores_bbc_range_match_date_timestamp_seconds",
+    bbcRangeCoverage.latest,
+    { boundary: "latest" }
+  );
+
+  lines.push("# HELP top_scores_bbc_range_scrape_running 1 while the BBC scores and fixtures range scrape is in progress.");
+  lines.push("# TYPE top_scores_bbc_range_scrape_running gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_bbc_range_scrape_running",
+    bbcRangeScrapeProgress.running ? 1 : 0
+  );
+
+  lines.push("# HELP top_scores_bbc_range_scrape_dates_total BBC range scrape dates in the current or most recent run by date window.");
+  lines.push("# TYPE top_scores_bbc_range_scrape_dates_total gauge");
+  lines.push("# HELP top_scores_bbc_range_scrape_dates_completed BBC range scrape dates completed in the current or most recent run by date window and result.");
+  lines.push("# TYPE top_scores_bbc_range_scrape_dates_completed gauge");
+  lines.push("# HELP top_scores_bbc_range_scrape_progress_ratio BBC range scrape completion ratio between 0 and 1 for the current or most recent run by date window.");
+  lines.push("# TYPE top_scores_bbc_range_scrape_progress_ratio gauge");
+  BBC_RANGE_PROGRESS_WINDOWS.forEach((window) => {
+    const progressWindow = bbcRangeScrapeProgress.windows[window] || buildBbcRangeProgressWindow();
+    pushPrometheusSample(lines, "top_scores_bbc_range_scrape_dates_total", progressWindow.total, {
+      window,
+    });
+    pushPrometheusSample(lines, "top_scores_bbc_range_scrape_dates_completed", progressWindow.succeeded, {
+      window,
+      result: "success",
+    });
+    pushPrometheusSample(lines, "top_scores_bbc_range_scrape_dates_completed", progressWindow.failed, {
+      window,
+      result: "failure",
+    });
+    pushPrometheusSample(
+      lines,
+      "top_scores_bbc_range_scrape_progress_ratio",
+      progressWindow.total > 0 ? progressWindow.completed / progressWindow.total : 0,
+      { window }
+    );
+  });
   const fantasyBootstrapSuccessTimestampSeconds = isoTimestampToSeconds(
     fantasyBootstrapLastSuccessAt
   );
@@ -17838,6 +18027,7 @@ async function updateBbcRangeMatches(options = {}) {
         initiator: "scraper",
         reason: "bbc_scores_fixtures_range_poll",
         trigger,
+        onProgress: handleBbcRangeScrapeProgress,
       })
     );
     cachedBbcRangeMatches = matches;
@@ -17884,6 +18074,7 @@ async function updateBbcRangeMatches(options = {}) {
     });
     console.warn("Failed to update BBC date-range matches:", err.message || err);
   } finally {
+    finishBbcRangeScrapeProgress();
     trackSourceUpdateMetrics({
       source: SOURCE_BBC_RANGE,
       startedAtMs,

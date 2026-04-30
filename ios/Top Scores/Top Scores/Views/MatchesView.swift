@@ -385,21 +385,15 @@ struct MatchesView: View {
     private var matchesList: some View {
         List {
             ForEach(Array(displayedMatchDays.enumerated()), id: \.element.id) { index, day in
-                sectionHeader(for: day)
-                    .listRowInsets(
-                        EdgeInsets(
-                            top: index == 0
-                                ? compactFixturesSpacing.dayHeaderTopFirst
-                                : compactFixturesSpacing.dayHeaderTop,
-                            leading: 16,
-                            bottom: compactFixturesSpacing.dayHeaderBottom,
-                            trailing: 16
-                        )
-                    )
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
+                Section {
+                    compactLeagueRows(for: day)
+                } header: {
+                    sectionHeader(for: day, isFirst: index == 0)
+                }
+            }
 
-                compactLeagueRows(for: day)
+            if mode == .results && matchesStore.isLoadingMoreMatches {
+                loadingMoreMatchesRow
             }
         }
         .listStyle(.plain)
@@ -420,7 +414,25 @@ struct MatchesView: View {
         }
     }
 
-    private func sectionHeader(for day: MatchDay) -> some View {
+    private var loadingMoreMatchesRow: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .controlSize(.small)
+                .tint(.accentColor)
+            Text("Loading more matches...")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 18)
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func sectionHeader(for day: MatchDay, isFirst: Bool) -> some View {
         HStack(spacing: 12) {
             Text(day.displayDate)
                 .font(compactDayHeaderFont)
@@ -431,6 +443,16 @@ struct MatchesView: View {
             if mode == .fixtures && shouldShowPredictorButton(for: day) {
                 predictorControls(for: day)
             }
+        }
+        .padding(.top, isFirst ? compactFixturesSpacing.dayHeaderTopFirst : compactFixturesSpacing.dayHeaderTop)
+        .padding(.bottom, compactFixturesSpacing.dayHeaderBottom)
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color(.separator).opacity(0.35))
+                .frame(height: 0.5)
         }
         .textCase(nil)
     }
@@ -530,6 +552,16 @@ struct MatchesView: View {
         }
         .disabled(match.isPostponed)
         .buttonStyle(.plain)
+        .onAppear {
+            let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+            Task {
+                await matchesStore.prefetchIfNeeded(
+                    currentMatch: match,
+                    preferences: snapshot,
+                    mode: mode
+                )
+            }
+        }
         .listRowInsets(
             EdgeInsets(
                 top: compactFixturesSpacing.rowTop,

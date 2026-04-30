@@ -3,8 +3,8 @@ import Foundation
 struct APIClient {
     let baseURL: URL
     let session: URLSession
-    private static let defaultPastDays = 90
     private static let openEndedFixtureEndDate = "9999-12-31"
+    private static let resultsHistoryYears = 1
     private static let matchStatesBatchLimit = 500
     private static let maxLoggedBodyLength = 240
     private static let retryDelayNanos: UInt64 = 350_000_000
@@ -199,6 +199,29 @@ struct APIClient {
         try await fetchAllMatches(
             preferences: preferences,
             mode: mode,
+            pageSize: pageSize,
+            dateRangeQueryItems: Self.dateRangeQueryItems(startDate: startDate, endDate: endDate),
+            includePreferenceFilters: includePreferenceFilters,
+            hydrateStates: hydrateStates,
+            ifModifiedSince: ifModifiedSince
+        )
+    }
+
+    func fetchMatchesPageInRange(
+        preferences: PreferencesSnapshot,
+        mode: MatchesViewMode,
+        startDate: Date,
+        endDate: Date,
+        page: Int,
+        pageSize: Int = 500,
+        includePreferenceFilters: Bool = true,
+        hydrateStates: Bool = true,
+        ifModifiedSince: Date? = nil
+    ) async throws -> MatchPageResponse {
+        try await fetchMatchesPage(
+            preferences: preferences,
+            mode: mode,
+            page: page,
             pageSize: pageSize,
             dateRangeQueryItems: Self.dateRangeQueryItems(startDate: startDate, endDate: endDate),
             includePreferenceFilters: includePreferenceFilters,
@@ -580,11 +603,8 @@ struct APIClient {
     }
 
     private func combinedDateRangeQueryItems(now: Date = Date()) -> [URLQueryItem] {
-        let calendar = Calendar.current
-        let startDate = calendar.date(byAdding: .day, value: -Self.defaultPastDays, to: now) ?? now
-        let formatter = Self.dateFormatter
         return [
-            URLQueryItem(name: "start", value: formatter.string(from: startDate)),
+            URLQueryItem(name: "start", value: Self.dateFormatter.string(from: Self.resultHistoryStartDate(from: now))),
             URLQueryItem(name: "end", value: Self.openEndedFixtureEndDate),
         ]
     }
@@ -592,19 +612,23 @@ struct APIClient {
     private static func dateRangeQueryItems(mode: MatchesViewMode, now: Date = Date()) -> [URLQueryItem] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
-        let startDate: Date
 
         switch mode {
         case .fixtures:
-            startDate = today
             return [
-                URLQueryItem(name: "start", value: Self.dateFormatter.string(from: startDate)),
+                URLQueryItem(name: "start", value: Self.dateFormatter.string(from: today)),
                 URLQueryItem(name: "end", value: Self.openEndedFixtureEndDate),
             ]
         case .results:
-            startDate = calendar.date(byAdding: .day, value: -Self.defaultPastDays, to: today) ?? today
-            return dateRangeQueryItems(startDate: startDate, endDate: today)
+            return [
+                URLQueryItem(name: "start", value: Self.dateFormatter.string(from: Self.resultHistoryStartDate(from: today))),
+                URLQueryItem(name: "end", value: Self.dateFormatter.string(from: today)),
+            ]
         }
+    }
+
+    private static func resultHistoryStartDate(from date: Date) -> Date {
+        Calendar.current.date(byAdding: .year, value: -Self.resultsHistoryYears, to: date) ?? date
     }
 
     private static func dateRangeQueryItems(startDate: Date, endDate: Date) -> [URLQueryItem] {

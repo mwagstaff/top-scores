@@ -10,7 +10,7 @@ const cheerio = require("cheerio");
 const DEFAULT_BBC_URL = "https://www.bbc.co.uk/sport/football/scores-fixtures";
 const DEFAULT_BBC_OUTPUT = path.join(__dirname, "bbc_live_matches.json");
 const DEFAULT_BBC_MATCH_TIMEZONE = "Europe/London";
-const DEFAULT_BBC_RANGE_PAST_DAYS = 30;
+const DEFAULT_BBC_RANGE_PAST_DAYS = 300;
 const DEFAULT_BBC_RANGE_FUTURE_DAYS = 90;
 const DEFAULT_BBC_RANGE_CONCURRENCY = 20;
 const BBC_BASE_URL = "https://www.bbc.co.uk";
@@ -3392,11 +3392,51 @@ async function fetchBbcScoresFixturesByDateRange(options = {}) {
   const concurrency = Number.isFinite(options.concurrency)
     ? Math.max(1, Math.floor(options.concurrency))
     : DEFAULT_BBC_RANGE_CONCURRENCY;
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+  const notifyProgress = (event) => {
+    if (!onProgress) return;
+    try {
+      onProgress(event);
+    } catch (_error) {
+      // Metrics observers must not make scraping fail.
+    }
+  };
+
+  if (onProgress) {
+    notifyProgress({
+      event: "start",
+      startDate,
+      endDate,
+      dates,
+      totalDates: dates.length,
+    });
+  }
 
   await mapWithConcurrency(dates, concurrency, async (dateString) => {
-    const dailyMatches = await fetchBbcScoresFixturesByDate(dateString, options);
-    allMatches.push(...dailyMatches);
+    let success = false;
+    try {
+      const dailyMatches = await fetchBbcScoresFixturesByDate(dateString, options);
+      allMatches.push(...dailyMatches);
+      success = true;
+    } finally {
+      if (onProgress) {
+        notifyProgress({
+          event: "date_complete",
+          date: dateString,
+          success,
+        });
+      }
+    }
   });
+
+  if (onProgress) {
+    notifyProgress({
+      event: "complete",
+      startDate,
+      endDate,
+      totalDates: dates.length,
+    });
+  }
 
   return dedupeScheduledMatches(allMatches);
 }

@@ -45,12 +45,14 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
 - Public matches API
   - `GET /api/v1/matches` requires `start=YYYY-MM-DD` and `end=YYYY-MM-DD`, but the route only validates date format and `start <= end`; it does not impose its own maximum date span. Results are limited by the server-side cached/scraped datasets available at the time of the request.
 - iOS app client
-  - The main API client defaults in [`APIClient.swift`](ios/Top%20Scores/Top%20Scores/Services/APIClient.swift) are 90 days back and 90 days forward when it builds a combined match request.
-  - The interactive fixtures screen in [`MatchesStore.swift`](ios/Top%20Scores/Top%20Scores/State/MatchesStore.swift) initially loads 14 days from today, then lazily loads future fixtures in 14-day batches up to a 90-day future horizon.
-  - Results history in [`MatchesStore.swift`](ios/Top%20Scores/Top%20Scores/State/MatchesStore.swift) loads up to 90 days back.
+  - The main API client in [`APIClient.swift`](ios/Top%20Scores/Top%20Scores/Services/APIClient.swift) uses broad match windows when it builds match requests: results from one year before today, and fixtures through `9999-12-31`.
+  - The interactive fixtures screen in [`MatchesStore.swift`](ios/Top%20Scores/Top%20Scores/State/MatchesStore.swift) requests fixtures from today through `9999-12-31`. Fixture display is limited by the server-side scraped/cache data available for the selected filters, not by a local app end-date horizon.
+  - Results history in [`MatchesStore.swift`](ios/Top%20Scores/Top%20Scores/State/MatchesStore.swift) requests results from one year before today through today and automatically loads additional result pages in the background until the server has no more data in that window.
+  - Competition/category filtering is requested from the server with the user's preferences. The app keeps only date-mode filtering locally so competition names, weights, normalization, and category membership can be controlled server-side.
 - Web client
-  - The web match query builder in [`web/src/client/api.ts`](web/src/client/api.ts) requests fixtures from today through 90 days forward.
-  - For results, it requests 30 days back through today.
+  - The web match query builder in [`web/src/client/api.ts`](web/src/client/api.ts) requests fixtures from today through `9999-12-31`.
+  - For results, it requests one year before today through today and automatically loads additional result pages in the background until the server has no more data in that window.
+  - Competition/category filtering is sent to the server with the user's preferences; the web client still supports the explicit in-page custom competition picker as an additional display-only refinement.
 
 ## Important Documents
 

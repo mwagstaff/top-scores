@@ -1,7 +1,7 @@
 {
   "title": "BBC Sport Source Health",
   "schemaVersion": 38,
-  "version": 4,
+  "version": 5,
   "refresh": "10s",
   "panels": [
     {
@@ -254,6 +254,214 @@
         {
           "expr": "100 * sum(rate(source_fetches_total{source=~\"bbc_live_scores|bbc_scores_fixtures_range|bbc_premier_league_table|bbc_match_details|bbc_league_tables\",status=\"failure\"}[$__rate_interval])) / clamp_min(sum(rate(source_fetches_total{source=~\"bbc_live_scores|bbc_scores_fixtures_range|bbc_premier_league_table|bbc_match_details|bbc_league_tables\"}[$__rate_interval])), 1e-9)",
           "legendFormat": "failure %"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Earliest BBC Range Match Date",
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "min(top_scores_bbc_range_match_date_timestamp_seconds{boundary=\"earliest\"} > 0) * 1000",
+          "instant": true,
+          "legendFormat": "earliest"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Latest BBC Range Match Date",
+      "gridPos": {
+        "x": 6,
+        "y": 44,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(top_scores_bbc_range_match_date_timestamp_seconds{boundary=\"latest\"}) * 1000",
+          "instant": true,
+          "legendFormat": "latest"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "BBC Range Scrape Running",
+      "gridPos": {
+        "x": 12,
+        "y": 44,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "Idle"
+                },
+                "1": {
+                  "text": "Running"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(top_scores_bbc_range_scrape_running)",
+          "instant": true,
+          "legendFormat": "running"
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "BBC Range Scrape Progress",
+      "gridPos": {
+        "x": 18,
+        "y": 44,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "expr": "100 * max by (window) (top_scores_bbc_range_scrape_progress_ratio{window=~\"past|future\"})",
+          "instant": true,
+          "legendFormat": "{{window}}"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "BBC Range Scrape Date Counts",
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "expr": "max by (window) (top_scores_bbc_range_scrape_dates_total{window=~\"past|today|future|all\"})",
+          "instant": true,
+          "format": "table",
+          "legendFormat": "total"
+        },
+        {
+          "expr": "max by (window, result) (top_scores_bbc_range_scrape_dates_completed{window=~\"past|today|future|all\"})",
+          "instant": true,
+          "format": "table",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "Metric": true,
+              "metric": true
+            },
+            "renameByName": {
+              "Value": "Count",
+              "Value #A": "Total Dates",
+              "Value #B": "Completed Dates",
+              "window": "Window",
+              "result": "Result"
+            }
+          }
         }
       ]
     }

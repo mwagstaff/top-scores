@@ -142,6 +142,8 @@ export interface MatchesPayload {
   matches: Match[];
   lastUpdated: string | null;
   totalCount: number;
+  page: number;
+  hasMore: boolean;
 }
 
 export interface LeagueTableRow {

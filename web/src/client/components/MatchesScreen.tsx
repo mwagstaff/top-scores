@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchMatches, fetchTeamRankings, fetchCompetitionWeights, fetchCompetitions } from "../api";
+import { fetchMatchesPage, fetchTeamRankings, fetchCompetitionWeights, fetchCompetitions } from "../api";
 import { usePreferences } from "../preferences";
 import { CompetitionWeightLookup, TeamRatingLookup, groupMatches } from "../matchGrouping";
 import { useShouldUseShortTeamNames } from "../useResponsiveTeamNames";
 import { MatchCard } from "./MatchCard";
 import type { ChangeEvent } from "react";
-import type { MatchDayGroup, MatchesMode, Preferences } from "../types";
+import type { Match, MatchDayGroup, MatchesMode, Preferences } from "../types";
 
 interface MatchesScreenProps {
   mode: MatchesMode;
@@ -19,6 +19,10 @@ interface ScreenState {
   groups: MatchDayGroup[];
   totalCount: number;
   lastUpdated: string | null;
+  matches: Match[];
+  page: number;
+  hasMore: boolean;
+  loadingMore: boolean;
 }
 
 const initialState: ScreenState = {
@@ -28,6 +32,10 @@ const initialState: ScreenState = {
   groups: [],
   totalCount: 0,
   lastUpdated: null,
+  matches: [],
+  page: 0,
+  hasMore: false,
+  loadingMore: false,
 };
 
 export function MatchesScreen({ mode }: MatchesScreenProps) {
@@ -37,6 +45,12 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
   const [state, setState]             = useState<ScreenState>(initialState);
   const [reloadToken, reload]         = useReducer((v) => v + 1, 0);
   const useShortTeamNames             = useShouldUseShortTeamNames();
+  const pagingRef = useRef({
+    loading: false,
+    page: 0,
+    hasMore: false,
+    matches: [] as Match[],
+  });
 
   // Client-side competition filter – null means "show all", string[] means "show only these".
   // This is intentionally NOT part of server preferences: the server always fetches the
@@ -91,6 +105,76 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
     const controller    = new AbortController();
     let refreshTimeoutId = 0;
     let loadInFlight     = false;
+    let backgroundLoadInFlight = false;
+
+    const loadRemainingResults = async (
+      rankings: Awaited<ReturnType<typeof fetchTeamRankings>>,
+      weights: Awaited<ReturnType<typeof fetchCompetitionWeights>>
+    ) => {
+      if (mode !== "results" || backgroundLoadInFlight) return;
+      backgroundLoadInFlight = true;
+      pagingRef.current.loading = true;
+      setState((current) => ({ ...current, loadingMore: true }));
+
+      try {
+        while (!controller.signal.aborted && pagingRef.current.hasMore) {
+          const payload = await fetchMatchesPage(
+            mode,
+            preferences,
+            pagingRef.current.page + 1,
+            controller.signal
+          );
+          if (controller.signal.aborted) return;
+
+          const seen = new Set(pagingRef.current.matches.map((match) => match.id));
+          const nextMatches = [
+            ...pagingRef.current.matches,
+            ...payload.matches.filter((match) => !seen.has(match.id)),
+          ];
+          const grouped = groupMatches(
+            nextMatches,
+            mode,
+            preferences.matchGroupSortOrder,
+            new TeamRatingLookup(rankings),
+            new CompetitionWeightLookup(weights)
+          );
+
+          pagingRef.current = {
+            loading: true,
+            page: payload.page,
+            hasMore: payload.hasMore,
+            matches: nextMatches,
+          };
+          setState((current) => ({
+            ...current,
+            groups: grouped,
+            matches: nextMatches,
+            page: payload.page,
+            hasMore: payload.hasMore,
+            loadingMore: payload.hasMore,
+            totalCount: payload.totalCount || current.totalCount,
+            lastUpdated: payload.lastUpdated || current.lastUpdated,
+          }));
+
+          if (payload.matches.length === 0) {
+            break;
+          }
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setState((current) => ({
+          ...current,
+          loadingMore: false,
+          error: error instanceof Error ? error.message : "Unable to load more results.",
+        }));
+      } finally {
+        backgroundLoadInFlight = false;
+        pagingRef.current.loading = false;
+        if (!controller.signal.aborted) {
+          setState((current) => ({ ...current, loadingMore: false }));
+        }
+      }
+    };
 
     const load = async (manual = false) => {
       if (loadInFlight) return;
@@ -113,25 +197,39 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
         const [rankings, weights, payload] = await Promise.all([
           rankingsPromise,
           fetchCompetitionWeights().catch(() => []),
-          fetchMatches(mode, preferences, controller.signal),
+          fetchMatchesPage(mode, preferences, 1, controller.signal),
         ]);
 
         if (controller.signal.aborted) return;
 
+        const allMatches = payload.matches;
         const grouped = groupMatches(
-          payload.matches,
+          allMatches,
           mode,
           preferences.matchGroupSortOrder,
           new TeamRatingLookup(rankings),
           new CompetitionWeightLookup(weights)
         );
 
+        pagingRef.current = {
+          loading: false,
+          page: payload.page,
+          hasMore: payload.hasMore,
+          matches: allMatches,
+        };
         setState({
           loading: false, refreshing: false, error: null,
           groups: grouped,
           totalCount: payload.totalCount,
           lastUpdated: payload.lastUpdated,
+          matches: allMatches,
+          page: payload.page,
+          hasMore: payload.hasMore,
+          loadingMore: false,
         });
+        if (mode === "results" && payload.hasMore) {
+          void loadRemainingResults(rankings, weights);
+        }
       } catch (error) {
         if (controller.signal.aborted) return;
         setState((current) => ({
@@ -213,7 +311,7 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
   const title = mode === "fixtures" ? "Fixtures" : "Results";
 
   return (
-    <section className="screen-panel">
+    <section className="screen-panel match-screen-panel">
       {/* ── Minimal toolbar: search + refresh icons ── */}
       <div className="match-controls">
         {showSearch && (
@@ -283,7 +381,10 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
 
       {/* ── Match list ── */}
       {state.loading ? (
-        <div className="empty-state">Loading {title.toLowerCase()}…</div>
+        <div className="empty-state empty-state--loading">
+          <span className="match-list-footer__spinner" aria-hidden="true" />
+          Loading {title.toLowerCase()}…
+        </div>
       ) : state.error ? (
         <div className="empty-state is-error">{state.error}</div>
       ) : displayedGroups.length === 0 ? (
@@ -323,7 +424,14 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
       {/* ── Last updated footer ── */}
       {state.lastUpdated && (
         <div className="match-list-footer">
-          Updated {formatLastUpdated(state.lastUpdated)}
+          {state.loadingMore ? (
+            <span className="match-list-footer__loading">
+              <span className="match-list-footer__spinner" aria-hidden="true" />
+              Loading more results...
+            </span>
+          ) : (
+            `Updated ${formatLastUpdated(state.lastUpdated)}`
+          )}
         </div>
       )}
     </section>

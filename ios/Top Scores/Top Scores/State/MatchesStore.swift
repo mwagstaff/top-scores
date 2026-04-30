@@ -539,6 +539,7 @@ final class MatchesStore: ObservableObject {
     @Published private(set) var matches: [Match] = []
     @Published private(set) var groupedMatches: [MatchDay] = []
     @Published var isLoading = false
+    @Published private(set) var isLoadingMoreMatches = false
     @Published var errorMessage: String?
     @Published var lastUpdated: Date?
     @Published var isUsingCache = false
@@ -551,6 +552,7 @@ final class MatchesStore: ObservableObject {
         var page: Int = 0
         var hasMore: Bool = true
         var isLoading: Bool = false
+        var isLoadingMore: Bool = false
         var lastUpdated: Date?
         var fixtureCoverageEnd: Date?
         var isUsingCache: Bool = false
@@ -596,7 +598,6 @@ final class MatchesStore: ObservableObject {
     private let fixturesLazyPageSize = 2000
     private let fixturesLazyStartDelayNanos: UInt64 = 30_000_000_000
     private let fixturesLazyInterBatchDelayNanos: UInt64 = 5_000_000_000
-    private let resultsHistoryLoadDays = 90
     private let resultsHistoryPageSize = 500
     private let teamRankingsRefreshDelayNanos: UInt64 = 4_000_000_000
 
@@ -783,9 +784,9 @@ final class MatchesStore: ObservableObject {
     ) async {
         guard mode == activeMode else { return }
         guard mode == .results else { return }
-        _ = currentMatch
-        _ = preferences
-        // Results are fully hydrated up front; there is no scroll-driven paging anymore.
+        guard let lastVisibleResult = state(for: .results).matches.last else { return }
+        guard lastVisibleResult.id == currentMatch.id else { return }
+        await loadMoreResultsIfNeeded(preferences: preferences)
     }
 
     private func startRefreshTask(
@@ -805,6 +806,7 @@ final class MatchesStore: ObservableObject {
             existingTask.cancel()
             var currentModeState = state(for: mode)
             currentModeState.isLoading = false
+            currentModeState.isLoadingMore = false
             modeStates[mode] = currentModeState
         }
 
@@ -873,6 +875,7 @@ final class MatchesStore: ObservableObject {
         fixturesBackgroundLoadTask = nil
 
         fixtureState.isLoading = true
+        fixtureState.isLoadingMore = false
         fixtureState.errorMessage = nil
         fixtureState.isUsingCache = fixtureState.isUsingCache && !fixtureState.matches.isEmpty
         modeStates[.fixtures] = fixtureState
@@ -906,6 +909,7 @@ final class MatchesStore: ObservableObject {
                     response.lastUpdated ?? refreshCompletedAt
                 )
                 nextState.isLoading = false
+                nextState.isLoadingMore = false
                 nextState.isUsingCache = false
                 nextState.errorMessage = nil
                 nextState.lastValidatedSnapshot = preferences
@@ -957,6 +961,7 @@ final class MatchesStore: ObservableObject {
             nextState.page = 0
             nextState.hasMore = false
             nextState.isLoading = false
+            nextState.isLoadingMore = false
             nextState.isUsingCache = false
             nextState.errorMessage = nil
             nextState.lastValidatedSnapshot = preferences
@@ -988,6 +993,7 @@ final class MatchesStore: ObservableObject {
             if Self.isCancellationError(error) {
                 var cancelledState = state(for: .fixtures)
                 cancelledState.isLoading = false
+                cancelledState.isLoadingMore = false
                 cancelledState.errorMessage = nil
                 modeStates[.fixtures] = cancelledState
                 if activeMode == .fixtures {
@@ -1029,27 +1035,23 @@ final class MatchesStore: ObservableObject {
         }
 
         let today = Self.startOfToday()
-        let historyStart = Self.dayOffset(-(resultsHistoryLoadDays - 1), from: today)
+        let historyStart = Self.resultsHistoryStartDate(from: today)
         let hasPotentiallyStaleCachedResults = Self.containsPotentiallyStaleResults(
             resultState.unfilteredMatches,
             today: today
         )
-        let shouldReloadHistory =
-            resultState.unfilteredMatches.isEmpty ||
-            resultState.lastUpdated == nil ||
-            resultState.isUsingCache ||
-            hasPotentiallyStaleCachedResults
-        let loadRange = shouldReloadHistory ? (historyStart...today) : (today...today)
+        let loadRange = historyStart...today
 
         Self.log(
             "results_refresh_begin snapshot=\(Self.snapshotDebugSummary(preferences)) " +
             "visible=\(resultState.matches.count) stored=\(resultState.unfilteredMatches.count) " +
             "range=\(Self.formatDateForLog(loadRange.lowerBound))...\(Self.formatDateForLog(loadRange.upperBound)) " +
-            "full_reload=\(shouldReloadHistory)"
+            "page=1"
         )
         let requestStartedAt = Date()
 
         resultState.isLoading = true
+        resultState.isLoadingMore = false
         resultState.errorMessage = nil
         resultState.isUsingCache = resultState.isUsingCache && !resultState.matches.isEmpty
         modeStates[.results] = resultState
@@ -1068,11 +1070,12 @@ final class MatchesStore: ObservableObject {
                     "sample=\(Self.matchSample(resultState.unfilteredMatches))"
                 )
             }
-            let response = try await client.fetchMatchesInRange(
+            let response = try await client.fetchMatchesPageInRange(
                 preferences: preferences,
                 mode: .results,
                 startDate: loadRange.lowerBound,
                 endDate: loadRange.upperBound,
+                page: 1,
                 pageSize: resultsHistoryPageSize,
                 includePreferenceFilters: true,
                 // Results can retain stale synthetic rows across full-history reloads unless
@@ -1089,6 +1092,7 @@ final class MatchesStore: ObservableObject {
                     response.lastUpdated ?? refreshCompletedAt
                 )
                 nextState.isLoading = false
+                nextState.isLoadingMore = false
                 nextState.isUsingCache = false
                 nextState.errorMessage = nil
                 nextState.lastValidatedSnapshot = preferences
@@ -1102,6 +1106,7 @@ final class MatchesStore: ObservableObject {
                     publishState(for: .results)
                 }
                 updateRefreshTimer(using: resolvedSnapshot(for: preferences), matches: combinedLoadedMatches())
+                await loadRemainingResultsIfNeeded(preferences: preferences)
                 return
             }
 
@@ -1114,11 +1119,7 @@ final class MatchesStore: ObservableObject {
             let effectiveSnapshot = resolvedSnapshot(for: preferences)
             var nextState = state(for: .results)
             nextState.unfilteredMatches = Self.sortedMatches(
-                Self.replacingMatches(
-                    in: nextState.unfilteredMatches,
-                    with: incoming,
-                    within: loadRange
-                ),
+                Self.deduplicatedMatches(incoming),
                 descendingDates: true
             )
             nextState.matches = visibleMatches(
@@ -1128,13 +1129,14 @@ final class MatchesStore: ObservableObject {
             )
             nextState.groupedMatches = []
             nextState.groupedMatchesRevision = nil
-            nextState.page = 0
-            nextState.hasMore = false
+            nextState.page = response.page
+            nextState.hasMore = response.hasMore
             nextState.lastUpdated = Self.maxDate(
                 nextState.lastUpdated,
                 response.lastUpdated ?? refreshCompletedAt
             )
             nextState.isLoading = false
+            nextState.isLoadingMore = false
             nextState.isUsingCache = false
             nextState.errorMessage = nil
             nextState.lastValidatedSnapshot = preferences
@@ -1152,10 +1154,12 @@ final class MatchesStore: ObservableObject {
             }
             refreshTeamRatingLookup(apiBaseURL: effectiveSnapshot.apiBaseURL)
             updateRefreshTimer(using: effectiveSnapshot, matches: combinedLoadedMatches())
+            await loadRemainingResultsIfNeeded(preferences: effectiveSnapshot)
         } catch {
             if Self.isCancellationError(error) {
                 var cancelledState = state(for: .results)
                 cancelledState.isLoading = false
+                cancelledState.isLoadingMore = false
                 cancelledState.errorMessage = nil
                 modeStates[.results] = cancelledState
                 if activeMode == .results {
@@ -1169,11 +1173,182 @@ final class MatchesStore: ObservableObject {
         }
     }
 
+    private func loadMoreResultsIfNeeded(preferences: PreferencesSnapshot) async {
+        guard let baseURL = URL(string: preferences.apiBaseURL) else { return }
+        var resultState = state(for: .results)
+        guard resultState.hasMore else { return }
+        guard !resultState.isLoading else { return }
+
+        let loadedPageCount = max(
+            resultState.page,
+            Self.inferredLoadedPageCount(
+                matchCount: resultState.unfilteredMatches.count,
+                pageSize: resultsHistoryPageSize
+            )
+        )
+        let nextPage = max(1, loadedPageCount + 1)
+        let today = Self.startOfToday()
+        let loadRange = Self.resultsHistoryStartDate(from: today)...today
+        resultState.isLoading = true
+        resultState.isLoadingMore = true
+        resultState.errorMessage = nil
+        modeStates[.results] = resultState
+        if activeMode == .results {
+            publishState(for: .results)
+        }
+
+        do {
+            let effectiveSnapshot = resolvedSnapshot(for: preferences)
+            let batch = try await Self.fetchRemainingResultPages(
+                baseURL: baseURL,
+                preferences: preferences,
+                startDate: loadRange.lowerBound,
+                endDate: loadRange.upperBound,
+                firstPage: nextPage,
+                pageSize: resultsHistoryPageSize
+            )
+            var nextState = state(for: .results)
+            let prepared = await Self.preparedResultsState(
+                existing: nextState.unfilteredMatches,
+                incoming: batch.matches,
+                snapshot: effectiveSnapshot
+            )
+            nextState.unfilteredMatches = prepared.unfilteredMatches
+            nextState.matches = prepared.visibleMatches
+            nextState.groupedMatches = []
+            nextState.groupedMatchesRevision = nil
+            nextState.page = batch.lastPage
+            nextState.hasMore = batch.hasMore
+            nextState.lastUpdated = Self.maxDate(nextState.lastUpdated, batch.lastUpdated)
+            nextState.isLoading = false
+            nextState.isLoadingMore = false
+            nextState.isUsingCache = false
+            nextState.errorMessage = nil
+            modeStates[.results] = nextState
+
+            if activeMode == .results {
+                publishState(for: .results)
+            }
+            persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
+        } catch {
+            if Self.isCancellationError(error) {
+                var cancelledState = state(for: .results)
+                cancelledState.isLoading = false
+                cancelledState.isLoadingMore = false
+                modeStates[.results] = cancelledState
+                if activeMode == .results {
+                    publishState(for: .results)
+                }
+                return
+            }
+            var failedState = state(for: .results)
+            failedState.isLoading = false
+            failedState.isLoadingMore = false
+            failedState.errorMessage = "Unable to load more results. Check your API URL or connection."
+            modeStates[.results] = failedState
+            if activeMode == .results {
+                publishState(for: .results)
+            }
+        }
+    }
+
+    private func loadRemainingResultsIfNeeded(preferences: PreferencesSnapshot) async {
+        await loadMoreResultsIfNeeded(preferences: preferences)
+    }
+
+    private struct ResultsPageBatch: Sendable {
+        let matches: [Match]
+        let lastPage: Int
+        let hasMore: Bool
+        let lastUpdated: Date?
+    }
+
+    private struct PreparedResultsState: Sendable {
+        let unfilteredMatches: [Match]
+        let visibleMatches: [Match]
+    }
+
+    private nonisolated static func fetchRemainingResultPages(
+        baseURL: URL,
+        preferences: PreferencesSnapshot,
+        startDate: Date,
+        endDate: Date,
+        firstPage: Int,
+        pageSize: Int
+    ) async throws -> ResultsPageBatch {
+        let client = APIClient(baseURL: baseURL)
+        var page = firstPage
+        var allMatches: [Match] = []
+        var lastPage = max(1, firstPage - 1)
+        var hasMore = true
+        var lastUpdated: Date?
+
+        while hasMore {
+            try Task.checkCancellation()
+            let response = try await client.fetchMatchesPageInRange(
+                preferences: preferences,
+                mode: .results,
+                startDate: startDate,
+                endDate: endDate,
+                page: page,
+                pageSize: pageSize,
+                includePreferenceFilters: true,
+                hydrateStates: false
+            )
+
+            var incoming = response.matches
+            #if !DEBUG
+            incoming = incoming.filter { $0.isTestMatch != true }
+            #endif
+            allMatches.append(contentsOf: incoming)
+            lastPage = response.page
+            hasMore = response.hasMore && !response.matches.isEmpty
+            lastUpdated = Self.maxDate(lastUpdated, response.lastUpdated)
+            page = response.page + 1
+
+            await Task.yield()
+        }
+
+        return ResultsPageBatch(
+            matches: allMatches,
+            lastPage: lastPage,
+            hasMore: hasMore,
+            lastUpdated: lastUpdated
+        )
+    }
+
+    private nonisolated static func preparedResultsState(
+        existing: [Match],
+        incoming: [Match],
+        snapshot: PreferencesSnapshot
+    ) async -> PreparedResultsState {
+        await Task.detached(priority: .utility) {
+            let unfiltered = Self.sortedMatches(
+                Self.deduplicatedMatches(
+                    Self.mergePages(existing: existing, incoming: incoming)
+                ),
+                descendingDates: true
+            )
+            let visible = Self.sortedMatches(
+                Self.deduplicatedMatches(
+                    Self.applyPreferenceFilters(to: unfiltered, snapshot: snapshot, mode: .results)
+                ),
+                descendingDates: true
+            )
+            return PreparedResultsState(unfilteredMatches: unfiltered, visibleMatches: visible)
+        }.value
+    }
+
     private struct FixtureRangeLoadResult: Sendable {
         let range: ClosedRange<Date>
         let matches: [Match]
         let lastUpdated: Date?
         let durationMs: Int
+    }
+
+    private nonisolated static func inferredLoadedPageCount(matchCount: Int, pageSize: Int) -> Int {
+        guard matchCount > 0, pageSize > 0 else { return 0 }
+        return Int(ceil(Double(matchCount) / Double(pageSize)))
     }
 
     private func scheduleRemainingFixtureLoadingIfNeeded(preferences: PreferencesSnapshot) {
@@ -1707,6 +1882,7 @@ final class MatchesStore: ObservableObject {
     private func setError(_ message: String, for mode: MatchesViewMode) {
         var current = state(for: mode)
         current.isLoading = false
+        current.isLoadingMore = false
         current.errorMessage = message
         modeStates[mode] = current
         if mode == activeMode {
@@ -1728,6 +1904,7 @@ final class MatchesStore: ObservableObject {
 
         matches = current.matches
         isLoading = current.isLoading
+        isLoadingMoreMatches = current.isLoadingMore
         errorMessage = current.errorMessage
         lastUpdated = current.lastUpdated
         isUsingCache = current.isUsingCache
@@ -2003,9 +2180,10 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    static func filterMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
+    nonisolated static func filterMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
         let calendar = Calendar.current
         let today = startOfToday()
+        let earliestResultDate = resultsHistoryStartDate(from: today)
         return matches.filter { match in
             guard let date = match.dateOnly else {
                 return mode == .fixtures
@@ -2015,6 +2193,7 @@ final class MatchesStore: ObservableObject {
             case .fixtures:
                 return day >= today
             case .results:
+                guard day >= earliestResultDate else { return false }
                 if day < today { return true }
                 if day > today { return false }
                 return match.isInProgress || match.isFinished
@@ -2025,6 +2204,7 @@ final class MatchesStore: ObservableObject {
     private nonisolated static func storageMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
         let calendar = Calendar.current
         let today = startOfToday()
+        let earliestResultDate = resultsHistoryStartDate(from: today)
         return matches.filter { match in
             guard let date = match.dateOnly else {
                 return mode == .fixtures
@@ -2034,6 +2214,7 @@ final class MatchesStore: ObservableObject {
             case .fixtures:
                 return day >= today
             case .results:
+                guard day >= earliestResultDate else { return false }
                 if day < today { return true }
                 if day > today { return false }
                 return match.isInProgress || match.isFinished
@@ -2041,7 +2222,7 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    static func applyPreferenceFilters(
+    nonisolated static func applyPreferenceFilters(
         to matches: [Match],
         snapshot: PreferencesSnapshot,
         mode: MatchesViewMode
@@ -2150,12 +2331,12 @@ final class MatchesStore: ObservableObject {
         Calendar.current.startOfDay(for: now)
     }
 
-    private nonisolated static func dayOffset(_ value: Int, from date: Date) -> Date {
-        Calendar.current.date(byAdding: .day, value: value, to: date) ?? date
-    }
-
     private nonisolated static func openEndedFixtureDate() -> Date {
         DateComponents(calendar: Calendar.current, year: 9999, month: 12, day: 31).date ?? .distantFuture
+    }
+
+    private nonisolated static func resultsHistoryStartDate(from date: Date) -> Date {
+        Calendar.current.date(byAdding: .year, value: -1, to: date) ?? date
     }
 
     private nonisolated static func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {

@@ -33,6 +33,7 @@ let competitionWeightsCache: CompetitionWeightEntry[] | null = null;
 const matchDetailsCache = new Map<string, MatchDetails>();
 const matchDetailsPromises = new Map<string, Promise<MatchDetails>>();
 const OPEN_ENDED_FIXTURE_END_DATE = "9999-12-31";
+const RESULTS_HISTORY_YEARS = 1;
 
 export async function fetchMatches(
   mode: MatchesMode,
@@ -70,6 +71,33 @@ export async function fetchMatches(
     matches,
     lastUpdated,
     totalCount: totalCount || matches.length,
+    page,
+    hasMore: false,
+  };
+}
+
+export async function fetchMatchesPage(
+  mode: MatchesMode,
+  preferences: Preferences,
+  page: number,
+  signal?: AbortSignal
+): Promise<MatchesPayload> {
+  const params = buildMatchQuery(mode, preferences, page);
+  const response = await fetch(`/api/v1/matches?${params.toString()}`, {
+    signal,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load ${mode}: ${response.status}`);
+  }
+
+  const matches = (await response.json()).map(normalizeMatch);
+  return {
+    matches,
+    lastUpdated: response.headers.get("X-Last-Updated"),
+    totalCount: Number(response.headers.get("X-Total-Count") || matches.length),
+    page: Number(response.headers.get("X-Page") || page),
+    hasMore: response.headers.get("X-Has-More") === "true" && matches.length > 0,
   };
 }
 
@@ -253,16 +281,14 @@ async function requestJson<T>(url: string, signal?: AbortSignal, init?: RequestI
 function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: number): URLSearchParams {
   const params = new URLSearchParams();
   const today = new Date();
-  const startDate = new Date(today);
 
   if (mode === "fixtures") {
     params.set("sort", "asc");
   } else {
-    startDate.setDate(startDate.getDate() - 30);
     params.set("sort", "desc");
   }
 
-  params.set("start", formatDateParam(mode === "fixtures" ? today : startDate));
+  params.set("start", mode === "fixtures" ? formatDateParam(today) : formatDateParam(resultHistoryStartDate(today)));
   params.set("end", mode === "fixtures" ? OPEN_ENDED_FIXTURE_END_DATE : formatDateParam(today));
   params.set("page", String(page));
   params.set("page_size", "200");
@@ -287,6 +313,12 @@ function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: numb
   }
 
   return params;
+}
+
+function resultHistoryStartDate(today: Date): Date {
+  const startDate = new Date(today);
+  startDate.setFullYear(startDate.getFullYear() - RESULTS_HISTORY_YEARS);
+  return startDate;
 }
 
 function formatDateParam(date: Date): string {

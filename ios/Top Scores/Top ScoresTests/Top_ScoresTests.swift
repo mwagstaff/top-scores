@@ -129,6 +129,42 @@ struct Top_ScoresTests {
         #expect(names.contains("major_tournaments"))
     }
 
+    @Test func matchesPageQueryItems_omitCategoryParamsWhenPremierLeagueTeamsOnlyIsOff() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: PreferencesStore.defaultSelectedLeagues,
+            selectedChannels: PreferencesStore.defaultSelectedChannels,
+            competitionFilterEnabled: false,
+            channelFilterEnabled: false,
+            englishPremierLeagueTeamsOnly: false,
+            majorUEFAClubGamesEnabled: true,
+            homeNationsFilterEnabled: true,
+            majorTournamentsFilterEnabled: true,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+        let queryItems = APIClient.matchesPageQueryItems(
+            preferences: snapshot,
+            mode: .results,
+            page: 1,
+            pageSize: 120,
+            dateRangeQueryItems: [
+                URLQueryItem(name: "start", value: "2026-04-01"),
+                URLQueryItem(name: "end", value: "2026-04-29")
+            ]
+        )
+
+        let names = Set(queryItems.map(\.name))
+        #expect(!snapshot.effectiveEnglishPremierLeagueTeamsOnly)
+        #expect(!snapshot.effectiveMajorUEFAClubGamesEnabled)
+        #expect(!snapshot.effectiveHomeNationsFilterEnabled)
+        #expect(!snapshot.effectiveMajorTournamentsFilterEnabled)
+        #expect(!names.contains("league"))
+        #expect(!names.contains("epl_only"))
+        #expect(!names.contains("major_uefa"))
+        #expect(!names.contains("home_nations"))
+        #expect(!names.contains("major_tournaments"))
+    }
+
     @Test func matchesPageQueryItems_includeCompetitionCategoryParamsWhenMasterFilterIsOn() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: PreferencesStore.defaultSelectedLeagues,
@@ -377,11 +413,11 @@ struct Top_ScoresTests {
         #expect(filtered.count == 1)
     }
 
-    @Test func applyPreferenceFilters_fixtures_doesNotApplyCompetitionFilteringLocally() async throws {
+    @Test func applyPreferenceFilters_fixtures_appliesPremierLeagueTeamsOnlyLocally() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: [],
             selectedChannels: [],
-            competitionFilterEnabled: true,
+            competitionFilterEnabled: false,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: true,
             homeNationsFilterEnabled: false,
@@ -418,7 +454,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["prem-team", "non-prem-team"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["prem-team"])
     }
 
     @Test func applyPreferenceFilters_fixtures_keepsStagedMajorUefaClubMatchesVisible() async throws {
@@ -464,7 +500,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-ucl", "league-one"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-ucl"])
     }
 
     @Test func applyPreferenceFilters_fixtures_supportLeagueSelectionForStagedUefaClubCompetitions() async throws {
@@ -510,16 +546,157 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-ucl", "laliga"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-ucl"])
     }
 
-    @Test func applyPreferenceFilters_fixtures_supportLocalMajorTournamentFiltering() async throws {
+    @Test func applyPreferenceFilters_results_showAllCompetitionsWhenFiltersAreOff() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: ["UEFA Champions League"],
+            selectedChannels: [],
+            competitionFilterEnabled: false,
+            channelFilterEnabled: false,
+            englishPremierLeagueTeamsOnly: false,
+            majorUEFAClubGamesEnabled: true,
+            homeNationsFilterEnabled: true,
+            majorTournamentsFilterEnabled: true,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+        let matches = [
+            Match(
+                date: formattedDate(offsetDays: -2),
+                time: "20:00",
+                homeTeam: "Manchester United",
+                awayTeam: "Brentford",
+                league: "Premier League",
+                matchDetailsID: "man-utd-brentford",
+                hasBbcSource: true,
+                tvChannels: [],
+                homeScore: 2,
+                awayScore: 1,
+                scoreStatus: "FT"
+            ),
+            Match(
+                date: formattedDate(offsetDays: -2),
+                time: "20:00",
+                homeTeam: "PSG",
+                awayTeam: "Bayern Munich",
+                league: "UEFA Champions League",
+                leagueSubcategory: "Semi-finals",
+                matchDetailsID: "psg-bayern",
+                hasBbcSource: true,
+                tvChannels: [],
+                homeScore: 5,
+                awayScore: 4,
+                scoreStatus: "FT"
+            )
+        ]
+
+        let filtered = MatchesStore.applyPreferenceFilters(
+            to: matches,
+            snapshot: snapshot,
+            mode: .results
+        )
+
+        #expect(filtered.compactMap(\.matchDetailsID) == ["man-utd-brentford", "psg-bayern"])
+    }
+
+    @Test func applyPreferenceFilters_results_appliesCompetitionFilterLocally() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: ["Premier League"],
+            selectedChannels: [],
+            competitionFilterEnabled: true,
+            channelFilterEnabled: false,
+            englishPremierLeagueTeamsOnly: false,
+            majorUEFAClubGamesEnabled: false,
+            homeNationsFilterEnabled: false,
+            majorTournamentsFilterEnabled: false,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+        let matches = [
+            Match(
+                date: formattedDate(offsetDays: -2),
+                time: "20:00",
+                homeTeam: "Manchester United",
+                awayTeam: "Brentford",
+                league: "Premier League",
+                matchDetailsID: "man-utd-brentford",
+                hasBbcSource: true,
+                tvChannels: [],
+                homeScore: 2,
+                awayScore: 1,
+                scoreStatus: "FT"
+            ),
+            Match(
+                date: formattedDate(offsetDays: -2),
+                time: "20:00",
+                homeTeam: "PSG",
+                awayTeam: "Bayern Munich",
+                league: "UEFA Champions League",
+                matchDetailsID: "psg-bayern",
+                hasBbcSource: true,
+                tvChannels: [],
+                homeScore: 5,
+                awayScore: 4,
+                scoreStatus: "FT"
+            )
+        ]
+
+        let filtered = MatchesStore.applyPreferenceFilters(
+            to: matches,
+            snapshot: snapshot,
+            mode: .results
+        )
+
+        #expect(filtered.compactMap(\.matchDetailsID) == ["man-utd-brentford"])
+    }
+
+    @Test func applyPreferenceFilters_results_emptyCompetitionSelectionShowsNoMatches() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: [],
             selectedChannels: [],
             competitionFilterEnabled: true,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: false,
+            majorUEFAClubGamesEnabled: false,
+            homeNationsFilterEnabled: false,
+            majorTournamentsFilterEnabled: false,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+        let matches = [
+            Match(
+                date: formattedDate(offsetDays: -2),
+                time: "20:00",
+                homeTeam: "Manchester United",
+                awayTeam: "Brentford",
+                league: "Premier League",
+                matchDetailsID: "man-utd-brentford",
+                hasBbcSource: true,
+                tvChannels: [],
+                homeScore: 2,
+                awayScore: 1,
+                scoreStatus: "FT"
+            )
+        ]
+
+        let filtered = MatchesStore.applyPreferenceFilters(
+            to: matches,
+            snapshot: snapshot,
+            mode: .results
+        )
+
+        #expect(filtered.isEmpty)
+    }
+
+    @Test func applyPreferenceFilters_fixtures_supportLocalMajorTournamentFiltering() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: [],
+            selectedChannels: [],
+            competitionFilterEnabled: false,
+            channelFilterEnabled: false,
+            englishPremierLeagueTeamsOnly: true,
             homeNationsFilterEnabled: false,
             majorTournamentsFilterEnabled: true,
             apiBaseURL: PreferencesStore.defaultApiBaseURL,
@@ -565,7 +742,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["world-cup-final", "major", "qualifying"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["world-cup-final", "major"])
     }
 
     @Test func hasBbcMatchEntry_acceptsLegacyBbcSportWebsiteChannel() async throws {

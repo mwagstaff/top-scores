@@ -27,6 +27,11 @@ test("buildPrometheusMetricsText includes top-scores runtime health metrics", ()
     "top_scores_process_cpu_usage_ratio",
     "top_scores_bbc_http_requests_total",
     "top_scores_bbc_http_failed_responses_total",
+    "top_scores_bbc_range_match_date_timestamp_seconds",
+    "top_scores_bbc_range_scrape_running",
+    "top_scores_bbc_range_scrape_dates_total",
+    "top_scores_bbc_range_scrape_dates_completed",
+    "top_scores_bbc_range_scrape_progress_ratio",
     "nodejs_eventloop_utilization_ratio",
     "nodejs_heap_size_limit_bytes",
     "nodejs_heap_size_available_bytes",
@@ -59,5 +64,9 @@ test("buildPrometheusMetricsText includes top-scores runtime health metrics", ()
   assert.match(metricsText, /top_scores_redis_operation_payload_bytes_avg\{operation="test_payload_metric"\}\s+2048(?:\.0+)?\b/);
   assert.match(metricsText, /top_scores_redis_operation_payload_bytes_max\{operation="test_payload_metric"\}\s+2048(?:\.0+)?\b/);
   assert.match(metricsText, /top_scores_runtime_info\{[^}]*runtime="library"[^}]*service="top-scores-library"[^}]*\}\s+1(?:\.0+)?\b/);
+  assert.match(metricsText, /top_scores_bbc_range_match_date_timestamp_seconds\{boundary="earliest"\}\s+\d+(?:\.0+)?\b/);
+  assert.match(metricsText, /top_scores_bbc_range_match_date_timestamp_seconds\{boundary="latest"\}\s+\d+(?:\.0+)?\b/);
+  assert.match(metricsText, /top_scores_bbc_range_scrape_progress_ratio\{window="past"\}\s+\d+(?:\.\d+)?\b/);
+  assert.match(metricsText, /top_scores_bbc_range_scrape_progress_ratio\{window="future"\}\s+\d+(?:\.\d+)?\b/);
   resetRedisMetricsForTests();
 });
