@@ -35,7 +35,7 @@ const BBC_NOTIFICATION_HISTORY_TTL_SECONDS = parsePositiveIntOrFallback(
 );
 const BBC_REQUEST_HISTORY_TTL_SECONDS = parsePositiveIntOrFallback(
   process.env.BBC_REQUEST_HISTORY_TTL_SECONDS,
-  24 * 60 * 60
+  12 * 60 * 60
 );
 const BBC_NOTIFICATION_IDEMPOTENCY_TTL_SECONDS = parsePositiveIntOrFallback(
   process.env.BBC_NOTIFICATION_IDEMPOTENCY_TTL_SECONDS,
@@ -1119,14 +1119,14 @@ async function saveBbcRequestHistory(payload) {
 
   try {
     const redisClient = await getClient();
+    const cutoffMs = pruneCutoffMs(BBC_REQUEST_HISTORY_TTL_SECONDS);
     const transaction = redisClient.multi();
     transaction.set(recordKey, JSON.stringify(record), { EX: BBC_REQUEST_HISTORY_TTL_SECONDS });
     transaction.zAdd(BBC_REQUESTS_INDEX_KEY, [{ score: timestampMs, value: recordKey }]);
     transaction.expire(BBC_REQUESTS_INDEX_KEY, BBC_REQUEST_HISTORY_TTL_SECONDS);
+    // Prune stale entries inside the transaction — avoids a sequential round-trip after every write
+    transaction.zRemRangeByScore(BBC_REQUESTS_INDEX_KEY, 0, cutoffMs);
     await transaction.exec();
-
-    const cutoffMs = pruneCutoffMs(BBC_REQUEST_HISTORY_TTL_SECONDS);
-    await pruneIndexEntries(redisClient, BBC_REQUESTS_INDEX_KEY, cutoffMs);
 
     return record;
   } catch (error) {
@@ -2016,30 +2016,32 @@ async function saveOperationalMatchDetailsRecords(recordsById, options = {}) {
       transaction.sAdd(OPERATIONAL_MATCH_DETAILS_INDEX_KEY, normalizedPayload.id);
     });
 
-    transaction.set(
-      OPERATIONAL_MATCH_DETAILS_META_KEY,
-      JSON.stringify({
-        updated_at: updatedAt,
-        source: options.source || null,
-      })
-    );
-    await transaction.exec();
-
-    const total = await redisClient.sCard(OPERATIONAL_MATCH_DETAILS_INDEX_KEY);
-    await redisClient.set(
-      OPERATIONAL_MATCH_DETAILS_META_KEY,
-      JSON.stringify({
-        updated_at: updatedAt,
-        source: options.source || null,
-        total: Number(total || 0),
-      })
-    );
+    let total;
+    if (replace) {
+      // In replace mode the final set is exactly the incoming records — no sCard needed.
+      total = records.length;
+      transaction.set(
+        OPERATIONAL_MATCH_DETAILS_META_KEY,
+        JSON.stringify({ updated_at: updatedAt, source: options.source || null, total })
+      );
+      await transaction.exec();
+    } else {
+      // In non-replace mode, fold sCard into the transaction so we can read the count
+      // from exec() results and write the meta in one follow-up round-trip instead of two.
+      transaction.sCard(OPERATIONAL_MATCH_DETAILS_INDEX_KEY);
+      const results = await transaction.exec();
+      total = Number(results[results.length - 1] || 0);
+      await redisClient.set(
+        OPERATIONAL_MATCH_DETAILS_META_KEY,
+        JSON.stringify({ updated_at: updatedAt, source: options.source || null, total })
+      );
+    }
 
     return attachRedisMetricMeta({
       updated_at: updatedAt,
       upserted: records.length,
       removed,
-      total: Number(total || 0),
+      total,
       replace,
     }, { payloadBytes });
   } catch (error) {

@@ -17459,16 +17459,12 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayload(payload, options = {}
     options && options.historyMatchesById instanceof Map ? options.historyMatchesById : null;
   let historyMatch = providedHistoryMatchesById ? providedHistoryMatchesById.get(matchId) || null : null;
   if (!historyMatch && !providedHistoryMatchesById) {
-    const nowMs = Date.now();
-    const loadHistory =
-      options && typeof options.loadHistory === "function"
-        ? options.loadHistory
-        : getBbcMatchHistoryGrouped;
-    const history = await loadHistory({
-      match_id: matchId,
-      start_ms: nowMs - 24 * 60 * 60 * 1000,
-      end_ms: nowMs + 60 * 60 * 1000,
-    });
+    // Use the shared 15-second in-memory cache rather than hitting Redis on every match-detail
+    // request. VAR decisions are real-time so 15 s staleness is imperceptible to users, and this
+    // avoids a full history range-scan per individual API call.
+    const customLoader =
+      options && typeof options.loadHistory === "function" ? options.loadHistory : null;
+    const history = await getCachedVarHistoryGrouped(customLoader || undefined);
     if (!history || history.error || !Array.isArray(history.matches)) {
       return payload;
     }
