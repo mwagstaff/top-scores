@@ -906,6 +906,40 @@ let bbcRangeUpdating = false;
 const BBC_RANGE_PROGRESS_WINDOWS = Object.freeze(["past", "today", "future", "all"]);
 let bbcRangeScrapeProgress = buildEmptyBbcRangeScrapeProgress();
 let cachedMergedMatches = [];
+// In-memory cache for deleted match IDs. Refreshed async after every
+// mark/unmark/delete operation and on a 60-second safety-net interval so
+// the /matches handler never needs a Redis round-trip to serve this.
+let cachedDeletedMatchIds = new Set();
+
+async function refreshDeletedMatchIdsCacheAsync() {
+  try {
+    const ids = await getDeletedMatchIds();
+    cachedDeletedMatchIds = new Set(Array.isArray(ids) ? ids : []);
+  } catch (error) {
+    console.warn("[MatchList] Failed to refresh deleted match IDs cache:", error.message || error);
+  }
+}
+
+function proactivelyWarmMatchListResponseCache() {
+  const snapshot = currentMatchDetailsLookupSnapshot();
+  if (!snapshot) return;
+  const mergedItems = filterMatchesByCompetition(cachedMergedMatches);
+  const bbcRangeItems = filterMatchesByCompetition(cachedBbcRangeMatches);
+  getCachedCanonicalPublicMatchListPayloads({
+    matchDetailsLookup: snapshot.lookup,
+    matchDetailsUpdatedAt: snapshot.updated_at,
+    matchDetailsCount: matchDetailsLookupSize(snapshot.lookup),
+    mergedDataset: {
+      items: mergedItems,
+      updated_at: bbcRangeLastUpdated || bbcLastUpdated || null,
+    },
+    bbcRangeDataset: {
+      items: bbcRangeItems,
+      updated_at: bbcRangeLastUpdated || null,
+    },
+  });
+}
+
 let cachedRecentMatches = [];
 let recentLastUpdated = null;
 let cachedPremierLeagueTeams = [];
@@ -10157,7 +10191,14 @@ async function refreshInProgressMatchDetails(options = {}) {
 
     recordsFetched = targets.length;
     success = true;
-    matchDetailsLastUpdated = nowIso;
+    // Only advance the timestamp (and thus invalidate the match-list response
+    // cache) when at least one match record actually changed this cycle.
+    // upsertCanonicalMatchDetailsFromMatch already uses hashComparablePayload
+    // to detect no-op upserts, so refreshedDetailsIds is a reliable signal.
+    if (refreshedDetailsIds.size > 0) {
+      matchDetailsLastUpdated = nowIso;
+      void proactivelyWarmMatchListResponseCache();
+    }
     setSourceCacheSize(SOURCE_BBC_MATCH_DETAILS, matchDetailsById.size);
     logPollSuccess("bbc_match_details", {
       source: SOURCE_BBC_MATCH_DETAILS,
@@ -11259,6 +11300,10 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
       previousById,
     }),
   ]);
+  // Proactively warm the match-list response cache so the first request after
+  // this rebuild always hits a hot cache rather than paying for the rebuild
+  // on the request path.
+  void proactivelyWarmMatchListResponseCache();
 }
 
 function newestIsoTimestamp(values) {
@@ -14516,6 +14561,7 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
     tables_ms: 0,
     team_short_names_ms: 0,
     unmatched_metrics_ms: 0,
+    warm_cache_ms: 0,
     total_ms: 0,
   };
   const reloads = [];
@@ -14700,6 +14746,13 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
     invalidateUnmatchedTeamMetrics({ schedule: false });
   }
   stageTimings.unmatched_metrics_ms = Date.now() - unmatchedMetricsStartedAtMs;
+
+  if (recordMap.matches || recordMap.match_details) {
+    const warmStartedAtMs = Date.now();
+    proactivelyWarmMatchListResponseCache();
+    stageTimings.warm_cache_ms = Date.now() - warmStartedAtMs;
+  }
+
   stageTimings.total_ms = Date.now() - reloadStartedAtMs;
 
   if (
@@ -15944,6 +15997,10 @@ async function deleteCanonicalMatchDetailsByIds(matchIds, options = {}) {
       reason: "admin_redis_match_delete",
       source,
     });
+    // Keep the in-memory deleted-ID cache consistent immediately so subsequent
+    // /matches requests don't serve the deleted matches before the next interval.
+    void refreshDeletedMatchIdsCacheAsync();
+    void proactivelyWarmMatchListResponseCache();
   }
 
   return result;
@@ -16161,12 +16218,13 @@ function setMatchListResponseCacheEntry(key, value) {
 }
 
 function buildMatchListResponseCacheKey(options = {}) {
+  // Keyed on merged/BBC-range dataset identity only. match_details_updated_at
+  // is intentionally excluded: it changes on every upsert (including startup
+  // backfill), which would bust the cache before the first request ever
+  // arrives. The 30-second TTL provides the freshness guarantee for match
+  // detail changes; list views poll /matches/:matchId for real-time scores.
   return JSON.stringify({
     kind: options.kind || "public",
-    match_details_updated_at: options.matchDetailsUpdatedAt || null,
-    match_details_count: Number.isFinite(options.matchDetailsCount)
-      ? options.matchDetailsCount
-      : matchDetailsLookupSize(options.matchDetailsLookup),
     merged_updated_at:
       options.mergedDataset && options.mergedDataset.updated_at
         ? options.mergedDataset.updated_at
@@ -21451,18 +21509,28 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
 
     const memoryMatchDetailsSnapshot = currentMatchDetailsLookupSnapshot();
     stageStartedAtMs = Date.now();
-    const [
-      mergedDataset,
-      bbcRangeDataset,
-      redisMatchDetailsSnapshot,
-      deletedMatchIdList,
-    ] = await Promise.all([
-      getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, mergedMatchesForResponse()),
-        getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, cachedBbcRangeMatches),
-      memoryMatchDetailsSnapshot ? Promise.resolve(null) : getOperationalMatchDetailsSnapshotSafe(),
-      getDeletedMatchIds().catch(() => []),
-    ]);
-    const deletedMatchIdSet = new Set(deletedMatchIdList);
+    // Serve merged and BBC-range datasets from in-memory arrays when available
+    // (they're always populated after the first BBC poll). Only fall back to
+    // Redis on a cold start before the first poll has run. Deleted match IDs
+    // are served from the in-memory Set maintained by refreshDeletedMatchIdsCacheAsync.
+    const mergedDataset = cachedMergedMatches.length > 0
+      ? {
+          items: filterMatchesByCompetition(cachedMergedMatches),
+          updated_at: bbcRangeLastUpdated || bbcLastUpdated || null,
+          source: "memory",
+        }
+      : await getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, []);
+    const bbcRangeDataset = cachedBbcRangeMatches.length > 0
+      ? {
+          items: filterMatchesByCompetition(cachedBbcRangeMatches),
+          updated_at: bbcRangeLastUpdated || null,
+          source: "memory",
+        }
+      : await getOperationalArrayDataset(OP_DATASET_BBC_RANGE_MATCHES, []);
+    const redisMatchDetailsSnapshot = memoryMatchDetailsSnapshot
+      ? null
+      : await getOperationalMatchDetailsSnapshotSafe();
+    const deletedMatchIdSet = cachedDeletedMatchIds;
     timings.dataset_load_ms = Date.now() - stageStartedAtMs;
     const canonicalLookup = memoryMatchDetailsSnapshot
       ? memoryMatchDetailsSnapshot.lookup
@@ -23008,12 +23076,7 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
   const detailsLookup = await getOperationalMatchDetailsByIdSafe(detailsId);
   const payload = detailsLookup && detailsLookup.payload ? detailsLookup.payload : null;
   const fallbackMatchRecord = findInMemoryMatchRecordByMatchId(detailsId);
-  const responsePayload = await enrichMatchDetailsAggregateImmediately(
-    payload || buildFallbackMatchDetailsPayload(detailsId, fallbackMatchRecord),
-    {
-      persistSource: "bbc_details_request_knockout_aggregate_enrichment",
-    }
-  );
+  const responsePayload = payload || buildFallbackMatchDetailsPayload(detailsId, fallbackMatchRecord);
   if (!responsePayload) {
     scheduleMatchDetailsWarm(detailsId, {
       trigger: "bbc_details_request",
@@ -23026,6 +23089,7 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
   const enrichedResponsePayload = await mergeConfirmedVarDisallowedGoalsIntoPayload(stableResponsePayload);
 
   if (payload) {
+    // Backfill handles aggregate enrichment asynchronously, avoiding a blocking BBC HTTP call.
     scheduleMatchDetailsBackfill(payload, { trigger: "bbc_details_request" });
   } else {
     scheduleMatchDetailsWarm(detailsId, {
@@ -25457,6 +25521,9 @@ app.post(`${API_PREFIX}/admin/audit/matches/mark-deleted`, async (req, res) => {
         }
       })
     );
+    // Refresh the in-memory deleted-IDs cache so subsequent /matches requests
+    // reflect the new deletions without waiting for the next interval tick.
+    void refreshDeletedMatchIdsCacheAsync();
     res.status(200).json({
       success: true,
       requested: matchIds.length,
@@ -25484,6 +25551,9 @@ app.delete(`${API_PREFIX}/admin/audit/matches/:matchId/deleted`, async (req, res
   }
   try {
     await unmarkMatchDeleted(matchId);
+    // Refresh the in-memory deleted-IDs cache so the match reappears in /matches
+    // responses immediately rather than waiting for the next interval tick.
+    void refreshDeletedMatchIdsCacheAsync();
     res.status(200).json({ success: true, match_id: matchId, undeleted_at: new Date().toISOString() });
   } catch (error) {
     console.error("[API] Error unmarking match as deleted:", error);
@@ -28521,15 +28591,25 @@ function startScraperIntervals() {
   });
 
   operationalBootstrapPromise
-    .then(() =>
-      runRedisReconciliationCheck({
+    .then(() => {
+      // Seed the in-memory deleted-IDs cache and pre-warm the match-list
+      // response cache after bootstrap so the very first user request is fast.
+      void refreshDeletedMatchIdsCacheAsync();
+      void proactivelyWarmMatchListResponseCache();
+      return runRedisReconciliationCheck({
         trigger: "startup_bootstrap",
         repair: REDIS_RECONCILIATION_AUTO_REPAIR,
-      })
-    )
+      });
+    })
     .catch((error) => {
       console.warn("[RedisReconciliation] Initial run failed:", error.message || error);
     });
+
+  // Safety-net: re-sync deleted-match-IDs from Redis every 60 s to catch any
+  // out-of-band changes that bypassed the in-process update hooks above.
+  registerRuntimeInterval(() => {
+    void refreshDeletedMatchIdsCacheAsync();
+  }, 60 * 1000);
   registerRuntimeInterval(() => {
     operationalBootstrapPromise
       .then(() =>
