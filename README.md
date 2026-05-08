@@ -8,7 +8,8 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
   - Main backend and data ingestion pipeline.
   - `server.js` is the primary API entry point.
   - `fetch_*.js` scripts pull data from BBC Sport, Football on TV, Club Elo, Football Database, and National Elo sources.
-  - `redis_client.js` handles Redis-backed operational state and persistence.
+  - `mongo_client.js` handles Mongo-backed durable state for user/device records, canonical match state, history, and migration targets.
+  - `redis_client.js` now acts as the compatibility facade for existing callers, keeping Redis as a hot cache/fallback for operational state and short-lived coordination.
   - Admin/test harness HTML files and API-side tests also live here.
 - [`ios`](ios)
   - Native Apple client code.
@@ -25,7 +26,8 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
 - Match details enrichment
   - BBC match detail pages are parsed for scores, statuses, scorers, assists, red cards, and lineups.
 - Operational state
-  - Redis-backed datasets store merged matches, match details, tables, rankings, and other cached operational data.
+  - Mongo-backed durable records store user/device state and canonical match details.
+  - Redis remains useful for hot operational datasets, idempotency, short-lived debug records, and deployment-safe fallback reads.
 - iOS caching and sync
   - The iOS app keeps a local cache, shared app-group payloads for widgets/watch, and background refresh logic.
 - Rankings and tables

@@ -15,6 +15,7 @@
     "start:monitor": "node monitor.js",
     "start:scraper": "node scraper.js",
     "start:audit": "node audit.js",
+    "migrate:redis-to-mongo": "node scripts/migrate_redis_to_mongo.js",
     "test-harness": "node -e \"console.log('Start the main API server with npm start, then open http://localhost:3000/admin/harness')\"",
     "live-activity:harness": "./live_activity_test_harness.sh"
   },
@@ -22,6 +23,7 @@
     "@parse/node-apn": "^6.0.1",
     "cheerio": "^1.0.0",
     "express": "^4.19.2",
+    "mongodb": "^6.21.0",
     "nodemailer": "^6.9.0",
     "redis": "^5.11.0"
   }

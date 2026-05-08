@@ -1,0 +1,65 @@
+mwagstaff@ubuntu-4gb-hel1-2:~/dev/top-scores$ npm run migrate:redis-to-mongo -- --apply
+
+> migrate:redis-to-mongo
+> node scripts/migrate_redis_to_mongo.js --apply
+
+[Redis] Connected to 127.0.0.1:6379 (DB 0)
+[Mongo] Connected to top_scores
+{
+  "dry_run": false,
+  "collections": [
+    "user_devices",
+    "matches",
+    "operational_datasets",
+    "fantasy_reminders",
+    "bbc_history",
+    "bbc_requests"
+  ],
+  "history_days": 14,
+  "results": [
+    {
+      "collection": "user_devices",
+      "read": 6,
+      "written": 6,
+      "skipped": 0,
+      "failed": 0
+    },
+    {
+      "collection": "matches",
+      "read": 6432,
+      "written": 6432,
+      "skipped": 0,
+      "failed": 0
+    },
+    {
+      "collection": "operational_datasets",
+      "read": 10,
+      "written": 10,
+      "skipped": 0,
+      "failed": 0
+    },
+    {
+      "collection": "fantasy_reminders",
+      "read": 2,
+      "written": 2,
+      "skipped": 0,
+      "failed": 0
+    },
+    {
+      "collection": "bbc_history",
+      "read": 0,
+      "written": 0,
+      "skipped": 0,
+      "failed": 0
+    },
+    {
+      "collection": "bbc_requests",
+      "read": 500,
+      "written": 500,
+      "skipped": 0,
+      "failed": 0
+    }
+  ]
+}
+[Redis] Connection closed
+mwagstaff@ubuntu-4gb-hel1-2:~/dev/top-scores$

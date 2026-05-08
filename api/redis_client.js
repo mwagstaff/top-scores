@@ -1,10 +1,13 @@
 const crypto = require("crypto");
 const { createClient } = require("redis");
+const mongoStore = require("./mongo_client");
 
 const REDIS_HOST = process.env.REDIS_HOST || "127.0.0.1";
 const REDIS_PORT = process.env.REDIS_PORT || 6379;
 const REDIS_DB = process.env.REDIS_DB || 0;
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
+const MONGO_READ_BACKFILL_DISABLED = process.env.MONGO_READ_BACKFILL_DISABLED === "1";
+const MONGO_READ_PRIMARY_DISABLED = process.env.MONGO_READ_PRIMARY_DISABLED === "1";
 
 const DB_NAME = "top_scores";
 const USER_PREFERENCES_PREFIX = `${DB_NAME}:user_preferences:`;
@@ -102,6 +105,14 @@ const LIVE_ACTIVITY_MATCH_TIMELINE_INDEX_PREFIX = `${DB_NAME}:live_activity:time
 let client = null;
 let isConnected = false;
 let ttlPolicyEnsured = false;
+
+function shouldBackfillMongoReads() {
+  return !MONGO_READ_BACKFILL_DISABLED;
+}
+
+function shouldReadMongoPrimary() {
+  return !MONGO_READ_PRIMARY_DISABLED;
+}
 
 // ─── Redis operation metrics ──────────────────────────────────────────────────
 const REDIS_OP_DURATION_BUCKETS_S = [0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 5.0];
@@ -769,7 +780,9 @@ async function saveUserPreferences(
     let existing = null;
     if (options && options.mergeExisting !== false) {
       const rawExisting = await redisClient.get(key);
-      existing = rawExisting ? safeJsonParse(rawExisting, `user preferences ${normalizedToken}`) : null;
+      existing = rawExisting
+        ? safeJsonParse(rawExisting, `user preferences ${normalizedToken}`)
+        : await mongoStore.getUserPreferences(normalizedToken);
     }
 
     const resolvedAPNSToken = apnsToken !== undefined
@@ -819,6 +832,9 @@ async function saveUserPreferences(
     transaction.set(key, serializedData, { EX: USER_PREFERENCES_TTL_SECONDS });
     transaction.sAdd(USER_PREFERENCES_INDEX_KEY, normalizedToken);
     await transaction.exec();
+    await mongoStore.upsertUserPreferences(data).catch((error) => {
+      console.warn("[Mongo] Failed mirroring user preferences:", error.message || error);
+    });
     console.log(
       `[Redis] Saved preferences for device: ${normalizedToken.substring(0, 12)}... (APNS: ${resolvedAPNSToken ? "Yes" : "No"}, Dev: ${resolvedIsDevelopmentBuild})`
     );
@@ -838,6 +854,13 @@ async function getUserPreferences(deviceToken) {
   const key = buildUserPreferencesKey(normalizedToken);
 
   try {
+    const mongoRecord = shouldReadMongoPrimary()
+      ? await mongoStore.getUserPreferences(normalizedToken)
+      : null;
+    if (mongoRecord) {
+      return mongoRecord;
+    }
+
     const redisClient = await getClient();
     const data = await redisClient.get(key);
 
@@ -845,7 +868,13 @@ async function getUserPreferences(deviceToken) {
       return null;
     }
 
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (shouldBackfillMongoReads()) {
+      await mongoStore.upsertUserPreferences(parsed).catch((error) => {
+        console.warn("[Mongo] Failed backfilling user preferences:", error.message || error);
+      });
+    }
+    return parsed;
   } catch (error) {
     console.error("[Redis] Error retrieving user preferences:", error);
     return null;
@@ -862,12 +891,16 @@ async function deleteUserPreferences(deviceToken) {
 
   try {
     const redisClient = await getClient();
-    const [deleted] = await Promise.all([
+    const [deleted, _removedFromIndex, mongoDeleted] = await Promise.all([
       redisClient.del(key),
       redisClient.sRem(USER_PREFERENCES_INDEX_KEY, normalizedToken),
+      mongoStore.deleteUserPreferences(normalizedToken).catch((error) => {
+        console.warn("[Mongo] Failed deleting user preferences:", error.message || error);
+        return null;
+      }),
     ]);
     console.log(`[Redis] Deleted preferences for device: ${normalizedToken.substring(0, 12)}...`);
-    return deleted > 0;
+    return deleted > 0 || mongoDeleted === true;
   } catch (error) {
     console.error("[Redis] Error deleting user preferences:", error);
     return false;
@@ -876,6 +909,13 @@ async function deleteUserPreferences(deviceToken) {
 
 async function getAllUserPreferences() {
   try {
+    const mongoRecords = shouldReadMongoPrimary()
+      ? await mongoStore.getAllUserPreferences()
+      : null;
+    if (Array.isArray(mongoRecords) && mongoRecords.length > 0) {
+      return mongoRecords;
+    }
+
     const redisClient = await getClient();
     const [indexReady, indexedTokensRaw] = await Promise.all([
       redisClient.get(USER_PREFERENCES_INDEX_READY_KEY),
@@ -922,6 +962,16 @@ async function getAllUserPreferences() {
       await redisClient.sRem(USER_PREFERENCES_INDEX_KEY, staleTokens);
     }
 
+    if (records.length > 0 && shouldBackfillMongoReads()) {
+      await Promise.all(
+        records.map((record) =>
+          mongoStore.upsertUserPreferences(record).catch((error) => {
+            console.warn("[Mongo] Failed backfilling user preferences index:", error.message || error);
+          })
+        )
+      );
+    }
+
     return attachRedisMetricMeta(records, { payloadBytes });
   } catch (error) {
     console.error("[Redis] Error retrieving all user preferences:", error);
@@ -941,7 +991,9 @@ async function updateUserLiveActivityState(deviceToken, liveActivityPatch = {}, 
   try {
     const redisClient = await getClient();
     const raw = await redisClient.get(key);
-    const existing = raw ? safeJsonParse(raw, `user preferences ${normalizedToken}`) : null;
+    const existing = raw
+      ? safeJsonParse(raw, `user preferences ${normalizedToken}`)
+      : await mongoStore.getUserPreferences(normalizedToken);
     // Live-activity callbacks can race with preference/fantasy sync writes.
     // Re-read the latest record before persisting so we don't resurrect stale fantasy data.
     const latestRaw = await redisClient.get(key);
@@ -971,6 +1023,9 @@ async function updateUserLiveActivityState(deviceToken, liveActivityPatch = {}, 
     transaction.set(key, serializedData, { EX: USER_PREFERENCES_TTL_SECONDS });
     transaction.sAdd(USER_PREFERENCES_INDEX_KEY, normalizedToken);
     await transaction.exec();
+    await mongoStore.upsertUserPreferences(data).catch((error) => {
+      console.warn("[Mongo] Failed mirroring live activity state:", error.message || error);
+    });
     console.log(`[Redis] Updated live activity state for device: ${normalizedToken.substring(0, 12)}...`);
     return attachRedisMetricMeta(data, { payloadBytes: utf8ByteLength(serializedData) });
   } catch (error) {
@@ -1019,6 +1074,9 @@ async function saveBbcMatchEventHistory(payload) {
       pruneIndexEntries(redisClient, matchIndexKey, cutoffMs),
     ]);
 
+    await mongoStore.saveBbcMatchEventHistory(record).catch((error) => {
+      console.warn("[Mongo] Failed mirroring BBC event history:", error.message || error);
+    });
     return record;
   } catch (error) {
     console.error("[Redis] Error saving BBC match event history:", error);
@@ -1079,6 +1137,9 @@ async function saveBbcNotificationHistory(payload) {
       pruneIndexEntries(redisClient, matchDeviceIndexKey, cutoffMs),
     ]);
 
+    await mongoStore.saveBbcNotificationHistory(record).catch((error) => {
+      console.warn("[Mongo] Failed mirroring BBC notification history:", error.message || error);
+    });
     return record;
   } catch (error) {
     console.error("[Redis] Error saving BBC notification history:", error);
@@ -1128,6 +1189,9 @@ async function saveBbcRequestHistory(payload) {
     transaction.zRemRangeByScore(BBC_REQUESTS_INDEX_KEY, 0, cutoffMs);
     await transaction.exec();
 
+    await mongoStore.saveBbcRequestHistory(record).catch((error) => {
+      console.warn("[Mongo] Failed mirroring BBC request history:", error.message || error);
+    });
     return record;
   } catch (error) {
     console.error("[Redis] Error saving BBC request history:", error);
@@ -1619,7 +1683,11 @@ async function saveFantasyReminderRecord(payload, options = {}) {
   const recordKey = buildFantasyReminderRecordKey(reminderId);
   const mergeExisting = options && options.mergeExisting !== false;
   const rawExisting = mergeExisting ? await redisClient.get(recordKey) : null;
-  const existing = rawExisting ? safeJsonParse(rawExisting, `fantasy reminder ${reminderId}`) : null;
+  const existing = rawExisting
+    ? safeJsonParse(rawExisting, `fantasy reminder ${reminderId}`)
+    : mergeExisting
+      ? await mongoStore.getFantasyReminderRecord(reminderId)
+      : null;
 
   const deviceToken = String(
     payload && (payload.device_token || payload.deviceToken)
@@ -1711,6 +1779,9 @@ async function saveFantasyReminderRecord(payload, options = {}) {
         : Promise.resolve(),
     ]);
 
+    await mongoStore.saveFantasyReminderRecord(record).catch((error) => {
+      console.warn("[Mongo] Failed mirroring fantasy reminder:", error.message || error);
+    });
     return record;
   } catch (error) {
     console.error("[Redis] Error saving fantasy reminder record:", error);
@@ -1723,10 +1794,22 @@ async function getFantasyReminderRecord(reminderId) {
   if (!normalizedId) return null;
 
   try {
+    const mongoRecord = shouldReadMongoPrimary()
+      ? await mongoStore.getFantasyReminderRecord(normalizedId)
+      : null;
+    if (mongoRecord) {
+      return mongoRecord;
+    }
+
     const redisClient = await getClient();
     const raw = await redisClient.get(buildFantasyReminderRecordKey(normalizedId));
     if (!raw) return null;
     const parsed = safeJsonParse(raw, `fantasy reminder ${normalizedId}`);
+    if (parsed && typeof parsed === "object" && shouldBackfillMongoReads()) {
+      await mongoStore.saveFantasyReminderRecord(parsed).catch((error) => {
+        console.warn(`[Mongo] Failed backfilling fantasy reminder ${normalizedId}:`, error.message || error);
+      });
+    }
     return parsed && typeof parsed === "object" ? parsed : null;
   } catch (error) {
     console.error("[Redis] Error retrieving fantasy reminder record:", error);
@@ -1746,6 +1829,13 @@ async function getFantasyReminderRecords(options = {}) {
   const limit = parsePositiveIntOrFallback(options.limit, 0);
 
   try {
+    const mongoRecords = shouldReadMongoPrimary()
+      ? await mongoStore.getFantasyReminderRecords(options)
+      : null;
+    if (Array.isArray(mongoRecords) && mongoRecords.length > 0) {
+      return mongoRecords;
+    }
+
     const redisClient = await getClient();
     const indexKey = deviceTokenFilter
       ? buildFantasyReminderDeviceIndexKey(deviceTokenFilter)
@@ -1769,7 +1859,17 @@ async function getFantasyReminderRecords(options = {}) {
       );
     });
 
-    return limit > 0 ? filtered.slice(0, limit) : filtered;
+    const result = limit > 0 ? filtered.slice(0, limit) : filtered;
+    if (result.length > 0 && shouldBackfillMongoReads()) {
+      await Promise.all(
+        result.map((record) =>
+          mongoStore.saveFantasyReminderRecord(record).catch((error) => {
+            console.warn("[Mongo] Failed backfilling fantasy reminder list:", error.message || error);
+          })
+        )
+      );
+    }
+    return result;
   } catch (error) {
     console.error("[Redis] Error retrieving fantasy reminder records:", error);
     return [];
@@ -1889,6 +1989,9 @@ async function saveOperationalDataset(name, payload, options = {}) {
     } else {
       await redisClient.set(key, serializedRecord);
     }
+    await mongoStore.saveOperationalDataset(record).catch((error) => {
+      console.warn(`[Mongo] Failed mirroring operational dataset ${name}:`, error.message || error);
+    });
     return attachRedisMetricMeta(record, { payloadBytes: utf8ByteLength(serializedRecord) });
   } catch (error) {
     console.error(`[Redis] Error saving operational dataset ${name}:`, error);
@@ -1898,6 +2001,13 @@ async function saveOperationalDataset(name, payload, options = {}) {
 
 async function getOperationalDataset(name) {
   try {
+    const mongoRecord = shouldReadMongoPrimary()
+      ? await mongoStore.getOperationalDataset(name)
+      : null;
+    if (mongoRecord) {
+      return mongoRecord;
+    }
+
     const redisClient = await getClient();
     const key = buildOperationalDatasetKey(name);
     const raw = await redisClient.get(key);
@@ -1905,6 +2015,11 @@ async function getOperationalDataset(name) {
     const parsed = safeJsonParse(raw, `operational dataset ${name}`);
     if (!parsed || typeof parsed !== "object") return null;
     if (!Object.prototype.hasOwnProperty.call(parsed, "payload")) return null;
+    if (shouldBackfillMongoReads()) {
+      await mongoStore.saveOperationalDataset(parsed).catch((error) => {
+        console.warn(`[Mongo] Failed backfilling operational dataset ${name}:`, error.message || error);
+      });
+    }
     return attachRedisMetricMeta(parsed, { payloadBytes: utf8ByteLength(raw) });
   } catch (error) {
     console.error(`[Redis] Error retrieving operational dataset ${name}:`, error);
@@ -1919,6 +2034,13 @@ async function getOperationalDatasets(names = []) {
   if (requestedNames.length === 0) return {};
 
   try {
+    const mongoRecords = shouldReadMongoPrimary()
+      ? await mongoStore.getOperationalDatasets(requestedNames)
+      : null;
+    if (mongoRecords && Object.keys(mongoRecords).length === requestedNames.length) {
+      return mongoRecords;
+    }
+
     const redisClient = await getClient();
     const keys = requestedNames.map((name) => buildOperationalDatasetKey(name));
     const rawValues = await redisClient.mGet(keys);
@@ -1933,6 +2055,15 @@ async function getOperationalDatasets(names = []) {
         output[name] = parsed;
       }
     });
+    if (Object.keys(output).length > 0 && shouldBackfillMongoReads()) {
+      await Promise.all(
+        Object.values(output).map((record) =>
+          mongoStore.saveOperationalDataset(record).catch((error) => {
+            console.warn("[Mongo] Failed backfilling operational dataset batch:", error.message || error);
+          })
+        )
+      );
+    }
     return attachRedisMetricMeta(output, { payloadBytes });
   } catch (error) {
     console.error("[Redis] Error retrieving operational datasets:", error);
@@ -2037,6 +2168,10 @@ async function saveOperationalMatchDetailsRecords(recordsById, options = {}) {
       );
     }
 
+    await mongoStore.saveOperationalMatchDetailsRecords(Object.fromEntries(records), options).catch((error) => {
+      console.warn("[Mongo] Failed mirroring operational match details:", error.message || error);
+    });
+
     return attachRedisMetricMeta({
       updated_at: updatedAt,
       upserted: records.length,
@@ -2055,12 +2190,27 @@ async function getOperationalMatchDetails(matchId) {
   if (!normalized) return null;
 
   try {
+    const mongoRecord = shouldReadMongoPrimary()
+      ? await mongoStore.getOperationalMatchDetails(normalized)
+      : null;
+    if (mongoRecord) {
+      return mongoRecord;
+    }
+
     const redisClient = await getClient();
     const key = buildOperationalMatchDetailsKey(normalized);
     const raw = await redisClient.get(key);
     if (!raw) return null;
     const parsed = safeJsonParse(raw, `operational match details ${normalized}`);
     if (!parsed || typeof parsed !== "object") return null;
+    if (shouldBackfillMongoReads()) {
+      await mongoStore.saveOperationalMatchDetailsRecords({ [normalized]: parsed }, {
+        updated_at: parsed.updated_at || new Date().toISOString(),
+        source: "redis_backfill",
+      }).catch((error) => {
+        console.warn(`[Mongo] Failed backfilling match details ${normalized}:`, error.message || error);
+      });
+    }
     return parsed;
   } catch (error) {
     console.error(`[Redis] Error retrieving operational match details ${normalized}:`, error);
@@ -2070,6 +2220,13 @@ async function getOperationalMatchDetails(matchId) {
 
 async function getAllOperationalMatchDetails() {
   try {
+    const mongoSnapshot = shouldReadMongoPrimary()
+      ? await mongoStore.getAllOperationalMatchDetails()
+      : null;
+    if (mongoSnapshot && Number(mongoSnapshot.total || 0) > 0) {
+      return mongoSnapshot;
+    }
+
     const redisClient = await getClient();
     const ids = await redisClient.sMembers(OPERATIONAL_MATCH_DETAILS_INDEX_KEY);
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -2107,6 +2264,14 @@ async function getAllOperationalMatchDetails() {
 
     const metaRaw = await redisClient.get(OPERATIONAL_MATCH_DETAILS_META_KEY);
     const meta = metaRaw ? safeJsonParse(metaRaw, "operational match details meta") : null;
+    if (Object.keys(records).length > 0 && shouldBackfillMongoReads()) {
+      await mongoStore.saveOperationalMatchDetailsRecords(records, {
+        updated_at: meta && meta.updated_at ? meta.updated_at : new Date().toISOString(),
+        source: "redis_backfill",
+      }).catch((error) => {
+        console.warn("[Mongo] Failed backfilling all match details:", error.message || error);
+      });
+    }
     return attachRedisMetricMeta({
       updated_at: meta && meta.updated_at ? meta.updated_at : null,
       total: Object.keys(records).length,
@@ -2125,6 +2290,13 @@ async function getAllOperationalMatchDetails() {
 
 async function getOperationalMatchDetailsSummary() {
   try {
+    const mongoSummary = shouldReadMongoPrimary()
+      ? await mongoStore.getOperationalMatchDetailsSummary()
+      : null;
+    if (mongoSummary && Number(mongoSummary.total || 0) > 0) {
+      return mongoSummary;
+    }
+
     const redisClient = await getClient();
     const [total, metaRaw] = await Promise.all([
       redisClient.sCard(OPERATIONAL_MATCH_DETAILS_INDEX_KEY),
@@ -2190,6 +2362,10 @@ async function deleteOperationalMatchDetailsRecords(matchIds, options = {}) {
       });
       await transaction.exec();
     }
+
+    await mongoStore.deleteOperationalMatchDetailsRecords(normalizedIds).catch((error) => {
+      console.warn("[Mongo] Failed deleting operational match details:", error.message || error);
+    });
 
     const total = await redisClient.sCard(OPERATIONAL_MATCH_DETAILS_INDEX_KEY);
     const updatedAt =
@@ -2272,6 +2448,9 @@ async function saveOperationalMatchWriteLogEntries(entriesByMatchId, options = {
     });
 
     await transaction.exec();
+    await mongoStore.saveOperationalMatchWriteLogEntries(Object.fromEntries(records)).catch((error) => {
+      console.warn("[Mongo] Failed mirroring operational match write logs:", error.message || error);
+    });
     return {
       written,
       matches: records.length,
@@ -2306,6 +2485,16 @@ async function getOperationalMatchWriteLog(matchId, options = {}) {
   const stop = start + normalizedPageSize - 1;
 
   try {
+    const mongoLog = shouldReadMongoPrimary()
+      ? await mongoStore.getOperationalMatchWriteLog(normalized, {
+          page: normalizedPage,
+          page_size: normalizedPageSize,
+        })
+      : null;
+    if (mongoLog && Number(mongoLog.total || 0) > 0) {
+      return mongoLog;
+    }
+
     const redisClient = await getClient();
     const key = buildOperationalMatchWriteLogKey(normalized);
     const [total, values] = await Promise.all([
