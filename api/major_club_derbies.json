@@ -1,0 +1,30 @@
+[
+  {
+    "name": "Old Firm",
+    "teams": ["Celtic", "Rangers"]
+  },
+  {
+    "name": "El Clasico",
+    "teams": ["Barcelona", "Real Madrid"]
+  },
+  {
+    "name": "Manchester derby",
+    "teams": ["Man City", "Man Utd"]
+  },
+  {
+    "name": "North London derby",
+    "teams": ["Arsenal", "Tottenham"]
+  },
+  {
+    "name": "Merseyside derby",
+    "teams": ["Liverpool", "Everton"]
+  },
+  {
+    "name": "Milan derby",
+    "teams": ["Inter Milan", "AC Milan"]
+  },
+  {
+    "name": "Der Klassiker",
+    "teams": ["Bayern Munich", "Borussia Dortmund"]
+  }
+]

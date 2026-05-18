@@ -65,8 +65,8 @@ struct PreferencesView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
-                        Toggle("Major UEFA games", isOn: majorUEFAClubGamesEnabledBinding)
-                        Text("Always show UEFA Champions League, Europa League, and Conference League quarter-finals, semi-finals, and finals, even when no Premier League team is involved.")
+                        Toggle("Major games of interest", isOn: majorUEFAClubGamesEnabledBinding)
+                        Text("Always show UEFA club knockout games, end of season promotion play-offs, and configured major club derbies, even when no Premier League team is involved.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -151,9 +151,9 @@ struct PreferencesView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
-                        Toggle("Domestic: Major UEFA games", isOn: notificationMajorUEFAClubGamesEnabledBinding)
+                        Toggle("Domestic: Major games of interest", isOn: notificationMajorUEFAClubGamesEnabledBinding)
                             .disabled(!preferences.notificationsEnabled)
-                        Text("Always receive notifications for UEFA Champions League, Europa League, and Conference League quarter-finals, semi-finals, and finals, even when no Premier League team is involved.")
+                        Text("Always receive notifications for UEFA club knockout games, end of season promotion play-offs, and configured major club derbies, even when no Premier League team is involved.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 

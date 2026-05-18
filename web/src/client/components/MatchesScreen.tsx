@@ -599,7 +599,7 @@ function CompetitionsDropdown({ customCompetitions, onCustomCompetitionsChange }
           checked={majorUEFAClubGamesEnabled}
           onChange={handleToggleMajorUEFAClubGames}
         />
-        <span>Major UEFA games</span>
+        <span>Major games of interest</span>
       </label>
 
       <label className="comp-option comp-option--international">

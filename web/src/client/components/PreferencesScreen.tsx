@@ -120,7 +120,7 @@ export function PreferencesScreen() {
           </p>
 
           <label className="toggle-row">
-            <span>Major UEFA games</span>
+            <span>Major games of interest</span>
             <input
               type="checkbox"
               checked={preferences.majorUEFAClubGamesEnabled}
@@ -129,6 +129,10 @@ export function PreferencesScreen() {
               }
             />
           </label>
+          <p className="field-copy">
+            Includes UEFA club knockout games, end of season promotion play-offs, and
+            configured major club derbies even when no Premier League team is involved.
+          </p>
 
           <label className="toggle-row">
             <span>International: Home nations</span>

@@ -68,6 +68,10 @@ const LIVE_ACTIVITY_MATCH_TIMELINE_TTL_SECONDS = parsePositiveIntOrFallback(
   process.env.LIVE_ACTIVITY_MATCH_TIMELINE_TTL_SECONDS,
   12 * 60 * 60
 );
+const SLOW_OPERATIONAL_READ_THRESHOLD_MS = parsePositiveIntOrFallback(
+  process.env.SLOW_OPERATIONAL_READ_THRESHOLD_MS,
+  1000
+);
 const MAX_BBC_HISTORY_QUERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 const BBC_EVENTS_INDEX_KEY = `${DB_NAME}:bbc:events:index`;
@@ -242,6 +246,26 @@ function _withMetrics(operation, fn) {
       throw error;
     }
   };
+}
+
+function recordTiming(timings, key, startedAtMs) {
+  if (!timings || !key) return;
+  timings[key] = Date.now() - startedAtMs;
+}
+
+function maybeLogSlowOperationalRead(operation, startedAtMs, timings, meta = {}) {
+  const totalMs = Date.now() - startedAtMs;
+  if (
+    !Number.isFinite(SLOW_OPERATIONAL_READ_THRESHOLD_MS) ||
+    SLOW_OPERATIONAL_READ_THRESHOLD_MS <= 0 ||
+    totalMs < SLOW_OPERATIONAL_READ_THRESHOLD_MS
+  ) {
+    return;
+  }
+  console.info(
+    `[OperationalRead][slow] operation=${operation} total_ms=${totalMs} ` +
+    `timings=${JSON.stringify(timings || {})} meta=${JSON.stringify(meta || {})}`
+  );
 }
 
 function getRedisMetrics() {
@@ -2000,26 +2024,51 @@ async function saveOperationalDataset(name, payload, options = {}) {
 }
 
 async function getOperationalDataset(name) {
+  const startedAtMs = Date.now();
+  const timings = {};
   try {
+    const mongoStartedAtMs = Date.now();
     const mongoRecord = shouldReadMongoPrimary()
       ? await mongoStore.getOperationalDataset(name)
       : null;
+    recordTiming(timings, "mongo_primary_ms", mongoStartedAtMs);
     if (mongoRecord) {
+      maybeLogSlowOperationalRead("get_operational_dataset", startedAtMs, timings, {
+        name,
+        source: "mongo",
+        payload_type: Array.isArray(mongoRecord.payload) ? "array" : typeof mongoRecord.payload,
+        count: Array.isArray(mongoRecord.payload)
+          ? mongoRecord.payload.length
+          : mongoRecord.payload && typeof mongoRecord.payload === "object"
+            ? Object.keys(mongoRecord.payload).length
+            : null,
+      });
       return mongoRecord;
     }
 
+    const redisStartedAtMs = Date.now();
     const redisClient = await getClient();
     const key = buildOperationalDatasetKey(name);
     const raw = await redisClient.get(key);
+    recordTiming(timings, "redis_get_ms", redisStartedAtMs);
     if (!raw) return null;
+    const parseStartedAtMs = Date.now();
     const parsed = safeJsonParse(raw, `operational dataset ${name}`);
+    recordTiming(timings, "parse_ms", parseStartedAtMs);
     if (!parsed || typeof parsed !== "object") return null;
     if (!Object.prototype.hasOwnProperty.call(parsed, "payload")) return null;
     if (shouldBackfillMongoReads()) {
+      const backfillStartedAtMs = Date.now();
       await mongoStore.saveOperationalDataset(parsed).catch((error) => {
         console.warn(`[Mongo] Failed backfilling operational dataset ${name}:`, error.message || error);
       });
+      recordTiming(timings, "mongo_backfill_ms", backfillStartedAtMs);
     }
+    maybeLogSlowOperationalRead("get_operational_dataset", startedAtMs, timings, {
+      name,
+      source: "redis",
+      payload_bytes: utf8ByteLength(raw),
+    });
     return attachRedisMetricMeta(parsed, { payloadBytes: utf8ByteLength(raw) });
   } catch (error) {
     console.error(`[Redis] Error retrieving operational dataset ${name}:`, error);
@@ -2033,19 +2082,31 @@ async function getOperationalDatasets(names = []) {
     : [];
   if (requestedNames.length === 0) return {};
 
+  const startedAtMs = Date.now();
+  const timings = {};
   try {
+    const mongoStartedAtMs = Date.now();
     const mongoRecords = shouldReadMongoPrimary()
       ? await mongoStore.getOperationalDatasets(requestedNames)
       : null;
+    recordTiming(timings, "mongo_primary_ms", mongoStartedAtMs);
     if (mongoRecords && Object.keys(mongoRecords).length === requestedNames.length) {
+      maybeLogSlowOperationalRead("get_operational_datasets", startedAtMs, timings, {
+        names: requestedNames,
+        source: "mongo",
+        returned: Object.keys(mongoRecords).length,
+      });
       return mongoRecords;
     }
 
+    const redisStartedAtMs = Date.now();
     const redisClient = await getClient();
     const keys = requestedNames.map((name) => buildOperationalDatasetKey(name));
     const rawValues = await redisClient.mGet(keys);
+    recordTiming(timings, "redis_mget_ms", redisStartedAtMs);
     const output = {};
     let payloadBytes = 0;
+    const parseStartedAtMs = Date.now();
     requestedNames.forEach((name, index) => {
       const raw = rawValues[index];
       if (!raw) return;
@@ -2055,7 +2116,9 @@ async function getOperationalDatasets(names = []) {
         output[name] = parsed;
       }
     });
+    recordTiming(timings, "parse_ms", parseStartedAtMs);
     if (Object.keys(output).length > 0 && shouldBackfillMongoReads()) {
+      const backfillStartedAtMs = Date.now();
       await Promise.all(
         Object.values(output).map((record) =>
           mongoStore.saveOperationalDataset(record).catch((error) => {
@@ -2063,7 +2126,14 @@ async function getOperationalDatasets(names = []) {
           })
         )
       );
+      recordTiming(timings, "mongo_backfill_ms", backfillStartedAtMs);
     }
+    maybeLogSlowOperationalRead("get_operational_datasets", startedAtMs, timings, {
+      names: requestedNames,
+      source: "redis",
+      returned: Object.keys(output).length,
+      payload_bytes: payloadBytes,
+    });
     return attachRedisMetricMeta(output, { payloadBytes });
   } catch (error) {
     console.error("[Redis] Error retrieving operational datasets:", error);
@@ -2219,16 +2289,26 @@ async function getOperationalMatchDetails(matchId) {
 }
 
 async function getAllOperationalMatchDetails() {
+  const startedAtMs = Date.now();
+  const timings = {};
   try {
+    const mongoStartedAtMs = Date.now();
     const mongoSnapshot = shouldReadMongoPrimary()
       ? await mongoStore.getAllOperationalMatchDetails()
       : null;
+    recordTiming(timings, "mongo_primary_ms", mongoStartedAtMs);
     if (mongoSnapshot && Number(mongoSnapshot.total || 0) > 0) {
+      maybeLogSlowOperationalRead("get_all_match_details", startedAtMs, timings, {
+        source: "mongo",
+        total: Number(mongoSnapshot.total || 0),
+      });
       return mongoSnapshot;
     }
 
+    const indexStartedAtMs = Date.now();
     const redisClient = await getClient();
     const ids = await redisClient.sMembers(OPERATIONAL_MATCH_DETAILS_INDEX_KEY);
+    recordTiming(timings, "redis_index_ms", indexStartedAtMs);
     if (!Array.isArray(ids) || ids.length === 0) {
       return {
         updated_at: null,
@@ -2237,11 +2317,14 @@ async function getAllOperationalMatchDetails() {
       };
     }
 
+    const mgetStartedAtMs = Date.now();
     const keys = ids.map((matchId) => buildOperationalMatchDetailsKey(matchId));
     const values = await redisClient.mGet(keys);
+    recordTiming(timings, "redis_mget_ms", mgetStartedAtMs);
     const records = {};
     const staleIds = [];
     let payloadBytes = 0;
+    const parseStartedAtMs = Date.now();
     ids.forEach((matchId, index) => {
       const raw = values[index];
       if (!raw) {
@@ -2257,21 +2340,34 @@ async function getAllOperationalMatchDetails() {
       const normalizedId = String(parsed.id || matchId).trim().toLowerCase();
       records[normalizedId] = parsed;
     });
+    recordTiming(timings, "parse_ms", parseStartedAtMs);
 
     if (staleIds.length > 0) {
+      const pruneStartedAtMs = Date.now();
       await redisClient.sRem(OPERATIONAL_MATCH_DETAILS_INDEX_KEY, staleIds);
+      recordTiming(timings, "redis_prune_ms", pruneStartedAtMs);
     }
 
+    const metaStartedAtMs = Date.now();
     const metaRaw = await redisClient.get(OPERATIONAL_MATCH_DETAILS_META_KEY);
+    recordTiming(timings, "redis_meta_ms", metaStartedAtMs);
     const meta = metaRaw ? safeJsonParse(metaRaw, "operational match details meta") : null;
     if (Object.keys(records).length > 0 && shouldBackfillMongoReads()) {
+      const backfillStartedAtMs = Date.now();
       await mongoStore.saveOperationalMatchDetailsRecords(records, {
         updated_at: meta && meta.updated_at ? meta.updated_at : new Date().toISOString(),
         source: "redis_backfill",
       }).catch((error) => {
         console.warn("[Mongo] Failed backfilling all match details:", error.message || error);
       });
+      recordTiming(timings, "mongo_backfill_ms", backfillStartedAtMs);
     }
+    maybeLogSlowOperationalRead("get_all_match_details", startedAtMs, timings, {
+      source: "redis",
+      total: Object.keys(records).length,
+      stale_ids: staleIds.length,
+      payload_bytes: payloadBytes,
+    });
     return attachRedisMetricMeta({
       updated_at: meta && meta.updated_at ? meta.updated_at : null,
       total: Object.keys(records).length,

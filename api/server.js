@@ -5,11 +5,16 @@ const path = require("path");
 const http = require("http");
 const https = require("https");
 const crypto = require("crypto");
+const os = require("os");
 const v8 = require("v8");
 const zlib = require("zlib");
 const { monitorEventLoopDelay, performance } = require("perf_hooks");
 const express = require("express");
 const liveActivityMetrics = require("./live_activity_metrics");
+const {
+  matchIsMajorGameOfInterest,
+  matchIsMajorUefaClubKnockoutFixture,
+} = require("./major_games_of_interest");
 const {
   SERVER_CONFIG,
   DEFAULT_COMPETITION_WEIGHTS,
@@ -858,6 +863,11 @@ app.use((req, res, next) => {
 
   const requestId = Math.random().toString(36).slice(2, 10);
   const startedAtMs = Date.now();
+  const requestStartCpuUsage = process.cpuUsage();
+  const requestStartEventLoopUtilization =
+    typeof performance.eventLoopUtilization === "function"
+      ? performance.eventLoopUtilization()
+      : null;
   req.requestId = requestId;
   res.set("X-Request-Id", requestId);
   res.on("finish", () => {
@@ -885,8 +895,12 @@ app.use((req, res, next) => {
         DEBUG_SLOW_API_REQUEST_THRESHOLD_MS > 0 &&
         durationMs >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS
       ) {
+        const perfSnapshot = buildProcessPerformanceSnapshot(
+          requestStartCpuUsage,
+          requestStartEventLoopUtilization
+        );
         logPerformanceDiagnostic(
-          `[api][slow] id=${requestId} method=${req.method} route=${route} status=${res.statusCode} duration_ms=${durationMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
+          `[api][slow] id=${requestId} method=${req.method} route=${route} status=${res.statusCode} duration_ms=${durationMs} p99_lag_ms=${currentEventLoopLagP99Ms()} perf=${JSON.stringify(perfSnapshot)} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
         );
       }
     }
@@ -1041,6 +1055,49 @@ function currentEventLoopLagP99Ms() {
   } catch (_error) {
     return null;
   }
+}
+
+function megabytes(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return Number((numeric / (1024 * 1024)).toFixed(1));
+}
+
+function roundedRatio(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Number(numeric.toFixed(4));
+}
+
+function buildProcessPerformanceSnapshot(startCpuUsage = null, startEventLoopUtilization = null) {
+  const memoryUsage = process.memoryUsage();
+  const cpuDelta = startCpuUsage ? process.cpuUsage(startCpuUsage) : null;
+  let eventLoopUtilization = null;
+  try {
+    eventLoopUtilization =
+      startEventLoopUtilization && typeof performance.eventLoopUtilization === "function"
+        ? performance.eventLoopUtilization(startEventLoopUtilization)
+        : null;
+  } catch (_error) {
+    eventLoopUtilization = null;
+  }
+  const loadAverage = os.loadavg();
+  return {
+    cpu_user_ms: cpuDelta ? Math.round(cpuDelta.user / 1000) : null,
+    cpu_system_ms: cpuDelta ? Math.round(cpuDelta.system / 1000) : null,
+    event_loop_utilization: eventLoopUtilization
+      ? roundedRatio(eventLoopUtilization.utilization)
+      : null,
+    rss_mb: megabytes(memoryUsage.rss),
+    heap_used_mb: megabytes(memoryUsage.heapUsed),
+    heap_total_mb: megabytes(memoryUsage.heapTotal),
+    external_mb: megabytes(memoryUsage.external),
+    array_buffers_mb: megabytes(memoryUsage.arrayBuffers || 0),
+    system_load_1m: roundedRatio(loadAverage[0]),
+    system_load_5m: roundedRatio(loadAverage[1]),
+    system_free_mb: megabytes(os.freemem()),
+    system_total_mb: megabytes(os.totalmem()),
+  };
 }
 
 function logPerformanceDiagnostic(message) {
@@ -12919,26 +12976,38 @@ function applyRankingToUnifiedTeamRows(rows) {
     });
 }
 
+function recordStageTiming(timings, key, startedAtMs) {
+  if (!timings || !key) return;
+  timings[key] = Date.now() - startedAtMs;
+}
+
 function buildRankedTeamsForSource(
   matches,
   clubEloTeams,
   footballDatabaseTeams,
   nationalEloTeams,
   source,
-  leagueFilter = null
+  leagueFilter = null,
+  timings = null
 ) {
+  const nationalStartedAtMs = Date.now();
   const nationalRows = toUnifiedTeamRows(
     mapNationalTeamsForRankingSource(matches, nationalEloTeams, leagueFilter),
     TEAM_RANKING_SOURCE_NATIONAL_ELO,
     TEAM_TYPE_NATIONAL
   ).filter((row) => isLikelyNationalTeamName(row.Name));
   const dedupedNationalRows = dedupeUnifiedTeamRowsByManualMappings(nationalRows);
+  recordStageTiming(timings, "national_rows_ms", nationalStartedAtMs);
 
   if (source === TEAM_RANKING_SOURCE_NATIONAL_ELO) {
-    return applyRankingToUnifiedTeamRows(dedupedNationalRows);
+    const rankingStartedAtMs = Date.now();
+    const ranked = applyRankingToUnifiedTeamRows(dedupedNationalRows);
+    recordStageTiming(timings, "apply_ranking_ms", rankingStartedAtMs);
+    return ranked;
   }
 
   if (source === TEAM_RANKING_SOURCE_CLUBELO) {
+    const clubStartedAtMs = Date.now();
     const clubRows = toUnifiedTeamRows(
       mapTeamsForRankingSource(
         matches,
@@ -12950,12 +13019,19 @@ function buildRankedTeamsForSource(
       TEAM_RANKING_SOURCE_CLUBELO,
       TEAM_TYPE_CLUB
     );
+    recordStageTiming(timings, "club_elo_rows_ms", clubStartedAtMs);
+    const dedupeStartedAtMs = Date.now();
     const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(
       clubRows.filter((row) => !isLikelyNationalTeamName(row.Name))
     );
-    return applyRankingToUnifiedTeamRows([...dedupedRows, ...dedupedNationalRows]);
+    recordStageTiming(timings, "club_elo_dedupe_ms", dedupeStartedAtMs);
+    const rankingStartedAtMs = Date.now();
+    const ranked = applyRankingToUnifiedTeamRows([...dedupedRows, ...dedupedNationalRows]);
+    recordStageTiming(timings, "apply_ranking_ms", rankingStartedAtMs);
+    return ranked;
   }
   if (source === TEAM_RANKING_SOURCE_FOOTBALLDATABASE) {
+    const footballDatabaseStartedAtMs = Date.now();
     const footballDatabaseRows = toUnifiedTeamRows(
       mapTeamsForRankingSource(
         matches,
@@ -12967,11 +13043,18 @@ function buildRankedTeamsForSource(
       TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
       TEAM_TYPE_CLUB
     );
+    recordStageTiming(timings, "football_database_rows_ms", footballDatabaseStartedAtMs);
+    const dedupeStartedAtMs = Date.now();
     const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(
       footballDatabaseRows.filter((row) => !isLikelyNationalTeamName(row.Name))
     );
-    return applyRankingToUnifiedTeamRows([...dedupedRows, ...dedupedNationalRows]);
+    recordStageTiming(timings, "football_database_dedupe_ms", dedupeStartedAtMs);
+    const rankingStartedAtMs = Date.now();
+    const ranked = applyRankingToUnifiedTeamRows([...dedupedRows, ...dedupedNationalRows]);
+    recordStageTiming(timings, "apply_ranking_ms", rankingStartedAtMs);
+    return ranked;
   }
+  const clubStartedAtMs = Date.now();
   const clubRows = toUnifiedTeamRows(
     mapTeamsForRankingSource(
       matches,
@@ -12983,6 +13066,8 @@ function buildRankedTeamsForSource(
     TEAM_RANKING_SOURCE_CLUBELO,
     TEAM_TYPE_CLUB
   );
+  recordStageTiming(timings, "club_elo_rows_ms", clubStartedAtMs);
+  const footballDatabaseStartedAtMs = Date.now();
   const footballDatabaseRows = toUnifiedTeamRows(
     mapTeamsForRankingSource(
       matches,
@@ -12994,12 +13079,20 @@ function buildRankedTeamsForSource(
     TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
     TEAM_TYPE_CLUB
   );
+  recordStageTiming(timings, "football_database_rows_ms", footballDatabaseStartedAtMs);
+  const mergeStartedAtMs = Date.now();
   const mergedRows = mergeUnifiedTeamRows(
     clubRows.filter((row) => !isLikelyNationalTeamName(row.Name)),
     footballDatabaseRows.filter((row) => !isLikelyNationalTeamName(row.Name))
   );
+  recordStageTiming(timings, "merge_rows_ms", mergeStartedAtMs);
+  const dedupeStartedAtMs = Date.now();
   const dedupedRows = dedupeUnifiedTeamRowsByManualMappings(mergedRows);
-  return applyRankingToUnifiedTeamRows([...dedupedRows, ...dedupedNationalRows]);
+  recordStageTiming(timings, "merged_dedupe_ms", dedupeStartedAtMs);
+  const rankingStartedAtMs = Date.now();
+  const ranked = applyRankingToUnifiedTeamRows([...dedupedRows, ...dedupedNationalRows]);
+  recordStageTiming(timings, "apply_ranking_ms", rankingStartedAtMs);
+  return ranked;
 }
 
 function toTeamsApiTeamPayload(rows) {
@@ -13086,6 +13179,29 @@ function buildTeamRankingsResponseCacheKey(options = {}) {
   });
 }
 
+function summarizeTeamRankingsResponseCacheKey(cacheKey) {
+  const raw = String(cacheKey || "");
+  let parsed = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch (_error) {
+    parsed = null;
+  }
+  const hash = crypto.createHash("sha1").update(raw).digest("hex").slice(0, 12);
+  if (!parsed || typeof parsed !== "object") {
+    return {
+      hash,
+      bytes: Buffer.byteLength(raw, "utf8"),
+    };
+  }
+  const { merged_team_signature: _signature, ...summary } = parsed;
+  return {
+    hash,
+    bytes: Buffer.byteLength(raw, "utf8"),
+    ...summary,
+  };
+}
+
 async function resolveTeamRankingDatasetsForResponse() {
   const memoryDatasets = {
     mergedDataset: currentMergedMatchesDatasetSnapshot(),
@@ -13117,21 +13233,30 @@ async function resolveTeamRankingDatasetsForResponse() {
 }
 
 function buildTeamRankingsResponsePayload(options = {}) {
+  const timings = options.timings && typeof options.timings === "object" ? options.timings : null;
   const mergedDataset = options.mergedDataset || { items: [], updated_at: null, source: "unknown" };
   const clubEloDataset = options.clubEloDataset || { items: [], updated_at: null, source: "unknown" };
   const footballDatabaseDataset =
     options.footballDatabaseDataset || { items: [], updated_at: null, source: "unknown" };
   const nationalEloDataset =
     options.nationalEloDataset || { items: [], updated_at: null, source: "unknown" };
+  const rankBuildStartedAtMs = Date.now();
   const rankedRows = buildRankedTeamsForSource(
     mergedDataset.items,
     clubEloDataset.items,
     footballDatabaseDataset.items,
     nationalEloDataset.items,
     options.source || TEAM_RANKING_DEFAULT_SOURCE,
-    options.leagueFilter || null
+    options.leagueFilter || null,
+    timings
   );
+  recordStageTiming(timings, "rank_build_ms", rankBuildStartedAtMs);
+  const typeFilterStartedAtMs = Date.now();
   const filteredRows = filterRankedRowsByTeamType(rankedRows, options.type || null);
+  recordStageTiming(timings, "type_filter_ms", typeFilterStartedAtMs);
+  const payloadBuildStartedAtMs = Date.now();
+  const payload = toTeamsApiTeamPayload(filteredRows);
+  recordStageTiming(timings, "payload_build_ms", payloadBuildStartedAtMs);
   const updatedAt = newestIsoTimestamp([
     mergedDataset.updated_at,
     clubEloDataset.updated_at,
@@ -13143,7 +13268,7 @@ function buildTeamRankingsResponsePayload(options = {}) {
   ]);
 
   return {
-    payload: toTeamsApiTeamPayload(filteredRows),
+    payload,
     updatedAt,
     operationalSource:
       `merged=${mergedDataset.source || "unknown"};` +
@@ -13173,9 +13298,11 @@ async function getCachedTeamRankingsResponse(options = {}) {
   }
 
   const buildStartedAtMs = Date.now();
+  const buildTimings = {};
   const response = buildTeamRankingsResponsePayload({
     ...options,
     ...datasets,
+    timings: buildTimings,
   });
   const buildMs = Date.now() - buildStartedAtMs;
   setTeamRankingsResponseCacheEntry(cacheKey, response);
@@ -13186,7 +13313,8 @@ async function getCachedTeamRankingsResponse(options = {}) {
   ) {
     logPerformanceDiagnostic(
       `[TeamsCache][miss] build_ms=${buildMs} cache_size=${teamRankingsResponseCache.size} ` +
-      `source=${options.source || TEAM_RANKING_DEFAULT_SOURCE} type=${options.type || "all"} league=${options.leagueFilter || "all"} key=${cacheKey}`
+      `source=${options.source || TEAM_RANKING_DEFAULT_SOURCE} type=${options.type || "all"} league=${options.leagueFilter || "all"} ` +
+      `timings=${JSON.stringify(buildTimings)} key_summary=${JSON.stringify(summarizeTeamRankingsResponseCacheKey(cacheKey))}`
     );
   }
   return {
@@ -13194,6 +13322,7 @@ async function getCachedTeamRankingsResponse(options = {}) {
     cacheHit: false,
     datasetResolveMs,
     buildMs,
+    buildTimings,
     totalMs: Date.now() - startedAtMs,
   };
 }
@@ -13213,30 +13342,75 @@ async function warmDefaultTeamRankingsResponseCache(trigger = "background") {
   }
 }
 
-async function getCachedVarHistoryGrouped(loadHistory) {
+function captureVarHistoryTrace(trace, history, extra = {}) {
+  if (!trace || typeof trace !== "object") return;
+  Object.assign(trace, {
+    count_matches: Number(history && history.count_matches ? history.count_matches : 0),
+    count_events: Number(history && history.count_events ? history.count_events : 0),
+    count_notifications: Number(history && history.count_notifications ? history.count_notifications : 0),
+    has_error: Boolean(history && history.error),
+    ...extra,
+  });
+}
+
+async function getCachedVarHistoryGrouped(loadHistory, trace = null) {
   const nowMs = Date.now();
   if (varHistoryGroupedCache && nowMs < varHistoryGroupedCacheExpiresAtMs) {
+    captureVarHistoryTrace(trace, varHistoryGroupedCache, {
+      cache_hit: true,
+      shared_task: false,
+      wait_ms: 0,
+    });
     return varHistoryGroupedCache;
   }
   if (varHistoryGroupedCacheTask) {
-    return varHistoryGroupedCacheTask;
+    const waitStartedAtMs = Date.now();
+    const history = await varHistoryGroupedCacheTask;
+    captureVarHistoryTrace(trace, history, {
+      cache_hit: false,
+      shared_task: true,
+      wait_ms: Date.now() - waitStartedAtMs,
+    });
+    return history;
   }
 
   const effectiveLoadHistory =
     typeof loadHistory === "function" ? loadHistory : getBbcMatchHistoryGrouped;
   const task = (async () => {
+    const loadStartedAtMs = Date.now();
     const history = await effectiveLoadHistory({
       start_ms: nowMs - 24 * 60 * 60 * 1000,
       end_ms: nowMs + 60 * 60 * 1000,
     });
+    const loadMs = Date.now() - loadStartedAtMs;
     varHistoryGroupedCache = history;
     varHistoryGroupedCacheExpiresAtMs = Date.now() + VAR_HISTORY_GROUPED_CACHE_TTL_MS;
+    if (
+      Number.isFinite(DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) &&
+      DEBUG_SLOW_API_REQUEST_THRESHOLD_MS > 0 &&
+      loadMs >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS
+    ) {
+      logPerformanceDiagnostic(
+        `[VarHistory][load] duration_ms=${loadMs} counts=${JSON.stringify({
+          matches: Number(history && history.count_matches ? history.count_matches : 0),
+          events: Number(history && history.count_events ? history.count_events : 0),
+          notifications: Number(history && history.count_notifications ? history.count_notifications : 0),
+          has_error: Boolean(history && history.error),
+        })}`
+      );
+    }
     return history;
   })();
 
   varHistoryGroupedCacheTask = task;
   try {
-    return await task;
+    const history = await task;
+    captureVarHistoryTrace(trace, history, {
+      cache_hit: false,
+      shared_task: false,
+      wait_ms: Date.now() - nowMs,
+    });
+    return history;
   } finally {
     varHistoryGroupedCacheTask = null;
   }
@@ -13560,32 +13734,6 @@ function matchIsMajorTournament(match) {
   return MAJOR_TOURNAMENT_PATTERNS.some((pattern) => pattern.test(normalizedLeague));
 }
 
-function matchIsMajorUefaClubKnockoutFixture(match) {
-  if (!match) return false;
-
-  const normalizedLeague = normalizeCompetitionFilterName(match.league || "");
-  const descriptor = [
-    match.league || "",
-    match.league_subcategory || "",
-  ]
-    .map((value) => String(value).replace(/\s+/g, " ").trim().toLowerCase())
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-
-  const majorUefaClubCompetitions = new Set([
-    "uefa champions league",
-    "uefa europa league",
-    "uefa conference league",
-  ]);
-
-  if (!majorUefaClubCompetitions.has(normalizedLeague) || !descriptor) {
-    return false;
-  }
-
-  return /\b(?:quarter(?:\s|-)?finals?|semi(?:\s|-)?finals?|final)\b/i.test(descriptor);
-}
-
 function matchPassesCategoryFilters(match, options = {}) {
   const predicates = [];
   if (options.eplOnly) {
@@ -13594,7 +13742,7 @@ function matchPassesCategoryFilters(match, options = {}) {
     );
   }
   if (options.majorUefa) {
-    predicates.push(matchIsMajorUefaClubKnockoutFixture);
+    predicates.push(matchIsMajorGameOfInterest);
   }
   if (options.homeNations) {
     predicates.push(matchIncludesHomeNation);
@@ -17709,7 +17857,22 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayloads(payloads, options = 
     options && typeof options.loadHistory === "function"
       ? options.loadHistory
       : getBbcMatchHistoryGrouped;
-  const history = await getCachedVarHistoryGrouped(loadHistory);
+  const timings = options && options.timings && typeof options.timings === "object"
+    ? options.timings
+    : null;
+  const historyTrace = {};
+  const historyStartedAtMs = Date.now();
+  const history = await getCachedVarHistoryGrouped(loadHistory, historyTrace);
+  recordStageTiming(timings, "var_history_ms", historyStartedAtMs);
+  if (timings) {
+    timings.var_history_cache_hit = Boolean(historyTrace.cache_hit);
+    timings.var_history_shared_task = Boolean(historyTrace.shared_task);
+    timings.var_history_wait_ms = Number(historyTrace.wait_ms || 0);
+    timings.var_history_matches = Number(historyTrace.count_matches || 0);
+    timings.var_history_events = Number(historyTrace.count_events || 0);
+    timings.var_history_notifications = Number(historyTrace.count_notifications || 0);
+  }
+  const applyStartedAtMs = Date.now();
   const historyMatchesById = new Map();
   if (history && !history.error && Array.isArray(history.matches)) {
     history.matches.forEach((entry) => {
@@ -17719,7 +17882,7 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayloads(payloads, options = 
     });
   }
 
-  return Promise.all(
+  const merged = await Promise.all(
     items.map((payload) =>
       mergeConfirmedVarDisallowedGoalsIntoPayload(payload, {
         ...options,
@@ -17727,6 +17890,8 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayloads(payloads, options = 
       })
     )
   );
+  recordStageTiming(timings, "var_apply_ms", applyStartedAtMs);
+  return merged;
 }
 
 function scheduleMatchDetailsWarm(matchId, options = {}) {
@@ -21675,8 +21840,12 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const pageEnd = pageStart + pageSize;
     const pagedRaw = pageStart >= totalCount ? [] : payload.slice(pageStart, pageEnd);
     stageStartedAtMs = Date.now();
-    const paged = await mergeConfirmedVarDisallowedGoalsIntoPayloads(pagedRaw);
+    const varMergeTimings = {};
+    const paged = await mergeConfirmedVarDisallowedGoalsIntoPayloads(pagedRaw, {
+      timings: varMergeTimings,
+    });
     timings.var_merge_ms = Date.now() - stageStartedAtMs;
+    Object.assign(timings, varMergeTimings);
     const hasMore = page < totalPages;
     timings.total_ms = Date.now() - handlerStartedAtMs;
 
@@ -22025,7 +22194,8 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
     logPerformanceDiagnostic(
       `[API][teams][timings] id=${req.requestId || "unknown"} total_ms=${totalMs} ` +
       `cache_hit=${response.cacheHit ? "true" : "false"} dataset_resolve_ms=${response.datasetResolveMs || 0} ` +
-      `build_ms=${response.buildMs || 0} source=${sourceSelection.source} type=${typeSelection.type || "all"} league=${leagueFilter || "all"}`
+      `build_ms=${response.buildMs || 0} build_timings=${JSON.stringify(response.buildTimings || {})} ` +
+      `source=${sourceSelection.source} type=${typeSelection.type || "all"} league=${leagueFilter || "all"}`
     );
   }
   setLastModifiedHeaders(res, response.updatedAt);
@@ -29448,7 +29618,9 @@ module.exports = {
     collectDisallowedCompetitionTargets,
     mergeBbcAndLiveMatches,
     matchIncludesHomeNation,
+    matchIsMajorGameOfInterest,
     matchIsMajorTournament,
+    matchIsMajorUefaClubKnockoutFixture,
     matchPassesCategoryFilters,
     isListPayloadVisibleForMode,
     mergeClubEloFixtureMetadata,

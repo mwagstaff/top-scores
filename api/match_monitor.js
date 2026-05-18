@@ -18,6 +18,10 @@ const { fetchBbcLiveTextEntriesByDetailsUrl } = require("./fetch_bbc_scores");
 const liveActivityMetrics = require("./live_activity_metrics");
 const fantasyScore = require("./fantasy_score");
 const { DEFAULT_COMPETITION_WEIGHTS } = require("./config");
+const {
+  matchIsMajorGameOfInterest,
+  matchIsMajorUefaClubKnockoutFixture,
+} = require("./major_games_of_interest");
 const crypto = require("crypto");
 const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.json");
 const TEAM_SHORT_NAMES_PAYLOAD = require("./team_short_names.json");
@@ -4143,24 +4147,6 @@ function liveActivityPreferenceLeagueMatchesSelectedLeagues(selectedLeagues, lea
   );
 }
 
-function liveActivityMatchIsMajorUEFAClubKnockoutFixture(match) {
-  const descriptor = [
-    normalizeLiveActivityCompetitionName(match && match.league),
-    normalizeLiveActivityCompetitionName(match && match.league_subcategory),
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  if (!descriptor) return false;
-  if (
-    !/\buefa champions league\b|\buefa europa league\b|\buefa conference league\b/.test(descriptor)
-  ) {
-    return false;
-  }
-
-  return /\b(?:quarter(?:\s|-)?finals?|semi(?:\s|-)?finals?|final)\b/.test(descriptor);
-}
-
 function buildLiveActivityOperationalMatches(detailsRecords, fallbackMatches = []) {
   const canonicalMatches = canonicalLiveActivityMatchesFromDetailsRecords(detailsRecords);
   const enrichedFallbackMatches = enrichLiveActivityOperationalMatches(fallbackMatches, detailsRecords);
@@ -4316,7 +4302,7 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
       ) {
         return true;
       }
-      return majorUEFAClubGamesEnabled && liveActivityMatchIsMajorUEFAClubKnockoutFixture(match);
+      return majorUEFAClubGamesEnabled && matchIsMajorGameOfInterest(match);
     });
 }
 
@@ -4699,7 +4685,7 @@ function isEligibleForLiveActivityByPreferences(user, match) {
     if (
       !homeInPremierLeague &&
       !awayInPremierLeague &&
-      !(prefs.majorUEFAClubGamesEnabled && liveActivityMatchIsMajorUEFAClubKnockoutFixture(match))
+      !(prefs.majorUEFAClubGamesEnabled && matchIsMajorGameOfInterest(match))
     ) {
       return {
         eligible: false,
@@ -7891,6 +7877,8 @@ module.exports = {
     monitoredMatchStatesSnapshot,
     evaluateUserNotificationDecision,
     filterCanonicalLiveActivityMatchesForUser,
+    matchIsMajorGameOfInterest,
+    matchIsMajorUefaClubKnockoutFixture,
     isEligibleForLiveActivityByPreferences,
     shouldAllowInactiveLiveActivityEvaluation,
     firstFixtureSectionMatches,

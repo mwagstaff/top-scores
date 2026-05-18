@@ -53,6 +53,7 @@ const {
     collectInProgressMatchDetailTargets,
     mergeBbcAndLiveMatches,
     matchIncludesHomeNation,
+    matchIsMajorGameOfInterest,
     matchIsMajorTournament,
     matchPassesCategoryFilters,
     isListPayloadVisibleForMode,
@@ -1030,6 +1031,42 @@ test("matchIsMajorTournament includes World Cup and Euros but excludes qualifyin
   );
 });
 
+test("matchIsMajorGameOfInterest includes promotion play-offs and configured derbies", () => {
+  assert.equal(
+    matchIsMajorGameOfInterest(
+      baseMatch({
+        league: "Championship",
+        league_subcategory: "Promotion Play-offs - Semi-finals",
+        home_team: "Middlesbrough",
+        away_team: "Southampton",
+      })
+    ),
+    true
+  );
+
+  assert.equal(
+    matchIsMajorGameOfInterest(
+      baseMatch({
+        league: "Scottish Premiership",
+        home_team: "Rangers",
+        away_team: "Celtic",
+      })
+    ),
+    true
+  );
+
+  assert.equal(
+    matchIsMajorGameOfInterest(
+      baseMatch({
+        league: "La Liga",
+        home_team: "Real Madrid",
+        away_team: "Barcelona",
+      })
+    ),
+    true
+  );
+});
+
 test("matchPassesCategoryFilters uses union semantics across domestic and international toggles", () => {
   const premierLeagueTeams = ["Arsenal", "Chelsea"];
 
@@ -1053,9 +1090,9 @@ test("matchPassesCategoryFilters uses union semantics across domestic and intern
   assert.equal(
     matchPassesCategoryFilters(
       baseMatch({
-        league: "Serie A",
-        home_team: "Napoli",
-        away_team: "Roma",
+        league: "Ligue 1",
+        home_team: "Nantes",
+        away_team: "Rennes",
       }),
       {
         eplOnly: true,

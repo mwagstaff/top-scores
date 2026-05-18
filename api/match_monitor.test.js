@@ -955,6 +955,63 @@ test("filterCanonicalLiveActivityMatchesForUser keeps major UEFA knockout fixtur
   );
 });
 
+test("filterCanonicalLiveActivityMatchesForUser keeps promotion play-off fixtures when EPL-only is expanded", () => {
+  const nowMs = Date.parse("2026-05-09T11:05:00Z");
+
+  const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+    [
+      {
+        date: "2026-05-09",
+        time: "12:30",
+        league: "Championship",
+        league_subcategory: "Promotion Play-offs - Semi-finals",
+        home_team: "Middlesbrough",
+        away_team: "Southampton",
+        tv_channels: ["Sky Sports"],
+      },
+    ],
+    liveActivityUser(0, {
+      competitionFilterEnabled: true,
+      englishPremierLeagueTeamsOnly: true,
+      majorUEFAClubGamesEnabled: true,
+    }),
+    nowMs
+  );
+
+  assert.deepEqual(
+    filtered.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Middlesbrough|Southampton"]
+  );
+});
+
+test("filterCanonicalLiveActivityMatchesForUser keeps configured major derbies in reverse order", () => {
+  const nowMs = Date.parse("2026-05-09T11:05:00Z");
+
+  const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+    [
+      {
+        date: "2026-05-09",
+        time: "12:30",
+        league: "Scottish Premiership",
+        home_team: "Rangers",
+        away_team: "Celtic",
+        tv_channels: [],
+      },
+    ],
+    liveActivityUser(0, {
+      competitionFilterEnabled: true,
+      englishPremierLeagueTeamsOnly: true,
+      majorUEFAClubGamesEnabled: true,
+    }),
+    nowMs
+  );
+
+  assert.deepEqual(
+    filtered.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Rangers|Celtic"]
+  );
+});
+
 test("filterCanonicalLiveActivityMatchesForUser canonicalizes selected league names for fallback fixtures", () => {
   const nowMs = Date.parse("2026-04-07T19:05:00Z");
 

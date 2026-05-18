@@ -56,6 +56,18 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
   - For results, it requests one year before today through today and automatically loads additional result pages in the background until the server has no more data in that window.
   - Competition/category filtering is sent to the server with the user's preferences; the web client still supports the explicit in-page custom competition picker as an additional display-only refinement.
 
+## Major Games Of Interest
+
+The Profile > Preferences toggle labelled "Major games of interest" still uses the existing `majorUEFAClubGamesEnabled` preference key and `major_uefa=true` API query parameter for backwards compatibility.
+
+When "Premier League teams only" is enabled, this toggle expands the match set to include:
+
+- UEFA Champions League, UEFA Europa League, and UEFA Conference League quarter-finals, semi-finals, and finals.
+- End of season promotion play-off matches where the competition title metadata contains `Promotion Play-offs`, for example `Championship: Promotion Play-offs - Semi-finals`.
+- Configured major club derbies, matched in either home/away order.
+
+The backend logic lives in [`api/major_games_of_interest.js`](api/major_games_of_interest.js). The editable derby configuration is [`api/major_club_derbies.json`](api/major_club_derbies.json); add or remove two-team entries there to update which derbies are treated as major games of interest. The server and Live Activity monitor both read that shared config.
+
 ## Important Documents
 
 - Cache invalidation / full correction runbook:
