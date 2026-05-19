@@ -72,6 +72,10 @@ const SLOW_OPERATIONAL_READ_THRESHOLD_MS = parsePositiveIntOrFallback(
   process.env.SLOW_OPERATIONAL_READ_THRESHOLD_MS,
   1000
 );
+const SLOW_BBC_HISTORY_READ_THRESHOLD_MS = parsePositiveIntOrFallback(
+  process.env.SLOW_BBC_HISTORY_READ_THRESHOLD_MS,
+  1000
+);
 const MAX_BBC_HISTORY_QUERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 const BBC_EVENTS_INDEX_KEY = `${DB_NAME}:bbc:events:index`;
@@ -264,6 +268,21 @@ function maybeLogSlowOperationalRead(operation, startedAtMs, timings, meta = {})
   }
   console.info(
     `[OperationalRead][slow] operation=${operation} total_ms=${totalMs} ` +
+    `timings=${JSON.stringify(timings || {})} meta=${JSON.stringify(meta || {})}`
+  );
+}
+
+function maybeLogSlowBbcHistoryRead(operation, startedAtMs, timings, meta = {}) {
+  const totalMs = Date.now() - startedAtMs;
+  if (
+    !Number.isFinite(SLOW_BBC_HISTORY_READ_THRESHOLD_MS) ||
+    SLOW_BBC_HISTORY_READ_THRESHOLD_MS <= 0 ||
+    totalMs < SLOW_BBC_HISTORY_READ_THRESHOLD_MS
+  ) {
+    return;
+  }
+  console.info(
+    `[BbcHistoryRead][slow] operation=${operation} total_ms=${totalMs} ` +
     `timings=${JSON.stringify(timings || {})} meta=${JSON.stringify(meta || {})}`
   );
 }
@@ -1279,15 +1298,25 @@ async function claimBbcNotificationIdempotency(notificationId, options = {}) {
   }
 }
 
-async function getHistoryRecordsBySortedKeys(redisClient, keys, indexKey, contextLabel) {
+async function getHistoryRecordsBySortedKeys(
+  redisClient,
+  keys,
+  indexKey,
+  contextLabel,
+  timings = null,
+  timingPrefix = contextLabel
+) {
   if (!Array.isArray(keys) || keys.length === 0) {
     return [];
   }
 
+  const fetchStartedAtMs = Date.now();
   const rawValues = await redisClient.mGet(keys);
+  recordTiming(timings, `${timingPrefix}_mget_ms`, fetchStartedAtMs);
   const staleKeys = [];
   const records = [];
 
+  const parseStartedAtMs = Date.now();
   rawValues.forEach((rawValue, index) => {
     const key = keys[index];
     if (!rawValue) {
@@ -1299,17 +1328,40 @@ async function getHistoryRecordsBySortedKeys(redisClient, keys, indexKey, contex
       records.push(parsed);
     }
   });
+  recordTiming(timings, `${timingPrefix}_parse_ms`, parseStartedAtMs);
 
   if (staleKeys.length > 0) {
+    const cleanupStartedAtMs = Date.now();
     await redisClient.zRem(indexKey, staleKeys);
+    recordTiming(timings, `${timingPrefix}_cleanup_ms`, cleanupStartedAtMs);
   }
 
   return records;
 }
 
-async function getHistoryRecordsByRange(redisClient, indexKey, startMs, endMs, contextLabel) {
+async function getHistoryRecordsByRange(
+  redisClient,
+  indexKey,
+  startMs,
+  endMs,
+  contextLabel,
+  timings = null,
+  timingPrefix = contextLabel
+) {
+  const rangeStartedAtMs = Date.now();
   const keys = await redisClient.zRangeByScore(indexKey, startMs, endMs);
-  return getHistoryRecordsBySortedKeys(redisClient, keys, indexKey, contextLabel);
+  recordTiming(timings, `${timingPrefix}_zrange_ms`, rangeStartedAtMs);
+  if (timings) {
+    timings[`${timingPrefix}_key_count`] = keys.length;
+  }
+  return getHistoryRecordsBySortedKeys(
+    redisClient,
+    keys,
+    indexKey,
+    contextLabel,
+    timings,
+    timingPrefix
+  );
 }
 
 async function getHistoryRecordsAll(redisClient, indexKey, contextLabel) {
@@ -2636,6 +2688,8 @@ function sanitizeMatchIdList(matchIds) {
 
 async function getBbcMatchHistoryGrouped(options = {}) {
   const range = normalizeTimeRange(options.start_ms, options.end_ms);
+  const startedAtMs = Date.now();
+  const timings = {};
 
   try {
     const redisClient = await getClient();
@@ -2646,19 +2700,32 @@ async function getBbcMatchHistoryGrouped(options = {}) {
         BBC_EVENTS_INDEX_KEY,
         range.startMs,
         range.endMs,
-        "event"
+        "event",
+        timings,
+        "events"
       ),
       getHistoryRecordsByRange(
         redisClient,
         BBC_NOTIFICATIONS_INDEX_KEY,
         range.startMs,
         range.endMs,
-        "notification"
+        "notification",
+        timings,
+        "notifications"
       ),
     ]);
 
+    const filterStartedAtMs = Date.now();
     const filtered = applyHistoryFilters(eventRecordsRaw, notificationRecordsRaw, options);
+    recordTiming(timings, "filter_ms", filterStartedAtMs);
+    const groupStartedAtMs = Date.now();
     const matches = groupHistoryRecordsByMatch(filtered.eventRecords, filtered.notificationRecords);
+    recordTiming(timings, "group_ms", groupStartedAtMs);
+    maybeLogSlowBbcHistoryRead("get_bbc_history_grouped", startedAtMs, timings, {
+      count_matches: matches.length,
+      count_events: filtered.eventRecords.length,
+      count_notifications: filtered.notificationRecords.length,
+    });
 
     return {
       start_ms: range.startMs,
@@ -2669,6 +2736,9 @@ async function getBbcMatchHistoryGrouped(options = {}) {
       matches,
     };
   } catch (error) {
+    maybeLogSlowBbcHistoryRead("get_bbc_history_grouped", startedAtMs, timings, {
+      error: error.message || String(error),
+    });
     console.error("[Redis] Error retrieving grouped BBC match history:", error);
     return {
       start_ms: range.startMs,

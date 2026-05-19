@@ -929,6 +929,7 @@ async function refreshDeletedMatchIdsCacheAsync() {
   try {
     const ids = await getDeletedMatchIds();
     cachedDeletedMatchIds = new Set(Array.isArray(ids) ? ids : []);
+    clearMatchListResponseCache();
   } catch (error) {
     console.warn("[MatchList] Failed to refresh deleted match IDs cache:", error.message || error);
   }
@@ -12044,6 +12045,7 @@ function uniqueMatchTeamNames(matches, leagueFilter = null) {
 function buildClubEloCandidateIndex(clubEloTeams) {
   const byNormalizedName = new Map();
   const byIdentityKey = new Map();
+  const byToken = new Map();
   const entries = Array.isArray(clubEloTeams) ? clubEloTeams : [];
 
   entries.forEach((team) => {
@@ -12063,9 +12065,17 @@ function buildClubEloCandidateIndex(clubEloTeams) {
       }
       byIdentityKey.get(key).push(team);
     });
+
+    identityTokens(club).forEach((token) => {
+      if (!token) return;
+      if (!byToken.has(token)) {
+        byToken.set(token, []);
+      }
+      byToken.get(token).push(team);
+    });
   });
 
-  return { byNormalizedName, byIdentityKey };
+  return { byNormalizedName, byIdentityKey, byToken };
 }
 
 function normalizeMatchConfidenceThreshold(value, fallback) {
@@ -12244,6 +12254,16 @@ function findBestClubEloMatch(
   const candidates = new Map();
   identityTeamKeys(teamName).forEach((key) => {
     const matches = safeIndex.byIdentityKey.get(key);
+    (Array.isArray(matches) ? matches : []).forEach((team) => {
+      const club = String(team && team.Club ? team.Club : "").trim();
+      if (!club) return;
+      if (!candidates.has(club)) {
+        candidates.set(club, team);
+      }
+    });
+  });
+  identityTokens(teamName).forEach((token) => {
+    const matches = safeIndex.byToken.get(token);
     (Array.isArray(matches) ? matches : []).forEach((team) => {
       const club = String(team && team.Club ? team.Club : "").trim();
       if (!club) return;
@@ -13179,6 +13199,13 @@ function buildTeamRankingsResponseCacheKey(options = {}) {
   });
 }
 
+function buildTeamRankingsBaseCacheKey(options = {}) {
+  return buildTeamRankingsResponseCacheKey({
+    ...options,
+    type: null,
+  });
+}
+
 function summarizeTeamRankingsResponseCacheKey(cacheKey) {
   const raw = String(cacheKey || "");
   let parsed = null;
@@ -13278,6 +13305,18 @@ function buildTeamRankingsResponsePayload(options = {}) {
   };
 }
 
+function deriveTeamRankingsResponseForType(response, type, timings = null) {
+  if (!type) return response;
+  const typeFilterStartedAtMs = Date.now();
+  const payload = (Array.isArray(response && response.payload) ? response.payload : [])
+    .filter((team) => String(team && team.Type ? team.Type : "").toLowerCase() === type);
+  recordStageTiming(timings, "type_filter_ms", typeFilterStartedAtMs);
+  return {
+    ...response,
+    payload,
+  };
+}
+
 async function getCachedTeamRankingsResponse(options = {}) {
   const startedAtMs = Date.now();
   const datasets = await resolveTeamRankingDatasetsForResponse();
@@ -13291,20 +13330,52 @@ async function getCachedTeamRankingsResponse(options = {}) {
     return {
       ...cached,
       cacheHit: true,
+      baseCacheHit: true,
       datasetResolveMs,
       buildMs: 0,
       totalMs: Date.now() - startedAtMs,
     };
   }
 
-  const buildStartedAtMs = Date.now();
-  const buildTimings = {};
-  const response = buildTeamRankingsResponsePayload({
+  const baseCacheKey = buildTeamRankingsBaseCacheKey({
     ...options,
     ...datasets,
+  });
+  const cachedBaseResponse = teamRankingsResponseCache.get(baseCacheKey);
+  if (cachedBaseResponse) {
+    const buildTimings = {};
+    const response = deriveTeamRankingsResponseForType(
+      cachedBaseResponse,
+      options.type || null,
+      buildTimings
+    );
+    setTeamRankingsResponseCacheEntry(cacheKey, response);
+    return {
+      ...response,
+      cacheHit: true,
+      baseCacheHit: true,
+      datasetResolveMs,
+      buildMs: 0,
+      buildTimings,
+      totalMs: Date.now() - startedAtMs,
+    };
+  }
+
+  const buildStartedAtMs = Date.now();
+  const buildTimings = {};
+  const baseResponse = buildTeamRankingsResponsePayload({
+    ...options,
+    ...datasets,
+    type: null,
     timings: buildTimings,
   });
+  const response = deriveTeamRankingsResponseForType(
+    baseResponse,
+    options.type || null,
+    buildTimings
+  );
   const buildMs = Date.now() - buildStartedAtMs;
+  setTeamRankingsResponseCacheEntry(baseCacheKey, baseResponse);
   setTeamRankingsResponseCacheEntry(cacheKey, response);
   if (
     Number.isFinite(DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) &&
@@ -13320,6 +13391,7 @@ async function getCachedTeamRankingsResponse(options = {}) {
   return {
     ...response,
     cacheHit: false,
+    baseCacheHit: false,
     datasetResolveMs,
     buildMs,
     buildTimings,
@@ -16337,9 +16409,13 @@ function canonicalMatchDetailsRecordsToPublicListPayloads(recordsById, options =
 const MATCH_LIST_RESPONSE_CACHE_LIMIT = 32;
 const MATCH_LIST_RESPONSE_CACHE_TTL_MS = 30 * 1000;
 const matchListResponseCache = new Map();
+const MATCH_QUERY_RESPONSE_CACHE_LIMIT = 64;
+const MATCH_QUERY_RESPONSE_CACHE_TTL_MS = 30 * 1000;
+const matchQueryResponseCache = new Map();
 
 function clearMatchListResponseCache() {
   matchListResponseCache.clear();
+  matchQueryResponseCache.clear();
 }
 
 function matchDetailsLookupSize(matchDetailsLookup) {
@@ -16362,6 +16438,19 @@ function setMatchListResponseCacheEntry(key, value) {
     const oldestKey = matchListResponseCache.keys().next().value;
     if (!oldestKey) break;
     matchListResponseCache.delete(oldestKey);
+  }
+}
+
+function setMatchQueryResponseCacheEntry(key, value) {
+  if (!key) return;
+  if (matchQueryResponseCache.has(key)) {
+    matchQueryResponseCache.delete(key);
+  }
+  matchQueryResponseCache.set(key, value);
+  while (matchQueryResponseCache.size > MATCH_QUERY_RESPONSE_CACHE_LIMIT) {
+    const oldestKey = matchQueryResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    matchQueryResponseCache.delete(oldestKey);
   }
 }
 
@@ -16390,6 +16479,38 @@ function buildMatchListResponseCacheKey(options = {}) {
         ? options.bbcRangeDataset.items.length
         : 0,
   });
+}
+
+function buildMatchQueryResponseCacheKey(options = {}) {
+  return JSON.stringify({
+    list_cache_key: options.listCacheKey || null,
+    date_from: options.dateFrom || null,
+    date_to: options.dateTo || null,
+    leagues: Array.isArray(options.leagues) ? options.leagues : [],
+    teams: Array.isArray(options.teams) ? options.teams : [],
+    channels: Array.isArray(options.channels) ? options.channels : [],
+    filter_mode: options.filterMode || "union",
+    list_mode: options.listMode || null,
+    sort_order: options.sortOrder || "asc",
+    epl_only: Boolean(options.eplOnly),
+    major_uefa: Boolean(options.majorUefa),
+    home_nations: Boolean(options.homeNations),
+    major_tournaments: Boolean(options.majorTournaments),
+    premier_league_updated_at: options.premierLeagueUpdatedAt || null,
+  });
+}
+
+function getCachedMatchQueryPayload(cacheKey) {
+  if (!cacheKey) return null;
+  const cached = matchQueryResponseCache.get(cacheKey);
+  if (
+    !cached ||
+    !Array.isArray(cached.payload) ||
+    Date.now() - cached.createdAtMs > MATCH_QUERY_RESPONSE_CACHE_TTL_MS
+  ) {
+    return null;
+  }
+  return cached.payload;
 }
 
 function getCachedCanonicalPublicMatchListPayloads(options = {}) {
@@ -17841,9 +17962,47 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayload(payload, options = {}
 
 async function mergeConfirmedVarDisallowedGoalsIntoPayloads(payloads, options = {}) {
   const items = Array.isArray(payloads) ? payloads : [];
+  const timings = options && options.timings && typeof options.timings === "object"
+    ? options.timings
+    : null;
+  const historyCandidates = items.filter((payload) => {
+    const matchId = normalizeMatchDetailsId(payload && (payload.id || payload.match_details_id));
+    if (!matchId) return false;
+
+    const homeScore = parseNumericScore(payload && payload.home_score);
+    const awayScore = parseNumericScore(payload && payload.away_score);
+    if (homeScore !== null || awayScore !== null) return true;
+
+    if (
+      isInProgressMatchStatus(payload && payload.score_status) ||
+      isFinishedMatchStatus(payload && payload.score_status)
+    ) {
+      return true;
+    }
+
+    return (
+      (Array.isArray(payload && payload.home_goal_scorers) &&
+        payload.home_goal_scorers.length > 0) ||
+      (Array.isArray(payload && payload.away_goal_scorers) &&
+        payload.away_goal_scorers.length > 0)
+    );
+  });
+  if (timings) {
+    timings.var_history_candidate_count = historyCandidates.length;
+    timings.var_history_skipped = false;
+  }
+  if (historyCandidates.length === 0) {
+    if (timings) {
+      timings.var_history_skipped = true;
+      timings.var_history_skip_reason = "no_candidate_payloads";
+      timings.var_history_ms = 0;
+      timings.var_apply_ms = 0;
+    }
+    return items;
+  }
   const matchIds = Array.from(
     new Set(
-      items
+      historyCandidates
         .map((payload) => normalizeMatchDetailsId(payload && (payload.id || payload.match_details_id)))
         .filter(Boolean)
     )
@@ -17857,9 +18016,6 @@ async function mergeConfirmedVarDisallowedGoalsIntoPayloads(payloads, options = 
     options && typeof options.loadHistory === "function"
       ? options.loadHistory
       : getBbcMatchHistoryGrouped;
-  const timings = options && options.timings && typeof options.timings === "object"
-    ? options.timings
-    : null;
   const historyTrace = {};
   const historyStartedAtMs = Date.now();
   const history = await getCachedVarHistoryGrouped(loadHistory, historyTrace);
@@ -21746,92 +21902,124 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const homeNations = isTruthyParam(req.query.home_nations);
     const majorTournaments = isTruthyParam(req.query.major_tournaments);
 
-    stageStartedAtMs = Date.now();
-    let filtered = getCachedCanonicalPublicMatchListPayloads(
-      {
-        matchDetailsLookup: canonicalLookup,
-        matchDetailsUpdatedAt: canonicalUpdatedAt,
-        matchDetailsCount: matchDetailsLookupSize(canonicalLookup),
-        mergedDataset,
-        bbcRangeDataset,
-      }
-    ).filter((match) =>
-      matchesFilters(match, {
+    const allTestMatches = testMatchState.getAllMatches();
+    const canonicalListOptions = {
+      matchDetailsLookup: canonicalLookup,
+      matchDetailsUpdatedAt: canonicalUpdatedAt,
+      matchDetailsCount: matchDetailsLookupSize(canonicalLookup),
+      mergedDataset,
+      bbcRangeDataset,
+    };
+    const canonicalListCacheKey = buildMatchListResponseCacheKey({
+      ...canonicalListOptions,
+      kind: "public",
+    });
+    const canUseMatchQueryCache = allTestMatches.length === 0;
+    const matchQueryCacheKey = canUseMatchQueryCache
+      ? buildMatchQueryResponseCacheKey({
+        listCacheKey: canonicalListCacheKey,
+        dateFrom,
+        dateTo,
         leagues,
         teams,
         channels,
         filterMode,
-        dateFrom,
-        dateTo,
-        manualMappings,
+        listMode,
+        sortOrder,
+        eplOnly,
+        majorUefa,
+        homeNations,
+        majorTournaments,
+        premierLeagueUpdatedAt: premierLeagueDataset.updated_at,
       })
-    ).filter((match) => {
-      const matchId = String(match && match.match_details_id ? match.match_details_id : "").toLowerCase();
-      return !matchId || !deletedMatchIdSet.has(matchId);
-    });
-    timings.base_filter_ms = Date.now() - stageStartedAtMs;
+      : null;
+    let payload = getCachedMatchQueryPayload(matchQueryCacheKey);
+    timings.match_query_cache_hit = Boolean(payload);
 
-    if (eplOnly || majorUefa || homeNations || majorTournaments) {
+    if (!payload) {
       stageStartedAtMs = Date.now();
-      filtered = filtered.filter((match) =>
-        matchPassesCategoryFilters(match, {
-          eplOnly,
-          majorUefa,
-          homeNations,
-          majorTournaments,
-          premierLeagueTeams: premierLeagueDataset.items,
-        })
-      );
-      timings.category_filter_ms = Date.now() - stageStartedAtMs;
-    }
+      let filtered = getCachedCanonicalPublicMatchListPayloads(canonicalListOptions)
+        .filter((match) =>
+          matchesFilters(match, {
+            leagues,
+            teams,
+            channels,
+            filterMode,
+            dateFrom,
+            dateTo,
+            manualMappings,
+          })
+        )
+        .filter((match) => {
+          const matchId = String(match && match.match_details_id ? match.match_details_id : "").toLowerCase();
+          return !matchId || !deletedMatchIdSet.has(matchId);
+        });
+      timings.base_filter_ms = Date.now() - stageStartedAtMs;
 
-    // Inject all test matches if they match filters
-    const allTestMatches = testMatchState.getAllMatches();
-    for (const testMatch of allTestMatches) {
-      if (testMatch && testMatch.is_test_match) {
-        const testMatchDate = testMatch.date;
-        if (testMatchDate >= dateFrom && testMatchDate <= dateTo) {
-          // Check if test match matches other filters
-          const matchesLeagueFilter =
-          leagues.length === 0 ||
-          leagues.some((league) =>
-            normalizeLeagueName(testMatch.league) === league
-          );
-        const matchesTeamFilter =
-          teams.length === 0 ||
-          teams.some(
-            (team) =>
-              teamMatchesSelectionAliasAware(testMatch.home_team, team, manualMappings) ||
-              teamMatchesSelectionAliasAware(testMatch.away_team, team, manualMappings) ||
-              testMatch.home_team.toLowerCase().includes(team.toLowerCase()) ||
-              testMatch.away_team.toLowerCase().includes(team.toLowerCase())
-          );
+      if (eplOnly || majorUefa || homeNations || majorTournaments) {
+        stageStartedAtMs = Date.now();
+        filtered = filtered.filter((match) =>
+          matchPassesCategoryFilters(match, {
+            eplOnly,
+            majorUefa,
+            homeNations,
+            majorTournaments,
+            premierLeagueTeams: premierLeagueDataset.items,
+          })
+        );
+        timings.category_filter_ms = Date.now() - stageStartedAtMs;
+      }
 
-          if (matchesLeagueFilter && matchesTeamFilter) {
-            // Insert test match at the appropriate position based on date/time
-            filtered.push(testMatch);
-            // Re-sort by kickoff time (date + time)
-            filtered.sort((a, b) => {
-              const aTime = `${a.date} ${a.time}`;
-              const bTime = `${b.date} ${b.time}`;
-              return aTime.localeCompare(bTime);
-            });
+      // Inject all test matches if they match filters.
+      for (const testMatch of allTestMatches) {
+        if (testMatch && testMatch.is_test_match) {
+          const testMatchDate = testMatch.date;
+          if (testMatchDate >= dateFrom && testMatchDate <= dateTo) {
+            const matchesLeagueFilter =
+              leagues.length === 0 ||
+              leagues.some((league) =>
+                normalizeLeagueName(testMatch.league) === league
+              );
+            const matchesTeamFilter =
+              teams.length === 0 ||
+              teams.some(
+                (team) =>
+                  teamMatchesSelectionAliasAware(testMatch.home_team, team, manualMappings) ||
+                  teamMatchesSelectionAliasAware(testMatch.away_team, team, manualMappings) ||
+                  testMatch.home_team.toLowerCase().includes(team.toLowerCase()) ||
+                  testMatch.away_team.toLowerCase().includes(team.toLowerCase())
+              );
+
+            if (matchesLeagueFilter && matchesTeamFilter) {
+              filtered.push(testMatch);
+            }
           }
         }
       }
-    }
 
-    stageStartedAtMs = Date.now();
-    filtered = filtered.slice().sort((lhs, rhs) => sortAdminMatchesByKickoff(lhs, rhs, "asc"));
-    if (sortOrder === "desc") {
-      filtered = filtered.slice().reverse();
-    }
-    timings.sort_ms = Date.now() - stageStartedAtMs;
-    let payload = filtered;
-    if (listMode) {
       stageStartedAtMs = Date.now();
-      payload = payload.filter((item) => isListPayloadVisibleForMode(item, listMode));
-      timings.mode_filter_ms = Date.now() - stageStartedAtMs;
+      filtered = filtered.slice().sort((lhs, rhs) => sortAdminMatchesByKickoff(lhs, rhs, "asc"));
+      if (sortOrder === "desc") {
+        filtered = filtered.slice().reverse();
+      }
+      timings.sort_ms = Date.now() - stageStartedAtMs;
+      payload = filtered;
+      if (listMode) {
+        stageStartedAtMs = Date.now();
+        payload = payload.filter((item) => isListPayloadVisibleForMode(item, listMode));
+        timings.mode_filter_ms = Date.now() - stageStartedAtMs;
+      }
+      if (matchQueryCacheKey) {
+        setMatchQueryResponseCacheEntry(matchQueryCacheKey, {
+          createdAtMs: Date.now(),
+          payload,
+        });
+      }
+    } else {
+      timings.base_filter_ms = 0;
+      timings.category_filter_ms = 0;
+      timings.sort_ms = 0;
+      if (listMode) timings.mode_filter_ms = 0;
     }
 
     const totalCount = payload.length;
@@ -22193,7 +22381,8 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
   if (DEBUG_ROUTE_STAGE_LOGGING_ENABLED || totalMs >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) {
     logPerformanceDiagnostic(
       `[API][teams][timings] id=${req.requestId || "unknown"} total_ms=${totalMs} ` +
-      `cache_hit=${response.cacheHit ? "true" : "false"} dataset_resolve_ms=${response.datasetResolveMs || 0} ` +
+      `cache_hit=${response.cacheHit ? "true" : "false"} base_cache_hit=${response.baseCacheHit ? "true" : "false"} ` +
+      `dataset_resolve_ms=${response.datasetResolveMs || 0} ` +
       `build_ms=${response.buildMs || 0} build_timings=${JSON.stringify(response.buildTimings || {})} ` +
       `source=${sourceSelection.source} type=${typeSelection.type || "all"} league=${leagueFilter || "all"}`
     );
@@ -29580,6 +29769,7 @@ module.exports = {
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
+    buildMatchQueryResponseCacheKey,
     buildCanonicalMatchWriteAuditEntry,
     transformBbcLiveMatchWithDetails,
     mergeConfirmedVarDisallowedGoalsIntoPayload,
@@ -29633,6 +29823,7 @@ module.exports = {
     bumpCacheStateSnapshot,
     buildTeamRankingsUniverseSignature,
     buildTeamRankingsResponseCacheKey,
+    buildTeamRankingsBaseCacheKey,
     inspectOperationalStateReadiness,
     clearFootballOperationalMemoryState,
     collectInProgressMatchDetailTargets,

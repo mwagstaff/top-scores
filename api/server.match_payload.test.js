@@ -20,6 +20,9 @@ const {
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
+    buildMatchQueryResponseCacheKey,
+    buildTeamRankingsResponseCacheKey,
+    buildTeamRankingsBaseCacheKey,
     buildCanonicalMatchWriteAuditEntry,
     transformBbcLiveMatchWithDetails,
     mergeConfirmedVarDisallowedGoalsIntoPayload,
@@ -1714,6 +1717,68 @@ test("toMatchListPayload includes score fields from resolved match state", () =>
   assert.equal(payload.penalty_result, undefined);
 });
 
+test("buildMatchQueryResponseCacheKey ignores pagination and changes with filters", () => {
+  const baseOptions = {
+    listCacheKey: "base",
+    dateFrom: "2025-05-18",
+    dateTo: "2026-05-18",
+    leagues: [],
+    teams: [],
+    channels: [],
+    filterMode: "intersection",
+    listMode: "results",
+    sortOrder: "desc",
+    eplOnly: true,
+    majorUefa: true,
+    homeNations: true,
+    majorTournaments: true,
+    premierLeagueUpdatedAt: "2026-05-18T12:00:00.000Z",
+  };
+
+  assert.equal(
+    buildMatchQueryResponseCacheKey({ ...baseOptions, page: 1, pageSize: 120 }),
+    buildMatchQueryResponseCacheKey({ ...baseOptions, page: 6, pageSize: 120 })
+  );
+  assert.notEqual(
+    buildMatchQueryResponseCacheKey(baseOptions),
+    buildMatchQueryResponseCacheKey({ ...baseOptions, homeNations: false })
+  );
+});
+
+test("buildTeamRankingsBaseCacheKey ignores type while response keys preserve it", () => {
+  const baseOptions = {
+    source: "merged",
+    leagueFilter: null,
+    mergedDataset: {
+      updated_at: "2026-05-18T12:00:00.000Z",
+      items: [
+        { home_team: "Arsenal", away_team: "Burnley" },
+      ],
+    },
+    clubEloDataset: {
+      updated_at: "2026-05-18T12:00:00.000Z",
+      items: [{ Club: "Arsenal" }],
+    },
+    footballDatabaseDataset: {
+      updated_at: "2026-05-18T12:00:00.000Z",
+      items: [{ Club: "Arsenal" }],
+    },
+    nationalEloDataset: {
+      updated_at: "2026-05-18T12:00:00.000Z",
+      items: [{ Team: "England" }],
+    },
+  };
+
+  assert.notEqual(
+    buildTeamRankingsResponseCacheKey({ ...baseOptions, type: "club" }),
+    buildTeamRankingsResponseCacheKey({ ...baseOptions, type: "national" })
+  );
+  assert.equal(
+    buildTeamRankingsBaseCacheKey({ ...baseOptions, type: "club" }),
+    buildTeamRankingsBaseCacheKey({ ...baseOptions, type: "national" })
+  );
+});
+
 test("toMatchListPayload includes details state even when details teams exactly match", () => {
   const payload = toMatchListPayload(baseMatch(), {
     matchDetailsLookup: {
@@ -2735,6 +2800,43 @@ test("mergeConfirmedVarDisallowedGoalsIntoPayloads corrects paged list payloads 
   assert.equal(merged[0].away_score, 2);
   assert.equal(merged[1].home_score, 1);
   assert.equal(merged[1].away_score, 0);
+});
+
+test("mergeConfirmedVarDisallowedGoalsIntoPayloads skips shared history for upcoming fixtures", async () => {
+  let loadHistoryCalls = 0;
+  const timings = {};
+  const payloads = [
+    {
+      match_details_id: DETAILS_ID,
+      date: "2026-05-18",
+      time: "20:00",
+      home_team: "Arsenal",
+      away_team: "Burnley",
+    },
+    {
+      match_details_id: "cothermatch001",
+      date: "2026-05-19",
+      time: "19:30",
+      home_team: "Chelsea",
+      away_team: "Tottenham Hotspur",
+    },
+  ];
+
+  const merged = await mergeConfirmedVarDisallowedGoalsIntoPayloads(payloads, {
+    timings,
+    loadHistory: async () => {
+      loadHistoryCalls += 1;
+      return { matches: [] };
+    },
+  });
+
+  assert.equal(loadHistoryCalls, 0);
+  assert.deepStrictEqual(merged, payloads);
+  assert.equal(timings.var_history_candidate_count, 0);
+  assert.equal(timings.var_history_skipped, true);
+  assert.equal(timings.var_history_skip_reason, "no_candidate_payloads");
+  assert.equal(timings.var_history_ms, 0);
+  assert.equal(timings.var_apply_ms, 0);
 });
 
 test("mergeConfirmedVarDisallowedGoalsIntoPayload corrects list payloads that only carry match_details_id", async () => {
