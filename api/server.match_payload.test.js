@@ -446,6 +446,82 @@ test("canonicalMatchDetailsRecordsToPublicListPayloads supplements missing canon
   assert.equal(payloads[0].has_bbc_source, true);
 });
 
+test("canonicalMatchDetailsRecordsToListPayloads drops stale TBC final placeholders", () => {
+  const payloads = canonicalMatchDetailsRecordsToListPayloads({
+    old_placeholder: {
+      id: "oldplaceholder",
+      date: "2026-05-20",
+      time: "20:00",
+      league: "UEFA Europa League",
+      league_subcategory: "Final",
+      home_team: "TBC",
+      away_team: "TBC",
+      updated_at: "2026-05-18T10:00:00.000Z",
+      tv_channels: [],
+    },
+    latest_final: {
+      id: "latestfinal",
+      date: "2026-05-20",
+      time: "20:00",
+      league: "UEFA Europa League",
+      league_subcategory: "Final",
+      home_team: "Freiburg",
+      away_team: "Aston Villa",
+      updated_at: "2026-05-20T08:00:00.000Z",
+      tv_channels: [],
+    },
+  });
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].match_details_id, "latestfinal");
+  assert.equal(payloads[0].home_team, "Freiburg");
+  assert.equal(payloads[0].away_team, "Aston Villa");
+  assert.equal(payloads[0]._source_updated_at, undefined);
+});
+
+test("canonicalMatchDetailsRecordsToListPayloads keeps latest one-team-overlap play-off final fixture", () => {
+  const payloads = canonicalMatchDetailsRecordsToListPayloads({
+    old_tbc: {
+      id: "oldtbc",
+      date: "2026-05-23",
+      time: "00:00",
+      league: "Championship",
+      league_subcategory: "Promotion Play-offs - Final",
+      home_team: "Hull City",
+      away_team: "TBC",
+      updated_at: "2026-05-17T10:00:00.000Z",
+      tv_channels: [],
+    },
+    old_opponent: {
+      id: "oldopponent",
+      date: "2026-05-23",
+      time: "16:30",
+      league: "Championship",
+      league_subcategory: "Promotion Play-offs - Final",
+      home_team: "Hull City",
+      away_team: "Southampton",
+      updated_at: "2026-05-18T10:00:00.000Z",
+      tv_channels: ["Sky Sports Football"],
+    },
+    latest_opponent: {
+      id: "latestopponent",
+      date: "2026-05-23",
+      time: "00:00",
+      league: "Championship",
+      league_subcategory: "Promotion Play-offs - Final",
+      home_team: "Hull City",
+      away_team: "Middlesbrough",
+      updated_at: "2026-05-20T08:00:00.000Z",
+      tv_channels: [],
+    },
+  });
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].match_details_id, "latestopponent");
+  assert.equal(payloads[0].home_team, "Hull City");
+  assert.equal(payloads[0].away_team, "Middlesbrough");
+});
+
 test("buildCanonicalMatchWriteAuditEntry captures previous and next summaries", () => {
   const entry = buildCanonicalMatchWriteAuditEntry(
     DETAILS_ID,

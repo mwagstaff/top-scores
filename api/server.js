@@ -10724,6 +10724,157 @@ function matchListPayloadIdentityKeys(payload) {
   return Array.from(new Set(keys.filter(Boolean)));
 }
 
+const PLACEHOLDER_TEAM_NAMES = new Set([
+  "tbc",
+  "tbd",
+  "to be confirmed",
+  "to be decided",
+  "unknown",
+]);
+
+function isPlaceholderTeamName(value) {
+  const normalized = normalizeTeamName(value).replace(/\s+/g, " ").trim().toLowerCase();
+  return PLACEHOLDER_TEAM_NAMES.has(normalized);
+}
+
+function normalizedFixtureStage(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function fixtureSupersessionGroupKey(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const date = String(payload.date || "").trim();
+  const league = normalizeLeagueName(payload.league || "").toLowerCase().trim();
+  if (!date || !league) return null;
+  const stage = normalizedFixtureStage(payload.league_subcategory || "");
+  return `${date}|${league}|${stage}`;
+}
+
+function payloadKnownTeamKeys(payload) {
+  const keys = [];
+  [payload && payload.home_team, payload && payload.away_team].forEach((team) => {
+    if (!team || isPlaceholderTeamName(team)) return;
+    identityTeamKeys(team).forEach((key) => {
+      if (key && !keys.includes(key)) keys.push(key);
+    });
+  });
+  return keys;
+}
+
+function countKnownTeamSlots(payload) {
+  return [payload && payload.home_team, payload && payload.away_team].filter(
+    (team) => team && !isPlaceholderTeamName(team)
+  ).length;
+}
+
+function payloadHasPlaceholderTeam(payload) {
+  return [payload && payload.home_team, payload && payload.away_team].some((team) =>
+    isPlaceholderTeamName(team)
+  );
+}
+
+function sharedKnownTeamCount(lhs, rhs) {
+  const left = new Set(payloadKnownTeamKeys(lhs));
+  const right = new Set(payloadKnownTeamKeys(rhs));
+  let count = 0;
+  left.forEach((key) => {
+    if (right.has(key)) count += 1;
+  });
+  return count;
+}
+
+function matchListPayloadUpdatedAtMs(payload) {
+  const parsed = Date.parse(
+    String(payload && payload._source_updated_at ? payload._source_updated_at : "")
+  );
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isScorelessScheduledListPayload(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  if (parseNumericScore(payload.home_score) !== null || parseNumericScore(payload.away_score) !== null) {
+    return false;
+  }
+  const status = normalizeMatchStatusValue(payload.score_status);
+  return !isInProgressMatchStatus(status) && !isFinishedMatchStatus(status);
+}
+
+function chooseSupersedingFixturePayload(lhs, rhs) {
+  if (!isScorelessScheduledListPayload(lhs) || !isScorelessScheduledListPayload(rhs)) {
+    return null;
+  }
+  if (fixtureSupersessionGroupKey(lhs) !== fixtureSupersessionGroupKey(rhs)) {
+    return null;
+  }
+
+  const leftKnownCount = countKnownTeamSlots(lhs);
+  const rightKnownCount = countKnownTeamSlots(rhs);
+  const leftHasPlaceholder = payloadHasPlaceholderTeam(lhs);
+  const rightHasPlaceholder = payloadHasPlaceholderTeam(rhs);
+
+  if (leftHasPlaceholder !== rightHasPlaceholder && leftKnownCount !== rightKnownCount) {
+    return leftKnownCount > rightKnownCount ? lhs : rhs;
+  }
+
+  if (sharedKnownTeamCount(lhs, rhs) < 1) {
+    return null;
+  }
+
+  const leftUpdatedAt = matchListPayloadUpdatedAtMs(lhs);
+  const rightUpdatedAt = matchListPayloadUpdatedAtMs(rhs);
+  if (leftUpdatedAt !== null && rightUpdatedAt !== null && leftUpdatedAt !== rightUpdatedAt) {
+    return leftUpdatedAt > rightUpdatedAt ? lhs : rhs;
+  }
+
+  if (lhs.has_bbc_source === true && rhs.has_bbc_source !== true) return lhs;
+  if (rhs.has_bbc_source === true && lhs.has_bbc_source !== true) return rhs;
+
+  return null;
+}
+
+function dropSupersededFixturePayloads(payloads) {
+  const list = Array.isArray(payloads) ? payloads : [];
+  if (list.length < 2) return list;
+
+  const groups = new Map();
+  list.forEach((payload, index) => {
+    const key = fixtureSupersessionGroupKey(payload);
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ payload, index });
+  });
+
+  const dropped = new Set();
+  groups.forEach((entries) => {
+    if (entries.length < 2) return;
+    for (let i = 0; i < entries.length; i += 1) {
+      for (let j = i + 1; j < entries.length; j += 1) {
+        if (dropped.has(entries[i].index) || dropped.has(entries[j].index)) continue;
+        const preferred = chooseSupersedingFixturePayload(entries[i].payload, entries[j].payload);
+        if (!preferred) continue;
+        if (preferred === entries[i].payload) dropped.add(entries[j].index);
+        else dropped.add(entries[i].index);
+      }
+    }
+  });
+
+  if (dropped.size === 0) return list;
+  return list.filter((_payload, index) => !dropped.has(index));
+}
+
+function stripInternalMatchListPayloadFields(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+  const stripped = { ...payload };
+  Object.keys(stripped).forEach((key) => {
+    if (key.startsWith("_")) delete stripped[key];
+  });
+  return stripped;
+}
+
 function mergeMatchListPayload(existing, incoming) {
   if (!existing) return incoming ? { ...incoming } : null;
   if (!incoming) return { ...existing };
@@ -10807,7 +10958,7 @@ function dedupeMatchListPayloads(payloads) {
     matchListPayloadIdentityKeys(merged).forEach((key) => keyToIndex.set(key, targetIndex));
   }
 
-  return deduped;
+  return dropSupersededFixturePayloads(deduped).map(stripInternalMatchListPayloadFields);
 }
 
 function listPayloadHasBbcMatchEntry(payload) {
@@ -16326,7 +16477,7 @@ async function rescrapeCanonicalMatchDetailsByIds(matchIds, options = {}) {
   };
 }
 
-function canonicalMatchDetailsToListPayload(payload) {
+function canonicalMatchDetailsToListPayload(payload, options = {}) {
   const statePayload = getMatchDetailsStatePayload(payload);
   if (!statePayload) return null;
 
@@ -16339,6 +16490,10 @@ function canonicalMatchDetailsToListPayload(payload) {
     tv_channels: uniqueChannels(statePayload.tv_channels),
     match_details_id: statePayload.id,
   };
+
+  if (options.includeInternalMetadata === true && payload && payload.updated_at) {
+    listPayload._source_updated_at = String(payload.updated_at);
+  }
 
   if (payload && payload.league_subcategory) {
     listPayload.league_subcategory = payload.league_subcategory;
@@ -16377,7 +16532,7 @@ function canonicalMatchDetailsRecordsToListPayloads(recordsById, options = {}) {
   const primaryPayloads = (
     lookup instanceof Map ? Array.from(lookup.values()) : Object.values(lookup)
   )
-    .map((payload) => canonicalMatchDetailsToListPayload(payload))
+    .map((payload) => canonicalMatchDetailsToListPayload(payload, { includeInternalMetadata: true }))
     .filter(Boolean);
 
   const fallbackMatches = Array.isArray(options.fallbackMatches)
