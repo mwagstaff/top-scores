@@ -61,11 +61,11 @@ const LIVE_ACTIVITY_MAX_MATCHES = 6;
 const LIVE_ACTIVITY_TEAM_RANKING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_TEAM_RANKING_RETRY_MS = 5 * 60 * 1000;
 const LIVE_ACTIVITY_TEAM_RANKING_FETCH_TIMEOUT_MS = 15 * 1000;
-// If APNS accepts a start but the app never reports an activity token, retry quickly.
+// Short recovery window for changed payloads after APNS accepts a start but the app
+// never reports an activity token.
 const LIVE_ACTIVITY_PENDING_MAX_MS = 2 * 60 * 1000;
 // Stop firing push-to-start after this many consecutive unanswered attempts on the
-// same token (each attempt = one PENDING_MAX_MS window expiring without a token
-// response). iOS silently drops push-to-start when Live Activities are disabled or
+// same token. iOS silently drops push-to-start when Live Activities are disabled or
 // rate-limited; continuing to hammer it wastes APNs budget and can trigger further
 // iOS suppression. The counter resets whenever an activity-token lands.
 const LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS = 5;
@@ -5713,6 +5713,10 @@ function liveActivityHeartbeatThresholdMsForMode(mode) {
   return Math.max(0, staleAfterSeconds - LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS) * 1000;
 }
 
+function liveActivityPendingStartMaxMsForMode(mode) {
+  return liveActivityStaleAfterSecondsForMode(mode) * 1000;
+}
+
 function buildLiveActivityApsPayload(event, contentState, options = {}) {
   const normalizedEvent = String(event || "").trim().toLowerCase();
   const aps = {
@@ -6463,26 +6467,6 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     }
     return;
   }
-  // Stale lock recovery runs for ALL triggers, including app_foreground, so that the
-  // first foreground after PENDING_MAX_MS clears the stuck lock immediately rather than
-  // waiting for the next background eval loop tick.
-  if (hasPendingStart && pendingAgeMs >= LIVE_ACTIVITY_PENDING_MAX_MS) {
-    const newAttemptCount = pushToStartAttempts + 1;
-    await persistLiveActivityPatch(user, {
-      pendingStartAt: null,
-      lastPayloadHash: null,
-      lastScoreHash: null,
-      lastMode: null,
-      pushToStartAttempts: newAttemptCount,
-    });
-    if (newAttemptCount >= LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS) {
-      console.log(
-        `[MatchMonitor] Push-to-start suppressed after ${newAttemptCount} unanswered attempts (Live Activities likely disabled on device): device=${shortDeviceToken(user && user.deviceToken)}`
-      );
-    }
-    return;
-  }
-
   if (hasFreshTokenlessCurrentActivity) {
     monitorVerboseLog(
       `[MatchMonitor] Live Activity activity token wait ${JSON.stringify({
@@ -6519,6 +6503,57 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     );
     return;
   }
+  if (hasPendingStart) {
+    const samePendingPayload =
+      state.lastMode === presentation.mode &&
+      state.lastPayloadHash === payloadHash;
+    const pendingMaxMs = samePendingPayload
+      ? liveActivityPendingStartMaxMsForMode(presentation.mode)
+      : LIVE_ACTIVITY_PENDING_MAX_MS;
+
+    if (pendingAgeMs < pendingMaxMs) {
+      // A start push already succeeded. Wait for the activity token instead of
+      // retrying an identical start, because iOS may have created the activity
+      // while the app process is not running to upload its token.
+      monitorVerboseLog(
+        `[MatchMonitor] Live Activity pending start wait ${JSON.stringify({
+          user_device_short: shortDeviceToken(user && user.deviceToken),
+          reason: samePendingPayload ? "pending_same_payload_wait" : "pending_start_wait",
+          pending_age_seconds: Math.max(0, Math.round(pendingAgeMs / 1000)),
+          pending_max_seconds: Math.round(pendingMaxMs / 1000),
+          same_pending_payload: samePendingPayload,
+        })}`
+      );
+      await persistLiveActivityDebug(user, {
+        record_type: "decision",
+        decision_type: "pending_start_wait",
+        decision_reason: samePendingPayload ? "same_payload" : "recent_start",
+        pending_start_at: state && state.pendingStartAt ? String(state.pendingStartAt) : null,
+        pending_age_seconds: Math.max(0, Math.round(pendingAgeMs / 1000)),
+        pending_max_seconds: Math.round(pendingMaxMs / 1000),
+        same_pending_payload: samePendingPayload,
+        mode: presentation.mode,
+        payload_hash: payloadHash,
+      });
+      return;
+    }
+
+    const newAttemptCount = pushToStartAttempts + 1;
+    await persistLiveActivityPatch(user, {
+      pendingStartAt: null,
+      lastPayloadHash: null,
+      lastScoreHash: null,
+      lastMode: null,
+      pushToStartAttempts: newAttemptCount,
+    });
+    if (newAttemptCount >= LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS) {
+      console.log(
+        `[MatchMonitor] Push-to-start suppressed after ${newAttemptCount} unanswered attempts (Live Activities likely disabled on device): device=${shortDeviceToken(user && user.deviceToken)}`
+      );
+    }
+    return;
+  }
+
   if (!pushToStartToken) {
     console.log(
       `[MatchMonitor] Live Activity decision ${JSON.stringify({
@@ -6529,25 +6564,6 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
         mode: presentation.mode,
       })}`
     );
-    return;
-  }
-  if (hasPendingStart && pendingAgeMs < LIVE_ACTIVITY_PENDING_MAX_MS) {
-    // A start push already succeeded; wait for activity push token from app and avoid duplicate starts.
-    monitorVerboseLog(
-      `[MatchMonitor] Live Activity pending start wait ${JSON.stringify({
-        user_device_short: shortDeviceToken(user && user.deviceToken),
-        reason: "pending_start_wait",
-        pending_age_seconds: Math.max(0, Math.round(pendingAgeMs / 1000)),
-        pending_max_seconds: Math.round(LIVE_ACTIVITY_PENDING_MAX_MS / 1000),
-      })}`
-    );
-    await persistLiveActivityDebug(user, {
-      record_type: "decision",
-      decision_type: "pending_start_wait",
-      pending_start_at: state && state.pendingStartAt ? String(state.pendingStartAt) : null,
-      pending_age_seconds: Math.max(0, Math.round(pendingAgeMs / 1000)),
-      pending_max_seconds: Math.round(LIVE_ACTIVITY_PENDING_MAX_MS / 1000),
-    });
     return;
   }
 
@@ -7893,6 +7909,7 @@ module.exports = {
     shouldPreserveExistingLiveActivityOnEmpty,
     liveActivityTokenlessCurrentActivityIsBlocking,
     liveActivityRecentDismissalCooldownIsBlocking,
+    liveActivityPendingStartMaxMsForMode,
     liveActivityStaleAfterSecondsForMode,
     updateScoreReversionState,
   },

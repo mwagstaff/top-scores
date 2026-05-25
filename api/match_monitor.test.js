@@ -810,6 +810,21 @@ test("liveActivityRecentDismissalCooldownIsBlocking suppresses quiet push-to-sta
   );
 });
 
+test("liveActivityPendingStartMaxMsForMode follows stale window by mode", () => {
+  assert.equal(
+    __testHooks.liveActivityPendingStartMaxMsForMode("single_upcoming"),
+    4 * 60 * 60 * 1000
+  );
+  assert.equal(
+    __testHooks.liveActivityPendingStartMaxMsForMode("multi_finished"),
+    4 * 60 * 60 * 1000
+  );
+  assert.equal(
+    __testHooks.liveActivityPendingStartMaxMsForMode("multi_live"),
+    30 * 60 * 1000
+  );
+});
+
 test("buildLiveActivityPresentationForUser suppresses stale high-minute live status and ends activity", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 130 * 60 * 1000;

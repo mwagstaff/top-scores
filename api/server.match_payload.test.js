@@ -522,6 +522,50 @@ test("canonicalMatchDetailsRecordsToListPayloads keeps latest one-team-overlap p
   assert.equal(payloads[0].away_team, "Middlesbrough");
 });
 
+test("canonicalMatchDetailsRecordsToListPayloads lets resolved BBC final suppress stale scheduled fallback", () => {
+  const payloads = canonicalMatchDetailsRecordsToListPayloads(
+    {
+      latest_result: {
+        id: "latestresult",
+        date: "2026-05-23",
+        time: "15:00",
+        league: "Championship",
+        league_subcategory: "Promotion Play-offs - Final",
+        home_team: "Hull City",
+        away_team: "Middlesbrough",
+        home_score: 1,
+        away_score: 0,
+        score_status: "FT",
+        has_bbc_source: true,
+        updated_at: "2026-05-23T16:55:00.000Z",
+        tv_channels: [],
+      },
+    },
+    {
+      fallbackMatches: [
+        {
+          date: "2026-05-23",
+          time: "16:30",
+          league: "Championship",
+          league_subcategory: "Promotion Play-offs - Final",
+          home_team: "Hull City",
+          away_team: "Southampton",
+          has_bbc_source: true,
+          tv_channels: ["Sky Sports Football"],
+        },
+      ],
+    }
+  );
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].match_details_id, "latestresult");
+  assert.equal(payloads[0].home_team, "Hull City");
+  assert.equal(payloads[0].away_team, "Middlesbrough");
+  assert.equal(payloads[0].home_score, 1);
+  assert.equal(payloads[0].away_score, 0);
+  assert.equal(payloads[0].score_status, "FT");
+});
+
 test("buildCanonicalMatchWriteAuditEntry captures previous and next summaries", () => {
   const entry = buildCanonicalMatchWriteAuditEntry(
     DETAILS_ID,

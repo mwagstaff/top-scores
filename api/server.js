@@ -676,7 +676,9 @@ const TEAM_RANKING_DEFAULT_ELO = Number.isFinite(SERVER_CONFIG.teamRankingDefaul
 
 const app = express();
 const API_PREFIX = "/api/v1";
-const LIVE_ACTIVITY_PENDING_START_GRACE_MS = 15 * 1000;
+// Match the monitor's short pending recovery window before a foreground client
+// with zero local activities may take over with Activity.request().
+const LIVE_ACTIVITY_PENDING_START_GRACE_MS = 2 * 60 * 1000;
 const LIVE_ACTIVITY_RECENT_DISPATCH_WINDOW_MS = 2 * 60 * 1000;
 const LIVE_ACTIVITY_ENDED_TOMBSTONE_WINDOW_MS = 15 * 60 * 1000;
 const APP_DATA_SOURCE = "redis-operational";
@@ -10803,10 +10805,16 @@ function isScorelessScheduledListPayload(payload) {
   return !isInProgressMatchStatus(status) && !isFinishedMatchStatus(status);
 }
 
-function chooseSupersedingFixturePayload(lhs, rhs) {
-  if (!isScorelessScheduledListPayload(lhs) || !isScorelessScheduledListPayload(rhs)) {
-    return null;
+function hasResolvedMatchState(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  if (parseNumericScore(payload.home_score) !== null && parseNumericScore(payload.away_score) !== null) {
+    return true;
   }
+  const status = normalizeMatchStatusValue(payload.score_status);
+  return isInProgressMatchStatus(status) || isFinishedMatchStatus(status);
+}
+
+function chooseSupersedingFixturePayload(lhs, rhs) {
   if (fixtureSupersessionGroupKey(lhs) !== fixtureSupersessionGroupKey(rhs)) {
     return null;
   }
@@ -10820,7 +10828,38 @@ function chooseSupersedingFixturePayload(lhs, rhs) {
     return leftKnownCount > rightKnownCount ? lhs : rhs;
   }
 
-  if (sharedKnownTeamCount(lhs, rhs) < 1) {
+  const sharedKnownTeams = sharedKnownTeamCount(lhs, rhs);
+  if (sharedKnownTeams < 1) {
+    return null;
+  }
+
+  const leftScheduled = isScorelessScheduledListPayload(lhs);
+  const rightScheduled = isScorelessScheduledListPayload(rhs);
+  const leftBbc = lhs.has_bbc_source === true;
+  const rightBbc = rhs.has_bbc_source === true;
+  const leftResolved = hasResolvedMatchState(lhs);
+  const rightResolved = hasResolvedMatchState(rhs);
+
+  if (leftResolved !== rightResolved && leftScheduled !== rightScheduled) {
+    const resolvedPayload = leftResolved ? lhs : rhs;
+    const scheduledPayload = leftResolved ? rhs : lhs;
+    if (
+      resolvedPayload.has_bbc_source === true ||
+      scheduledPayload.has_bbc_source !== true
+    ) {
+      return resolvedPayload;
+    }
+  }
+
+  if (leftBbc !== rightBbc) {
+    const bbcPayload = leftBbc ? lhs : rhs;
+    const fallbackPayload = leftBbc ? rhs : lhs;
+    if (isScorelessScheduledListPayload(fallbackPayload) || hasResolvedMatchState(bbcPayload)) {
+      return bbcPayload;
+    }
+  }
+
+  if (!leftScheduled || !rightScheduled) {
     return null;
   }
 
@@ -10830,8 +10869,8 @@ function chooseSupersedingFixturePayload(lhs, rhs) {
     return leftUpdatedAt > rightUpdatedAt ? lhs : rhs;
   }
 
-  if (lhs.has_bbc_source === true && rhs.has_bbc_source !== true) return lhs;
-  if (rhs.has_bbc_source === true && lhs.has_bbc_source !== true) return rhs;
+  if (leftBbc && !rightBbc) return lhs;
+  if (rightBbc && !leftBbc) return rhs;
 
   return null;
 }
