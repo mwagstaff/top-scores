@@ -234,7 +234,7 @@ test("applyTeamShortNamesToApiValue adds Bolton short name from cache data", () 
       away_team: "Stevenage",
       tv_channels: ["Sky Sports+"],
       match_details_id: "ckgwd8x7yrlt",
-      has_bbc_source: true,
+      has_tsdb_source: true,
     },
     lookup
   );

@@ -22,7 +22,7 @@ test("buildDefaultOperationalCacheState initializes all split-runtime cache doma
     "teams",
     "tables",
     "team_short_names",
-    "bbc_live",
+    "tsdb_live",
   ]);
 });
 
@@ -35,10 +35,10 @@ test("normalizeCacheStateDomains accepts teams tables and team short name aliase
 
 test("filterCacheStateDomainsForRuntimeRefresh avoids monitor match details churn", () => {
   assert.deepEqual(
-    filterCacheStateDomainsForRuntimeRefresh(["matches", "match_details", "teams", "bbc_live"], {
+    filterCacheStateDomainsForRuntimeRefresh(["matches", "match_details", "teams", "tsdb_live"], {
       runtimeRole: "monitor",
     }),
-    ["matches", "bbc_live"]
+    ["matches", "tsdb_live"]
   );
   assert.deepEqual(
     filterCacheStateDomainsForRuntimeRefresh(["match_details"], {

@@ -230,12 +230,12 @@ export function isMatchLive(match: Match): boolean {
   if (/^\d{1,3}(?:\+\d{1,2})?'?$/.test(status)) {
     return true;
   }
-  return ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."].includes(status);
+  return ["HT", "ET", "LIVE"].includes(status);
 }
 
 export function isMatchFinished(match: Match): boolean {
   const status = (match.scoreStatus || "").trim().toUpperCase();
-  return ["FT", "AET"].includes(status);
+  return ["FT", "AET", "PENS"].includes(status);
 }
 
 export function aggregateSummary(match: Match): string | null {

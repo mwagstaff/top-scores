@@ -214,14 +214,14 @@ test("toMatchListPayload preserves explicit BBC-source flag without requiring ma
     baseMatch({
       details_url: null,
       match_details_id: null,
-      has_bbc_source: true,
+      has_tsdb_source: true,
       home_score: null,
       away_score: null,
       score_status: null,
     })
   );
 
-  assert.equal(payload.has_bbc_source, true);
+  assert.equal(payload.has_tsdb_source, true);
   assert.equal(payload.match_details_id, undefined);
 });
 
@@ -293,7 +293,7 @@ test("canonicalMatchDetailsToListPayload materializes a list row from canonical 
       score_status: "AET",
       penalty_result: "Leeds United win 4 - 2 on penalties",
       tv_channels: ["TNT Sports 1"],
-      has_bbc_source: true,
+      has_tsdb_source: true,
     }),
     league_subcategory: "Quarter-finals",
   });
@@ -311,7 +311,7 @@ test("canonicalMatchDetailsToListPayload materializes a list row from canonical 
     away_score: 1,
     score_status: "AET",
     penalty_result: "Leeds United win 4 - 2 on penalties",
-    has_bbc_source: true,
+    has_tsdb_source: true,
   });
 });
 
@@ -431,7 +431,7 @@ test("canonicalMatchDetailsRecordsToPublicListPayloads supplements missing canon
           league_subcategory: "Quarter-finals",
           home_team: "Real Madrid",
           away_team: "Bayern Munich",
-          has_bbc_source: true,
+          has_tsdb_source: true,
           tv_channels: [],
         },
       ],
@@ -443,7 +443,7 @@ test("canonicalMatchDetailsRecordsToPublicListPayloads supplements missing canon
   assert.equal(payloads[0].away_team, "Bayern Munich");
   assert.equal(payloads[0].league, "UEFA Champions League");
   assert.equal(payloads[0].league_subcategory, "Quarter-finals");
-  assert.equal(payloads[0].has_bbc_source, true);
+  assert.equal(payloads[0].has_tsdb_source, true);
 });
 
 test("canonicalMatchDetailsRecordsToListPayloads drops stale TBC final placeholders", () => {
@@ -536,7 +536,7 @@ test("canonicalMatchDetailsRecordsToListPayloads lets resolved BBC final suppres
         home_score: 1,
         away_score: 0,
         score_status: "FT",
-        has_bbc_source: true,
+        has_tsdb_source: true,
         updated_at: "2026-05-23T16:55:00.000Z",
         tv_channels: [],
       },
@@ -550,7 +550,7 @@ test("canonicalMatchDetailsRecordsToListPayloads lets resolved BBC final suppres
           league_subcategory: "Promotion Play-offs - Final",
           home_team: "Hull City",
           away_team: "Southampton",
-          has_bbc_source: true,
+          has_tsdb_source: true,
           tv_channels: ["Sky Sports Football"],
         },
       ],
@@ -1297,7 +1297,7 @@ test("mergeBbcAndLiveMatches keeps BBC team names while merging live TV metadata
         home_team: "Preston North End",
         away_team: "Queens Park Rangers",
         tv_channels: [],
-        has_bbc_source: true,
+        has_tsdb_source: true,
       },
     ]
   );
@@ -1305,7 +1305,7 @@ test("mergeBbcAndLiveMatches keeps BBC team names while merging live TV metadata
   assert.equal(merged.length, 1);
   assert.equal(merged[0].home_team, "Preston North End");
   assert.equal(merged[0].away_team, "Queens Park Rangers");
-  assert.equal(merged[0].has_bbc_source, true);
+  assert.equal(merged[0].has_tsdb_source, true);
   assert.deepStrictEqual(merged[0].tv_channels, ["Sky Sports Football"]);
 });
 
@@ -1336,7 +1336,7 @@ test("mergeBbcAndLiveMatches collapses Bundesliga aliases onto the BBC-backed FT
         away_score: 2,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/c89558d5d5nt",
-        has_bbc_source: true,
+        has_tsdb_source: true,
       },
     ]
   );
@@ -1346,7 +1346,7 @@ test("mergeBbcAndLiveMatches collapses Bundesliga aliases onto the BBC-backed FT
   assert.equal(merged[0].away_team, "Stuttgart");
   assert.equal(merged[0].score_status, "FT");
   assert.equal(merged[0].details_url, "https://www.bbc.co.uk/sport/football/live/c89558d5d5nt");
-  assert.equal(merged[0].has_bbc_source, true);
+  assert.equal(merged[0].has_tsdb_source, true);
 });
 
 test("mergeBbcAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT rows", () => {
@@ -1372,7 +1372,7 @@ test("mergeBbcAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT
         away_score: 1,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/c5yjjq5jlrmt",
-        has_bbc_source: true,
+        has_tsdb_source: true,
       },
     ]
   );
@@ -1405,7 +1405,7 @@ test("mergeBbcAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT
         away_score: 2,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/cx2vvg0v3rpt",
-        has_bbc_source: true,
+        has_tsdb_source: true,
       },
     ]
   );
@@ -1439,7 +1439,7 @@ test("mergeBbcAndLiveMatches collapses La Liga and Bundesliga alias rows onto BB
         away_score: 1,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/cx24nxnxggkt",
-        has_bbc_source: true,
+        has_tsdb_source: true,
       },
     ]
   );
@@ -1471,7 +1471,7 @@ test("mergeBbcAndLiveMatches collapses La Liga and Bundesliga alias rows onto BB
         away_score: 0,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/c705j1jx2y0t",
-        has_bbc_source: true,
+        has_tsdb_source: true,
       },
     ]
   );
@@ -1530,7 +1530,7 @@ test("collectAdminRogueMatchTargets only selects the exact rogue short-name row"
         home_team: "Preston North End",
         away_team: "Queens Park Rangers",
         match_details_id: bbcId,
-        has_bbc_source: true,
+        has_tsdb_source: true,
       },
     ],
     new Map([
@@ -1554,7 +1554,7 @@ test("collectAdminRogueMatchTargets only selects the exact rogue short-name row"
           league: "Championship",
           home_team: "Preston North End",
           away_team: "Queens Park Rangers",
-          has_bbc_source: true,
+          has_tsdb_source: true,
         },
       ],
     ])
@@ -1605,7 +1605,7 @@ test("collectLiveSourceDuplicateTargets finds live-only duplicates of BBC-backed
         home_team: "Mainz 05",
         away_team: "Strasbourg",
         details_url: `https://www.bbc.co.uk/sport/football/live/${mainzBbcId}`,
-        has_bbc_source: true,
+        has_tsdb_source: true,
       },
     ],
     [
@@ -1629,7 +1629,7 @@ test("collectLiveSourceDuplicateTargets finds live-only duplicates of BBC-backed
         home_team: "Shakhtar Donetsk",
         away_team: "AZ Alkmaar",
         details_url: `https://www.bbc.co.uk/sport/football/live/${azBbcId}`,
-        has_bbc_source: true,
+        has_tsdb_source: true,
       },
     ],
   ]);
@@ -1708,7 +1708,7 @@ test("collectCanonicalDuplicateTargets finds weaker canonical alias duplicates",
         home_team: "Mainz 05",
         away_team: "Strasbourg",
         details_url: `https://www.bbc.co.uk/sport/football/live/${mainzBbcId}`,
-        has_bbc_source: true,
+        has_tsdb_source: true,
         updated_at: "2026-04-09T18:01:00.000Z",
       },
     ],
@@ -1734,7 +1734,7 @@ test("collectCanonicalDuplicateTargets finds weaker canonical alias duplicates",
         home_team: "Shakhtar Donetsk",
         away_team: "AZ Alkmaar",
         details_url: `https://www.bbc.co.uk/sport/football/live/${azBbcId}`,
-        has_bbc_source: true,
+        has_tsdb_source: true,
         updated_at: "2026-04-09T18:01:00.000Z",
       },
     ],
@@ -1923,7 +1923,7 @@ test("dedupeMatchListPayloads collapses duplicate match ids and preserves the ri
       home_team: "Manchester City",
       away_team: "Liverpool",
       match_details_id: "clydqev9y9et",
-      has_bbc_source: true,
+      has_tsdb_source: true,
       tv_channels: ["BBC One"],
     },
     {
@@ -1945,7 +1945,7 @@ test("dedupeMatchListPayloads collapses duplicate match ids and preserves the ri
   assert.equal(deduped[0].score_status, "FT");
   assert.equal(deduped[0].home_score, 4);
   assert.equal(deduped[0].away_score, 0);
-  assert.equal(deduped[0].has_bbc_source, true);
+  assert.equal(deduped[0].has_tsdb_source, true);
   assert.deepEqual(deduped[0].tv_channels, ["BBC One", "BBC iPlayer"]);
   assert.equal(deduped[0].league_subcategory, "Quarter-finals");
 });
@@ -2002,7 +2002,7 @@ test("dedupeMatchListPayloads collapses Bundesliga alias rows and keeps the BBC 
       home_team: "Bayern Munich",
       away_team: "Stuttgart",
       match_details_id: "c89558d5d5nt",
-      has_bbc_source: true,
+      has_tsdb_source: true,
       home_score: 4,
       away_score: 2,
       score_status: "FT",
@@ -2012,7 +2012,7 @@ test("dedupeMatchListPayloads collapses Bundesliga alias rows and keeps the BBC 
   assert.equal(deduped.length, 1);
   assert.equal(deduped[0].match_details_id, "c89558d5d5nt");
   assert.equal(deduped[0].score_status, "FT");
-  assert.equal(deduped[0].has_bbc_source, true);
+  assert.equal(deduped[0].has_tsdb_source, true);
   assert.equal(deduped[0].away_team, "Stuttgart");
 });
 
@@ -2037,7 +2037,7 @@ test("dedupeMatchListPayloads collapses Serie A alias rows and keeps the BBC liv
       home_score: 0,
       away_score: 1,
       score_status: "FT",
-      has_bbc_source: true,
+      has_tsdb_source: true,
     },
   ]);
 
@@ -2066,7 +2066,7 @@ test("dedupeMatchListPayloads collapses Serie A alias rows and keeps the BBC liv
       home_score: 1,
       away_score: 2,
       score_status: "FT",
-      has_bbc_source: true,
+      has_tsdb_source: true,
     },
   ]);
 
@@ -2097,14 +2097,14 @@ test("dedupeMatchListPayloads collapses La Liga and Bundesliga alias rows and ke
       home_score: 1,
       away_score: 1,
       score_status: "FT",
-      has_bbc_source: true,
+      has_tsdb_source: true,
     },
   ]);
 
   assert.equal(osasunaDeduped.length, 1);
   assert.equal(osasunaDeduped[0].match_details_id, "cx24nxnxggkt");
   assert.equal(osasunaDeduped[0].score_status, "FT");
-  assert.equal(osasunaDeduped[0].has_bbc_source, true);
+  assert.equal(osasunaDeduped[0].has_tsdb_source, true);
 
   const stuttgartDeduped = dedupeMatchListPayloads([
     {
@@ -2126,14 +2126,14 @@ test("dedupeMatchListPayloads collapses La Liga and Bundesliga alias rows and ke
       home_score: 4,
       away_score: 0,
       score_status: "FT",
-      has_bbc_source: true,
+      has_tsdb_source: true,
     },
   ]);
 
   assert.equal(stuttgartDeduped.length, 1);
   assert.equal(stuttgartDeduped[0].match_details_id, "c705j1jx2y0t");
   assert.equal(stuttgartDeduped[0].score_status, "FT");
-  assert.equal(stuttgartDeduped[0].has_bbc_source, true);
+  assert.equal(stuttgartDeduped[0].has_tsdb_source, true);
 });
 
 test("isListPayloadVisibleForMode excludes future same-day fixtures from results", () => {
@@ -3691,7 +3691,7 @@ test("collectInProgressMatchDetailTargets includes live matches without active r
       score_status: "111",
       home_score: 2,
       away_score: 2,
-      has_bbc_source: true,
+      has_tsdb_source: true,
     }),
     "2026-03-03T21:21:00.000Z"
   );
@@ -3744,7 +3744,7 @@ test("collectInProgressMatchDetailTargets excludes stale live records with missi
       score_status: "74",
       home_score: 1,
       away_score: 0,
-      has_bbc_source: true,
+      has_tsdb_source: true,
     }),
     "2026-03-03T12:15:00.000Z"
   );

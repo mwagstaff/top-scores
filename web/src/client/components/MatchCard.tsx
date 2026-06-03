@@ -47,8 +47,8 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
   // Show TV logo in centre for upcoming fixtures; for live matches with scores, show flanking scores instead
   const showTvOnly = !hasScore && hasTvLogo;
   const showLiveScore = isLive && hasScore;
-  // Right column: penalty result overrides; otherwise the status string (FT / AET / 45' / 15:00)
-  const rightText  = match.penaltyResult ?? status;
+  // Right column: "P4-3" when decided by penalties; otherwise status (FT / AET / 45' / 15:00)
+  const rightText  = match.penaltyResult ? `P${match.penaltyResult}` : status;
   const homeDisplayName = displayTeamName(match.homeTeam, match.homeShortName, useShortTeamNames);
   const awayDisplayName = displayTeamName(match.awayTeam, match.awayShortName, useShortTeamNames);
 
@@ -98,7 +98,7 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
   useEffect(() => {
     if (!details || !match.matchDetailsId) return;
     const matchFinished = isMatchFinished(match);
-    const detailsFinished = ["FT", "AET"].includes((details.scoreStatus ?? "").trim().toUpperCase());
+    const detailsFinished = ["FT", "AET", "PENS"].includes((details.scoreStatus ?? "").trim().toUpperCase());
     if (matchFinished && !detailsFinished) {
       clearMatchDetailsCache(match.matchDetailsId);
       setDetails(null);

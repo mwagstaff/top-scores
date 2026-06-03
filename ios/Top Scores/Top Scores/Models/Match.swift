@@ -1043,12 +1043,18 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
 
         let homeMentioned = Self.containsTeamName(homeTeam, in: trimmedPenaltyResult)
         let awayMentioned = Self.containsTeamName(awayTeam, in: trimmedPenaltyResult)
-        guard homeMentioned != awayMentioned else {
-            return nil
-        }
 
-        let homePenaltyScore = homeMentioned ? scorePair.0 : scorePair.1
-        let awayPenaltyScore = homeMentioned ? scorePair.1 : scorePair.0
+        let homePenaltyScore: Int
+        let awayPenaltyScore: Int
+        if homeMentioned != awayMentioned {
+            // One team name present — use it to orient the score.
+            homePenaltyScore = homeMentioned ? scorePair.0 : scorePair.1
+            awayPenaltyScore = homeMentioned ? scorePair.1 : scorePair.0
+        } else {
+            // No team names (e.g. bare "4-3") — first number is home, second is away.
+            homePenaltyScore = scorePair.0
+            awayPenaltyScore = scorePair.1
+        }
         return "P \(homePenaltyScore)-\(awayPenaltyScore)"
     }
 
@@ -1122,8 +1128,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
 }
 
 enum MatchStatusFormatter {
-    private nonisolated static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
-    private nonisolated static let completeTokens: Set<String> = ["FT", "AET"]
+    private nonisolated static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE"]
+    private nonisolated static let completeTokens: Set<String> = ["FT", "AET", "PENS"]
     private nonisolated static let postponedTokens: Set<String> = ["POSTPONED", "MATCH POSTPONED"]
     private nonisolated static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
     private nonisolated static let penaltyProgressPattern = #"^P\s+(\d+)\s*-\s*(\d+)$"#
@@ -1146,10 +1152,12 @@ enum MatchStatusFormatter {
         let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return false }
         if isMinuteStatus(status) { return true }
-        if isPenaltyShootoutStatus(status) { return true }
-
+        // Check complete tokens before penalty-shootout detection: "PENS" is a
+        // final result, not an in-progress state. Only the live progress pattern
+        // "P x-y" (e.g. "P 3-2") indicates an ongoing shootout.
         let token = status.uppercased()
         if completeTokens.contains(token) { return false }
+        if isPenaltyShootoutStatus(status) { return true }
         return inProgressTokens.contains(token)
     }
 

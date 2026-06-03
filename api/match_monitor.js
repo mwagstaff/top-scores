@@ -14,7 +14,8 @@ const {
   claimBbcNotificationIdempotency,
 } = require("./redis_client");
 const { sendNotification, sendLiveActivityPush } = require("./apns_client");
-const { fetchBbcLiveTextEntriesByDetailsUrl } = require("./fetch_bbc_scores");
+// BBC live-text removed: VAR confirmation now relies on score-reversion detection
+// (match_monitor handles this without prose text via consecutivePolls logic).
 const liveActivityMetrics = require("./live_activity_metrics");
 const fantasyScore = require("./fantasy_score");
 const { DEFAULT_COMPETITION_WEIGHTS } = require("./config");
@@ -1569,15 +1570,12 @@ async function resolveScoreReversion(matchId, newMatch, reversionState, options 
 
   let liveText;
   if (Array.isArray(newMatch.live_text_entries) && newMatch.live_text_entries.length > 0) {
+    // Structured live_text_entries can be injected by tests for VAR confirmation.
     liveText = { entries: newMatch.live_text_entries };
-  } else {
-    if (!newMatch.details_url) return null;
+  } else if (options && typeof options.fetchLiveText === "function") {
+    // Allow tests / callers to inject a live-text fetcher.
     try {
-      const fetchLiveText =
-        options && typeof options.fetchLiveText === "function"
-          ? options.fetchLiveText
-          : fetchBbcLiveTextEntriesByDetailsUrl;
-      liveText = await fetchLiveText(newMatch.details_url);
+      liveText = await options.fetchLiveText(newMatch.details_url);
     } catch (error) {
       logDecision("var_disallowed_confirmation", {
         match_id: matchId,
@@ -1586,6 +1584,9 @@ async function resolveScoreReversion(matchId, newMatch, reversionState, options 
       });
       return null;
     }
+  } else {
+    // No live text available from TSDB — VAR confirmation is not possible.
+    return null;
   }
 
   const entries = Array.isArray(liveText && liveText.entries) ? liveText.entries : [];

@@ -180,7 +180,7 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
             .replacingOccurrences(of: ".", with: "")
-        return normalized.hasPrefix("FT") || normalized.hasPrefix("AET")
+        return normalized.hasPrefix("FT") || normalized.hasPrefix("AET") || normalized == "PENS"
     }
 
     var displayScoreStatus: String? {
@@ -445,7 +445,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
             .replacingOccurrences(of: ".", with: "")
-        return normalized.hasPrefix("FT") || normalized.hasPrefix("AET")
+        return normalized.hasPrefix("FT") || normalized.hasPrefix("AET") || normalized == "PENS"
     }
 
     var hasDisplayableAggregateScore: Bool {
