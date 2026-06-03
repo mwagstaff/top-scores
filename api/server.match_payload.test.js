@@ -38,8 +38,8 @@ const {
     pickPreferredMatchStatus,
     resolveStableMatchScoreStatus,
     withStableMatchDetailsState,
-    filterStaleBbcMatches,
-    shouldRefreshCanonicalMatchDetailsFromBbcLive,
+    filterStaleMatches,
+    shouldRefreshCanonicalMatchDetails,
     buildDefaultOperationalCacheState,
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
@@ -54,7 +54,7 @@ const {
     collectDisallowedCompetitionTargets,
     clearFootballOperationalMemoryState,
     collectInProgressMatchDetailTargets,
-    mergeBbcAndLiveMatches,
+    mergeTsdbAndLiveMatches,
     matchIncludesHomeNation,
     matchIsMajorGameOfInterest,
     matchIsMajorTournament,
@@ -232,11 +232,11 @@ test("toMatchListPayload includes server-controlled competition weight", () => {
   assert.equal(typeof payload.competition_weight, "number");
 });
 
-test("shouldRefreshCanonicalMatchDetailsFromBbcLive heals missing canonical records", () => {
+test("shouldRefreshCanonicalMatchDetails heals missing canonical records", () => {
   clearFootballOperationalMemoryState();
 
   assert.equal(
-    shouldRefreshCanonicalMatchDetailsFromBbcLive(
+    shouldRefreshCanonicalMatchDetails(
       baseMatch({
         score_status: "FT",
         home_score: 2,
@@ -250,13 +250,13 @@ test("shouldRefreshCanonicalMatchDetailsFromBbcLive heals missing canonical reco
   );
 });
 
-test("shouldRefreshCanonicalMatchDetailsFromBbcLive heals incomplete canonical records", () => {
+test("shouldRefreshCanonicalMatchDetails heals incomplete canonical records", () => {
   clearFootballOperationalMemoryState();
 
   upsertMatchDetailsFromMatch(baseMatch());
 
   assert.equal(
-    shouldRefreshCanonicalMatchDetailsFromBbcLive(
+    shouldRefreshCanonicalMatchDetails(
       baseMatch({
         score_status: "FT",
         home_score: 2,
@@ -270,7 +270,7 @@ test("shouldRefreshCanonicalMatchDetailsFromBbcLive heals incomplete canonical r
   );
 });
 
-test("shouldRefreshCanonicalMatchDetailsFromBbcLive skips unchanged canonical records", () => {
+test("shouldRefreshCanonicalMatchDetails skips unchanged canonical records", () => {
   clearFootballOperationalMemoryState();
 
   const livePayload = baseMatch({
@@ -284,7 +284,7 @@ test("shouldRefreshCanonicalMatchDetailsFromBbcLive skips unchanged canonical re
   });
   upsertMatchDetailsFromMatch(livePayload);
 
-  assert.equal(shouldRefreshCanonicalMatchDetailsFromBbcLive(livePayload), false);
+  assert.equal(shouldRefreshCanonicalMatchDetails(livePayload), false);
 });
 
 test("canonicalMatchDetailsToListPayload materializes a list row from canonical Redis state", () => {
@@ -1228,8 +1228,8 @@ test("matchPassesCategoryFilters uses union semantics across domestic and intern
   );
 });
 
-test("mergeBbcAndLiveMatches prefers BBC competition metadata for duplicate fixtures", () => {
-  const merged = mergeBbcAndLiveMatches(
+test("mergeTsdbAndLiveMatches prefers BBC competition metadata for duplicate fixtures", () => {
+  const merged = mergeTsdbAndLiveMatches(
     [
       {
         date: "2026-03-26",
@@ -1259,8 +1259,8 @@ test("mergeBbcAndLiveMatches prefers BBC competition metadata for duplicate fixt
   assert.deepStrictEqual(merged[0].tv_channels, ["BBC Three"]);
 });
 
-test("mergeBbcAndLiveMatches ignores unmatched live-football rows", () => {
-  const merged = mergeBbcAndLiveMatches(
+test("mergeTsdbAndLiveMatches ignores unmatched live-football rows", () => {
+  const merged = mergeTsdbAndLiveMatches(
     [
       {
         date: "2026-04-06",
@@ -1277,8 +1277,8 @@ test("mergeBbcAndLiveMatches ignores unmatched live-football rows", () => {
   assert.deepStrictEqual(merged, []);
 });
 
-test("mergeBbcAndLiveMatches keeps BBC team names while merging live TV metadata", () => {
-  const merged = mergeBbcAndLiveMatches(
+test("mergeTsdbAndLiveMatches keeps BBC team names while merging live TV metadata", () => {
+  const merged = mergeTsdbAndLiveMatches(
     [
       {
         date: "2026-04-06",
@@ -1309,8 +1309,8 @@ test("mergeBbcAndLiveMatches keeps BBC team names while merging live TV metadata
   assert.deepStrictEqual(merged[0].tv_channels, ["Sky Sports Football"]);
 });
 
-test("mergeBbcAndLiveMatches collapses Bundesliga aliases onto the BBC-backed FT row", () => {
-  const merged = mergeBbcAndLiveMatches(
+test("mergeTsdbAndLiveMatches collapses Bundesliga aliases onto the BBC-backed FT row", () => {
+  const merged = mergeTsdbAndLiveMatches(
     [
       {
         date: "2026-04-19",
@@ -1349,8 +1349,8 @@ test("mergeBbcAndLiveMatches collapses Bundesliga aliases onto the BBC-backed FT
   assert.equal(merged[0].has_tsdb_source, true);
 });
 
-test("mergeBbcAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT rows", () => {
-  const veronaMerged = mergeBbcAndLiveMatches(
+test("mergeTsdbAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT rows", () => {
+  const veronaMerged = mergeTsdbAndLiveMatches(
     [
       {
         date: "2026-04-19",
@@ -1383,7 +1383,7 @@ test("mergeBbcAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT
   assert.equal(veronaMerged[0].score_status, "FT");
   assert.equal(veronaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/c5yjjq5jlrmt");
 
-  const pisaMerged = mergeBbcAndLiveMatches(
+  const pisaMerged = mergeTsdbAndLiveMatches(
     [
       {
         date: "2026-04-19",
@@ -1416,8 +1416,8 @@ test("mergeBbcAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT
   assert.equal(pisaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/cx2vvg0v3rpt");
 });
 
-test("mergeBbcAndLiveMatches collapses La Liga and Bundesliga alias rows onto BBC-backed FT rows", () => {
-  const osasunaMerged = mergeBbcAndLiveMatches(
+test("mergeTsdbAndLiveMatches collapses La Liga and Bundesliga alias rows onto BBC-backed FT rows", () => {
+  const osasunaMerged = mergeTsdbAndLiveMatches(
     [
       {
         date: "2026-04-12",
@@ -1449,7 +1449,7 @@ test("mergeBbcAndLiveMatches collapses La Liga and Bundesliga alias rows onto BB
   assert.equal(osasunaMerged[0].score_status, "FT");
   assert.equal(osasunaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/cx24nxnxggkt");
 
-  const stuttgartMerged = mergeBbcAndLiveMatches(
+  const stuttgartMerged = mergeTsdbAndLiveMatches(
     [
       {
         date: "2026-04-12",
@@ -3055,8 +3055,8 @@ test("transformBbcLiveMatchWithDetails replaces transient shootout tally with co
   ]);
 });
 
-test("filterStaleBbcMatches accepts a corrected scoreless kickoff fixture over stale cached scores", () => {
-  const filtered = filterStaleBbcMatches(
+test("filterStaleMatches accepts a corrected scoreless kickoff fixture over stale cached scores", () => {
+  const filtered = filterStaleMatches(
     [
       {
         home_team: "Fulham",

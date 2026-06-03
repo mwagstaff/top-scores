@@ -1,15 +1,11 @@
 {
-  "name": "football-on-tv",
+  "name": "top-scores-api",
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "fetch": "node fetch_live_footballontv.js",
-    "fetch:epl": "node fetch_bbc_premier_league_table.js",
-    "fetch:tables": "node fetch_bbc_league_tables.js",
     "fetch:footballdatabase": "node fetch_football_database_rankings.js",
     "fetch:national-elo": "node fetch_national_elo_rankings.js",
     "cleanup:invalid-redis-matches": "node scripts/cleanup_invalid_redis_matches.js",
-    "test:bbc-details": "node test_bbc_match_details.js",
     "start": "node server.js",
     "start:api": "node server.js",
     "start:monitor": "node monitor.js",

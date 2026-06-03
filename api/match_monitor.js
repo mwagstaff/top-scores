@@ -24,7 +24,7 @@ const {
   matchIsMajorUefaClubKnockoutFixture,
 } = require("./major_games_of_interest");
 const crypto = require("crypto");
-const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./bbc_premier_league_teams.json");
+const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./premier_league_teams_static.json");
 const TEAM_SHORT_NAMES_PAYLOAD = require("./team_short_names.json");
 const TEAM_ALIASES_PAYLOAD = require("./team_aliases.json");
 const { teamIdentityNames, teamIdentityKeys } = require("./team_identity");

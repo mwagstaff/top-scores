@@ -26,12 +26,6 @@ const {
   normalizeTeamRankingSource,
 } = require("./config");
 const {
-  DEFAULT_URL,
-  DEFAULT_OUTPUT,
-  fetchMatches,
-  writeMatches,
-} = require("./fetch_live_footballontv");
-const {
   LEAGUE_TABLE_SOURCES,
   DEFAULT_BBC_LEAGUE_TABLES_OUTPUT,
   fetchLeagueTables,
@@ -116,10 +110,6 @@ const PORT = Number(process.env.PORT || 3011);
 const SCRAPER_PORT = Number(process.env.SCRAPER_PORT || 3013);
 const MONITOR_PORT = Number(process.env.MONITOR_PORT || 3014);
 const AUDIT_PORT = Number(process.env.AUDIT_PORT || 3015);
-const SOURCE_URL = process.env.SOURCE_URL || DEFAULT_URL;
-const OUTPUT_PATH = process.env.OUTPUT_PATH || DEFAULT_OUTPUT;
-const INTERVAL_MINUTES = Number(process.env.UPDATE_INTERVAL_MINUTES || 30);
-const INTERVAL_MS = Number(process.env.UPDATE_INTERVAL_MS || INTERVAL_MINUTES * 60 * 1000);
 const CACHE_STATE_WATCH_INTERVAL_MS = Number(process.env.CACHE_STATE_WATCH_INTERVAL_MS || 5000);
 const parsedDebugSlowApiRequestThresholdMs = Number(
   process.env.DEBUG_SLOW_API_REQUEST_THRESHOLD_MS || 1000
@@ -728,7 +718,6 @@ const fantasyTransferRecommendationMetrics = new Map();
 const sourceRecordsFetchedTotalBySource = new Map();
 const sourceCacheSizeBySource = new Map();
 const sourceLastSuccessAtSeconds = new Map();
-const SOURCE_LIVE_FOOTBALL = "live_football_on_tv";
 const SOURCE_TSDB_LIVE = "tsdb_live_scores";
 const SOURCE_TSDB_SCHEDULE = "tsdb_schedule_fixtures";
 const SOURCE_TSDB_PREMIER_LEAGUE = "tsdb_premier_league_teams";
@@ -742,7 +731,6 @@ const SOURCE_RECENT_CACHE = "recent_matches_cache";
 const SOURCE_FPL_BOOTSTRAP = "fpl_bootstrap_static";
 const SOURCE_FPL_FIXTURES = "fpl_fixtures";
 const SOURCE_FPL_EVENT_LIVE = "fpl_event_live";
-const COMPONENT_SOURCE_LIVE_FOOTBALL = "source_live_football";
 const COMPONENT_SOURCE_TSDB_LIVE = "source_tsdb_live";
 const COMPONENT_SOURCE_TSDB_SCHEDULE = "source_tsdb_schedule";
 const COMPONENT_SOURCE_TSDB_MATCH_DETAILS = "source_tsdb_match_details";
@@ -758,7 +746,6 @@ const COMPONENT_SOURCE_FPL_EVENT_LIVE = "source_fpl_event_live";
 const COMPONENT_OPERATIONAL_REDIS = "operational_redis";
 const COMPONENT_REDIS_RECONCILIATION = "redis_reconciliation";
 const COMPONENT_BOOTSTRAP = "operational_bootstrap";
-const OP_DATASET_LIVE_MATCHES = "live_matches";
 const OP_DATASET_TSDB_LIVE_MATCHES = "tsdb_live_matches";
 const OP_DATASET_TSDB_SCHEDULE_MATCHES = "tsdb_schedule_matches";
 const OP_DATASET_RECENT_MATCHES = "recent_matches";
@@ -886,9 +873,6 @@ app.use((req, res, next) => {
   next();
 });
 
-let cachedMatches = [];
-let lastUpdated = null;
-let updating = false;
 let cachedTsdbLiveMatches = [];
 let tsdbLiveLastUpdated = null;
 let tsdbLiveUpdating = false;
@@ -1089,7 +1073,6 @@ function buildRuntimeActivitySnapshot() {
     runtime: runtimeRole,
     startup_backfill_running: startupBackfillRunning,
     cache_state_refresh_running: Boolean(cacheStateWatchTask),
-    live_matches_updating: updating,
     bbc_live_updating: tsdbLiveUpdating,
     bbc_range_updating: tsdbScheduleUpdating,
     epl_updating: eplUpdating,
@@ -11487,7 +11470,6 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
     is_test_match: true
   }));
 
-  const liveMatchesForMerge = Array.isArray(cachedMatches) ? cachedMatches : [];
   const preferredMatchesForMerge = [
     ...(Array.isArray(cachedTsdbScheduleMatches)
       ? cachedTsdbScheduleMatches.map((match) => ({ ...match, has_tsdb_source: true }))
@@ -11496,7 +11478,7 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
   ];
 
   cachedMergedMatches = mergeTsdbAndLiveMatches(
-    liveMatchesForMerge,
+    [],
     preferredMatchesForMerge
   );
   const previousById = Object.fromEntries(matchDetailsById);
@@ -11504,7 +11486,7 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
   invalidateUnmatchedTeamMetrics({ schedule: false });
 
   const updatedAt =
-    newestIsoTimestamp([tsdbScheduleLastUpdated, lastUpdated, tsdbLiveLastUpdated, recentLastUpdated]) ||
+    newestIsoTimestamp([tsdbScheduleLastUpdated, tsdbLiveLastUpdated, recentLastUpdated]) ||
     new Date().toISOString();
   await Promise.all([
     persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
@@ -14040,12 +14022,6 @@ function matchesFilters(match, filters) {
   return true;
 }
 
-function loadFromDisk() {
-  // live_football_on_tv scraper is disabled — skip loading its output file.
-  // Leaving the call site in place so the file can be deleted safely without
-  // a reference error; cachedMatches stays [] and Redis/TSDB are the only sources.
-}
-
 function loadTsdbLiveFromDisk() {
   try {
     if (!fs.existsSync(TSDB_LIVESCORE_OUTPUT_PATH)) return;
@@ -14084,7 +14060,12 @@ function loadRecentFromDisk() {
     const raw = fs.readFileSync(RECENT_OUTPUT_PATH, "utf8");
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      cachedRecentMatches = filterMatchesByCompetition(parsed);
+      // Only restore records with a real numeric TSDB idEvent. Synthetic-ID
+      // records from the old live-footballontv scraper must not be re-seeded
+      // on restart — they would re-enter matchDetailsById and persist to
+      // MongoDB, creating an unbreakable reload cycle.
+      const clean = parsed.filter((m) => m && /^\d+$/.test(String(m.id || m.match_details_id || "")));
+      cachedRecentMatches = filterMatchesByCompetition(clean);
       setSourceCacheSize(SOURCE_RECENT_CACHE, cachedRecentMatches.length);
       const stat = fs.statSync(RECENT_OUTPUT_PATH);
       recentLastUpdated = stat.mtime.toISOString();
@@ -14621,7 +14602,6 @@ async function hydrateOperationalStateFromRedis(options = {}) {
     !(options && options.skipMatchDetails) && !isMonitorRuntime();
   const hydrateDatasets = isMonitorRuntime()
     ? [
-        OP_DATASET_LIVE_MATCHES,
         OP_DATASET_TSDB_LIVE_MATCHES,
         OP_DATASET_TSDB_SCHEDULE_MATCHES,
         OP_DATASET_RECENT_MATCHES,
@@ -14629,7 +14609,6 @@ async function hydrateOperationalStateFromRedis(options = {}) {
         OP_DATASET_CACHE_STATE,
       ]
     : [
-        OP_DATASET_LIVE_MATCHES,
         OP_DATASET_TSDB_LIVE_MATCHES,
         OP_DATASET_TSDB_SCHEDULE_MATCHES,
         OP_DATASET_RECENT_MATCHES,
@@ -14651,13 +14630,6 @@ async function hydrateOperationalStateFromRedis(options = {}) {
     const matchDetailsSnapshot = shouldHydrateMatchDetails
       ? await getAllOperationalMatchDetails()
       : null;
-
-    const liveRecord = datasetRecords[OP_DATASET_LIVE_MATCHES];
-    if (liveRecord && Array.isArray(liveRecord.payload)) {
-      cachedMatches = filterMatchesByCompetition(liveRecord.payload);
-      lastUpdated = liveRecord.updated_at || lastUpdated;
-      setSourceCacheSize(SOURCE_LIVE_FOOTBALL, cachedMatches.length);
-    }
 
     const bbcLiveRecord = datasetRecords[OP_DATASET_TSDB_LIVE_MATCHES];
     if (bbcLiveRecord && Array.isArray(bbcLiveRecord.payload)) {
@@ -14777,7 +14749,13 @@ async function hydrateOperationalStateFromRedis(options = {}) {
 
     if (matchDetailsSnapshot && matchDetailsSnapshot.records) {
       const filteredRecords = filterMatchDetailsRecordsByCompetition(matchDetailsSnapshot.records);
-      const entries = Object.entries(filteredRecords);
+      // Strip any synthetic-ID records that were persisted to MongoDB from the
+      // old live-footballontv scraper. Only real positive-integer TSDB idEvent
+      // keys are valid; synthetic records must not re-enter matchDetailsById on
+      // startup, as the reconciliation repair would immediately re-persist them.
+      const entries = Object.entries(filteredRecords).filter(
+        ([matchId]) => /^\d+$/.test(String(matchId || ""))
+      );
       matchDetailsById = new Map(entries);
       if (matchDetailsSnapshot.updated_at) {
         matchDetailsLastUpdated = matchDetailsSnapshot.updated_at;
@@ -14790,7 +14768,6 @@ async function hydrateOperationalStateFromRedis(options = {}) {
     console.log(
       "[OperationalState] Hydrated from Redis:",
       JSON.stringify({
-        live_matches: cachedMatches.length,
         bbc_live_matches: cachedTsdbLiveMatches.length,
         bbc_range_matches: cachedTsdbScheduleMatches.length,
         merged_matches: cachedMergedMatches.length,
@@ -14875,8 +14852,6 @@ async function inspectOperationalStateReadiness() {
 }
 
 function clearFootballOperationalMemoryState() {
-  cachedMatches = [];
-  lastUpdated = null;
   cachedTsdbLiveMatches = [];
   tsdbLiveLastUpdated = null;
   cachedTsdbScheduleMatches = [];
@@ -14905,7 +14880,6 @@ function clearFootballOperationalMemoryState() {
   scrapedTeamShortNamesByKey = new Map();
   scrapedTeamShortNamesLastUpdated = null;
   operationalCacheState = buildDefaultOperationalCacheState();
-  setSourceCacheSize(SOURCE_LIVE_FOOTBALL, 0);
   setSourceCacheSize(SOURCE_TSDB_LIVE, 0);
   setSourceCacheSize(SOURCE_TSDB_SCHEDULE, 0);
   setSourceCacheSize(SOURCE_RECENT_CACHE, 0);
@@ -14969,7 +14943,6 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
   if (selectedDomains.includes("matches") || selectedDomains.includes("tsdb_live")) {
     reloads.push(
       getOperationalDatasets([
-        OP_DATASET_LIVE_MATCHES,
         OP_DATASET_TSDB_LIVE_MATCHES,
         OP_DATASET_TSDB_SCHEDULE_MATCHES,
         OP_DATASET_RECENT_MATCHES,
@@ -15020,13 +14993,6 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
   if (recordMap.matches) {
     const startedAtMs = Date.now();
     const records = recordMap.matches;
-    const liveRecord = records[OP_DATASET_LIVE_MATCHES];
-    if (liveRecord && Array.isArray(liveRecord.payload)) {
-      cachedMatches = filterMatchesByCompetition(liveRecord.payload);
-      lastUpdated = liveRecord.updated_at || lastUpdated;
-      setSourceCacheSize(SOURCE_LIVE_FOOTBALL, cachedMatches.length);
-    }
-
     const bbcLiveRecord = records[OP_DATASET_TSDB_LIVE_MATCHES];
     if (bbcLiveRecord && Array.isArray(bbcLiveRecord.payload)) {
       cachedTsdbLiveMatches = filterMatchesByCompetition(bbcLiveRecord.payload);
@@ -15060,7 +15026,9 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
   if (recordMap.match_details && recordMap.match_details.records) {
     const startedAtMs = Date.now();
     const filteredRecords = filterMatchDetailsRecordsByCompetition(recordMap.match_details.records);
-    matchDetailsById = new Map(Object.entries(filteredRecords));
+    matchDetailsById = new Map(
+      Object.entries(filteredRecords).filter(([id]) => /^\d+$/.test(String(id || "")))
+    );
     matchDetailsLastUpdated =
       recordMap.match_details.updated_at || matchDetailsLastUpdated || nowIso;
     setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
@@ -15263,10 +15231,6 @@ async function persistStartupOperationalStateFromDisk() {
     operation: "persist_startup_state_from_disk",
   });
   await Promise.all([
-    persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, cachedMatches, {
-      updated_at: lastUpdated || new Date().toISOString(),
-      source: "startup_disk_seed",
-    }),
     persistOperationalDatasetSafe(OP_DATASET_TSDB_LIVE_MATCHES, cachedTsdbLiveMatches, {
       updated_at: tsdbLiveLastUpdated || new Date().toISOString(),
       source: "startup_disk_seed",
@@ -15280,7 +15244,7 @@ async function persistStartupOperationalStateFromDisk() {
       source: "startup_disk_seed",
     }),
     persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
-      updated_at: newestIsoTimestamp([tsdbScheduleLastUpdated, lastUpdated, tsdbLiveLastUpdated]) || new Date().toISOString(),
+      updated_at: newestIsoTimestamp([tsdbScheduleLastUpdated, tsdbLiveLastUpdated]) || new Date().toISOString(),
       source: "startup_disk_seed",
     }),
     persistOperationalDatasetSafe(OP_DATASET_PREMIER_LEAGUE_TEAMS, cachedPremierLeagueTeams, {
@@ -15349,7 +15313,6 @@ async function getOperationalArrayDataset(name, fallback = []) {
     const payload =
       [
         OP_DATASET_MERGED_MATCHES,
-        OP_DATASET_LIVE_MATCHES,
         OP_DATASET_TSDB_LIVE_MATCHES,
         OP_DATASET_TSDB_SCHEDULE_MATCHES,
         OP_DATASET_RECENT_MATCHES,
@@ -15644,7 +15607,6 @@ async function getPreferredOperationalMatchDetailsSnapshotSafe() {
 
 const ADMIN_OPERATIONAL_DATASET_NAMES = [
   OP_DATASET_MERGED_MATCHES,
-  OP_DATASET_LIVE_MATCHES,
   OP_DATASET_TSDB_LIVE_MATCHES,
   OP_DATASET_TSDB_SCHEDULE_MATCHES,
   OP_DATASET_RECENT_MATCHES,
@@ -15963,7 +15925,7 @@ function collectLiveSourceDuplicateTargets(sourceMatches = {}, detailsLookup = m
 
   return {
     duplicate_live_matches: collectDatasetDuplicates(
-      Array.isArray(sourceMatches.liveMatches) ? sourceMatches.liveMatches : cachedMatches
+      Array.isArray(sourceMatches.liveMatches) ? sourceMatches.liveMatches : []
     ),
     duplicate_recent_matches: collectDatasetDuplicates(
       Array.isArray(sourceMatches.recentMatches) ? sourceMatches.recentMatches : cachedRecentMatches
@@ -16047,26 +16009,21 @@ async function purgeLiveSourceDuplicateData(options = {}) {
       ? options.source.trim()
       : "admin_live_source_duplicate_purge";
 
-  const liveBefore = Array.isArray(cachedMatches) ? cachedMatches.length : 0;
   const recentBefore = Array.isArray(cachedRecentMatches) ? cachedRecentMatches.length : 0;
   const mergedBefore = Array.isArray(cachedMergedMatches) ? cachedMergedMatches.length : 0;
 
   const targets = collectLiveSourceDuplicateTargets(
     {
-      liveMatches: cachedMatches,
+      liveMatches: [],
       recentMatches: cachedRecentMatches,
       mergedMatches: cachedMergedMatches,
     },
     matchDetailsById
   );
 
-  const duplicateLiveSet = new Set(targets.duplicate_live_matches);
   const duplicateRecentSet = new Set(targets.duplicate_recent_matches);
   const duplicateMergedSet = new Set(targets.duplicate_merged_matches);
 
-  cachedMatches = (Array.isArray(cachedMatches) ? cachedMatches : []).filter(
-    (match) => !duplicateLiveSet.has(match)
-  );
   cachedRecentMatches = (Array.isArray(cachedRecentMatches) ? cachedRecentMatches : []).filter(
     (match) => !duplicateRecentSet.has(match)
   );
@@ -16074,17 +16031,11 @@ async function purgeLiveSourceDuplicateData(options = {}) {
     (match) => !duplicateMergedSet.has(match)
   );
 
-  setSourceCacheSize(SOURCE_LIVE_FOOTBALL, cachedMatches.length);
   setSourceCacheSize(SOURCE_RECENT_CACHE, cachedRecentMatches.length);
 
-  writeMatches(OUTPUT_PATH, cachedMatches);
   writeRecentMatches(RECENT_OUTPUT_PATH, cachedRecentMatches);
 
   await Promise.all([
-    persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, cachedMatches, {
-      updated_at: updatedAt,
-      source,
-    }),
     persistOperationalDatasetSafe(OP_DATASET_RECENT_MATCHES, cachedRecentMatches, {
       updated_at: updatedAt,
       source,
@@ -16120,7 +16071,7 @@ async function purgeLiveSourceDuplicateData(options = {}) {
       canonicalDeleteResult && Number.isFinite(canonicalDeleteResult.deleted)
         ? canonicalDeleteResult.deleted
         : 0,
-    live_matches_removed: liveBefore - cachedMatches.length,
+    live_matches_removed: 0,
     recent_matches_removed: recentBefore - cachedRecentMatches.length,
     merged_matches_removed: mergedBefore - cachedMergedMatches.length,
     merged_matches_remaining: cachedMergedMatches.length,
@@ -16200,7 +16151,6 @@ async function purgeDisallowedCompetitionData(options = {}) {
       ? options.source.trim()
       : "admin_disallowed_competition_purge";
 
-  const liveBefore = Array.isArray(cachedMatches) ? cachedMatches.length : 0;
   const bbcLiveBefore = Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches.length : 0;
   const bbcRangeBefore = Array.isArray(cachedTsdbScheduleMatches) ? cachedTsdbScheduleMatches.length : 0;
   const recentBefore = Array.isArray(cachedRecentMatches) ? cachedRecentMatches.length : 0;
@@ -16211,7 +16161,6 @@ async function purgeDisallowedCompetitionData(options = {}) {
     matchDetailsById
   );
 
-  cachedMatches = filterMatchesByCompetition(Array.isArray(cachedMatches) ? cachedMatches : []);
   cachedTsdbLiveMatches = filterMatchesByCompetition(
     Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : []
   );
@@ -16225,21 +16174,15 @@ async function purgeDisallowedCompetitionData(options = {}) {
     Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []
   );
 
-  setSourceCacheSize(SOURCE_LIVE_FOOTBALL, cachedMatches.length);
   setSourceCacheSize(SOURCE_TSDB_LIVE, cachedTsdbLiveMatches.length);
   setSourceCacheSize(SOURCE_TSDB_SCHEDULE, cachedTsdbScheduleMatches.length);
   setSourceCacheSize(SOURCE_RECENT_CACHE, cachedRecentMatches.length);
 
-  writeMatches(OUTPUT_PATH, cachedMatches);
   writeTsdbLiveMatches(TSDB_LIVESCORE_OUTPUT_PATH, cachedTsdbLiveMatches);
   writeBbcRangeMatches(TSDB_SCHEDULE_OUTPUT_PATH, cachedTsdbScheduleMatches);
   writeRecentMatches(RECENT_OUTPUT_PATH, cachedRecentMatches);
 
   await Promise.all([
-    persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, cachedMatches, {
-      updated_at: updatedAt,
-      source,
-    }),
     persistOperationalDatasetSafe(OP_DATASET_TSDB_LIVE_MATCHES, cachedTsdbLiveMatches, {
       updated_at: updatedAt,
       source,
@@ -16284,7 +16227,7 @@ async function purgeDisallowedCompetitionData(options = {}) {
       canonicalDeleteResult && Number.isFinite(canonicalDeleteResult.deleted)
         ? canonicalDeleteResult.deleted
         : 0,
-    live_matches_removed: liveBefore - cachedMatches.length,
+    live_matches_removed: 0,
     bbc_live_matches_removed: bbcLiveBefore - cachedTsdbLiveMatches.length,
     bbc_range_matches_removed: bbcRangeBefore - cachedTsdbScheduleMatches.length,
     recent_matches_removed: recentBefore - cachedRecentMatches.length,
@@ -16858,9 +16801,18 @@ async function getOperationalRealtimeSnapshot(options = {}) {
 
 async function updateRecentCache(source = "recent_cache_refresh") {
   const now = new Date();
-  const live = Array.isArray(cachedMatches) ? cachedMatches : [];
+  const live = [];
   const bbc = Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : [];
   const liveKeys = new Set(live.map(matchKey));
+
+  // Strip any synthetic-ID records that may have been loaded from disk on
+  // startup before the loadRecentFromDisk filter was applied. Only real
+  // positive-integer TSDB idEvent keys are valid.
+  if (Array.isArray(cachedRecentMatches)) {
+    cachedRecentMatches = cachedRecentMatches.filter(
+      (m) => m && /^\d+$/.test(String(m.id || m.match_details_id || ""))
+    );
+  }
 
   const map = new Map();
   cachedRecentMatches.forEach((match) => {
@@ -16946,7 +16898,7 @@ function currentMergedMatchesDatasetSnapshot() {
   return {
     items: mergedMatchesForResponse(),
     updated_at:
-      newestIsoTimestamp([tsdbScheduleLastUpdated, lastUpdated, tsdbLiveLastUpdated, recentLastUpdated]) ||
+      newestIsoTimestamp([tsdbScheduleLastUpdated, tsdbLiveLastUpdated, recentLastUpdated]) ||
       null,
     source: "memory",
   };
@@ -16967,7 +16919,9 @@ function scheduleMatchDetailsSnapshotWarm(trigger = "request") {
     try {
       const snapshot = await getAllOperationalMatchDetails();
       if (!snapshot || !snapshot.records || typeof snapshot.records !== "object") return;
-      const entries = Object.entries(snapshot.records);
+      const entries = Object.entries(snapshot.records).filter(
+        ([id]) => /^\d+$/.test(String(id || ""))
+      );
       if (entries.length === 0) return;
       matchDetailsById = new Map(entries);
       if (snapshot.updated_at) {
@@ -17106,12 +17060,6 @@ function currentOperationalDatasetMemorySnapshot(name) {
   switch (name) {
     case OP_DATASET_MERGED_MATCHES:
       return currentMergedMatchesDatasetSnapshot();
-    case OP_DATASET_LIVE_MATCHES:
-      return {
-        items: Array.isArray(cachedMatches) ? cachedMatches : [],
-        updated_at: lastUpdated || null,
-        source: "memory",
-      };
     case OP_DATASET_TSDB_LIVE_MATCHES:
       return {
         items: Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : [],
@@ -17884,7 +17832,6 @@ function findInMemoryMatchRecordByMatchId(matchId) {
     Array.isArray(cachedRecentMatches) ? cachedRecentMatches : [],
     Array.isArray(cachedTsdbScheduleMatches) ? cachedTsdbScheduleMatches : [],
     Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : [],
-    Array.isArray(cachedMatches) ? cachedMatches : [],
   ];
 
   for (const source of sources) {
@@ -18278,77 +18225,7 @@ function scheduleMatchDetailsWarm(matchId, options = {}) {
   return true;
 }
 
-async function updateMatches(options = {}) {
-  if (updating) return;
-  updating = true;
-  const startedAtMs = Date.now();
-  let success = false;
-  let recordsFetched = null;
-  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  recordRuntimeComponentStart(COMPONENT_SOURCE_LIVE_FOOTBALL, {
-    trigger,
-    url: SOURCE_URL,
-    interval_ms: INTERVAL_MS,
-  });
-  try {
-    const previousMatches = cachedMatches;
-    const matches = filterMatchesByCompetition(await fetchMatches(SOURCE_URL));
-    const matchesChanged =
-      hashComparablePayload(matches) !== hashComparablePayload(previousMatches);
-    cachedMatches = matches;
-    recordsFetched = matches.length;
-    setSourceCacheSize(SOURCE_LIVE_FOOTBALL, matches.length);
-    if (matchesChanged) {
-      lastUpdated = new Date().toISOString();
-      writeMatches(OUTPUT_PATH, matches);
-      await persistOperationalDatasetSafe(OP_DATASET_LIVE_MATCHES, matches, {
-        updated_at: lastUpdated,
-        source: SOURCE_LIVE_FOOTBALL,
-      });
-      await updateRecentCache(SOURCE_LIVE_FOOTBALL);
-      await rebuildMergedMatchesCache(SOURCE_LIVE_FOOTBALL);
-      invalidateCacheDomains(["matches", "match_details"], {
-        updated_at: lastUpdated,
-        reason: "live_matches_refresh",
-        source: SOURCE_LIVE_FOOTBALL,
-      });
-    }
-    success = true;
-    logPollSuccess("live_football", {
-      source: SOURCE_LIVE_FOOTBALL,
-      trigger,
-      count: matches.length,
-      updated_at: lastUpdated,
-      changed: matchesChanged,
-      duration_ms: Date.now() - startedAtMs,
-    });
-    recordRuntimeComponentSuccess(COMPONENT_SOURCE_LIVE_FOOTBALL, {
-      trigger,
-      url: SOURCE_URL,
-      interval_ms: INTERVAL_MS,
-      count: matches.length,
-      updated_at: lastUpdated,
-      changed: matchesChanged,
-    });
-  } catch (err) {
-    recordRuntimeComponentFailure(COMPONENT_SOURCE_LIVE_FOOTBALL, err, {
-      trigger,
-      url: SOURCE_URL,
-      interval_ms: INTERVAL_MS,
-    });
-    console.warn("Failed to update matches:", err.message || err);
-  } finally {
-    trackSourceUpdateMetrics({
-      source: SOURCE_LIVE_FOOTBALL,
-      startedAtMs,
-      success,
-      recordsFetched,
-    });
-    updating = false;
-  }
-}
-
-function filterStaleBbcMatches(newMatches, cachedMatches) {
+function filterStaleMatches(newMatches, cachedMatches) {
   if (!cachedMatches || cachedMatches.length === 0) {
     return newMatches;
   }
@@ -18438,7 +18315,7 @@ function filterStaleBbcMatches(newMatches, cachedMatches) {
   return filtered;
 }
 
-function shouldRefreshCanonicalMatchDetailsFromBbcLive(match) {
+function shouldRefreshCanonicalMatchDetails(match) {
   const incoming = normalizeMatchDetailsPayload(match);
   if (!incoming) return false;
 
@@ -18516,7 +18393,7 @@ async function updateTsdbLivescores(options = {}) {
     cachedTsdbLiveMatches = matches;
     recordsFetched = matches.length;
     setSourceCacheSize(SOURCE_TSDB_LIVE, matches.length);
-    const canonicalRefreshTargets = matches.filter(shouldRefreshCanonicalMatchDetailsFromBbcLive);
+    const canonicalRefreshTargets = matches.filter(shouldRefreshCanonicalMatchDetails);
     if (matchesChanged) {
       tsdbLiveLastUpdated = canonicalUpdatedAt;
       writeTsdbLiveMatches(TSDB_LIVESCORE_OUTPUT_PATH, matches);
@@ -20849,17 +20726,6 @@ async function buildAdminArchitectureOverviewPayload() {
   const tablesReconciliation = findReconciliationComponentByName(reconciliation, OP_DATASET_LEAGUE_TABLES);
   const detailsReconciliation = findReconciliationComponentByName(reconciliation, "match_details");
 
-  const liveFootballFeed = buildUpstreamFeedSnapshot({
-    id: COMPONENT_SOURCE_LIVE_FOOTBALL,
-    title: "LiveFootballOnTV",
-    runtimeId: COMPONENT_SOURCE_LIVE_FOOTBALL,
-    url: SOURCE_URL,
-    interval_ms: INTERVAL_MS,
-    updated_at: lastUpdated,
-    count: cachedMatches.length,
-    last_success_at: sourceLastSuccessAtIso(SOURCE_LIVE_FOOTBALL),
-    running: updating,
-  });
   const bbcLiveFeed = buildUpstreamFeedSnapshot({
     id: COMPONENT_SOURCE_TSDB_LIVE,
     title: "SportsDB Live Scores",
@@ -21052,13 +20918,6 @@ async function buildAdminArchitectureOverviewPayload() {
   );
 
   const components = [
-    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_live_football"), {
-      level: liveFootballFeed.level,
-      status: liveFootballFeed.status,
-      summary: `${liveFootballFeed.count || 0} live TV fixtures`,
-      updated_at: liveFootballFeed.updated_at,
-      age_seconds: liveFootballFeed.age_seconds,
-    }),
     buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_tsdb_live"), {
       level: bbcLiveFeed.level,
       status: bbcLiveFeed.status,
@@ -21213,7 +21072,6 @@ async function buildAdminArchitectureOverviewPayload() {
     edges: ADMIN_ARCH_FLOW_EDGES,
     components,
     feed_snapshots: {
-      live_football: liveFootballFeed,
       tsdb_live: bbcLiveFeed,
       tsdb_schedule: bbcRangeFeed,
       tsdb_match_details: bbcDetailsFeed,
@@ -21248,7 +21106,6 @@ async function buildAdminArchitectureComponentDetail(componentId) {
 
   if (componentId === "operational_memory") {
     const datasetCards = [
-      { name: OP_DATASET_LIVE_MATCHES, snapshot: memoryDatasets[OP_DATASET_LIVE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_LIVE_MATCHES) },
       { name: OP_DATASET_TSDB_LIVE_MATCHES, snapshot: memoryDatasets[OP_DATASET_TSDB_LIVE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_TSDB_LIVE_MATCHES) },
       { name: OP_DATASET_TSDB_SCHEDULE_MATCHES, snapshot: memoryDatasets[OP_DATASET_TSDB_SCHEDULE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_TSDB_SCHEDULE_MATCHES) },
       { name: OP_DATASET_RECENT_MATCHES, snapshot: memoryDatasets[OP_DATASET_RECENT_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_RECENT_MATCHES) },
@@ -23705,7 +23562,6 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   const [
     mergedDataset,
-    liveDataset,
     bbcLiveDataset,
     bbcRangeDataset,
     recentDataset,
@@ -23718,7 +23574,6 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     matchDetailsSnapshot,
   ] = await Promise.all([
     getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, cachedMergedMatches),
-    getOperationalArrayDataset(OP_DATASET_LIVE_MATCHES, cachedMatches),
     getOperationalArrayDataset(OP_DATASET_TSDB_LIVE_MATCHES, cachedTsdbLiveMatches),
     getOperationalArrayDataset(OP_DATASET_TSDB_SCHEDULE_MATCHES, cachedTsdbScheduleMatches),
     getOperationalArrayDataset(OP_DATASET_RECENT_MATCHES, cachedRecentMatches),
@@ -23737,10 +23592,8 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
   const mergedLastUpdated = newestIsoTimestamp([
     mergedDataset.updated_at,
     bbcRangeDataset.updated_at,
-    liveDataset.updated_at,
     bbcLiveDataset.updated_at,
     tsdbScheduleLastUpdated,
-    lastUpdated,
     tsdbLiveLastUpdated,
   ]);
 
@@ -23764,11 +23617,6 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
   res.json({
     count: mergedDataset.items.length,
     last_updated: mergedLastUpdated,
-    live_count: liveDataset.items.length,
-    live_last_updated: liveDataset.updated_at || lastUpdated,
-    source_url: SOURCE_URL,
-    output_path: path.resolve(OUTPUT_PATH),
-    interval_ms: INTERVAL_MS,
     tsdb_live_count: bbcLiveDataset.items.length,
     tsdb_live_last_updated: bbcLiveDataset.updated_at || tsdbLiveLastUpdated,
     tsdb_live_output_path: path.resolve(TSDB_LIVESCORE_OUTPUT_PATH),
@@ -23930,7 +23778,6 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     competition_allowlist: SERVER_CONFIG.competitionAllowlist,
     operational_state_source: {
       merged_matches: mergedDataset.source,
-      live_matches: liveDataset.source,
       bbc_live_matches: bbcLiveDataset.source,
       bbc_range_matches: bbcRangeDataset.source,
       recent_matches: recentDataset.source,
@@ -23947,7 +23794,6 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
   });
 });
 
-loadFromDisk();
 loadTsdbLiveFromDisk();
 loadTsdbScheduleFromDisk();
 loadRecentFromDisk();
@@ -29921,8 +29767,8 @@ module.exports = {
     isListPayloadVisibleForMode,
     mergeClubEloFixtureMetadata,
     matchDetailsIdFromUrl,
-    filterStaleBbcMatches,
-    shouldRefreshCanonicalMatchDetailsFromBbcLive,
+    filterStaleMatches,
+    shouldRefreshCanonicalMatchDetails,
     buildDefaultOperationalCacheState,
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
