@@ -19,6 +19,7 @@ const {
   mapTsdbLeagueName,
   leagueSeasons,
 } = require("./thesportsdb_leagues");
+const { utcDateTimeToZonedDateTime } = require("./match_time");
 
 // ---------------------------------------------------------------------------
 // Status mapping
@@ -536,11 +537,28 @@ function computeAggregateFromSchedule(event, scheduleCache) {
 // Shared time helpers
 // ---------------------------------------------------------------------------
 
+const TSDB_DISPLAY_TIME_ZONE =
+  process.env.TSDB_DISPLAY_TIME_ZONE || process.env.MATCH_DISPLAY_TIME_ZONE || "Europe/London";
+
 function stripSeconds(timeStr) {
   // "22:00:00" → "22:00"
   if (!timeStr) return null;
   const match = String(timeStr).match(/^(\d{1,2}:\d{2})/);
   return match ? match[1] : null;
+}
+
+function normalizeTsdbKickoffDateTime(event, options = {}) {
+  const source = event && typeof event === "object" ? event : {};
+  const date = String(source.dateEvent || source.date || "").trim() || null;
+  const timeField = options.timeField || "strTime";
+  const rawTime = source[timeField] || source.strTime || null;
+  const time = stripSeconds(rawTime);
+
+  if (!date || !time) {
+    return { date, time };
+  }
+
+  return utcDateTimeToZonedDateTime(date, time, TSDB_DISPLAY_TIME_ZONE);
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +578,7 @@ async function fetchTsdbLivescores(options = {}) {
 
   return entries
     .map((e) => {
+      const kickoff = normalizeTsdbKickoffDateTime(e, { timeField: "strEventTime" });
       const scoreStatus = mapTsdbStatus(e.strStatus, e.strProgress);
       // Use the allowlist name if the league is in our schedule set, otherwise
       // use the raw SportsDB name so matches from other competitions (e.g.
@@ -578,8 +597,8 @@ async function fetchTsdbLivescores(options = {}) {
           ? Number(e.intAwayScore) : null,
         score_status: scoreStatus,
         match_time: scoreStatus,
-        date: String(e.dateEvent || "").trim() || null,
-        time: e.strEventTime ? stripSeconds(e.strEventTime) : null,
+        date: kickoff.date,
+        time: kickoff.time,
         league,
         details_url: null,
         has_tsdb_source: true,
@@ -689,6 +708,7 @@ async function fetchTsdbLeagueSchedule(idLeague, season, options = {}) {
   });
 
   return validEntries.map((e) => {
+    const kickoff = normalizeTsdbKickoffDateTime(e);
     const scoreStatus = mapTsdbStatus(e.strStatus, e.strProgress);
     const league = leagueName || resolveLeagueName(e.strLeague);
     const homeScore = (e.intHomeScore !== null && e.intHomeScore !== undefined && e.intHomeScore !== "")
@@ -698,8 +718,8 @@ async function fetchTsdbLeagueSchedule(idLeague, season, options = {}) {
 
     return {
       id: String(e.idEvent),
-      date: String(e.dateEvent || "").trim() || null,
-      time: e.strTime ? stripSeconds(e.strTime) : null,
+      date: kickoff.date,
+      time: kickoff.time,
       league,
       home_team: String(e.strHomeTeam || "").trim(),
       away_team: String(e.strAwayTeam || "").trim(),
@@ -819,12 +839,14 @@ async function fetchTsdbMatchDetails(idEvent, options = {}) {
   const awayScore = (event.intAwayScore !== null && event.intAwayScore !== undefined && event.intAwayScore !== "")
     ? Number(event.intAwayScore) : null;
 
+  const kickoff = normalizeTsdbKickoffDateTime(event);
+
   const result = {
     id: String(idEvent),
     match_details_id: String(idEvent),
     details_url: null,
-    date: String(event.dateEvent || "").trim() || null,
-    time: event.strTime ? stripSeconds(event.strTime) : null,
+    date: kickoff.date,
+    time: kickoff.time,
     league,
     home_team: String(event.strHomeTeam || "").trim(),
     away_team: String(event.strAwayTeam || "").trim(),
@@ -904,5 +926,6 @@ module.exports = {
     computeAggregateFromSchedule,
     resolveLeagueName,
     stripSeconds,
+    normalizeTsdbKickoffDateTime,
   },
 };

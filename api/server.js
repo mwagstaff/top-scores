@@ -11,6 +11,7 @@ const zlib = require("zlib");
 const { monitorEventLoopDelay, performance } = require("perf_hooks");
 const express = require("express");
 const liveActivityMetrics = require("./live_activity_metrics");
+const { zonedDateTimeToUtcMs } = require("./match_time");
 const {
   matchIsMajorGameOfInterest,
   matchIsMajorUefaClubKnockoutFixture,
@@ -932,7 +933,9 @@ function proactivelyWarmMatchListResponseCache() {
   if (!snapshot) return;
   const mergedItems = filterMatchesByCompetition(cachedMergedMatches);
   const bbcRangeItems = filterMatchesByCompetition(cachedTsdbScheduleMatches);
-  getCachedCanonicalPublicMatchListPayloads({
+  // Fire-and-forget: the getter kicks an event-loop-yielding background
+  // rebuild; awaiting it here would block reload/startup paths for ~6s.
+  void getCachedCanonicalPublicMatchListPayloads({
     matchDetailsLookup: snapshot.lookup,
     matchDetailsUpdatedAt: snapshot.updated_at,
     matchDetailsCount: matchDetailsLookupSize(snapshot.lookup),
@@ -944,6 +947,8 @@ function proactivelyWarmMatchListResponseCache() {
       items: bbcRangeItems,
       updated_at: tsdbScheduleLastUpdated || null,
     },
+  }).catch((error) => {
+    console.warn("[MatchList] Proactive warm failed:", error.message || error);
   });
 }
 
@@ -11710,23 +11715,12 @@ function isNotModifiedRequest(req, latestUpdated) {
   return Math.floor(latestTimestamp / 1000) <= Math.floor(clientTimestamp / 1000);
 }
 
+const MATCH_DISPLAY_TIME_ZONE = process.env.MATCH_DISPLAY_TIME_ZONE || "Europe/London";
+
 function parseKickoff(match) {
   if (!match || !match.date || !match.time) return null;
-  const dateParts = String(match.date).split("-").map((part) => Number(part));
-  const timeParts = String(match.time).split(":").map((part) => Number(part));
-  if (dateParts.length !== 3 || timeParts.length < 2) return null;
-  const [year, month, day] = dateParts;
-  const [hour, minute] = timeParts;
-  if (
-    !Number.isFinite(year) ||
-    !Number.isFinite(month) ||
-    !Number.isFinite(day) ||
-    !Number.isFinite(hour) ||
-    !Number.isFinite(minute)
-  ) {
-    return null;
-  }
-  return new Date(year, month - 1, day, hour, minute);
+  const timestampMs = zonedDateTimeToUtcMs(match.date, match.time, MATCH_DISPLAY_TIME_ZONE);
+  return Number.isFinite(timestampMs) ? new Date(timestampMs) : null;
 }
 
 function isWithinRetention(match, now = new Date()) {
@@ -17009,7 +17003,58 @@ function matchListLookupFromOptions(options = {}) {
     : {};
 }
 
-function getCachedCanonicalPublicMatchListPayloads(options = {}) {
+// Persisted copy of the public match-list payload so a freshly restarted
+// process can serve immediately instead of blocking on a ~6s cold build.
+// Persistence is throttled because saveOperationalDataset also mirrors to
+// Mongo and the payload is ~1-2MB; cold-start seeding only needs freshness
+// within a few minutes (live scores come from /matches/:matchId polling).
+const MATCH_LIST_PERSIST_DATASET_NAME = "match_list_public_payload";
+const MATCH_LIST_PERSIST_MIN_INTERVAL_MS = 5 * 60 * 1000;
+let matchListLastPersistedAtMs = 0;
+
+function persistMatchListPayloadThrottled(payload) {
+  if (!Array.isArray(payload) || payload.length === 0) return;
+  const nowMs = Date.now();
+  if (nowMs - matchListLastPersistedAtMs < MATCH_LIST_PERSIST_MIN_INTERVAL_MS) return;
+  matchListLastPersistedAtMs = nowMs;
+  void persistOperationalDatasetSafe(MATCH_LIST_PERSIST_DATASET_NAME, payload, {
+    source: "match_list_cache",
+    updated_at: new Date().toISOString(),
+  });
+}
+
+function startMatchListRebuild(cacheKey, options) {
+  if (matchListInFlightRebuilds.has(cacheKey)) {
+    return matchListInFlightRebuilds.get(cacheKey);
+  }
+  const rebuildPromise = (async () => {
+    try {
+      const payload = await canonicalMatchDetailsRecordsToPublicListPayloadsAsync(
+        matchListLookupFromOptions(options),
+        {
+          fallbackMatches: buildMatchListFallbackMatches(options),
+          nowMs: Date.now(),
+        }
+      );
+      setMatchListResponseCacheEntry(cacheKey, {
+        createdAtMs: Date.now(),
+        payload,
+      });
+      matchListLastKnownPublicPayload = payload;
+      persistMatchListPayloadThrottled(payload);
+      return payload;
+    } finally {
+      matchListInFlightRebuilds.delete(cacheKey);
+    }
+  })();
+  matchListInFlightRebuilds.set(cacheKey, rebuildPromise);
+  rebuildPromise.catch((error) => {
+    console.warn("[MatchList] Background rebuild failed:", error.message || error);
+  });
+  return rebuildPromise;
+}
+
+async function getCachedCanonicalPublicMatchListPayloads(options = {}) {
   const cacheKey = buildMatchListResponseCacheKey({
     ...options,
     kind: "public",
@@ -17027,53 +17072,29 @@ function getCachedCanonicalPublicMatchListPayloads(options = {}) {
   // Stale-while-revalidate: prefer the expired entry for this exact key, then
   // the most recent build for any key. The ~6s rebuild runs in the background
   // with event-loop yields instead of blocking the requesting user.
-  const stalePayload =
+  let stalePayload =
     cached && Array.isArray(cached.payload) ? cached.payload : matchListLastKnownPublicPayload;
 
-  if (stalePayload) {
-    if (!matchListInFlightRebuilds.has(cacheKey)) {
-      const rebuildPromise = (async () => {
-        try {
-          const payload = await canonicalMatchDetailsRecordsToPublicListPayloadsAsync(
-            matchListLookupFromOptions(options),
-            {
-              fallbackMatches: buildMatchListFallbackMatches(options),
-              nowMs: Date.now(),
-            }
-          );
-          setMatchListResponseCacheEntry(cacheKey, {
-            createdAtMs: Date.now(),
-            payload,
-          });
-          matchListLastKnownPublicPayload = payload;
-          return payload;
-        } finally {
-          matchListInFlightRebuilds.delete(cacheKey);
-        }
-      })();
-      matchListInFlightRebuilds.set(cacheKey, rebuildPromise);
-      rebuildPromise.catch((error) => {
-        console.warn("[MatchList] Background rebuild failed:", error.message || error);
-      });
+  // Cold start: seed the stale payload from Redis so the first requests after
+  // a restart are served in milliseconds while the real build runs.
+  if (!stalePayload) {
+    const persisted = await loadOperationalDatasetSafe(MATCH_LIST_PERSIST_DATASET_NAME);
+    if (persisted && Array.isArray(persisted.payload) && persisted.payload.length > 0) {
+      stalePayload = persisted.payload;
+      if (!matchListLastKnownPublicPayload) {
+        matchListLastKnownPublicPayload = persisted.payload;
+      }
     }
+  }
+
+  const rebuildPromise = startMatchListRebuild(cacheKey, options);
+  if (stalePayload) {
     return stalePayload;
   }
 
-  // True cold start (no payload ever built in this process): build
-  // synchronously — one-time cost, normally absorbed by the startup warm.
-  const payload = canonicalMatchDetailsRecordsToPublicListPayloads(
-    matchListLookupFromOptions(options),
-    {
-      fallbackMatches: buildMatchListFallbackMatches(options),
-      nowMs,
-    }
-  );
-  setMatchListResponseCacheEntry(cacheKey, {
-    createdAtMs: nowMs,
-    payload,
-  });
-  matchListLastKnownPublicPayload = payload;
-  return payload;
+  // First ever run (nothing persisted): await the chunked build. It yields to
+  // the event loop, so other requests stay responsive while it completes.
+  return rebuildPromise;
 }
 
 function canonicalLiveActivityMatchesFromDetailsRecords(recordsById) {
@@ -22498,7 +22519,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
 
     if (!payload) {
       stageStartedAtMs = Date.now();
-      let filtered = getCachedCanonicalPublicMatchListPayloads(canonicalListOptions)
+      let filtered = (await getCachedCanonicalPublicMatchListPayloads(canonicalListOptions))
         .filter((match) =>
           matchesFilters(match, {
             leagues,

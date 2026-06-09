@@ -12,6 +12,7 @@ const {
   computeAggregateFromSchedule,
   resolveLeagueName,
   stripSeconds,
+  normalizeTsdbKickoffDateTime,
 } = __private;
 
 // ---------------------------------------------------------------------------
@@ -89,6 +90,42 @@ test("stripSeconds: already HH:MM returned as-is", () => {
 
 test("stripSeconds: null input returns null", () => {
   assert.equal(stripSeconds(null), null);
+});
+
+test("normalizeTsdbKickoffDateTime: converts TSDB UTC summer kickoffs to Europe/London", () => {
+  assert.deepEqual(
+    normalizeTsdbKickoffDateTime({
+      dateEvent: "2026-06-17",
+      strTime: "20:00:00",
+      strHomeTeam: "England",
+      strAwayTeam: "Croatia",
+    }),
+    { date: "2026-06-17", time: "21:00" }
+  );
+});
+
+test("normalizeTsdbKickoffDateTime: moves late UTC kickoffs onto the next London date", () => {
+  assert.deepEqual(
+    normalizeTsdbKickoffDateTime({
+      dateEvent: "2026-06-17",
+      strTime: "23:00:00",
+      strHomeTeam: "Ghana",
+      strAwayTeam: "Panama",
+    }),
+    { date: "2026-06-18", time: "00:00" }
+  );
+});
+
+test("normalizeTsdbKickoffDateTime: leaves winter UTC kickoffs unchanged for London", () => {
+  assert.deepEqual(
+    normalizeTsdbKickoffDateTime({
+      dateEvent: "2026-12-17",
+      strTime: "20:00:00",
+      strHomeTeam: "England",
+      strAwayTeam: "Croatia",
+    }),
+    { date: "2026-12-17", time: "20:00" }
+  );
 });
 
 // ---------------------------------------------------------------------------
