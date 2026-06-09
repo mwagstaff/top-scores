@@ -328,7 +328,7 @@ struct MatchRow: View {
             footerLeadingContent
 
             if showBroadcastDetails && !isMatchFinished {
-                TvLogoRow(channels: match.tvChannels)
+                TvLogoRow(channels: localeFilteredChannels(match.tvChannels))
                     .fixedSize(horizontal: true, vertical: false)
             }
 
@@ -346,7 +346,7 @@ struct MatchRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(1)
         } else if showBroadcastDetails && !isMatchFinished {
-            Text(match.tvChannels.isEmpty ? "TV TBA" : match.tvChannels.joined(separator: " • "))
+            Text(match.tvChannels.isEmpty ? "TV TBA" : match.tvChannels.map(\.name).joined(separator: " • "))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -514,7 +514,7 @@ struct MatchRow: View {
     }
 
     private var primaryBroadcastLogo: UIImage? {
-        TvLogoResolver.shared.images(for: match.tvChannels).first
+        TvLogoResolver.shared.images(for: localeFilteredChannels(match.tvChannels).map(\.name)).first
     }
 
     private var compactBroadcastLogoHeight: CGFloat {
@@ -773,6 +773,7 @@ struct MatchRow: View {
 
     private var compactPrimaryBroadcastLogo: UIImage? {
         guard rowPreferences.showCompactFixtureTvLogo else { return nil }
+        guard !localeFilteredChannels(match.tvChannels).isEmpty else { return nil }
         return primaryBroadcastLogo
     }
 
@@ -1917,11 +1918,17 @@ private func lineupInitialFragment(from value: String, lowercaseParticles: Bool,
 
 
 
+private func localeFilteredChannels(_ channels: [TvChannel]) -> [TvChannel] {
+    let regionCode = Locale.current.region?.identifier
+    let local = regionCode.map { code in channels.filter { $0.countryCode == code } } ?? []
+    return local.isEmpty ? [] : local
+}
+
 private struct TvLogoRow: View {
-    let channels: [String]
+    let channels: [TvChannel]
 
     var body: some View {
-        let images = TvLogoResolver.shared.images(for: channels)
+        let images = TvLogoResolver.shared.images(for: channels.map(\.name))
         if images.isEmpty {
             EmptyView()
         } else {
@@ -1961,7 +1968,7 @@ private struct TeamLogo: View {
 
 
 #Preview {
-    MatchRow(match: Match(date: "2026-02-11", time: "19:45", homeTeam: "Arsenal", awayTeam: "Chelsea", league: "Premier League", tvChannels: ["NBC", "Peacock"]))
+    MatchRow(match: Match(date: "2026-02-11", time: "19:45", homeTeam: "Arsenal", awayTeam: "Chelsea", league: "Premier League", tvChannels: [TvChannel(name: "NBC"), TvChannel(name: "Peacock")]))
         .environmentObject(PreferencesStore())
         .environmentObject(FantasyViewModel())
         .padding()

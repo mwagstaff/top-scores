@@ -387,6 +387,19 @@ function getStandings(idLeague, season, options = {}) {
   );
 }
 
+// --- TV listings ---
+
+// All soccer TV listings. Returns entries grouped under `filter`, each with:
+//   idEvent, strChannel, strCountry, strLogo, dateEvent, strTime
+// One entry per (event × channel × country). Refreshed every ~2 hours.
+function getTvListings(options = {}) {
+  return _request("/filter/tv/sport/soccer", {
+    source: "tsdb_tv_listings",
+    reason: "tv_listings_fetch",
+    ...options,
+  });
+}
+
 // --- League search / all leagues (for building the allowlist) ---
 
 function searchLeague(name, options = {}) {
@@ -401,6 +414,122 @@ function getAllLeagues(options = {}) {
   return _request("/all/leagues", {
     source: "tsdb_all_leagues",
     reason: "all_leagues_fetch",
+    ...options,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// v1 API — league tables
+// ---------------------------------------------------------------------------
+//
+// The lookuptable endpoint is only available on the legacy v1 API where the
+// key "123" is baked into the URL path. No X-API-KEY header is needed.
+
+const TSDB_V1_BASE_URL = "https://www.thesportsdb.com/api/v1/json/123";
+
+function _fetchJsonV1(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const source = String(options.source || "tsdb_v1_unknown").trim() || "tsdb_v1_unknown";
+    const initiator = String(options.initiator || "").trim() || null;
+    const reason = String(options.reason || "").trim() || null;
+    const trigger = String(options.trigger || "").trim() || null;
+    const requestedUrl = String(url || "").trim();
+    const startedAtMs = Date.now();
+    let settled = false;
+
+    const complete = ({ statusCode, error, data }) => {
+      if (settled) return;
+      settled = true;
+      _notifyObserver({
+        source,
+        initiator,
+        reason,
+        trigger,
+        url: requestedUrl,
+        statusCode,
+        durationMs: Date.now() - startedAtMs,
+        timestampMs: Date.now(),
+      });
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(data);
+    };
+
+    const target = new URL(requestedUrl);
+    const req = https.get(
+      target,
+      { headers: { "Accept": "application/json" } },
+      (res) => {
+        const statusCode = Number(res.statusCode || 0);
+
+        if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
+          res.resume();
+          _fetchJsonV1(
+            new URL(res.headers.location, target).toString(),
+            options
+          ).then(resolve).catch(reject);
+          return;
+        }
+
+        if (statusCode !== 200) {
+          res.resume();
+          const error = new Error(`TheSportsDB v1 request failed with status ${statusCode}`);
+          error.statusCode = statusCode;
+          error.code = `HTTP_${statusCode}`;
+          error.url = requestedUrl;
+          complete({ statusCode, error });
+          return;
+        }
+
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { raw += chunk; });
+        res.on("end", () => {
+          let parsed;
+          try {
+            parsed = JSON.parse(raw);
+          } catch (parseErr) {
+            parseErr.code = "TSDB_JSON_PARSE_ERROR";
+            parseErr.url = requestedUrl;
+            complete({ statusCode, error: parseErr });
+            return;
+          }
+          complete({ statusCode, data: parsed });
+        });
+      }
+    );
+
+    req.setTimeout(TSDB_REQUEST_TIMEOUT_MS, () => {
+      const error = new Error("TheSportsDB v1 request timed out");
+      error.code = "ETIMEDOUT";
+      error.url = requestedUrl;
+      req.destroy(error);
+    });
+
+    req.on("error", (error) => {
+      if (!error.url) error.url = requestedUrl;
+      complete({
+        statusCode:
+          Number.isFinite(Number(error.statusCode)) && Number(error.statusCode) >= 0
+            ? Number(error.statusCode)
+            : 0,
+        error,
+      });
+    });
+  });
+}
+
+async function _requestV1(path, options = {}) {
+  await _acquireToken();
+  const url = `${TSDB_V1_BASE_URL}${path}`;
+  return _fetchJsonV1(url, options);
+}
+
+function getLeagueTable(idLeague, options = {}) {
+  return _requestV1(`/lookuptable.php?l=${encodeURIComponent(String(idLeague || ""))}`, {
+    source: "tsdb_league_table",
     ...options,
   });
 }
@@ -434,6 +563,12 @@ module.exports = {
 
   // Standings (parked — path TBC)
   getStandings,
+
+  // League tables (v1)
+  getLeagueTable,
+
+  // TV listings
+  getTvListings,
 
   // Utilities
   searchLeague,

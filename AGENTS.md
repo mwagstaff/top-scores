@@ -1,6 +1,89 @@
-# Agent Instructions
+# Claude Code Instructions
 
-- Do not run Xcode builds (`xcodebuild`) in this repository.
-- The user runs builds manually in Xcode.
-- For admin pages and API URLs, always account for proxy routing. Derive an `API_BASE_PREFIX` from the current pathname so deployed URLs resolve under `/top-scores` when served via `api.skynolimit.dev`.
-- Live Activity widget code must stay highly performant: keep render bodies synchronous and cheap, do not add `.task`/async calls, network calls, file I/O, resolver scans, or runtime asset discovery in the Live Activity render path.
+## Overview
+
+- `Top Scores` consists of an API, iOS app and website
+- A top quality user experience is paramount
+- All pages/screens on both website and app should load as quickly as possible, with data load times measured in milliseconds
+
+## Server logs
+
+- The default production server is `sky`, reachable by passwordless SSH, e.g. `ssh sky`
+- Server logs can be found under `/home/mwagstaff/dev/top-scores`, e.g.: `top-scores.error.log`
+- System architecture is described in `ARCHITECTURE_OVERVIEW.md`
+
+## Build System
+
+- **Never run `xcodebuild` commands** - The user will always run Xcode builds themselves
+- Do not attempt to compile or build the iOS/watchOS projects
+- Focus on code changes and let the user verify builds in Xcode
+- **Never try and start the node API server**, e.g. by running `npm start` or `node server.js` - The user will always start the server themselves
+
+## Secrets
+
+When testing locally, use .env.local for secrets
+# CLAUDE.md
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

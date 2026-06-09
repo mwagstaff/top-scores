@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Tables — Admin Test Harness</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; margin: 0; padding: 16px; background: #f5f5f5; color: #1a1a1a; }
+  h1 { font-size: 1.25rem; margin: 0 0 16px; }
+  h2 { font-size: 1rem; margin: 0 0 10px; }
+  .card { background: white; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 16px; }
+  label { display: block; font-size: .85rem; font-weight: 600; margin-bottom: 4px; color: #555; }
+  select, input[type=number], input[type=text] { width: 100%; padding: 7px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: .9rem; }
+  button { padding: 8px 18px; border: none; border-radius: 6px; cursor: pointer; font-size: .9rem; font-weight: 600; }
+  .btn-primary { background: #007aff; color: white; }
+  .btn-primary:disabled { background: #99c4ff; cursor: default; }
+  .btn-sm { padding: 5px 12px; font-size: .82rem; }
+  .btn-danger { background: #ff3b30; color: white; }
+  .row { display: flex; gap: 12px; }
+  .col { flex: 1; }
+  .match-row { display: grid; grid-template-columns: 1fr auto 40px auto 1fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .match-row input { width: 100%; }
+  .vs { text-align: center; color: #999; font-size: .8rem; }
+  .score-input { width: 50px !important; text-align: center; }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th { text-align: right; font-size: .75rem; font-weight: 600; color: #888; padding: 4px 8px; border-bottom: 1px solid #eee; }
+  th:first-child, td:first-child { text-align: left; }
+  td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; }
+  td:not(:first-child):not(:nth-child(2)) { text-align: right; }
+  tr:last-child td { border-bottom: none; }
+  .pos { color: #888; width: 28px; }
+  .team-name { font-weight: 500; }
+  .badge-live { display: inline-block; background: #ff3b30; color: white; font-size: .65rem; font-weight: 700; border-radius: 3px; padding: 1px 4px; margin-left: 4px; vertical-align: middle; }
+  .realtime-banner { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; font-size: .82rem; color: #856404; }
+  .tables-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .tables-wrap { grid-template-columns: 1fr; } }
+  .status { font-size: .82rem; color: #555; margin-top: 8px; }
+  .error { color: #c00; }
+  .changed-up { color: #2a9d2a; }
+  .changed-down { color: #c00; }
+  .rank-status { font-size: .72rem; color: #888; margin-left: 4px; }
+  #league-info { font-size: .82rem; color: #888; margin-top: 6px; }
+</style>
+</head>
+<body>
+<h1>League Tables — Admin Test Harness</h1>
+
+<div class="card">
+  <h2>Select League</h2>
+  <div class="row" style="align-items: flex-end; gap: 10px;">
+    <div class="col">
+      <label for="league-select">League</label>
+      <select id="league-select"><option value="">Loading…</option></select>
+    </div>
+    <div>
+      <button class="btn-primary btn-sm" id="load-btn">Load Table</button>
+    </div>
+    <div>
+      <button class="btn-sm" id="refresh-btn" title="Fetch latest from TheSportsDB">Refresh from TSDB</button>
+    </div>
+  </div>
+  <div id="league-info"></div>
+</div>
+
+<div class="card" id="matches-card" style="display:none;">
+  <h2>Simulate Live Matches <span style="font-weight:400;color:#888;font-size:.85rem;">(1–10)</span></h2>
+  <div id="match-rows"></div>
+  <div class="row" style="margin-top:8px;gap:8px;align-items:center;">
+    <button class="btn-sm" id="add-match-btn">+ Add Match</button>
+    <button class="btn-sm btn-danger" id="clear-matches-btn">Clear All</button>
+    <span style="flex:1;"></span>
+    <button class="btn-primary" id="simulate-btn">Apply Simulation</button>
+  </div>
+  <div class="status" id="simulate-status"></div>
+</div>
+
+<div class="tables-wrap" id="tables-section" style="display:none;">
+  <div class="card">
+    <h2>Base Table</h2>
+    <div id="base-table-container"></div>
+  </div>
+  <div class="card">
+    <h2>Realtime Table <span id="realtime-badge"></span></h2>
+    <div id="realtime-table-container"></div>
+  </div>
+</div>
+
+<script>
+const API = "/api/v1";
+const ADMIN_API = "/api/v1/admin";
+
+let availableLeagues = [];
+let currentBase = null;
+
+// Load league list
+async function loadLeagues() {
+  try {
+    const res = await fetch(`${API}/tables`);
+    const data = await res.json();
+    availableLeagues = Array.isArray(data.leagues) ? data.leagues : [];
+    const sel = document.getElementById("league-select");
+    sel.innerHTML = availableLeagues.length
+      ? availableLeagues.map(l => `<option value="${l.league_id}">${l.league_name} (${l.league_id}) — ${l.rows ? l.rows.length : 0} teams</option>`).join("")
+      : `<option value="">No tables available</option>`;
+  } catch (e) {
+    document.getElementById("league-select").innerHTML = `<option value="">Error loading leagues</option>`;
+  }
+}
+
+async function loadTable() {
+  const leagueId = document.getElementById("league-select").value;
+  if (!leagueId) return;
+  document.getElementById("league-info").textContent = "Loading…";
+  try {
+    const res = await fetch(`${API}/tables/${leagueId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const table = await res.json();
+    currentBase = table;
+    document.getElementById("league-info").textContent =
+      `Season: ${table.season || "unknown"} · ${table.rows.length} teams · Updated: ${table.updated_at || "unknown"}`;
+    document.getElementById("matches-card").style.display = "";
+    renderMatchInputs(table);
+    renderTables(table, table);
+    document.getElementById("tables-section").style.display = "";
+  } catch (e) {
+    document.getElementById("league-info").textContent = "Error: " + e.message;
+  }
+}
+
+async function refreshFromTSDB() {
+  const leagueId = document.getElementById("league-select").value;
+  if (!leagueId) return;
+  document.getElementById("refresh-btn").disabled = true;
+  document.getElementById("refresh-btn").textContent = "Refreshing…";
+  try {
+    const res = await fetch(`${ADMIN_API}/league-tables/refresh?leagueId=${encodeURIComponent(leagueId)}`, { method: "POST" });
+    const data = await res.json();
+    if (data.has_table === false) {
+      alert(`League ${leagueId} has no table in TheSportsDB (cup / friendly / no standings available).`);
+    } else {
+      await loadLeagues();
+      await loadTable();
+    }
+  } catch (e) {
+    alert("Refresh failed: " + e.message);
+  }
+  document.getElementById("refresh-btn").disabled = false;
+  document.getElementById("refresh-btn").textContent = "Refresh from TSDB";
+}
+
+// Render match input rows
+function renderMatchInputs(table) {
+  const teams = (table.rows || []).map(r => r.team).filter(Boolean);
+  document.getElementById("match-rows").innerHTML = "";
+  // Start with two empty rows
+  addMatchRow(teams);
+  addMatchRow(teams);
+}
+
+function addMatchRow(teamsArg) {
+  const teams = teamsArg || (currentBase ? (currentBase.rows || []).map(r => r.team) : []);
+  const container = document.getElementById("match-rows");
+  if (container.children.length >= 10) return;
+
+  const row = document.createElement("div");
+  row.className = "match-row";
+
+  const makeTeamSel = (placeholder) => {
+    const s = document.createElement("select");
+    s.className = "team-sel";
+    s.innerHTML = `<option value="">— ${placeholder} —</option>` +
+      teams.map(t => `<option value="${t}">${t}</option>`).join("");
+    return s;
+  };
+
+  const homeScore = Object.assign(document.createElement("input"), { type: "number", min: "0", max: "20", value: "0", className: "score-input" });
+  const awayScore = Object.assign(document.createElement("input"), { type: "number", min: "0", max: "20", value: "0", className: "score-input" });
+  const vs = Object.assign(document.createElement("span"), { className: "vs", textContent: "-" });
+  const removeBtn = Object.assign(document.createElement("button"), { className: "btn-sm btn-danger", textContent: "✕" });
+  removeBtn.addEventListener("click", () => row.remove());
+
+  row.append(makeTeamSel("Home"), homeScore, vs, awayScore, makeTeamSel("Away"), removeBtn);
+  container.appendChild(row);
+}
+
+document.getElementById("add-match-btn").addEventListener("click", () => {
+  const teams = currentBase ? (currentBase.rows || []).map(r => r.team) : [];
+  addMatchRow(teams);
+});
+
+document.getElementById("clear-matches-btn").addEventListener("click", () => {
+  if (currentBase) renderMatchInputs(currentBase);
+});
+
+// Collect match inputs
+function collectMatches() {
+  const rows = document.querySelectorAll(".match-row");
+  const matches = [];
+  rows.forEach(row => {
+    const sels = row.querySelectorAll(".team-sel");
+    const inputs = row.querySelectorAll("input[type=number]");
+    const home = sels[0] && sels[0].value;
+    const away = sels[1] && sels[1].value;
+    if (!home || !away || home === away) return;
+    matches.push({
+      home,
+      away,
+      homeScore: Number(inputs[0].value),
+      awayScore: Number(inputs[1].value),
+    });
+  });
+  return matches;
+}
+
+async function runSimulation() {
+  const leagueId = document.getElementById("league-select").value;
+  if (!leagueId) return;
+  const matches = collectMatches();
+  const status = document.getElementById("simulate-status");
+  if (matches.length === 0) {
+    status.textContent = "No valid matches to simulate.";
+    return;
+  }
+  status.textContent = `Simulating ${matches.length} match(es)…`;
+  document.getElementById("simulate-btn").disabled = true;
+  try {
+    const res = await fetch(`${ADMIN_API}/league-tables/simulate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leagueId, matches }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const { base, realtime } = await res.json();
+    renderTables(base, realtime);
+    status.textContent = `${matches.length} match(es) applied. ${realtime.realtime ? "Table updated." : "No teams matched — check spelling."}`;
+  } catch (e) {
+    status.className = "status error";
+    status.textContent = "Error: " + e.message;
+  }
+  document.getElementById("simulate-btn").disabled = false;
+}
+
+function renderTable(container, table, compareTable) {
+  if (!table || !table.rows || table.rows.length === 0) {
+    container.innerHTML = "<p style='color:#888;font-size:.85rem;'>No data</p>";
+    return;
+  }
+
+  // Build position-change map from compareTable
+  const basePos = new Map();
+  if (compareTable && compareTable.rows) {
+    compareTable.rows.forEach(r => basePos.set(r.team, r.position));
+  }
+
+  let html = "";
+  if (table.realtime) {
+    html += `<div class="realtime-banner">⚡ Provisional standings — simulated in-progress results applied</div>`;
+  }
+
+  html += `<table><thead><tr>
+    <th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th>
+  </tr></thead><tbody>`;
+
+  for (const row of table.rows) {
+    const origPos = basePos.get(row.team);
+    let posClass = "";
+    let posArrow = "";
+    if (origPos !== undefined && origPos !== row.position) {
+      if (row.position < origPos) { posClass = "changed-up"; posArrow = " ↑"; }
+      else { posClass = "changed-down"; posArrow = " ↓"; }
+    }
+    const liveBadge = row.live ? `<span class="badge-live">LIVE</span>` : "";
+    const rankStatus = row.rank_status ? `<span class="rank-status">${esc(row.rank_status)}</span>` : "";
+    html += `<tr>
+      <td class="pos ${posClass}">${row.position}${posArrow}</td>
+      <td class="team-name">${esc(row.team)}${liveBadge}${rankStatus}</td>
+      <td>${row.played}</td><td>${row.won}</td><td>${row.drawn}</td><td>${row.lost}</td>
+      <td>${row.goals_for}</td><td>${row.goals_against}</td>
+      <td>${row.goal_difference >= 0 ? "+" : ""}${row.goal_difference}</td>
+      <td><strong>${row.points}</strong></td>
+    </tr>`;
+  }
+
+  html += "</tbody></table>";
+  container.innerHTML = html;
+}
+
+function renderTables(base, realtime) {
+  renderTable(document.getElementById("base-table-container"), base, null);
+  renderTable(document.getElementById("realtime-table-container"), realtime, base);
+  const badge = document.getElementById("realtime-badge");
+  badge.textContent = realtime && realtime.realtime ? "⚡ live" : "";
+  badge.style.cssText = realtime && realtime.realtime
+    ? "background:#ff3b30;color:white;font-size:.65rem;font-weight:700;border-radius:3px;padding:1px 5px;"
+    : "";
+}
+
+function esc(str) {
+  return String(str || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+document.getElementById("load-btn").addEventListener("click", loadTable);
+document.getElementById("simulate-btn").addEventListener("click", runSimulation);
+document.getElementById("refresh-btn").addEventListener("click", refreshFromTSDB);
+
+loadLeagues();
+</script>
+</body>
+</html>

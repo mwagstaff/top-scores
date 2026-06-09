@@ -32,8 +32,12 @@ const {
   setBbcLeagueTablesRequestObserver,
   writeLeagueTables,
 } = require("./fetch_bbc_league_tables");
+const { fetchTsdbLeagueTable } = require("./fetch_tsdb_league_tables");
 const {
   TSDB_LEAGUE_ALLOWLIST,
+  TSDB_LEAGUE_ID_BY_NAME,
+  TSDB_TRACKED_LEAGUE_IDS,
+  TSDB_EPL_LEAGUE_ID,
 } = require("./thesportsdb_leagues");
 const {
   setTsdbRequestObserver,
@@ -42,6 +46,8 @@ const {
   fetchTsdbMatchDetails,
   fetchTsdbPremierLeagueTeams,
 } = require("./fetch_tsdb_matches");
+const { fetchTsdbTvListingsFull } = require("./fetch_tsdb_tv");
+const { fetchSoccerLeagues } = require("./fetch_tsdb_leagues");
 const {
   DEFAULT_CLUB_ELO_BASE_URL,
   DEFAULT_CLUB_ELO_TIMEZONE,
@@ -143,6 +149,14 @@ const TSDB_SCHEDULE_INTERVAL_HOURS = Number(process.env.TSDB_SCHEDULE_INTERVAL_H
 const TSDB_SCHEDULE_INTERVAL_MS = Number(
   process.env.TSDB_SCHEDULE_INTERVAL_MS || TSDB_SCHEDULE_INTERVAL_HOURS * 60 * 60 * 1000
 );
+
+const TSDB_TV_INTERVAL_HOURS = Number(process.env.TSDB_TV_INTERVAL_HOURS || 2);
+const TSDB_TV_INTERVAL_MS = Number(
+  process.env.TSDB_TV_UPDATE_INTERVAL_MS || TSDB_TV_INTERVAL_HOURS * 60 * 60 * 1000
+);
+// How many days of TV listings to keep in MongoDB. Older records are pruned
+// on each successful refresh.
+const TSDB_TV_RETENTION_DAYS = Number(process.env.TSDB_TV_RETENTION_DAYS || 3);
 
 const EPL_OUTPUT_PATH = process.env.EPL_OUTPUT_PATH || path.join(__dirname, "premier_league_teams.json");
 const EPL_INTERVAL_HOURS = Number(process.env.EPL_UPDATE_INTERVAL_HOURS || 24);
@@ -718,10 +732,12 @@ const fantasyTransferRecommendationMetrics = new Map();
 const sourceRecordsFetchedTotalBySource = new Map();
 const sourceCacheSizeBySource = new Map();
 const sourceLastSuccessAtSeconds = new Map();
+const SOURCE_TSDB_TV = "tsdb_tv_listings";
 const SOURCE_TSDB_LIVE = "tsdb_live_scores";
 const SOURCE_TSDB_SCHEDULE = "tsdb_schedule_fixtures";
 const SOURCE_TSDB_PREMIER_LEAGUE = "tsdb_premier_league_teams";
 const SOURCE_BBC_LEAGUE_TABLES = "bbc_league_tables";
+const SOURCE_TSDB_LEAGUE_TABLES = "tsdb_league_tables";
 const SOURCE_CLUB_ELO = "club_elo_rankings";
 const SOURCE_CLUB_ELO_FIXTURES = "club_elo_fixtures";
 const SOURCE_FOOTBALL_DATABASE = "football_database_rankings";
@@ -731,11 +747,13 @@ const SOURCE_RECENT_CACHE = "recent_matches_cache";
 const SOURCE_FPL_BOOTSTRAP = "fpl_bootstrap_static";
 const SOURCE_FPL_FIXTURES = "fpl_fixtures";
 const SOURCE_FPL_EVENT_LIVE = "fpl_event_live";
+const COMPONENT_SOURCE_TSDB_TV = "source_tsdb_tv";
 const COMPONENT_SOURCE_TSDB_LIVE = "source_tsdb_live";
 const COMPONENT_SOURCE_TSDB_SCHEDULE = "source_tsdb_schedule";
 const COMPONENT_SOURCE_TSDB_MATCH_DETAILS = "source_tsdb_match_details";
 const COMPONENT_SOURCE_TSDB_PREMIER_TEAMS = "source_tsdb_premier_teams";
 const COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES = "source_bbc_league_tables";
+const COMPONENT_SOURCE_TSDB_LEAGUE_TABLES = "source_tsdb_league_tables";
 const COMPONENT_SOURCE_CLUB_ELO = "source_club_elo_rankings";
 const COMPONENT_SOURCE_CLUB_ELO_FIXTURES = "source_club_elo_fixtures";
 const COMPONENT_SOURCE_FOOTBALL_DATABASE = "source_football_database";
@@ -879,6 +897,9 @@ let tsdbLiveUpdating = false;
 let cachedTsdbScheduleMatches = [];
 let tsdbScheduleLastUpdated = null;
 let tsdbScheduleUpdating = false;
+let cachedTvListingsByEvent = new Map(); // idEvent → TvChannel[]
+let tsdbTvLastUpdated = null;
+let tsdbTvUpdating = false;
 const BBC_RANGE_PROGRESS_WINDOWS = Object.freeze(["past", "today", "future", "all"]);
 let bbcRangeScrapeProgress = buildEmptyBbcRangeScrapeProgress();
 let cachedMergedMatches = [];
@@ -890,8 +911,17 @@ let cachedDeletedMatchIds = new Set();
 async function refreshDeletedMatchIdsCacheAsync() {
   try {
     const ids = await getDeletedMatchIds();
-    cachedDeletedMatchIds = new Set(Array.isArray(ids) ? ids : []);
-    clearMatchListResponseCache();
+    const next = new Set(Array.isArray(ids) ? ids : []);
+    // Only invalidate response caches when the set actually changed — this
+    // runs on a 60s safety-net interval and unconditional clears would force
+    // an expensive match-list rebuild every minute.
+    const changed =
+      next.size !== cachedDeletedMatchIds.size ||
+      [...next].some((id) => !cachedDeletedMatchIds.has(id));
+    cachedDeletedMatchIds = next;
+    if (changed) {
+      clearMatchListResponseCache();
+    }
   } catch (error) {
     console.warn("[MatchList] Failed to refresh deleted match IDs cache:", error.message || error);
   }
@@ -1602,7 +1632,7 @@ function summarizeLiveActivityDebugMatch(match) {
     matchTime: match && match.score_status ? String(match.score_status) : null,
     tvChannels:
       match && Array.isArray(match.tv_channels)
-        ? match.tv_channels.map((channel) => String(channel))
+        ? match.tv_channels.map(channelName).filter(Boolean)
         : [],
   };
 }
@@ -1656,13 +1686,13 @@ const LEAGUE_TABLE_ID_ALIASES = {
 };
 
 function normalizeLeagueTableId(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (!normalized) return "";
-  return LEAGUE_TABLE_ID_ALIASES[normalized] || normalized;
+  const str = String(value || "").trim();
+  if (!str) return "";
+  // Numeric TSDB IDs — return as-is
+  if (/^\d+$/.test(str)) return str;
+  // Legacy BBC slug normalization for any residual data
+  const slug = str.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return LEAGUE_TABLE_ID_ALIASES[slug] || slug;
 }
 
 function leagueTableRowsCount(tables) {
@@ -1675,12 +1705,17 @@ function leagueTableRowsCount(tables) {
 
 function sortLeagueTablesForResponse(tables) {
   if (!Array.isArray(tables)) return [];
-  const order = new Map(LEAGUE_TABLE_SOURCES.map((source, index) => [source.id, index]));
+  // Primary: TSDB tracked league order (numeric IDs)
+  const tsdbOrder = new Map(TSDB_TRACKED_LEAGUE_IDS.map((id, index) => [String(id), index]));
+  // Fallback: BBC source order for any legacy slug-keyed tables still in cache
+  const bbcOrder = new Map(LEAGUE_TABLE_SOURCES.map((source, index) => [source.id, index]));
   return [...tables].sort((left, right) => {
     const leftId = normalizeLeagueTableId(left && left.league_id);
     const rightId = normalizeLeagueTableId(right && right.league_id);
-    const leftOrder = order.has(leftId) ? order.get(leftId) : Number.MAX_SAFE_INTEGER;
-    const rightOrder = order.has(rightId) ? order.get(rightId) : Number.MAX_SAFE_INTEGER;
+    const leftOrder = tsdbOrder.has(leftId) ? tsdbOrder.get(leftId)
+      : bbcOrder.has(leftId) ? 10000 + bbcOrder.get(leftId) : Number.MAX_SAFE_INTEGER;
+    const rightOrder = tsdbOrder.has(rightId) ? tsdbOrder.get(rightId)
+      : bbcOrder.has(rightId) ? 10000 + bbcOrder.get(rightId) : Number.MAX_SAFE_INTEGER;
     if (leftOrder !== rightOrder) return leftOrder - rightOrder;
     const leftName = String((left && left.league_name) || "");
     const rightName = String((right && right.league_name) || "");
@@ -1698,11 +1733,97 @@ function findLeagueTableById(tables, leagueId) {
 }
 
 function extractPremierLeagueTeamsFromTables(tables) {
-  const premier = findLeagueTableById(tables, "premier-league");
+  // Try TSDB numeric ID first, then legacy BBC slug
+  const premier =
+    findLeagueTableById(tables, TSDB_EPL_LEAGUE_ID) ||
+    findLeagueTableById(tables, "premier-league");
   if (!premier || !Array.isArray(premier.rows)) return [];
   return premier.rows
     .map((row) => String((row && row.team) || "").trim())
     .filter(Boolean);
+}
+
+/**
+ * Applies in-progress live match results to a stored league table, returning
+ * a new table object with updated standings. Rows gain a `live: true` flag and
+ * the table gains `realtime: true` when at least one match was applied.
+ *
+ * Only matches that are currently in-progress and whose both teams appear in
+ * the base table are applied. Finished matches (FT, AET, etc.) are intentionally
+ * excluded — they should be reflected in the next daily table pull.
+ */
+function applyLiveResultsToTable(baseTable, liveMatches) {
+  if (!baseTable || !Array.isArray(baseTable.rows) || baseTable.rows.length === 0) {
+    return baseTable;
+  }
+  if (!Array.isArray(liveMatches) || liveMatches.length === 0) return baseTable;
+
+  // Deep-copy rows so we never mutate the base table
+  const rows = baseTable.rows.map((row) => ({ ...row }));
+
+  // Index by normalized team name for fast lookup
+  const rowByTeam = new Map();
+  for (const row of rows) {
+    const key = normalizeTeamName(String(row.team || "")).replace(/\s+/g, " ").trim().toLowerCase();
+    if (key) rowByTeam.set(key, row);
+  }
+
+  let anyApplied = false;
+
+  for (const match of liveMatches) {
+    if (!isInProgressMatchStatus(match && match.score_status)) continue;
+    const homeScore = parseNumericScore(match.home_score);
+    const awayScore = parseNumericScore(match.away_score);
+    if (homeScore === null || awayScore === null) continue;
+
+    const homeKey = normalizeTeamName(String(match.home_team || "")).replace(/\s+/g, " ").trim().toLowerCase();
+    const awayKey = normalizeTeamName(String(match.away_team || "")).replace(/\s+/g, " ").trim().toLowerCase();
+    const homeRow = homeKey ? rowByTeam.get(homeKey) : null;
+    const awayRow = awayKey ? rowByTeam.get(awayKey) : null;
+    if (!homeRow || !awayRow) continue;
+
+    homeRow.played += 1;
+    awayRow.played += 1;
+    homeRow.goals_for += homeScore;
+    homeRow.goals_against += awayScore;
+    awayRow.goals_for += awayScore;
+    awayRow.goals_against += homeScore;
+    homeRow.goal_difference = homeRow.goals_for - homeRow.goals_against;
+    awayRow.goal_difference = awayRow.goals_for - awayRow.goals_against;
+
+    if (homeScore > awayScore) {
+      homeRow.won += 1;
+      homeRow.points += 3;
+      awayRow.lost += 1;
+    } else if (homeScore < awayScore) {
+      awayRow.won += 1;
+      awayRow.points += 3;
+      homeRow.lost += 1;
+    } else {
+      homeRow.drawn += 1;
+      homeRow.points += 1;
+      awayRow.drawn += 1;
+      awayRow.points += 1;
+    }
+
+    homeRow.live = true;
+    awayRow.live = true;
+    anyApplied = true;
+  }
+
+  if (!anyApplied) return baseTable;
+
+  // Re-sort: points → goal difference → goals scored → alphabetical
+  rows.sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points;
+    if (b.goal_difference !== a.goal_difference) return b.goal_difference - a.goal_difference;
+    if (b.goals_for !== a.goals_for) return b.goals_for - a.goals_for;
+    return String(a.team || "").localeCompare(String(b.team || ""));
+  });
+
+  rows.forEach((row, index) => { row.position = index + 1; });
+
+  return { ...baseTable, rows, realtime: true };
 }
 
 const ALLOWED_COMPETITION_SET = new Set(
@@ -1766,10 +1887,19 @@ function matchPassesCompetitionTableValidation(match, leagueName = null, tables 
   return homeKnown || awayKnown;
 }
 
+// Matches team names that end with an age-group suffix: " U21", " U23", " U18", etc.
+const YOUTH_TEAM_SUFFIX_RE = /\bU\d+$/i;
+
+function isYouthTeam(teamName) {
+  return YOUTH_TEAM_SUFFIX_RE.test(String(teamName || "").trim());
+}
+
 function isAllowedCompetitionMatch(match, options = {}) {
   const league = String((match && match.league) || "").trim();
   if (!league) return true;
   if (!isAllowedCompetition(league)) return false;
+  if (isYouthTeam(match && match.home_team)) return false;
+  if (isYouthTeam(match && match.away_team)) return false;
   return matchPassesCompetitionTableValidation(
     match,
     league,
@@ -1802,14 +1932,11 @@ function isAllowedMatchDetailsPayload(payload, fallbackLeague = null, options = 
   if (!league) return true;
   if (!isAllowedCompetition(league)) return false;
   const statePayload = getMatchDetailsStatePayload(payload);
+  const homeTeam = (statePayload && statePayload.home_team) || (payload && payload.home_team) || null;
+  const awayTeam = (statePayload && statePayload.away_team) || (payload && payload.away_team) || null;
+  if (isYouthTeam(homeTeam) || isYouthTeam(awayTeam)) return false;
   return matchPassesCompetitionTableValidation(
-    {
-      league,
-      home_team:
-        (statePayload && statePayload.home_team) || (payload && payload.home_team) || null,
-      away_team:
-        (statePayload && statePayload.away_team) || (payload && payload.away_team) || null,
-    },
+    { league, home_team: homeTeam, away_team: awayTeam },
     league,
     options && Array.isArray(options.tables) ? options.tables : cachedLeagueTables
   );
@@ -6864,6 +6991,9 @@ const CLUB_ELO_FIXTURES_MATCH_OPPONENT_MARGIN = Number.isFinite(
   ? Math.min(0.5, Math.max(0, parsedClubEloFixturesOpponentMargin))
   : 0.03;
 const CLUB_ELO_FIXTURES_MATCH_AMBIGUOUS_MARGIN = 0.01;
+// Max time a team-rankings build may hold the event loop before yielding via
+// setImmediate, so user requests stay responsive during background rebuilds.
+const MATCH_BUILD_YIELD_INTERVAL_MS = 25;
 const parsedClubEloMatchMinConfidence = Number(process.env.CLUB_ELO_MATCH_MIN_CONFIDENCE || 0.82);
 const CLUB_ELO_MATCH_MIN_CONFIDENCE = Number.isFinite(parsedClubEloMatchMinConfidence)
   ? Math.min(1, Math.max(0, parsedClubEloMatchMinConfidence))
@@ -7700,6 +7830,16 @@ function applyTeamShortNamesToApiValue(value, lookup = null) {
   return output;
 }
 
+function addLeagueIdToMatchPayloads(matches) {
+  if (!Array.isArray(matches)) return matches;
+  return matches.map((match) => {
+    if (!match || typeof match !== "object") return match;
+    const leagueName = String(match.league || "").toLowerCase();
+    const leagueId = leagueName ? (TSDB_LEAGUE_ID_BY_NAME.get(leagueName) || null) : null;
+    return leagueId ? { ...match, league_id: leagueId } : match;
+  });
+}
+
 function loadTeamShortNamesPayload() {
   loadTeamShortNameOverrides();
   return buildTeamShortNamesPayloadFromMaps(
@@ -8374,12 +8514,37 @@ function parseNumericScore(value) {
 
 function uniqueChannels(channels) {
   const output = [];
+  const seen = new Set();
   (Array.isArray(channels) ? channels : []).forEach((channel) => {
-    const trimmed = String(channel || "").trim();
-    if (!trimmed) return;
-    if (!output.includes(trimmed)) output.push(trimmed);
+    if (channel && typeof channel === "object") {
+      // Structured channel object — preserve as-is, deduplicate by name+country.
+      const name = String(channel.name || "").trim();
+      if (!name) return;
+      const key = `${name}|${String(channel.country || "")}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        output.push(channel);
+      }
+    } else {
+      const trimmed = String(channel || "").trim();
+      if (!trimmed) return;
+      // Discard artefact strings produced when structured channel objects were
+      // previously passed through String() in the old code path.
+      if (trimmed === "[object Object]") return;
+      if (!seen.has(trimmed)) {
+        seen.add(trimmed);
+        output.push(trimmed);
+      }
+    }
   });
   return output;
+}
+
+// Extracts just the channel name from a channel value that may be either a
+// structured TvChannel object { name, country, ... } or a plain string.
+function channelName(channel) {
+  if (channel && typeof channel === "object") return String(channel.name || "").trim();
+  return String(channel || "").trim();
 }
 
 const MATCH_STATUS_IN_PROGRESS_TOKENS = new Set(["LIVE", "HT", "ET", "PENS", "PEN", "PEN."]);
@@ -11472,7 +11637,12 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
 
   const preferredMatchesForMerge = [
     ...(Array.isArray(cachedTsdbScheduleMatches)
-      ? cachedTsdbScheduleMatches.map((match) => ({ ...match, has_tsdb_source: true }))
+      ? cachedTsdbScheduleMatches.map((match) => ({
+          ...match,
+          has_tsdb_source: true,
+          // Attach TV channel listing for this event if available.
+          tv_channels: cachedTvListingsByEvent.get(String(match.id || "")) || match.tv_channels || [],
+        }))
       : []),
     ...testMatchesForMerge,
   ];
@@ -12446,7 +12616,7 @@ function findBestClubEloMatch(
   };
 }
 
-function mapTeamsToClubElo(matches, clubEloTeams, leagueFilter = null, options = {}) {
+async function mapTeamsToClubElo(matches, clubEloTeams, leagueFilter = null, options = {}) {
   const names = uniqueMatchTeamNames(matches, leagueFilter);
   const normalizedClubEloTeams = normalizeClubEloTeamsPayload(clubEloTeams);
   const index = buildClubEloCandidateIndex(normalizedClubEloTeams);
@@ -12455,19 +12625,24 @@ function mapTeamsToClubElo(matches, clubEloTeams, leagueFilter = null, options =
     options.minConfidence,
     CLUB_ELO_MATCH_MIN_CONFIDENCE
   );
-  return names.map((name) => {
-    const match = findBestClubEloMatch(
-      name,
-      normalizedClubEloTeams,
-      index,
-      manualMappings,
-      {
-        minConfidence,
-      }
-    );
+  const memoKey = options.memoKey || null;
+  const results = [];
+  let lastYieldMs = Date.now();
+  for (let i = 0; i < names.length; i++) {
+    if (Date.now() - lastYieldMs >= MATCH_BUILD_YIELD_INTERVAL_MS) {
+      await new Promise((resolve) => setImmediate(resolve));
+      lastYieldMs = Date.now();
+    }
+    const name = names[i];
+    const fullMemoKey = memoKey ? `${memoKey}|${name}` : null;
+    let match = fullMemoKey ? getMatchMemo(clubEloMatchMemoCache, fullMemoKey) : undefined;
+    if (match === undefined) {
+      match = findBestClubEloMatch(name, normalizedClubEloTeams, index, manualMappings, { minConfidence });
+      if (fullMemoKey) setMatchMemo(clubEloMatchMemoCache, fullMemoKey, match);
+    }
     const excludedFromMatching = match && match.method === "excluded_national_team";
     if (!match || !match.team || !match.accepted) {
-      return {
+      results.push({
         Name: name,
         Rank: null,
         Club: null,
@@ -12480,26 +12655,28 @@ function mapTeamsToClubElo(matches, clubEloTeams, leagueFilter = null, options =
         _closest_club: match && match.team ? match.team.Club : null,
         _match_method: match && match.method ? match.method : null,
         _excluded_from_matching: Boolean(excludedFromMatching),
-      };
+      });
+    } else {
+      const team = match.team;
+      results.push({
+        Name: name,
+        Rank: Number.isFinite(team.Rank) ? team.Rank : null,
+        Club: team.Club || null,
+        Country: team.Country || null,
+        Level: Number.isFinite(team.Level) ? team.Level : null,
+        Elo: Number.isFinite(team.Elo) ? team.Elo : null,
+        From: team.From || null,
+        To: team.To || null,
+        _match_confidence: match.confidence,
+        _match_method: match.method || null,
+        _excluded_from_matching: false,
+      });
     }
-    const team = match.team;
-    return {
-      Name: name,
-      Rank: Number.isFinite(team.Rank) ? team.Rank : null,
-      Club: team.Club || null,
-      Country: team.Country || null,
-      Level: Number.isFinite(team.Level) ? team.Level : null,
-      Elo: Number.isFinite(team.Elo) ? team.Elo : null,
-      From: team.From || null,
-      To: team.To || null,
-      _match_confidence: match.confidence,
-      _match_method: match.method || null,
-      _excluded_from_matching: false,
-    };
-  });
+  }
+  return results;
 }
 
-function mapTeamsToFootballDatabase(
+async function mapTeamsToFootballDatabase(
   matches,
   footballDatabaseTeams,
   leagueFilter = null,
@@ -12514,21 +12691,28 @@ function mapTeamsToFootballDatabase(
     options.minConfidence,
     FOOTBALL_DATABASE_MATCH_MIN_CONFIDENCE
   );
-  return names.map((name) => {
-    const match = findBestClubEloMatch(
-      name,
-      normalizedFootballDatabaseTeams,
-      index,
-      manualMappings,
-      {
+  const memoKey = options.memoKey || null;
+  const results = [];
+  let lastYieldMs = Date.now();
+  for (let i = 0; i < names.length; i++) {
+    if (Date.now() - lastYieldMs >= MATCH_BUILD_YIELD_INTERVAL_MS) {
+      await new Promise((resolve) => setImmediate(resolve));
+      lastYieldMs = Date.now();
+    }
+    const name = names[i];
+    const fullMemoKey = memoKey ? `${memoKey}|${name}` : null;
+    let match = fullMemoKey ? getMatchMemo(footballDatabaseMatchMemoCache, fullMemoKey) : undefined;
+    if (match === undefined) {
+      match = findBestClubEloMatch(name, normalizedFootballDatabaseTeams, index, manualMappings, {
         minConfidence,
         manualTargetFallbackMinConfidence: FOOTBALL_DATABASE_MANUAL_TARGET_MIN_CONFIDENCE,
         fallbackToAutomaticOnMissingManualTarget: true,
-      }
-    );
+      });
+      if (fullMemoKey) setMatchMemo(footballDatabaseMatchMemoCache, fullMemoKey, match);
+    }
     const excludedFromMatching = match && match.method === "excluded_national_team";
     if (!match || !match.team || !match.accepted) {
-      return {
+      results.push({
         Name: name,
         Rank: null,
         Club: null,
@@ -12539,26 +12723,28 @@ function mapTeamsToFootballDatabase(
         _closest_club: match && match.team ? match.team.Club : null,
         _match_method: match && match.method ? match.method : null,
         _excluded_from_matching: Boolean(excludedFromMatching),
-      };
+      });
+    } else {
+      const team = match.team;
+      const points = Number.isFinite(team.Points)
+        ? team.Points
+        : Number.isFinite(team.Elo)
+          ? team.Elo
+          : null;
+      results.push({
+        Name: name,
+        Rank: Number.isFinite(team.Rank) ? team.Rank : null,
+        Club: team.Club || null,
+        Country: team.Country || null,
+        Points: Number.isFinite(points) ? points : null,
+        Elo: Number.isFinite(points) ? points : null,
+        _match_confidence: match.confidence,
+        _match_method: match.method || null,
+        _excluded_from_matching: false,
+      });
     }
-    const team = match.team;
-    const points = Number.isFinite(team.Points)
-      ? team.Points
-      : Number.isFinite(team.Elo)
-        ? team.Elo
-        : null;
-    return {
-      Name: name,
-      Rank: Number.isFinite(team.Rank) ? team.Rank : null,
-      Club: team.Club || null,
-      Country: team.Country || null,
-      Points: Number.isFinite(points) ? points : null,
-      Elo: Number.isFinite(points) ? points : null,
-      _match_confidence: match.confidence,
-      _match_method: match.method || null,
-      _excluded_from_matching: false,
-    };
-  });
+  }
+  return results;
 }
 
 function buildNationalEloCandidateIndex(nationalEloTeams) {
@@ -12677,7 +12863,7 @@ function findBestNationalEloMatch(teamName, nationalEloTeams, index = null, opti
   };
 }
 
-function mapTeamsToNationalElo(matches, nationalEloTeams, leagueFilter = null, options = {}) {
+async function mapTeamsToNationalElo(matches, nationalEloTeams, leagueFilter = null, options = {}) {
   const names = uniqueMatchTeamNames(matches, leagueFilter);
   const normalizedNationalTeams = normalizeNationalEloTeamsPayload(nationalEloTeams);
   const index = buildNationalEloCandidateIndex(normalizedNationalTeams);
@@ -12685,14 +12871,24 @@ function mapTeamsToNationalElo(matches, nationalEloTeams, leagueFilter = null, o
     options.minConfidence,
     NATIONAL_ELO_MATCH_MIN_CONFIDENCE
   );
-
-  return names.map((name) => {
-    const match = findBestNationalEloMatch(name, normalizedNationalTeams, index, {
-      minConfidence,
-    });
+  const memoKey = options.memoKey || null;
+  const results = [];
+  let lastYieldMs = Date.now();
+  for (let i = 0; i < names.length; i++) {
+    if (Date.now() - lastYieldMs >= MATCH_BUILD_YIELD_INTERVAL_MS) {
+      await new Promise((resolve) => setImmediate(resolve));
+      lastYieldMs = Date.now();
+    }
+    const name = names[i];
+    const fullMemoKey = memoKey ? `${memoKey}|${name}` : null;
+    let match = fullMemoKey ? getMatchMemo(nationalEloMatchMemoCache, fullMemoKey) : undefined;
+    if (match === undefined) {
+      match = findBestNationalEloMatch(name, normalizedNationalTeams, index, { minConfidence });
+      if (fullMemoKey) setMatchMemo(nationalEloMatchMemoCache, fullMemoKey, match);
+    }
     const excludedFromMatching = match && match.method === "excluded_non_national_team";
     if (!match || !match.team || !match.accepted) {
-      return {
+      results.push({
         Name: name,
         Rank: null,
         Team: null,
@@ -12705,28 +12901,30 @@ function mapTeamsToNationalElo(matches, nationalEloTeams, leagueFilter = null, o
         _closest_club: match && match.team ? match.team.Team : null,
         _match_method: match && match.method ? match.method : null,
         _excluded_from_matching: Boolean(excludedFromMatching),
-      };
+      });
+    } else {
+      const team = match.team;
+      const points = Number.isFinite(team.Points)
+        ? team.Points
+        : Number.isFinite(team.Elo)
+          ? team.Elo
+          : null;
+      results.push({
+        Name: name,
+        Rank: Number.isFinite(team.Rank) ? team.Rank : null,
+        Team: team.Team || team.Name || null,
+        Country: team.Country || team.Team || team.Name || null,
+        Elo: Number.isFinite(points) ? points : null,
+        Points: Number.isFinite(points) ? points : null,
+        TeamCode: team.TeamCode || null,
+        Aliases: Array.isArray(team.Aliases) ? team.Aliases : [],
+        _match_confidence: match.confidence,
+        _match_method: match.method || null,
+        _excluded_from_matching: false,
+      });
     }
-    const team = match.team;
-    const points = Number.isFinite(team.Points)
-      ? team.Points
-      : Number.isFinite(team.Elo)
-        ? team.Elo
-        : null;
-    return {
-      Name: name,
-      Rank: Number.isFinite(team.Rank) ? team.Rank : null,
-      Team: team.Team || team.Name || null,
-      Country: team.Country || team.Team || team.Name || null,
-      Elo: Number.isFinite(points) ? points : null,
-      Points: Number.isFinite(points) ? points : null,
-      TeamCode: team.TeamCode || null,
-      Aliases: Array.isArray(team.Aliases) ? team.Aliases : [],
-      _match_confidence: match.confidence,
-      _match_method: match.method || null,
-      _excluded_from_matching: false,
-    };
-  });
+  }
+  return results;
 }
 
 const CLUB_ELO_COUNTRY_CODE_TO_NAME = Object.freeze({
@@ -12837,26 +13035,30 @@ function isRankedTeamRow(row) {
   );
 }
 
-function mapTeamsForRankingSource(
+async function mapTeamsForRankingSource(
   matches,
   clubEloTeams,
   footballDatabaseTeams,
   leagueFilter,
-  source
+  source,
+  memoKeys = {}
 ) {
   if (source === TEAM_RANKING_SOURCE_FOOTBALLDATABASE) {
     return mapTeamsToFootballDatabase(matches, footballDatabaseTeams, leagueFilter, {
       minConfidence: FOOTBALL_DATABASE_MATCH_MIN_CONFIDENCE,
+      memoKey: memoKeys.footballDatabase || null,
     });
   }
   return mapTeamsToClubElo(matches, clubEloTeams, leagueFilter, {
     minConfidence: CLUB_ELO_MATCH_MIN_CONFIDENCE,
+    memoKey: memoKeys.clubElo || null,
   });
 }
 
-function mapNationalTeamsForRankingSource(matches, nationalEloTeams, leagueFilter) {
+async function mapNationalTeamsForRankingSource(matches, nationalEloTeams, leagueFilter, memoKeys = {}) {
   return mapTeamsToNationalElo(matches, nationalEloTeams, leagueFilter, {
     minConfidence: NATIONAL_ELO_MATCH_MIN_CONFIDENCE,
+    memoKey: memoKeys.nationalElo || null,
   });
 }
 
@@ -13144,18 +13346,19 @@ function recordStageTiming(timings, key, startedAtMs) {
   timings[key] = Date.now() - startedAtMs;
 }
 
-function buildRankedTeamsForSource(
+async function buildRankedTeamsForSource(
   matches,
   clubEloTeams,
   footballDatabaseTeams,
   nationalEloTeams,
   source,
   leagueFilter = null,
-  timings = null
+  timings = null,
+  memoKeys = {}
 ) {
   const nationalStartedAtMs = Date.now();
   const nationalRows = toUnifiedTeamRows(
-    mapNationalTeamsForRankingSource(matches, nationalEloTeams, leagueFilter),
+    await mapNationalTeamsForRankingSource(matches, nationalEloTeams, leagueFilter, memoKeys),
     TEAM_RANKING_SOURCE_NATIONAL_ELO,
     TEAM_TYPE_NATIONAL
   ).filter((row) => isLikelyNationalTeamName(row.Name));
@@ -13172,12 +13375,13 @@ function buildRankedTeamsForSource(
   if (source === TEAM_RANKING_SOURCE_CLUBELO) {
     const clubStartedAtMs = Date.now();
     const clubRows = toUnifiedTeamRows(
-      mapTeamsForRankingSource(
+      await mapTeamsForRankingSource(
         matches,
         clubEloTeams,
         footballDatabaseTeams,
         leagueFilter,
-        TEAM_RANKING_SOURCE_CLUBELO
+        TEAM_RANKING_SOURCE_CLUBELO,
+        memoKeys
       ),
       TEAM_RANKING_SOURCE_CLUBELO,
       TEAM_TYPE_CLUB
@@ -13196,12 +13400,13 @@ function buildRankedTeamsForSource(
   if (source === TEAM_RANKING_SOURCE_FOOTBALLDATABASE) {
     const footballDatabaseStartedAtMs = Date.now();
     const footballDatabaseRows = toUnifiedTeamRows(
-      mapTeamsForRankingSource(
+      await mapTeamsForRankingSource(
         matches,
         clubEloTeams,
         footballDatabaseTeams,
         leagueFilter,
-        TEAM_RANKING_SOURCE_FOOTBALLDATABASE
+        TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
+        memoKeys
       ),
       TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
       TEAM_TYPE_CLUB
@@ -13219,12 +13424,13 @@ function buildRankedTeamsForSource(
   }
   const clubStartedAtMs = Date.now();
   const clubRows = toUnifiedTeamRows(
-    mapTeamsForRankingSource(
+    await mapTeamsForRankingSource(
       matches,
       clubEloTeams,
       footballDatabaseTeams,
       leagueFilter,
-      TEAM_RANKING_SOURCE_CLUBELO
+      TEAM_RANKING_SOURCE_CLUBELO,
+      memoKeys
     ),
     TEAM_RANKING_SOURCE_CLUBELO,
     TEAM_TYPE_CLUB
@@ -13232,12 +13438,13 @@ function buildRankedTeamsForSource(
   recordStageTiming(timings, "club_elo_rows_ms", clubStartedAtMs);
   const footballDatabaseStartedAtMs = Date.now();
   const footballDatabaseRows = toUnifiedTeamRows(
-    mapTeamsForRankingSource(
+    await mapTeamsForRankingSource(
       matches,
       clubEloTeams,
       footballDatabaseTeams,
       leagueFilter,
-      TEAM_RANKING_SOURCE_FOOTBALLDATABASE
+      TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
+      memoKeys
     ),
     TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
     TEAM_TYPE_CLUB
@@ -13274,8 +13481,57 @@ function toTeamsApiTeamPayload(rows) {
 const TEAM_RANKINGS_RESPONSE_CACHE_LIMIT = 32;
 const teamRankingsResponseCache = new Map();
 
+// Per-name fuzzy-match memo caches, keyed by `${datasetSig}|${teamName}`.
+// Avoids re-running Levenshtein matching for names that haven't changed since
+// the last build (the common case when only a few new fixtures roll in).
+const MATCH_MEMO_MAX_SIZE = 100_000;
+const clubEloMatchMemoCache = new Map();
+const footballDatabaseMatchMemoCache = new Map();
+const nationalEloMatchMemoCache = new Map();
+
+function getMatchMemo(cache, key) {
+  return cache.get(key);
+}
+
+function setMatchMemo(cache, key, value) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  if (cache.size > MATCH_MEMO_MAX_SIZE) {
+    cache.delete(cache.keys().next().value);
+  }
+}
+
+// Stale-while-revalidate: holds the last successfully built response keyed by
+// JSON.stringify({source, type, league}).  Returned immediately on cache miss
+// while a fresh build runs in the background.
+const teamRankingsStaleCache = new Map();
+
+// Coalesces concurrent cache misses onto a single in-flight build promise,
+// keyed by baseCacheKey so only one rebuild runs per unique dataset version.
+const teamRankingsInFlightBuilds = new Map();
+
+function teamRankingsPersistedDatasetName(source) {
+  const safeSource = String(source || TEAM_RANKING_DEFAULT_SOURCE).replace(/[^a-z0-9_]/gi, "_");
+  return `teams_rankings_response_${safeSource}`;
+}
+
+function buildTeamRankingsMemoKeys(datasets) {
+  const manualMtime = clubEloManualMappingsMtimeMs || 0;
+  const sig = (dataset) => {
+    const updatedAt = dataset && dataset.updated_at ? dataset.updated_at : "unknown";
+    const count = Array.isArray(dataset && dataset.items) ? dataset.items.length : 0;
+    return `${updatedAt}|${count}|m${manualMtime}`;
+  };
+  return {
+    clubElo: sig(datasets.clubEloDataset),
+    footballDatabase: sig(datasets.footballDatabaseDataset),
+    nationalElo: sig(datasets.nationalEloDataset),
+  };
+}
+
 function clearTeamRankingsResponseCache() {
   teamRankingsResponseCache.clear();
+  teamRankingsInFlightBuilds.clear();
 }
 
 function setTeamRankingsResponseCacheEntry(key, value) {
@@ -13402,7 +13658,7 @@ async function resolveTeamRankingDatasetsForResponse() {
   return Object.fromEntries(resolvedEntries);
 }
 
-function buildTeamRankingsResponsePayload(options = {}) {
+async function buildTeamRankingsResponsePayload(options = {}) {
   const timings = options.timings && typeof options.timings === "object" ? options.timings : null;
   const mergedDataset = options.mergedDataset || { items: [], updated_at: null, source: "unknown" };
   const clubEloDataset = options.clubEloDataset || { items: [], updated_at: null, source: "unknown" };
@@ -13410,15 +13666,17 @@ function buildTeamRankingsResponsePayload(options = {}) {
     options.footballDatabaseDataset || { items: [], updated_at: null, source: "unknown" };
   const nationalEloDataset =
     options.nationalEloDataset || { items: [], updated_at: null, source: "unknown" };
+  const memoKeys = options.memoKeys || {};
   const rankBuildStartedAtMs = Date.now();
-  const rankedRows = buildRankedTeamsForSource(
+  const rankedRows = await buildRankedTeamsForSource(
     mergedDataset.items,
     clubEloDataset.items,
     footballDatabaseDataset.items,
     nationalEloDataset.items,
     options.source || TEAM_RANKING_DEFAULT_SOURCE,
     options.leagueFilter || null,
-    timings
+    timings,
+    memoKeys
   );
   recordStageTiming(timings, "rank_build_ms", rankBuildStartedAtMs);
   const typeFilterStartedAtMs = Date.now();
@@ -13464,82 +13722,125 @@ async function getCachedTeamRankingsResponse(options = {}) {
   const startedAtMs = Date.now();
   const datasets = await resolveTeamRankingDatasetsForResponse();
   const datasetResolveMs = Date.now() - startedAtMs;
-  const cacheKey = buildTeamRankingsResponseCacheKey({
-    ...options,
-    ...datasets,
-  });
+  const cacheKey = buildTeamRankingsResponseCacheKey({ ...options, ...datasets });
+  const baseCacheKey = buildTeamRankingsBaseCacheKey({ ...options, ...datasets });
+
+  // Exact hit — freshest cached response for these exact datasets + type + league
   const cached = teamRankingsResponseCache.get(cacheKey);
   if (cached) {
-    return {
-      ...cached,
-      cacheHit: true,
-      baseCacheHit: true,
-      datasetResolveMs,
-      buildMs: 0,
-      totalMs: Date.now() - startedAtMs,
-    };
+    return { ...cached, cacheHit: true, baseCacheHit: true, datasetResolveMs, buildMs: 0, totalMs: Date.now() - startedAtMs };
   }
 
-  const baseCacheKey = buildTeamRankingsBaseCacheKey({
-    ...options,
-    ...datasets,
-  });
+  // Base hit — derive the type-filtered view from the already-built base response
   const cachedBaseResponse = teamRankingsResponseCache.get(baseCacheKey);
   if (cachedBaseResponse) {
     const buildTimings = {};
-    const response = deriveTeamRankingsResponseForType(
-      cachedBaseResponse,
-      options.type || null,
-      buildTimings
-    );
+    const response = deriveTeamRankingsResponseForType(cachedBaseResponse, options.type || null, buildTimings);
     setTeamRankingsResponseCacheEntry(cacheKey, response);
-    return {
-      ...response,
-      cacheHit: true,
-      baseCacheHit: true,
-      datasetResolveMs,
-      buildMs: 0,
-      buildTimings,
-      totalMs: Date.now() - startedAtMs,
-    };
+    return { ...response, cacheHit: true, baseCacheHit: true, datasetResolveMs, buildMs: 0, buildTimings, totalMs: Date.now() - startedAtMs };
   }
 
-  const buildStartedAtMs = Date.now();
-  const buildTimings = {};
-  const baseResponse = buildTeamRankingsResponsePayload({
-    ...options,
-    ...datasets,
-    type: null,
-    timings: buildTimings,
+  // Stale-while-revalidate: return last known good response immediately while a
+  // fresh build runs in the background.  forceRebuild bypasses stale (used by
+  // scheduled warm so it always ensures the cache is current).
+  const staleKey = JSON.stringify({
+    source: options.source || TEAM_RANKING_DEFAULT_SOURCE,
+    type: options.type || null,
+    league: options.leagueFilter || null,
   });
-  const response = deriveTeamRankingsResponseForType(
-    baseResponse,
-    options.type || null,
-    buildTimings
-  );
-  const buildMs = Date.now() - buildStartedAtMs;
-  setTeamRankingsResponseCacheEntry(baseCacheKey, baseResponse);
-  setTeamRankingsResponseCacheEntry(cacheKey, response);
-  if (
-    Number.isFinite(DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) &&
-    DEBUG_SLOW_API_REQUEST_THRESHOLD_MS > 0 &&
-    buildMs >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS
-  ) {
-    logPerformanceDiagnostic(
-      `[TeamsCache][miss] build_ms=${buildMs} cache_size=${teamRankingsResponseCache.size} ` +
-      `source=${options.source || TEAM_RANKING_DEFAULT_SOURCE} type=${options.type || "all"} league=${options.leagueFilter || "all"} ` +
-      `timings=${JSON.stringify(buildTimings)} key_summary=${JSON.stringify(summarizeTeamRankingsResponseCacheKey(cacheKey))}`
-    );
+  const staleResponse = options.forceRebuild ? null : teamRankingsStaleCache.get(staleKey);
+
+  // Start a background build if none is already in flight for this base key.
+  // All concurrent misses coalesce onto the same Promise.
+  if (!teamRankingsInFlightBuilds.has(baseCacheKey)) {
+    const memoKeys = buildTeamRankingsMemoKeys(datasets);
+    const buildPromise = (async () => {
+      try {
+        const buildTimings = {};
+        const buildStartedAtMs = Date.now();
+        const builtBaseResponse = await buildTeamRankingsResponsePayload({
+          ...options,
+          ...datasets,
+          type: null,
+          timings: buildTimings,
+          memoKeys,
+        });
+        const buildMs = Date.now() - buildStartedAtMs;
+        setTeamRankingsResponseCacheEntry(baseCacheKey, builtBaseResponse);
+        const baseStaleKey = JSON.stringify({
+          source: options.source || TEAM_RANKING_DEFAULT_SOURCE,
+          type: null,
+          league: options.leagueFilter || null,
+        });
+        teamRankingsStaleCache.set(baseStaleKey, builtBaseResponse);
+        if (!options.leagueFilter) {
+          // Persist so a freshly restarted process can serve immediately from
+          // Redis instead of making users wait ~30s for the first cold build.
+          void persistOperationalDatasetSafe(
+            teamRankingsPersistedDatasetName(options.source),
+            builtBaseResponse,
+            {
+              source: "teams_rankings_cache",
+              updated_at: builtBaseResponse.updatedAt || new Date().toISOString(),
+            }
+          );
+        }
+        if (options.type) {
+          const typedResponse = deriveTeamRankingsResponseForType(builtBaseResponse, options.type, {});
+          setTeamRankingsResponseCacheEntry(cacheKey, typedResponse);
+          teamRankingsStaleCache.set(staleKey, typedResponse);
+        } else {
+          teamRankingsStaleCache.set(staleKey, builtBaseResponse);
+        }
+        if (Number.isFinite(DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) && DEBUG_SLOW_API_REQUEST_THRESHOLD_MS > 0 && buildMs >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) {
+          logPerformanceDiagnostic(
+            `[TeamsCache][miss] build_ms=${buildMs} cache_size=${teamRankingsResponseCache.size} ` +
+            `source=${options.source || TEAM_RANKING_DEFAULT_SOURCE} type=${options.type || "all"} league=${options.leagueFilter || "all"} ` +
+            `timings=${JSON.stringify(buildTimings)} key_summary=${JSON.stringify(summarizeTeamRankingsResponseCacheKey(cacheKey))}`
+          );
+        }
+        return { baseResponse: builtBaseResponse, buildTimings, buildMs };
+      } finally {
+        teamRankingsInFlightBuilds.delete(baseCacheKey);
+      }
+    })();
+    teamRankingsInFlightBuilds.set(baseCacheKey, buildPromise);
   }
-  return {
-    ...response,
-    cacheHit: false,
-    baseCacheHit: false,
-    datasetResolveMs,
-    buildMs,
-    buildTimings,
-    totalMs: Date.now() - startedAtMs,
-  };
+
+  // Have stale data: return it immediately and let the background build finish.
+  if (staleResponse) {
+    return { ...staleResponse, cacheHit: false, baseCacheHit: false, staleHit: true, datasetResolveMs, buildMs: 0, buildTimings: {}, totalMs: Date.now() - startedAtMs };
+  }
+
+  // Cold start: no in-memory stale data, but a previous process may have
+  // persisted its last build to Redis — serve that while the build runs.
+  if (!options.forceRebuild && !options.leagueFilter) {
+    const persisted = await loadOperationalDatasetSafe(
+      teamRankingsPersistedDatasetName(options.source)
+    );
+    const persistedBase = persisted && persisted.payload ? persisted.payload : null;
+    if (persistedBase && Array.isArray(persistedBase.payload) && persistedBase.payload.length > 0) {
+      const baseStaleKey = JSON.stringify({
+        source: options.source || TEAM_RANKING_DEFAULT_SOURCE,
+        type: null,
+        league: null,
+      });
+      if (!teamRankingsStaleCache.has(baseStaleKey)) {
+        teamRankingsStaleCache.set(baseStaleKey, persistedBase);
+      }
+      const response = deriveTeamRankingsResponseForType(persistedBase, options.type || null, {});
+      if (!teamRankingsStaleCache.has(staleKey)) {
+        teamRankingsStaleCache.set(staleKey, response);
+      }
+      return { ...response, cacheHit: false, baseCacheHit: false, staleHit: true, datasetResolveMs, buildMs: 0, buildTimings: {}, totalMs: Date.now() - startedAtMs };
+    }
+  }
+
+  // No stale data anywhere (first ever run or forced rebuild): await the build.
+  const { baseResponse: builtBase, buildTimings, buildMs } = await teamRankingsInFlightBuilds.get(baseCacheKey);
+  const response = deriveTeamRankingsResponseForType(builtBase, options.type || null, buildTimings);
+  setTeamRankingsResponseCacheEntry(cacheKey, response);
+  return { ...response, cacheHit: false, baseCacheHit: false, staleHit: false, datasetResolveMs, buildMs, buildTimings, totalMs: Date.now() - startedAtMs };
 }
 
 async function warmDefaultTeamRankingsResponseCache(trigger = "background") {
@@ -13548,6 +13849,7 @@ async function warmDefaultTeamRankingsResponseCache(trigger = "background") {
       source: TEAM_RANKING_DEFAULT_SOURCE,
       type: TEAM_TYPE_CLUB,
       leagueFilter: null,
+      forceRebuild: true,
     });
   } catch (error) {
     console.warn(
@@ -13847,7 +14149,7 @@ function buildChannelList(matches) {
   matches.forEach((match) => {
     if (!match || !Array.isArray(match.tv_channels)) return;
     match.tv_channels.forEach((channel) => {
-      const trimmed = String(channel || "").trim();
+      const trimmed = channelName(channel);
       if (trimmed) set.add(trimmed);
     });
   });
@@ -16522,7 +16824,56 @@ function canonicalMatchDetailsRecordsToListPayloads(recordsById, options = {}) {
 
 function canonicalMatchDetailsRecordsToPublicListPayloads(recordsById, options = {}) {
   return canonicalMatchDetailsRecordsToListPayloads(recordsById, options).filter((payload) =>
-    isAllowedCompetition(payload && payload.league)
+    isAllowedCompetitionMatch(payload)
+  );
+}
+
+// Async variant of canonicalMatchDetailsRecordsToListPayloads that yields to
+// the event loop periodically so background match-list rebuilds (~6s of CPU
+// over ~8k records) don't stall user requests.
+async function canonicalMatchDetailsRecordsToPublicListPayloadsAsync(recordsById, options = {}) {
+  const lookup =
+    recordsById instanceof Map
+      ? recordsById
+      : recordsById && typeof recordsById === "object"
+        ? recordsById
+        : {};
+  const values = lookup instanceof Map ? Array.from(lookup.values()) : Object.values(lookup);
+  let lastYieldMs = Date.now();
+  const maybeYield = async () => {
+    if (Date.now() - lastYieldMs >= MATCH_BUILD_YIELD_INTERVAL_MS) {
+      await new Promise((resolve) => setImmediate(resolve));
+      lastYieldMs = Date.now();
+    }
+  };
+
+  const primaryPayloads = [];
+  for (const payload of values) {
+    await maybeYield();
+    const listPayload = canonicalMatchDetailsToListPayload(payload, { includeInternalMetadata: true });
+    if (listPayload) primaryPayloads.push(listPayload);
+  }
+
+  const fallbackMatches = Array.isArray(options.fallbackMatches)
+    ? options.fallbackMatches
+    : [];
+  let combined = primaryPayloads;
+  if (fallbackMatches.length > 0) {
+    const matchDetailsIdentityIndex = buildMatchDetailsIdentityIndex(lookup);
+    const supplementalPayloads = [];
+    for (const match of fallbackMatches) {
+      await maybeYield();
+      const listPayload = toMatchListPayload(match, {
+        matchDetailsLookup: lookup,
+        matchDetailsIdentityIndex,
+      });
+      if (listPayload) supplementalPayloads.push(listPayload);
+    }
+    combined = [...primaryPayloads, ...supplementalPayloads];
+  }
+
+  return dedupeMatchListPayloads(combined).filter((payload) =>
+    isAllowedCompetitionMatch(payload)
   );
 }
 
@@ -16633,6 +16984,31 @@ function getCachedMatchQueryPayload(cacheKey) {
   return cached.payload;
 }
 
+// Most recent successfully built public match-list payload, kept outside the
+// keyed/TTL cache so it survives cache clears and key changes. Used as the
+// stale-while-revalidate fallback.
+let matchListLastKnownPublicPayload = null;
+// Coalesces concurrent rebuilds: cacheKey -> Promise
+const matchListInFlightRebuilds = new Map();
+
+function buildMatchListFallbackMatches(options = {}) {
+  return [
+    ...(Array.isArray(options.mergedDataset && options.mergedDataset.items)
+      ? options.mergedDataset.items
+      : []),
+    ...(Array.isArray(options.bbcRangeDataset && options.bbcRangeDataset.items)
+      ? options.bbcRangeDataset.items.map((match) => ({ ...match, has_tsdb_source: true }))
+      : []),
+  ];
+}
+
+function matchListLookupFromOptions(options = {}) {
+  return options.matchDetailsLookup instanceof Map ||
+    (options.matchDetailsLookup && typeof options.matchDetailsLookup === "object")
+    ? options.matchDetailsLookup
+    : {};
+}
+
 function getCachedCanonicalPublicMatchListPayloads(options = {}) {
   const cacheKey = buildMatchListResponseCacheKey({
     ...options,
@@ -16648,20 +17024,47 @@ function getCachedCanonicalPublicMatchListPayloads(options = {}) {
     return cached.payload;
   }
 
-  const fallbackMatches = [
-    ...(Array.isArray(options.mergedDataset && options.mergedDataset.items)
-      ? options.mergedDataset.items
-      : []),
-    ...(Array.isArray(options.bbcRangeDataset && options.bbcRangeDataset.items)
-      ? options.bbcRangeDataset.items.map((match) => ({ ...match, has_tsdb_source: true }))
-      : []),
-  ];
+  // Stale-while-revalidate: prefer the expired entry for this exact key, then
+  // the most recent build for any key. The ~6s rebuild runs in the background
+  // with event-loop yields instead of blocking the requesting user.
+  const stalePayload =
+    cached && Array.isArray(cached.payload) ? cached.payload : matchListLastKnownPublicPayload;
+
+  if (stalePayload) {
+    if (!matchListInFlightRebuilds.has(cacheKey)) {
+      const rebuildPromise = (async () => {
+        try {
+          const payload = await canonicalMatchDetailsRecordsToPublicListPayloadsAsync(
+            matchListLookupFromOptions(options),
+            {
+              fallbackMatches: buildMatchListFallbackMatches(options),
+              nowMs: Date.now(),
+            }
+          );
+          setMatchListResponseCacheEntry(cacheKey, {
+            createdAtMs: Date.now(),
+            payload,
+          });
+          matchListLastKnownPublicPayload = payload;
+          return payload;
+        } finally {
+          matchListInFlightRebuilds.delete(cacheKey);
+        }
+      })();
+      matchListInFlightRebuilds.set(cacheKey, rebuildPromise);
+      rebuildPromise.catch((error) => {
+        console.warn("[MatchList] Background rebuild failed:", error.message || error);
+      });
+    }
+    return stalePayload;
+  }
+
+  // True cold start (no payload ever built in this process): build
+  // synchronously — one-time cost, normally absorbed by the startup warm.
   const payload = canonicalMatchDetailsRecordsToPublicListPayloads(
-    options.matchDetailsLookup instanceof Map || (options.matchDetailsLookup && typeof options.matchDetailsLookup === "object")
-      ? options.matchDetailsLookup
-      : {},
+    matchListLookupFromOptions(options),
     {
-      fallbackMatches,
+      fallbackMatches: buildMatchListFallbackMatches(options),
       nowMs,
     }
   );
@@ -16669,6 +17072,7 @@ function getCachedCanonicalPublicMatchListPayloads(options = {}) {
     createdAtMs: nowMs,
     payload,
   });
+  matchListLastKnownPublicPayload = payload;
   return payload;
 }
 
@@ -18533,6 +18937,129 @@ async function updateTsdbScheduleMatches(options = {}) {
   }
 }
 
+async function updateTsdbTvListings(options = {}) {
+  if (tsdbTvUpdating) return;
+  tsdbTvUpdating = true;
+  const startedAtMs = Date.now();
+  let success = false;
+  let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_TV, {
+    trigger,
+    interval_ms: TSDB_TV_INTERVAL_MS,
+  });
+  try {
+    const { byEvent, upsertArray } = await fetchTsdbTvListingsFull({
+      initiator: "scraper",
+      trigger,
+    });
+    cachedTvListingsByEvent = byEvent;
+    recordsFetched = upsertArray.length;
+    tsdbTvLastUpdated = new Date().toISOString();
+    setSourceCacheSize(SOURCE_TSDB_TV, byEvent.size);
+
+    if (upsertArray.length > 0) {
+      await upsertTvListings(upsertArray);
+    }
+
+    // Prune listings older than retention window.
+    const cutoff = new Date(Date.now() - TSDB_TV_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    await purgeStaleTvListings(cutoffStr);
+
+    // Rebuild merged matches so fixtures immediately get their TV channels.
+    await rebuildMergedMatchesCache(SOURCE_TSDB_TV);
+    invalidateCacheDomains(["matches"], {
+      updated_at: tsdbTvLastUpdated,
+      reason: "tv_listings_refresh",
+      source: SOURCE_TSDB_TV,
+    });
+
+    success = true;
+    logPollSuccess("tsdb_tv_listings", {
+      source: SOURCE_TSDB_TV,
+      trigger,
+      events: byEvent.size,
+      updated_at: tsdbTvLastUpdated,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_TV, {
+      trigger,
+      interval_ms: TSDB_TV_INTERVAL_MS,
+      events: byEvent.size,
+      updated_at: tsdbTvLastUpdated,
+    });
+  } catch (err) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_TV, err, {
+      trigger,
+      interval_ms: TSDB_TV_INTERVAL_MS,
+    });
+    console.warn("Failed to update TSDB TV listings:", err.message || err);
+  } finally {
+    trackSourceUpdateMetrics({
+      source: SOURCE_TSDB_TV,
+      startedAtMs,
+      success,
+      recordsFetched,
+    });
+    tsdbTvUpdating = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// TSDB league catalogue — fetched once per day at midnight London time.
+// Stores Soccer leagues as { _id: idLeague, name, sport } in the "leagues"
+// collection for use by future standings / league-table features.
+// ---------------------------------------------------------------------------
+
+let tsdbLeaguesUpdating = false;
+let tsdbLeaguesDailyRefreshTimer = null;
+let tsdbLeaguesNextDailyRefreshAt = null;
+
+async function updateTsdbLeagues(options = {}) {
+  if (tsdbLeaguesUpdating) return;
+  tsdbLeaguesUpdating = true;
+  const startedAtMs = Date.now();
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  try {
+    const leagues = await fetchSoccerLeagues({ trigger });
+    if (leagues.length > 0) {
+      await upsertLeagues(leagues);
+    }
+    console.info(
+      `[Leagues] Upserted ${leagues.length} soccer leagues trigger=${trigger} duration_ms=${Date.now() - startedAtMs}`
+    );
+  } catch (err) {
+    console.warn("[Leagues] Failed to update league catalogue:", err.message || err);
+  } finally {
+    tsdbLeaguesUpdating = false;
+  }
+}
+
+function scheduleLeaguesDailyRefresh() {
+  if (tsdbLeaguesDailyRefreshTimer) {
+    cancelRuntimeTimeout(tsdbLeaguesDailyRefreshTimer);
+    tsdbLeaguesDailyRefreshTimer = null;
+  }
+
+  const delayMs = millisecondsUntilNextLondonTime(0, 0);
+  const nextAt = new Date(Date.now() + delayMs);
+  tsdbLeaguesNextDailyRefreshAt = nextAt.toISOString();
+  const londonTarget = londonDateTimeFormatter.format(nextAt);
+  console.info(
+    `[Leagues] Daily refresh scheduled next_london="${londonTarget}" next_iso=${tsdbLeaguesNextDailyRefreshAt}`
+  );
+
+  tsdbLeaguesDailyRefreshTimer = registerRuntimeTimeout(async () => {
+    tsdbLeaguesDailyRefreshTimer = null;
+    try {
+      await updateTsdbLeagues({ trigger: "daily_midnight" });
+    } finally {
+      scheduleLeaguesDailyRefresh();
+    }
+  }, delayMs);
+}
+
 async function updateTsdbPremierLeagueTeams(options = {}) {
   if (eplUpdating) return;
   eplUpdating = true;
@@ -18619,71 +19146,64 @@ async function updateLeagueTables(options = {}) {
   let success = false;
   let recordsFetched = null;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  recordRuntimeComponentStart(COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES, {
-    trigger,
-    interval_ms: LEAGUE_TABLES_INTERVAL_MS,
-    urls: LEAGUE_TABLE_SOURCES.map((source) => source.url),
-  });
+  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_LEAGUE_TABLES, { trigger });
 
   try {
-    const { tables, errors } = await fetchLeagueTables(LEAGUE_TABLE_SOURCES, {
-      initiator: "scraper",
-      reason: "bbc_league_tables_poll",
-      trigger,
-    });
-
-    if (Array.isArray(errors) && errors.length > 0) {
-      errors.forEach((error) => {
-        console.warn(
-          `[LeagueTables] Failed ${error.league_id || "unknown"}: ${error.message || String(error)}`
-        );
-      });
+    // Fetch tables sequentially to stay well within TSDB rate limits.
+    // Most leagues (cups, friendlies, knock-outs) return null and are skipped.
+    const fetched = [];
+    const failures = [];
+    for (const entry of TSDB_LEAGUE_ALLOWLIST) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const table = await fetchTsdbLeagueTable(entry.id, entry.name, {
+          initiator: "scraper",
+          trigger,
+        });
+        if (table) fetched.push(table);
+      } catch (fetchErr) {
+        failures.push({ id: entry.id, message: fetchErr.message || String(fetchErr) });
+      }
     }
 
-    if (!Array.isArray(tables) || tables.length === 0) {
-      recordRuntimeComponentFailure(
-        COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES,
-        new Error("League tables update returned no tables"),
-        {
-          trigger,
-          interval_ms: LEAGUE_TABLES_INTERVAL_MS,
-        }
+    if (failures.length > 0) {
+      console.warn(
+        `[LeagueTables] ${failures.length} fetch failure(s):`,
+        failures.map((f) => `${f.id}: ${f.message}`).join("; ")
       );
-      console.warn("League tables update returned no tables");
+    }
+
+    if (fetched.length === 0) {
+      recordRuntimeComponentFailure(
+        COMPONENT_SOURCE_TSDB_LEAGUE_TABLES,
+        new Error("League tables update returned no tables"),
+        { trigger }
+      );
+      console.warn("[LeagueTables] No tables returned from TSDB");
       return;
     }
 
-    const previousTables = Array.isArray(cachedLeagueTables) ? cachedLeagueTables : [];
-    const mergedById = new Map();
-    previousTables.forEach((table) => {
-      const id = normalizeLeagueTableId(table && table.league_id);
-      if (!id) return;
-      mergedById.set(id, table);
-    });
-    tables.forEach((table) => {
-      const id = normalizeLeagueTableId(table && table.league_id);
-      if (!id) return;
-      mergedById.set(id, table);
-    });
-    const sortedTables = sortLeagueTablesForResponse(Array.from(mergedById.values()));
+    // Persist to MongoDB league_tables collection
+    try {
+      await upsertTsdbLeagueTables(fetched);
+    } catch (dbErr) {
+      console.warn("[LeagueTables] Failed to upsert to MongoDB:", dbErr.message || dbErr);
+    }
+
+    const sortedTables = sortLeagueTablesForResponse(fetched);
     const nowIso = new Date().toISOString();
-    const updatedAtCandidates = sortedTables
-      .map((league) => (league && league.updated_at ? String(league.updated_at) : ""))
-      .filter(Boolean);
-    const resolvedUpdatedAt = newestIsoTimestamp([...updatedAtCandidates, nowIso]) || nowIso;
 
     cachedLeagueTables = sortedTables;
-    leagueTablesLastUpdated = resolvedUpdatedAt;
+    leagueTablesLastUpdated = nowIso;
     recordsFetched = leagueTableRowsCount(sortedTables);
-    setSourceCacheSize(SOURCE_BBC_LEAGUE_TABLES, recordsFetched);
+    setSourceCacheSize(SOURCE_TSDB_LEAGUE_TABLES, recordsFetched);
 
-    writeLeagueTables(LEAGUE_TABLES_OUTPUT_PATH, sortedTables);
     await persistOperationalDatasetSafe(OP_DATASET_LEAGUE_TABLES, sortedTables, {
       updated_at: leagueTablesLastUpdated,
-      source: SOURCE_BBC_LEAGUE_TABLES,
+      source: SOURCE_TSDB_LEAGUE_TABLES,
     });
 
-    // Keep EPL team filters aligned with the live table feed.
+    // Keep EPL team filter aligned with the live table.
     const premierLeagueTeams = extractPremierLeagueTeamsFromTables(sortedTables);
     if (premierLeagueTeams.length > 0) {
       cachedPremierLeagueTeams = premierLeagueTeams;
@@ -18692,49 +19212,75 @@ async function updateLeagueTables(options = {}) {
       await persistOperationalDatasetSafe(
         OP_DATASET_PREMIER_LEAGUE_TEAMS,
         cachedPremierLeagueTeams,
-        {
-          updated_at: eplLastUpdated,
-          source: SOURCE_BBC_LEAGUE_TABLES,
-        }
+        { updated_at: eplLastUpdated, source: SOURCE_TSDB_LEAGUE_TABLES }
       );
     }
+
     invalidateCacheDomains(["tables", "teams"], {
       updated_at: leagueTablesLastUpdated,
       reason: "league_tables_refresh",
-      source: SOURCE_BBC_LEAGUE_TABLES,
+      source: SOURCE_TSDB_LEAGUE_TABLES,
     });
 
     success = true;
-    logPollSuccess("bbc_league_tables", {
-      source: SOURCE_BBC_LEAGUE_TABLES,
+    logPollSuccess("tsdb_league_tables", {
+      source: SOURCE_TSDB_LEAGUE_TABLES,
       trigger,
       leagues: sortedTables.length,
       rows: recordsFetched,
+      failures: failures.length,
       updated_at: leagueTablesLastUpdated,
       duration_ms: Date.now() - startedAtMs,
     });
-    recordRuntimeComponentSuccess(COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES, {
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_LEAGUE_TABLES, {
       trigger,
-      interval_ms: LEAGUE_TABLES_INTERVAL_MS,
       leagues: sortedTables.length,
       rows: recordsFetched,
+      failures: failures.length,
       updated_at: leagueTablesLastUpdated,
-      warnings: Array.isArray(errors) ? errors.length : 0,
     });
   } catch (err) {
-    recordRuntimeComponentFailure(COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES, err, {
-      trigger,
-      interval_ms: LEAGUE_TABLES_INTERVAL_MS,
-    });
-    console.warn("Failed to update league tables:", err.message || err);
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_LEAGUE_TABLES, err, { trigger });
+    console.warn("[LeagueTables] Failed to update league tables:", err.message || err);
   } finally {
     trackSourceUpdateMetrics({
-      source: SOURCE_BBC_LEAGUE_TABLES,
+      source: SOURCE_TSDB_LEAGUE_TABLES,
       startedAtMs,
       success,
       recordsFetched,
     });
     leagueTablesUpdating = false;
+  }
+}
+
+let leagueTablesDailyRefreshTimer = null;
+let leagueTablesNextDailyRefreshAt = null;
+
+function scheduleLeagueTablesDailyRefresh() {
+  if (leagueTablesDailyRefreshTimer) {
+    clearTimeout(leagueTablesDailyRefreshTimer);
+    leagueTablesDailyRefreshTimer = null;
+  }
+
+  const delayMs = millisecondsUntilNextLondonTime(0, 5); // 00:05 London — after leagues refresh
+  const nextAt = new Date(Date.now() + delayMs);
+  leagueTablesNextDailyRefreshAt = nextAt.toISOString();
+  const londonTarget = londonDateTimeFormatter.format(nextAt);
+  console.info(
+    `[LeagueTables] Daily refresh scheduled next_london="${londonTarget}" next_iso=${leagueTablesNextDailyRefreshAt}`
+  );
+
+  leagueTablesDailyRefreshTimer = setTimeout(async () => {
+    leagueTablesDailyRefreshTimer = null;
+    try {
+      await updateLeagueTables({ trigger: "daily_midnight" });
+    } finally {
+      scheduleLeagueTablesDailyRefresh();
+    }
+  }, delayMs);
+
+  if (leagueTablesDailyRefreshTimer && typeof leagueTablesDailyRefreshTimer.unref === "function") {
+    leagueTablesDailyRefreshTimer.unref();
   }
 }
 
@@ -20768,14 +21314,13 @@ async function buildAdminArchitectureOverviewPayload() {
     allow_missing: true,
   });
   const bbcLeagueTablesFeed = buildUpstreamFeedSnapshot({
-    id: COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES,
-    title: "BBC League Tables",
-    runtimeId: COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES,
-    url: LEAGUE_TABLE_SOURCES[0] && LEAGUE_TABLE_SOURCES[0].url,
-    interval_ms: LEAGUE_TABLES_INTERVAL_MS,
+    id: COMPONENT_SOURCE_TSDB_LEAGUE_TABLES,
+    title: "SportsDB League Tables",
+    runtimeId: COMPONENT_SOURCE_TSDB_LEAGUE_TABLES,
     updated_at: leagueTablesLastUpdated,
+    next_refresh_at: leagueTablesNextDailyRefreshAt,
     count: leagueTableRowsCount(cachedLeagueTables),
-    last_success_at: sourceLastSuccessAtIso(SOURCE_BBC_LEAGUE_TABLES),
+    last_success_at: sourceLastSuccessAtIso(SOURCE_TSDB_LEAGUE_TABLES),
     running: leagueTablesUpdating,
   });
   const bbcTablesHealth = combineAdminHealth(bbcPremierFeed, bbcLeagueTablesFeed);
@@ -21076,7 +21621,7 @@ async function buildAdminArchitectureOverviewPayload() {
       tsdb_schedule: bbcRangeFeed,
       tsdb_match_details: bbcDetailsFeed,
       tsdb_premier_teams: bbcPremierFeed,
-      bbc_league_tables: bbcLeagueTablesFeed,
+      tsdb_league_tables: bbcLeagueTablesFeed,
       club_elo: clubEloFeed,
       club_elo_fixtures: clubEloFixturesFeed,
       football_database: footballDatabaseFeed,
@@ -21468,7 +22013,7 @@ async function buildAdminArchitectureComponentDetail(componentId) {
       component,
       detail: {
         description: "Combines the BBC Premier League team-list puller and the multi-league BBC tables puller.",
-        subcomponents: [feedSnapshots.tsdb_premier_teams, feedSnapshots.bbc_league_tables],
+        subcomponents: [feedSnapshots.tsdb_premier_teams, feedSnapshots.tsdb_league_tables],
         data_flow: {
           writes_to: ["operational_memory.league_tables", "operational_redis.league_tables", "operational_redis.premier_league_teams"],
           used_by: ["tables_api", "metadata_api"],
@@ -21479,7 +22024,7 @@ async function buildAdminArchitectureComponentDetail(componentId) {
         ],
         recent_errors: mergeRuntimeDiagnostics([
           COMPONENT_SOURCE_TSDB_PREMIER_TEAMS,
-          COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES,
+          COMPONENT_SOURCE_TSDB_LEAGUE_TABLES,
         ]).recent_errors,
       },
     };
@@ -21576,6 +22121,10 @@ app.get("/admin/audit-matches", (_req, res) => {
 
 app.get("/admin/harness", (_req, res) => {
   res.sendFile(path.join(__dirname, "test_harness_ui.html"));
+});
+
+app.get("/admin/league-tables", (_req, res) => {
+  res.sendFile(path.join(__dirname, "admin_league_tables_ui.html"));
 });
 
 app.get("/admin/fixtures", (_req, res) => {
@@ -22074,9 +22623,10 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     res.set("X-Total-Pages", String(totalPages));
     res.set("X-Has-More", hasMore ? "true" : "false");
     res.set("X-Sort-Order", sortOrder);
+    const pagedWithLeagueId = addLeagueIdToMatchPayloads(paged);
     if (includeMeta) {
       res.json({
-        matches: applyTeamShortNamesToApiValue(paged, teamShortNameLookup),
+        matches: applyTeamShortNamesToApiValue(pagedWithLeagueId, teamShortNameLookup),
         pagination: {
           page,
           page_size: pageSize,
@@ -22090,7 +22640,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       });
       return;
     }
-    res.json(applyTeamShortNamesToApiValue(paged, teamShortNameLookup));
+    res.json(applyTeamShortNamesToApiValue(pagedWithLeagueId, teamShortNameLookup));
   } catch (err) {
     console.warn("Failed to serve /matches from cache:", err.message || err);
     res.status(500).json({ error: "Failed to serve matches from cache" });
@@ -22392,7 +22942,7 @@ app.get(`${API_PREFIX}/teams`, async (req, res) => {
   if (DEBUG_ROUTE_STAGE_LOGGING_ENABLED || totalMs >= DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) {
     logPerformanceDiagnostic(
       `[API][teams][timings] id=${req.requestId || "unknown"} total_ms=${totalMs} ` +
-      `cache_hit=${response.cacheHit ? "true" : "false"} base_cache_hit=${response.baseCacheHit ? "true" : "false"} ` +
+      `cache_hit=${response.cacheHit ? "true" : "false"} base_cache_hit=${response.baseCacheHit ? "true" : "false"} stale_hit=${response.staleHit ? "true" : "false"} ` +
       `dataset_resolve_ms=${response.datasetResolveMs || 0} ` +
       `build_ms=${response.buildMs || 0} build_timings=${JSON.stringify(response.buildTimings || {})} ` +
       `source=${sourceSelection.source} type=${typeSelection.type || "all"} league=${leagueFilter || "all"}`
@@ -22681,15 +23231,32 @@ app.get(`${API_PREFIX}/teams/:teamName`, async (req, res) => {
   });
 });
 
+/**
+ * Returns the currently in-progress merged matches that belong to a given
+ * league table, matched by league_name. Used for the realtime overlay.
+ */
+function liveMatchesForLeague(leagueName) {
+  if (!leagueName || !Array.isArray(cachedMergedMatches)) return [];
+  const normalizedTarget = normalizeCompetitionFilterName(leagueName);
+  return cachedMergedMatches.filter((match) => {
+    if (!isInProgressMatchStatus(match && match.score_status)) return false;
+    return normalizeCompetitionFilterName(String(match.league || "")) === normalizedTarget;
+  });
+}
+
 app.get(`${API_PREFIX}/tables`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   const dataset = await getOperationalArrayDataset(OP_DATASET_LEAGUE_TABLES, cachedLeagueTables);
-  const leagues = sortLeagueTablesForResponse(dataset.items);
+  const baseLeagues = sortLeagueTablesForResponse(dataset.items);
+  const leagues = baseLeagues.map((league) => {
+    const live = liveMatchesForLeague(league && league.league_name);
+    return live.length > 0 ? applyLiveResultsToTable(league, live) : league;
+  });
   const updatedAt =
     dataset.updated_at ||
     leagueTablesLastUpdated ||
     newestIsoTimestamp(
-      leagues
+      baseLeagues
         .map((league) => String((league && league.updated_at) || "").trim())
         .filter(Boolean)
     );
@@ -22708,8 +23275,8 @@ app.get(`${API_PREFIX}/tables/:leagueId`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const dataset = await getOperationalArrayDataset(OP_DATASET_LEAGUE_TABLES, cachedLeagueTables);
   const leagues = sortLeagueTablesForResponse(dataset.items);
-  const league = findLeagueTableById(leagues, req.params.leagueId);
-  if (!league) {
+  const baseLeague = findLeagueTableById(leagues, req.params.leagueId);
+  if (!baseLeague) {
     res.status(404).json({
       error: "League table not found",
       league_id: normalizeLeagueTableId(req.params.leagueId),
@@ -22717,8 +23284,10 @@ app.get(`${API_PREFIX}/tables/:leagueId`, async (req, res) => {
     });
     return;
   }
-  if (league.updated_at) {
-    res.set("X-Last-Updated", league.updated_at);
+  const live = liveMatchesForLeague(baseLeague.league_name);
+  const league = live.length > 0 ? applyLiveResultsToTable(baseLeague, live) : baseLeague;
+  if (baseLeague.updated_at) {
+    res.set("X-Last-Updated", baseLeague.updated_at);
   } else if (dataset.updated_at) {
     res.set("X-Last-Updated", dataset.updated_at);
   }
@@ -23835,6 +24404,12 @@ const {
   getDeletedMatchIds,
   getDeletedMatches,
   unmarkMatchDeleted,
+  upsertTvListings,
+  getAllTvListings,
+  purgeStaleTvListings,
+  upsertLeagues,
+  upsertTsdbLeagueTables,
+  getAllTsdbLeagueTables,
   __historyConfig: bbcHistoryConfig,
   getRedisMetrics,
 } = require("./redis_client");
@@ -26672,6 +27247,125 @@ app.post(`${API_PREFIX}/admin/bbc-state/backfill-range`, async (req, res) => {
   }
 });
 
+app.post(`${API_PREFIX}/admin/leagues/refresh`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  if (tsdbLeaguesUpdating) {
+    res.status(409).json({ error: "League refresh already in progress." });
+    return;
+  }
+  const startedAtMs = Date.now();
+  try {
+    const leagues = await fetchSoccerLeagues({ trigger: "admin_api" });
+    if (leagues.length > 0) {
+      await upsertLeagues(leagues);
+    }
+    tsdbLeaguesUpdating = false;
+    res.status(200).json({
+      success: true,
+      upserted: leagues.length,
+      duration_ms: Date.now() - startedAtMs,
+    });
+  } catch (error) {
+    tsdbLeaguesUpdating = false;
+    res.status(500).json({
+      error: "Failed to refresh league catalogue.",
+      message: error.message || String(error),
+    });
+  }
+});
+
+// ===== League Tables Admin Endpoints =====
+
+app.post(`${API_PREFIX}/admin/league-tables/refresh`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  if (leagueTablesUpdating) {
+    res.status(409).json({ error: "League tables refresh already in progress." });
+    return;
+  }
+  const leagueId = req.query.leagueId || req.body && req.body.leagueId;
+  const startedAtMs = Date.now();
+  try {
+    if (leagueId) {
+      // Refresh a single league
+      const entry = TSDB_LEAGUE_ALLOWLIST.find((e) => String(e.id) === String(leagueId));
+      if (!entry) {
+        res.status(404).json({ error: "League ID not in tracked allowlist", league_id: leagueId });
+        return;
+      }
+      const table = await fetchTsdbLeagueTable(entry.id, entry.name, { trigger: "admin_api" });
+      if (table) {
+        try { await upsertTsdbLeagueTables([table]); } catch (_) {}
+        // Merge into cache
+        const idx = cachedLeagueTables.findIndex(
+          (t) => normalizeLeagueTableId(t.league_id) === normalizeLeagueTableId(table.league_id)
+        );
+        if (idx >= 0) {
+          cachedLeagueTables = [...cachedLeagueTables.slice(0, idx), table, ...cachedLeagueTables.slice(idx + 1)];
+        } else {
+          cachedLeagueTables = sortLeagueTablesForResponse([...cachedLeagueTables, table]);
+        }
+        invalidateCacheDomains(["tables"], { reason: "league_table_single_refresh" });
+      }
+      res.json({
+        success: true,
+        league_id: leagueId,
+        has_table: !!table,
+        duration_ms: Date.now() - startedAtMs,
+      });
+    } else {
+      // Full refresh — run in background and return immediately
+      void updateLeagueTables({ trigger: "admin_api" });
+      res.json({ success: true, message: "Full refresh started in background." });
+    }
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to refresh league table",
+      message: error.message || String(error),
+    });
+  }
+});
+
+app.post(`${API_PREFIX}/admin/league-tables/simulate`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const { leagueId, matches } = req.body || {};
+  if (!leagueId) {
+    res.status(400).json({ error: "leagueId is required" });
+    return;
+  }
+  const dataset = await getOperationalArrayDataset(OP_DATASET_LEAGUE_TABLES, cachedLeagueTables);
+  const leagues = sortLeagueTablesForResponse(dataset.items);
+  const baseTable = findLeagueTableById(leagues, leagueId);
+  if (!baseTable) {
+    res.status(404).json({
+      error: "League table not found",
+      league_id: normalizeLeagueTableId(leagueId),
+      available_leagues: leagues.map((t) => t.league_id).filter(Boolean),
+    });
+    return;
+  }
+
+  // Validate and normalise simulated matches
+  let simulatedMatches = [];
+  if (Array.isArray(matches)) {
+    simulatedMatches = matches
+      .filter((m) => m && m.home && m.away)
+      .map((m) => ({
+        home_team: String(m.home),
+        away_team: String(m.away),
+        home_score: m.homeScore !== undefined ? Number(m.homeScore) : null,
+        away_score: m.awayScore !== undefined ? Number(m.awayScore) : null,
+        score_status: "1'", // treated as in-progress by isInProgressMatchStatus
+      }))
+      .filter((m) => m.home_score !== null && m.away_score !== null && Number.isFinite(m.home_score) && Number.isFinite(m.away_score));
+  }
+
+  const realtimeTable = simulatedMatches.length > 0
+    ? applyLiveResultsToTable(baseTable, simulatedMatches)
+    : baseTable;
+
+  res.json({ base: baseTable, realtime: realtimeTable });
+});
+
 // ===== Push Notification & Live Activity Testing Endpoints =====
 const { sendNotification, sendLiveActivityPush } = require("./apns_client");
 
@@ -26718,7 +27412,7 @@ function liveActivityNowTimeLabel(now = new Date()) {
 function liveActivityTestTvLogoKey(channels = []) {
   const values = Array.isArray(channels) ? channels : [];
   for (const channel of values) {
-    const normalized = String(channel || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const normalized = channelName(channel).toLowerCase().replace(/[^a-z0-9]+/g, "");
     if (!normalized) continue;
     if (
       normalized.includes("amazonprime") ||
@@ -26835,7 +27529,7 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
         : null,
     tvChannels: Array.isArray(match.tvChannels || match.tv_channels)
       ? (match.tvChannels || match.tv_channels)
-          .map((channel) => String(channel || "").trim())
+          .map(channelName)
           .filter(Boolean)
           .slice(0, 3)
       : ["TNT Sports 1"],
@@ -27805,7 +28499,7 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
               matchTime: match && match.score_status ? String(match.score_status) : null,
               tvChannels:
                 match && Array.isArray(match.tv_channels)
-                  ? match.tv_channels.map((channel) => String(channel))
+                  ? match.tv_channels.map(channelName).filter(Boolean)
                   : [],
               eligible: eligibility && typeof eligibility.eligible === "boolean"
                 ? eligibility.eligible
@@ -28606,11 +29300,35 @@ async function bootstrapOperationalState(options = {}) {
     }
 
     await updateRecentCache("startup_bootstrap");
+    // Load TV listings from MongoDB so the first merged-matches build has channels.
+    try {
+      const tvSnapshot = await getAllTvListings();
+      cachedTvListingsByEvent = new Map(Object.entries(tvSnapshot));
+      setSourceCacheSize(SOURCE_TSDB_TV, cachedTvListingsByEvent.size);
+    } catch (tvLoadErr) {
+      console.warn("[Startup] Failed to load TV listings from MongoDB:", tvLoadErr.message || tvLoadErr);
+    }
+    // Load league tables from dedicated MongoDB collection if in-memory is empty
+    if (cachedLeagueTables.length === 0) {
+      try {
+        const mongoTables = await getAllTsdbLeagueTables();
+        if (mongoTables.length > 0) {
+          cachedLeagueTables = sortLeagueTablesForResponse(mongoTables);
+          leagueTablesLastUpdated = new Date().toISOString();
+          setSourceCacheSize(SOURCE_TSDB_LEAGUE_TABLES, leagueTableRowsCount(cachedLeagueTables));
+          console.info(`[Startup] Loaded ${cachedLeagueTables.length} league tables from MongoDB`);
+        }
+      } catch (ltLoadErr) {
+        console.warn("[Startup] Failed to load league tables from MongoDB:", ltLoadErr.message || ltLoadErr);
+      }
+    }
+
     await rebuildMergedMatchesCache("startup_bootstrap");
     await rebuildMatchDetailsCache("startup_bootstrap");
 
     void updateTsdbLivescores({ trigger: "startup_bootstrap" });
     void updateTsdbScheduleMatches({ trigger: "startup_bootstrap" });
+    void updateTsdbTvListings({ trigger: "startup_bootstrap" });
     void updateTsdbPremierLeagueTeams({ trigger: "startup_bootstrap" });
     void updateLeagueTables({ trigger: "startup_bootstrap" });
     void updateClubEloTeams({ trigger: "startup_bootstrap" });
@@ -28842,6 +29560,15 @@ function startScraperIntervals() {
     void updateTsdbScheduleMatches({ trigger: "interval" });
   }, tsdbScheduleInterval, { initialDelayMs: tsdbScheduleIntervalOffsetMs });
 
+  const tsdbTvInterval =
+    Number.isFinite(TSDB_TV_INTERVAL_MS) && TSDB_TV_INTERVAL_MS > 0
+      ? TSDB_TV_INTERVAL_MS
+      : 2 * 60 * 60 * 1000;
+  const tsdbTvIntervalOffsetMs = Math.min(75 * 1000, Math.max(0, tsdbTvInterval - 1000));
+  registerRuntimeInterval(() => {
+    void updateTsdbTvListings({ trigger: "interval" });
+  }, tsdbTvInterval, { initialDelayMs: tsdbTvIntervalOffsetMs });
+
   const eplInterval =
     Number.isFinite(EPL_INTERVAL_MS) && EPL_INTERVAL_MS > 0 ? EPL_INTERVAL_MS : 24 * 60 * 60 * 1000;
   const eplIntervalOffsetMs = Math.min(90 * 1000, Math.max(0, eplInterval - 1000));
@@ -28849,14 +29576,8 @@ function startScraperIntervals() {
     void updateTsdbPremierLeagueTeams({ trigger: "interval" });
   }, eplInterval, { initialDelayMs: eplIntervalOffsetMs });
 
-  const leagueTablesInterval =
-    Number.isFinite(LEAGUE_TABLES_INTERVAL_MS) && LEAGUE_TABLES_INTERVAL_MS > 0
-      ? LEAGUE_TABLES_INTERVAL_MS
-      : 2 * 60 * 1000;
-  const leagueTablesIntervalOffsetMs = Math.min(65 * 1000, Math.max(0, leagueTablesInterval - 1000));
-  registerRuntimeInterval(() => {
-    void updateLeagueTables({ trigger: "interval" });
-  }, leagueTablesInterval, { initialDelayMs: leagueTablesIntervalOffsetMs });
+  scheduleLeagueTablesDailyRefresh();
+  void updateLeagueTables({ trigger: "startup_scraper" });
 
   const clubEloInterval =
     Number.isFinite(CLUB_ELO_INTERVAL_MS) && CLUB_ELO_INTERVAL_MS > 0
@@ -29624,6 +30345,9 @@ function startApiRuntime() {
   startApiIntervals();
   scheduleInitialTeamRankingsWarm();
   scheduleTeamRankingsDailyWarm();
+  scheduleLeaguesDailyRefresh();
+  void updateTsdbLeagues({ trigger: "startup" });
+  scheduleLeagueTablesDailyRefresh();
   scheduleDeferredApiWarmTasks();
 
   runtimeServer = app.listen(PORT, () => {

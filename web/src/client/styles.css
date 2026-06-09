@@ -946,6 +946,74 @@ button.match-row:hover {
   color: var(--error-text);
 }
 
+.match-debug-panel {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px dashed #ff6b35;
+  background: rgba(255, 107, 53, 0.06);
+  border-radius: 0 0 6px 6px;
+  font-size: 0.8rem;
+}
+
+.match-debug-title {
+  font-weight: 700;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ff6b35;
+  margin-bottom: 0.5rem;
+}
+
+.match-debug-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-bottom: 0.6rem;
+}
+
+.match-debug-table td {
+  padding: 0.15rem 0.5rem 0.15rem 0;
+  vertical-align: top;
+  color: var(--text-secondary);
+}
+
+.match-debug-table td:first-child {
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  padding-right: 0.75rem;
+  width: 7rem;
+}
+
+.match-debug-mono {
+  font-family: monospace;
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+
+.match-debug-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.match-debug-link {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  background: rgba(255, 107, 53, 0.12);
+  border: 1px solid rgba(255, 107, 53, 0.3);
+  border-radius: 4px;
+  color: #ff6b35;
+  text-decoration: none;
+  font-size: 0.72rem;
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+.match-debug-link:hover {
+  background: rgba(255, 107, 53, 0.22);
+  text-decoration: underline;
+}
+
 .details-section {
   display: grid;
   gap: 0.75rem;
@@ -960,11 +1028,90 @@ button.match-row:hover {
 }
 
 /* TV channels in expanded panel */
-.details-tv-channels {
-  display: grid;
+/* Where to watch — locale-first TV listings */
+.details-where-to-watch {
+  display: flex;
+  flex-direction: column;
   gap: 0.5rem;
 }
 
+.details-wtw-unavailable {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin: 0;
+  font-style: italic;
+}
+
+/* Other countries — collapsed by default */
+.details-wtw-other {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.details-wtw-other-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  opacity: 0.65;
+  transition: opacity 0.15s;
+}
+
+.details-wtw-other-toggle:hover {
+  opacity: 1;
+}
+
+.details-wtw-chevron {
+  font-size: 0.6rem;
+  line-height: 1;
+}
+
+.details-wtw-other-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-top: 0.25rem;
+}
+
+.details-wtw-country {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.details-wtw-country-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.details-wtw-flag {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.details-wtw-country-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.details-wtw-channels {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-left: 1.6rem;
+}
+
+/* Shared channel row (used both in wtw grid and legacy tv section) */
 .details-tv-channel-row {
   display: flex;
   align-items: center;

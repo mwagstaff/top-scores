@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState, memo } from "react";
 import { clearMatchDetailsCache, fetchMatchDetails, shouldRetryMatchDetails } from "../api";
 import {
   aggregateSummary,
@@ -18,15 +18,33 @@ import type {
   MatchTeamLineups,
   MatchRedCardEvent,
   MatchYellowCardEvent,
+  TvChannel,
 } from "../types";
+
+// ── Locale helpers ────────────────────────────────────────────────
+// Derive the user's broadcast country code from the browser locale tag.
+// e.g. "en-GB" → "GB",  "en-US" → "US",  "fr-FR" → "FR".
+function userCountryCode(): string | null {
+  const tag = navigator.language ?? "";
+  const parts = tag.split("-");
+  return parts.length >= 2 ? parts[parts.length - 1].toUpperCase() : null;
+}
+
+// Channels that match the user's locale country code.
+function localChannels(channels: TvChannel[]): TvChannel[] {
+  const code = userCountryCode();
+  if (!code) return [];
+  return channels.filter((c) => c.countryCode === code);
+}
 
 interface MatchCardProps {
   match: Match;
   highlightToday?: boolean;
   useShortTeamNames?: boolean;
+  debugMode?: boolean;
 }
 
-export function MatchCard({ match, highlightToday = false, useShortTeamNames = false }: MatchCardProps) {
+export function MatchCard({ match, highlightToday = false, useShortTeamNames = false, debugMode = false }: MatchCardProps) {
   const [homeLogoMissing, setHomeLogoMissing] = useState(false);
   const [awayLogoMissing, setAwayLogoMissing] = useState(false);
   const [isExpanded, setIsExpanded]           = useState(false);
@@ -43,7 +61,9 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
 
   // Derived display state
   const hasScore   = typeof match.homeScore === "number" && typeof match.awayScore === "number";
-  const hasTvLogo  = match.tvChannels.length > 0;
+  // Only show a TV badge for channels matching the user's locale country.
+  const localTvChannels = useMemo(() => localChannels(match.tvChannels), [match.tvChannels]);
+  const hasTvLogo  = localTvChannels.length > 0;
   // Show TV logo in centre for upcoming fixtures; for live matches with scores, show flanking scores instead
   const showTvOnly = !hasScore && hasTvLogo;
   const showLiveScore = isLive && hasScore;
@@ -154,13 +174,7 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
           <div className="mc-score">
             <span className="mc-num">{match.homeScore}</span>
             {hasTvLogo ? (
-              <img
-                key={`${match.id}-tv-0`}
-                src={`/logos/tv/${encodeURIComponent(match.tvChannels[0])}`}
-                alt=""
-                className="mc-tv-logo"
-                onError={(e) => { e.currentTarget.style.display = "none"; }}
-              />
+              <TvBadge channel={localTvChannels[0]} matchId={match.id} />
             ) : (
               <span className="mc-sep">—</span>
             )}
@@ -168,13 +182,7 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
           </div>
         ) : showTvOnly ? (
           <div className="mc-tv">
-            <img
-              key={`${match.id}-tv-0`}
-              src={`/logos/tv/${encodeURIComponent(match.tvChannels[0])}`}
-              alt=""
-              className="mc-tv-logo"
-              onError={(e) => { e.currentTarget.style.display = "none"; }}
-            />
+            <TvBadge channel={localTvChannels[0]} matchId={match.id} />
           </div>
         ) : hasScore ? (
           <div className="mc-score">
@@ -254,13 +262,62 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
           ) : detailsError ? (
             <div className="match-details-message is-error">{detailsError}</div>
           ) : details ? (
-            <ExpandedMatchDetails details={details} tvChannels={match.tvChannels} isFinished={isMatchFinished(match)} />
+            <ExpandedMatchDetails details={details} tvChannels={match.tvChannels} />
           ) : (
             <div className="match-details-message">No additional match details available.</div>
           )}
         </div>
       )}
+      {/* Debug panel always visible in debug mode, regardless of expand state */}
+      {debugMode && (
+        <div className="match-details-panel">
+          <MatchDebugPanel match={match} />
+        </div>
+      )}
     </article>
+  );
+}
+
+// ── Debug panel ───────────────────────────────────────────────────
+
+const TSDB_BASE = "https://www.thesportsdb.com/api/v2/json";
+
+function MatchDebugPanel({ match }: { match: Match }) {
+  const eventId  = match.matchDetailsId ?? null;
+  const leagueId = match.leagueId ?? null;
+
+  const links: Array<{ label: string; url: string }> = [];
+
+  if (eventId) {
+    links.push({ label: `event_timeline/${eventId}`,  url: `${TSDB_BASE}/lookup/event_timeline/${eventId}` });
+    links.push({ label: `event_lineup/${eventId}`,    url: `${TSDB_BASE}/lookup/event_lineup/${eventId}` });
+  }
+  if (leagueId) {
+    links.push({ label: `livescore/${leagueId}`,      url: `${TSDB_BASE}/livescore/${leagueId}` });
+    links.push({ label: `list/teams/${leagueId}`,     url: `${TSDB_BASE}/list/teams/${leagueId}` });
+  }
+
+  return (
+    <section className="match-debug-panel">
+      <div className="match-debug-title">🐛 Debug</div>
+      <table className="match-debug-table">
+        <tbody>
+          <tr><td>League</td><td>{match.league || "—"}</td></tr>
+          <tr><td>League ID</td><td>{leagueId ?? <em>not mapped</em>}</td></tr>
+          <tr><td>Event ID</td><td>{eventId ?? <em>none</em>}</td></tr>
+          <tr><td>Internal ID</td><td className="match-debug-mono">{match.id}</td></tr>
+        </tbody>
+      </table>
+      {links.length > 0 && (
+        <div className="match-debug-links">
+          {links.map(({ label, url }) => (
+            <a key={label} href={url} target="_blank" rel="noreferrer" className="match-debug-link">
+              {label}
+            </a>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -273,6 +330,28 @@ function displayTeamName(fullName: string, shortName: string | null | undefined,
   return trimmed.length > 0 ? trimmed : fullName;
 }
 
+
+// ── Flag emoji from ISO 3166-1 alpha-2 country code ─────────────────
+// Regional indicator symbols: 🇦 = U+1F1E6, 🇧 = U+1F1E7, …
+function flagEmoji(countryCode: string): string {
+  return Array.from(countryCode.toUpperCase())
+    .map((c) => String.fromCodePoint(0x1f1e6 + c.charCodeAt(0) - 65))
+    .join("");
+}
+
+// ── TV badge (single channel logo for the fixture list row) ──────────
+function TvBadge({ channel, matchId }: { channel: TvChannel; matchId: string }) {
+  const src = channel.logo || `/logos/tv/${encodeURIComponent(channel.name)}`;
+  return (
+    <img
+      key={`${matchId}-tv-badge`}
+      src={src}
+      alt={channel.name}
+      className="mc-tv-logo"
+      onError={(e) => { e.currentTarget.style.display = "none"; }}
+    />
+  );
+}
 
 // ── TV logo brand key (mirrors server resolveTvLogo brand detection) ──
 function tvLogoBrand(ch: string): string {
@@ -324,36 +403,112 @@ function TeamBadge({ teamName, missing, onMissing }: TeamBadgeProps) {
 
 // ── Expanded match details ────────────────────────────────────────
 
-function ExpandedMatchDetails({ details, tvChannels = [], isFinished = false }: { details: MatchDetails; tvChannels?: string[]; isFinished?: boolean }) {
-  const timelineEntries   = useMemo(() => buildTimelineEntries(details), [details]);
+function WhereToWatch({ channels }: { channels: TvChannel[] }) {
+  const [otherExpanded, setOtherExpanded] = useState(false);
+
+  const { local, other } = useMemo(() => {
+    const userCode = userCountryCode();
+    const localChannels: TvChannel[] = [];
+    const otherMap = new Map<string, TvChannel[]>();
+
+    channels.forEach((ch) => {
+      if (ch.countryCode === userCode) {
+        localChannels.push(ch);
+      } else {
+        const key = ch.country ?? "Other";
+        if (!otherMap.has(key)) otherMap.set(key, []);
+        otherMap.get(key)!.push(ch);
+      }
+    });
+
+    // Sort other countries alphabetically.
+    const otherGroups = Array.from(otherMap.entries()).sort(([a], [b]) => a.localeCompare(b));
+    return { local: localChannels, other: otherGroups };
+  }, [channels]);
+
+  const hasLocal = local.length > 0;
+  const hasOther = other.length > 0;
+  if (!hasLocal && !hasOther) return null;
+
+  return (
+    <section className="details-section">
+      <div className="details-section-title">Where to watch</div>
+      <div className="details-where-to-watch">
+        {hasLocal ? (
+          <div className="details-wtw-channels">
+            {local.map((ch) => (
+              <div key={`${ch.name}-${ch.country}`} className="details-tv-channel-row">
+                <img
+                  src={ch.logo || `/logos/tv/${encodeURIComponent(ch.name)}`}
+                  alt=""
+                  className="details-tv-channel-logo"
+                  onError={(e) => { e.currentTarget.style.display = "none"; }}
+                />
+                <span className="details-tv-channel-name">{ch.name}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="details-wtw-unavailable">Not available in your region</p>
+        )}
+
+        {hasOther && (
+          <div className="details-wtw-other">
+            <button
+              type="button"
+              className="details-wtw-other-toggle"
+              onClick={() => setOtherExpanded((v) => !v)}
+              aria-expanded={otherExpanded}
+            >
+              {otherExpanded ? "Hide other countries" : `Other countries (${other.length})`}
+              <span className="details-wtw-chevron">{otherExpanded ? "▲" : "▼"}</span>
+            </button>
+            {otherExpanded && (
+              <div className="details-wtw-other-content">
+                {other.map(([country, chs]) => (
+                  <div key={country} className="details-wtw-country">
+                    <div className="details-wtw-country-header">
+                      {chs[0]?.countryCode && (
+                        <span className="details-wtw-flag">{flagEmoji(chs[0].countryCode)}</span>
+                      )}
+                      <span className="details-wtw-country-name">{country}</span>
+                    </div>
+                    <div className="details-wtw-channels">
+                      {chs.map((ch) => (
+                        <div key={`${ch.name}-${ch.country}`} className="details-tv-channel-row">
+                          <img
+                            src={ch.logo || `/logos/tv/${encodeURIComponent(ch.name)}`}
+                            alt=""
+                            className="details-tv-channel-logo"
+                            onError={(e) => { e.currentTarget.style.display = "none"; }}
+                          />
+                          <span className="details-tv-channel-name">{ch.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ExpandedMatchDetails({ details, tvChannels = [] }: { details: MatchDetails; tvChannels?: TvChannel[] }) {
+  const timelineEntries    = useMemo(() => buildTimelineEntries(details), [details]);
   const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
+  const hasTvData          = tvChannels.length > 0;
 
-  const showTvSection = !isFinished && tvChannels.length > 0;
-
-  if (timelineEntries.length === 0 && !hasCompleteLineups && !showTvSection) {
+  if (timelineEntries.length === 0 && !hasCompleteLineups && !hasTvData) {
     return <div className="match-details-message">No additional match details available.</div>;
   }
 
   return (
     <div className="match-details-body">
-      {showTvSection && (
-        <section className="details-section">
-          <div className="details-section-title">TV Coverage</div>
-          <div className="details-tv-channels">
-            {tvChannels.map((channel) => (
-              <div key={channel} className="details-tv-channel-row">
-                <img
-                  src={`/logos/tv/${encodeURIComponent(channel)}`}
-                  alt=""
-                  className="details-tv-channel-logo"
-                  onError={(e) => { e.currentTarget.style.display = "none"; }}
-                />
-                <span className="details-tv-channel-name">{channel}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      {hasTvData && <WhereToWatch channels={tvChannels} />}
       {timelineEntries.length > 0 && (
         <section className="details-section">
           <div className="details-section-title">Key events</div>

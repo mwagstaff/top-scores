@@ -106,7 +106,7 @@ final class MatchSchedulingService {
     private func buildNotes(for match: Match) -> String {
         var lines: [String] = [match.league]
         if !match.tvChannels.isEmpty {
-            lines.append("TV: \(match.tvChannels.joined(separator: ", "))")
+            lines.append("TV: \(match.tvChannels.map(\.name).joined(separator: ", "))")
         }
         return lines.joined(separator: "\n")
     }

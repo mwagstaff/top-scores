@@ -500,7 +500,7 @@ struct AboutView: View {
                 homeTeam: home.teamName,
                 awayTeam: awayGroup.teamName,
                 league: "Premier League",
-                tvChannels: ["Sky Sports Premier League", "Sky Sports Main Event"],
+                tvChannels: [TvChannel(name: "Sky Sports Premier League"), TvChannel(name: "Sky Sports Main Event")],
                 homeScore: matchState.homeScore,
                 awayScore: matchState.awayScore,
                 scoreStatus: matchState.scoreStatus,

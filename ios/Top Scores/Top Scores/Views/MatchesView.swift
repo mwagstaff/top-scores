@@ -839,7 +839,7 @@ struct MatchesView: View {
                                 match.awayTeam,
                                 match.displayLeague,
                                 match.time,
-                                match.tvChannels.joined(separator: " ")
+                                match.tvChannels.map(\.name).joined(separator: " ")
                             ].joined(separator: " ")
                         )
                     )
@@ -1518,7 +1518,7 @@ private enum FixturePredictionGenerator {
                 let matchAwayTeam = match.awayTeam
                 let matchHomeShortName = match.homeShortName
                 let matchAwayShortName = match.awayShortName
-                let matchTVChannels = match.tvChannels
+                let matchTVChannels = match.tvChannels.map(\.name)
                 let kickoff = match.dateTime
                 let isPostponed = match.isPostponed
                 let isInProgress = match.isInProgress

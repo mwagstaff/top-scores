@@ -412,7 +412,17 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         firstLegAwayScore = try container.decodeIfPresent(Int.self, forKey: .firstLegAwayScore)
         matchTime = try container.decodeIfPresent(String.self, forKey: .matchTime)
         penaltyWinner = try container.decodeIfPresent(String.self, forKey: .penaltyWinner)
-        tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
+        // Decode tv_channels tolerantly: accepts [String] or [{name,...}] objects
+        struct TvChannelRaw: Decodable {
+            let name: String?
+        }
+        if let channels = try? container.decodeIfPresent([TvChannelRaw].self, forKey: .tvChannels) {
+            tvChannels = channels.compactMap(\.name).filter { !$0.isEmpty }
+        } else if let strings = try? container.decodeIfPresent([String].self, forKey: .tvChannels) {
+            tvChannels = strings
+        } else {
+            tvChannels = []
+        }
         tvLogoKey = try container.decodeIfPresent(String.self, forKey: .tvLogoKey)
     }
 

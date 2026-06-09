@@ -22,6 +22,7 @@ struct MatchDetailView: View {
     @State private var pendingEventsQuickRetry = false
     @State private var screenOpenedAt: Date?
     @State private var screenViewSent = false
+    @State private var showOtherCountries = false
 
     private static let detailsRefreshIntervalNanos: UInt64 = 10_000_000_000
     private static let idleDetailsRefreshIntervalNanos: UInt64 = 30_000_000_000
@@ -56,10 +57,24 @@ struct MatchDetailView: View {
         activeMatch.isFinished
     }
 
-    private var sortedChannels: [String] {
-        activeMatch.tvChannels.sorted { lhs, rhs in
-            lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
-        }
+    private var localChannels: [TvChannel] {
+        let code = Locale.current.region?.identifier
+        guard let code else { return [] }
+        return activeMatch.tvChannels.filter { $0.countryCode == code }
+    }
+
+    private var otherChannelGroups: [(country: String, channels: [TvChannel])] {
+        let code = Locale.current.region?.identifier
+        let others = activeMatch.tvChannels.filter { $0.countryCode != code }
+        let grouped = Dictionary(grouping: others) { $0.country ?? "Other" }
+        return grouped.sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+            .map { (country: $0.key, channels: $0.value) }
+    }
+
+    private func flagEmoji(for countryCode: String) -> String {
+        countryCode.unicodeScalars.compactMap {
+            Unicode.Scalar($0.value + 127397)
+        }.map(String.init).joined()
     }
 
     private var shouldShowLineupPitch: Bool {
@@ -129,15 +144,50 @@ struct MatchDetailView: View {
 
     private var tvChannelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if sortedChannels.isEmpty {
-                Text("TV TBA")
+            if localChannels.isEmpty {
+                Text("Not available in your region")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(sortedChannels, id: \.self) { channel in
+                ForEach(localChannels, id: \.name) { channel in
                     TvChannelRow(channel: channel)
                 }
             }
+
+            if !otherChannelGroups.isEmpty {
+                Button {
+                    showOtherCountries.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(showOtherCountries
+                            ? "Hide other countries"
+                            : "Other countries (\(otherChannelGroups.count))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Image(systemName: showOtherCountries ? "chevron.up" : "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                if showOtherCountries {
+                    ForEach(otherChannelGroups, id: \.country) { group in
+                        VStack(alignment: .leading, spacing: 6) {
+                            let flag = group.channels.first.flatMap(\.countryCode).map { flagEmoji(for: $0) } ?? ""
+                            Text("\(flag) \(group.country)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fontWeight(.medium)
+                            ForEach(group.channels, id: \.name) { channel in
+                                TvChannelRow(channel: channel)
+                                    .padding(.leading, 8)
+                            }
+                        }
+                    }
+                }
+            }
+
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -193,9 +243,9 @@ struct MatchDetailView: View {
                         .padding(.horizontal)
                 }
 
-                if !isMatchFinished {
+                if !activeMatch.tvChannels.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("TV listings")
+                        Text("Where to watch")
                             .font(.headline)
                             .foregroundStyle(.primary)
                         tvChannelSection
@@ -896,18 +946,27 @@ private struct CalendarChoice: Identifiable {
 // MARK: - TV Channel Row
 
 private struct TvChannelRow: View {
-    let channel: String
+    let channel: TvChannel
 
     var body: some View {
         HStack(spacing: 8) {
-            if let image = TvLogoResolver.shared.image(for: channel) {
+            if let logoURL = channel.logo.flatMap(URL.init) {
+                AsyncImage(url: logoURL) { image in
+                    image.resizable().scaledToFit()
+                } placeholder: {
+                    if let asset = TvLogoResolver.shared.image(for: channel.name) {
+                        Image(uiImage: asset).resizable().scaledToFit()
+                    }
+                }
+                .frame(height: 16)
+            } else if let image = TvLogoResolver.shared.image(for: channel.name) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(height: 16)
             }
 
-            Text(channel)
+            Text(channel.name)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
         }

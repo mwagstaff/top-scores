@@ -350,6 +350,44 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
     }
 }
 
+struct TvChannel: Codable, Equatable, Hashable, Sendable {
+    let name: String
+    let country: String?
+    let countryCode: String?
+    let logo: String?
+
+    // Tolerant decode: accepts either a String or a {name,country,...} object.
+    init(from decoder: Decoder) throws {
+        // Try object form first
+        if let container = try? decoder.container(keyedBy: CodingKeys.self) {
+            name = (try? container.decode(String.self, forKey: .name)) ?? ""
+            country = (try? container.decodeIfPresent(String.self, forKey: .country)) ?? nil
+            countryCode = (try? container.decodeIfPresent(String.self, forKey: .countryCode)) ?? nil
+            logo = (try? container.decodeIfPresent(String.self, forKey: .logo)) ?? nil
+        } else {
+            // Legacy flat string
+            let str = try decoder.singleValueContainer().decode(String.self)
+            name = str
+            country = nil
+            countryCode = nil
+            logo = nil
+        }
+    }
+
+    // Memberwise init for tests and previews
+    init(name: String, country: String? = nil, countryCode: String? = nil, logo: String? = nil) {
+        self.name = name
+        self.country = country
+        self.countryCode = countryCode
+        self.logo = logo
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, country, logo
+        case countryCode = "countryCode"
+    }
+}
+
 struct Match: Identifiable, Codable, Hashable, Sendable {
     let date: String
     let time: String
@@ -363,7 +401,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let detailsURL: String?
     let matchDetailsIDValue: String?
     let hasBbcSourceValue: Bool?
-    let tvChannels: [String]
+    let tvChannels: [TvChannel]
     let homeScore: Int?
     let awayScore: Int?
     let aggregateHomeScore: Int?
@@ -396,7 +434,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         detailsURL: String? = nil,
         matchDetailsID: String? = nil,
         hasBbcSource: Bool? = nil,
-        tvChannels: [String],
+        tvChannels: [TvChannel],
         homeScore: Int? = nil,
         awayScore: Int? = nil,
         aggregateHomeScore: Int? = nil,
@@ -477,7 +515,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     nonisolated var hasBbcMatchEntry: Bool {
         hasBbcSourceValue == true ||
             matchDetailsID != nil ||
-            tvChannels.contains { $0.caseInsensitiveCompare("BBC Sport Website") == .orderedSame }
+            tvChannels.contains { $0.name.caseInsensitiveCompare("BBC Sport Website") == .orderedSame }
     }
 
     nonisolated var dateOnly: Date? {
@@ -642,7 +680,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         )
     }
 
-    func withTvChannels(_ channels: [String]) -> Match {
+    func withTvChannels(_ channels: [TvChannel]) -> Match {
         Match(
             date: date,
             time: time,
@@ -694,7 +732,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             try container.decodeIfPresent(String.self, forKey: .matchDetailsIDValue)
         )
         hasBbcSourceValue = try container.decodeIfPresent(Bool.self, forKey: .hasBbcSourceValue)
-        tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
+        tvChannels = try container.decodeIfPresent([TvChannel].self, forKey: .tvChannels) ?? []
         homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
         awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
         aggregateHomeScore = try container.decodeIfPresent(Int.self, forKey: .aggregateHomeScore)

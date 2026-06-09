@@ -42,6 +42,7 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
   const { preferences, setPreferences } = usePreferences();
   const [searchText, setSearchText]   = useState("");
   const [showSearch, setShowSearch]   = useState(false);
+  const [debugMode, setDebugMode]     = useState(false);
   const [state, setState]             = useState<ScreenState>(initialState);
   const [reloadToken, reload]         = useReducer((v) => v + 1, 0);
   const useShortTeamNames             = useShouldUseShortTeamNames();
@@ -68,6 +69,7 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
     if (params.get("nations") === "0") updates.homeNationsFilterEnabled = false;
     if (params.get("majors") === "0") updates.majorTournamentsFilterEnabled = false;
     if (Object.keys(updates).length > 0) setPreferences(updates);
+    if (params.get("debug") === "1") setDebugMode(true);
 
     const compsParam = params.get("comps");
     if (compsParam) {
@@ -298,7 +300,7 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
               const haystack = [
                 match.homeTeam, match.awayTeam,
                 match.league, match.leagueSubcategory ?? "",
-                match.tvChannels.join(" "),
+                match.tvChannels.map((c) => c.name).join(" "),
               ].join(" ").toLowerCase();
               return haystack.includes(query);
             }),
@@ -411,6 +413,7 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
                         match={match}
                         highlightToday={day.isToday}
                         useShortTeamNames={useShortTeamNames}
+                        debugMode={debugMode}
                       />
                     ))}
                   </div>

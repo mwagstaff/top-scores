@@ -12,7 +12,7 @@ enum ChannelSelection {
     ]
 
     static func selectableChannels(from matches: [Match]) -> [String] {
-        selectableChannels(from: matches.flatMap(\.tvChannels))
+        selectableChannels(from: matches.flatMap { $0.tvChannels.map(\.name) })
     }
 
     static func selectableChannels(from channels: [String]) -> [String] {

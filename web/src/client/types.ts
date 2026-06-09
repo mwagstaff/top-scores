@@ -19,6 +19,13 @@ export interface Preferences {
   matchGroupSortOrder: MatchGroupSortOrder;
 }
 
+export interface TvChannel {
+  name: string;
+  country: string | null;
+  countryCode: string | null;
+  logo: string | null;
+}
+
 export interface Match {
   id: string;
   date: string;
@@ -28,8 +35,9 @@ export interface Match {
   homeShortName?: string | null;
   awayShortName?: string | null;
   league: string;
+  leagueId?: string | null;
   leagueSubcategory?: string | null;
-  tvChannels: string[];
+  tvChannels: TvChannel[];
   homeScore?: number | null;
   awayScore?: number | null;
   aggregateHomeScore?: number | null;

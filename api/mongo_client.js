@@ -75,6 +75,15 @@ async function ensureIndexes() {
       { key: { source: 1, timestamp_ms: -1 }, name: "source_timestamp" },
       { key: { status_code: 1, timestamp_ms: -1 }, name: "status_timestamp" },
     ]),
+    collection("tv_listings").createIndexes([
+      { key: { date_event: 1 }, name: "date_event" },
+      { key: { updated_at: -1 }, name: "updatedAt_desc" },
+    ]),
+    collection("leagues").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("league_tables").createIndexes([
+      { key: { updated_at: -1 }, name: "updatedAt_desc" },
+      { key: { league_name: 1 }, name: "league_name" },
+    ]),
   ]);
 
   indexesEnsured = true;
@@ -483,6 +492,128 @@ async function saveBbcRequestHistory(record) {
   return stripMongoId(doc);
 }
 
+// ---------------------------------------------------------------------------
+// TV listings
+//
+// One document per idEvent: { _id: idEvent, date_event, channels[], updated_at }
+// Upserted on every 2-hour TV listings refresh.
+// ---------------------------------------------------------------------------
+
+async function upsertTvListings(listings) {
+  const mongoDb = await getDb();
+  if (!mongoDb || !Array.isArray(listings) || listings.length === 0) return null;
+  const nowIso = new Date().toISOString();
+  const ops = listings.map(({ idEvent, dateEvent, channels }) => ({
+    updateOne: {
+      filter: { _id: String(idEvent) },
+      update: {
+        $set: {
+          _id: String(idEvent),
+          date_event: dateEvent || null,
+          channels: Array.isArray(channels) ? channels : [],
+          updated_at: nowIso,
+        },
+      },
+      upsert: true,
+    },
+  }));
+  const result = await collection("tv_listings").bulkWrite(ops, { ordered: false });
+  return { upserted: result.upsertedCount, modified: result.modifiedCount };
+}
+
+async function getAllTvListings() {
+  const mongoDb = await getDb();
+  if (!mongoDb) return {};
+  const records = await collection("tv_listings").find({}).toArray();
+  const out = {};
+  records.forEach((r) => {
+    if (r._id && Array.isArray(r.channels)) {
+      out[String(r._id)] = r.channels;
+    }
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Leagues
+//
+// One document per idLeague: { _id: idLeague, name, sport, updated_at }
+// Upserted nightly from the TheSportsDB /all/leagues endpoint.
+// ---------------------------------------------------------------------------
+
+async function upsertTsdbLeagueTables(tables) {
+  const mongoDb = await getDb();
+  if (!mongoDb || !Array.isArray(tables) || tables.length === 0) return null;
+  const nowIso = new Date().toISOString();
+  const ops = tables.map((table) => ({
+    updateOne: {
+      filter: { _id: String(table.league_id) },
+      update: {
+        $set: {
+          _id: String(table.league_id),
+          league_name: table.league_name || null,
+          stage_name: table.stage_name || null,
+          season: table.season || null,
+          source_url: table.source_url || null,
+          rows: Array.isArray(table.rows) ? table.rows : [],
+          groups: Array.isArray(table.groups) ? table.groups : [],
+          updated_at: nowIso,
+        },
+      },
+      upsert: true,
+    },
+  }));
+  const result = await collection("league_tables").bulkWrite(ops, { ordered: false });
+  return { upserted: result.upsertedCount, modified: result.modifiedCount, total: tables.length };
+}
+
+async function getAllTsdbLeagueTables() {
+  const mongoDb = await getDb();
+  if (!mongoDb) return [];
+  const docs = await collection("league_tables").find({}).toArray();
+  return docs.map((doc) => ({
+    league_id: String(doc._id),
+    league_name: doc.league_name || null,
+    stage_name: doc.stage_name || null,
+    season: doc.season || null,
+    source_url: doc.source_url || null,
+    updated_at: doc.updated_at || null,
+    groups: Array.isArray(doc.groups) ? doc.groups : [],
+    rows: Array.isArray(doc.rows) ? doc.rows : [],
+  }));
+}
+
+async function upsertLeagues(leagues) {
+  const mongoDb = await getDb();
+  if (!mongoDb || !Array.isArray(leagues) || leagues.length === 0) return null;
+  const nowIso = new Date().toISOString();
+  const ops = leagues.map(({ idLeague, strLeague, strSport }) => ({
+    updateOne: {
+      filter: { _id: String(idLeague) },
+      update: {
+        $set: {
+          _id: String(idLeague),
+          name: strLeague || null,
+          sport: strSport || null,
+          updated_at: nowIso,
+        },
+      },
+      upsert: true,
+    },
+  }));
+  const result = await collection("leagues").bulkWrite(ops, { ordered: false });
+  return { upserted: result.upsertedCount, modified: result.modifiedCount, total: leagues.length };
+}
+
+async function purgeStaleTvListings(cutoffDateStr) {
+  const mongoDb = await getDb();
+  if (!mongoDb || !cutoffDateStr) return null;
+  const result = await collection("tv_listings").deleteMany({
+    date_event: { $lt: String(cutoffDateStr) },
+  });
+  return { deleted: result.deletedCount };
+}
+
 module.exports = {
   isMongoConfigured,
   getDb,
@@ -507,4 +638,10 @@ module.exports = {
   saveBbcMatchEventHistory,
   saveBbcNotificationHistory,
   saveBbcRequestHistory,
+  upsertTvListings,
+  getAllTvListings,
+  purgeStaleTvListings,
+  upsertLeagues,
+  upsertTsdbLeagueTables,
+  getAllTsdbLeagueTables,
 };

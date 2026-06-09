@@ -344,9 +344,19 @@ function normalizeMatch(raw: Record<string, unknown>): Match {
     homeShortName: optionalString(raw.home_short_name),
     awayShortName: optionalString(raw.away_short_name),
     league,
+    leagueId: optionalString(raw.league_id),
     leagueSubcategory: optionalString(raw.league_subcategory),
     tvChannels: Array.isArray(raw.tv_channels)
-      ? raw.tv_channels.filter((item): item is string => typeof item === "string")
+      ? raw.tv_channels.flatMap((item) => {
+          if (typeof item === "string") {
+            // Legacy flat-string format — wrap in structured shape.
+            return [{ name: item, country: null, countryCode: null, logo: null }];
+          }
+          if (item && typeof item === "object" && typeof item.name === "string" && item.name) {
+            return [{ name: item.name, country: item.country ?? null, countryCode: item.countryCode ?? null, logo: item.logo ?? null }];
+          }
+          return [];
+        })
       : [],
     homeScore: optionalNumber(raw.home_score),
     awayScore: optionalNumber(raw.away_score),
