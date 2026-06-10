@@ -11137,6 +11137,76 @@ function dedupeMatchListPayloads(payloads) {
   return dropSupersededFixturePayloads(deduped).map(stripInternalMatchListPayloadFields);
 }
 
+// Async variants of dedupeMatchListPayloads/dropSupersededFixturePayloads for
+// background match-list rebuilds: identical logic but yielding to the event
+// loop periodically — the synchronous dedupe tail (~0.9s over ~8k payloads)
+// was stalling all in-flight requests at the end of every rebuild.
+async function dropSupersededFixturePayloadsAsync(payloads) {
+  const list = Array.isArray(payloads) ? payloads : [];
+  if (list.length < 2) return list;
+
+  const groups = new Map();
+  list.forEach((payload, index) => {
+    const key = fixtureSupersessionGroupKey(payload);
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ payload, index });
+  });
+
+  const dropped = new Set();
+  let lastYieldMs = Date.now();
+  for (const entries of groups.values()) {
+    if (entries.length < 2) continue;
+    for (let i = 0; i < entries.length; i += 1) {
+      if (Date.now() - lastYieldMs >= MATCH_BUILD_YIELD_INTERVAL_MS) {
+        await new Promise((resolve) => setImmediate(resolve));
+        lastYieldMs = Date.now();
+      }
+      for (let j = i + 1; j < entries.length; j += 1) {
+        if (dropped.has(entries[i].index) || dropped.has(entries[j].index)) continue;
+        const preferred = chooseSupersedingFixturePayload(entries[i].payload, entries[j].payload);
+        if (!preferred) continue;
+        if (preferred === entries[i].payload) dropped.add(entries[j].index);
+        else dropped.add(entries[i].index);
+      }
+    }
+  }
+
+  if (dropped.size === 0) return list;
+  return list.filter((_payload, index) => !dropped.has(index));
+}
+
+async function dedupeMatchListPayloadsAsync(payloads) {
+  const deduped = [];
+  const keyToIndex = new Map();
+  let lastYieldMs = Date.now();
+
+  for (const payload of Array.isArray(payloads) ? payloads : []) {
+    if (!payload || typeof payload !== "object") continue;
+    if (Date.now() - lastYieldMs >= MATCH_BUILD_YIELD_INTERVAL_MS) {
+      await new Promise((resolve) => setImmediate(resolve));
+      lastYieldMs = Date.now();
+    }
+
+    const identityKeys = matchListPayloadIdentityKeys(payload);
+    const existingIndex = identityKeys.find((key) => keyToIndex.has(key));
+    if (existingIndex === undefined) {
+      const nextIndex = deduped.length;
+      deduped.push({ ...payload });
+      identityKeys.forEach((key) => keyToIndex.set(key, nextIndex));
+      continue;
+    }
+
+    const targetIndex = keyToIndex.get(existingIndex);
+    const merged = mergeMatchListPayload(deduped[targetIndex], payload);
+    deduped[targetIndex] = merged;
+    matchListPayloadIdentityKeys(merged).forEach((key) => keyToIndex.set(key, targetIndex));
+  }
+
+  const kept = await dropSupersededFixturePayloadsAsync(deduped);
+  return kept.map(stripInternalMatchListPayloadFields);
+}
+
 function listPayloadHasBbcMatchEntry(payload) {
   if (!payload || typeof payload !== "object") return false;
   if (payload.has_tsdb_source === true) return true;
@@ -16880,7 +16950,7 @@ async function canonicalMatchDetailsRecordsToPublicListPayloadsAsync(recordsById
     combined = [...primaryPayloads, ...supplementalPayloads];
   }
 
-  return dedupeMatchListPayloads(combined).filter((payload) =>
+  return (await dedupeMatchListPayloadsAsync(combined)).filter((payload) =>
     isAllowedCompetitionMatch(payload)
   );
 }
