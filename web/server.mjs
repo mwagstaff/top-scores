@@ -25,6 +25,24 @@ const appIconPath = path.join(generatedAssetsRoot, "app-icon.png");
 const faviconPath = path.join(generatedAssetsRoot, "favicon-32.png");
 const appleTouchIconPath = path.join(generatedAssetsRoot, "apple-touch-icon.png");
 
+// Event-loop stall logger: detects synchronous blocks in this process that
+// delay proxied API responses (diagnosing browser-visible multi-second loads
+// that don't show up in the API's own timings).
+const stallThresholdMs = Number(process.env.TOP_SCORES_WEB_STALL_THRESHOLD_MS || 200);
+if (stallThresholdMs > 0) {
+  const tickIntervalMs = 100;
+  let lastTickMs = Date.now();
+  setInterval(() => {
+    const nowMs = Date.now();
+    const delayMs = nowMs - lastTickMs - tickIntervalMs;
+    lastTickMs = nowMs;
+    if (delayMs >= stallThresholdMs) {
+      // eslint-disable-next-line no-console
+      console.warn(`[web][event-loop-stall] delay_ms=${delayMs} at=${new Date(nowMs).toISOString()}`);
+    }
+  }, tickIntervalMs).unref();
+}
+
 const teamLogoIndex = buildTeamLogoIndex();
 const tvLogoIndex = buildTvLogoIndex();
 const teamShortNameEntries = loadTeamShortNameEntries();
@@ -210,7 +228,7 @@ app.use(
       const upstreamHeaderDurationMs = upstreamHeadersReceivedAtMs - startedAtMs;
       const bodyReadDurationMs = totalDurationMs - upstreamHeaderDurationMs;
       const logLine =
-        `[web][proxy] id=${requestId} method=${req.method} path=${req.originalUrl} ` +
+        `[web][proxy] id=${requestId} at=${new Date(startedAtMs).toISOString()} method=${req.method} path=${req.originalUrl} ` +
         `target=${target.toString()} status=${upstream.status} ` +
         `upstream_header_ms=${upstreamHeaderDurationMs} body_read_ms=${bodyReadDurationMs} total_ms=${totalDurationMs}`;
       if (totalDurationMs >= debugProxyThresholdMs) {

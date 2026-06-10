@@ -8179,7 +8179,17 @@ function canonicalTeamIdentity(value) {
   return normalizeTeamName(value).replace(/\s+/g, " ").trim();
 }
 
+// Memoized: recomputed for the same team names millions of times during
+// match-list dedupe (O(pairs) in dropSupersededFixturePayloads) and teams
+// rebuilds; uncached this dominated the recurring ~4.5s event-loop stalls.
+const identityTeamKeysCache = new Map();
+const IDENTITY_TEAM_KEYS_CACHE_LIMIT = 50000;
+
 function identityTeamKeys(value) {
+  const cacheKey = String(value || "");
+  const cached = identityTeamKeysCache.get(cacheKey);
+  if (cached !== undefined) return cached.slice();
+
   const keys = [];
   const addKey = (candidate) => {
     const normalized = String(candidate || "").replace(/\s+/g, " ").trim();
@@ -8202,7 +8212,11 @@ function identityTeamKeys(value) {
     addKey(canonicalVariant);
   });
 
-  return keys;
+  if (identityTeamKeysCache.size >= IDENTITY_TEAM_KEYS_CACHE_LIMIT) {
+    identityTeamKeysCache.clear();
+  }
+  identityTeamKeysCache.set(cacheKey, keys);
+  return keys.slice();
 }
 
 function nameVariants(name) {

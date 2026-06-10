@@ -260,9 +260,17 @@ function buildIdentityIndex(config) {
   };
 }
 
+// Memoized: called millions of times per match-list/teams rebuild with a
+// small set of recurring team names; uncached it dominated CPU profiles.
+const normalizeTeamIdentityNameCache = new Map();
+const NORMALIZE_TEAM_IDENTITY_CACHE_LIMIT = 50000;
+
 function normalizeTeamIdentityName(value) {
   if (!value) return "";
-  return String(value)
+  const raw = String(value);
+  const cached = normalizeTeamIdentityNameCache.get(raw);
+  if (cached !== undefined) return cached;
+  const normalized = raw
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -272,6 +280,11 @@ function normalizeTeamIdentityName(value) {
     .replace(/[-_]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  if (normalizeTeamIdentityNameCache.size >= NORMALIZE_TEAM_IDENTITY_CACHE_LIMIT) {
+    normalizeTeamIdentityNameCache.clear();
+  }
+  normalizeTeamIdentityNameCache.set(raw, normalized);
+  return normalized;
 }
 
 function normalizeTeamIdentityKey(value) {
