@@ -95,6 +95,7 @@ struct TablesView: View {
                     VStack(spacing: 14) {
                         competitionPicker
                         if let league = selectedLeague {
+                            LeagueTableHero(league: league)
                             LeagueTableCard(league: league)
                                 .id("\(league.id)-\(shortNameRefreshVersion)")
                         }
@@ -550,6 +551,119 @@ private struct LeagueTableCard: View {
     private func displayTeamName(for row: LeagueTableRow) -> String {
         let canonicalName = TeamIdentityStore.shared.canonicalName(for: row.team)
         return FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: canonicalName)
+    }
+}
+
+private struct LeagueTableHero: View {
+    let league: LeagueTable
+
+    private var rows: [LeagueTableRow] {
+        if !league.rows.isEmpty {
+            return league.rows
+        }
+        return league.groups.flatMap(\.rows)
+    }
+
+    private var leader: LeagueTableRow? {
+        rows.sorted {
+            if $0.position != $1.position {
+                return $0.position < $1.position
+            }
+            return $0.points > $1.points
+        }.first
+    }
+
+    private var secondPlace: LeagueTableRow? {
+        rows.sorted {
+            if $0.position != $1.position {
+                return $0.position < $1.position
+            }
+            return $0.points > $1.points
+        }.dropFirst().first
+    }
+
+    private var visibleStageName: String? {
+        let stage = String(league.stageName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stage.isEmpty, stage.caseInsensitiveCompare("Regular Season") != .orderedSame else {
+            return nil
+        }
+        return stage
+    }
+
+    private var leaderSummary: String? {
+        guard let leader else { return nil }
+        guard let secondPlace else { return "\(leader.team) lead" }
+        let gap = leader.points - secondPlace.points
+        guard gap > 0 else { return "\(leader.team) lead on goal difference" }
+        return "\(leader.team) lead by \(gap) \(gap == 1 ? "point" : "points")"
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            ZStack {
+                if league.leagueName.localizedCaseInsensitiveContains("Premier League") {
+                    Image("FantasyPremierLeagueLionTab")
+                        .resizable()
+                        .scaledToFit()
+                        .padding(9)
+                } else {
+                    Image(systemName: "trophy.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 58, height: 58)
+            .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(league.leagueName)
+                    .font(.title2.bold())
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
+
+                HStack(spacing: 8) {
+                    if let visibleStageName {
+                        Text(visibleStageName)
+                    }
+                    Text("\(rows.count) teams")
+                }
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white.opacity(0.76))
+            }
+
+            Spacer(minLength: 0)
+
+            if let leaderSummary {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("Leader")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(.white.opacity(0.62))
+                    Text(leaderSummary)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                }
+                .frame(maxWidth: 150, alignment: .trailing)
+            }
+        }
+        .padding(18)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(red: 0.21, green: 0.02, blue: 0.38),
+                    Color(red: 0.35, green: 0.03, blue: 0.42),
+                    Color(red: 0.08, green: 0.02, blue: 0.20)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: Color.black.opacity(0.12), radius: 18, x: 0, y: 10)
     }
 }
 

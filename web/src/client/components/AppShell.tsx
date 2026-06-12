@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { type PropsWithChildren, useEffect, useState } from "react";
+import { defaultPreferences } from "../types";
 
 // ── Theme management ─────────────────────────────────────────────
 // Three states: "auto" follows system preference, "light"/"dark" are explicit.
@@ -112,41 +113,61 @@ export function AppShell({ children }: PropsWithChildren) {
 
   return (
     <div className="app-shell">
-      {/* Sticky header: brand · tabs (desktop) · theme toggle */}
-      <header className="app-header">
-        <div className="brand">
-          <a href="/">
-            <img src="/generated-assets/app-icon.png" alt="" className="brand-logo" />
-          </a>
-          <span className="brand-name">Top Scores</span>
-        </div>
+      <div className="desktop-dashboard">
+        <aside className="competition-rail" aria-label="Pinned competitions">
+          <div className="rail-title">Pinned Competitions</div>
+          <div className="rail-list">
+            {defaultPreferences.selectedLeagues.slice(0, 5).map((competition) => (
+              <NavLink
+                key={competition}
+                className="rail-link"
+                to={`/fixtures?comps=${encodeURIComponent(competition)}`}
+              >
+                <span className="rail-dot" aria-hidden="true" />
+                <span>{competition}</span>
+              </NavLink>
+            ))}
+          </div>
+        </aside>
 
-        {/* Desktop navigation – hidden on mobile via CSS */}
-        <nav className="tab-strip tab-strip-desktop" aria-label="Primary">
-          {tabs.map((tab) => (
-            <NavLink
-              key={tab.to}
-              to={tab.to}
-              className={({ isActive }) => `tab-link${isActive ? " is-active" : ""}`}
+        <div className="dashboard-main">
+          {/* Sticky header: brand · tabs (desktop) · theme toggle */}
+          <header className="app-header">
+            <div className="brand">
+              <a href="/">
+                <img src="/generated-assets/app-icon.png" alt="" className="brand-logo" />
+              </a>
+              <span className="brand-name">Top Scores</span>
+            </div>
+
+            {/* Desktop navigation – hidden on mobile via CSS */}
+            <nav className="tab-strip tab-strip-desktop" aria-label="Primary">
+              {tabs.map((tab) => (
+                <NavLink
+                  key={tab.to}
+                  to={tab.to}
+                  className={({ isActive }) => `tab-link${isActive ? " is-active" : ""}`}
+                >
+                  {tab.icon}
+                  <span>{tab.label}</span>
+                </NavLink>
+              ))}
+            </nav>
+
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={toggle}
+              aria-label={themeLabel(theme)}
+              title={themeLabel(theme)}
             >
-              {tab.icon}
-              <span>{tab.label}</span>
-            </NavLink>
-          ))}
-        </nav>
+              <ThemeIcon theme={theme} />
+            </button>
+          </header>
 
-        <button
-          type="button"
-          className="theme-toggle"
-          onClick={toggle}
-          aria-label={themeLabel(theme)}
-          title={themeLabel(theme)}
-        >
-          <ThemeIcon theme={theme} />
-        </button>
-      </header>
-
-      <main className="app-content">{children}</main>
+          <main className="app-content">{children}</main>
+        </div>
+      </div>
 
       {/* Mobile bottom dock – hidden on desktop via CSS */}
       <nav className="tab-strip tab-strip-mobile" aria-label="Primary">

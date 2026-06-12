@@ -1920,8 +1920,19 @@ private func lineupInitialFragment(from value: String, lowercaseParticles: Bool,
 
 private func localeFilteredChannels(_ channels: [TvChannel]) -> [TvChannel] {
     let regionCode = Locale.current.region?.identifier
-    let local = regionCode.map { code in channels.filter { $0.countryCode == code } } ?? []
+    let local = regionCode.map { code in channels.filter { broadcastCountryCode(for: $0) == code } } ?? []
     return local.isEmpty ? [] : local
+}
+
+private func broadcastCountryCode(for channel: TvChannel) -> String? {
+    if let countryCode = channel.countryCode {
+        return countryCode
+    }
+    if channel.name.localizedCaseInsensitiveContains("bbc") ||
+        channel.name.localizedCaseInsensitiveContains("itv") {
+        return "GB"
+    }
+    return nil
 }
 
 private struct TvLogoRow: View {

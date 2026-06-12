@@ -23,16 +23,23 @@ struct TopLevelScreenHeader<Icon: View, Accessory: View, Detail: View>: View {
             HStack(alignment: .center, spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.12))
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.accentColor, Color.accentColor.opacity(0.72)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
 
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
 
                     icon()
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.white)
                         .frame(width: 30, height: 30)
                 }
                 .frame(width: 52, height: 52)
+                .shadow(color: Color.accentColor.opacity(0.22), radius: 14, x: 0, y: 8)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Top Scores")
@@ -55,6 +62,15 @@ struct TopLevelScreenHeader<Icon: View, Accessory: View, Detail: View>: View {
         .padding(.horizontal)
         .padding(.top, 8)
         .padding(.bottom, 12)
-        .background(.ultraThinMaterial)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(.systemBackground).opacity(0.98),
+                    Color(.secondarySystemBackground).opacity(0.82)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 }

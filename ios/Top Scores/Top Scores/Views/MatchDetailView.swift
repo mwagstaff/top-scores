@@ -60,15 +60,26 @@ struct MatchDetailView: View {
     private var localChannels: [TvChannel] {
         let code = Locale.current.region?.identifier
         guard let code else { return [] }
-        return activeMatch.tvChannels.filter { $0.countryCode == code }
+        return activeMatch.tvChannels.filter { broadcastCountryCode(for: $0) == code }
     }
 
     private var otherChannelGroups: [(country: String, channels: [TvChannel])] {
         let code = Locale.current.region?.identifier
-        let others = activeMatch.tvChannels.filter { $0.countryCode != code }
+        let others = activeMatch.tvChannels.filter { broadcastCountryCode(for: $0) != code }
         let grouped = Dictionary(grouping: others) { $0.country ?? "Other" }
         return grouped.sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
             .map { (country: $0.key, channels: $0.value) }
+    }
+
+    private func broadcastCountryCode(for channel: TvChannel) -> String? {
+        if let countryCode = channel.countryCode {
+            return countryCode
+        }
+        if channel.name.localizedCaseInsensitiveContains("bbc") ||
+            channel.name.localizedCaseInsensitiveContains("itv") {
+            return "GB"
+        }
+        return nil
     }
 
     private func flagEmoji(for countryCode: String) -> String {
@@ -174,7 +185,7 @@ struct MatchDetailView: View {
                 if showOtherCountries {
                     ForEach(otherChannelGroups, id: \.country) { group in
                         VStack(alignment: .leading, spacing: 6) {
-                            let flag = group.channels.first.flatMap(\.countryCode).map { flagEmoji(for: $0) } ?? ""
+                            let flag = group.channels.first.flatMap { broadcastCountryCode(for: $0) }.map { flagEmoji(for: $0) } ?? ""
                             Text("\(flag) \(group.country)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -200,26 +211,13 @@ struct MatchDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(activeMatch.displayLeague)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-
-                    Text(kickoffText)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                MatchDetailScoreboardHero(
+                    match: activeMatch,
+                    kickoffText: kickoffText
+                )
                 .padding(.horizontal)
 
-                MatchRow(
-                    match: activeMatch,
-                    highlightToday: highlightToday,
-                    showTeamEvents: true,
-                    showBroadcastDetails: false,
-                    showFantasyBadge: false,
-                    fantasyContext: fantasyViewModel.matchRowContext,
-                    rowPreferences: matchRowPreferences
-                )
+                MatchEventsCard(match: activeMatch)
                     .padding(.horizontal)
 
                 if let detailsErrorMessage {
@@ -770,6 +768,131 @@ struct MatchDetailView: View {
 }
 
 // MARK: - FPL Squad Sections
+
+private struct MatchDetailScoreboardHero: View {
+    let match: Match
+    let kickoffText: String
+
+    private var centerText: String {
+        if let scoreLine = match.scoreLine {
+            return scoreLine
+        }
+        return match.time
+    }
+
+    private var statusText: String {
+        if let displayScoreStatus = match.displayScoreStatus {
+            return displayScoreStatus
+        }
+        return match.hasScore ? "Score" : "Kick-off"
+    }
+
+    private var metadataText: String {
+        [kickoffText, match.aggregateSummaryText]
+            .compactMap { value in
+                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            .joined(separator: " • ")
+    }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 8) {
+                Text(match.displayLeague)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+
+                Text(metadataText)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .multilineTextAlignment(.center)
+            }
+
+            HStack(alignment: .center, spacing: 14) {
+                teamColumn(
+                    name: match.displayHomeTeam,
+                    fullName: match.homeTeam,
+                    alternateNames: [match.homeShortName].compactMap { $0 }
+                )
+
+                VStack(spacing: 8) {
+                    Text(centerText)
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .minimumScaleFactor(0.65)
+                        .lineLimit(1)
+
+                    Text(statusText)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.14), in: Capsule())
+                }
+                .frame(maxWidth: 134)
+
+                teamColumn(
+                    name: match.displayAwayTeam,
+                    fullName: match.awayTeam,
+                    alternateNames: [match.awayShortName].compactMap { $0 }
+                )
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 24)
+        .background(
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.08, green: 0.13, blue: 0.22),
+                        Color(red: 0.05, green: 0.09, blue: 0.16)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                RadialGradient(
+                    colors: [Color.accentColor.opacity(0.36), .clear],
+                    center: .topTrailing,
+                    startRadius: 0,
+                    endRadius: 260
+                )
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .shadow(color: Color.black.opacity(0.18), radius: 22, x: 0, y: 12)
+    }
+
+    private func teamColumn(name: String, fullName: String, alternateNames: [String]) -> some View {
+        VStack(spacing: 10) {
+            Group {
+                if let image = LogoResolver.shared.image(for: fullName, alternateNames: alternateNames) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Image(systemName: "shield.fill")
+                        .font(.system(size: 30, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.82))
+                }
+            }
+            .frame(width: 62, height: 62)
+            .padding(10)
+            .background(.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            Text(name)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.72)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
 
 private struct FantasyMatchSquadSectionsView: View {
     let sections: [FantasyMatchTeamSquadSection]

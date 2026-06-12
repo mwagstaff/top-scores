@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { parseTvListingsResponse, resolveCountryCode, COUNTRY_CODE_MAP } = require("./fetch_tsdb_tv");
+const { parseTvListingsResponse, resolveChannelCountryCode, resolveCountryCode, COUNTRY_CODE_MAP } = require("./fetch_tsdb_tv");
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -48,6 +48,17 @@ test("resolveCountryCode: unknown country → null", () => {
 test("resolveCountryCode: null/empty → null", () => {
   assert.equal(resolveCountryCode(null), null);
   assert.equal(resolveCountryCode(""), null);
+});
+
+test("resolveChannelCountryCode: BBC and ITV channels default to GB", () => {
+  assert.equal(resolveChannelCountryCode(null, "BBC iPlayer"), "GB");
+  assert.equal(resolveChannelCountryCode("Other", "BBC Sport Website"), "GB");
+  assert.equal(resolveChannelCountryCode(null, "ITVX"), "GB");
+  assert.equal(resolveChannelCountryCode("Other", "ITV TBC"), "GB");
+});
+
+test("resolveChannelCountryCode: explicit mapped country wins", () => {
+  assert.equal(resolveChannelCountryCode("United States", "BBC America"), "US");
 });
 
 // ---------------------------------------------------------------------------
@@ -142,10 +153,24 @@ test("parseTvListingsResponse: maps multiple countries correctly", () => {
 });
 
 test("parseTvListingsResponse: worldwide country gets null countryCode", () => {
-  const data = { filter: [entry({ strCountry: "Worldwide" })] };
+  const data = { filter: [entry({ strChannel: "World Feed", strCountry: "Worldwide" })] };
   const [ch] = parseTvListingsResponse(data).get("2391728");
   assert.equal(ch.country, "Worldwide");
   assert.equal(ch.countryCode, null);
+});
+
+test("parseTvListingsResponse: UK broadcaster channels with unmapped country get GB countryCode", () => {
+  const data = {
+    filter: [
+      entry({ strChannel: "BBC TBC", strCountry: "Other" }),
+      entry({ strChannel: "BBC iPlayer", strCountry: "" }),
+      entry({ strChannel: "BBC Sport Website", strCountry: "Worldwide" }),
+      entry({ strChannel: "ITV TBC", strCountry: "Other" }),
+      entry({ strChannel: "ITVX", strCountry: "" }),
+    ],
+  };
+  const channels = parseTvListingsResponse(data).get("2391728");
+  assert.deepEqual(channels.map((ch) => ch.countryCode), ["GB", "GB", "GB", "GB", "GB"]);
 });
 
 test("COUNTRY_CODE_MAP has no empty-string values", () => {

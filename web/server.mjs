@@ -259,6 +259,9 @@ async function start() {
   if (isProduction) {
     app.use("/assets", express.static(path.join(productionClientRoot, "assets")));
     app.use(express.static(productionClientRoot));
+    app.get("/generated-assets/*", (_req, res) => {
+      res.status(404).end();
+    });
 
     app.get("*", (_req, res) => {
       res.sendFile(path.join(productionClientRoot, "index.html"));

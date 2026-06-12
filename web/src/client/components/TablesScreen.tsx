@@ -105,9 +105,59 @@ export function TablesScreen() {
             </select>
           </label>
 
-          {selectedLeague ? <LeagueTableCard league={selectedLeague} /> : null}
+          {selectedLeague ? (
+            <>
+              <LeagueTableHero league={selectedLeague} />
+              <LeagueTableCard league={selectedLeague} />
+              {state.lastUpdated ? (
+                <div className="tables-updated">Updated {formatLastUpdated(state.lastUpdated)}</div>
+              ) : null}
+            </>
+          ) : null}
         </div>
       )}
+    </section>
+  );
+}
+
+function LeagueTableHero({ league }: { league: LeagueTable }) {
+  const rows = league.rows.length > 0 ? league.rows : league.groups.flatMap((group) => group.rows);
+  const sortedRows = [...rows].sort((left, right) => {
+    if (left.position !== right.position) return left.position - right.position;
+    return right.points - left.points;
+  });
+  const leader = sortedRows[0] || null;
+  const second = sortedRows[1] || null;
+  const visibleStageName = normalizeStageName(league.stageName);
+  const leaderSummary = leader
+    ? second
+      ? leader.points > second.points
+        ? `${leader.team} lead by ${leader.points - second.points} ${leader.points - second.points === 1 ? "point" : "points"}`
+        : `${leader.team} lead on goal difference`
+      : `${leader.team} lead`
+    : null;
+
+  return (
+    <section className="league-hero">
+      <div className="league-hero-mark">
+        {league.leagueName.toLowerCase().includes("premier league") ? (
+          <img src="/generated-assets/app-icon.png" alt="" />
+        ) : (
+          <span aria-hidden="true">*</span>
+        )}
+      </div>
+      <div className="league-hero-title">
+        <h2>{league.leagueName}</h2>
+        <p>
+          {[visibleStageName, `${rows.length} teams`].filter(Boolean).join(" · ")}
+        </p>
+      </div>
+      {leaderSummary ? (
+        <div className="league-hero-leader">
+          <span>Leader</span>
+          <strong>{leaderSummary}</strong>
+        </div>
+      ) : null}
     </section>
   );
 }

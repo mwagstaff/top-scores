@@ -30,11 +30,17 @@ function userCountryCode(): string | null {
   return parts.length >= 2 ? parts[parts.length - 1].toUpperCase() : null;
 }
 
+function broadcastCountryCode(channel: TvChannel): string | null {
+  if (channel.countryCode) return channel.countryCode;
+  const name = channel.name.toLowerCase();
+  return name.includes("bbc") || name.includes("itv") ? "GB" : null;
+}
+
 // Channels that match the user's locale country code.
 function localChannels(channels: TvChannel[]): TvChannel[] {
   const code = userCountryCode();
   if (!code) return [];
-  return channels.filter((c) => c.countryCode === code);
+  return channels.filter((c) => broadcastCountryCode(c) === code);
 }
 
 interface MatchCardProps {
@@ -339,6 +345,12 @@ function flagEmoji(countryCode: string): string {
     .join("");
 }
 
+function channelFlagEmoji(channel: TvChannel | undefined): string | null {
+  if (!channel) return null;
+  const countryCode = broadcastCountryCode(channel);
+  return countryCode ? flagEmoji(countryCode) : null;
+}
+
 // ── TV badge (single channel logo for the fixture list row) ──────────
 function TvBadge({ channel, matchId }: { channel: TvChannel; matchId: string }) {
   const src = channel.logo || `/logos/tv/${encodeURIComponent(channel.name)}`;
@@ -412,7 +424,8 @@ function WhereToWatch({ channels }: { channels: TvChannel[] }) {
     const otherMap = new Map<string, TvChannel[]>();
 
     channels.forEach((ch) => {
-      if (ch.countryCode === userCode) {
+      const countryCode = broadcastCountryCode(ch);
+      if (countryCode === userCode) {
         localChannels.push(ch);
       } else {
         const key = ch.country ?? "Other";
@@ -468,8 +481,8 @@ function WhereToWatch({ channels }: { channels: TvChannel[] }) {
                 {other.map(([country, chs]) => (
                   <div key={country} className="details-wtw-country">
                     <div className="details-wtw-country-header">
-                      {chs[0]?.countryCode && (
-                        <span className="details-wtw-flag">{flagEmoji(chs[0].countryCode)}</span>
+                      {channelFlagEmoji(chs[0]) && (
+                        <span className="details-wtw-flag">{channelFlagEmoji(chs[0])}</span>
                       )}
                       <span className="details-wtw-country-name">{country}</span>
                     </div>

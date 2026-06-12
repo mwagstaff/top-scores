@@ -60,6 +60,17 @@ function resolveCountryCode(strCountry) {
   return COUNTRY_CODE_MAP[strCountry.toLowerCase()] ?? null;
 }
 
+function resolveChannelCountryCode(strCountry, strChannel) {
+  const explicitCode = resolveCountryCode(strCountry);
+  if (explicitCode) return explicitCode;
+
+  const channel = String(strChannel || "").toLowerCase();
+  if (channel.includes("bbc")) return "GB";
+  if (channel.includes("itv")) return "GB";
+
+  return explicitCode;
+}
+
 // ---------------------------------------------------------------------------
 // Parse the API response into a map keyed by idEvent.
 //
@@ -79,7 +90,7 @@ function parseTvListingsResponse(data) {
     if (!name) return;
 
     const country = String(entry.strCountry || "").trim() || null;
-    const countryCode = resolveCountryCode(country);
+    const countryCode = resolveChannelCountryCode(country, name);
     const logo = String(entry.strLogo || "").trim() || null;
 
     if (!byEvent.has(idEvent)) byEvent.set(idEvent, []);
@@ -144,5 +155,6 @@ module.exports = {
   fetchTsdbTvListingsFull,
   parseTvListingsResponse,
   resolveCountryCode,
+  resolveChannelCountryCode,
   COUNTRY_CODE_MAP,
 };

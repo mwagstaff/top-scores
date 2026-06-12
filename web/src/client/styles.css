@@ -174,16 +174,79 @@ img    { display: block; }
 /* ── 3. LAYOUT: APP SHELL ────────────────────────────────────── */
 
 .app-shell {
-  width: min(1100px, calc(100vw - 1.5rem));
+  width: min(1420px, calc(100vw - 1.5rem));
   margin: 0 auto;
   padding: 0.75rem 0 6rem;
   --match-date-sticky-top: 5rem;
+}
+
+.desktop-dashboard {
+  display: grid;
+  grid-template-columns: 13.5rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.dashboard-main {
+  min-width: 0;
 }
 
 .app-content {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.competition-rail {
+  position: sticky;
+  top: 0.75rem;
+  display: grid;
+  gap: 0.85rem;
+  min-height: calc(100dvh - 1.5rem);
+  padding: 1rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 1.15rem;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+
+.rail-title {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.rail-list {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.rail-link {
+  display: grid;
+  grid-template-columns: 0.55rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 2.45rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.75rem;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.rail-link:hover {
+  background: var(--hover-bg);
+}
+
+.rail-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 0.22rem var(--accent-soft);
 }
 
 
@@ -200,11 +263,11 @@ img    { display: block; }
   display: flex;
   align-items: center;
   gap: 1rem;
-  margin: 0.5rem 0 0.75rem;
+  margin: 0 0 0.75rem;
   padding: 0.65rem 1rem;
   border: 1px solid var(--surface-border);
-  border-radius: 1.25rem;
-  background: color-mix(in srgb, var(--surface-strong) 80%, transparent);
+  border-radius: 1.1rem;
+  background: color-mix(in srgb, var(--surface-strong) 78%, transparent);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   box-shadow: var(--shadow-sm);
@@ -353,7 +416,7 @@ img    { display: block; }
 /* Generic panel – used by Tables and Preferences */
 .screen-panel {
   border: 1px solid var(--surface-border);
-  border-radius: 1.35rem;
+  border-radius: 1.05rem;
   background: var(--surface);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
@@ -641,7 +704,7 @@ img    { display: block; }
 
 .match-day-stack {
   display: grid;
-  gap: 1.25rem;
+  gap: 1.05rem;
   padding: 0.15rem 0.85rem 0.85rem;
 }
 
@@ -673,7 +736,7 @@ img    { display: block; }
   align-self: start;
   margin: -0.15rem -0.85rem 0;
   padding: 0.45rem 0.85rem 0.5rem;
-  border-bottom: 1px solid var(--surface-border);
+  border-bottom: 0;
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
@@ -681,10 +744,10 @@ img    { display: block; }
 
 .day-section-header h3 {
   margin: 0;
-  font-size: 0.88rem;
+  font-size: 1rem;
   font-weight: 700;
-  color: var(--text-muted);
-  letter-spacing: 0.03em;
+  color: var(--text);
+  letter-spacing: 0;
 }
 
 /* League sub-group within a day */
@@ -699,7 +762,7 @@ img    { display: block; }
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-muted);
-  padding: 0 0.9rem;
+  padding: 0 0.3rem;
   opacity: 0.75;
 }
 
@@ -718,7 +781,7 @@ img    { display: block; }
 */
 .match-card {
   border: 1px solid var(--surface-border);
-  border-radius: 0.95rem;
+  border-radius: 0.75rem;
   background: var(--surface-strong);
   overflow: hidden;
   transition: border-color 180ms ease;
@@ -746,7 +809,7 @@ img    { display: block; }
     1.15rem;          /* chevron    */
   align-items: center;
   column-gap: 0.5rem;
-  padding: 0.6rem 0.85rem;
+  padding: 0.7rem 0.9rem;
 
   /* Reset button defaults when used as <button> */
   width: 100%;
@@ -924,7 +987,7 @@ button.match-row:hover {
 
 .match-details-panel {
   border-top: 1px solid var(--surface-border);
-  padding: 0.9rem;
+  padding: 1rem;
 }
 
 .match-details-body,
@@ -1017,6 +1080,10 @@ button.match-row:hover {
 .details-section {
   display: grid;
   gap: 0.75rem;
+  padding: 0.9rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--surface-strong) 72%, transparent);
 }
 
 .details-section-title {
@@ -1489,6 +1556,75 @@ button.match-row:hover {
   max-width: 22rem;
 }
 
+.league-hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(10rem, auto);
+  align-items: center;
+  gap: 1rem;
+  overflow: hidden;
+  border-radius: 1rem;
+  padding: 1.15rem 1.35rem;
+  background:
+    radial-gradient(circle at 88% 10%, rgba(255, 58, 119, 0.28), transparent 18rem),
+    linear-gradient(135deg, #2a0647 0%, #3a064d 52%, #160522 100%);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.league-hero-mark {
+  display: grid;
+  place-items: center;
+  width: 3.75rem;
+  height: 3.75rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 2rem;
+  font-weight: 900;
+}
+
+.league-hero-mark img {
+  width: 2.8rem;
+  height: 2.8rem;
+  object-fit: contain;
+}
+
+.league-hero-title h2 {
+  margin: 0;
+  font-size: clamp(1.45rem, 3vw, 2rem);
+  line-height: 1.05;
+}
+
+.league-hero-title p {
+  margin: 0.4rem 0 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-weight: 650;
+}
+
+.league-hero-leader {
+  display: grid;
+  gap: 0.28rem;
+  text-align: right;
+}
+
+.league-hero-leader span {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.league-hero-leader strong {
+  font-size: 1.1rem;
+  line-height: 1.18;
+}
+
+.tables-updated {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-align: right;
+}
+
 .league-table-card {
   display: grid;
   gap: 0.85rem;
@@ -1873,6 +2009,14 @@ button.match-row:hover {
     --match-date-sticky-top: 4.75rem;
   }
 
+  .desktop-dashboard {
+    display: block;
+  }
+
+  .competition-rail {
+    display: none;
+  }
+
   /* Mobile: tabs go to bottom dock, hide from header */
   .tab-strip-desktop { display: none; }
 
@@ -1898,6 +2042,21 @@ button.match-row:hover {
   }
 
   /* Tables: tighter columns */
+  .league-hero {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 1rem;
+  }
+
+  .league-hero-leader {
+    grid-column: 1 / -1;
+    text-align: left;
+    padding-top: 0.3rem;
+  }
+
+  .tables-stack {
+    padding-inline: 0.85rem;
+  }
+
   .league-table-heading,
   .league-table-row {
     grid-template-columns: 1.75rem 1.6rem minmax(0, 1fr) 1.85rem 2.2rem 2.35rem 1.25rem;
