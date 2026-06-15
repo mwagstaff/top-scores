@@ -10,7 +10,7 @@
   "timezone": "browser",
   "schemaVersion": 38,
   "version": 1,
-  "refresh": "10s",
+  "refresh": "30s",
   "time": {
     "from": "now-6h",
     "to": "now"
@@ -426,11 +426,11 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(top_scores_tsdb_http_request_duration_seconds_bucket{job=\"top-scores\",source=~\"tsdb_.*\"}[$__rate_interval])) by (source, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(top_scores_tsdb_http_request_duration_seconds_bucket{job=\"top-scores\",source=~\"tsdb_.*\",url=\"\"}[$__rate_interval])) by (source, le))",
           "legendFormat": "{{source}} p95"
         }
       ],
-      "description": "Per-request TheSportsDB HTTP latency by client source. This uses the same URL-level HTTP request histogram as the slow-URL table below."
+      "description": "Per-request TheSportsDB HTTP latency by client source. URL-level troubleshooting tables below use bounded top-N gauges to avoid expensive high-cardinality Prometheus scans."
     },
     {
       "type": "timeseries",
@@ -638,7 +638,7 @@
       },
       "targets": [
         {
-          "expr": "sort_desc(topk(100, histogram_quantile(0.95, sum(rate(top_scores_tsdb_http_request_duration_seconds_bucket{job=\"top-scores\",source=~\"tsdb_.*\"}[$__range])) by (source, status_code, url, le))))",
+          "expr": "sort_desc(top_scores_tsdb_http_slow_url_p95_seconds{job=\"top-scores\"})",
           "instant": true,
           "format": "table"
         }
@@ -672,12 +672,12 @@
           }
         }
       ],
-      "description": "Per-URL upstream HTTP request latency. Use this for troubleshooting slow TheSportsDB endpoints; the source update duration chart above measures whole update jobs."
+      "description": "Top URL/status/source combinations by p95 upstream HTTP request latency over the API process rolling window. This uses bounded top-N gauges instead of querying all URL-labelled histogram buckets."
     },
     {
       "type": "table",
       "title": "Slow TheSportsDB HTTP URLs by Max Latency",
-      "description": "Top 20 URL/status/source combinations by the maximum sampled last-request latency in the selected dashboard time window. Last Observed At is the latest observed request timestamp for that URL/status/source within the same window; exact peak timestamps require Prometheus experimental ts_of_max_over_time support.",
+      "description": "Top 20 URL/status/source combinations by max upstream HTTP request latency over the API process rolling window. Peak Observed At is the timestamp of the max request captured by the API.",
       "gridPos": {
         "x": 0,
         "y": 60,
@@ -704,7 +704,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Last Observed At"
+              "options": "Peak Observed At"
             },
             "properties": [
               {
@@ -718,13 +718,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sort_desc(topk(20, max_over_time(top_scores_tsdb_http_request_last_duration_seconds{job=\"top-scores\",source=~\"tsdb_.*\"}[$__range])))",
+          "expr": "sort_desc(top_scores_tsdb_http_slow_url_max_seconds{job=\"top-scores\"})",
           "instant": true,
           "format": "table"
         },
         {
           "refId": "B",
-          "expr": "1000 * (max_over_time(top_scores_tsdb_http_request_last_timestamp_seconds{job=\"top-scores\",source=~\"tsdb_.*\"}[$__range]) and on(source, status_code, url) topk(20, max_over_time(top_scores_tsdb_http_request_last_duration_seconds{job=\"top-scores\",source=~\"tsdb_.*\"}[$__range])))",
+          "expr": "1000 * top_scores_tsdb_http_slow_url_max_timestamp_seconds{job=\"top-scores\"}",
           "instant": true,
           "format": "table"
         }
@@ -763,7 +763,7 @@
               "status_code": "Status Code",
               "url": "URL",
               "Value #A": "HTTP Max Latency",
-              "Value #B": "Last Observed At",
+              "Value #B": "Peak Observed At",
               "Value": "HTTP Max Latency"
             }
           }

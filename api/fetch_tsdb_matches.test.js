@@ -15,6 +15,8 @@ const {
   normalizeTsdbKickoffDateTime,
   lineupPayloadHasEntries,
   matchLineupCacheFresh,
+  timelinePayloadHasEntries,
+  matchTimelineCacheFresh,
 } = __private;
 
 // ---------------------------------------------------------------------------
@@ -447,6 +449,38 @@ test("lineup cache freshness: final populated lineup is fresh", () => {
         final: true,
         next_refresh_at_ms: null,
         payload: { lookup: [{ idLineup: "1" }] },
+      },
+      nowMs
+    ),
+    true
+  );
+});
+
+test("timeline cache freshness: final No data found response is not fresh", () => {
+  const nowMs = Date.parse("2026-06-15T12:00:00Z");
+  assert.equal(timelinePayloadHasEntries({ message: "No data found" }), false);
+  assert.equal(
+    matchTimelineCacheFresh(
+      {
+        final: true,
+        next_refresh_at_ms: null,
+        payload: { message: "No data found" },
+      },
+      nowMs
+    ),
+    false
+  );
+});
+
+test("timeline cache freshness: final populated timeline is fresh", () => {
+  const nowMs = Date.parse("2026-06-15T12:00:00Z");
+  assert.equal(timelinePayloadHasEntries({ lookup: [{ idTimeline: "1797034" }] }), true);
+  assert.equal(
+    matchTimelineCacheFresh(
+      {
+        final: true,
+        next_refresh_at_ms: null,
+        payload: { lookup: [{ idTimeline: "1797034" }] },
       },
       nowMs
     ),

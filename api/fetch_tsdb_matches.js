@@ -36,6 +36,7 @@ const {
 const TSDB_LINEUP_FUTURE_REFRESH_MS = 6 * 60 * 60 * 1000;
 const TSDB_LINEUP_TODAY_REFRESH_MS = 30 * 60 * 1000;
 const TSDB_TIMELINE_IN_PROGRESS_REFRESH_MS = 30 * 1000;
+const TSDB_TIMELINE_EMPTY_RETRY_MS = 2 * 60 * 1000;
 const TSDB_ENTITY_REFRESH_MS = 24 * 60 * 60 * 1000;
 const TSDB_ENTITY_WARM_CONCURRENCY = 3;
 
@@ -893,14 +894,16 @@ function currentUkDateString(nowMs = Date.now()) {
   }
 }
 
-function cacheRecordFresh(record, nowMs = Date.now()) {
-  if (!record || typeof record !== "object") return false;
-  if (record.final === true) return true;
-  const nextRefreshAtMs = Number(record.next_refresh_at_ms);
-  return Number.isFinite(nextRefreshAtMs) && nextRefreshAtMs > nowMs;
+function lineupPayloadHasEntries(payload) {
+  return Boolean(
+    payload &&
+    typeof payload === "object" &&
+    Array.isArray(payload.lookup) &&
+    payload.lookup.length > 0
+  );
 }
 
-function lineupPayloadHasEntries(payload) {
+function timelinePayloadHasEntries(payload) {
   return Boolean(
     payload &&
     typeof payload === "object" &&
@@ -912,6 +915,13 @@ function lineupPayloadHasEntries(payload) {
 function matchLineupCacheFresh(record, nowMs = Date.now()) {
   if (!record || typeof record !== "object") return false;
   if (record.final === true) return lineupPayloadHasEntries(record.payload);
+  const nextRefreshAtMs = Number(record.next_refresh_at_ms);
+  return Number.isFinite(nextRefreshAtMs) && nextRefreshAtMs > nowMs;
+}
+
+function matchTimelineCacheFresh(record, nowMs = Date.now()) {
+  if (!record || typeof record !== "object") return false;
+  if (record.final === true) return timelinePayloadHasEntries(record.payload);
   const nextRefreshAtMs = Number(record.next_refresh_at_ms);
   return Number.isFinite(nextRefreshAtMs) && nextRefreshAtMs > nowMs;
 }
@@ -993,7 +1003,7 @@ async function cachedOrFetchMatchTimeline(idEvent, context = {}, reqOpts = {}) {
   const nowMs = Number.isFinite(Number(context.nowMs)) ? Number(context.nowMs) : Date.now();
   const scoreStatus = context.scoreStatus || null;
   const cached = await getMatchTimelineCache(idEvent).catch(() => null);
-  if (cached && cacheRecordFresh(cached, nowMs)) {
+  if (cached && matchTimelineCacheFresh(cached, nowMs)) {
     return cached.payload || null;
   }
 
@@ -1001,10 +1011,15 @@ async function cachedOrFetchMatchTimeline(idEvent, context = {}, reqOpts = {}) {
     ...reqOpts,
     reason: "tsdb_timeline_lookup",
   });
+  const metadata = matchTimelineCacheMetadata(scoreStatus, nowMs);
+  if (!timelinePayloadHasEntries(response)) {
+    metadata.final = false;
+    metadata.next_refresh_at_ms = nowMs + TSDB_TIMELINE_EMPTY_RETRY_MS;
+  }
   await upsertMatchTimelineCache(
     idEvent,
     response,
-    matchTimelineCacheMetadata(scoreStatus, nowMs)
+    metadata
   ).catch((error) => {
     console.warn(`[TSDB] Failed to cache timeline for event=${idEvent}:`, error.message || error);
   });
@@ -1281,5 +1296,7 @@ module.exports = {
     normalizeTsdbKickoffDateTime,
     lineupPayloadHasEntries,
     matchLineupCacheFresh,
+    timelinePayloadHasEntries,
+    matchTimelineCacheFresh,
   },
 };

@@ -8,6 +8,8 @@ const REDIS_DB = process.env.REDIS_DB || 0;
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 const MONGO_READ_BACKFILL_DISABLED = process.env.MONGO_READ_BACKFILL_DISABLED === "1";
 const MONGO_READ_PRIMARY_DISABLED = process.env.MONGO_READ_PRIMARY_DISABLED === "1";
+const MONGO_BULK_READ_PRIMARY_ENABLED = process.env.MONGO_BULK_READ_PRIMARY_ENABLED === "1";
+const MONGO_BULK_READ_BACKFILL_ENABLED = process.env.MONGO_BULK_READ_BACKFILL_ENABLED === "1";
 
 const DB_NAME = "top_scores";
 const USER_PREFERENCES_PREFIX = `${DB_NAME}:user_preferences:`;
@@ -120,6 +122,10 @@ function shouldBackfillMongoReads() {
 
 function shouldReadMongoPrimary() {
   return !MONGO_READ_PRIMARY_DISABLED;
+}
+
+function shouldReadMongoBulkPrimary() {
+  return shouldReadMongoPrimary() && MONGO_BULK_READ_PRIMARY_ENABLED;
 }
 
 // ─── Redis operation metrics ──────────────────────────────────────────────────
@@ -2345,7 +2351,7 @@ async function getAllOperationalMatchDetails() {
   const timings = {};
   try {
     const mongoStartedAtMs = Date.now();
-    const mongoSnapshot = shouldReadMongoPrimary()
+    const mongoSnapshot = shouldReadMongoBulkPrimary()
       ? await mongoStore.getAllOperationalMatchDetails()
       : null;
     recordTiming(timings, "mongo_primary_ms", mongoStartedAtMs);
@@ -2362,6 +2368,18 @@ async function getAllOperationalMatchDetails() {
     const ids = await redisClient.sMembers(OPERATIONAL_MATCH_DETAILS_INDEX_KEY);
     recordTiming(timings, "redis_index_ms", indexStartedAtMs);
     if (!Array.isArray(ids) || ids.length === 0) {
+      const fallbackStartedAtMs = Date.now();
+      const fallbackMongoSnapshot = !shouldReadMongoBulkPrimary() && shouldReadMongoPrimary()
+        ? await mongoStore.getAllOperationalMatchDetails()
+        : null;
+      recordTiming(timings, "mongo_fallback_ms", fallbackStartedAtMs);
+      if (fallbackMongoSnapshot && Number(fallbackMongoSnapshot.total || 0) > 0) {
+        maybeLogSlowOperationalRead("get_all_match_details", startedAtMs, timings, {
+          source: "mongo_fallback",
+          total: Number(fallbackMongoSnapshot.total || 0),
+        });
+        return fallbackMongoSnapshot;
+      }
       return {
         updated_at: null,
         total: 0,
@@ -2404,7 +2422,11 @@ async function getAllOperationalMatchDetails() {
     const metaRaw = await redisClient.get(OPERATIONAL_MATCH_DETAILS_META_KEY);
     recordTiming(timings, "redis_meta_ms", metaStartedAtMs);
     const meta = metaRaw ? safeJsonParse(metaRaw, "operational match details meta") : null;
-    if (Object.keys(records).length > 0 && shouldBackfillMongoReads()) {
+    if (
+      Object.keys(records).length > 0 &&
+      shouldBackfillMongoReads() &&
+      MONGO_BULK_READ_BACKFILL_ENABLED
+    ) {
       const backfillStartedAtMs = Date.now();
       await mongoStore.saveOperationalMatchDetailsRecords(records, {
         updated_at: meta && meta.updated_at ? meta.updated_at : new Date().toISOString(),

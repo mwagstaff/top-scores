@@ -736,6 +736,11 @@ const SOURCE_UPDATE_PHASE_DURATION_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 
 const APP_EVENT_DURATION_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0];
 const REDIS_OP_DURATION_BUCKETS_S = [0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 5.0];
 const FPL_TRANSFER_RECOMMENDATION_DURATION_BUCKETS = [0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1];
+const TSDB_HTTP_SLOW_REQUEST_WINDOW_MS = Number(
+  process.env.TSDB_HTTP_SLOW_REQUEST_WINDOW_MS || 6 * 60 * 60 * 1000
+);
+const TSDB_HTTP_SLOW_URL_P95_LIMIT = Number(process.env.TSDB_HTTP_SLOW_URL_P95_LIMIT || 100);
+const TSDB_HTTP_SLOW_URL_MAX_LIMIT = Number(process.env.TSDB_HTTP_SLOW_URL_MAX_LIMIT || 20);
 const UNIQUE_USER_WINDOWS = [
   { period: "1m", windowMs: 60 * 1000 },
   { period: "5m", windowMs: 5 * 60 * 1000 },
@@ -749,8 +754,7 @@ const sourceFetchMetrics = new Map();
 const bbcHttpRequestMetrics = new Map();
 const bbcHttpFailedResponseMetrics = new Map();
 const tsdbHttpRequestDurationMetrics = new Map();
-const tsdbHttpRequestLastDurationMetrics = new Map();
-const tsdbHttpRequestLastTimestampMetrics = new Map();
+let tsdbHttpRecentRequests = [];
 const sourceUpdatePhaseMetrics = new Map();
 const fantasyTransferRecommendationMetrics = new Map();
 const sourceRecordsFetchedTotalBySource = new Map();
@@ -2630,6 +2634,81 @@ function trackSourceUpdatePhaseMetric({ source, phase, startedAtMs }) {
   );
 }
 
+function pruneTsdbHttpRecentRequests(nowMs = Date.now()) {
+  const windowMs =
+    Number.isFinite(TSDB_HTTP_SLOW_REQUEST_WINDOW_MS) && TSDB_HTTP_SLOW_REQUEST_WINDOW_MS > 0
+      ? TSDB_HTTP_SLOW_REQUEST_WINDOW_MS
+      : 6 * 60 * 60 * 1000;
+  const cutoffMs = nowMs - windowMs;
+  if (tsdbHttpRecentRequests.length === 0) return;
+  if (tsdbHttpRecentRequests[0].timestampMs >= cutoffMs) return;
+  tsdbHttpRecentRequests = tsdbHttpRecentRequests.filter((entry) => entry.timestampMs >= cutoffMs);
+}
+
+function percentileFromSorted(values, percentile) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  const normalizedPercentile = Math.min(1, Math.max(0, Number(percentile) || 0));
+  const index = Math.min(
+    values.length - 1,
+    Math.max(0, Math.ceil(normalizedPercentile * values.length) - 1)
+  );
+  return values[index];
+}
+
+function buildTsdbHttpSlowUrlRows(nowMs = Date.now()) {
+  pruneTsdbHttpRecentRequests(nowMs);
+  const grouped = new Map();
+
+  tsdbHttpRecentRequests.forEach((entry) => {
+    const labels = {
+      source: entry.source,
+      status_code: entry.statusCode,
+      url: entry.url,
+    };
+    const key = metricLabelKey(labels);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        labels,
+        durations: [],
+        count: 0,
+        maxSeconds: 0,
+        maxTimestampSeconds: 0,
+      });
+    }
+    const row = grouped.get(key);
+    row.count += 1;
+    row.durations.push(entry.durationSeconds);
+    if (entry.durationSeconds >= row.maxSeconds) {
+      row.maxSeconds = entry.durationSeconds;
+      row.maxTimestampSeconds = entry.timestampMs / 1000;
+    }
+  });
+
+  const rows = Array.from(grouped.values()).map((row) => {
+    row.durations.sort((lhs, rhs) => lhs - rhs);
+    return {
+      labels: row.labels,
+      count: row.count,
+      p95Seconds: percentileFromSorted(row.durations, 0.95),
+      maxSeconds: row.maxSeconds,
+      maxTimestampSeconds: row.maxTimestampSeconds,
+    };
+  });
+
+  const p95Limit = Math.max(1, Number(TSDB_HTTP_SLOW_URL_P95_LIMIT) || 100);
+  const maxLimit = Math.max(1, Number(TSDB_HTTP_SLOW_URL_MAX_LIMIT) || 20);
+  return {
+    p95Rows: rows
+      .slice()
+      .sort((lhs, rhs) => rhs.p95Seconds - lhs.p95Seconds)
+      .slice(0, p95Limit),
+    maxRows: rows
+      .slice()
+      .sort((lhs, rhs) => rhs.maxSeconds - lhs.maxSeconds)
+      .slice(0, maxLimit),
+  };
+}
+
 function buildBbcRangeProgressWindow() {
   return {
     total: 0,
@@ -2799,28 +2878,24 @@ function trackBbcHttpRequestMetric({
   bbcHttpRequestMetrics.set(requestKey, (bbcHttpRequestMetrics.get(requestKey) || 0) + 1);
 
   if (normalizedUrl && normalizedDurationMs !== null) {
-    const durationLabels = {
-      source: normalizedSource,
-      status_code: normalizedStatusCode,
-      url: normalizedUrl,
-    };
-
     recordHistogramSample(
       tsdbHttpRequestDurationMetrics,
-      durationLabels,
+      {
+        source: normalizedSource,
+        status_code: normalizedStatusCode,
+      },
       normalizedDurationMs / 1000,
       TSDB_HTTP_REQUEST_DURATION_BUCKETS
     );
 
-    const durationKey = metricLabelKey(durationLabels);
-    tsdbHttpRequestLastDurationMetrics.set(durationKey, {
-      labels: durationLabels,
-      value: normalizedDurationMs / 1000,
+    tsdbHttpRecentRequests.push({
+      source: normalizedSource,
+      statusCode: normalizedStatusCode,
+      url: normalizedUrl,
+      durationSeconds: normalizedDurationMs / 1000,
+      timestampMs: normalizedTimestampMs,
     });
-    tsdbHttpRequestLastTimestampMetrics.set(durationKey, {
-      labels: durationLabels,
-      value: normalizedTimestampMs / 1000,
-    });
+    pruneTsdbHttpRecentRequests(normalizedTimestampMs);
   }
 
   saveBbcRequestHistory({
@@ -5915,36 +5990,44 @@ function buildPrometheusMetricsText() {
   appendHistogramMetrics(
     lines,
     "top_scores_tsdb_http_request_duration_seconds",
-    "Duration of TheSportsDB upstream HTTP requests in seconds by source, response code, and URL.",
+    "Duration of TheSportsDB upstream HTTP requests in seconds by source and response code.",
     TSDB_HTTP_REQUEST_DURATION_BUCKETS,
     tsdbHttpDurationMetricEntries
   );
 
-  lines.push("# HELP top_scores_tsdb_http_request_last_duration_seconds Last observed duration of a TheSportsDB upstream HTTP request by source, response code, and URL.");
-  lines.push("# TYPE top_scores_tsdb_http_request_last_duration_seconds gauge");
-  Array.from(tsdbHttpRequestLastDurationMetrics.values())
-    .sort((lhs, rhs) => metricLabelKey(lhs.labels).localeCompare(metricLabelKey(rhs.labels)))
-    .forEach((entry) => {
-      pushPrometheusSample(
-        lines,
-        "top_scores_tsdb_http_request_last_duration_seconds",
-        entry.value,
-        entry.labels
-      );
-    });
+  const tsdbSlowUrlRows = buildTsdbHttpSlowUrlRows(nowMs);
+  lines.push("# HELP top_scores_tsdb_http_slow_url_p95_seconds Top recent TheSportsDB HTTP URL p95 durations in seconds over the API process rolling window.");
+  lines.push("# TYPE top_scores_tsdb_http_slow_url_p95_seconds gauge");
+  tsdbSlowUrlRows.p95Rows.forEach((entry) => {
+    pushPrometheusSample(lines, "top_scores_tsdb_http_slow_url_p95_seconds", entry.p95Seconds, entry.labels);
+  });
 
-  lines.push("# HELP top_scores_tsdb_http_request_last_timestamp_seconds Last observed timestamp of a TheSportsDB upstream HTTP request by source, response code, and URL.");
-  lines.push("# TYPE top_scores_tsdb_http_request_last_timestamp_seconds gauge");
-  Array.from(tsdbHttpRequestLastTimestampMetrics.values())
-    .sort((lhs, rhs) => metricLabelKey(lhs.labels).localeCompare(metricLabelKey(rhs.labels)))
-    .forEach((entry) => {
-      pushPrometheusSample(
-        lines,
-        "top_scores_tsdb_http_request_last_timestamp_seconds",
-        entry.value,
-        entry.labels
-      );
-    });
+  lines.push("# HELP top_scores_tsdb_http_slow_url_max_seconds Top recent TheSportsDB HTTP URL max durations in seconds over the API process rolling window.");
+  lines.push("# TYPE top_scores_tsdb_http_slow_url_max_seconds gauge");
+  tsdbSlowUrlRows.maxRows.forEach((entry) => {
+    pushPrometheusSample(lines, "top_scores_tsdb_http_slow_url_max_seconds", entry.maxSeconds, entry.labels);
+  });
+
+  lines.push("# HELP top_scores_tsdb_http_slow_url_max_timestamp_seconds Timestamp of the max request for top recent TheSportsDB HTTP URLs over the API process rolling window.");
+  lines.push("# TYPE top_scores_tsdb_http_slow_url_max_timestamp_seconds gauge");
+  tsdbSlowUrlRows.maxRows.forEach((entry) => {
+    pushPrometheusSample(
+      lines,
+      "top_scores_tsdb_http_slow_url_max_timestamp_seconds",
+      entry.maxTimestampSeconds,
+      entry.labels
+    );
+  });
+
+  lines.push("# HELP top_scores_tsdb_http_slow_url_requests Requests observed for top recent TheSportsDB HTTP URL rows over the API process rolling window.");
+  lines.push("# TYPE top_scores_tsdb_http_slow_url_requests gauge");
+  Array.from(
+    [...tsdbSlowUrlRows.p95Rows, ...tsdbSlowUrlRows.maxRows]
+      .reduce((rowsByKey, entry) => rowsByKey.set(metricLabelKey(entry.labels), entry), new Map())
+      .values()
+  ).forEach((entry) => {
+    pushPrometheusSample(lines, "top_scores_tsdb_http_slow_url_requests", entry.count, entry.labels);
+  });
 
   lines.push("# HELP source_records_fetched_total Total number of source records fetched.");
   lines.push("# TYPE source_records_fetched_total counter");
@@ -30210,7 +30293,13 @@ async function bootstrapOperationalState(options = {}) {
     }
 
     await rebuildMergedMatchesCache("startup_bootstrap");
-    await rebuildMatchDetailsCache("startup_bootstrap");
+    if (matchDetailsById.size === 0) {
+      await rebuildMatchDetailsCache("startup_bootstrap");
+    } else {
+      console.info(
+        `[Startup] Skipped full match details rebuild; hydrated ${matchDetailsById.size} records from operational state.`
+      );
+    }
 
     void updateTsdbLivescores({ trigger: "startup_bootstrap" });
     void updateTsdbScheduleMatches({ trigger: "startup_bootstrap" });
