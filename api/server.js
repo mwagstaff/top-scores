@@ -11976,7 +11976,7 @@ function isListPayloadVisibleForMode(payload, mode, now = new Date()) {
   const todayStartMs = todayStart.getTime();
 
   if (mode === "fixtures") {
-    return dayMs >= todayStartMs;
+    return dayMs >= todayStartMs || isInProgressMatchStatus(payload.score_status);
   }
 
   if (dayMs < todayStartMs) return true;

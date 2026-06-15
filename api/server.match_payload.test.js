@@ -2190,6 +2190,40 @@ test("isListPayloadVisibleForMode keeps future fixtures visible without legacy B
   );
 });
 
+test("isListPayloadVisibleForMode keeps in-progress previous-day matches visible in fixtures", () => {
+  const now = new Date("2026-04-05T00:20:00Z");
+
+  assert.equal(
+    isListPayloadVisibleForMode(
+      {
+        date: "2026-04-04",
+        time: "23:00",
+        home_team: "Atletico Madrid",
+        away_team: "Club Brugge",
+        score_status: "77",
+      },
+      "fixtures",
+      now
+    ),
+    true
+  );
+
+  assert.equal(
+    isListPayloadVisibleForMode(
+      {
+        date: "2026-04-04",
+        time: "19:45",
+        home_team: "Chelsea",
+        away_team: "Port Vale",
+        score_status: "FT",
+      },
+      "fixtures",
+      now
+    ),
+    false
+  );
+});
+
 test("isListPayloadVisibleForMode keeps penalty shootouts in progress visible in results", () => {
   const now = new Date("2026-04-04T17:45:00Z");
   assert.equal(

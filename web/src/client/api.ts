@@ -327,7 +327,10 @@ function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: numb
     params.set("sort", "desc");
   }
 
-  params.set("start", mode === "fixtures" ? formatDateParam(today) : formatDateParam(resultHistoryStartDate(today)));
+  params.set(
+    "start",
+    mode === "fixtures" ? formatDateParam(fixtureLiveOverlapStartDate(today)) : formatDateParam(resultHistoryStartDate(today))
+  );
   params.set("end", mode === "fixtures" ? OPEN_ENDED_FIXTURE_END_DATE : formatDateParam(today));
   params.set("page", String(page));
   params.set("page_size", "200");
@@ -357,6 +360,12 @@ function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: numb
 function resultHistoryStartDate(today: Date): Date {
   const startDate = new Date(today);
   startDate.setFullYear(startDate.getFullYear() - RESULTS_HISTORY_YEARS);
+  return startDate;
+}
+
+function fixtureLiveOverlapStartDate(today: Date): Date {
+  const startDate = new Date(today);
+  startDate.setDate(startDate.getDate() - 1);
   return startDate;
 }
 

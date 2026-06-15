@@ -626,8 +626,9 @@ struct APIClient {
 
         switch mode {
         case .fixtures:
+            let fixtureStart = Self.fixtureLiveOverlapStartDate(from: today)
             return [
-                URLQueryItem(name: "start", value: Self.dateFormatter.string(from: today)),
+                URLQueryItem(name: "start", value: Self.dateFormatter.string(from: fixtureStart)),
                 URLQueryItem(name: "end", value: Self.openEndedFixtureEndDate),
             ]
         case .results:
@@ -640,6 +641,10 @@ struct APIClient {
 
     private static func resultHistoryStartDate(from date: Date) -> Date {
         Calendar.current.date(byAdding: .year, value: -Self.resultsHistoryYears, to: date) ?? date
+    }
+
+    private static func fixtureLiveOverlapStartDate(from date: Date) -> Date {
+        Calendar.current.date(byAdding: .day, value: -1, to: date) ?? date
     }
 
     private static func dateRangeQueryItems(startDate: Date, endDate: Date) -> [URLQueryItem] {

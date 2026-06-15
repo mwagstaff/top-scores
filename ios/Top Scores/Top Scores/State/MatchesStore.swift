@@ -867,7 +867,8 @@ final class MatchesStore: ObservableObject {
         FixtureLoadDiagnosticsStore.shared.record(
             title: "Initial fixtures start",
             summary:
-                "window=\(Self.formatDateForLog(Self.startOfToday()))...\(Self.formatDateForLog(Self.openEndedFixtureDate())) " +
+                "window=\(Self.formatDateForLog(Self.fixtureLiveOverlapStartDate(from: Self.startOfToday())))..." +
+                "\(Self.formatDateForLog(Self.openEndedFixtureDate())) " +
                 "page_size=\(fixturesLazyPageSize) hydrate_states=false stored_before=\(fixtureState.unfilteredMatches.count)"
         )
 
@@ -885,6 +886,7 @@ final class MatchesStore: ObservableObject {
 
         do {
             let today = Self.startOfToday()
+            let fixtureStart = Self.fixtureLiveOverlapStartDate(from: today)
             let initialEnd = Self.openEndedFixtureDate()
             let ifModifiedSince = fixtureState.lastValidatedSnapshot == preferences &&
                 fixtureState.fixtureCoverageEnd.map { $0 >= initialEnd } == true
@@ -893,7 +895,7 @@ final class MatchesStore: ObservableObject {
             let response = try await client.fetchMatchesInRange(
                 preferences: preferences,
                 mode: .fixtures,
-                startDate: today,
+                startDate: fixtureStart,
                 endDate: initialEnd,
                 pageSize: fixturesLazyPageSize,
                 includePreferenceFilters: true,
@@ -922,7 +924,7 @@ final class MatchesStore: ObservableObject {
                 FixtureLoadDiagnosticsStore.shared.record(
                     title: "Initial fixtures unchanged",
                     summary:
-                        "window=\(Self.formatDateForLog(today))...\(Self.formatDateForLog(initialEnd)) " +
+                        "window=\(Self.formatDateForLog(fixtureStart))...\(Self.formatDateForLog(initialEnd)) " +
                         "duration_ms=\(Int(Date().timeIntervalSince(requestStartedAt) * 1000))"
                 )
 
@@ -944,7 +946,7 @@ final class MatchesStore: ObservableObject {
             nextState.unfilteredMatches = Self.replacingMatches(
                 in: nextState.unfilteredMatches,
                 with: incoming,
-                within: today...initialEnd
+                within: fixtureStart...initialEnd
             )
             nextState.matches = visibleMatches(
                 from: nextState.unfilteredMatches,
@@ -2191,7 +2193,7 @@ final class MatchesStore: ObservableObject {
             let day = calendar.startOfDay(for: date)
             switch mode {
             case .fixtures:
-                return day >= today
+                return day >= today || match.isInProgress
             case .results:
                 guard day >= earliestResultDate else { return false }
                 if day < today { return true }
@@ -2212,7 +2214,7 @@ final class MatchesStore: ObservableObject {
             let day = calendar.startOfDay(for: date)
             switch mode {
             case .fixtures:
-                return day >= today
+                return day >= today || match.isInProgress
             case .results:
                 guard day >= earliestResultDate else { return false }
                 if day < today { return true }
@@ -2337,6 +2339,10 @@ final class MatchesStore: ObservableObject {
 
     private nonisolated static func resultsHistoryStartDate(from date: Date) -> Date {
         Calendar.current.date(byAdding: .year, value: -1, to: date) ?? date
+    }
+
+    private nonisolated static func fixtureLiveOverlapStartDate(from date: Date) -> Date {
+        Calendar.current.date(byAdding: .day, value: -1, to: date) ?? date
     }
 
     private nonisolated static func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {

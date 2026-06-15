@@ -245,6 +245,48 @@ struct Top_ScoresTests {
         #expect(AppIconBadgeManager.unfinishedFixtureCount(for: matches) == 2)
     }
 
+    @Test func fixturesFilter_keepsPreviousDayInProgressMatchesVisible() async throws {
+        let today = formattedDate(offsetDays: 0)
+        let yesterday = formattedDate(offsetDays: -1)
+
+        let liveLateKickoff = makeMatch(
+            date: yesterday,
+            time: "23:00",
+            homeScore: 1,
+            awayScore: 1,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "77"
+        )
+        let finishedYesterday = makeMatch(
+            date: yesterday,
+            time: "19:45",
+            homeScore: 2,
+            awayScore: 1,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "FT"
+        )
+        let upcomingToday = makeMatch(
+            date: today,
+            time: "15:00",
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: nil
+        )
+
+        let fixtures = MatchesStore.filterMatches(
+            [liveLateKickoff, finishedYesterday, upcomingToday],
+            for: .fixtures
+        )
+
+        #expect(fixtures.contains(liveLateKickoff))
+        #expect(!fixtures.contains(finishedYesterday))
+        #expect(fixtures.contains(upcomingToday))
+    }
+
     @Test func withScore_adjustsAggregateByScoreDelta() async throws {
         let match = makeMatch(
             homeScore: 0,
