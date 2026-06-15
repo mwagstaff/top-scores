@@ -7,6 +7,8 @@ const {
   getEvent,
   getEventTimeline,
   getEventLineup,
+  getTeam,
+  getPlayer,
   getLeagueSchedule,
   getLeagueTeams,
   setRequestObserver,
@@ -20,6 +22,22 @@ const {
   leagueSeasons,
 } = require("./thesportsdb_leagues");
 const { utcDateTimeToZonedDateTime } = require("./match_time");
+const {
+  getMatchLineupCache,
+  upsertMatchLineupCache,
+  getMatchTimelineCache,
+  upsertMatchTimelineCache,
+  getTeamCache,
+  upsertTeamCache,
+  getPlayerCaches,
+  upsertPlayerCache,
+} = require("./mongo_client");
+
+const TSDB_LINEUP_FUTURE_REFRESH_MS = 6 * 60 * 60 * 1000;
+const TSDB_LINEUP_TODAY_REFRESH_MS = 30 * 60 * 1000;
+const TSDB_TIMELINE_IN_PROGRESS_REFRESH_MS = 30 * 1000;
+const TSDB_ENTITY_REFRESH_MS = 24 * 60 * 60 * 1000;
+const TSDB_ENTITY_WARM_CONCURRENCY = 3;
 
 // ---------------------------------------------------------------------------
 // Status mapping
@@ -411,10 +429,10 @@ function parseLineups(lineupEntries, homeTeamId) {
   if (!Array.isArray(lineupEntries) || lineupEntries.length === 0) return null;
 
   function isHome(entry) {
-    if (homeTeamId && entry.idTeam) {
-      return String(entry.idTeam) === String(homeTeamId);
-    }
-    return String(entry.strHome || "").toLowerCase() === "yes";
+    const homeFlag = String(entry.strHome || "").trim().toLowerCase();
+    if (homeFlag === "yes") return true;
+    if (homeFlag === "no") return false;
+    return null;
   }
 
   const homeStarters = [];
@@ -431,6 +449,7 @@ function parseLineups(lineupEntries, homeTeamId) {
     const number = Number(entry.intSquadNumber);
     const isSub = String(entry.strSubstitute || "").toLowerCase() === "yes";
     const home = isHome(entry);
+    if (home === null) return;
 
     const formation = String(entry.strFormation || "").trim() || null;
     if (formation) {
@@ -441,7 +460,11 @@ function parseLineups(lineupEntries, homeTeamId) {
     const player_entry = {
       number: Number.isFinite(number) ? number : null,
       name: player,
+      id_player: String(entry.idPlayer || "").trim() || null,
       position_category: positionCategoryFromShort(entry.strPositionShort, entry.strPosition),
+      position: String(entry.strPosition || "").trim() || null,
+      position_short: String(entry.strPositionShort || "").trim() || null,
+      cutout_url: String(entry.strCutout || "").trim() || null,
     };
 
     if (home) {
@@ -591,6 +614,8 @@ async function fetchTsdbLivescores(options = {}) {
         match_details_id: String(e.idEvent),
         home_team: String(e.strHomeTeam || "").trim(),
         away_team: String(e.strAwayTeam || "").trim(),
+        home_team_id: String(e.idHomeTeam || "").trim() || null,
+        away_team_id: String(e.idAwayTeam || "").trim() || null,
         home_score: e.intHomeScore !== null && e.intHomeScore !== undefined
           ? Number(e.intHomeScore) : null,
         away_score: e.intAwayScore !== null && e.intAwayScore !== undefined
@@ -627,7 +652,14 @@ async function fetchTsdbLivescores(options = {}) {
 // We cross-reference with the starters list to look up the squad number for the
 // player going off. The player coming on has no number (not in lineup endpoint).
 
-function extractSubstitutionsFromTimeline(timeline, homeStarters, awayStarters, homeTeamId) {
+function extractSubstitutionsFromTimeline(
+  timeline,
+  homeStarters,
+  awayStarters,
+  homeTeamId,
+  homeSubstitutes = [],
+  awaySubstitutes = []
+) {
   if (!Array.isArray(timeline)) return { home: [], away: [] };
 
   // Build a name→number lookup from starters (both sides).
@@ -640,6 +672,8 @@ function extractSubstitutionsFromTimeline(timeline, homeStarters, awayStarters, 
   }
   const homeLookup = buildNameLookup(homeStarters);
   const awayLookup = buildNameLookup(awayStarters);
+  const homeBenchLookup = buildPlayerLookup(homeSubstitutes);
+  const awayBenchLookup = buildPlayerLookup(awaySubstitutes);
 
   const home = [];
   const away = [];
@@ -661,12 +695,14 @@ function extractSubstitutionsFromTimeline(timeline, homeStarters, awayStarters, 
 
     const h = isHome(entry);
     const lookup = h ? homeLookup : awayLookup;
+    const benchLookup = h ? homeBenchLookup : awayBenchLookup;
     const offNumber = playerOff ? (lookup.get(playerOff.toLowerCase()) ?? null) : null;
+    const resolvedPlayerOn = resolvePlayerFromLookup(playerOn, benchLookup) || { number: null, name: playerOn };
 
     const subEvent = {
       minute,
       player_off: playerOff ? { number: offNumber, name: playerOff } : null,
-      player_on:  { number: null, name: playerOn },
+      player_on: resolvedPlayerOn,
     };
 
     if (h) home.push(subEvent);
@@ -683,6 +719,55 @@ function extractSubstitutionsFromTimeline(timeline, homeStarters, awayStarters, 
   away.sort(byMinute);
 
   return { home, away };
+}
+
+function buildPlayerLookup(players) {
+  return (Array.isArray(players) ? players : [])
+    .filter((player) => player && typeof player === "object" && String(player.name || "").trim())
+    .map((player) => ({
+      player,
+      lookup: playerNameLookup(player.name),
+    }));
+}
+
+function resolvePlayerFromLookup(name, candidates) {
+  const lookup = playerNameLookup(name);
+  let best = null;
+  candidates.forEach((candidate) => {
+    const score = playerNameMatchScore(lookup, candidate.lookup);
+    if (score <= 0) return;
+    if (!best || score > best.score) {
+      best = { player: candidate.player, score };
+    }
+  });
+  return best ? { ...best.player } : null;
+}
+
+function playerNameLookup(name) {
+  const tokens = String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\(c\)/gi, "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const first = tokens[0] || "";
+  const last = tokens[tokens.length - 1] || "";
+  return {
+    full: tokens.join(" "),
+    initialAndLast: first && last ? `${first[0]} ${last}` : tokens.join(" "),
+    last,
+  };
+}
+
+function playerNameMatchScore(left, right) {
+  if (!left.full || !right.full) return 0;
+  if (left.full === right.full) return 4;
+  if (left.initialAndLast && left.initialAndLast === right.initialAndLast) return 3;
+  if (left.last && left.last === right.last) return 2;
+  if (left.full.length >= 3 && right.full.endsWith(` ${left.full}`)) return 1;
+  if (right.full.length >= 3 && left.full.endsWith(` ${right.full}`)) return 1;
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -723,6 +808,8 @@ async function fetchTsdbLeagueSchedule(idLeague, season, options = {}) {
       league,
       home_team: String(e.strHomeTeam || "").trim(),
       away_team: String(e.strAwayTeam || "").trim(),
+      home_team_id: String(e.idHomeTeam || "").trim() || null,
+      away_team_id: String(e.idAwayTeam || "").trim() || null,
       home_score: homeScore,
       away_score: awayScore,
       score_status: scoreStatus,
@@ -782,6 +869,214 @@ async function fetchTsdbAllLeagueSchedules(options = {}) {
   return Array.from(allMatches.values());
 }
 
+function isFinishedScoreStatus(scoreStatus) {
+  const token = String(scoreStatus || "").trim().toUpperCase();
+  return ["FT", "AET", "PENS", "POSTPONED"].includes(token);
+}
+
+function isInProgressScoreStatus(scoreStatus) {
+  if (!scoreStatus) return false;
+  if (isFinishedScoreStatus(scoreStatus)) return false;
+  return true;
+}
+
+function currentUkDateString(nowMs = Date.now()) {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/London",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(nowMs));
+  } catch (_err) {
+    return new Date(nowMs).toISOString().slice(0, 10);
+  }
+}
+
+function cacheRecordFresh(record, nowMs = Date.now()) {
+  if (!record || typeof record !== "object") return false;
+  if (record.final === true) return true;
+  const nextRefreshAtMs = Number(record.next_refresh_at_ms);
+  return Number.isFinite(nextRefreshAtMs) && nextRefreshAtMs > nowMs;
+}
+
+function lineupPayloadHasEntries(payload) {
+  return Boolean(
+    payload &&
+    typeof payload === "object" &&
+    Array.isArray(payload.lookup) &&
+    payload.lookup.length > 0
+  );
+}
+
+function matchLineupCacheFresh(record, nowMs = Date.now()) {
+  if (!record || typeof record !== "object") return false;
+  if (record.final === true) return lineupPayloadHasEntries(record.payload);
+  const nextRefreshAtMs = Number(record.next_refresh_at_ms);
+  return Number.isFinite(nextRefreshAtMs) && nextRefreshAtMs > nowMs;
+}
+
+function entityCacheFresh(record, nowMs = Date.now()) {
+  if (!record || typeof record !== "object") return false;
+  const updatedAtMs = Number(record.updated_at_ms);
+  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < TSDB_ENTITY_REFRESH_MS;
+}
+
+function matchLineupCacheMetadata(scoreStatus, kickoffDate, nowMs = Date.now()) {
+  const finished = isFinishedScoreStatus(scoreStatus);
+  const inProgress = isInProgressScoreStatus(scoreStatus);
+  if (finished || inProgress) {
+    return {
+      final: true,
+      next_refresh_at_ms: null,
+      source: "tsdb_event_lineup",
+    };
+  }
+  const refreshMs =
+    kickoffDate && kickoffDate === currentUkDateString(nowMs)
+      ? TSDB_LINEUP_TODAY_REFRESH_MS
+      : TSDB_LINEUP_FUTURE_REFRESH_MS;
+  return {
+    final: false,
+    next_refresh_at_ms: nowMs + refreshMs,
+    source: "tsdb_event_lineup",
+  };
+}
+
+function matchTimelineCacheMetadata(scoreStatus, nowMs = Date.now()) {
+  const finished = isFinishedScoreStatus(scoreStatus);
+  if (finished) {
+    return {
+      final: true,
+      next_refresh_at_ms: null,
+      source: "tsdb_event_timeline",
+    };
+  }
+  return {
+    final: false,
+    next_refresh_at_ms: isInProgressScoreStatus(scoreStatus)
+      ? nowMs + TSDB_TIMELINE_IN_PROGRESS_REFRESH_MS
+      : nowMs + TSDB_LINEUP_TODAY_REFRESH_MS,
+    source: "tsdb_event_timeline",
+  };
+}
+
+async function cachedOrFetchMatchLineup(idEvent, context = {}, reqOpts = {}) {
+  const nowMs = Number.isFinite(Number(context.nowMs)) ? Number(context.nowMs) : Date.now();
+  const scoreStatus = context.scoreStatus || null;
+  const kickoffDate = context.kickoffDate || null;
+  const cached = await getMatchLineupCache(idEvent).catch(() => null);
+  if (cached && matchLineupCacheFresh(cached, nowMs)) {
+    return cached.payload || null;
+  }
+
+  const response = await getEventLineup(idEvent, {
+    ...reqOpts,
+    reason: "tsdb_lineup_lookup",
+  });
+  const metadata = matchLineupCacheMetadata(scoreStatus, kickoffDate, nowMs);
+  if (!lineupPayloadHasEntries(response)) {
+    metadata.final = false;
+    metadata.next_refresh_at_ms = nowMs + TSDB_LINEUP_TODAY_REFRESH_MS;
+  }
+  await upsertMatchLineupCache(
+    idEvent,
+    response,
+    metadata
+  ).catch((error) => {
+    console.warn(`[TSDB] Failed to cache lineup for event=${idEvent}:`, error.message || error);
+  });
+  return response;
+}
+
+async function cachedOrFetchMatchTimeline(idEvent, context = {}, reqOpts = {}) {
+  const nowMs = Number.isFinite(Number(context.nowMs)) ? Number(context.nowMs) : Date.now();
+  const scoreStatus = context.scoreStatus || null;
+  const cached = await getMatchTimelineCache(idEvent).catch(() => null);
+  if (cached && cacheRecordFresh(cached, nowMs)) {
+    return cached.payload || null;
+  }
+
+  const response = await getEventTimeline(idEvent, {
+    ...reqOpts,
+    reason: "tsdb_timeline_lookup",
+  });
+  await upsertMatchTimelineCache(
+    idEvent,
+    response,
+    matchTimelineCacheMetadata(scoreStatus, nowMs)
+  ).catch((error) => {
+    console.warn(`[TSDB] Failed to cache timeline for event=${idEvent}:`, error.message || error);
+  });
+  return response;
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const limit = Math.max(1, Number(concurrency) || 1);
+  let cursor = 0;
+  async function runWorker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      // eslint-disable-next-line no-await-in-loop
+      await worker(items[index], index);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => runWorker())
+  );
+}
+
+async function warmTsdbEntityCaches(event, lineupEntries, reqOpts = {}) {
+  const nowMs = Date.now();
+  const teamIds = [
+    String(event && event.idHomeTeam ? event.idHomeTeam : "").trim(),
+    String(event && event.idAwayTeam ? event.idAwayTeam : "").trim(),
+  ].filter((id) => /^\d+$/.test(id));
+  const playerIds = Array.isArray(lineupEntries)
+    ? [
+        ...new Set(
+          lineupEntries
+            .map((entry) => String(entry && entry.idPlayer ? entry.idPlayer : "").trim())
+            .filter((id) => /^\d+$/.test(id))
+        ),
+      ]
+    : [];
+
+  await mapWithConcurrency(teamIds, TSDB_ENTITY_WARM_CONCURRENCY, async (teamId) => {
+    const cached = await getTeamCache(teamId).catch(() => null);
+    if (entityCacheFresh(cached, nowMs)) return;
+    const response = await getTeam(teamId, {
+      ...reqOpts,
+      reason: "tsdb_team_cache_warm",
+    });
+    const teams = Array.isArray(response && response.lookup) ? response.lookup : [];
+    if (teams[0]) {
+      await upsertTeamCache(teamId, teams[0], {
+        next_refresh_at_ms: nowMs + TSDB_ENTITY_REFRESH_MS,
+        source: "tsdb_team",
+      }).catch(() => {});
+    }
+  });
+
+  const cachedPlayers = await getPlayerCaches(playerIds).catch(() => ({}));
+  const stalePlayerIds = playerIds.filter((playerId) => !entityCacheFresh(cachedPlayers[playerId], nowMs));
+  await mapWithConcurrency(stalePlayerIds, TSDB_ENTITY_WARM_CONCURRENCY, async (playerId) => {
+    const response = await getPlayer(playerId, {
+      ...reqOpts,
+      reason: "tsdb_player_cache_warm",
+    });
+    const players = Array.isArray(response && response.lookup) ? response.lookup : [];
+    if (players[0]) {
+      await upsertPlayerCache(playerId, players[0], {
+        next_refresh_at_ms: nowMs + TSDB_ENTITY_REFRESH_MS,
+        source: "tsdb_player",
+      }).catch(() => {});
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Public API: fetchTsdbMatchDetails
 // Replaces fetchBbcMatchByDetailsUrl — fetches rich details for one event.
@@ -794,15 +1089,24 @@ async function fetchTsdbMatchDetails(idEvent, options = {}) {
     trigger: options.trigger,
   };
 
-  // Fetch event, timeline, and lineup in parallel — 3 tokens consumed.
-  const [eventResp, timelineResp, lineupResp] = await Promise.all([
-    getEvent(idEvent, { ...reqOpts, reason: "tsdb_event_lookup" }),
-    getEventTimeline(idEvent, { ...reqOpts, reason: "tsdb_timeline_lookup" }),
-    getEventLineup(idEvent, { ...reqOpts, reason: "tsdb_lineup_lookup" }),
-  ]);
-
+  const eventResp = await getEvent(idEvent, { ...reqOpts, reason: "tsdb_event_lookup" });
   const event = Array.isArray(eventResp && eventResp.lookup) ? eventResp.lookup[0] : null;
   if (!event) return null;
+
+  const scoreStatus = mapTsdbStatus(event.strStatus, event.strProgress);
+  const kickoff = normalizeTsdbKickoffDateTime(event);
+  const [timelineResp, lineupResp] = await Promise.all([
+    cachedOrFetchMatchTimeline(
+      idEvent,
+      { scoreStatus, nowMs: options.nowMs },
+      reqOpts
+    ),
+    cachedOrFetchMatchLineup(
+      idEvent,
+      { scoreStatus, kickoffDate: kickoff.date, nowMs: options.nowMs },
+      reqOpts
+    ),
+  ]);
 
   const timeline = Array.isArray(timelineResp && timelineResp.lookup)
     ? timelineResp.lookup
@@ -811,7 +1115,6 @@ async function fetchTsdbMatchDetails(idEvent, options = {}) {
     ? lineupResp.lookup
     : [];
 
-  const scoreStatus = mapTsdbStatus(event.strStatus, event.strProgress);
   const league = resolveLeagueName(event.strLeague);
 
   const timelineEvents = parseTimelineEvents(
@@ -828,7 +1131,9 @@ async function fetchTsdbMatchDetails(idEvent, options = {}) {
       timeline,
       teamLineups.home ? teamLineups.home.starting_lineup : [],
       teamLineups.away ? teamLineups.away.starting_lineup : [],
-      event.idHomeTeam
+      event.idHomeTeam,
+      teamLineups.home ? teamLineups.home.substitutes : [],
+      teamLineups.away ? teamLineups.away.substitutes : []
     );
     if (teamLineups.home) teamLineups.home.substitutions = subs.home;
     if (teamLineups.away) teamLineups.away.substitutions = subs.away;
@@ -839,8 +1144,6 @@ async function fetchTsdbMatchDetails(idEvent, options = {}) {
   const awayScore = (event.intAwayScore !== null && event.intAwayScore !== undefined && event.intAwayScore !== "")
     ? Number(event.intAwayScore) : null;
 
-  const kickoff = normalizeTsdbKickoffDateTime(event);
-
   const result = {
     id: String(idEvent),
     match_details_id: String(idEvent),
@@ -850,6 +1153,8 @@ async function fetchTsdbMatchDetails(idEvent, options = {}) {
     league,
     home_team: String(event.strHomeTeam || "").trim(),
     away_team: String(event.strAwayTeam || "").trim(),
+    home_team_id: String(event.idHomeTeam || "").trim() || null,
+    away_team_id: String(event.idAwayTeam || "").trim() || null,
     home_score: homeScore,
     away_score: awayScore,
     aggregate_home_score: null,
@@ -873,9 +1178,55 @@ async function fetchTsdbMatchDetails(idEvent, options = {}) {
 
   if (teamLineups) {
     result.team_lineups = teamLineups;
+    void warmTsdbEntityCaches(event, lineupEntries, {
+      ...reqOpts,
+      trigger: reqOpts.trigger || "match_details_entity_warm",
+    }).catch((error) => {
+      console.warn(`[TSDB] Failed to warm team/player caches for event=${idEvent}:`, error.message || error);
+    });
   }
 
   return result;
+}
+
+async function refreshTsdbSupplementalCachesForMatch(match, options = {}) {
+  if (!match || typeof match !== "object") return null;
+  const idEvent = String(match.id || match.match_details_id || "").trim();
+  if (!/^\d+$/.test(idEvent)) return null;
+  const reqOpts = {
+    initiator: options.initiator || "scraper",
+    trigger: options.trigger || "tsdb_supplemental_cache_refresh",
+  };
+  const scoreStatus = match.score_status || match.match_time || null;
+  const kickoffDate = String(match.date || "").trim() || null;
+  const [timelineResp, lineupResp] = await Promise.all([
+    cachedOrFetchMatchTimeline(
+      idEvent,
+      { scoreStatus, nowMs: options.nowMs },
+      reqOpts
+    ),
+    cachedOrFetchMatchLineup(
+      idEvent,
+      { scoreStatus, kickoffDate, nowMs: options.nowMs },
+      reqOpts
+    ),
+  ]);
+  const timeline = Array.isArray(timelineResp && timelineResp.lookup)
+    ? timelineResp.lookup
+    : [];
+  const lineupEntries = Array.isArray(lineupResp && lineupResp.lookup)
+    ? lineupResp.lookup
+    : [];
+  if (lineupEntries.length > 0) {
+    void warmTsdbEntityCaches({}, lineupEntries, reqOpts).catch((error) => {
+      console.warn(`[TSDB] Failed to warm player caches for event=${idEvent}:`, error.message || error);
+    });
+  }
+  return {
+    id: idEvent,
+    lineup_count: lineupEntries.length,
+    timeline_count: timeline.length,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -914,6 +1265,7 @@ module.exports = {
   fetchTsdbLeagueSchedule,
   fetchTsdbAllLeagueSchedules,
   fetchTsdbMatchDetails,
+  refreshTsdbSupplementalCachesForMatch,
   fetchTsdbLeagueTeams,
   fetchTsdbPremierLeagueTeams,
 
@@ -927,5 +1279,7 @@ module.exports = {
     resolveLeagueName,
     stripSeconds,
     normalizeTsdbKickoffDateTime,
+    lineupPayloadHasEntries,
+    matchLineupCacheFresh,
   },
 };

@@ -30,6 +30,7 @@ const {
     enrichMatchDetailsAggregateImmediately,
     enrichKnockoutAggregatesForListMatches,
     matchDetailsNeedsBackfill,
+    hasRenderableTeamLineups,
     markMatchDetailsActive,
     isMatchDetailsActive,
     normalizeMatchDetailsPayload,
@@ -3826,6 +3827,159 @@ test("matchDetailsNeedsBackfill refreshes cached records that are missing parsed
         { player: "N. Madueke", goal_times: ["41'"] },
         { player: "E. Eze", goal_times: ["66'"] },
       ],
+    }),
+    true
+  );
+});
+
+test("matchDetailsNeedsBackfill refreshes cached records with one-sided parsed team lineups", () => {
+  const malformedLineups = {
+    home: {
+      team: "Canada",
+      starting_lineup: [],
+      substitutes: [],
+      substitutions: [],
+    },
+    away: {
+      team: "Bosnia-Herzegovina",
+      starting_lineup: Array.from({ length: 22 }, (_, index) => ({
+        number: index + 1,
+        name: `Player ${index + 1}`,
+        position_category: index === 0 ? "goalkeeper" : "midfielder",
+      })),
+      substitutes: [],
+      substitutions: [],
+    },
+  };
+
+  assert.equal(hasRenderableTeamLineups(malformedLineups), false);
+  assert.equal(
+    matchDetailsNeedsBackfill({
+      id: "2461104",
+      date: "2026-06-12",
+      time: "20:00",
+      league: "FIFA World Cup 2026",
+      home_team: "Canada",
+      away_team: "Bosnia-Herzegovina",
+      home_score: 1,
+      away_score: 1,
+      score_status: "FT",
+      team_lineups: malformedLineups,
+    }),
+    true
+  );
+});
+
+test("matchDetailsNeedsBackfill accepts renderable non-11v11 lineups", () => {
+  assert.equal(
+    matchDetailsNeedsBackfill({
+      id: "2461104",
+      date: "2026-06-12",
+      time: "20:00",
+      league: "FIFA World Cup 2026",
+      home_team: "Canada",
+      away_team: "Bosnia-Herzegovina",
+      home_score: 0,
+      away_score: 0,
+      score_status: "FT",
+      team_lineups: {
+        home: {
+          team: "Canada",
+          starting_lineup: [{
+            number: 1,
+            name: "Canada Player",
+            id_player: "1001",
+            position_category: "goalkeeper",
+          }],
+          substitutes: [],
+          substitutions: [],
+        },
+        away: {
+          team: "Bosnia-Herzegovina",
+          starting_lineup: [{ number: 1, name: "Bosnia Player", position_category: "goalkeeper" }],
+          substitutes: [],
+          substitutions: [],
+        },
+      },
+    }),
+    false
+  );
+});
+
+test("matchDetailsNeedsBackfill refreshes SportsDB lineups missing player ids", () => {
+  assert.equal(
+    matchDetailsNeedsBackfill({
+      id: "2461104",
+      date: "2026-06-12",
+      time: "20:00",
+      league: "FIFA World Cup 2026",
+      home_team: "Canada",
+      away_team: "Bosnia-Herzegovina",
+      home_score: 1,
+      away_score: 1,
+      score_status: "FT",
+      team_lineups: {
+        home: {
+          team: "Canada",
+          starting_lineup: [{ number: 1, name: "Canada Player", position_category: "goalkeeper" }],
+          substitutes: [],
+          substitutions: [],
+        },
+        away: {
+          team: "Bosnia-Herzegovina",
+          starting_lineup: [{
+            number: 1,
+            name: "Bosnia Player",
+            id_player: "2001",
+            position_category: "goalkeeper",
+          }],
+          substitutes: [],
+          substitutions: [],
+        },
+      },
+    }),
+    true
+  );
+});
+
+test("matchDetailsNeedsBackfill refreshes resolvable substitution players missing ids", () => {
+  assert.equal(
+    matchDetailsNeedsBackfill({
+      id: "2461104",
+      date: "2026-06-13",
+      time: "20:00",
+      league: "FIFA World Cup 2026",
+      home_team: "USA",
+      away_team: "Paraguay",
+      home_score: 4,
+      away_score: 1,
+      score_status: "FT",
+      team_lineups: {
+        home: {
+          team: "USA",
+          starting_lineup: [
+            { number: 8, name: "Malik Tillman", id_player: "1008", position_category: "midfielder" },
+          ],
+          substitutes: [
+            { number: 7, name: "Giovanni Reyna", id_player: "34170047", cutout_url: "https://example.test/reyna.png" },
+          ],
+          substitutions: [
+            {
+              minute: "82'",
+              player_off: { number: 8, name: "Malik Tillman", id_player: "1008" },
+              player_on: { number: null, name: "Reyna" },
+            },
+          ],
+        },
+        away: {
+          team: "Paraguay",
+          starting_lineup: [
+            { number: 1, name: "Paraguay Player", id_player: "2001", position_category: "goalkeeper" },
+          ],
+          substitutes: [],
+          substitutions: [],
+        },
+      },
     }),
     true
   );

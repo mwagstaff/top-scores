@@ -1781,6 +1781,12 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   monitorState.unresolvedGoalCount = unresolvedGoalCount;
   const oldStatus = normalizeStatusToken(oldMatch && oldMatch.score_status);
   const newStatus = normalizeStatusToken(newMatch && newMatch.score_status);
+  const previousHighestSnapshot =
+    monitorState &&
+    monitorState.highestObservedScoreSnapshot &&
+    typeof monitorState.highestObservedScoreSnapshot === "object"
+      ? monitorState.highestObservedScoreSnapshot
+      : null;
 
   // Kick-off
   const kickoffDecision = evaluateKickoffDecision(oldMatch, newMatch, lifecycle, nowMs);
@@ -1834,6 +1840,19 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   // Goals: emit one notification per newly discovered goal event.
   const previousSnapshot = scoreSnapshot(oldMatch || {});
   const currentSnapshot = scoreSnapshot(newMatch || {});
+  if (monitorState) {
+    monitorState.highestObservedScoreSnapshot = {
+      home_score: Math.max(
+        Number(previousHighestSnapshot && previousHighestSnapshot.home_score) || 0,
+        currentSnapshot.home_score
+      ),
+      away_score: Math.max(
+        Number(previousHighestSnapshot && previousHighestSnapshot.away_score) || 0,
+        currentSnapshot.away_score
+      ),
+      score_status: currentSnapshot.score_status,
+    };
+  }
   const newlyDiscoveredGoalEvents = diffGoalEvents(oldMatch || {}, newMatch || {});
   if (newlyDiscoveredGoalEvents.length > 0) {
     goalTimelineBacklog.push(...newlyDiscoveredGoalEvents);
@@ -1871,6 +1890,22 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   // to the current score (prevents impossible inflated scorelines).
   let runningHomeScore = currentSnapshot.home_score - newHomeGoalsCount;
   let runningAwayScore = currentSnapshot.away_score - newAwayGoalsCount;
+  const oldGoalTimeline = buildGoalTimeline(oldMatch || {});
+  const oldTimelineHomeScore = oldGoalTimeline.filter((goal) => goal.team === "home").length;
+  const oldTimelineAwayScore = oldGoalTimeline.filter((goal) => goal.team === "away").length;
+  const scoreRegressedFromObserved =
+    previousHighestSnapshot &&
+    (Number(previousHighestSnapshot.home_score) > currentSnapshot.home_score ||
+      Number(previousHighestSnapshot.away_score) > currentSnapshot.away_score);
+  if (
+    scoreRegressedFromObserved &&
+    oldGoalTimeline.length > 0 &&
+    (oldTimelineHomeScore + newHomeGoalsCount > currentSnapshot.home_score ||
+      oldTimelineAwayScore + newAwayGoalsCount > currentSnapshot.away_score)
+  ) {
+    runningHomeScore = oldTimelineHomeScore;
+    runningAwayScore = oldTimelineAwayScore;
+  }
   if (
     !Number.isFinite(runningHomeScore) ||
     !Number.isFinite(runningAwayScore) ||

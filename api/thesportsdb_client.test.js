@@ -6,13 +6,17 @@ const assert = require("node:assert/strict");
 const {
   setRequestObserver,
   getRateLimitState,
+  getV1RateLimitState,
   __private,
 } = require("./thesportsdb_client");
 
 const {
   _acquireToken,
   _isNullResult,
+  _isRetryableError,
+  _retryAfterMs,
   RATE_LIMIT_MAX_TOKENS,
+  RATE_LIMIT_V1_MAX_TOKENS,
   RATE_LIMIT_REFILL_INTERVAL_MS,
   NULL_RESULT_RETRY_DELAY_MS,
   NULL_RESULT_MAX_RETRIES,
@@ -29,6 +33,16 @@ test("getRateLimitState returns expected shape", () => {
   assert.ok(typeof state.queueDepth === "number");
   assert.ok(typeof state.msUntilRefill === "number");
   assert.equal(state.maxTokens, RATE_LIMIT_MAX_TOKENS);
+});
+
+test("getV1RateLimitState returns the v1 30/minute cap", () => {
+  const state = getV1RateLimitState();
+  assert.ok(typeof state.tokens === "number");
+  assert.ok(typeof state.maxTokens === "number");
+  assert.ok(typeof state.queueDepth === "number");
+  assert.ok(typeof state.msUntilRefill === "number");
+  assert.equal(state.maxTokens, RATE_LIMIT_V1_MAX_TOKENS);
+  assert.equal(RATE_LIMIT_V1_MAX_TOKENS, 30);
 });
 
 test("_acquireToken resolves immediately when tokens are available", async () => {
@@ -54,6 +68,10 @@ test("token count decrements by 1 per _acquireToken call", async () => {
 test("RATE_LIMIT_MAX_TOKENS is strictly below 100", () => {
   assert.ok(RATE_LIMIT_MAX_TOKENS < 100, "must stay under the 100 req/min hard cap");
   assert.ok(RATE_LIMIT_MAX_TOKENS > 0);
+});
+
+test("RATE_LIMIT_V1_MAX_TOKENS is 30", () => {
+  assert.equal(RATE_LIMIT_V1_MAX_TOKENS, 30);
 });
 
 test("RATE_LIMIT_REFILL_INTERVAL_MS is 60 seconds", () => {
@@ -93,6 +111,21 @@ test("_isNullResult: non-objects are not null results", () => {
   assert.equal(_isNullResult(undefined), false);
   assert.equal(_isNullResult("string"), false);
   assert.equal(_isNullResult(42), false);
+});
+
+// ---------------------------------------------------------------------------
+// Retry helpers
+// ---------------------------------------------------------------------------
+
+test("_isRetryableError retries 429 and transient JSON parse failures", () => {
+  assert.equal(_isRetryableError({ statusCode: 429 }), true);
+  assert.equal(_isRetryableError({ statusCode: 500 }), true);
+  assert.equal(_isRetryableError({ code: "TSDB_JSON_PARSE_ERROR" }), true);
+  assert.equal(_isRetryableError({ statusCode: 404 }), false);
+});
+
+test("_retryAfterMs parses retry-after seconds", () => {
+  assert.equal(_retryAfterMs({ "retry-after": "2" }), 2_000);
 });
 
 // ---------------------------------------------------------------------------

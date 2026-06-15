@@ -4692,6 +4692,86 @@ test("emits all newly discovered goals when score jumps", () => {
   assert.equal(events[1].body, "Mainz 05 1 - 1 Hamburger SV (N. Amiri, assist: D. da Costa)");
 });
 
+test("backfilled goals use existing scorer timeline when current score regresses", () => {
+  const monitorState = newMonitorState({
+    unresolvedGoalCount: 3,
+  });
+
+  const observedHtScore = {
+    home_team: "Germany",
+    away_team: "Curaçao",
+    score_status: "HT",
+    home_score: 3,
+    away_score: 1,
+    home_goal_scorers: [
+      {
+        player: "Felix Nmecha",
+        goal_times: ["6'"],
+      },
+    ],
+    away_goal_scorers: [],
+    home_assists: [
+      {
+        player: "Florian Wirtz",
+        assist_times: ["6'"],
+      },
+    ],
+    away_assists: [],
+  };
+
+  __testHooks.buildMatchEvents(
+    { ...observedHtScore, home_score: 2, away_score: 1 },
+    observedHtScore,
+    monitorState,
+    Date.now()
+  );
+
+  const staleScore = {
+    ...observedHtScore,
+    home_score: 2,
+    away_score: 1,
+  };
+
+  const newMatch = {
+    ...staleScore,
+    home_score: 2,
+    away_score: 1,
+    home_goal_scorers: [
+      ...staleScore.home_goal_scorers,
+      {
+        player: "Nico Schlotterbeck",
+        goal_times: ["38'"],
+      },
+      {
+        player: "Kai Havertz",
+        goal_times: ["45'"],
+      },
+    ],
+    away_goal_scorers: [
+      {
+        player: "Livano Comenencia",
+        goal_times: ["21'"],
+      },
+    ],
+    home_assists: [
+      ...staleScore.home_assists,
+      {
+        player: "Nathaniel Brown",
+        assist_times: ["38'"],
+      },
+    ],
+  };
+
+  const events = __testHooks
+    .buildMatchEvents(staleScore, newMatch, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+
+  assert.equal(events.length, 3);
+  assert.equal(events[0].body, "Germany 1 - 1 Curaçao (Livano Comenencia)");
+  assert.equal(events[1].body, "Germany 2 - 1 Curaçao (Nico Schlotterbeck, assist: Nathaniel Brown)");
+  assert.equal(events[2].body, "Germany 3 - 1 Curaçao (Kai Havertz)");
+});
+
 test("includes aggregate score in goal notification body when available", () => {
   const monitorState = newMonitorState();
 

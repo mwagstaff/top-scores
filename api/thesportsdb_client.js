@@ -11,10 +11,18 @@ const { URL } = require("url");
 
 const TSDB_BASE_URL = "https://www.thesportsdb.com/api/v2/json";
 const TSDB_REQUEST_TIMEOUT_MS = 30_000;
+const TSDB_RETRY_MAX_ATTEMPTS = Number(process.env.TSDB_RETRY_MAX_ATTEMPTS || 3);
+const TSDB_RETRY_BASE_DELAY_MS = Number(process.env.TSDB_RETRY_BASE_DELAY_MS || 400);
+const TSDB_RETRY_MAX_DELAY_MS = Number(process.env.TSDB_RETRY_MAX_DELAY_MS || 5_000);
+const TSDB_RETRY_JITTER_MS = Number(process.env.TSDB_RETRY_JITTER_MS || 250);
+const TSDB_V1_RETRY_MAX_ATTEMPTS = Number(process.env.TSDB_V1_RETRY_MAX_ATTEMPTS || 4);
+const TSDB_V1_RETRY_BASE_DELAY_MS = Number(process.env.TSDB_V1_RETRY_BASE_DELAY_MS || 2_000);
+const TSDB_V1_RETRY_MAX_DELAY_MS = Number(process.env.TSDB_V1_RETRY_MAX_DELAY_MS || 60_000);
 
 // Hard cap from TheSportsDB docs: 100 req/min on premium tier.
 // We target 90 to keep a comfortable headroom against clock skew.
 const RATE_LIMIT_MAX_TOKENS = 90;
+const RATE_LIMIT_V1_MAX_TOKENS = 30;
 const RATE_LIMIT_REFILL_INTERVAL_MS = 60_000;
 
 // When the upstream returns HTTP 200 but the body is `{"events":null}` or an
@@ -23,71 +31,136 @@ const RATE_LIMIT_REFILL_INTERVAL_MS = 60_000;
 const NULL_RESULT_RETRY_DELAY_MS = 2_000;
 const NULL_RESULT_MAX_RETRIES = 2;
 
+function _sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function _randomDelay(maxMs) {
+  const normalized = Math.max(0, Number(maxMs) || 0);
+  if (normalized <= 0) return 0;
+  return Math.floor(Math.random() * normalized);
+}
+
+function _retryDelayMs(attempt, options = {}) {
+  const base = Math.max(0, Number(options.baseDelayMs ?? TSDB_RETRY_BASE_DELAY_MS) || 0);
+  const cap = Math.max(base, Number(options.maxDelayMs ?? TSDB_RETRY_MAX_DELAY_MS) || base);
+  const exponential = Math.min(cap, base * Math.max(1, 2 ** Math.max(0, attempt - 1)));
+  const retryAfterMs = Math.max(0, Number(options.retryAfterMs) || 0);
+  return Math.max(exponential, retryAfterMs) + _randomDelay(TSDB_RETRY_JITTER_MS);
+}
+
+function _isRetryableError(error) {
+  if (!error) return false;
+  const statusCode = Number(error.statusCode || 0);
+  if (statusCode === 408 || statusCode === 429) return true;
+  if (statusCode >= 500 && statusCode <= 599) return true;
+  const code = String(error.code || "").trim().toUpperCase();
+  if (code === "TSDB_JSON_PARSE_ERROR") return true;
+  return [
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EAI_AGAIN",
+    "ETIMEDOUT",
+    "ENOTFOUND",
+    "EPIPE",
+  ].includes(code);
+}
+
+function _retryAfterMs(headers = {}) {
+  const raw = headers["retry-after"];
+  if (raw == null) return 0;
+
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, Math.floor(seconds * 1000));
+  }
+
+  const retryAtMs = Date.parse(String(raw));
+  if (Number.isFinite(retryAtMs)) {
+    return Math.max(0, retryAtMs - Date.now());
+  }
+
+  return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Token-bucket rate limiter
 // ---------------------------------------------------------------------------
 //
-// Single shared bucket for all calls made through this module so every
-// code path (live scores, match details, schedules, etc.) counts toward
-// the same cap.
+// v2 and v1 have different upstream caps, so each API generation gets its own
+// bucket while sharing the same refill cadence.
 
-let _tokens = RATE_LIMIT_MAX_TOKENS;
-let _lastRefillMs = Date.now();
+function _createRateLimiter(maxTokens) {
+  return {
+    tokens: maxTokens,
+    maxTokens,
+    lastRefillMs: Date.now(),
+    waitQueue: [],
+  };
+}
 
-// Waiters queued when the bucket is empty: { resolve, cost }
-const _waitQueue = [];
+const _v2RateLimiter = _createRateLimiter(RATE_LIMIT_MAX_TOKENS);
+const _v1RateLimiter = _createRateLimiter(RATE_LIMIT_V1_MAX_TOKENS);
 
-function _refillTokens() {
+function _refillTokens(limiter) {
   const now = Date.now();
-  const elapsed = now - _lastRefillMs;
+  const elapsed = now - limiter.lastRefillMs;
   if (elapsed >= RATE_LIMIT_REFILL_INTERVAL_MS) {
-    _tokens = RATE_LIMIT_MAX_TOKENS;
-    _lastRefillMs = now;
-    _drainQueue();
+    limiter.tokens = limiter.maxTokens;
+    limiter.lastRefillMs = now;
+    _drainQueue(limiter);
   }
 }
 
-function _drainQueue() {
-  while (_waitQueue.length > 0 && _tokens >= _waitQueue[0].cost) {
-    const waiter = _waitQueue.shift();
-    _tokens -= waiter.cost;
+function _drainQueue(limiter) {
+  while (limiter.waitQueue.length > 0 && limiter.tokens >= limiter.waitQueue[0].cost) {
+    const waiter = limiter.waitQueue.shift();
+    limiter.tokens -= waiter.cost;
     waiter.resolve();
   }
 }
 
 // Returns a Promise that resolves once `cost` tokens are available.
 // Cost is always 1 for a single API call.
-function _acquireToken(cost = 1) {
-  _refillTokens();
-  if (_tokens >= cost) {
-    _tokens -= cost;
+function _acquireToken(cost = 1, limiter = _v2RateLimiter) {
+  _refillTokens(limiter);
+  if (limiter.tokens >= cost) {
+    limiter.tokens -= cost;
     return Promise.resolve();
   }
   // Queue the waiter; a scheduled refill will drain it.
   return new Promise((resolve) => {
-    _waitQueue.push({ resolve, cost });
+    limiter.waitQueue.push({ resolve, cost });
     // Schedule a wakeup at the next refill boundary if one isn't already
     // pending. We only need one timeout regardless of queue depth.
-    if (_waitQueue.length === 1) {
-      const msUntilRefill = RATE_LIMIT_REFILL_INTERVAL_MS - (Date.now() - _lastRefillMs);
+    if (limiter.waitQueue.length === 1) {
+      const msUntilRefill = RATE_LIMIT_REFILL_INTERVAL_MS - (Date.now() - limiter.lastRefillMs);
       setTimeout(() => {
-        _tokens = RATE_LIMIT_MAX_TOKENS;
-        _lastRefillMs = Date.now();
-        _drainQueue();
+        limiter.tokens = limiter.maxTokens;
+        limiter.lastRefillMs = Date.now();
+        _drainQueue(limiter);
       }, Math.max(0, msUntilRefill));
     }
   });
 }
 
 // Exposed for tests / diagnostics.
-function getRateLimitState() {
-  _refillTokens();
+function _rateLimitState(limiter) {
+  _refillTokens(limiter);
   return {
-    tokens: _tokens,
-    maxTokens: RATE_LIMIT_MAX_TOKENS,
-    queueDepth: _waitQueue.length,
-    msUntilRefill: Math.max(0, RATE_LIMIT_REFILL_INTERVAL_MS - (Date.now() - _lastRefillMs)),
+    tokens: limiter.tokens,
+    maxTokens: limiter.maxTokens,
+    queueDepth: limiter.waitQueue.length,
+    msUntilRefill: Math.max(0, RATE_LIMIT_REFILL_INTERVAL_MS - (Date.now() - limiter.lastRefillMs)),
   };
+}
+
+function getRateLimitState() {
+  return _rateLimitState(_v2RateLimiter);
+}
+
+function getV1RateLimitState() {
+  return _rateLimitState(_v1RateLimiter);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +318,7 @@ async function _fetchWithNullRetry(url, options = {}) {
   for (let attempt = 0; attempt <= NULL_RESULT_MAX_RETRIES; attempt += 1) {
     if (attempt > 0) {
       // eslint-disable-next-line no-await-in-loop
-      await new Promise((res) => setTimeout(res, NULL_RESULT_RETRY_DELAY_MS));
+      await _sleep(NULL_RESULT_RETRY_DELAY_MS + _randomDelay(TSDB_RETRY_JITTER_MS));
     }
     // eslint-disable-next-line no-await-in-loop
     lastData = await _fetchJson(url, options);
@@ -255,14 +328,39 @@ async function _fetchWithNullRetry(url, options = {}) {
   return lastData;
 }
 
+async function _fetchWithRetry(fetcher, url, options = {}) {
+  const maxAttempts = Math.max(1, Number(options.maxAttempts ?? TSDB_RETRY_MAX_ATTEMPTS) || 1);
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await fetcher(url, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !_isRetryableError(error)) {
+        throw error;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await _sleep(_retryDelayMs(attempt, {
+        baseDelayMs: options.baseDelayMs,
+        maxDelayMs: options.maxDelayMs,
+        retryAfterMs: error && error.retryAfterMs,
+      }));
+    }
+  }
+  throw lastError;
+}
+
 // ---------------------------------------------------------------------------
 // Rate-limited public fetch
 // ---------------------------------------------------------------------------
 
 async function _request(path, options = {}) {
-  await _acquireToken();
   const url = `${TSDB_BASE_URL}${path}`;
-  return _fetchWithNullRetry(url, options);
+  return _fetchWithRetry(async (targetUrl, requestOptions) => {
+    await _acquireToken();
+    return _fetchWithNullRetry(targetUrl, requestOptions);
+  }, url, options);
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +414,14 @@ function getEventStats(idEvent, options = {}) {
   return _request(`/lookup/event_stats/${encodeURIComponent(idEvent)}`, {
     source: "tsdb_event_stats",
     reason: "event_stats_lookup",
+    ...options,
+  });
+}
+
+function getPlayer(idPlayer, options = {}) {
+  return _request(`/lookup/player/${encodeURIComponent(idPlayer)}`, {
+    source: "tsdb_player",
+    reason: "player_lookup",
     ...options,
   });
 }
@@ -478,6 +584,9 @@ function _fetchJsonV1(url, options = {}) {
           const error = new Error(`TheSportsDB v1 request failed with status ${statusCode}`);
           error.statusCode = statusCode;
           error.code = `HTTP_${statusCode}`;
+          if (statusCode === 429) {
+            error.retryAfterMs = _retryAfterMs(res.headers) || RATE_LIMIT_REFILL_INTERVAL_MS;
+          }
           error.url = requestedUrl;
           complete({ statusCode, error });
           return;
@@ -522,9 +631,16 @@ function _fetchJsonV1(url, options = {}) {
 }
 
 async function _requestV1(path, options = {}) {
-  await _acquireToken();
   const url = `${TSDB_V1_BASE_URL}${path}`;
-  return _fetchJsonV1(url, options);
+  return _fetchWithRetry(async (targetUrl, requestOptions) => {
+    await _acquireToken(1, _v1RateLimiter);
+    return _fetchJsonV1(targetUrl, requestOptions);
+  }, url, {
+    ...options,
+    maxAttempts: TSDB_V1_RETRY_MAX_ATTEMPTS,
+    baseDelayMs: TSDB_V1_RETRY_BASE_DELAY_MS,
+    maxDelayMs: TSDB_V1_RETRY_MAX_DELAY_MS,
+  });
 }
 
 function getLeagueTable(idLeague, options = {}) {
@@ -542,6 +658,7 @@ module.exports = {
   // Auth / config
   setRequestObserver,
   getRateLimitState,
+  getV1RateLimitState,
 
   // Livescores
   getLivescores,
@@ -551,6 +668,7 @@ module.exports = {
   getEventTimeline,
   getEventLineup,
   getEventStats,
+  getPlayer,
 
   // Schedule
   getLeagueSchedule,
@@ -579,8 +697,12 @@ module.exports = {
     _acquireToken,
     _isNullResult,
     _fetchWithNullRetry,
+    _isRetryableError,
+    _retryAfterMs,
+    getV1RateLimitState,
     getRateLimitState,
     RATE_LIMIT_MAX_TOKENS,
+    RATE_LIMIT_V1_MAX_TOKENS,
     RATE_LIMIT_REFILL_INTERVAL_MS,
     NULL_RESULT_RETRY_DELAY_MS,
     NULL_RESULT_MAX_RETRIES,

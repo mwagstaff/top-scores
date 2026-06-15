@@ -436,6 +436,17 @@ struct APIClient {
         return try JSONDecoder().decode(MatchDetailsPayload.self, from: data)
     }
 
+    func fetchPlayerDetails(playerId: String) async throws -> PlayerDetails {
+        let normalizedID = playerId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty, normalizedID.allSatisfy(\.isNumber) else {
+            throw APIClientError.invalidPlayerID(playerId)
+        }
+        let request = try buildRequest(path: "players/\(normalizedID)", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "player_details")
+        try validateSuccess(http, data: data, operation: "player_details")
+        return try JSONDecoder().decode(PlayerDetails.self, from: data)
+    }
+
     func fetchMatchStates(matchIDs: [String]) async throws -> [String: MatchDetailsPayload] {
         let normalizedIDs = Array(
             Set(matchIDs.compactMap { Self.normalizedMatchDetailsID($0) })
@@ -946,6 +957,7 @@ enum APIClientError: LocalizedError {
     case badStatus(statusCode: Int, url: String, bodySnippet: String)
     case invalidMatchesPayload(operation: String, reason: String)
     case invalidMatchDetailsID(String)
+    case invalidPlayerID(String)
 
     var errorDescription: String? {
         switch self {
@@ -960,6 +972,8 @@ enum APIClientError: LocalizedError {
             return "Invalid matches payload for \(operation): \(reason)"
         case let .invalidMatchDetailsID(matchId):
             return "Invalid match details id: \(matchId)"
+        case let .invalidPlayerID(playerId):
+            return "Invalid player id: \(playerId)"
         }
     }
 }

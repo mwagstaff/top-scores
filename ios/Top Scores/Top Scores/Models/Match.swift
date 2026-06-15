@@ -153,23 +153,59 @@ struct MatchYellowCardEvent: Codable, Hashable, Sendable {
 struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
     let number: Int
     let name: String
+    let idPlayer: String?
     let positionCategory: String?
+    let position: String?
+    let positionShort: String?
+    let cutoutURL: String?
     let formationRowIndex: Int?
     let formationSlotIndex: Int?
     let formationRowSize: Int?
 
     var id: String {
-        "\(number)|\(normalizedNameKey)"
+        if let idPlayer, !idPlayer.isEmpty {
+            return idPlayer
+        }
+
+        return "\(number)|\(normalizedNameKey)"
     }
 
     var normalizedNameKey: String {
         Self.normalizeName(name)
     }
 
+    init(
+        number: Int,
+        name: String,
+        idPlayer: String? = nil,
+        positionCategory: String?,
+        position: String? = nil,
+        positionShort: String? = nil,
+        cutoutURL: String? = nil,
+        formationRowIndex: Int?,
+        formationSlotIndex: Int?,
+        formationRowSize: Int?
+    ) {
+        self.number = number
+        self.name = name
+        self.idPlayer = idPlayer
+        self.positionCategory = positionCategory
+        self.position = position
+        self.positionShort = positionShort
+        self.cutoutURL = cutoutURL
+        self.formationRowIndex = formationRowIndex
+        self.formationSlotIndex = formationSlotIndex
+        self.formationRowSize = formationRowSize
+    }
+
     enum CodingKeys: String, CodingKey {
         case number
         case name
+        case idPlayer = "id_player"
         case positionCategory = "position_category"
+        case position
+        case positionShort = "position_short"
+        case cutoutURL = "cutout_url"
         case formationRowIndex = "formation_row_index"
         case formationSlotIndex = "formation_slot_index"
         case formationRowSize = "formation_row_size"
@@ -190,7 +226,11 @@ struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
     nonisolated static func == (lhs: MatchLineupPlayer, rhs: MatchLineupPlayer) -> Bool {
         lhs.number == rhs.number &&
         lhs.name == rhs.name &&
+        lhs.idPlayer == rhs.idPlayer &&
         lhs.positionCategory == rhs.positionCategory &&
+        lhs.position == rhs.position &&
+        lhs.positionShort == rhs.positionShort &&
+        lhs.cutoutURL == rhs.cutoutURL &&
         lhs.formationRowIndex == rhs.formationRowIndex &&
         lhs.formationSlotIndex == rhs.formationSlotIndex &&
         lhs.formationRowSize == rhs.formationRowSize
@@ -216,6 +256,34 @@ struct MatchLineupSubstitution: Codable, Hashable, Identifiable, Sendable {
         lhs.minute == rhs.minute &&
         lhs.playerOff == rhs.playerOff &&
         lhs.playerOn == rhs.playerOn
+    }
+}
+
+struct PlayerDetails: Codable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let team: String?
+    let born: String?
+    let description: String?
+    let side: String?
+    let position: String?
+    let birthLocation: String?
+    let cutoutURL: String?
+    let thumbURL: String?
+    let renderURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case team
+        case born
+        case description
+        case side
+        case position
+        case birthLocation = "birth_location"
+        case cutoutURL = "cutout_url"
+        case thumbURL = "thumb_url"
+        case renderURL = "render_url"
     }
 }
 

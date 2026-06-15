@@ -84,6 +84,22 @@ async function ensureIndexes() {
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
       { key: { league_name: 1 }, name: "league_name" },
     ]),
+    collection("match_lineups").createIndexes([
+      { key: { updated_at_ms: -1 }, name: "updatedAtMs_desc" },
+      { key: { next_refresh_at_ms: 1 }, name: "nextRefreshAtMs" },
+      { key: { final: 1 }, name: "final" },
+    ]),
+    collection("match_timelines").createIndexes([
+      { key: { updated_at_ms: -1 }, name: "timelineUpdatedAtMs_desc" },
+      { key: { next_refresh_at_ms: 1 }, name: "timelineNextRefreshAtMs" },
+      { key: { final: 1 }, name: "timelineFinal" },
+    ]),
+    collection("teams").createIndexes([
+      { key: { updated_at_ms: -1 }, name: "teamUpdatedAtMs_desc" },
+    ]),
+    collection("players").createIndexes([
+      { key: { updated_at_ms: -1 }, name: "playerUpdatedAtMs_desc" },
+    ]),
   ]);
 
   indexesEnsured = true;
@@ -614,6 +630,377 @@ async function purgeStaleTvListings(cutoffDateStr) {
   return { deleted: result.deletedCount };
 }
 
+function buildTsdbCacheDocument(id, payload, metadata = {}) {
+  const normalized = normalizeRecordId(id);
+  if (!normalized) return null;
+  const nowMs = Date.now();
+  const updatedAtMs = Number.isFinite(Number(metadata.updated_at_ms))
+    ? Number(metadata.updated_at_ms)
+    : nowMs;
+  return {
+    _id: normalized,
+    payload,
+    updated_at: metadata.updated_at || new Date(updatedAtMs).toISOString(),
+    updated_at_ms: updatedAtMs,
+    next_refresh_at_ms: Number.isFinite(Number(metadata.next_refresh_at_ms))
+      ? Number(metadata.next_refresh_at_ms)
+      : null,
+    final: metadata.final === true,
+    source: metadata.source || null,
+  };
+}
+
+async function upsertTsdbCacheRecord(collectionName, id, payload, metadata = {}) {
+  const mongoDb = await getDb();
+  const doc = buildTsdbCacheDocument(id, payload, metadata);
+  if (!mongoDb || !doc) return null;
+  await collection(collectionName).updateOne(
+    { _id: doc._id },
+    { $set: doc, $setOnInsert: { created_at: new Date().toISOString() } },
+    { upsert: true }
+  );
+  return stripMongoId(doc);
+}
+
+async function getTsdbCacheRecord(collectionName, id) {
+  const mongoDb = await getDb();
+  const normalized = normalizeRecordId(id);
+  if (!mongoDb || !normalized) return null;
+  const record = await collection(collectionName).findOne({ _id: normalized });
+  return record ? stripMongoId(record) : null;
+}
+
+async function getTsdbCacheRecords(collectionName, ids = []) {
+  const mongoDb = await getDb();
+  const normalizedIds = Array.isArray(ids)
+    ? [...new Set(ids.map((id) => normalizeRecordId(id)).filter(Boolean))]
+    : [];
+  if (!mongoDb || normalizedIds.length === 0) return {};
+  const records = await collection(collectionName)
+    .find({ _id: { $in: normalizedIds } })
+    .toArray();
+  const output = {};
+  records.forEach((record) => {
+    const stripped = stripMongoId(record);
+    output[String(record._id)] = stripped;
+  });
+  return output;
+}
+
+function timestampSecondsFromMs(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number / 1000 : 0;
+}
+
+async function summarizeTsdbCacheCollection(collectionName, nowMs = Date.now()) {
+  const mongoDb = await getDb();
+  if (!mongoDb) return null;
+  const [summary] = await collection(collectionName)
+    .aggregate([
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          final_count: {
+            $sum: { $cond: [{ $eq: ["$final", true] }, 1, 0] },
+          },
+          non_final_count: {
+            $sum: { $cond: [{ $ne: ["$final", true] }, 1, 0] },
+          },
+          due_count: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$final", true] },
+                    { $ne: ["$next_refresh_at_ms", null] },
+                    { $lte: ["$next_refresh_at_ms", nowMs] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          latest_updated_at_ms: { $max: "$updated_at_ms" },
+          oldest_updated_at_ms: { $min: "$updated_at_ms" },
+          next_refresh_at_ms: {
+            $min: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$final", true] },
+                    { $ne: ["$next_refresh_at_ms", null] },
+                  ],
+                },
+                "$next_refresh_at_ms",
+                null,
+              ],
+            },
+          },
+        },
+      },
+    ])
+    .toArray();
+  const nextRefreshRecord = await collection(collectionName)
+    .find(
+      { final: { $ne: true }, next_refresh_at_ms: { $ne: null } },
+      { projection: { next_refresh_at_ms: 1 } }
+    )
+    .sort({ next_refresh_at_ms: 1 })
+    .limit(1)
+    .toArray();
+  const nextRefreshAtMs =
+    nextRefreshRecord[0] && Number.isFinite(Number(nextRefreshRecord[0].next_refresh_at_ms))
+      ? Number(nextRefreshRecord[0].next_refresh_at_ms)
+      : 0;
+  return {
+    count: Number(summary && summary.count) || 0,
+    final_count: Number(summary && summary.final_count) || 0,
+    non_final_count: Number(summary && summary.non_final_count) || 0,
+    due_count: Number(summary && summary.due_count) || 0,
+    latest_updated_at_seconds: timestampSecondsFromMs(summary && summary.latest_updated_at_ms),
+    oldest_updated_at_seconds: timestampSecondsFromMs(summary && summary.oldest_updated_at_ms),
+    next_refresh_at_seconds: timestampSecondsFromMs(nextRefreshAtMs),
+  };
+}
+
+function extractIdsFromLineupPayload(payload, key) {
+  if (!payload || typeof payload !== "object") return [];
+  const lookup = Array.isArray(payload.lookup) ? payload.lookup : [];
+  return lookup
+    .map((entry) => String(entry && entry[key] ? entry[key] : "").trim())
+    .filter((id) => /^\d+$/.test(id));
+}
+
+async function getExpectedTsdbCacheIdsFromMongo() {
+  const mongoDb = await getDb();
+  if (!mongoDb) {
+    return {
+      matchIds: [],
+      playerIds: [],
+      teamIds: [],
+    };
+  }
+
+  const [matches, lineupRecords] = await Promise.all([
+    collection("matches")
+      .find(
+        { _id: { $regex: /^\d+$/ } },
+        { projection: { _id: 1, "payload.home_team_id": 1, "payload.away_team_id": 1 } }
+      )
+      .toArray(),
+    collection("match_lineups")
+      .find({}, { projection: { payload: 1 } })
+      .toArray(),
+  ]);
+
+  const matchIds = new Set();
+  const playerIds = new Set();
+  const teamIds = new Set();
+
+  matches.forEach((record) => {
+    const id = String(record && record._id ? record._id : "").trim();
+    if (/^\d+$/.test(id)) matchIds.add(id);
+    const payload = record && record.payload && typeof record.payload === "object"
+      ? record.payload
+      : {};
+    [payload.home_team_id, payload.away_team_id].forEach((teamId) => {
+      const normalizedTeamId = String(teamId || "").trim();
+      if (/^\d+$/.test(normalizedTeamId)) teamIds.add(normalizedTeamId);
+    });
+  });
+
+  lineupRecords.forEach((record) => {
+    extractIdsFromLineupPayload(record && record.payload, "idPlayer").forEach((id) => playerIds.add(id));
+  });
+
+  return {
+    matchIds: Array.from(matchIds),
+    playerIds: Array.from(playerIds),
+    teamIds: Array.from(teamIds),
+  };
+}
+
+async function countMissingTsdbCacheRecords(collectionName, expectedIds = []) {
+  const mongoDb = await getDb();
+  const ids = Array.isArray(expectedIds)
+    ? [...new Set(expectedIds.map((id) => normalizeRecordId(id)).filter(Boolean))]
+    : [];
+  if (!mongoDb || ids.length === 0) return 0;
+  const cached = await collection(collectionName).distinct("_id", { _id: { $in: ids } });
+  return Math.max(0, ids.length - cached.length);
+}
+
+async function getTsdbCacheObservabilitySnapshot() {
+  const mongoDb = await getDb();
+  const nowMs = Date.now();
+  const emptyCollection = {
+    count: 0,
+    final_count: 0,
+    non_final_count: 0,
+    due_count: 0,
+    latest_updated_at_seconds: 0,
+    oldest_updated_at_seconds: 0,
+    next_refresh_at_seconds: 0,
+    expected_count: 0,
+    missing_count: 0,
+    completion_ratio: 1,
+  };
+  if (!mongoDb) {
+    return {
+      available: false,
+      refreshed_at_seconds: Math.floor(nowMs / 1000),
+      collections: {
+        players: { ...emptyCollection },
+        teams: { ...emptyCollection },
+        match_lineups: { ...emptyCollection },
+        match_timelines: { ...emptyCollection },
+      },
+    };
+  }
+
+  const [expected, players, teams, matchLineups, matchTimelines] = await Promise.all([
+    getExpectedTsdbCacheIdsFromMongo(),
+    summarizeTsdbCacheCollection("players", nowMs),
+    summarizeTsdbCacheCollection("teams", nowMs),
+    summarizeTsdbCacheCollection("match_lineups", nowMs),
+    summarizeTsdbCacheCollection("match_timelines", nowMs),
+  ]);
+
+  const expectedByCollection = {
+    players: expected.playerIds,
+    teams: expected.teamIds,
+    match_lineups: expected.matchIds,
+    match_timelines: expected.matchIds,
+  };
+  const summaries = {
+    players,
+    teams,
+    match_lineups: matchLineups,
+    match_timelines: matchTimelines,
+  };
+
+  const collections = {};
+  await Promise.all(
+    Object.entries(summaries).map(async ([name, summary]) => {
+      const expectedIds = expectedByCollection[name] || [];
+      const missingCount = await countMissingTsdbCacheRecords(name, expectedIds);
+      const expectedCount = expectedIds.length;
+      const cachedCount = Number(summary && summary.count) || 0;
+      collections[name] = {
+        ...emptyCollection,
+        ...(summary || {}),
+        expected_count: expectedCount,
+        missing_count: missingCount,
+        completion_ratio: expectedCount > 0
+          ? Math.max(0, Math.min(1, (expectedCount - missingCount) / expectedCount))
+          : (cachedCount > 0 ? 1 : 0),
+      };
+    })
+  );
+
+  return {
+    available: true,
+    refreshed_at_seconds: Math.floor(nowMs / 1000),
+    collections,
+  };
+}
+
+async function upsertMatchLineupCache(eventId, payload, metadata = {}) {
+  return upsertTsdbCacheRecord("match_lineups", eventId, payload, metadata);
+}
+
+async function getMatchLineupCache(eventId) {
+  return getTsdbCacheRecord("match_lineups", eventId);
+}
+
+async function upsertMatchTimelineCache(eventId, payload, metadata = {}) {
+  return upsertTsdbCacheRecord("match_timelines", eventId, payload, metadata);
+}
+
+async function getMatchTimelineCache(eventId) {
+  return getTsdbCacheRecord("match_timelines", eventId);
+}
+
+async function upsertTeamCache(teamId, payload, metadata = {}) {
+  return upsertTsdbCacheRecord("teams", teamId, payload, metadata);
+}
+
+async function getTeamCache(teamId) {
+  return getTsdbCacheRecord("teams", teamId);
+}
+
+async function getTeamCaches(teamIds = []) {
+  return getTsdbCacheRecords("teams", teamIds);
+}
+
+async function upsertPlayerCache(playerId, payload, metadata = {}) {
+  return upsertTsdbCacheRecord("players", playerId, payload, metadata);
+}
+
+async function getPlayerCache(playerId) {
+  return getTsdbCacheRecord("players", playerId);
+}
+
+async function getPlayerCaches(playerIds = []) {
+  return getTsdbCacheRecords("players", playerIds);
+}
+
+async function findPlayerCachesByNames(playerNames = []) {
+  const mongoDb = await getDb();
+  if (!mongoDb) return [];
+  const names = Array.isArray(playerNames)
+    ? [...new Set(playerNames.map((name) => String(name || "").trim()).filter(Boolean))]
+    : [];
+  if (names.length === 0) return [];
+  const nameRegexes = playerNameSearchRegexes(names);
+  const regexClauses = nameRegexes.flatMap((regex) => [
+    { "payload.strPlayer": regex },
+    { "payload.strPlayerAlternate": regex },
+  ]);
+  const records = await collection("players")
+    .find({
+      $or: [
+        { "payload.strPlayer": { $in: names } },
+        { "payload.strPlayerAlternate": { $in: names } },
+        ...regexClauses,
+      ],
+    })
+    .collation({ locale: "en", strength: 1 })
+    .toArray();
+  return records.map(stripMongoId);
+}
+
+function playerNameSearchRegexes(names = []) {
+  const regexes = [];
+  const seen = new Set();
+  names.forEach((name) => {
+    const variants = [
+      String(name || "").trim(),
+      String(name || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim(),
+    ].filter(Boolean);
+    variants.forEach((variant) => {
+      const tokens = variant.split(/[^A-Za-z0-9À-ÖØ-öø-ÿ]+/).filter(Boolean);
+      if (tokens.length === 0 || tokens.some((token) => token.length < 3)) return;
+      const pattern = tokens.map(escapeRegex).join("[^A-Za-z0-9À-ÖØ-öø-ÿ]+");
+      const boundedPattern = `(^|[^A-Za-z0-9À-ÖØ-öø-ÿ])${pattern}([^A-Za-z0-9À-ÖØ-öø-ÿ]|$)`;
+      const key = boundedPattern.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      regexes.push(new RegExp(boundedPattern, "i"));
+    });
+  });
+  return regexes.slice(0, 60);
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 module.exports = {
   isMongoConfigured,
   getDb,
@@ -644,4 +1031,16 @@ module.exports = {
   upsertLeagues,
   upsertTsdbLeagueTables,
   getAllTsdbLeagueTables,
+  upsertMatchLineupCache,
+  getMatchLineupCache,
+  upsertMatchTimelineCache,
+  getMatchTimelineCache,
+  upsertTeamCache,
+  getTeamCache,
+  getTeamCaches,
+  upsertPlayerCache,
+  getPlayerCache,
+  getPlayerCaches,
+  findPlayerCachesByNames,
+  getTsdbCacheObservabilitySnapshot,
 };

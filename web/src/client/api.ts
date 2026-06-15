@@ -17,6 +17,7 @@ import {
   type Match,
   type MatchesMode,
   type MatchesPayload,
+  type PlayerDetails,
   type Preferences,
   type TeamRankingEntry,
   type MatchYellowCardEvent,
@@ -32,6 +33,8 @@ let teamRankingsCache: TeamRankingEntry[] | null = null;
 let competitionWeightsCache: CompetitionWeightEntry[] | null = null;
 const matchDetailsCache = new Map<string, MatchDetails>();
 const matchDetailsPromises = new Map<string, Promise<MatchDetails>>();
+const playerDetailsCache = new Map<string, PlayerDetails>();
+const playerDetailsPromises = new Map<string, Promise<PlayerDetails>>();
 const OPEN_ENDED_FIXTURE_END_DATE = "9999-12-31";
 const RESULTS_HISTORY_YEARS = 1;
 
@@ -185,6 +188,42 @@ export function fetchCompetitionWeights(): Promise<CompetitionWeightEntry[]> {
 
 export function fetchMatchDetails(matchDetailsId: string): Promise<MatchDetails> {
   return fetchMatchDetailsInternal(matchDetailsId, false);
+}
+
+export function fetchPlayerDetails(playerId: string): Promise<PlayerDetails> {
+  const normalizedId = playerId.trim();
+  if (!normalizedId) {
+    return Promise.reject(new Error("Missing player id"));
+  }
+
+  const cached = playerDetailsCache.get(normalizedId);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+
+  const inFlight = playerDetailsPromises.get(normalizedId);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const request = requestJson<Record<string, unknown>>(
+    `/api/v1/players/${encodeURIComponent(normalizedId)}`,
+    undefined,
+    { cache: "no-store" }
+  )
+    .then(normalizePlayerDetails)
+    .then((details) => {
+      playerDetailsCache.set(normalizedId, details);
+      playerDetailsPromises.delete(normalizedId);
+      return details;
+    })
+    .catch((error) => {
+      playerDetailsPromises.delete(normalizedId);
+      throw error;
+    });
+
+  playerDetailsPromises.set(normalizedId, request);
+  return request;
 }
 
 export function clearMatchDetailsCache(matchDetailsId: string): void {
@@ -416,6 +455,22 @@ function normalizeMatchDetails(raw: Record<string, unknown>): MatchDetails {
   };
 }
 
+function normalizePlayerDetails(raw: Record<string, unknown>): PlayerDetails {
+  return {
+    id: asString(raw.id),
+    name: asString(raw.name),
+    team: optionalString(raw.team),
+    born: optionalString(raw.born),
+    description: optionalString(raw.description),
+    side: optionalString(raw.side),
+    position: optionalString(raw.position),
+    birthLocation: optionalString(raw.birth_location),
+    cutoutUrl: optionalString(raw.cutout_url),
+    thumbUrl: optionalString(raw.thumb_url),
+    renderUrl: optionalString(raw.render_url),
+  };
+}
+
 function normalizeLeagueTables(value: unknown): LeagueTable[] {
   if (!Array.isArray(value)) {
     return [];
@@ -597,7 +652,11 @@ function normalizeLineupPlayers(value: unknown): MatchLineupPlayer[] {
     return {
       number: optionalNumber(source.number) ?? 0,
       name: asString(source.name),
+      idPlayer: optionalString(source.id_player),
       positionCategory: optionalString(source.position_category),
+      position: optionalString(source.position),
+      positionShort: optionalString(source.position_short),
+      cutoutUrl: optionalString(source.cutout_url),
       formationRowIndex: optionalNumber(source.formation_row_index),
       formationSlotIndex: optionalNumber(source.formation_slot_index),
       formationRowSize: optionalNumber(source.formation_row_size),
@@ -637,7 +696,11 @@ function normalizeLineupPlayer(value: unknown): MatchLineupPlayer | null {
   return {
     number: optionalNumber(source.number) ?? 0,
     name: asString(source.name),
+    idPlayer: optionalString(source.id_player),
     positionCategory: optionalString(source.position_category),
+    position: optionalString(source.position),
+    positionShort: optionalString(source.position_short),
+    cutoutUrl: optionalString(source.cutout_url),
     formationRowIndex: optionalNumber(source.formation_row_index),
     formationSlotIndex: optionalNumber(source.formation_slot_index),
     formationRowSize: optionalNumber(source.formation_row_size),

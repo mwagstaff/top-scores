@@ -13,6 +13,8 @@ const {
   resolveLeagueName,
   stripSeconds,
   normalizeTsdbKickoffDateTime,
+  lineupPayloadHasEntries,
+  matchLineupCacheFresh,
 } = __private;
 
 // ---------------------------------------------------------------------------
@@ -292,7 +294,7 @@ test("parseLineups: null on empty input", () => {
 
 test("parseLineups: separates home and away starters and subs", () => {
   const entries = [
-    { strPlayer: "GK Home",   intSquadNumber: "1",  strHome: "Yes", strSubstitute: "No",  strPosition: "Goalkeeper",  strFormation: "4-3-3", idTeam: null },
+    { strPlayer: "GK Home",   intSquadNumber: "1",  strHome: "Yes", strSubstitute: "No",  strPosition: "Goalkeeper", strPositionShort: "G", strCutout: "https://example.test/gk.png", idPlayer: "1001", strFormation: "4-3-3", idTeam: null },
     { strPlayer: "FW Home",   intSquadNumber: "9",  strHome: "Yes", strSubstitute: "No",  strPosition: "Centre-Forward", strFormation: "4-3-3", idTeam: null },
     { strPlayer: "SUB Home",  intSquadNumber: "20", strHome: "Yes", strSubstitute: "Yes", strPosition: "Midfielder", strFormation: "4-3-3", idTeam: null },
     { strPlayer: "GK Away",   intSquadNumber: "1",  strHome: "No",  strSubstitute: "No",  strPosition: "Goalkeeper",  strFormation: "4-4-2", idTeam: null },
@@ -309,10 +311,39 @@ test("parseLineups: separates home and away starters and subs", () => {
   assert.equal(result.away.starting_lineup.length, 2);
   assert.equal(result.away.substitutes.length, 0);
   assert.equal(result.home.starting_lineup[0].position_category, "goalkeeper");
+  assert.equal(result.home.starting_lineup[0].id_player, "1001");
+  assert.equal(result.home.starting_lineup[0].position, "Goalkeeper");
+  assert.equal(result.home.starting_lineup[0].position_short, "G");
+  assert.equal(result.home.starting_lineup[0].cutout_url, "https://example.test/gk.png");
   assert.equal(result.home.starting_lineup[1].position_category, "attacker");
   // Grid positions should be assigned.
   assert.ok(result.home.starting_lineup[0].formation_row_index !== undefined);
   assert.ok(result.home.starting_lineup[0].formation_slot_index !== undefined);
+});
+
+test("parseLineups: strHome overrides mismatched lineup team ids", () => {
+  const entries = [
+    { strPlayer: "Canada Player", intSquadNumber: "10", strHome: "Yes", strSubstitute: "No", strPosition: "Forward", strPositionShort: "F", strFormation: null, idTeam: "canada-lineup-id" },
+    { strPlayer: "Bosnia Player", intSquadNumber: "9", strHome: "No", strSubstitute: "No", strPosition: "Forward", strPositionShort: "F", strFormation: null, idTeam: "bosnia-lineup-id" },
+  ];
+
+  const result = parseLineups(entries, "event-home-team-id");
+
+  assert.ok(result);
+  assert.equal(result.home.starting_lineup.length, 1);
+  assert.equal(result.home.starting_lineup[0].name, "Canada Player");
+  assert.equal(result.away.starting_lineup.length, 1);
+  assert.equal(result.away.starting_lineup[0].name, "Bosnia Player");
+});
+
+test("parseLineups: ignores team ids when strHome is absent", () => {
+  const entries = [
+    { strPlayer: "Unknown Side", intSquadNumber: "10", strHome: "", strSubstitute: "No", strPosition: "Forward", strPositionShort: "F", strFormation: null, idTeam: "event-home-team-id" },
+  ];
+
+  const result = parseLineups(entries, "event-home-team-id");
+
+  assert.equal(result, null);
 });
 
 test("parseLineups: assigns formation grid positions from strFormation", () => {
@@ -391,6 +422,38 @@ test("parseLineups: derives formation string when strFormation is null", () => {
   assert.equal(gk.formation_row_index, 0);
 });
 
+test("lineup cache freshness: final empty lineup is not fresh", () => {
+  const nowMs = Date.parse("2026-06-14T12:00:00Z");
+  assert.equal(lineupPayloadHasEntries({ lookup: [] }), false);
+  assert.equal(
+    matchLineupCacheFresh(
+      {
+        final: true,
+        next_refresh_at_ms: null,
+        payload: { lookup: [] },
+      },
+      nowMs
+    ),
+    false
+  );
+});
+
+test("lineup cache freshness: final populated lineup is fresh", () => {
+  const nowMs = Date.parse("2026-06-14T12:00:00Z");
+  assert.equal(lineupPayloadHasEntries({ lookup: [{ idLineup: "1" }] }), true);
+  assert.equal(
+    matchLineupCacheFresh(
+      {
+        final: true,
+        next_refresh_at_ms: null,
+        payload: { lookup: [{ idLineup: "1" }] },
+      },
+      nowMs
+    ),
+    true
+  );
+});
+
 // ---------------------------------------------------------------------------
 // extractSubstitutionsFromTimeline
 // ---------------------------------------------------------------------------
@@ -426,6 +489,34 @@ test("extractSubstitutionsFromTimeline: extracts home and away subs with minute"
   assert.equal(result.away[0].player_off.name, "Jaka Bijol");
   assert.equal(result.away[0].player_off.number, 15);
   assert.equal(result.away[0].player_on.name, "Daniel James");
+});
+
+test("extractSubstitutionsFromTimeline: resolves abbreviated incoming player from substitutes", () => {
+  const timeline = [
+    { strTimeline: "subst", strPlayer: "Malik Tillman", strAssist: "Reyna",
+      intTime: "82", strHome: "Yes", idTeam: null },
+  ];
+  const homeStarters = [{ name: "Malik Tillman", number: 10 }];
+  const homeSubstitutes = [{
+    number: 7,
+    name: "Giovanni Reyna",
+    id_player: "34170047",
+    cutout_url: "https://example.test/reyna.png",
+  }];
+
+  const result = extractSubstitutionsFromTimeline(
+    timeline,
+    homeStarters,
+    [],
+    null,
+    homeSubstitutes,
+    []
+  );
+
+  assert.equal(result.home.length, 1);
+  assert.equal(result.home[0].player_on.name, "Giovanni Reyna");
+  assert.equal(result.home[0].player_on.id_player, "34170047");
+  assert.equal(result.home[0].player_on.cutout_url, "https://example.test/reyna.png");
 });
 
 test("extractSubstitutionsFromTimeline: sorts by minute", () => {

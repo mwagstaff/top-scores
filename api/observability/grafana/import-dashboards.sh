@@ -6,6 +6,10 @@ DASHBOARD_DIR="$SCRIPT_DIR/dashboards"
 
 GRAFANA_URL="${GRAFANA_URL:-https://api.skynolimit.dev/grafana}"
 API="$GRAFANA_URL/api"
+GRAFANA_HOST_HEADER="${GRAFANA_HOST_HEADER:-}"
+if [[ -z "$GRAFANA_HOST_HEADER" && "$GRAFANA_URL" =~ ^http://(127\.0\.0\.1|localhost): ]]; then
+  GRAFANA_HOST_HEADER="${GRAFANA_TUNNEL_HOST_HEADER:-api.skynolimit.dev}"
+fi
 
 GRAFANA_USER="${GRAFANA_USER:-admin}"
 GRAFANA_PASSWORD="${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set}"
@@ -25,31 +29,72 @@ PROM_SCRAPE_TARGETS="${PROM_SCRAPE_TARGETS:-$PROM_SCRAPE_TARGET}"
 PROM_SCRAPE_METRICS_PATH="${PROM_SCRAPE_METRICS_PATH:-/metrics}"
 
 curl_json() {
-  curl -sS -u "$GRAFANA_USER:$GRAFANA_PASSWORD" -H "Content-Type: application/json" "$@"
+  curl_grafana -H "Content-Type: application/json" "$@"
+}
+
+curl_grafana() {
+  local args=()
+  if [[ -n "$GRAFANA_HOST_HEADER" ]]; then
+    args+=(-H "Host: $GRAFANA_HOST_HEADER")
+  fi
+  curl -sS "${args[@]}" -u "$GRAFANA_USER:$GRAFANA_PASSWORD" "$@"
 }
 
 url_encode() {
   jq -rn --arg v "$1" '$v|@uri'
 }
 
+response_preview() {
+  local preview
+  preview="$(printf '%s' "$1" | tr '\r\n' '  ' | cut -c1-500)"
+  if [[ -z "$preview" ]]; then
+    preview="<empty response>"
+  fi
+  printf '%s' "$preview"
+}
+
+require_json_response() {
+  local context="$1"
+  local response="$2"
+
+  if ! jq -e . >/dev/null 2>&1 <<< "$response"; then
+    echo "Grafana API returned non-JSON while $context." >&2
+    echo "Grafana URL: $GRAFANA_URL" >&2
+    if [[ -n "$GRAFANA_HOST_HEADER" ]]; then
+      echo "Grafana Host header: $GRAFANA_HOST_HEADER" >&2
+    fi
+    echo "Response preview: $(response_preview "$response")" >&2
+    exit 1
+  fi
+}
+
+jq_response() {
+  local context="$1"
+  local response="$2"
+  shift 2
+
+  require_json_response "$context" "$response"
+  jq -r "$@" <<< "$response"
+}
+
 ensure_prometheus_datasource() {
   local response existing_id existing_type existing_uid existing_name existing_url
   local create_payload update_payload
 
-  response="$(curl -sS -u "$GRAFANA_USER:$GRAFANA_PASSWORD" \
+  response="$(curl_grafana \
     "$API/datasources/uid/$(url_encode "$PROM_DS_UID")")"
-  existing_id="$(jq -r '.id // empty' <<< "$response")"
+  existing_id="$(jq_response "looking up Prometheus datasource uid=$PROM_DS_UID" "$response" '.id // empty')"
 
   if [[ -z "$existing_id" ]]; then
-    response="$(curl -sS -u "$GRAFANA_USER:$GRAFANA_PASSWORD" \
+    response="$(curl_grafana \
       "$API/datasources/name/$(url_encode "$PROM_DS_NAME")")"
-    existing_id="$(jq -r '.id // empty' <<< "$response")"
+    existing_id="$(jq_response "looking up Prometheus datasource name=$PROM_DS_NAME" "$response" '.id // empty')"
   fi
 
-  existing_type="$(jq -r '.type // empty' <<< "$response")"
-  existing_uid="$(jq -r '.uid // empty' <<< "$response")"
-  existing_name="$(jq -r '.name // empty' <<< "$response")"
-  existing_url="$(jq -r '.url // empty' <<< "$response")"
+  existing_type="$(jq_response "reading Prometheus datasource type" "$response" '.type // empty')"
+  existing_uid="$(jq_response "reading Prometheus datasource uid" "$response" '.uid // empty')"
+  existing_name="$(jq_response "reading Prometheus datasource name" "$response" '.name // empty')"
+  existing_url="$(jq_response "reading Prometheus datasource url" "$response" '.url // empty')"
 
   if [[ -n "$existing_id" ]]; then
     if [[ "$existing_type" != "prometheus" ]]; then
@@ -83,8 +128,8 @@ ensure_prometheus_datasource() {
     )"
 
     response="$(curl_json -X PUT "$API/datasources/uid/$(url_encode "$PROM_DS_UID")" -d "$update_payload")"
-    if [[ "$(jq -r '.message // empty' <<< "$response")" != "Datasource updated" ]]; then
-      echo "Failed to update Prometheus datasource: $(jq -r '.message // "unknown error"' <<< "$response")" >&2
+    if [[ "$(jq_response "updating Prometheus datasource uid=$PROM_DS_UID" "$response" '.message // empty')" != "Datasource updated" ]]; then
+      echo "Failed to update Prometheus datasource: $(jq_response "reading Prometheus datasource update error" "$response" '.message // "unknown error"')" >&2
       exit 1
     fi
 
@@ -109,13 +154,13 @@ ensure_prometheus_datasource() {
   )"
 
   response="$(curl_json -X POST "$API/datasources" -d "$create_payload")"
-  if [[ -z "$(jq -r '.datasource.id // .id // empty' <<< "$response")" ]]; then
-    echo "Failed to create Prometheus datasource: $(jq -r '.message // "unknown error"' <<< "$response")" >&2
+  if [[ -z "$(jq_response "creating Prometheus datasource" "$response" '.datasource.id // .id // empty')" ]]; then
+    echo "Failed to create Prometheus datasource: $(jq_response "reading Prometheus datasource create error" "$response" '.message // "unknown error"')" >&2
     exit 1
   fi
 
-  if [[ -n "$(jq -r '.datasource.uid // empty' <<< "$response")" ]]; then
-    PROM_DS_UID="$(jq -r '.datasource.uid' <<< "$response")"
+  if [[ -n "$(jq_response "reading created Prometheus datasource uid" "$response" '.datasource.uid // empty')" ]]; then
+    PROM_DS_UID="$(jq_response "reading created Prometheus datasource uid" "$response" '.datasource.uid')"
   fi
 
   echo "Created Prometheus datasource \"$PROM_DS_NAME\" (uid=$PROM_DS_UID)"
@@ -253,21 +298,16 @@ EOF
 ensure_folder() {
   local existing_uid response query
 
-  existing_uid="$(
-    curl -sS -u "$GRAFANA_USER:$GRAFANA_PASSWORD" "$API/folders/$FOLDER_UID" \
-      | jq -r '.uid // empty'
-  )"
+  response="$(curl_grafana "$API/folders/$FOLDER_UID")"
+  existing_uid="$(jq_response "looking up Grafana folder uid=$FOLDER_UID" "$response" '.uid // empty')"
   if [[ "$existing_uid" == "$FOLDER_UID" ]]; then
     echo "Using existing folder uid=$FOLDER_UID"
     return
   fi
 
   query="$(url_encode "$FOLDER_TITLE")"
-  existing_uid="$(
-    curl -sS -u "$GRAFANA_USER:$GRAFANA_PASSWORD" "$API/search?type=dash-folder&query=$query" \
-      | jq -r --arg t "$FOLDER_TITLE" '.[] | select(.title == $t) | .uid' \
-      | head -n 1
-  )"
+  response="$(curl_grafana "$API/search?type=dash-folder&query=$query")"
+  existing_uid="$(jq_response "searching Grafana folder title=$FOLDER_TITLE" "$response" --arg t "$FOLDER_TITLE" '.[] | select(.title == $t) | .uid' | head -n 1)"
   if [[ -n "$existing_uid" ]]; then
     FOLDER_UID="$existing_uid"
     echo "Using existing folder \"$FOLDER_TITLE\" (uid=$FOLDER_UID)"
@@ -278,9 +318,9 @@ ensure_folder() {
     jq -cn --arg uid "$FOLDER_UID" --arg title "$FOLDER_TITLE" '{uid: $uid, title: $title}' \
       | curl_json -X POST "$API/folders" -d @-
   )"
-  existing_uid="$(jq -r '.uid // empty' <<< "$response")"
+  existing_uid="$(jq_response "creating Grafana folder title=$FOLDER_TITLE" "$response" '.uid // empty')"
   if [[ -z "$existing_uid" ]]; then
-    echo "Failed to create folder \"$FOLDER_TITLE\": $(jq -r '.message // "unknown error"' <<< "$response")" >&2
+    echo "Failed to create folder \"$FOLDER_TITLE\": $(jq_response "reading Grafana folder create error" "$response" '.message // "unknown error"')" >&2
     exit 1
   fi
 
@@ -351,12 +391,12 @@ import_dashboard_file() {
 
   rm -f "$normalized_file"
   response="$(curl_json -X POST "$API/dashboards/db" -d "$payload")"
-  status="$(jq -r '.status // empty' <<< "$response")"
-  message="$(jq -r '.message // empty' <<< "$response")"
+  status="$(jq_response "importing dashboard title=$title uid=$uid" "$response" '.status // empty')"
+  message="$(jq_response "reading dashboard import message title=$title uid=$uid" "$response" '.message // empty')"
 
   if [[ "$status" != "success" ]]; then
     echo "Failed to import dashboard \"$title\" (uid=$uid): ${status:-unknown-status} ${message}" >&2
-    jq -c . <<< "$response" >&2
+    jq_response "reading dashboard import response title=$title uid=$uid" "$response" -c . >&2
     exit 1
   fi
 

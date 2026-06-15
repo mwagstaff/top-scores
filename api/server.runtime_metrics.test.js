@@ -27,6 +27,18 @@ test("buildPrometheusMetricsText includes top-scores runtime health metrics", ()
     "top_scores_process_cpu_usage_ratio",
     "top_scores_tsdb_http_requests_total",
     "top_scores_tsdb_http_failed_responses_total",
+    "top_scores_tsdb_http_request_duration_seconds",
+    "top_scores_tsdb_http_request_last_duration_seconds",
+    "top_scores_tsdb_http_request_last_timestamp_seconds",
+    "source_update_phase_duration_seconds",
+    "top_scores_tsdb_cache_mongo_available",
+    "top_scores_tsdb_cache_snapshot_refreshed_timestamp_seconds",
+    "top_scores_tsdb_cache_records",
+    "top_scores_tsdb_cache_expected_records",
+    "top_scores_tsdb_cache_missing_records",
+    "top_scores_tsdb_cache_completion_ratio",
+    "top_scores_tsdb_cache_due_records",
+    "top_scores_tsdb_cache_last_updated_timestamp_seconds",
     "top_scores_bbc_range_match_date_timestamp_seconds",
     "top_scores_bbc_range_scrape_running",
     "top_scores_bbc_range_scrape_dates_total",
@@ -68,5 +80,7 @@ test("buildPrometheusMetricsText includes top-scores runtime health metrics", ()
   assert.match(metricsText, /top_scores_bbc_range_match_date_timestamp_seconds\{boundary="latest"\}\s+\d+(?:\.0+)?\b/);
   assert.match(metricsText, /top_scores_bbc_range_scrape_progress_ratio\{window="past"\}\s+\d+(?:\.\d+)?\b/);
   assert.match(metricsText, /top_scores_bbc_range_scrape_progress_ratio\{window="future"\}\s+\d+(?:\.\d+)?\b/);
+  assert.match(metricsText, /top_scores_tsdb_cache_records\{collection="players"\}\s+\d+(?:\.0+)?\b/);
+  assert.match(metricsText, /top_scores_tsdb_cache_missing_records\{collection="match_lineups"\}\s+\d+(?:\.0+)?\b/);
   resetRedisMetricsForTests();
 });

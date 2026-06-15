@@ -76,10 +76,28 @@ export interface MatchYellowCardEvent {
 export interface MatchLineupPlayer {
   number: number;
   name: string;
+  idPlayer?: string | null;
   positionCategory?: string | null;
+  position?: string | null;
+  positionShort?: string | null;
+  cutoutUrl?: string | null;
   formationRowIndex?: number | null;
   formationSlotIndex?: number | null;
   formationRowSize?: number | null;
+}
+
+export interface PlayerDetails {
+  id: string;
+  name: string;
+  team?: string | null;
+  born?: string | null;
+  description?: string | null;
+  side?: string | null;
+  position?: string | null;
+  birthLocation?: string | null;
+  cutoutUrl?: string | null;
+  thumbUrl?: string | null;
+  renderUrl?: string | null;
 }
 
 export interface MatchLineupSubstitution {

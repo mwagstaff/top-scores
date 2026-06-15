@@ -1,0 +1,395 @@
+{
+  "uid": "top-scores-tsdb-cache",
+  "title": "top-scores • TheSportsDB Cache",
+  "tags": ["top-scores", "thesportsdb", "cache", "mongo"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Mongo Cache Metrics",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "text": "Unavailable" }, "1": { "text": "Available" } }, "type": "value" }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_mongo_available{job=\"top-scores\"}", "legendFormat": "Mongo" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Snapshot Age",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 120 },
+              { "color": "red", "value": 300 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "time() - top_scores_tsdb_cache_snapshot_refreshed_timestamp_seconds{job=\"top-scores\"}",
+          "legendFormat": "Age"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Outstanding Records",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 50 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "sum(top_scores_tsdb_cache_missing_records{job=\"top-scores\"})",
+          "legendFormat": "Missing"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Overall Completion",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.8 },
+              { "color": "green", "value": 0.98 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "sum(top_scores_tsdb_cache_expected_records{job=\"top-scores\"} - top_scores_tsdb_cache_missing_records{job=\"top-scores\"}) / clamp_min(sum(top_scores_tsdb_cache_expected_records{job=\"top-scores\"}), 1)",
+          "legendFormat": "Complete"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Due For Refresh",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 25 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "sum(top_scores_tsdb_cache_due_records{job=\"top-scores\"})",
+          "legendFormat": "Due"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "ETA At 30m Rate",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 900 },
+              { "color": "red", "value": 3600 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "sum(top_scores_tsdb_cache_missing_records{job=\"top-scores\"}) / clamp_min(sum(increase(top_scores_tsdb_cache_records{job=\"top-scores\"}[30m])) / 1800, 0.001)",
+          "legendFormat": "Estimated seconds"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cached vs Expected Records",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_records{job=\"top-scores\"}", "legendFormat": "{{collection}} cached" },
+        { "expr": "top_scores_tsdb_cache_expected_records{job=\"top-scores\"}", "legendFormat": "{{collection}} expected" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Outstanding Records By Collection",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_missing_records{job=\"top-scores\"}", "legendFormat": "{{collection}} missing" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Completion Ratio",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_completion_ratio{job=\"top-scores\"}", "legendFormat": "{{collection}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Due Refresh Backlog",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_due_records{job=\"top-scores\"}", "legendFormat": "{{collection}} due" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Players Cached",
+      "gridPos": { "x": 0, "y": 20, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "none", "graphMode": "area", "justifyMode": "center" },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_records{job=\"top-scores\",collection=\"players\"}", "legendFormat": "Cached" },
+        { "expr": "top_scores_tsdb_cache_missing_records{job=\"top-scores\",collection=\"players\"}", "legendFormat": "Missing" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Players Last Update",
+      "gridPos": { "x": 4, "y": 20, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "dateTimeAsIso" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value", "colorMode": "none", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        { "expr": "(top_scores_tsdb_cache_last_updated_timestamp_seconds{job=\"top-scores\",collection=\"players\"} > 0) * 1000", "legendFormat": "Last update" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Players ETA",
+      "gridPos": { "x": 8, "y": 20, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "none", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_missing_records{job=\"top-scores\",collection=\"players\"} / clamp_min(increase(top_scores_tsdb_cache_records{job=\"top-scores\",collection=\"players\"}[30m]) / 1800, 0.001)", "legendFormat": "ETA" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Teams Cached",
+      "gridPos": { "x": 12, "y": 20, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "none", "graphMode": "area", "justifyMode": "center" },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_records{job=\"top-scores\",collection=\"teams\"}", "legendFormat": "Cached" },
+        { "expr": "top_scores_tsdb_cache_missing_records{job=\"top-scores\",collection=\"teams\"}", "legendFormat": "Missing" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Teams Last Update",
+      "gridPos": { "x": 16, "y": 20, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "dateTimeAsIso" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value", "colorMode": "none", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        { "expr": "(top_scores_tsdb_cache_last_updated_timestamp_seconds{job=\"top-scores\",collection=\"teams\"} > 0) * 1000", "legendFormat": "Last update" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Teams ETA",
+      "gridPos": { "x": 20, "y": 20, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "none", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_missing_records{job=\"top-scores\",collection=\"teams\"} / clamp_min(increase(top_scores_tsdb_cache_records{job=\"top-scores\",collection=\"teams\"}[30m]) / 1800, 0.001)", "legendFormat": "ETA" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Lineups Cached",
+      "gridPos": { "x": 0, "y": 24, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "none", "graphMode": "area", "justifyMode": "center" },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_records{job=\"top-scores\",collection=\"match_lineups\"}", "legendFormat": "Cached" },
+        { "expr": "top_scores_tsdb_cache_missing_records{job=\"top-scores\",collection=\"match_lineups\"}", "legendFormat": "Missing" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Lineups Last Update",
+      "gridPos": { "x": 4, "y": 24, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "dateTimeAsIso" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value", "colorMode": "none", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        { "expr": "(top_scores_tsdb_cache_last_updated_timestamp_seconds{job=\"top-scores\",collection=\"match_lineups\"} > 0) * 1000", "legendFormat": "Last update" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Lineups ETA",
+      "gridPos": { "x": 8, "y": 24, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "none", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_missing_records{job=\"top-scores\",collection=\"match_lineups\"} / clamp_min(increase(top_scores_tsdb_cache_records{job=\"top-scores\",collection=\"match_lineups\"}[30m]) / 1800, 0.001)", "legendFormat": "ETA" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Timelines Cached",
+      "gridPos": { "x": 12, "y": 24, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "none", "graphMode": "area", "justifyMode": "center" },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_records{job=\"top-scores\",collection=\"match_timelines\"}", "legendFormat": "Cached" },
+        { "expr": "top_scores_tsdb_cache_missing_records{job=\"top-scores\",collection=\"match_timelines\"}", "legendFormat": "Missing" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Timelines Last Update",
+      "gridPos": { "x": 16, "y": 24, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "dateTimeAsIso" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value", "colorMode": "none", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        { "expr": "(top_scores_tsdb_cache_last_updated_timestamp_seconds{job=\"top-scores\",collection=\"match_timelines\"} > 0) * 1000", "legendFormat": "Last update" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Timelines ETA",
+      "gridPos": { "x": 20, "y": 24, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "none", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        { "expr": "top_scores_tsdb_cache_missing_records{job=\"top-scores\",collection=\"match_timelines\"} / clamp_min(increase(top_scores_tsdb_cache_records{job=\"top-scores\",collection=\"match_timelines\"}[30m]) / 1800, 0.001)", "legendFormat": "ETA" }
+      ]
+    }
+  ]
+}

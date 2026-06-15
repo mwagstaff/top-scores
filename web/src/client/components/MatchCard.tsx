@@ -1,12 +1,11 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState, memo } from "react";
-import { clearMatchDetailsCache, fetchMatchDetails, shouldRetryMatchDetails } from "../api";
+import { useEffect, useMemo, useRef, useState, memo } from "react";
+import { clearMatchDetailsCache, fetchMatchDetails, fetchPlayerDetails, shouldRetryMatchDetails } from "../api";
 import {
   aggregateSummary,
   displayStatus,
   isMatchFinished,
   isMatchLive,
 } from "../matchGrouping";
-import { type ResolvedTeamColors, useTeamColorCatalog } from "../teamColors";
 import type {
   Match,
   MatchAssistProvider,
@@ -16,6 +15,7 @@ import type {
   MatchLineupSubstitution,
   MatchTeamLineup,
   MatchTeamLineups,
+  PlayerDetails,
   MatchRedCardEvent,
   MatchYellowCardEvent,
   TvChannel,
@@ -514,6 +514,7 @@ function ExpandedMatchDetails({ details, tvChannels = [] }: { details: MatchDeta
   const timelineEntries    = useMemo(() => buildTimelineEntries(details), [details]);
   const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
   const hasTvData          = tvChannels.length > 0;
+  const [selectedTimelinePlayer, setSelectedTimelinePlayer] = useState<MatchLineupPlayer | null>(null);
 
   if (timelineEntries.length === 0 && !hasCompleteLineups && !hasTvData) {
     return <div className="match-details-message">No additional match details available.</div>;
@@ -521,28 +522,57 @@ function ExpandedMatchDetails({ details, tvChannels = [] }: { details: MatchDeta
 
   return (
     <div className="match-details-body">
-      {hasTvData && <WhereToWatch channels={tvChannels} />}
       {timelineEntries.length > 0 && (
         <section className="details-section">
           <div className="details-section-title">Key events</div>
           <div className="timeline-list">
             {timelineEntries.map((entry) => (
-              <div
+              <button
                 key={`${entry.side}-${entry.kind}-${entry.minute}-${entry.player}`}
+                type="button"
                 className={`timeline-row timeline-row-${entry.side}`}
+                onClick={() => entry.lineupPlayer?.idPlayer && setSelectedTimelinePlayer(entry.lineupPlayer)}
+                disabled={!entry.lineupPlayer?.idPlayer}
+                aria-label={entry.lineupPlayer?.idPlayer ? `Show ${entry.player} details` : entry.text}
               >
-                <span className="timeline-minute">{entry.minute}</span>
-                <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
-                <span className="timeline-text">{entry.text}</span>
-              </div>
+                {entry.side === "away" && <TimelinePlayerPortrait player={entry.lineupPlayer} />}
+                {entry.side === "home" ? (
+                  <>
+                    <span className="timeline-minute">{entry.minute}</span>
+                    <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
+                    <span className="timeline-text">{entry.text}</span>
+                    <TimelinePlayerPortrait player={entry.lineupPlayer} />
+                  </>
+                ) : (
+                  <>
+                    <span className="timeline-text">{entry.text}</span>
+                    <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
+                    <span className="timeline-minute">{entry.minute}</span>
+                  </>
+                )}
+              </button>
             ))}
           </div>
         </section>
       )}
 
       {hasCompleteLineups && <LineupSection details={details} teamLineups={details.teamLineups!} />}
+      {hasTvData && <WhereToWatch channels={tvChannels} />}
+      {selectedTimelinePlayer && (
+        <PlayerDetailsDialog
+          player={selectedTimelinePlayer}
+          onClose={() => setSelectedTimelinePlayer(null)}
+        />
+      )}
     </div>
   );
+}
+
+function TimelinePlayerPortrait({ player }: { player: MatchLineupPlayer | null }) {
+  if (!player) {
+    return <span className="lineup-player-portrait timeline-player-portrait-placeholder" aria-hidden="true" />;
+  }
+  return <LineupPlayerPortrait player={player} />;
 }
 
 
@@ -554,9 +584,9 @@ interface LineupSectionProps {
 }
 
 function LineupSection({ details, teamLineups }: LineupSectionProps) {
-  const teamColorCatalog = useTeamColorCatalog();
   const homeLineup       = teamLineups.home!;
   const awayLineup       = teamLineups.away!;
+  const [selectedPlayer, setSelectedPlayer] = useState<MatchLineupPlayer | null>(null);
 
   const homeLookup = buildLineupEventLookup({
     goals: details.homeGoalScorers, assists: details.homeAssists,
@@ -571,23 +601,10 @@ function LineupSection({ details, teamLineups }: LineupSectionProps) {
 
   const homeTeamName     = homeLineup.team || details.homeTeam || "Home";
   const awayTeamName     = awayLineup.team || details.awayTeam || "Away";
-  const homeNumberColors = teamColorCatalog.lineupColors(homeTeamName, awayTeamName, "home");
-  const awayNumberColors = teamColorCatalog.lineupColors(awayTeamName, homeTeamName, "away");
 
   return (
     <section className="details-section lineup-section">
       <div className="details-section-title">Starting Line-ups</div>
-
-      <div className="lineup-formations">
-        <div className="lineup-formation-chip">
-          <span className="lineup-formation-team">{homeTeamName}</span>
-          <span className="lineup-formation-value">{homeLineup.formation || "Formation TBC"}</span>
-        </div>
-        <div className="lineup-formation-chip lineup-formation-chip-away">
-          <span className="lineup-formation-team">{awayTeamName}</span>
-          <span className="lineup-formation-value">{awayLineup.formation || "Formation TBC"}</span>
-        </div>
-      </div>
 
       <div className="lineup-pitch">
         <div className="lineup-pitch-markings" aria-hidden="true">
@@ -606,23 +623,24 @@ function LineupSection({ details, teamLineups }: LineupSectionProps) {
             teamName={homeTeamName}
             starters={homeLineup.startingLineup}
             lookup={homeLookup}
-            numberColors={homeNumberColors}
             side="home"
+            onSelectPlayer={setSelectedPlayer}
           />
           <LineupHalf
             teamName={awayTeamName}
             starters={awayLineup.startingLineup}
             lookup={awayLookup}
-            numberColors={awayNumberColors}
             side="away"
+            onSelectPlayer={setSelectedPlayer}
           />
         </div>
       </div>
-
-      <div className="lineup-substitutes-grid">
-        <LineupSubstitutesTable lineup={homeLineup} />
-        <LineupSubstitutesTable lineup={awayLineup} />
-      </div>
+      {selectedPlayer && (
+        <PlayerDetailsDialog
+          player={selectedPlayer}
+          onClose={() => setSelectedPlayer(null)}
+        />
+      )}
     </section>
   );
 }
@@ -634,42 +652,38 @@ interface LineupHalfProps {
   teamName: string;
   starters: MatchLineupPlayer[];
   lookup: MatchLineupEventLookup;
-  numberColors: ResolvedTeamColors;
   side: "home" | "away";
+  onSelectPlayer: (player: MatchLineupPlayer) => void;
 }
 
-function LineupHalf({ teamName, starters, lookup, numberColors, side }: LineupHalfProps) {
+function LineupHalf({ teamName, starters, lookup, side, onSelectPlayer }: LineupHalfProps) {
   const groupedRows = buildDisplayLineupRows(starters, side);
 
   return (
     <div className={`lineup-half lineup-half-${side}`}>
-      {side === "away" && <div className="lineup-half-spacer" aria-hidden="true" />}
       {side === "home" && <div className="lineup-team-label">{teamName.toUpperCase()}</div>}
 
       <div className="lineup-half-rows">
         {groupedRows.map((row, rowIndex) => (
           <div
             key={`${side}-${rowIndex}`}
-            className="lineup-row"
-            style={{ gridTemplateColumns: `repeat(${row.players.length}, minmax(0, 1fr))` }}
+            className={`lineup-row${row.players.length === 0 ? " lineup-row-empty" : ""}`}
+            style={{ gridTemplateColumns: `repeat(${Math.max(row.players.length, 1)}, minmax(0, 1fr))` }}
           >
             {row.players.map((player) => (
               <LineupPlayerMarker
-                key={`${side}-${player.number}-${player.name}`}
+                key={`${side}-${player.idPlayer || player.number}-${player.name}`}
                 player={player}
                 summary={lookup.summaryFor(player)}
                 replacementSummary={lookup.replacementSummaryFor(player)}
-                numberColors={numberColors}
+                onSelectPlayer={onSelectPlayer}
               />
             ))}
           </div>
         ))}
       </div>
 
-      {side === "home"
-        ? <div className="lineup-half-spacer" aria-hidden="true" />
-        : <div className="lineup-team-label lineup-team-label-away">{teamName.toUpperCase()}</div>
-      }
+      {side === "away" && <div className="lineup-team-label lineup-team-label-away">{teamName.toUpperCase()}</div>}
     </div>
   );
 }
@@ -681,23 +695,23 @@ interface LineupPlayerMarkerProps {
   player: MatchLineupPlayer;
   summary: MatchLineupPlayerEventSummary;
   replacementSummary: MatchLineupPlayerEventSummary | null;
-  numberColors: ResolvedTeamColors;
+  onSelectPlayer: (player: MatchLineupPlayer) => void;
 }
 
-function LineupPlayerMarker({ player, summary, replacementSummary, numberColors }: LineupPlayerMarkerProps) {
+function LineupPlayerMarker({ player, summary, replacementSummary, onSelectPlayer }: LineupPlayerMarkerProps) {
   const replacementPlayer = summary.substitution?.playerOn ?? null;
   const badgeItems        = buildPlayerBadgeItems(summary);
   const replacementBadges = replacementSummary ? buildPlayerBadgeItems(replacementSummary) : [];
 
-  const numberStyle = {
-    "--lineup-player-number-bg":     numberColors.background,
-    "--lineup-player-number-fg":     numberColors.foreground,
-    "--lineup-player-number-stroke": numberColors.outlineColor ?? "transparent",
-  } as CSSProperties;
-
   return (
-    <div className="lineup-player">
-      <div className="lineup-player-number" style={numberStyle}>{player.number}</div>
+    <button
+      className="lineup-player"
+      type="button"
+      onClick={() => player.idPlayer && onSelectPlayer(player)}
+      disabled={!player.idPlayer}
+      aria-label={player.idPlayer ? `Show ${player.name} details` : player.name}
+    >
+      <LineupPlayerPortrait player={player} />
 
       {badgeItems.length > 0 && (
         <div className="lineup-player-badges">
@@ -710,7 +724,7 @@ function LineupPlayerMarker({ player, summary, replacementSummary, numberColors 
       <div className="lineup-player-text">
         <div className="lineup-player-name-row">
           {summary.substitution && <span className="lineup-sub-arrow lineup-sub-arrow-off">↓</span>}
-          <span className="lineup-player-name">{condensedLineupPlayerName(player.name)}</span>
+          <span className="lineup-player-name">{player.name}</span>
         </div>
 
         {replacementPlayer && (
@@ -732,6 +746,148 @@ function LineupPlayerMarker({ player, summary, replacementSummary, numberColors 
           </>
         )}
       </div>
+    </button>
+  );
+}
+
+function LineupPlayerPortrait({ player }: { player: MatchLineupPlayer }) {
+  const initials = playerInitials(player.name);
+  return (
+    <div className="lineup-player-portrait">
+      {player.cutoutUrl ? (
+        <img src={player.cutoutUrl} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = "none"; }} />
+      ) : null}
+      <span className="lineup-player-initials">{initials}</span>
+    </div>
+  );
+}
+
+function PlayerDetailsDialog({ player, onClose }: { player: MatchLineupPlayer; onClose: () => void }) {
+  const [details, setDetails] = useState<PlayerDetails | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!player.idPlayer) return;
+    let cancelled = false;
+    setDetails(null);
+    setError(null);
+    void fetchPlayerDetails(player.idPlayer)
+      .then((payload) => {
+        if (!cancelled) setDetails(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Player details unavailable.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [player.idPlayer]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const display = details ?? null;
+
+  return (
+    <div className="player-details-overlay" role="presentation" onClick={onClose}>
+      <div className="player-details-card" role="dialog" aria-modal="true" aria-label={`${player.name} details`} onClick={(event) => event.stopPropagation()}>
+        <button className="player-details-close" type="button" onClick={onClose} aria-label="Close player details">×</button>
+
+        <div className="player-details-hero">
+          <div className="player-details-copy">
+            <div className="player-details-position">{display?.position || player.position || "Position"}</div>
+            <h3>{display?.name || player.name}</h3>
+            {display?.team && <div className="player-details-team">{display.team}</div>}
+          </div>
+          <PlayerDetailsPhoto player={player} display={display} />
+        </div>
+
+        {!display && !error && <div className="player-details-loading">Loading player details…</div>}
+        {error && <div className="player-details-loading">{error}</div>}
+
+        {display && (
+          <>
+            <div className="player-details-facts">
+              <PlayerFact label="Age" value={playerAge(display.born)} meta={formatBornDate(display.born)} />
+              <PlayerFact label="Side" value={display.side || "Unknown"} />
+              <PlayerFact label="Position" value={display.position || player.position || "Unknown"} />
+            </div>
+
+            {display.description && (
+              <div className="player-details-about">
+                <h4>About {display.name}</h4>
+                {display.description.split(/\n+/).filter(Boolean).map((paragraph, index) => (
+                  <p key={index}>{paragraph}</p>
+                ))}
+              </div>
+            )}
+
+            <div className="player-details-info">
+              <div>
+                <span>Position</span>
+                <strong>{display.position || "Unknown"}</strong>
+              </div>
+              <div>
+                <span>Preferred foot</span>
+                <strong>{display.side || "Unknown"}</strong>
+              </div>
+              <div>
+                <span>Birth location</span>
+                <strong>{display.birthLocation || "Unknown"}</strong>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PlayerDetailsPhoto({ player, display }: { player: MatchLineupPlayer; display: PlayerDetails | null }) {
+  const imageCandidates = useMemo(
+    () => uniqueStrings([display?.renderUrl, display?.cutoutUrl, display?.thumbUrl, player.cutoutUrl]),
+    [display?.renderUrl, display?.cutoutUrl, display?.thumbUrl, player.cutoutUrl]
+  );
+  const imageKey = imageCandidates.join("|");
+  const [imageIndex, setImageIndex] = useState(0);
+
+  useEffect(() => {
+    setImageIndex(0);
+  }, [imageKey]);
+
+  const imageUrl = imageCandidates[imageIndex] ?? null;
+
+  return (
+    <div className="player-details-photo">
+      {imageUrl ? (
+        <img
+          key={imageUrl}
+          src={imageUrl}
+          alt=""
+          onError={() => setImageIndex((index) => index + 1)}
+        />
+      ) : (
+        <span>{playerInitials(display?.name || player.name)}</span>
+      )}
+    </div>
+  );
+}
+
+function uniqueStrings(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.map((value) => value?.trim() ?? "").filter(Boolean)));
+}
+
+function PlayerFact({ label, value, meta }: { label: string; value: string; meta?: string | null }) {
+  return (
+    <div className="player-details-fact">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {meta && <small>{meta}</small>}
     </div>
   );
 }
@@ -808,15 +964,15 @@ function LineupEventBadge({ badge }: { badge: LineupEventBadgeDescriptor }) {
 }
 
 
-// ── Guard: only render lineup when both teams have 11 starters ────
+// ── Guard: only render lineup when both teams have starters ───────
 
 function hasRenderableTeamLineups(
   teamLineups: MatchTeamLineups | null | undefined
 ): teamLineups is MatchTeamLineups & { home: MatchTeamLineup; away: MatchTeamLineup } {
   return Boolean(
     teamLineups?.home && teamLineups.away &&
-    teamLineups.home.startingLineup.length === 11 &&
-    teamLineups.away.startingLineup.length === 11
+    teamLineups.home.startingLineup.length > 0 &&
+    teamLineups.away.startingLineup.length > 0
   );
 }
 
@@ -829,47 +985,77 @@ interface LineupRow {
 }
 
 function buildDisplayLineupRows(starters: MatchLineupPlayer[], side: "home" | "away") {
-  const rows = buildLineupRows(starters);
+  const rows = buildRoleLineupRows(starters);
   return side === "home" ? rows : [...rows].reverse();
 }
 
-function buildLineupRows(starters: MatchLineupPlayer[]): LineupRow[] {
-  const withFormation = starters.filter(
-    (p) => typeof p.formationRowIndex === "number" && typeof p.formationSlotIndex === "number"
-  );
+function buildRoleLineupRows(starters: MatchLineupPlayer[]): LineupRow[] {
+  return [
+    starters.filter((p) => lineupRole(p) === "goalkeeper"),
+    starters.filter((p) => lineupRole(p) === "defender"),
+    starters.filter((p) => lineupRole(p) === "midfielder"),
+    starters.filter((p) => lineupRole(p) === "forward"),
+  ]
+    .map((players) => ({
+      players: [...players].sort((left, right) => {
+        const leftScore = horizontalLineupScore(left);
+        const rightScore = horizontalLineupScore(right);
+        return leftScore !== rightScore ? leftScore - rightScore : left.number - right.number;
+      }),
+      slotCount: players.length,
+    }));
+}
 
-  if (withFormation.length === starters.length) {
-    const groupedByRow = new Map<number, MatchLineupPlayer[]>();
-    for (const player of starters) {
-      const rowIndex = player.formationRowIndex ?? 0;
-      const row      = groupedByRow.get(rowIndex) ?? [];
-      row.push(player);
-      groupedByRow.set(rowIndex, row);
-    }
+function lineupRole(player: MatchLineupPlayer): "goalkeeper" | "defender" | "midfielder" | "forward" | "unknown" {
+  const short = (player.positionShort || "").trim().toUpperCase();
+  if (short === "G") return "goalkeeper";
+  if (short === "D") return "defender";
+  if (short === "M") return "midfielder";
+  if (short === "F") return "forward";
+  if (player.positionCategory === "goalkeeper") return "goalkeeper";
+  if (player.positionCategory === "defender") return "defender";
+  if (player.positionCategory === "midfielder") return "midfielder";
+  if (player.positionCategory === "attacker") return "forward";
+  return "unknown";
+}
 
-    return Array.from(groupedByRow.entries())
-      .sort(([a], [b]) => a - b)
-      .map(([, row]) => {
-        const players = [...row].sort((l, r) => {
-          const ls = l.formationSlotIndex ?? 0;
-          const rs = r.formationSlotIndex ?? 0;
-          return ls !== rs ? ls - rs : l.number - r.number;
-        });
-        return {
-          players,
-          slotCount: Math.max(...players.map((p) => p.formationRowSize ?? players.length), players.length),
-        };
-      });
+function horizontalLineupScore(player: MatchLineupPlayer) {
+  const position = (player.position || "").toLowerCase();
+  if (position.includes("left")) return 0;
+  if (position.includes("right")) return 2;
+  return 1;
+}
+
+function playerInitials(name: string) {
+  const tokens = name.replace(/\(c\)/gi, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const first = tokens[0]?.[0] ?? "";
+  const last = tokens.length > 1 ? tokens[tokens.length - 1]?.[0] ?? "" : "";
+  return `${first}${last}`.toUpperCase() || "?";
+}
+
+function playerAge(born: string | null | undefined) {
+  if (!born) return "Unknown";
+  const birthDate = new Date(`${born}T00:00:00Z`);
+  if (Number.isNaN(birthDate.getTime())) return "Unknown";
+  const now = new Date();
+  let age = now.getUTCFullYear() - birthDate.getUTCFullYear();
+  const monthDelta = now.getUTCMonth() - birthDate.getUTCMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && now.getUTCDate() < birthDate.getUTCDate())) {
+    age -= 1;
   }
+  return String(age);
+}
 
-  // Fallback: group by position category
-  const goalkeepers = starters.filter((p) => p.positionCategory === "goalkeeper");
-  const defenders   = starters.filter((p) => p.positionCategory === "defender");
-  const midfielders = starters.filter((p) => p.positionCategory === "midfielder");
-  const attackers   = starters.filter((p) => p.positionCategory === "attacker");
-  return [goalkeepers, defenders, midfielders, attackers]
-    .filter((row) => row.length > 0)
-    .map((players) => ({ players, slotCount: players.length }));
+function formatBornDate(born: string | null | undefined) {
+  if (!born) return null;
+  const birthDate = new Date(`${born}T00:00:00Z`);
+  if (Number.isNaN(birthDate.getTime())) return null;
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(birthDate);
 }
 
 
@@ -902,6 +1088,18 @@ function buildLineupEventLookup({
   const yellowCardEntries = yellowCards.map((c) => ({ count: c.yellowCardTimes.length, lookup: buildPlayerNameLookup(c.player) }));
   const redCardEntries    = redCards.map((c)    => ({ count: c.redCardTimes.length,    lookup: buildPlayerNameLookup(c.player) }));
 
+  const substitutionForPlayer = (player: MatchLineupPlayer) => {
+    const playerLookup = buildPlayerNameLookup(player.name);
+    const nameMatch = substitutions.find((substitution) =>
+      matchPlayerNameLookup(playerLookup, buildPlayerNameLookup(substitution.playerOff.name)) > 0.88
+    );
+    if (nameMatch) return nameMatch;
+
+    if (player.number === null || player.number === undefined) return null;
+    const numberMatches = substitutions.filter((substitution) => substitution.playerOff.number === player.number);
+    return numberMatches.length === 1 ? numberMatches[0] : null;
+  };
+
   const bestCount = (name: string, entries: Array<{ count: number; lookup: MatchPlayerNameLookup }>) => {
     const lookup = buildPlayerNameLookup(name);
     return entries.reduce<{ count: number; score: number } | null>((best, entry) => {
@@ -921,11 +1119,11 @@ function buildLineupEventLookup({
         assists:     bestCount(player.name, assistEntries),
         yellowCards: bestCount(player.name, yellowCardEntries),
         redCards:    bestCount(player.name, redCardEntries),
-        substitution: substitutions.find((s) => s.playerOff.number === player.number) ?? null,
+        substitution: substitutionForPlayer(player),
       };
     },
     replacementSummaryFor(player) {
-      const sub = substitutions.find((s) => s.playerOff.number === player.number);
+      const sub = substitutionForPlayer(player);
       if (!sub) return null;
       return {
         goals:       bestCount(sub.playerOn.name, goalEntries),
@@ -950,17 +1148,28 @@ function buildPlayerBadgeItems(summary: MatchLineupPlayerEventSummary): LineupEv
 
 // ── Timeline builder ──────────────────────────────────────────────
 
+interface TimelineEntry {
+  side: "home" | "away";
+  minute: string;
+  player: string;
+  lineupPlayer: MatchLineupPlayer | null;
+  text: string;
+  kind: string;
+  icon: string;
+  baseMinute: number;
+  extraMinute: number;
+  sequence: number;
+}
+
 function buildTimelineEntries(details: MatchDetails) {
   const homeAssistLookup = buildAssistLookup(details.homeAssists);
   const awayAssistLookup = buildAssistLookup(details.awayAssists);
+  const homePlayers = timelinePlayerCandidates(details.teamLineups?.home);
+  const awayPlayers = timelinePlayerCandidates(details.teamLineups?.away);
+  const playerForEvent = (name: string, side: "home" | "away") =>
+    findTimelinePlayer(name, side === "home" ? homePlayers : awayPlayers);
 
-  type Entry = {
-    side: "home" | "away"; minute: string; player: string;
-    text: string; kind: string; icon: string;
-    baseMinute: number; extraMinute: number; sequence: number;
-  };
-
-  const entries: Entry[] = [];
+  const entries: TimelineEntry[] = [];
   let sequence = 0;
 
   const addGoals = (
@@ -973,7 +1182,9 @@ function buildTimelineEntries(details: MatchDetails) {
         const parsed = parseMinute(minute);
         if (!parsed) continue;
         const assist = assistLookup.get(parsed.lookupKey) ?? assistLookup.get(String(parsed.base));
+        const lineupPlayer = playerForEvent(scorer.player, side);
         entries.push({ side, minute: parsed.display, player: scorer.player,
+          lineupPlayer,
           text: formatGoalText(scorer.player, assist, parsed.isPenalty),
           kind: "goal", icon: "⚽",
           baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
@@ -981,7 +1192,9 @@ function buildTimelineEntries(details: MatchDetails) {
       for (const minute of scorer.ownGoalTimes) {
         const parsed = parseMinute(minute);
         if (!parsed) continue;
+        const lineupPlayer = playerForEvent(scorer.player, side);
         entries.push({ side, minute: parsed.display, player: scorer.player,
+          lineupPlayer,
           text: `${abbreviatePlayerName(scorer.player)} (OG)`,
           kind: "own-goal", icon: "⚽",
           baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
@@ -990,7 +1203,9 @@ function buildTimelineEntries(details: MatchDetails) {
         const parsed = parseMinute(minute);
         if (!parsed) continue;
         const assist = assistLookup.get(parsed.lookupKey) ?? assistLookup.get(String(parsed.base));
+        const lineupPlayer = playerForEvent(scorer.player, side);
         entries.push({ side, minute: parsed.display, player: scorer.player,
+          lineupPlayer,
           text: formatDisallowedGoalText(scorer.player, assist, parsed.isPenalty),
           kind: "disallowed-goal", icon: "⚽",
           baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
@@ -1001,11 +1216,34 @@ function buildTimelineEntries(details: MatchDetails) {
   addGoals(details.homeGoalScorers, "home", homeAssistLookup);
   addGoals(details.awayGoalScorers, "away", awayAssistLookup);
 
+  for (const card of details.homeYellowCards) {
+    for (const minute of card.yellowCardTimes) {
+      const parsed = parseMinute(minute);
+      if (!parsed) continue;
+      entries.push({ side: "home", minute: parsed.display, player: card.player,
+        lineupPlayer: playerForEvent(card.player, "home"),
+        text: abbreviatePlayerName(card.player), kind: "yellow-card", icon: "🟨",
+        baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
+    }
+  }
+
+  for (const card of details.awayYellowCards) {
+    for (const minute of card.yellowCardTimes) {
+      const parsed = parseMinute(minute);
+      if (!parsed) continue;
+      entries.push({ side: "away", minute: parsed.display, player: card.player,
+        lineupPlayer: playerForEvent(card.player, "away"),
+        text: abbreviatePlayerName(card.player), kind: "yellow-card", icon: "🟨",
+        baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
+    }
+  }
+
   for (const card of details.homeRedCards) {
     for (const minute of card.redCardTimes) {
       const parsed = parseMinute(minute);
       if (!parsed) continue;
       entries.push({ side: "home", minute: parsed.display, player: card.player,
+        lineupPlayer: playerForEvent(card.player, "home"),
         text: abbreviatePlayerName(card.player), kind: "red-card", icon: "🟥",
         baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
     }
@@ -1016,6 +1254,7 @@ function buildTimelineEntries(details: MatchDetails) {
       const parsed = parseMinute(minute);
       if (!parsed) continue;
       entries.push({ side: "away", minute: parsed.display, player: card.player,
+        lineupPlayer: playerForEvent(card.player, "away"),
         text: abbreviatePlayerName(card.player), kind: "red-card", icon: "🟥",
         baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
     }
@@ -1026,6 +1265,31 @@ function buildTimelineEntries(details: MatchDetails) {
     l.extraMinute !== r.extraMinute ? l.extraMinute - r.extraMinute :
     l.sequence    - r.sequence
   );
+}
+
+function timelinePlayerCandidates(lineup: MatchTeamLineup | null | undefined) {
+  if (!lineup) return [];
+  return [
+    ...lineup.startingLineup,
+    ...lineup.substitutes,
+    ...lineup.substitutions.flatMap((substitution) => [
+      substitution.playerOff,
+      substitution.playerOn,
+    ]),
+  ];
+}
+
+function findTimelinePlayer(name: string, candidates: MatchLineupPlayer[]) {
+  const lookup = buildPlayerNameLookup(name);
+  let best: { player: MatchLineupPlayer; score: number } | null = null;
+  for (const player of candidates) {
+    const score = matchPlayerNameLookup(lookup, buildPlayerNameLookup(player.name));
+    if (score <= 0) continue;
+    if (!best || score > best.score) {
+      best = { player, score };
+    }
+  }
+  return best?.player ?? null;
 }
 
 function buildAssistLookup(assists: MatchAssistProvider[]) {

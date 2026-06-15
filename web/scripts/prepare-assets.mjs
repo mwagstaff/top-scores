@@ -13,6 +13,7 @@ const outputManifestPath = path.join(outputRoot, "team-logo-manifest.json");
 const outputAppIconPath = path.join(outputRoot, "app-icon.png");
 const outputFaviconPath = path.join(outputRoot, "favicon-32.png");
 const outputAppleTouchIconPath = path.join(outputRoot, "apple-touch-icon.png");
+const outputFplLionPath = path.join(outputRoot, "fpl-lion.png");
 const teamLogoManifestPath = path.join(
   repoRoot,
   "ios",
@@ -39,12 +40,14 @@ if (hasSourceAssets()) {
   const tempAppIconPath = path.join(tempRoot, "app-icon.png");
   const tempFaviconPath = path.join(tempRoot, "favicon-32.png");
   const tempAppleTouchIconPath = path.join(tempRoot, "apple-touch-icon.png");
+  const tempFplLionPath = path.join(tempRoot, "fpl-lion.png");
 
   fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   fs.mkdirSync(tempTeamLogosRoot, { recursive: true });
   fs.mkdirSync(tempTvLogosRoot, { recursive: true });
 
   await copyAppIcons(tempAppIconPath, tempFaviconPath, tempAppleTouchIconPath);
+  copyFplLion(tempFplLionPath);
   const teamEntries = copyTeamLogos(tempTeamLogosRoot);
   copyTvLogos(tempTvLogosRoot);
 
@@ -55,6 +58,7 @@ if (hasSourceAssets()) {
     `Synced ${teamEntries.length} team logos, TV logos, and app icon into ${path.relative(repoRoot, outputRoot)}`
   );
 } else if (hasBundledAssets()) {
+  ensureBundledFplLion();
   console.log(
     `iOS asset sources not present; using bundled web assets from ${path.relative(repoRoot, outputRoot)}`
   );
@@ -89,6 +93,17 @@ function hasBundledAssets() {
     fs.existsSync(outputAppleTouchIconPath) &&
     fs.readdirSync(outputTeamLogosRoot).some((entry) => entry.toLowerCase().endsWith(".png")) &&
     fs.readdirSync(outputTvLogosRoot).some((entry) => entry.toLowerCase().endsWith(".png"))
+  );
+}
+
+function ensureBundledFplLion() {
+  if (fs.existsSync(outputFplLionPath)) {
+    return;
+  }
+
+  fs.copyFileSync(outputAppIconPath, outputFplLionPath);
+  console.warn(
+    `Missing bundled FPL lion asset; copied ${path.basename(outputAppIconPath)} to ${path.basename(outputFplLionPath)}.`
   );
 }
 
@@ -159,6 +174,15 @@ function copyTvLogos(destinationRoot) {
       path.join(destinationRoot, entry)
     );
   }
+}
+
+function copyFplLion(destinationPath) {
+  const imagesetPath = path.join(mediaAssetsRoot, "FantasyPremierLeagueLion.imageset");
+  const sourceFile = pickImagesetPng(imagesetPath);
+  if (!sourceFile) {
+    throw new Error(`Missing FPL lion source asset in ${imagesetPath}`);
+  }
+  fs.copyFileSync(sourceFile, destinationPath);
 }
 
 function pickImagesetPng(imagesetPath) {
