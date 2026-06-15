@@ -19657,6 +19657,7 @@ async function updateTsdbLivescores(options = {}) {
     recordsFetched = matches.length;
     setSourceCacheSize(SOURCE_TSDB_LIVE, matches.length);
     const canonicalRefreshTargets = matches.filter(shouldRefreshCanonicalMatchDetails);
+    let canonicalChangedCount = 0;
     if (matchesChanged) {
       const persistStartedAtMs = Date.now();
       tsdbLiveLastUpdated = canonicalUpdatedAt;
@@ -19684,12 +19685,15 @@ async function updateTsdbLivescores(options = {}) {
         canonicalRefreshTargets,
         Math.min(MATCH_DETAILS_POLL_CONCURRENCY, 8),
         async (match) => {
-          await upsertCanonicalMatchDetailsFromMatch(match, {
+          const result = await upsertCanonicalMatchDetailsFromMatch(match, {
             updated_at: canonicalUpdatedAt,
             source: SOURCE_TSDB_LIVE,
             reason: "tsdb_live_poll",
             skipCacheInvalidation: true,
           });
+          if (result && result.changed === true) {
+            canonicalChangedCount += 1;
+          }
         }
       );
       trackSourceUpdatePhaseMetric({
@@ -19698,10 +19702,10 @@ async function updateTsdbLivescores(options = {}) {
         startedAtMs: canonicalRefreshStartedAtMs,
       });
     }
-    if (matchesChanged) {
+    if (matchesChanged || canonicalChangedCount > 0) {
       const invalidationStartedAtMs = Date.now();
       invalidateCacheDomains(["matches", "match_details", "tsdb_live"], {
-        updated_at: tsdbLiveLastUpdated,
+        updated_at: matchesChanged ? tsdbLiveLastUpdated : canonicalUpdatedAt,
         reason: "tsdb_live_refresh",
         source: SOURCE_TSDB_LIVE,
       });
@@ -19719,6 +19723,7 @@ async function updateTsdbLivescores(options = {}) {
       updated_at: tsdbLiveLastUpdated,
       changed: matchesChanged,
       canonical_refreshed: canonicalRefreshTargets.length,
+      canonical_changed: canonicalChangedCount,
       duration_ms: Date.now() - startedAtMs,
     });
     recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_LIVE, {
@@ -19728,6 +19733,7 @@ async function updateTsdbLivescores(options = {}) {
       updated_at: tsdbLiveLastUpdated,
       changed: matchesChanged,
       canonical_refreshed: canonicalRefreshTargets.length,
+      canonical_changed: canonicalChangedCount,
     });
   } catch (err) {
     recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_LIVE, err, {
@@ -23875,6 +23881,73 @@ app.post(`${API_PREFIX}/admin/tsdb/teams/refresh`, async (req, res) => {
     refreshed_ids: result.refreshed,
     failed_ids: result.failed,
   });
+});
+
+app.post(`${API_PREFIX}/admin/tsdb/matches/:matchId/lineup/refresh`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const matchId = normalizeMatchDetailsId(req.params.matchId);
+  if (!matchId || !/^\d+$/.test(matchId)) {
+    res.status(400).json({ error: "Invalid SportsDB match id." });
+    return;
+  }
+
+  try {
+    const existingLookup = await getOperationalMatchDetailsByIdSafe(matchId);
+    const existingPayload =
+      existingLookup && existingLookup.payload && typeof existingLookup.payload === "object"
+        ? existingLookup.payload
+        : null;
+    const fetched = await fetchTsdbMatchDetails(matchId, {
+      initiator: "admin_api",
+      trigger: "admin_tsdb_match_lineup_refresh",
+      scheduleCache: cachedTsdbScheduleMatches,
+      forceLineupRefresh: true,
+    });
+    if (!fetched) {
+      res.status(502).json({ error: "No SportsDB match payload returned." });
+      return;
+    }
+    if (!hasRenderableTeamLineups(fetched.team_lineups)) {
+      res.status(502).json({
+        error: "SportsDB returned no renderable line-up for this match.",
+        match_id: matchId,
+      });
+      return;
+    }
+
+    const combined = buildMergedMatchDetailsCandidate(
+      existingPayload || { id: matchId, match_details_id: matchId },
+      fetched,
+      null
+    );
+    const updatedAt = new Date().toISOString();
+    const result = await upsertCanonicalMatchDetailsFromMatch(combined, {
+      updated_at: updatedAt,
+      source: "admin_tsdb_match_lineup_refresh",
+      reason: "admin_tsdb_match_lineup_refresh",
+    });
+    if (!result || !result.payload) {
+      res.status(502).json({ error: "Canonical match details upsert returned no payload." });
+      return;
+    }
+
+    const lineups = normalizeTeamLineupsPayload(result.payload.team_lineups);
+    res.set("X-Operational-Source", "tsdb_event_lineup");
+    res.json({
+      match_id: matchId,
+      changed: result.changed === true,
+      updated_at: updatedAt,
+      home_starters: lineups && lineups.home ? lineups.home.starting_lineup.length : 0,
+      away_starters: lineups && lineups.away ? lineups.away.starting_lineup.length : 0,
+      team_lineups: result.payload.team_lineups,
+    });
+  } catch (error) {
+    console.warn(`[API] Failed to refresh TSDB lineup for match ${matchId}:`, error.message || error);
+    res.status(502).json({
+      error: "Failed to refresh SportsDB line-up.",
+      message: error && error.message ? error.message : String(error),
+    });
+  }
 });
 
 app.get(`${API_PREFIX}/teams`, async (req, res) => {

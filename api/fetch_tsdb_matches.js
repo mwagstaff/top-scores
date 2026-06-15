@@ -309,11 +309,11 @@ function positionCategory(strPosition) {
     pos.includes("back") || pos.includes("defend") ||
     pos.includes("centre-b") || pos.includes("sweeper") || pos.includes("libero")
   ) return "defender";
+  if (pos.includes("mid")) return "midfielder";
   if (
     pos.includes("forward") || pos.includes("winger") ||
     pos.includes("striker") || pos.includes("attac") || pos.includes("centre-f")
   ) return "attacker";
-  if (pos.includes("mid")) return "midfielder";
   // Fall back to strPositionShort single-character code.
   return null;
 }
@@ -321,14 +321,15 @@ function positionCategory(strPosition) {
 // positionCategoryFromShort maps the single-char strPositionShort (G/D/M/F) as
 // a fallback when strPosition doesn't give enough detail.
 function positionCategoryFromShort(strPositionShort, strPosition) {
-  const cat = positionCategory(strPosition);
-  if (cat) return cat;
   switch (String(strPositionShort || "").toUpperCase()) {
     case "G": return "goalkeeper";
     case "D": return "defender";
     case "M": return "midfielder";
     case "F": return "attacker";
-    default: return null;
+    default: {
+      const cat = positionCategory(strPosition);
+      return cat || null;
+    }
   }
 }
 
@@ -366,10 +367,97 @@ function parseFormationRows(formationStr) {
   return [1, ...parts];
 }
 
+function normalizeFormationForRoleRows(formationStr) {
+  const rows = parseFormationRows(formationStr);
+  if (!rows || rows.length < 3) return null;
+  const outfieldRows = rows.slice(1);
+  const defenders = outfieldRows[0];
+  const attackers = outfieldRows[outfieldRows.length - 1];
+  const midfielders = outfieldRows
+    .slice(1, -1)
+    .reduce((total, value) => total + value, 0);
+  const parts = [defenders];
+  if (midfielders > 0) parts.push(midfielders);
+  if (attackers > 0) parts.push(attackers);
+  return parts.join("-");
+}
+
+function resolveLineupFormation(apiFormation, starters) {
+  const derivedFormation = deriveFormationString(starters);
+  if (!apiFormation) return derivedFormation;
+  if (!derivedFormation) return apiFormation;
+  const normalizedApiFormation = normalizeFormationForRoleRows(apiFormation);
+  return normalizedApiFormation === derivedFormation ? apiFormation : derivedFormation;
+}
+
 // Assigns formation_row_index, formation_slot_index, formation_row_size to each
 // starter based on their position category and the parsed row sizes.
-function assignFormationGridPositions(starters, formationStr) {
+function positionSideHint(position) {
+  const normalized = String(position || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  if (/\bleft\b/.test(normalized)) return "left";
+  if (/\bright\b/.test(normalized)) return "right";
+  if (/\b(centre|center|central)\b/.test(normalized)) return "centre";
+  return null;
+}
+
+function preferredSlotsForHint(hint, rowSize, side) {
+  if (!hint || rowSize <= 0) return [];
+  const slots = Array.from({ length: rowSize }, (_, index) => index);
+  const middle = Math.floor(rowSize / 2);
+  const centreSlots = rowSize % 2 === 1
+    ? [middle]
+    : (rowSize >= 4 ? [middle - 1, middle] : []);
+  const screenLeftSlots = slots.filter((slot) => slot < middle);
+  const screenRightSlots = slots.filter((slot) => slot >= rowSize - middle);
+  if (hint === "centre") return centreSlots;
+
+  const logicalLeftSlots = side === "home" ? screenRightSlots : screenLeftSlots;
+  const logicalRightSlots = side === "home" ? screenLeftSlots : screenRightSlots;
+  return hint === "left" ? logicalLeftSlots : logicalRightSlots;
+}
+
+function assignSideAwareRowSlots(rowPlayers, side) {
+  const rowSize = rowPlayers.length;
+  if (rowSize <= 1) return rowPlayers;
+
+  const assignment = Array(rowSize).fill(null);
+  const assigned = new Set();
+  const groups = { left: [], right: [], centre: [] };
+  rowPlayers.forEach((player) => {
+    const hint = positionSideHint(player.position);
+    if (hint && groups[hint]) groups[hint].push(player);
+  });
+
+  ["right", "left", "centre"].forEach((hint) => {
+    const players = groups[hint];
+    if (players.length === 0) return;
+    const slots = preferredSlotsForHint(hint, rowSize, side);
+    if (players.length > slots.length) return;
+    players.forEach((player, index) => {
+      const slot = slots[index];
+      if (Number.isInteger(slot) && assignment[slot] === null) {
+        assignment[slot] = player;
+        assigned.add(player);
+      }
+    });
+  });
+
+  const unassigned = rowPlayers.filter((player) => !assigned.has(player));
+  let cursor = 0;
+  for (let slot = 0; slot < rowSize; slot++) {
+    if (assignment[slot] !== null) continue;
+    assignment[slot] = unassigned[cursor];
+    cursor += 1;
+  }
+  return assignment.filter(Boolean);
+}
+
+function assignFormationGridPositions(starters, formationStr, options = {}) {
   const ROLE_ORDER = { goalkeeper: 0, defender: 1, midfielder: 2, attacker: 3 };
+  const side = options.side === "away" ? "away" : "home";
 
   // Sort by role first, then squad number within role.
   const sorted = [...starters].sort((a, b) => {
@@ -400,12 +488,13 @@ function assignFormationGridPositions(starters, formationStr) {
   for (let rowIdx = 0; rowIdx < rows.length && cursor < sorted.length; rowIdx++) {
     const rowSize = rows[rowIdx];
     const rowPlayers = sorted.slice(cursor, cursor + rowSize);
-    rowPlayers.forEach((p, slotIdx) => {
+    const orderedRowPlayers = rowIdx === 0 ? rowPlayers : assignSideAwareRowSlots(rowPlayers, side);
+    orderedRowPlayers.forEach((p, slotIdx) => {
       result.push({
         ...p,
         formation_row_index: rowIdx,
         formation_slot_index: slotIdx,
-        formation_row_size: rowPlayers.length,
+        formation_row_size: orderedRowPlayers.length,
       });
     });
     cursor += rowPlayers.length;
@@ -426,8 +515,41 @@ function assignFormationGridPositions(starters, formationStr) {
   return result;
 }
 
-function parseLineups(lineupEntries, homeTeamId) {
+function lineupPlayerPositionFromLookup(entry, playerPositionsById) {
+  const playerId = String(entry && entry.idPlayer ? entry.idPlayer : "").trim();
+  const enrichedPosition = playerId && playerPositionsById
+    ? String(playerPositionsById[playerId] || "").trim()
+    : "";
+  return enrichedPosition || String(entry && entry.strPosition ? entry.strPosition : "").trim() || null;
+}
+
+function playerPositionFromCacheRecord(record) {
+  if (!record || typeof record !== "object") return null;
+  const payload = record.payload && typeof record.payload === "object" ? record.payload : record;
+  return String(payload.strPosition || "").trim() || null;
+}
+
+async function buildLineupPlayerPositionLookup(lineupEntries) {
+  if (!Array.isArray(lineupEntries) || lineupEntries.length === 0) return {};
+  const playerIds = [
+    ...new Set(
+      lineupEntries
+        .map((entry) => String(entry && entry.idPlayer ? entry.idPlayer : "").trim())
+        .filter((id) => /^\d+$/.test(id))
+    ),
+  ];
+  if (playerIds.length === 0) return {};
+  const cachedPlayers = await getPlayerCaches(playerIds).catch(() => ({}));
+  return Object.fromEntries(
+    playerIds
+      .map((playerId) => [playerId, playerPositionFromCacheRecord(cachedPlayers[playerId])])
+      .filter(([, position]) => Boolean(position))
+  );
+}
+
+function parseLineups(lineupEntries, homeTeamId, options = {}) {
   if (!Array.isArray(lineupEntries) || lineupEntries.length === 0) return null;
+  const playerPositionsById = options.playerPositionsById || {};
 
   function isHome(entry) {
     const homeFlag = String(entry.strHome || "").trim().toLowerCase();
@@ -458,12 +580,13 @@ function parseLineups(lineupEntries, homeTeamId) {
       if (!home && !awayFormation) awayFormation = formation;
     }
 
+    const position = lineupPlayerPositionFromLookup(entry, playerPositionsById);
     const player_entry = {
       number: Number.isFinite(number) ? number : null,
       name: player,
       id_player: String(entry.idPlayer || "").trim() || null,
-      position_category: positionCategoryFromShort(entry.strPositionShort, entry.strPosition),
-      position: String(entry.strPosition || "").trim() || null,
+      position_category: positionCategoryFromShort(entry.strPositionShort, entry.strPosition || position),
+      position,
       position_short: String(entry.strPositionShort || "").trim() || null,
       cutout_url: String(entry.strCutout || "").trim() || null,
     };
@@ -480,21 +603,21 @@ function parseLineups(lineupEntries, homeTeamId) {
   if (homeStarters.length === 0 && awayStarters.length === 0) return null;
 
   // Derive formation string from position counts when the API doesn't supply it.
-  const resolvedHomeFormation = homeFormation || deriveFormationString(homeStarters);
-  const resolvedAwayFormation = awayFormation || deriveFormationString(awayStarters);
+  const resolvedHomeFormation = resolveLineupFormation(homeFormation, homeStarters);
+  const resolvedAwayFormation = resolveLineupFormation(awayFormation, awayStarters);
 
   const lineups = {};
   if (homeStarters.length > 0 || homeSubstitutes.length > 0) {
     lineups.home = {
       formation: resolvedHomeFormation,
-      starting_lineup: assignFormationGridPositions(homeStarters, resolvedHomeFormation),
+      starting_lineup: assignFormationGridPositions(homeStarters, resolvedHomeFormation, { side: "home" }),
       substitutes: homeSubstitutes,
     };
   }
   if (awayStarters.length > 0 || awaySubstitutes.length > 0) {
     lineups.away = {
       formation: resolvedAwayFormation,
-      starting_lineup: assignFormationGridPositions(awayStarters, resolvedAwayFormation),
+      starting_lineup: assignFormationGridPositions(awayStarters, resolvedAwayFormation, { side: "away" }),
       substitutes: awaySubstitutes,
     };
   }
@@ -975,8 +1098,9 @@ async function cachedOrFetchMatchLineup(idEvent, context = {}, reqOpts = {}) {
   const nowMs = Number.isFinite(Number(context.nowMs)) ? Number(context.nowMs) : Date.now();
   const scoreStatus = context.scoreStatus || null;
   const kickoffDate = context.kickoffDate || null;
-  const cached = await getMatchLineupCache(idEvent).catch(() => null);
-  if (cached && matchLineupCacheFresh(cached, nowMs)) {
+  const forceRefresh = context.forceRefresh === true;
+  const cached = forceRefresh ? null : await getMatchLineupCache(idEvent).catch(() => null);
+  if (!forceRefresh && cached && matchLineupCacheFresh(cached, nowMs)) {
     return cached.payload || null;
   }
 
@@ -1118,7 +1242,12 @@ async function fetchTsdbMatchDetails(idEvent, options = {}) {
     ),
     cachedOrFetchMatchLineup(
       idEvent,
-      { scoreStatus, kickoffDate: kickoff.date, nowMs: options.nowMs },
+      {
+        scoreStatus,
+        kickoffDate: kickoff.date,
+        nowMs: options.nowMs,
+        forceRefresh: options.forceLineupRefresh === true,
+      },
       reqOpts
     ),
   ]);
@@ -1137,7 +1266,8 @@ async function fetchTsdbMatchDetails(idEvent, options = {}) {
     event.idHomeTeam,
     scoreStatus
   );
-  const teamLineups = parseLineups(lineupEntries, event.idHomeTeam);
+  const playerPositionsById = await buildLineupPlayerPositionLookup(lineupEntries);
+  const teamLineups = parseLineups(lineupEntries, event.idHomeTeam, { playerPositionsById });
 
   // Populate substitutions from the timeline (SportsDB lineup endpoint only
   // returns starting XI — bench players are not included).
@@ -1222,7 +1352,12 @@ async function refreshTsdbSupplementalCachesForMatch(match, options = {}) {
     ),
     cachedOrFetchMatchLineup(
       idEvent,
-      { scoreStatus, kickoffDate, nowMs: options.nowMs },
+      {
+        scoreStatus,
+        kickoffDate,
+        nowMs: options.nowMs,
+        forceRefresh: options.forceLineupRefresh === true,
+      },
       reqOpts
     ),
   ]);
@@ -1289,6 +1424,9 @@ module.exports = {
     mapTsdbStatus,
     parseTimelineEvents,
     parseLineups,
+    assignFormationGridPositions,
+    positionSideHint,
+    preferredSlotsForHint,
     extractSubstitutionsFromTimeline,
     computeAggregateFromSchedule,
     resolveLeagueName,

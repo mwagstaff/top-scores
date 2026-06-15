@@ -9,6 +9,7 @@ const {
   mapTsdbStatus,
   parseTimelineEvents,
   parseLineups,
+  assignFormationGridPositions,
   computeAggregateFromSchedule,
   resolveLeagueName,
   stripSeconds,
@@ -17,6 +18,7 @@ const {
   matchLineupCacheFresh,
   timelinePayloadHasEntries,
   matchTimelineCacheFresh,
+  preferredSlotsForHint,
 } = __private;
 
 // ---------------------------------------------------------------------------
@@ -422,6 +424,141 @@ test("parseLineups: derives formation string when strFormation is null", () => {
   assert.equal(sl.length, 11);
   const gk = sl.find((p) => p.position_category === "goalkeeper");
   assert.equal(gk.formation_row_index, 0);
+});
+
+test("parseLineups: uses cached player positions for side-aware home slots", () => {
+  const mkPlayer = (name, id, num, pos, posShort) => ({
+    strPlayer: name,
+    idPlayer: id,
+    intSquadNumber: String(num),
+    strHome: "Yes",
+    strSubstitute: "No",
+    strPosition: pos,
+    strPositionShort: posShort,
+    strFormation: "4-3-3",
+    idTeam: null,
+  });
+  const entries = [
+    mkPlayer("Thibaut Courtois", "1", 1, "Goalkeeper", "G"),
+    mkPlayer("Generic Defender", "2", 2, "Defender", "D"),
+    mkPlayer("Brandon Mechele", "3", 3, "Defender", "D"),
+    mkPlayer("Thomas Meunier", "4", 4, "Defender", "D"),
+    mkPlayer("Left Back", "5", 5, "Defender", "D"),
+    mkPlayer("Mid 1", "6", 6, "Midfielder", "M"),
+    mkPlayer("Mid 2", "7", 7, "Midfielder", "M"),
+    mkPlayer("Mid 3", "8", 8, "Midfielder", "M"),
+    mkPlayer("Centre Forward", "9", 9, "Forward", "F"),
+    mkPlayer("Right Forward", "10", 10, "Forward", "F"),
+    mkPlayer("Jérémy Doku", "11", 11, "Forward", "F"),
+  ];
+
+  const result = parseLineups(entries, null, {
+    playerPositionsById: {
+      3: "Centre-Back",
+      4: "Right-Back",
+      5: "Left-Back",
+      9: "Centre-Forward",
+      10: "Right Wing",
+      11: "Left Wing",
+    },
+  });
+
+  const starters = result.home.starting_lineup;
+  assert.equal(starters.find((p) => p.name === "Thomas Meunier").position, "Right-Back");
+  assert.equal(starters.find((p) => p.name === "Thomas Meunier").formation_slot_index, 0);
+  assert.ok([1, 2].includes(starters.find((p) => p.name === "Brandon Mechele").formation_slot_index));
+  assert.equal(starters.find((p) => p.name === "Jérémy Doku").formation_slot_index, 2);
+});
+
+test("parseLineups: re-derives role rows after enriching attacking midfield positions", () => {
+  const mkPlayer = (name, id, num, pos, posShort) => ({
+    strPlayer: name,
+    idPlayer: id,
+    intSquadNumber: String(num),
+    strHome: "Yes",
+    strSubstitute: "No",
+    strPosition: pos,
+    strPositionShort: posShort,
+    strFormation: "4-4-2",
+    idTeam: null,
+  });
+  const entries = [
+    mkPlayer("Thibaut Courtois", "34145514", 1, "Goalkeeper", "G"),
+    mkPlayer("Thomas Meunier", "34149005", 15, "Defender", "D"),
+    mkPlayer("Brandon Mechele", "34148993", 3, "Defender", "D"),
+    mkPlayer("Nathan Ngoy", "34218008", 4, "Defender", "D"),
+    mkPlayer("Timothy Castagne", "34153355", 21, "Defender", "D"),
+    mkPlayer("Kevin De Bruyne", "34155057", 7, "Midfielder", "M"),
+    mkPlayer("Youri Tielemans", "34153488", 8, "Midfielder", "M"),
+    mkPlayer("Leandro Trossard", "34153358", 10, "Midfielder", "M"),
+    mkPlayer("Jérémy Doku", "34172198", 11, "Midfielder", "M"),
+    mkPlayer("Amadou Onana", "34174589", 24, "Midfielder", "M"),
+    mkPlayer("Charles De Ketelaere", "34171323", 17, "Attacking Midfield", "F"),
+  ];
+
+  const result = parseLineups(entries, null, {
+    playerPositionsById: {
+      34149005: "Right-Back",
+      34148993: "Centre-Back",
+      34218008: "Centre-Back",
+      34153355: "Right-Back",
+      34155057: "Attacking Midfield",
+      34153488: "Central Midfield",
+      34153358: "Left Wing",
+      34172198: "Left Wing",
+      34174589: "Defensive Midfield",
+      34171323: "Attacking Midfield",
+    },
+  });
+
+  assert.equal(result.home.formation, "4-5-1");
+  const starters = result.home.starting_lineup;
+  const doku = starters.find((p) => p.name === "Jérémy Doku");
+  assert.equal(doku.position, "Left Wing");
+  assert.equal(doku.position_category, "midfielder");
+  assert.equal(doku.formation_row_index, 2);
+  assert.equal(doku.formation_slot_index, 4);
+
+  const meunier = starters.find((p) => p.name === "Thomas Meunier");
+  const castagne = starters.find((p) => p.name === "Timothy Castagne");
+  assert.equal(meunier.position, "Right-Back");
+  assert.equal(castagne.position, "Right-Back");
+  assert.ok([0, 1].includes(meunier.formation_slot_index));
+  assert.ok([0, 1].includes(castagne.formation_slot_index));
+
+  const deBruyne = starters.find((p) => p.name === "Kevin De Bruyne");
+  assert.equal(deBruyne.position_category, "midfielder");
+  assert.equal(deBruyne.formation_row_index, 2);
+});
+
+test("assignFormationGridPositions: overloaded side hints keep normal row spacing", () => {
+  const starters = [
+    { name: "GK", number: 1, position_category: "goalkeeper", position: "Goalkeeper" },
+    { name: "D1", number: 2, position_category: "defender", position: "Defender" },
+    { name: "D2", number: 3, position_category: "defender", position: "Defender" },
+    { name: "D3", number: 4, position_category: "defender", position: "Defender" },
+    { name: "D4", number: 5, position_category: "defender", position: "Defender" },
+    { name: "M1", number: 6, position_category: "midfielder", position: "Midfielder" },
+    { name: "M2", number: 7, position_category: "midfielder", position: "Midfielder" },
+    { name: "M3", number: 8, position_category: "midfielder", position: "Midfielder" },
+    { name: "Left 1", number: 9, position_category: "attacker", position: "Left Wing" },
+    { name: "Left 2", number: 10, position_category: "attacker", position: "Left Wing" },
+    { name: "Left 3", number: 11, position_category: "attacker", position: "Left Wing" },
+  ];
+
+  const result = assignFormationGridPositions(starters, "4-3-3", { side: "home" });
+  const attackers = result
+    .filter((player) => player.position_category === "attacker")
+    .sort((left, right) => left.formation_slot_index - right.formation_slot_index);
+
+  assert.deepEqual(attackers.map((player) => player.name), ["Left 1", "Left 2", "Left 3"]);
+});
+
+test("preferredSlotsForHint: home side is mirrored from user perspective", () => {
+  assert.deepEqual(preferredSlotsForHint("right", 4, "home"), [0, 1]);
+  assert.deepEqual(preferredSlotsForHint("left", 4, "home"), [2, 3]);
+  assert.deepEqual(preferredSlotsForHint("right", 4, "away"), [2, 3]);
+  assert.deepEqual(preferredSlotsForHint("left", 4, "away"), [0, 1]);
 });
 
 test("lineup cache freshness: final empty lineup is not fresh", () => {

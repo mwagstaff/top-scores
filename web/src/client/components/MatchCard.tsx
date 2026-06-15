@@ -998,6 +998,13 @@ function buildRoleLineupRows(starters: MatchLineupPlayer[]): LineupRow[] {
   ]
     .map((players) => ({
       players: [...players].sort((left, right) => {
+        if (
+          Number.isInteger(left.formationSlotIndex) &&
+          Number.isInteger(right.formationSlotIndex) &&
+          left.formationSlotIndex !== right.formationSlotIndex
+        ) {
+          return left.formationSlotIndex - right.formationSlotIndex;
+        }
         const leftScore = horizontalLineupScore(left);
         const rightScore = horizontalLineupScore(right);
         return leftScore !== rightScore ? leftScore - rightScore : left.number - right.number;

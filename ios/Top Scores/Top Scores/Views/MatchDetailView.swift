@@ -1631,6 +1631,11 @@ private struct MatchLineupHalfView: View {
         starters
             .filter { lineupRole(for: $0) == role }
             .sorted { left, right in
+                if let leftSlot = left.formationSlotIndex,
+                   let rightSlot = right.formationSlotIndex,
+                   leftSlot != rightSlot {
+                    return leftSlot < rightSlot
+                }
                 let leftScore = horizontalScore(for: left)
                 let rightScore = horizontalScore(for: right)
                 if leftScore != rightScore {
