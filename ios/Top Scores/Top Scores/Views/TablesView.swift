@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 struct TablesView: View {
@@ -11,6 +12,15 @@ struct TablesView: View {
     @State private var hasLoaded = false
     @State private var shortNameRefreshVersion = 0
     @State private var screenOpenedAt: Date?
+    @State private var isVisible = false
+    @State private var scrollTargetRowID: String?
+    @State private var highlightedRowID: String?
+    @ObservedObject private var navigationCoordinator = TablesNavigationCoordinator.shared
+
+    // While the Tables screen is visible, refresh on a live cadence so
+    // in-progress scores flow into the (server-recomputed) standings within
+    // ~30s. The endpoint is cached server-side, so this stays cheap.
+    private let liveRefreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     private static let apiBaseURLDefaultsKey = "preferences.apiBaseURL"
 
@@ -38,6 +48,9 @@ struct TablesView: View {
             GeometryReader { proxy in
                 VStack(spacing: 0) {
                     headerView
+                    if navigationCoordinator.returnTabIndex != nil {
+                        backToMatchButton
+                    }
                     contentView
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
@@ -45,6 +58,7 @@ struct TablesView: View {
             }
         }
         .onAppear {
+            isVisible = true
             guard !hasLoaded else { return }
             hasLoaded = true
             screenOpenedAt = Date()
@@ -55,7 +69,19 @@ struct TablesView: View {
                 let durationMs = screenOpenedAt.map { Int(Date().timeIntervalSince($0) * 1000) }
                 screenOpenedAt = nil
                 AppMetricsService.shared.fireScreenView(screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
+                // Pull fresh (server-recomputed) standings right away so any live
+                // match shows immediately, rather than waiting for the first timer tick.
+                await liveRefreshTables()
             }
+        }
+        .onDisappear {
+            isVisible = false
+            // Leaving Tables for any reason — tapping "Back to match", or
+            // switching to another tab directly — drops the stale return
+            // target and the pulsing row highlight, so neither lingers if
+            // the user comes back to Tables later for an unrelated reason.
+            _ = navigationCoordinator.consumeReturnTabIndex()
+            highlightedRowID = nil
         }
         .onChange(of: preferences.apiBaseURL) { _, newValue in
             applyCachedTables(for: newValue, clearWhenMissing: true)
@@ -64,6 +90,46 @@ struct TablesView: View {
                 await loadTables(force: true)
             }
         }
+        .onReceive(liveRefreshTimer) { _ in
+            guard isVisible, hasLoaded else { return }
+            Task { await liveRefreshTables() }
+        }
+        .onChange(of: navigationCoordinator.pendingTarget) { _, _ in
+            consumePendingNavigationIfNeeded()
+        }
+        .onChange(of: leagues) { _, _ in
+            consumePendingNavigationIfNeeded()
+        }
+    }
+
+    // Applies a cross-tab navigation request from MatchDetailView (selects the
+    // league, then scrolls to + highlights the team's row) once the matching
+    // league/row are available, then clears the request. The highlight pulses
+    // indefinitely — it only moves when a new navigation request arrives.
+    private func consumePendingNavigationIfNeeded() {
+        guard let target = navigationCoordinator.pendingTarget else { return }
+        guard let league = leagues.first(where: { $0.leagueID == target.leagueID }) else { return }
+        guard let row = matchingRow(forTeamName: target.teamName, in: league) else {
+            _ = navigationCoordinator.consumeTarget()
+            return
+        }
+
+        _ = navigationCoordinator.consumeTarget()
+        selectedLeagueID = target.leagueID
+
+        // A short delay lets the newly-selected league's rows lay out before
+        // ScrollViewReader can resolve the target id.
+        Task {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            scrollTargetRowID = row.id
+            highlightedRowID = row.id
+        }
+    }
+
+    private func matchingRow(forTeamName teamName: String, in league: LeagueTable) -> LeagueTableRow? {
+        let target = TeamIdentityStore.shared.canonicalName(for: teamName).lowercased()
+        let allRows = league.rows + league.groups.flatMap(\.rows)
+        return allRows.first { TeamIdentityStore.shared.canonicalName(for: $0.team).lowercased() == target }
     }
 
     private var contentView: some View {
@@ -91,25 +157,34 @@ struct TablesView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    VStack(spacing: 14) {
-                        competitionPicker
-                        if let league = selectedLeague {
-                            LeagueTableHero(league: league)
-                            LeagueTableCard(league: league)
-                                .id("\(league.id)-\(shortNameRefreshVersion)")
+                ScrollViewReader { scrollProxy in
+                    ScrollView {
+                        VStack(spacing: 14) {
+                            competitionPicker
+                            if let league = selectedLeague {
+                                LeagueTableHero(league: league)
+                                LeagueTableCard(league: league, highlightedRowID: highlightedRowID)
+                                    .id("\(league.id)-\(shortNameRefreshVersion)")
+                            }
                         }
+                        .padding(.horizontal)
+                        .padding(.vertical, 12)
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 12)
+                    .refreshable {
+                        let refreshStart = Date()
+                        await loadTables(force: true)
+                        let durationMs = Int(Date().timeIntervalSince(refreshStart) * 1000)
+                        AppMetricsService.shared.fireActivity("manual_refresh", screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
+                    }
+                    .safeAreaPadding(.bottom, 80)
+                    .onChange(of: scrollTargetRowID) { _, newValue in
+                        guard let newValue else { return }
+                        withAnimation {
+                            scrollProxy.scrollTo(newValue, anchor: .center)
+                        }
+                        scrollTargetRowID = nil
+                    }
                 }
-                .refreshable {
-                    let refreshStart = Date()
-                    await loadTables(force: true)
-                    let durationMs = Int(Date().timeIntervalSince(refreshStart) * 1000)
-                    AppMetricsService.shared.fireActivity("manual_refresh", screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
-                }
-                .safeAreaPadding(.bottom, 80)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -166,6 +241,28 @@ struct TablesView: View {
             .background(.thinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
+    }
+
+    // Small, unobtrusive pinned bar (sits between the header and the scroll
+    // content, so it never scrolls away) offering a quick way back to the
+    // match detail screen the user arrived from via a league position chip.
+    private var backToMatchButton: some View {
+        Button {
+            navigationCoordinator.requestReturnToMatch()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left")
+                    .font(.caption.weight(.semibold))
+                Text("Back to match")
+                    .font(.subheadline.weight(.medium))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .background(.thinMaterial)
     }
 
     private var headerView: some View {
@@ -238,6 +335,19 @@ struct TablesView: View {
         }
     }
 
+    // Silent live refresh: force-fetches the latest (server-recomputed) tables
+    // without toggling the loading spinner, so the standings update in place.
+    private func liveRefreshTables() async {
+        let apiBaseURL = preferences.apiBaseURL
+        guard !apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        do {
+            let response = try await LeagueTablesCatalog.shared.refresh(apiBaseURL: apiBaseURL, force: true)
+            await MainActor.run { apply(response: response) }
+        } catch {
+            // Keep showing existing data on a transient failure.
+        }
+    }
+
     private func refreshTeamShortNames(apiBaseURL: String) async {
         await FantasyTeamShortNameMappingsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
         await MainActor.run {
@@ -292,12 +402,16 @@ struct TablesView: View {
 
 private struct LeagueTableCard: View {
     let league: LeagueTable
+    var highlightedRowID: String?
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var expandedRows: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if league.hasLiveRows {
+                liveProvisionalNote
+            }
             VStack(spacing: 0) {
                 headingRow
                 tableSeparator(isThick: false)
@@ -340,10 +454,24 @@ private struct LeagueTableCard: View {
         return stage
     }
 
+    private var liveProvisionalNote: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.liveMatch)
+                .frame(width: 7, height: 7)
+            Text("Positions update live from in-progress scores and are provisional.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+    }
+
     private var headingRow: some View {
         HStack(spacing: 6) {
             Text("")
-                .frame(width: 28, alignment: .trailing)
+                .frame(width: 40, alignment: .trailing)
             Text("")
                 .frame(width: 24)
             Text("Team")
@@ -375,7 +503,7 @@ private struct LeagueTableCard: View {
                 toggleExpansion(for: row.id)
             } label: {
                 HStack(spacing: 6) {
-                    cell(String(row.position), width: 28)
+                    positionCell(row)
                     TableTeamLogo(name: row.team)
                     Text(displayTeamName(for: row))
                         .font(.subheadline)
@@ -391,6 +519,8 @@ private struct LeagueTableCard: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
+                .background(HighlightedTableRowBackground(isActive: highlightedRowID == row.id))
+                .background(LiveTableRowBackground(isActive: row.live))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -441,6 +571,7 @@ private struct LeagueTableCard: View {
                 .padding(.bottom, 10)
             }
         }
+        .id(row.id)
     }
 
     private func tableSeparator(isThick: Bool) -> some View {
@@ -484,6 +615,37 @@ private struct LeagueTableCard: View {
             .scaleEffect(0.7)
             .lineLimit(1)
             .frame(width: width, alignment: .trailing)
+    }
+
+    private func positionCell(_ row: LeagueTableRow) -> some View {
+        HStack(spacing: 2) {
+            trendIcon(for: row)
+            Text(String(row.position))
+                .font(.body.monospacedDigit())
+                .scaleEffect(0.7)
+                .lineLimit(1)
+        }
+        .frame(width: 40, alignment: .trailing)
+    }
+
+    @ViewBuilder
+    private func trendIcon(for row: LeagueTableRow) -> some View {
+        switch row.positionTrend {
+        case .up:
+            Image(systemName: "arrowtriangle.up.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(Color.liveMatch)
+        case .down:
+            Image(systemName: "arrowtriangle.down.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(Color.red)
+        case .same:
+            Image(systemName: "minus")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(Color.secondary)
+        case .none:
+            EmptyView()
+        }
     }
 
     private func subtleCell(_ text: String, width: CGFloat) -> some View {
@@ -557,45 +719,12 @@ private struct LeagueTableCard: View {
 private struct LeagueTableHero: View {
     let league: LeagueTable
 
-    private var rows: [LeagueTableRow] {
-        if !league.rows.isEmpty {
-            return league.rows
-        }
-        return league.groups.flatMap(\.rows)
-    }
-
-    private var leader: LeagueTableRow? {
-        rows.sorted {
-            if $0.position != $1.position {
-                return $0.position < $1.position
-            }
-            return $0.points > $1.points
-        }.first
-    }
-
-    private var secondPlace: LeagueTableRow? {
-        rows.sorted {
-            if $0.position != $1.position {
-                return $0.position < $1.position
-            }
-            return $0.points > $1.points
-        }.dropFirst().first
-    }
-
     private var visibleStageName: String? {
         let stage = String(league.stageName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !stage.isEmpty, stage.caseInsensitiveCompare("Regular Season") != .orderedSame else {
             return nil
         }
         return stage
-    }
-
-    private var leaderSummary: String? {
-        guard let leader else { return nil }
-        guard let secondPlace else { return "\(leader.team) lead" }
-        let gap = leader.points - secondPlace.points
-        guard gap > 0 else { return "\(leader.team) lead on goal difference" }
-        return "\(leader.team) lead by \(gap) \(gap == 1 ? "point" : "points")"
     }
 
     var body: some View {
@@ -622,33 +751,14 @@ private struct LeagueTableHero: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.82)
 
-                HStack(spacing: 8) {
-                    if let visibleStageName {
-                        Text(visibleStageName)
-                    }
-                    Text("\(rows.count) teams")
+                if let visibleStageName {
+                    Text(visibleStageName)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.76))
                 }
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.white.opacity(0.76))
             }
 
             Spacer(minLength: 0)
-
-            if let leaderSummary {
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Leader")
-                        .font(.caption.weight(.semibold))
-                        .textCase(.uppercase)
-                        .foregroundStyle(.white.opacity(0.62))
-                    Text(leaderSummary)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.trailing)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.8)
-                }
-                .frame(maxWidth: 150, alignment: .trailing)
-            }
         }
         .padding(18)
         .background(
@@ -664,6 +774,46 @@ private struct LeagueTableHero: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: Color.black.opacity(0.12), radius: 18, x: 0, y: 10)
+    }
+}
+
+// Pulsing green highlight for a table row whose team is in an in-progress
+// match, mirroring the live treatment used for matches on the fixtures screen.
+private struct LiveTableRowBackground: View {
+    let isActive: Bool
+
+    @State private var pulsing = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.liveMatch.opacity(isActive ? (pulsing ? 0.20 : 0.07) : 0))
+            .animation(
+                isActive ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true) : .default,
+                value: pulsing
+            )
+            .onAppear { pulsing = isActive }
+            .onChange(of: isActive) { _, newValue in pulsing = newValue }
+    }
+}
+
+// Pulsing accent highlight for the row scrolled to via a cross-tab navigation
+// (e.g. tapping a team's league position chip on a match detail screen).
+// Unlike the one-shot fade used elsewhere, this pulses indefinitely — it only
+// moves when a new navigation target is selected, or clears via backButton.
+private struct HighlightedTableRowBackground: View {
+    let isActive: Bool
+
+    @State private var pulsing = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.accentColor.opacity(isActive ? (pulsing ? 0.22 : 0.08) : 0))
+            .animation(
+                isActive ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true) : .default,
+                value: pulsing
+            )
+            .onAppear { pulsing = isActive }
+            .onChange(of: isActive) { _, newValue in pulsing = newValue }
     }
 }
 

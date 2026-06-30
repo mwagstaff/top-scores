@@ -1,0 +1,471 @@
+{
+  "event_id": 8317,
+  "lineup_status": "confirmed",
+  "beta": false,
+  "lineups": {
+    "home": {
+      "team_id": 466,
+      "team_name": "Scotland",
+      "formation": "3-4-2-1",
+      "confidence": null,
+      "players": [
+        {
+          "id": 4789,
+          "name": "A. Gunn",
+          "short_name": "A. Gunn",
+          "position": "G",
+          "jersey_number": 1,
+          "ai_score": null
+        },
+        {
+          "id": 5890,
+          "name": "G. Hanley",
+          "short_name": "G. Hanley",
+          "position": "D",
+          "jersey_number": 5,
+          "ai_score": null
+        },
+        {
+          "id": 8032,
+          "name": "J. Hendry",
+          "short_name": "J. Hendry",
+          "position": "D",
+          "jersey_number": 13,
+          "ai_score": null
+        },
+        {
+          "id": 3387,
+          "name": "K. Tierney",
+          "short_name": "K. Tierney",
+          "position": "D",
+          "jersey_number": 6,
+          "ai_score": null
+        },
+        {
+          "id": 818,
+          "name": "N. Patterson",
+          "short_name": "N. Patterson",
+          "position": "M",
+          "jersey_number": 22,
+          "ai_score": null
+        },
+        {
+          "id": 1088,
+          "name": "S. McTominay",
+          "short_name": "S. McTominay",
+          "position": "M",
+          "jersey_number": 4,
+          "ai_score": null
+        },
+        {
+          "id": 966,
+          "name": "L. Ferguson",
+          "short_name": "L. Ferguson",
+          "position": "M",
+          "jersey_number": 19,
+          "ai_score": null
+        },
+        {
+          "id": 326,
+          "name": "A. Robertson",
+          "short_name": "A. Robertson",
+          "position": "M",
+          "jersey_number": 3,
+          "ai_score": null
+        },
+        {
+          "id": 510,
+          "name": "J. McGinn",
+          "short_name": "J. McGinn",
+          "position": "F",
+          "jersey_number": 7,
+          "ai_score": null
+        },
+        {
+          "id": 3900,
+          "name": "R. Christie",
+          "short_name": "R. Christie",
+          "position": "F",
+          "jersey_number": 11,
+          "ai_score": null
+        },
+        {
+          "id": 1843,
+          "name": "C. Adams",
+          "short_name": "C. Adams",
+          "position": "F",
+          "jersey_number": 10,
+          "ai_score": null
+        }
+      ],
+      "substitutes": [
+        {
+          "id": 3026,
+          "name": "L. Kelly",
+          "short_name": "L. Kelly",
+          "position": "G",
+          "jersey_number": 12,
+          "ai_score": null
+        },
+        {
+          "id": 5780,
+          "name": "C. Gordon",
+          "short_name": "C. Gordon",
+          "position": "G",
+          "jersey_number": 21,
+          "ai_score": null
+        },
+        {
+          "id": 2373,
+          "name": "A. Hickey",
+          "short_name": "A. Hickey",
+          "position": "D",
+          "jersey_number": 2,
+          "ai_score": null
+        },
+        {
+          "id": 4153,
+          "name": "J. Souttar",
+          "short_name": "J. Souttar",
+          "position": "D",
+          "jersey_number": 15,
+          "ai_score": null
+        },
+        {
+          "id": 6543,
+          "name": "D. Hyam",
+          "short_name": "D. Hyam",
+          "position": "D",
+          "jersey_number": 16,
+          "ai_score": null
+        },
+        {
+          "id": 3398,
+          "name": "T. Ralston",
+          "short_name": "T. Ralston",
+          "position": "D",
+          "jersey_number": 24,
+          "ai_score": null
+        },
+        {
+          "id": 3340,
+          "name": "S. McKenna",
+          "short_name": "S. McKenna",
+          "position": "D",
+          "jersey_number": 26,
+          "ai_score": null
+        },
+        {
+          "id": 8374,
+          "name": "T. Fletcher",
+          "short_name": "T. Fletcher",
+          "position": "M",
+          "jersey_number": 8,
+          "ai_score": null
+        },
+        {
+          "id": 6386,
+          "name": "K. McLean",
+          "short_name": "K. McLean",
+          "position": "M",
+          "jersey_number": 23,
+          "ai_score": null
+        },
+        {
+          "id": 4027,
+          "name": "B. Doak",
+          "short_name": "B. Doak",
+          "position": "F",
+          "jersey_number": 17,
+          "ai_score": null
+        },
+        {
+          "id": 3029,
+          "name": "F. Curtis",
+          "short_name": "F. Curtis",
+          "position": "F",
+          "jersey_number": 25,
+          "ai_score": null
+        },
+        {
+          "id": 6100,
+          "name": "L. Dykes",
+          "short_name": "L. Dykes",
+          "position": "F",
+          "jersey_number": 9,
+          "ai_score": null
+        },
+        {
+          "id": 7003,
+          "name": "R. Stewart",
+          "short_name": "R. Stewart",
+          "position": "F",
+          "jersey_number": 14,
+          "ai_score": null
+        },
+        {
+          "id": 6153,
+          "name": "G. Hirst",
+          "short_name": "G. Hirst",
+          "position": "F",
+          "jersey_number": 18,
+          "ai_score": null
+        },
+        {
+          "id": 5774,
+          "name": "L. Shankland",
+          "short_name": "L. Shankland",
+          "position": "F",
+          "jersey_number": 20,
+          "ai_score": null
+        }
+      ]
+    },
+    "away": {
+      "team_id": 464,
+      "team_name": "Morocco",
+      "formation": "4-2-3-1",
+      "confidence": null,
+      "players": [
+        {
+          "id": 7990,
+          "name": "Bono",
+          "short_name": "Bono",
+          "position": "G",
+          "jersey_number": 1,
+          "ai_score": null
+        },
+        {
+          "id": 4241,
+          "name": "A. Hakimi",
+          "short_name": "A. Hakimi",
+          "position": "D",
+          "jersey_number": 2,
+          "ai_score": null
+        },
+        {
+          "id": 4377,
+          "name": "I. Diop",
+          "short_name": "I. Diop",
+          "position": "D",
+          "jersey_number": 14,
+          "ai_score": null
+        },
+        {
+          "id": 8593,
+          "name": "C. Riad",
+          "short_name": "C. Riad",
+          "position": "D",
+          "jersey_number": 18,
+          "ai_score": null
+        },
+        {
+          "id": 1799,
+          "name": "N. Mazraoui",
+          "short_name": "N. Mazraoui",
+          "position": "D",
+          "jersey_number": 3,
+          "ai_score": null
+        },
+        {
+          "id": 1070,
+          "name": "N. El Aynaoui",
+          "short_name": "N. El Aynaoui",
+          "position": "M",
+          "jersey_number": 24,
+          "ai_score": null
+        },
+        {
+          "id": 1451,
+          "name": "A. Bouaddi",
+          "short_name": "A. Bouaddi",
+          "position": "M",
+          "jersey_number": 6,
+          "ai_score": null
+        },
+        {
+          "id": 598,
+          "name": "B. Díaz",
+          "short_name": "B. Díaz",
+          "position": "M",
+          "jersey_number": 10,
+          "ai_score": null
+        },
+        {
+          "id": 1044,
+          "name": "A. Ounahi",
+          "short_name": "A. Ounahi",
+          "position": "M",
+          "jersey_number": 8,
+          "ai_score": null
+        },
+        {
+          "id": 1619,
+          "name": "B. E. Khannouss",
+          "short_name": "B. E. Khannouss",
+          "position": "M",
+          "jersey_number": 23,
+          "ai_score": null
+        },
+        {
+          "id": 3511,
+          "name": "I. Saibari",
+          "short_name": "I. Saibari",
+          "position": "F",
+          "jersey_number": 11,
+          "ai_score": null
+        }
+      ],
+      "substitutes": [
+        {
+          "id": 14734,
+          "name": "A. R. Tagnaouti",
+          "short_name": "A. R. Tagnaouti",
+          "position": "G",
+          "jersey_number": 22,
+          "ai_score": null
+        },
+        {
+          "id": 15369,
+          "name": "M. El Kajoui",
+          "short_name": "M. El Kajoui",
+          "position": "G",
+          "jersey_number": 12,
+          "ai_score": null
+        },
+        {
+          "id": 3506,
+          "name": "A. Salah-Eddine",
+          "short_name": "A. Salah-Eddine",
+          "position": "D",
+          "jersey_number": 26,
+          "ai_score": null
+        },
+        {
+          "id": 8257,
+          "name": "M. Saadane",
+          "short_name": "M. Saadane",
+          "position": "D",
+          "jersey_number": 5,
+          "ai_score": null
+        },
+        {
+          "id": 7757,
+          "name": "R. Halhal",
+          "short_name": "R. Halhal",
+          "position": "D",
+          "jersey_number": 25,
+          "ai_score": null
+        },
+        {
+          "id": 14679,
+          "name": "Y. Belammari",
+          "short_name": "Y. Belammari",
+          "position": "D",
+          "jersey_number": 19,
+          "ai_score": null
+        },
+        {
+          "id": 3122,
+          "name": "Z. E. Ouahdi",
+          "short_name": "Z. E. Ouahdi",
+          "position": "D",
+          "jersey_number": 13,
+          "ai_score": null
+        },
+        {
+          "id": 1395,
+          "name": "A. Sbai",
+          "short_name": "A. Sbai",
+          "position": "F",
+          "jersey_number": 17,
+          "ai_score": null
+        },
+        {
+          "id": 350,
+          "name": "C. Talbi",
+          "short_name": "C. Talbi",
+          "position": "F",
+          "jersey_number": 7,
+          "ai_score": null
+        },
+        {
+          "id": 8630,
+          "name": "G. Yassine",
+          "short_name": "G. Yassine",
+          "position": "F",
+          "jersey_number": 16,
+          "ai_score": null
+        },
+        {
+          "id": 1706,
+          "name": "S. E. Mourabet",
+          "short_name": "S. E. Mourabet",
+          "position": "M",
+          "jersey_number": 15,
+          "ai_score": null
+        },
+        {
+          "id": 2985,
+          "name": "S. Amrabat",
+          "short_name": "S. Amrabat",
+          "position": "M",
+          "jersey_number": 4,
+          "ai_score": null
+        },
+        {
+          "id": 3486,
+          "name": "A. E. Kaabi",
+          "short_name": "A. E. Kaabi",
+          "position": "F",
+          "jersey_number": 20,
+          "ai_score": null
+        },
+        {
+          "id": 8503,
+          "name": "A. Amaimouni Echghouyab",
+          "short_name": "A. Amaimouni Echghouyab",
+          "position": "F",
+          "jersey_number": 21,
+          "ai_score": null
+        },
+        {
+          "id": 15371,
+          "name": "S. Rahimi",
+          "short_name": "S. Rahimi",
+          "position": "F",
+          "jersey_number": 9,
+          "ai_score": null
+        }
+      ]
+    }
+  },
+  "unavailable_players": {
+    "home": [
+      {
+        "id": 907668,
+        "name": "Billy Gilmour",
+        "short_name": "B. Gilmour",
+        "status": "injured",
+        "reason": "Knee Injury"
+      }
+    ],
+    "away": [
+      {
+        "id": 1011375,
+        "name": "Abdessamad Ezzalzouli",
+        "short_name": "A. Ezzalzouli",
+        "status": "injured",
+        "reason": "Knee Injury"
+      },
+      {
+        "id": 1392829,
+        "name": "Amine Sbai",
+        "short_name": "A. Sbai",
+        "status": "injured",
+        "reason": ""
+      }
+    ]
+  },
+  "updated_at": "2026-06-19T23:25:12Z"
+}

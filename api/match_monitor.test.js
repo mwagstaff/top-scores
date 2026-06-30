@@ -119,349 +119,6 @@ test("mergeSnapshotWithFallback clears stale aggregate when incoming payload set
   assert.equal(merged.aggregate_away_score, null);
 });
 
-test("updateScoreReversionState tracks three consecutive BBC score reversions before confirmation", () => {
-  const state = newMonitorState();
-  const baseline = {
-    home_team: "Leeds United",
-    away_team: "Norwich City",
-    home_score: 1,
-    away_score: 0,
-    score_status: "20",
-    home_goal_scorers: [
-      {
-        player: "Lukas Nmecha",
-        goal_times: ["19'"],
-      },
-    ],
-    home_assists: [
-      {
-        player: "Wilfried Gnonto",
-        assist_times: ["19'"],
-      },
-    ],
-    away_goal_scorers: [],
-  };
-  const reverted = {
-    home_team: "Leeds United",
-    away_team: "Norwich City",
-    home_score: 0,
-    away_score: 0,
-    score_status: "21",
-    home_goal_scorers: [],
-    home_assists: [],
-    away_goal_scorers: [],
-  };
-
-  let reversion = __testHooks.updateScoreReversionState(state, baseline, reverted, 1000);
-  assert.equal(reversion.consecutivePolls, 1);
-  assert.equal(reversion.affectedTeam, "home");
-  assert.equal(reversion.removedGoal.goalTime, "19'");
-  assert.equal(reversion.removedGoal.player, "Lukas Nmecha");
-  assert.equal(reversion.removedGoal.assister, "Wilfried Gnonto");
-
-  for (let index = 0; index < 2; index += 1) {
-    reversion = __testHooks.updateScoreReversionState(state, reverted, reverted, 1001 + index);
-  }
-
-  assert.equal(reversion.consecutivePolls, 3);
-  assert.deepStrictEqual(reversion.baseline, {
-    home_score: 1,
-    away_score: 0,
-    score_status: "20",
-  });
-  assert.deepStrictEqual(reversion.reverted, {
-    home_score: 0,
-    away_score: 0,
-    score_status: "21",
-  });
-});
-
-test("confirmVarDisallowedGoal matches BBC LiveText overturned goal entries", async () => {
-  const reversionState = {
-    baseline: {
-      home_score: 1,
-      away_score: 0,
-      score_status: "20",
-    },
-    reverted: {
-      home_score: 0,
-      away_score: 0,
-      score_status: "21",
-    },
-    affectedTeam: "home",
-    consecutivePolls: 3,
-    removedGoal: {
-      team: "home",
-      player: "Lukas Nmecha",
-      goalTime: "19'",
-      assister: "Wilfried Gnonto",
-      minute: 19,
-    },
-  };
-
-  const confirmation = await __testHooks.confirmVarDisallowedGoal(
-    "cr5lln18q4lt",
-    {
-      home_team: "Leeds United",
-      away_team: "Norwich City",
-      details_url: "https://www.bbc.co.uk/sport/football/live/cr5lln18q4lt",
-    },
-    reversionState,
-    {
-      fetchLiveText: async () => ({
-        entries: [
-          {
-            minute: "21'",
-            minute_value: 21,
-            text: "VAR Decision: No Goal Leeds United 0-0 Norwich City.",
-          },
-          {
-            minute: "19'",
-            minute_value: 19,
-            text: "GOAL OVERTURNED BY VAR: Lukas Nmecha (Leeds United) scores but the goal is ruled out after a VAR review.",
-          },
-        ],
-      }),
-    }
-  );
-
-  assert.deepStrictEqual(confirmation, {
-    team: "home",
-    scorer: "Lukas Nmecha",
-    goalMinuteLabel: "19'",
-    decisionMinuteLabel: "21'",
-  });
-  assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
-});
-
-test("confirmScoreCorrection matches on-pitch offside reversions without VAR", async () => {
-  const reversionState = {
-    baseline: {
-      home_score: 1,
-      away_score: 0,
-      score_status: "74",
-    },
-    reverted: {
-      home_score: 0,
-      away_score: 0,
-      score_status: "74",
-    },
-    affectedTeam: "home",
-    consecutivePolls: 3,
-    removedGoal: {
-      team: "home",
-      player: "Joelinton",
-      goalTime: "74'",
-      assister: null,
-      minute: 74,
-    },
-  };
-
-  const confirmation = await __testHooks.confirmScoreCorrection(
-    "c0rjxqpdjert",
-    {
-      home_team: "Newcastle United",
-      away_team: "Barcelona",
-      details_url: "https://www.bbc.co.uk/sport/football/live/c0rjxqpdjert",
-    },
-    reversionState,
-    {
-      fetchLiveText: async () => ({
-        entries: [
-          {
-            minute: "74'",
-            minute_value: 74,
-            text: "Offside, Newcastle United. Joelinton is caught offside.",
-          },
-        ],
-      }),
-    }
-  );
-
-  assert.deepStrictEqual(confirmation, {
-    team: "home",
-    scorer: "Joelinton",
-    goalMinuteLabel: "74'",
-    correctionMinuteLabel: "74'",
-  });
-  assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
-});
-
-test("confirmScoreCorrection waits for longer stable reversion when live text has no explicit cause", async () => {
-  const reversionState = {
-    baseline: {
-      home_score: 1,
-      away_score: 0,
-      score_status: "74",
-    },
-    reverted: {
-      home_score: 0,
-      away_score: 0,
-      score_status: "75",
-    },
-    affectedTeam: "home",
-    consecutivePolls: 4,
-    removedGoal: {
-      team: "home",
-      player: "Joelinton",
-      goalTime: "74'",
-      assister: null,
-      minute: 74,
-    },
-  };
-
-  const match = {
-    home_team: "Newcastle United",
-    away_team: "Barcelona",
-    details_url: "https://www.bbc.co.uk/sport/football/live/c0rjxqpdjert",
-  };
-  const options = {
-    fetchLiveText: async () => ({
-      entries: [
-        {
-          minute: "75'",
-          minute_value: 75,
-          text: "Attempt missed. Harvey Barnes (Newcastle United) right footed shot from outside the box is close.",
-        },
-      ],
-    }),
-  };
-
-  assert.equal(await __testHooks.confirmScoreCorrection("c0rjxqpdjert", match, reversionState, options), null);
-  assert.equal(reversionState.confirmedAtMs, undefined);
-
-  reversionState.consecutivePolls = 5;
-
-  const confirmation = await __testHooks.confirmScoreCorrection("c0rjxqpdjert", match, reversionState, options);
-  assert.deepStrictEqual(confirmation, {
-    team: "home",
-    scorer: "Joelinton",
-    goalMinuteLabel: "74'",
-    correctionMinuteLabel: null,
-  });
-  assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
-});
-
-test("confirmScoreCorrection falls back when BBC only shows generic VAR context", async () => {
-  const reversionState = {
-    baseline: {
-      home_score: 1,
-      away_score: 0,
-      score_status: "16",
-    },
-    reverted: {
-      home_score: 0,
-      away_score: 0,
-      score_status: "17",
-    },
-    affectedTeam: "home",
-    consecutivePolls: 5,
-    removedGoal: {
-      team: "home",
-      player: "Marc Cucurella",
-      goalTime: "16'",
-      assister: null,
-      minute: 16,
-    },
-  };
-
-  const confirmation = await __testHooks.confirmScoreCorrection(
-    "cwyxndndp4pt",
-    {
-      home_team: "Chelsea",
-      away_team: "Manchester City",
-      details_url: "https://www.bbc.co.uk/sport/football/live/cwyxndndp4pt",
-    },
-    reversionState,
-    {
-      fetchLiveText: async () => ({
-        entries: [
-          {
-            minute: "17'",
-            minute_value: 17,
-            text: "Delay in match because of VAR check.",
-          },
-        ],
-      }),
-    }
-  );
-
-  assert.deepStrictEqual(confirmation, {
-    team: "home",
-    scorer: "Marc Cucurella",
-    goalMinuteLabel: "16'",
-    correctionMinuteLabel: null,
-  });
-  assert.equal(Number.isFinite(reversionState.confirmedAtMs), true);
-});
-
-test("buildVarDisallowedGoalEvent uses goal notification semantics and reverted scoreline", () => {
-  const event = __testHooks.buildVarDisallowedGoalEvent(
-    "cr5lln18q4lt",
-    {
-      home_team: "Leeds United",
-      away_team: "Norwich City",
-      home_score: 0,
-      away_score: 0,
-    },
-    {
-      team: "home",
-      scorer: "Lukas Nmecha",
-      goalMinuteLabel: "19'",
-      decisionMinuteLabel: "21'",
-    },
-    {
-      affectedTeam: "home",
-      removedGoal: {
-        player: "Lukas Nmecha",
-        assister: "Wilfried Gnonto",
-        goalTime: "19'",
-      },
-    }
-  );
-
-  assert.equal(event.type, "goal");
-  assert.equal(event.disallowedByVar, true);
-  assert.equal(event.title, "Goal disallowed by VAR 19'");
-  assert.equal(event.body, "Leeds United 0 - 0 Norwich City");
-  assert.equal(event.scorer, "Lukas Nmecha");
-  assert.equal(event.assister, "Wilfried Gnonto");
-  assert.equal(event.varDecisionTime, "21'");
-});
-
-test("buildScoreCorrectionEvent uses goal notification semantics and reverted scoreline", () => {
-  const event = __testHooks.buildScoreCorrectionEvent(
-    "c0rjxqpdjert",
-    {
-      home_team: "Newcastle United",
-      away_team: "Barcelona",
-      home_score: 0,
-      away_score: 0,
-    },
-    {
-      team: "home",
-      scorer: "Joelinton",
-      goalMinuteLabel: "74'",
-      correctionMinuteLabel: "74'",
-    },
-    {
-      affectedTeam: "home",
-      removedGoal: {
-        player: "Joelinton",
-        assister: null,
-        goalTime: "74'",
-      },
-    }
-  );
-
-  assert.equal(event.type, "goal");
-  assert.equal(event.scoreCorrection, true);
-  assert.equal(event.title, "Score correction");
-  assert.equal(event.body, "Newcastle United 0 - 0 Barcelona");
-  assert.equal(event.scorer, "Joelinton");
-  assert.equal(event.goalTime, "74'");
-});
-
 test("buildNotificationPayload preserves disallowed-goal metadata for APNS delivery", () => {
   const payload = __testHooks.buildNotificationPayload("cr5lln18q4lt", {
     type: "goal",
@@ -4611,6 +4268,61 @@ test("does not emit delayed kickoff when first live status seen is HT", () => {
   assert.deepEqual(types, ["halftime"]);
 });
 
+test("buildMatchEvents flags a goal-disallowed VAR entry as goalRelated", () => {
+  const monitorState = newMonitorState();
+
+  const oldMatch = {
+    home_team: "Scotland",
+    away_team: "Brazil",
+    score_status: "22",
+    home_score: 0,
+    away_score: 0,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_var_events: [],
+    away_var_events: [],
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    away_var_events: [{ player: "Vinícius Jr.", minute: "22'", detail: "VAR: Goal disallowed" }],
+  };
+
+  const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
+  const varEvent = events.find((event) => event.type === "var");
+
+  assert.ok(varEvent, "expected a var event to be emitted");
+  assert.equal(varEvent.goalRelated, true);
+  assert.equal(varEvent.detail, "VAR: Goal disallowed");
+});
+
+test("buildMatchEvents does not flag a non-goal VAR entry as goalRelated", () => {
+  const monitorState = newMonitorState();
+
+  const oldMatch = {
+    home_team: "Scotland",
+    away_team: "Brazil",
+    score_status: "30",
+    home_score: 0,
+    away_score: 1,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_var_events: [],
+    away_var_events: [],
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    away_var_events: [{ player: "Vinícius Jr.", minute: "30'", detail: "VAR: Offside Check" }],
+  };
+
+  const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
+  const varEvent = events.find((event) => event.type === "var");
+
+  assert.ok(varEvent, "expected a var event to be emitted");
+  assert.equal(varEvent.goalRelated, false);
+});
+
 test("includes aggregate score in halftime notification body when available", () => {
   const monitorState = newMonitorState();
 
@@ -4913,9 +4625,10 @@ test("includes penalty result in AET full-time notifications", () => {
   const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
   assert.equal(events.length, 1);
   assert.equal(events[0].type, "fulltime");
+  assert.equal(events[0].title, "FT");
   assert.equal(
     events[0].body,
-    "Midtjylland 1 - 2 Nottingham Forest (agg: 2-2) (AET) (Nottingham Forest win 3 - 0 on penalties)"
+    "Nottingham Forest beat Midtjylland 3-0 on penalties (1-2 AET)"
   );
 });
 
@@ -4941,10 +4654,37 @@ test("does not duplicate penalty wording in penalty-shootout full-time notificat
   const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
   assert.equal(events.length, 1);
   assert.equal(events[0].type, "fulltime");
+  assert.equal(events[0].title, "FT");
   assert.equal(
     events[0].body,
-    "West Ham United 2 - 2 Brentford (West Ham United win 5 - 3 on penalties)"
+    "West Ham United beat Brentford 5-3 on penalties (2-2 AET)"
   );
+});
+
+test("formats away shootout winner final notification with AET score", () => {
+  const monitorState = newMonitorState();
+
+  const oldMatch = {
+    home_team: "Germany",
+    away_team: "Paraguay",
+    score_status: "121'",
+    home_score: 1,
+    away_score: 1,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    score_status: "AET",
+    penalty_result: "Paraguay win 4 - 3 on penalties",
+  };
+
+  const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "fulltime");
+  assert.equal(events[0].title, "FT");
+  assert.equal(events[0].body, "Paraguay beat Germany 4-3 on penalties (1-1 AET)");
 });
 
 test("keeps unresolved penalty shootouts relevant until the result is confirmed", () => {
@@ -4996,6 +4736,29 @@ test("does not emit full-time for penalty shootouts until the result is confirme
     away_score: 2,
   };
 
+  const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
+  assert.deepStrictEqual(events, []);
+});
+
+test("keeps tied AET unresolved until penalty result is confirmed", () => {
+  const monitorState = newMonitorState();
+
+  const oldMatch = {
+    home_team: "Germany",
+    away_team: "Paraguay",
+    score_status: "119'",
+    home_score: 1,
+    away_score: 1,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+  };
+
+  const newMatch = {
+    ...oldMatch,
+    score_status: "AET",
+  };
+
+  assert.equal(__testHooks.isUnresolvedTiedAetMatch(newMatch), true);
   const events = __testHooks.buildMatchEvents(oldMatch, newMatch, monitorState, Date.now());
   assert.deepStrictEqual(events, []);
 });
@@ -5296,6 +5059,56 @@ test("emits goal when score delta appears before timeline details", () => {
   );
 });
 
+test("shows correct scoreline when score jumps 2 but only 1 timeline goal arrives first", () => {
+  // Regression: score jumped 0→2 but only one timeline goal was available.
+  // First notification must show 1-0, not 2-0.
+  const monitorState = newMonitorState();
+  const snap0 = {
+    home_team: "Portugal",
+    away_team: "DR Congo",
+    score_status: "5'",
+    home_score: 0,
+    away_score: 0,
+    home_goal_scorers: [],
+    away_goal_scorers: [],
+    home_assists: [],
+    away_assists: [],
+  };
+
+  // Score jumps to 2-0 but timeline only has one goal (João Neves, 6')
+  const snap1 = {
+    ...snap0,
+    score_status: "8'",
+    home_score: 2,
+    away_score: 0,
+    home_goal_scorers: [{ player: "João Neves", goal_times: ["6'"] }],
+  };
+
+  const poll1Goals = __testHooks
+    .buildMatchEvents(snap0, snap1, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+  assert.equal(poll1Goals.length, 1);
+  assert.equal(poll1Goals[0].title, "Goal 6'");
+  assert.equal(poll1Goals[0].body, "Portugal 1 - 0 DR Congo (João Neves)");
+
+  // Next poll: score unchanged but second goal arrives in timeline
+  const snap2 = {
+    ...snap1,
+    score_status: "12'",
+    home_goal_scorers: [
+      { player: "João Neves", goal_times: ["6'"] },
+      { player: "R. Leão", goal_times: ["9'"] },
+    ],
+  };
+
+  const poll2Goals = __testHooks
+    .buildMatchEvents(snap1, snap2, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+  assert.equal(poll2Goals.length, 1);
+  assert.equal(poll2Goals[0].title, "Goal 9'");
+  assert.equal(poll2Goals[0].body, "Portugal 2 - 0 DR Congo (R. Leão)");
+});
+
 test("prefers newest timeline entries when score catches up after backfill", () => {
   const monitorState = newMonitorState();
   const snap0 = {
@@ -5459,6 +5272,60 @@ test("evaluateUserNotificationDecision treats confirmed VAR reversals as delayed
     reason: "eligible",
     delayMinutes: 3,
   });
+});
+
+test("evaluateUserNotificationDecision allows a goal-related VAR decision under the goal preference", () => {
+  const decision = __testHooks.evaluateUserNotificationDecision(
+    {
+      apnsToken: "apns-token",
+      preferences: {
+        notificationsEnabled: true,
+        notificationDelayMinutes: 0,
+        notificationEventTypes: ["goal"],
+      },
+    },
+    {
+      home_team: "Scotland",
+      away_team: "Brazil",
+      league: "FIFA World Cup 2026",
+      tv_channels: [],
+    },
+    {
+      type: "var",
+      goalRelated: true,
+      detail: "VAR: Goal disallowed",
+    }
+  );
+
+  assert.equal(decision.shouldNotify, true);
+  assert.equal(decision.reason, "eligible");
+});
+
+test("evaluateUserNotificationDecision filters out a non-goal VAR decision without the var preference", () => {
+  const decision = __testHooks.evaluateUserNotificationDecision(
+    {
+      apnsToken: "apns-token",
+      preferences: {
+        notificationsEnabled: true,
+        notificationDelayMinutes: 0,
+        notificationEventTypes: ["goal"],
+      },
+    },
+    {
+      home_team: "Scotland",
+      away_team: "Brazil",
+      league: "FIFA World Cup 2026",
+      tv_channels: [],
+    },
+    {
+      type: "var",
+      goalRelated: false,
+      detail: "VAR: Offside Check",
+    }
+  );
+
+  assert.equal(decision.shouldNotify, false);
+  assert.equal(decision.reason, "event_type_filtered_out");
 });
 
 test("evaluateFantasyDeadlineReminderDecision requires a connected fantasy team", () => {

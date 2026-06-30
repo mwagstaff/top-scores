@@ -81,6 +81,112 @@ struct WatchRedCardEvent: Codable, Hashable {
     }
 }
 
+struct WatchYellowCardEvent: Codable, Hashable {
+    let player: String
+    let yellowCardTimes: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case player
+        case yellowCardTimes = "yellow_card_times"
+    }
+
+    private enum AlternateCodingKeys: String, CodingKey {
+        case playerName = "player_name"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let decodedPlayer = try container.decodeIfPresent(String.self, forKey: .player) {
+            player = decodedPlayer
+        } else {
+            let alternate = try decoder.container(keyedBy: AlternateCodingKeys.self)
+            player = try alternate.decodeIfPresent(String.self, forKey: .playerName) ?? ""
+        }
+        yellowCardTimes = try container.decodeIfPresent([String].self, forKey: .yellowCardTimes) ?? []
+    }
+}
+
+struct WatchVarEvent: Codable, Hashable {
+    let player: String?
+    let minute: String?
+    let detail: String
+
+    enum CodingKeys: String, CodingKey {
+        case player
+        case minute
+        case detail
+    }
+}
+
+struct WatchLineupPlayer: Codable, Hashable, Identifiable {
+    let number: Int
+    let name: String
+    let positionShort: String?
+    let position: String?
+
+    var id: String {
+        "\(number)|\(name)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case number
+        case name
+        case positionShort = "position_short"
+        case position
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        number = try container.decodeIfPresent(Int.self, forKey: .number) ?? 0
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        positionShort = try container.decodeIfPresent(String.self, forKey: .positionShort)
+        position = try container.decodeIfPresent(String.self, forKey: .position)
+    }
+}
+
+struct WatchLineupSubstitution: Codable, Hashable, Identifiable {
+    let minute: String
+    let playerOff: WatchLineupPlayer
+    let playerOn: WatchLineupPlayer
+
+    var id: String {
+        "\(minute)|\(playerOff.id)|\(playerOn.id)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case minute
+        case playerOff = "player_off"
+        case playerOn = "player_on"
+    }
+}
+
+struct WatchTeamLineup: Codable, Hashable {
+    let team: String?
+    let formation: String?
+    let startingLineup: [WatchLineupPlayer]
+    let substitutions: [WatchLineupSubstitution]
+
+    enum CodingKeys: String, CodingKey {
+        case team
+        case formation
+        case startingLineup = "starting_lineup"
+        case substitutions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        team = try container.decodeIfPresent(String.self, forKey: .team)
+        formation = try container.decodeIfPresent(String.self, forKey: .formation)
+        startingLineup = try container.decodeIfPresent([WatchLineupPlayer].self, forKey: .startingLineup) ?? []
+        substitutions = try container.decodeIfPresent([WatchLineupSubstitution].self, forKey: .substitutions) ?? []
+    }
+}
+
+struct WatchTeamLineups: Codable, Hashable {
+    let home: WatchTeamLineup?
+    let away: WatchTeamLineup?
+}
+
 struct WatchPreferencesSnapshot: Codable, Equatable {
     let selectedLeagues: [String]
     let selectedChannels: [String]
@@ -134,9 +240,16 @@ struct WatchMatch: Identifiable, Codable, Hashable {
     let awayGoalScorers: [WatchGoalScorer]
     let homeAssists: [WatchAssistProvider]
     let awayAssists: [WatchAssistProvider]
+    let homeYellowCards: [WatchYellowCardEvent]
+    let awayYellowCards: [WatchYellowCardEvent]
     let homeRedCards: [WatchRedCardEvent]
     let awayRedCards: [WatchRedCardEvent]
+    let homeVarEvents: [WatchVarEvent]
+    let awayVarEvents: [WatchVarEvent]
+    let teamLineups: WatchTeamLineups?
     let penaltyResult: String?
+    let homeTeamId: String?
+    let awayTeamId: String?
 
     var id: String {
         "\(date)|\(time)|\(league)|\(homeTeam)|\(awayTeam)"
@@ -202,9 +315,16 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         awayGoalScorers = try container.decodeIfPresent([WatchGoalScorer].self, forKey: .awayGoalScorers) ?? []
         homeAssists = try container.decodeIfPresent([WatchAssistProvider].self, forKey: .homeAssists) ?? []
         awayAssists = try container.decodeIfPresent([WatchAssistProvider].self, forKey: .awayAssists) ?? []
+        homeYellowCards = try container.decodeIfPresent([WatchYellowCardEvent].self, forKey: .homeYellowCards) ?? []
+        awayYellowCards = try container.decodeIfPresent([WatchYellowCardEvent].self, forKey: .awayYellowCards) ?? []
         homeRedCards = try container.decodeIfPresent([WatchRedCardEvent].self, forKey: .homeRedCards) ?? []
         awayRedCards = try container.decodeIfPresent([WatchRedCardEvent].self, forKey: .awayRedCards) ?? []
+        homeVarEvents = try container.decodeIfPresent([WatchVarEvent].self, forKey: .homeVarEvents) ?? []
+        awayVarEvents = try container.decodeIfPresent([WatchVarEvent].self, forKey: .awayVarEvents) ?? []
+        teamLineups = try container.decodeIfPresent(WatchTeamLineups.self, forKey: .teamLineups)
         penaltyResult = try container.decodeIfPresent(String.self, forKey: .penaltyResult)
+        homeTeamId = try container.decodeIfPresent(String.self, forKey: .homeTeamId)
+        awayTeamId = try container.decodeIfPresent(String.self, forKey: .awayTeamId)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -226,9 +346,16 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         case awayGoalScorers = "away_goal_scorers"
         case homeAssists = "home_assists"
         case awayAssists = "away_assists"
+        case homeYellowCards = "home_yellow_cards"
+        case awayYellowCards = "away_yellow_cards"
         case homeRedCards = "home_red_cards"
         case awayRedCards = "away_red_cards"
+        case homeVarEvents = "home_var_events"
+        case awayVarEvents = "away_var_events"
+        case teamLineups = "team_lineups"
         case penaltyResult = "penalty_result"
+        case homeTeamId = "home_team_id"
+        case awayTeamId = "away_team_id"
     }
 }
 

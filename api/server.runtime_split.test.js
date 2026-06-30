@@ -6,6 +6,10 @@ const {
     buildDefaultOperationalCacheState,
     filterCacheStateDomainsForRuntimeRefresh,
     normalizeCacheStateDomains,
+    resolveTsdbLivescorePollIntervalMs,
+    TSDB_LIVESCORE_ACTIVE_INTERVAL_MS,
+    TSDB_LIVESCORE_INTERVAL_MS,
+    TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE,
   },
   startApiRuntime,
   startMonitorRuntime,
@@ -22,6 +26,7 @@ test("buildDefaultOperationalCacheState initializes all split-runtime cache doma
     "teams",
     "tables",
     "team_short_names",
+    "team_badges",
     "tsdb_live",
   ]);
 });
@@ -59,4 +64,14 @@ test("server exports explicit api monitor and scraper runtime starters", () => {
   assert.equal(typeof startMonitorRuntime, "function");
   assert.equal(typeof startScraperRuntime, "function");
   assert.equal(typeof shutdownRuntime, "function");
+});
+
+test("TSDB livescore polling uses faster bounded cadence while matches are live", () => {
+  assert.equal(resolveTsdbLivescorePollIntervalMs({ hasLiveMatches: false }), TSDB_LIVESCORE_INTERVAL_MS);
+  assert.equal(resolveTsdbLivescorePollIntervalMs({ hasLiveMatches: true }), TSDB_LIVESCORE_ACTIVE_INTERVAL_MS);
+  assert.ok(TSDB_LIVESCORE_ACTIVE_INTERVAL_MS <= TSDB_LIVESCORE_INTERVAL_MS);
+  assert.ok(
+    Math.ceil(60_000 / TSDB_LIVESCORE_ACTIVE_INTERVAL_MS) <= TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE
+  );
+  assert.ok(TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE <= 90);
 });

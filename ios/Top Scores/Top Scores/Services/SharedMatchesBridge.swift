@@ -4,6 +4,7 @@ import WidgetKit
 enum AppGroupConfig {
     nonisolated static let identifier = "group.dev.skynolimit.topscores"
     nonisolated static let sharedMatchesFileName = "shared-matches.json"
+    nonisolated static let watchSharedMatchesFileName = "watch-shared-matches.json"
     nonisolated static let matchesPayloadContextKey = "matches_payload"
     nonisolated static let requestMatchesSyncMessageKey = "request_matches_sync"
     nonisolated static let fantasySharedImportQueueKey = "fantasy.sharedImportQueue"
@@ -84,6 +85,74 @@ struct SharedMatchesPayload: Codable, Equatable, Sendable {
     }
 }
 
+private struct WatchSharedMatchesTransferPayload: Codable, Sendable {
+    let snapshot: PreferencesSnapshot
+    let matches: [WatchSharedMatchTransfer]
+    let unfilteredMatches: [WatchSharedMatchTransfer]
+    let lastUpdated: Date?
+    let generatedAt: Date
+}
+
+private struct WatchSharedMatchTransfer: Codable, Sendable {
+    let date: String
+    let time: String
+    let homeTeam: String
+    let awayTeam: String
+    let homeTeamId: String?
+    let awayTeamId: String?
+    let homeShortName: String?
+    let awayShortName: String?
+    let league: String
+    let leagueSubcategory: String?
+    let competitionWeight: Double?
+    let matchDetailsIDValue: String?
+    let tvChannels: [String]
+    let homeScore: Int?
+    let awayScore: Int?
+    let scoreStatus: String?
+    let penaltyResult: String?
+
+    init(_ match: Match) {
+        date = match.date
+        time = match.time
+        homeTeam = match.homeTeam
+        awayTeam = match.awayTeam
+        homeTeamId = match.homeTeamId
+        awayTeamId = match.awayTeamId
+        homeShortName = match.homeShortName
+        awayShortName = match.awayShortName
+        league = match.league
+        leagueSubcategory = match.leagueSubcategory
+        competitionWeight = match.competitionWeight
+        matchDetailsIDValue = match.matchDetailsID
+        tvChannels = match.tvChannels.map(\.name)
+        homeScore = match.homeScore
+        awayScore = match.awayScore
+        scoreStatus = match.scoreStatus
+        penaltyResult = match.penaltyResult
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case date
+        case time
+        case homeTeam = "home_team"
+        case awayTeam = "away_team"
+        case homeTeamId = "home_team_id"
+        case awayTeamId = "away_team_id"
+        case homeShortName = "home_short_name"
+        case awayShortName = "away_short_name"
+        case league
+        case leagueSubcategory = "league_subcategory"
+        case competitionWeight = "competition_weight"
+        case matchDetailsIDValue = "match_details_id"
+        case tvChannels = "tv_channels"
+        case homeScore = "home_score"
+        case awayScore = "away_score"
+        case scoreStatus = "score_status"
+        case penaltyResult = "penalty_result"
+    }
+}
+
 struct FantasySharedImportPayload: Codable, Equatable, Sendable {
     let rawURL: String
     let updatedAt: TimeInterval
@@ -137,25 +206,57 @@ enum FantasySharedImportStore {
 }
 
 enum SharedMatchesBridge {
+    // Throttles widget reloads / watch transfers during rapid live-match updates
+    // (e.g. goals/incidents), where the underlying payload can change every refresh tick.
+    private static let minSyncInterval: TimeInterval = 30
+    private static let watchFixtureLimit = 80
+    private static let watchFixtureHistoryDays = 7
+    private static let watchResultHistoryDays = 7
+    private static let lock = NSLock()
+    private static var lastSyncedAt: Date?
+
     nonisolated static func saveAndSync(matches: [Match], unfilteredMatches: [Match], lastUpdated: Date?, snapshot: PreferencesSnapshot) {
+        let generatedAt = Date()
         let payload = SharedMatchesPayload(
             snapshot: snapshot,
             matches: matches,
             unfilteredMatches: unfilteredMatches,
             lastUpdated: lastUpdated,
-            generatedAt: Date()
+            generatedAt: generatedAt
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(payload) else { return }
-        guard shouldSync(payload) else { return }
+        let shouldPublish = shouldSync(payload)
 
         saveRawData(data)
+        if let watchData = makeWatchTransferData(
+            matches: matches,
+            unfilteredMatches: unfilteredMatches,
+            lastUpdated: lastUpdated,
+            snapshot: snapshot,
+            generatedAt: generatedAt,
+            encoder: encoder
+        ) {
+            saveWatchTransferData(watchData)
+        }
         saveSnapshotToSharedDefaults(snapshot)
+
+        guard shouldPublish else { return }
+
+        let now = Date()
+        lock.lock()
+        if let last = lastSyncedAt, now.timeIntervalSince(last) < minSyncInterval {
+            lock.unlock()
+            return
+        }
+        lastSyncedAt = now
+        lock.unlock()
+
         WidgetCenter.shared.reloadAllTimelines()
         Task { @MainActor in
             PhoneWatchSyncService.shared.activate()
-            PhoneWatchSyncService.shared.sendLatestPayload(data)
+            PhoneWatchSyncService.shared.sendLatestPayload(loadWatchTransferData() ?? data)
         }
     }
 
@@ -166,6 +267,19 @@ enum SharedMatchesBridge {
 
     nonisolated static func saveRawData(_ data: Data) {
         guard let url = sharedFileURL else { return }
+        try? data.write(to: url, options: [.atomic])
+    }
+
+    nonisolated static func loadWatchTransferData() -> Data? {
+        if let url = watchTransferFileURL,
+           let data = try? Data(contentsOf: url) {
+            return data
+        }
+        return makeWatchTransferDataFromCachedPayload()
+    }
+
+    private nonisolated static func saveWatchTransferData(_ data: Data) {
+        guard let url = watchTransferFileURL else { return }
         try? data.write(to: url, options: [.atomic])
     }
 
@@ -200,16 +314,119 @@ enum SharedMatchesBridge {
     }
 
     nonisolated static func clear() {
-        guard let url = sharedFileURL else { return }
-        if FileManager.default.fileExists(atPath: url.path) {
-            try? FileManager.default.removeItem(at: url)
+        for url in [sharedFileURL, watchTransferFileURL].compactMap({ $0 }) {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
         WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    private nonisolated static func makeWatchTransferData(
+        matches: [Match],
+        unfilteredMatches: [Match],
+        lastUpdated: Date?,
+        snapshot: PreferencesSnapshot,
+        generatedAt: Date,
+        encoder: JSONEncoder
+    ) -> Data? {
+        let payload = WatchSharedMatchesTransferPayload(
+            snapshot: snapshot,
+            matches: watchMatches(from: matches),
+            unfilteredMatches: matches.isEmpty ? watchMatches(from: unfilteredMatches) : [],
+            lastUpdated: lastUpdated,
+            generatedAt: generatedAt
+        )
+        return try? encoder.encode(payload)
+    }
+
+    private nonisolated static func makeWatchTransferDataFromCachedPayload() -> Data? {
+        guard let payload = loadPayload() else { return nil }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = makeWatchTransferData(
+            matches: payload.matches,
+            unfilteredMatches: payload.unfilteredMatches,
+            lastUpdated: payload.lastUpdated,
+            snapshot: payload.snapshot,
+            generatedAt: payload.generatedAt,
+            encoder: encoder
+        ) else {
+            return nil
+        }
+        saveWatchTransferData(data)
+        return data
+    }
+
+    private nonisolated static func watchMatches(from matches: [Match]) -> [WatchSharedMatchTransfer] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let fixtureEnd = calendar.date(
+            byAdding: .day,
+            value: watchFixtureHistoryDays,
+            to: today
+        ) ?? today
+        let resultStart = calendar.date(
+            byAdding: .day,
+            value: 1 - watchResultHistoryDays,
+            to: today
+        ) ?? today
+
+        let fixtures = matches
+            .filter { match in
+                guard let date = match.dateOnly else { return false }
+                let day = calendar.startOfDay(for: date)
+                return day >= today && day <= fixtureEnd && !match.isFinished
+            }
+            .sorted(by: ascendingMatchDate)
+            .prefix(watchFixtureLimit)
+
+        let results = matches
+            .filter { match in
+                guard let date = match.dateOnly else { return false }
+                let day = calendar.startOfDay(for: date)
+                return day >= resultStart && day <= today && match.isFinished
+            }
+            .sorted(by: descendingMatchDate)
+
+        return (Array(fixtures) + results)
+            .sorted(by: ascendingMatchDate)
+            .map(WatchSharedMatchTransfer.init)
+    }
+
+    private nonisolated static func ascendingMatchDate(_ lhs: Match, _ rhs: Match) -> Bool {
+        let leftDate = lhs.dateTime ?? lhs.dateOnly ?? .distantFuture
+        let rightDate = rhs.dateTime ?? rhs.dateOnly ?? .distantFuture
+        if leftDate != rightDate {
+            return leftDate < rightDate
+        }
+        if lhs.competitionWeight != rhs.competitionWeight {
+            return (lhs.competitionWeight ?? 0) > (rhs.competitionWeight ?? 0)
+        }
+        return lhs.id < rhs.id
+    }
+
+    private nonisolated static func descendingMatchDate(_ lhs: Match, _ rhs: Match) -> Bool {
+        let leftDate = lhs.dateTime ?? lhs.dateOnly ?? .distantPast
+        let rightDate = rhs.dateTime ?? rhs.dateOnly ?? .distantPast
+        if leftDate != rightDate {
+            return leftDate > rightDate
+        }
+        if lhs.competitionWeight != rhs.competitionWeight {
+            return (lhs.competitionWeight ?? 0) > (rhs.competitionWeight ?? 0)
+        }
+        return lhs.id < rhs.id
     }
 
     private nonisolated static var sharedFileURL: URL? {
         FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: AppGroupConfig.identifier)?
             .appendingPathComponent(AppGroupConfig.sharedMatchesFileName)
+    }
+
+    private nonisolated static var watchTransferFileURL: URL? {
+        FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: AppGroupConfig.identifier)?
+            .appendingPathComponent(AppGroupConfig.watchSharedMatchesFileName)
     }
 }

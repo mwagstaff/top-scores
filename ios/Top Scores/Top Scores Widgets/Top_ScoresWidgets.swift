@@ -91,6 +91,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
     let firstLegHomeScore: Int?
     let firstLegAwayScore: Int?
     let scoreStatus: String?
+    let homeTeamId: String?
+    let awayTeamId: String?
 
     init(
         date: String,
@@ -109,7 +111,9 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         aggregateAwayScore: Int? = nil,
         firstLegHomeScore: Int? = nil,
         firstLegAwayScore: Int? = nil,
-        scoreStatus: String?
+        scoreStatus: String?,
+        homeTeamId: String? = nil,
+        awayTeamId: String? = nil
     ) {
         self.date = date
         self.time = time
@@ -128,6 +132,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         self.firstLegHomeScore = firstLegHomeScore
         self.firstLegAwayScore = firstLegAwayScore
         self.scoreStatus = scoreStatus
+        self.homeTeamId = homeTeamId
+        self.awayTeamId = awayTeamId
     }
 
     var id: String {
@@ -247,7 +253,9 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
             aggregateAwayScore: aggregateAwayScore,
             firstLegHomeScore: firstLegHomeScore,
             firstLegAwayScore: firstLegAwayScore,
-            scoreStatus: scoreStatus
+            scoreStatus: scoreStatus,
+            homeTeamId: homeTeamId,
+            awayTeamId: awayTeamId
         )
     }
 
@@ -269,6 +277,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         case firstLegHomeScore = "first_leg_home_score"
         case firstLegAwayScore = "first_leg_away_score"
         case scoreStatus = "score_status"
+        case homeTeamId = "home_team_id"
+        case awayTeamId = "away_team_id"
     }
 }
 
@@ -1085,6 +1095,7 @@ private struct CompactMatchRow: View {
         HStack(spacing: 4) {
             WidgetTeamLogo(
                 teamName: match.homeTeam,
+                teamId: match.homeTeamId,
                 alternateNames: [match.homeShortName].compactMap { $0 },
                 size: logoSize
             )
@@ -1107,6 +1118,7 @@ private struct CompactMatchRow: View {
 
             WidgetTeamLogo(
                 teamName: match.awayTeam,
+                teamId: match.awayTeamId,
                 alternateNames: [match.awayShortName].compactMap { $0 },
                 size: logoSize
             )
@@ -1233,6 +1245,7 @@ private struct LargeMatchRow: View {
         HStack(spacing: compact ? 4 : 6) {
             WidgetTeamLogo(
                 teamName: match.homeTeam,
+                teamId: match.homeTeamId,
                 alternateNames: [match.homeShortName].compactMap { $0 },
                 size: compact ? 14 : 16
             )
@@ -1258,6 +1271,7 @@ private struct LargeMatchRow: View {
 
             WidgetTeamLogo(
                 teamName: match.awayTeam,
+                teamId: match.awayTeamId,
                 alternateNames: [match.awayShortName].compactMap { $0 },
                 size: compact ? 14 : 16
             )
@@ -1319,6 +1333,7 @@ private struct SmallMatchRow: View {
         HStack(spacing: 3) {
             WidgetTeamLogo(
                 teamName: match.homeTeam,
+                teamId: match.homeTeamId,
                 alternateNames: [match.homeShortName].compactMap { $0 },
                 size: 12
             )
@@ -1344,6 +1359,7 @@ private struct SmallMatchRow: View {
 
             WidgetTeamLogo(
                 teamName: match.awayTeam,
+                teamId: match.awayTeamId,
                 alternateNames: [match.awayShortName].compactMap { $0 },
                 size: 12
             )
@@ -1411,6 +1427,7 @@ private enum WidgetNameFormatter {
 
 private struct WidgetTeamLogo: View {
     let teamName: String
+    var teamId: String? = nil
     var alternateNames: [String] = []
     let size: CGFloat
 
@@ -1418,6 +1435,7 @@ private struct WidgetTeamLogo: View {
         Group {
             if let image = WidgetTeamLogoResolver.shared.image(
                 for: teamName,
+                teamId: teamId,
                 alternateNames: alternateNames,
                 idealPointSize: size
             ) {
@@ -1615,6 +1633,32 @@ private final class WidgetTeamLogoResolver {
 
     func image(
         for teamName: String,
+        teamId: String? = nil,
+        alternateNames: [String] = [],
+        variant: WidgetLogoAssetVariant = .standard,
+        idealPointSize: CGFloat? = nil
+    ) -> UIImage? {
+        if let teamId, let badge = widgetBadgeImage(forTeamId: teamId) {
+            return badge
+        }
+        return image(for: teamName, alternateNames: alternateNames, variant: variant, idealPointSize: idealPointSize)
+    }
+
+    private func widgetBadgeImage(forTeamId teamId: String) -> UIImage? {
+        guard let dir = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: WidgetAppGroupConfig.identifier)?
+            .appendingPathComponent("team-badges", isDirectory: true) else { return nil }
+        let manifestURL = dir.appendingPathComponent("manifest.json")
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode([String: String].self, from: data),
+              let filename = manifest[teamId] else { return nil }
+        let fileURL = dir.appendingPathComponent(filename)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        return UIImage(contentsOfFile: fileURL.path)
+    }
+
+    func image(
+        for teamName: String,
         alternateNames: [String] = [],
         variant: WidgetLogoAssetVariant = .standard,
         idealPointSize: CGFloat? = nil
@@ -1663,11 +1707,12 @@ private final class WidgetTeamLogoResolver {
     func assetName(
         for teamName: String,
         alternateNames: [String] = [],
-        variant: WidgetLogoAssetVariant = .standard
+        variant: WidgetLogoAssetVariant = .standard,
+        allowsFallback: Bool = true
     ) -> String? {
         let baseAssetName = resolveAssetName(for: teamName, alternateNames: alternateNames)
         return preferredAssetName(from: baseAssetName, variant: variant) ??
-            preferredAssetName(from: fallbackAssetName, variant: variant)
+            (allowsFallback ? preferredAssetName(from: fallbackAssetName, variant: variant) : nil)
     }
 
     private func loadLogos() {
@@ -2172,7 +2217,16 @@ private final class WidgetTeamLogoResolver {
         "paok thessaloniki": "paok",
         "paok thessaloniki fc": "paok",
         "inter milan": "inter",
-        "ac milan": "ac milan"
+        "ac milan": "ac milan",
+        "cabo verde": "cape verde",
+        "china pr": "china",
+        "congo dr": "dr congo",
+        "cote d'ivoire": "ivory coast",
+        "dominican rep": "dominican republic",
+        "n. ireland": "northern ireland",
+        "n. macedonia": "north macedonia",
+        "rep. ireland": "ireland",
+        "united states": "usa"
     ]
 
     private static func isFallbackName(_ name: String) -> Bool {
@@ -2863,8 +2917,14 @@ private struct LiveActivityPrecomputedTeamLogo: View {
     }
 
     private var assetName: String? {
-        let trimmed = logoKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        let trimmedLogoKey = logoKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let primaryName = trimmedLogoKey.isEmpty ? teamName : trimmedLogoKey
+        let alternateNames = trimmedLogoKey == teamName ? [] : [teamName]
+        return WidgetTeamLogoResolver.shared.assetName(
+            for: primaryName,
+            alternateNames: alternateNames,
+            allowsFallback: false
+        )
     }
 }
 
@@ -2891,6 +2951,22 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
 
     private var tvLogoHeight: CGFloat {
         usesDenseRows ? 11 : 13
+    }
+
+    // Fixed widths for the middle columns. Because these are identical across
+    // every row, the TV-logo column, away-logo column and status column all land
+    // at the same x-position regardless of row type — while the flexible team
+    // name columns on either side absorb the remaining width so the row fills.
+    private var scoreColumnWidth: CGFloat {
+        usesDenseRows ? 16 : 18
+    }
+
+    private var tvColumnWidth: CGFloat {
+        usesDenseRows ? 22 : 26
+    }
+
+    private var statusColumnWidth: CGFloat {
+        42
     }
 
     private var rowFont: Font {
@@ -2951,6 +3027,8 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                     matchRow(for: match)
                 }
             }
+            .font(rowFont)
+            .foregroundStyle(.white)
             .padding(.horizontal, 12)
             .padding(.top, usesDenseRows ? 7 : 8)
             .padding(.bottom, hasFooterContent ? (usesDenseRows ? 5 : 6) : (usesDenseRows ? 7 : 8))
@@ -2964,27 +3042,13 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private func centerText(for match: TopScoresLiveActivityMatchState) -> String {
-        if match.hasScore, let home = match.homeScore, let away = match.awayScore {
-            return "\(home)-\(away)"
-        }
-        if let matchTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !matchTime.isEmpty {
-            return matchTime
-        }
-        return match.time
-    }
-
-    @ViewBuilder
+    // One HStack per match with the same column structure for every row
+    // (home logo · home name · home score · TV/"vs" · away score · away name ·
+    // away logo · status). The middle columns use fixed widths so the TV logo,
+    // away logo and status all line up vertically across rows; the team-name
+    // columns flex to fill the remaining width. Fixture rows leave the score
+    // columns empty (but still reserved) so the TV logo stays in its column.
     private func matchRow(for match: TopScoresLiveActivityMatchState) -> some View {
-        if match.hasScore {
-            scoredMatchRow(for: match)
-        } else {
-            fixtureMatchRow(for: match)
-        }
-    }
-
-    private func fixtureMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
         HStack(spacing: 5) {
             LiveActivityPrecomputedTeamLogo(
                 logoKey: match.homeLogoKey,
@@ -2997,78 +3061,14 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                 .minimumScaleFactor(0.72)
                 .frame(maxWidth: .infinity, alignment: .trailing)
 
-            if hasTvLogo(match) {
-                LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: tvLogoHeight)
-            } else {
-                Text("vs")
-                    .font(.system(size: usesDenseRows ? 7 : 8, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.42))
-                    .frame(width: usesDenseRows ? 16 : 18, height: tvLogoHeight)
-            }
+            homeScoreCell(for: match)
+                .frame(width: scoreColumnWidth, alignment: .trailing)
 
-            Text(match.displayAwayTeam)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            centerCell(for: match)
+                .frame(width: tvColumnWidth, alignment: .center)
 
-            LiveActivityPrecomputedTeamLogo(
-                logoKey: match.awayLogoKey,
-                teamName: match.displayAwayTeam,
-                size: teamLogoSize
-            )
-
-            Text(centerText(for: match))
-                .font(rowFont)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: usesDenseRows ? 38 : 42, alignment: .trailing)
-                .foregroundStyle(.white.opacity(0.9))
-        }
-        .font(rowFont)
-        .foregroundStyle(.white)
-    }
-
-    private func scoredMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
-        HStack(spacing: 4) {
-            LiveActivityPrecomputedTeamLogo(
-                logoKey: match.homeLogoKey,
-                teamName: match.displayHomeTeam,
-                size: teamLogoSize
-            )
-
-            Text(match.displayHomeTeam)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-
-            if let aggregateHomeText = aggregateHomeText(for: match) {
-                Text(aggregateHomeText)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.68))
-                    .lineLimit(1)
-            }
-
-            Text(homeScoreText(for: match))
-                .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
-                .monospacedDigit()
-                .lineLimit(1)
-                .frame(minWidth: 12, alignment: .trailing)
-
-            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: tvLogoHeight)
-                .padding(.horizontal, 2)
-
-            Text(awayScoreText(for: match))
-                .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
-                .monospacedDigit()
-                .lineLimit(1)
-                .frame(minWidth: 12, alignment: .leading)
-
-            if let aggregateAwayText = aggregateAwayText(for: match) {
-                Text(aggregateAwayText)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.68))
-                    .lineLimit(1)
-            }
+            awayScoreCell(for: match)
+                .frame(width: scoreColumnWidth, alignment: .leading)
 
             Text(match.displayAwayTeam)
                 .lineLimit(1)
@@ -3086,11 +3086,73 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-                .foregroundStyle(.white.opacity(match.isFinished ? LiveActivityScoreStyle.finishedOpacity : 0.86))
-                .frame(width: 34, alignment: .trailing)
+                .foregroundStyle(.white.opacity(statusOpacity(for: match)))
+                .frame(width: statusColumnWidth, alignment: .trailing)
         }
-        .font(rowFont)
-        .foregroundStyle(.white)
+    }
+
+    @ViewBuilder
+    private func centerCell(for match: TopScoresLiveActivityMatchState) -> some View {
+        if match.isFinished {
+            Text("-")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white.opacity(LiveActivityScoreStyle.finishedOpacity))
+                .frame(width: usesDenseRows ? 16 : 18, height: tvLogoHeight)
+        } else if !match.hasScore && !hasTvLogo(match) {
+            Text("vs")
+                .font(.system(size: usesDenseRows ? 7 : 8, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.42))
+                .frame(width: usesDenseRows ? 16 : 18, height: tvLogoHeight)
+        } else {
+            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: tvLogoHeight)
+        }
+    }
+
+    @ViewBuilder
+    private func homeScoreCell(for match: TopScoresLiveActivityMatchState) -> some View {
+        if match.hasScore {
+            HStack(spacing: 3) {
+                if let aggregateHomeText = aggregateHomeText(for: match) {
+                    Text(aggregateHomeText)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.68))
+                        .lineLimit(1)
+                }
+
+                Text(homeScoreText(for: match))
+                    .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+        } else {
+            Color.clear
+        }
+    }
+
+    @ViewBuilder
+    private func awayScoreCell(for match: TopScoresLiveActivityMatchState) -> some View {
+        if match.hasScore {
+            HStack(spacing: 3) {
+                Text(awayScoreText(for: match))
+                    .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+
+                if let aggregateAwayText = aggregateAwayText(for: match) {
+                    Text(aggregateAwayText)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.68))
+                        .lineLimit(1)
+                }
+            }
+        } else {
+            Color.clear
+        }
+    }
+
+    private func statusOpacity(for match: TopScoresLiveActivityMatchState) -> Double {
+        if match.isFinished { return LiveActivityScoreStyle.finishedOpacity }
+        return match.hasScore ? 0.86 : 0.9
     }
 
     private func hasTvLogo(_ match: TopScoresLiveActivityMatchState) -> Bool {
@@ -3189,31 +3251,18 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
         }
     }
 
-    private func centerText(for match: TopScoresLiveActivityMatchState) -> String {
-        if match.hasScore, let home = match.homeScore, let away = match.awayScore {
-            return "\(home)-\(away)"
-        }
-        if let matchTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !matchTime.isEmpty {
-            return matchTime
-        }
-        return match.time
-    }
+    // Fixed-width middle columns (mirrors TopScoresLiveActivityMinimalLockScreenView)
+    // so the TV logo, away logo and status column all line up vertically across
+    // both fixture and scored rows, while the team-name columns flex to fill width.
+    private let scoreColumnWidth: CGFloat = 14
+    private let tvColumnWidth: CGFloat = 20
+    private let statusColumnWidth: CGFloat = 32
 
     private func hasTvLogo(_ match: TopScoresLiveActivityMatchState) -> Bool {
         LiveActivityTvLogoAsset.assetName(for: match.tvLogoKey) != nil
     }
 
-    @ViewBuilder
     private func matchRow(for match: TopScoresLiveActivityMatchState) -> some View {
-        if match.hasScore {
-            scoredMatchRow(for: match)
-        } else {
-            fixtureMatchRow(for: match)
-        }
-    }
-
-    private func fixtureMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
         HStack(spacing: 5) {
             LiveActivityPrecomputedTeamLogo(
                 logoKey: match.homeLogoKey,
@@ -3223,61 +3272,21 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
 
             Text(match.displayHomeTeam)
                 .lineLimit(1)
+                .minimumScaleFactor(0.72)
                 .frame(maxWidth: .infinity, alignment: .trailing)
 
-            if hasTvLogo(match) {
-                LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 10)
-            } else {
-                Text("vs")
-                    .font(.system(size: 7, weight: .semibold))
-                    .foregroundStyle(.secondary.opacity(0.7))
-                    .frame(width: 14, height: 10)
-            }
+            homeScoreCell(for: match)
+                .frame(width: scoreColumnWidth, alignment: .trailing)
+
+            centerCell(for: match)
+                .frame(width: tvColumnWidth, alignment: .center)
+
+            awayScoreCell(for: match)
+                .frame(width: scoreColumnWidth, alignment: .leading)
 
             Text(match.displayAwayTeam)
                 .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            LiveActivityPrecomputedTeamLogo(
-                logoKey: match.awayLogoKey,
-                teamName: match.displayAwayTeam,
-                size: 11
-            )
-
-            Text(centerText(for: match))
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 32, alignment: .trailing)
-        }
-        .font(.caption2.weight(.semibold))
-    }
-
-    private func scoredMatchRow(for match: TopScoresLiveActivityMatchState) -> some View {
-        HStack(spacing: 4) {
-            LiveActivityPrecomputedTeamLogo(
-                logoKey: match.homeLogoKey,
-                teamName: match.displayHomeTeam,
-                size: 11
-            )
-
-            Text(match.displayHomeTeam)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-
-            Text(homeScoreText(for: match))
-                .font(.caption2.weight(.bold))
-                .monospacedDigit()
-                .lineLimit(1)
-
-            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 10)
-
-            Text(awayScoreText(for: match))
-                .font(.caption2.weight(.bold))
-                .monospacedDigit()
-                .lineLimit(1)
-
-            Text(match.displayAwayTeam)
-                .lineLimit(1)
+                .minimumScaleFactor(0.72)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             LiveActivityPrecomputedTeamLogo(
@@ -3289,11 +3298,58 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
             Text(matchTimeText(for: match))
                 .font(.caption2.weight(.semibold))
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(statusOpacity(for: match)))
                 .lineLimit(1)
-                .frame(width: 31, alignment: .trailing)
+                .minimumScaleFactor(0.75)
+                .frame(width: statusColumnWidth, alignment: .trailing)
         }
         .font(.caption2.weight(.semibold))
+    }
+
+    @ViewBuilder
+    private func centerCell(for match: TopScoresLiveActivityMatchState) -> some View {
+        if match.isFinished {
+            Text("-")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white.opacity(LiveActivityScoreStyle.finishedOpacity))
+                .frame(width: 14, height: 10)
+        } else if !match.hasScore && !hasTvLogo(match) {
+            Text("vs")
+                .font(.system(size: 7, weight: .semibold))
+                .foregroundStyle(.secondary.opacity(0.7))
+                .frame(width: 14, height: 10)
+        } else {
+            LiveActivityPrecomputedTvLogo(logoKey: match.tvLogoKey, height: 10)
+        }
+    }
+
+    @ViewBuilder
+    private func homeScoreCell(for match: TopScoresLiveActivityMatchState) -> some View {
+        if match.hasScore {
+            Text(homeScoreText(for: match))
+                .font(.caption2.weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+        } else {
+            Color.clear
+        }
+    }
+
+    @ViewBuilder
+    private func awayScoreCell(for match: TopScoresLiveActivityMatchState) -> some View {
+        if match.hasScore {
+            Text(awayScoreText(for: match))
+                .font(.caption2.weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+        } else {
+            Color.clear
+        }
+    }
+
+    private func statusOpacity(for match: TopScoresLiveActivityMatchState) -> Double {
+        if match.isFinished { return LiveActivityScoreStyle.finishedOpacity }
+        return match.hasScore ? 0.86 : 0.9
     }
 
     private func homeScoreText(for match: TopScoresLiveActivityMatchState) -> String {

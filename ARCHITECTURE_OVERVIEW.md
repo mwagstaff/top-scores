@@ -62,7 +62,7 @@ flowchart LR
 | Source | What it provides | Default pull cadence | Retry behavior | What is updated |
 | --- | --- | --- | --- | --- |
 | LiveFootballOnTV | Scheduled TV fixtures and channel data | Every 30 minutes | No explicit retry in scheduler | `live_matches`, `recent_matches`, `merged_matches` |
-| BBC Live Scores | Fast live score/status overlay | Every 30 seconds | No explicit retry in scheduler | `bbc_live_matches`, `recent_matches`, `match_details` seeds |
+| TheSportsDB Live Scores | Fast live score/status overlay | Every 5 seconds while live matches are active; every 30 seconds when idle | Shared v2 token bucket caps upstream calls below 100/minute | `tsdb_live_matches`, `recent_matches`, `match_details` seeds |
 | BBC Scores/Fixtures Range | Broad past/future fixture coverage | Every 1 hour | No explicit retry in scheduler; multi-page fetch with configured concurrency | `bbc_range_matches`, `merged_matches` |
 | BBC Match Details | Detailed scorers/cards/lineups/aggregate state for in-progress matches | Every 10 seconds | Per-target failures are logged and skipped; remaining targets continue | `match_details` |
 | BBC Tables | League tables plus EPL team list | Tables every 2 minutes, EPL team list every 24 hours | No explicit retry in scheduler | `league_tables`, `premier_league_teams` |

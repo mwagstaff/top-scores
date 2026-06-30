@@ -38,11 +38,19 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
     let stageName: String?
     let sourceURL: String?
     let updatedAt: String?
+    /// True when live/just-finished results have been overlaid (positions are provisional).
+    let realtime: Bool
     let groups: [LeagueTableGroup]
     let rows: [LeagueTableRow]
 
     nonisolated var id: String {
         leagueID
+    }
+
+    /// Any team in this competition currently in an in-progress match.
+    nonisolated var hasLiveRows: Bool {
+        if rows.contains(where: \.live) { return true }
+        return groups.contains { $0.rows.contains(where: \.live) }
     }
 
     enum CodingKeys: String, CodingKey {
@@ -51,6 +59,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         case stageName = "stage_name"
         case sourceURL = "source_url"
         case updatedAt = "updated_at"
+        case realtime
         case groups
         case rows
     }
@@ -61,6 +70,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         stageName: String?,
         sourceURL: String?,
         updatedAt: String?,
+        realtime: Bool = false,
         groups: [LeagueTableGroup] = [],
         rows: [LeagueTableRow]
     ) {
@@ -69,6 +79,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         self.stageName = stageName
         self.sourceURL = sourceURL
         self.updatedAt = updatedAt
+        self.realtime = realtime
         self.groups = groups
         self.rows = rows
     }
@@ -80,6 +91,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         stageName = try container.decodeIfPresent(String.self, forKey: .stageName)
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        realtime = try container.decodeIfPresent(Bool.self, forKey: .realtime) ?? false
         groups = try container.decodeIfPresent([LeagueTableGroup].self, forKey: .groups) ?? []
         rows = try container.decodeIfPresent([LeagueTableRow].self, forKey: .rows) ?? []
     }
@@ -91,6 +103,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(stageName, forKey: .stageName)
         try container.encodeIfPresent(sourceURL, forKey: .sourceURL)
         try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try container.encode(realtime, forKey: .realtime)
         try container.encode(groups, forKey: .groups)
         try container.encode(rows, forKey: .rows)
     }
@@ -141,9 +154,25 @@ struct LeagueTableRow: Identifiable, Codable, Hashable, Sendable {
     let points: Int
     let form: [String]
     let rankStatus: String?
+    /// True while this team is in an in-progress match (drives the pulsing row highlight).
+    let live: Bool
+    /// Pre-overlay rank, present only on a realtime table (drives the trend arrow).
+    let previousPosition: Int?
 
     nonisolated var id: String {
         "\(position)-\(team)"
+    }
+
+    /// Direction of movement vs the pre-overlay rank on a realtime table.
+    nonisolated var positionTrend: PositionTrend {
+        guard let previousPosition else { return .none }
+        if previousPosition > position { return .up }
+        if previousPosition < position { return .down }
+        return .same
+    }
+
+    enum PositionTrend {
+        case up, down, same, none
     }
 
     enum CodingKeys: String, CodingKey {
@@ -159,6 +188,8 @@ struct LeagueTableRow: Identifiable, Codable, Hashable, Sendable {
         case points
         case form
         case rankStatus = "rank_status"
+        case live
+        case previousPosition = "previous_position"
     }
 
     nonisolated init(
@@ -173,7 +204,9 @@ struct LeagueTableRow: Identifiable, Codable, Hashable, Sendable {
         goalDifference: Int,
         points: Int,
         form: [String],
-        rankStatus: String?
+        rankStatus: String?,
+        live: Bool = false,
+        previousPosition: Int? = nil
     ) {
         self.position = position
         self.team = team
@@ -187,6 +220,8 @@ struct LeagueTableRow: Identifiable, Codable, Hashable, Sendable {
         self.points = points
         self.form = form
         self.rankStatus = rankStatus
+        self.live = live
+        self.previousPosition = previousPosition
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -203,6 +238,8 @@ struct LeagueTableRow: Identifiable, Codable, Hashable, Sendable {
         points = try container.decode(Int.self, forKey: .points)
         form = try container.decodeIfPresent([String].self, forKey: .form) ?? []
         rankStatus = try container.decodeIfPresent(String.self, forKey: .rankStatus)
+        live = try container.decodeIfPresent(Bool.self, forKey: .live) ?? false
+        previousPosition = try container.decodeIfPresent(Int.self, forKey: .previousPosition)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -219,6 +256,8 @@ struct LeagueTableRow: Identifiable, Codable, Hashable, Sendable {
         try container.encode(points, forKey: .points)
         try container.encode(form, forKey: .form)
         try container.encodeIfPresent(rankStatus, forKey: .rankStatus)
+        try container.encode(live, forKey: .live)
+        try container.encodeIfPresent(previousPosition, forKey: .previousPosition)
     }
 }
 

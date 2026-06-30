@@ -95,6 +95,7 @@ struct MatchRow: View {
                 HStack(alignment: .center, spacing: 10) {
                     TeamLogo(
                         name: match.homeTeam,
+                        teamId: match.homeTeamId,
                         alternateNames: [match.homeShortName].compactMap { $0 },
                         size: logoSize
                     )
@@ -122,6 +123,7 @@ struct MatchRow: View {
 
                     TeamLogo(
                         name: match.awayTeam,
+                        teamId: match.awayTeamId,
                         alternateNames: [match.awayShortName].compactMap { $0 },
                         size: logoSize
                     )
@@ -171,13 +173,13 @@ struct MatchRow: View {
         }
         .padding(cardPadding)
         .fixedSize(horizontal: false, vertical: true)
-        .background(
-            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .stroke(highlightToday ? Color(.systemYellow).opacity(0.35) : .clear, lineWidth: 1)
+        .modifier(
+            MatchCardChrome(
+                cornerRadius: cardCornerRadius,
+                isLive: match.isInProgress,
+                highlightToday: highlightToday,
+                isFinal: match.isFinalRound
+            )
         )
     }
 
@@ -193,6 +195,7 @@ struct MatchRow: View {
             HStack(alignment: .center, spacing: compactFixtureHorizontalSpacing) {
                 TeamLogo(
                     name: match.homeTeam,
+                    teamId: match.homeTeamId,
                     alternateNames: [match.homeShortName].compactMap { $0 },
                     size: logoSize
                 )
@@ -217,6 +220,7 @@ struct MatchRow: View {
 
                 TeamLogo(
                     name: match.awayTeam,
+                    teamId: match.awayTeamId,
                     alternateNames: [match.awayShortName].compactMap { $0 },
                     size: logoSize
                 )
@@ -226,13 +230,13 @@ struct MatchRow: View {
         }
         .padding(cardPadding)
         .fixedSize(horizontal: false, vertical: true)
-        .background(
-            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .stroke(highlightToday ? Color(.systemYellow).opacity(0.35) : .clear, lineWidth: 1)
+        .modifier(
+            MatchCardChrome(
+                cornerRadius: cardCornerRadius,
+                isLive: match.isInProgress,
+                highlightToday: highlightToday,
+                isFinal: match.isFinalRound
+            )
         )
     }
 
@@ -380,6 +384,7 @@ struct MatchRow: View {
             MatchTimeStatusView(
                 text: centerStatusText,
                 isLive: match.isInProgress,
+                isFinal: match.isFinalRound,
                 isLargePresentation: isLargePresentation
             )
             .fixedSize(horizontal: true, vertical: false)
@@ -637,6 +642,7 @@ struct MatchRow: View {
                 MatchTimeStatusView(
                     text: centerStatusText,
                     isLive: true,
+                    isFinal: match.isFinalRound,
                     isLargePresentation: false
                 )
                 .fixedSize(horizontal: true, vertical: false)
@@ -1417,18 +1423,80 @@ private enum MatchTimelineBuilder {
 }
 
 
+extension Color {
+    /// Shared "live / in-progress" green, matched to the website's `--live` token.
+    static let liveMatch = Color(red: 0.32, green: 0.82, blue: 0.51)
+    /// Gold used to highlight Final-round fixtures (e.g. World Cup Final).
+    static let finalMatch = Color(red: 0.85, green: 0.68, blue: 0.21)
+}
+
+/// Card background + border for a match row. In-progress matches get an elegant
+/// green glow (border + soft outer glow + faint inner tint); Final-round matches
+/// get the same treatment in gold, static when not live; today's non-live,
+/// non-final matches keep their existing subtle border; everything else stays plain.
+private struct MatchCardChrome: ViewModifier {
+    let cornerRadius: CGFloat
+    let isLive: Bool
+    let highlightToday: Bool
+    var isFinal: Bool = false
+
+    private var tintColor: Color {
+        isLive ? .liveMatch : .finalMatch
+    }
+
+    private var showsHighlight: Bool {
+        isLive || isFinal
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(showsHighlight ? tintColor.opacity(0.08) : Color.clear)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(borderColor, lineWidth: showsHighlight ? 1.5 : 1)
+            )
+            .shadow(
+                color: showsHighlight ? tintColor.opacity(0.30) : .clear,
+                radius: showsHighlight ? 9 : 0,
+                y: showsHighlight ? 1 : 0
+            )
+    }
+
+    private var borderColor: Color {
+        if showsHighlight {
+            return tintColor.opacity(0.85)
+        }
+        if highlightToday {
+            return Color(.systemYellow).opacity(0.35)
+        }
+        return .clear
+    }
+}
+
 private struct MatchTimeStatusView: View {
     let text: String
     let isLive: Bool
+    var isFinal: Bool = false
     var isLargePresentation: Bool = false
 
     @State private var isPulsing = false
+
+    private var tintColor: Color {
+        isFinal ? .finalMatch : .liveMatch
+    }
 
     var body: some View {
         Text(text)
             .font(statusFont)
             .fontWeight(isLive ? .semibold : .regular)
-            .foregroundStyle(isLive ? Color.red : Color.secondary)
+            .foregroundStyle(isLive ? tintColor : Color.secondary)
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.9)
@@ -1438,13 +1506,13 @@ private struct MatchTimeStatusView: View {
             .background {
                 if isLive {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.red.opacity(isPulsing ? 0.14 : 0.26))
+                        .fill(tintColor.opacity(isPulsing ? 0.14 : 0.26))
                 }
             }
             .overlay {
                 if isLive {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.red.opacity(isPulsing ? 0.45 : 0.95), lineWidth: 1)
+                        .stroke(tintColor.opacity(isPulsing ? 0.45 : 0.95), lineWidth: 1)
                         .scaleEffect(isPulsing ? 1.08 : 1.0)
                 }
             }
@@ -1957,23 +2025,30 @@ private struct TvLogoRow: View {
 
 private struct TeamLogo: View {
     let name: String
+    var teamId: String? = nil
     var alternateNames: [String] = []
     var size: CGFloat = 22
+    @State private var badgeCacheVersion: Int = 0
 
     var body: some View {
         Group {
-            if let image = LogoResolver.shared.image(for: name, alternateNames: alternateNames) {
+            if let image = LogoResolver.shared.image(for: name, teamId: teamId, alternateNames: alternateNames) {
                 Image(uiImage: image)
                     .resizable()
+                    .aspectRatio(contentMode: .fit)
             } else {
                 Image(systemName: "shield")
                     .resizable()
+                    .aspectRatio(contentMode: .fit)
                     .foregroundStyle(.secondary)
             }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .accessibilityHidden(true)
+        .onReceive(NotificationCenter.default.publisher(for: TeamBadgeCache.badgesUpdatedNotification)) { _ in
+            badgeCacheVersion += 1
+        }
     }
 }
 

@@ -24,8 +24,20 @@ const {
   TEAM_RANKING_SOURCE_CLUBELO,
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
   TEAM_RANKING_SOURCE_NATIONAL_ELO,
+  TEAM_LOGO_SOURCE_TSDB,
   normalizeTeamRankingSource,
 } = require("./config");
+const { resolveMatchSource } = require("./match_source");
+const {
+  projectBsdMatches,
+  projectBsdMatchDetails,
+  projectBsdStandings,
+  projectBsdPredictions,
+} = require("./bsd_adapter");
+const { getSocial: getBsdSocial } = require("./bsd_client");
+const { refreshAllPredictions } = require("./fetch_bsd_predictions");
+const { refreshEplSeasonActive, eplSeasonStatusSnapshot } = require("./epl_season_status");
+const { fetchTeamBadges, badgeMapToPayload } = require("./fetch_tsdb_team_badges");
 const {
   LEAGUE_TABLE_SOURCES,
   DEFAULT_BBC_LEAGUE_TABLES_OUTPUT,
@@ -148,7 +160,23 @@ const DEBUG_ROUTE_STAGE_LOGGING_ENABLED = parseEnvBoolean(
 
 const TSDB_LIVESCORE_OUTPUT_PATH =
   process.env.TSDB_LIVESCORE_OUTPUT_PATH || path.join(__dirname, "tsdb_live_matches.json");
-const TSDB_LIVESCORE_INTERVAL_MS = Number(process.env.TSDB_LIVESCORE_INTERVAL_MS || 30 * 1000);
+const parsedTsdbLivescoreIntervalMs = Number(process.env.TSDB_LIVESCORE_INTERVAL_MS || 30 * 1000);
+const TSDB_LIVESCORE_INTERVAL_MS = Number.isFinite(parsedTsdbLivescoreIntervalMs)
+  ? Math.max(1000, Math.floor(parsedTsdbLivescoreIntervalMs))
+  : 30 * 1000;
+const parsedTsdbLivescoreActiveIntervalMs = Number(
+  process.env.TSDB_LIVESCORE_ACTIVE_INTERVAL_MS || 5 * 1000
+);
+const parsedTsdbLivescoreMaxCallsPerMinute = Number(
+  process.env.TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE || 20
+);
+const TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE = Number.isFinite(parsedTsdbLivescoreMaxCallsPerMinute)
+  ? Math.max(1, Math.min(90, Math.floor(parsedTsdbLivescoreMaxCallsPerMinute)))
+  : 20;
+const TSDB_LIVESCORE_MIN_INTERVAL_MS = Math.ceil(60_000 / TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE);
+const TSDB_LIVESCORE_ACTIVE_INTERVAL_MS = Number.isFinite(parsedTsdbLivescoreActiveIntervalMs)
+  ? Math.max(TSDB_LIVESCORE_MIN_INTERVAL_MS, Math.floor(parsedTsdbLivescoreActiveIntervalMs))
+  : Math.max(TSDB_LIVESCORE_MIN_INTERVAL_MS, 5 * 1000);
 const TSDB_SCHEDULE_OUTPUT_PATH =
   process.env.TSDB_SCHEDULE_OUTPUT_PATH || path.join(__dirname, "tsdb_schedule_matches.json");
 const TSDB_SCHEDULE_INTERVAL_HOURS = Number(process.env.TSDB_SCHEDULE_INTERVAL_HOURS || 1);
@@ -804,12 +832,16 @@ const OP_DATASET_NATIONAL_ELO_TEAMS = "national_elo_teams";
 const OP_DATASET_MISSING_TEAM_LOGOS = "missing_team_logos";
 const OP_DATASET_TEAM_SHORT_NAMES = "team_short_names";
 const OP_DATASET_CACHE_STATE = "cache_state";
+const OP_DATASET_TEAM_BADGES = "team_badges";
+const SOURCE_TSDB_TEAM_BADGES = "tsdb_team_badges";
+const COMPONENT_SOURCE_TSDB_TEAM_BADGES = "source_tsdb_team_badges";
 const CACHE_STATE_DOMAINS = Object.freeze([
   "matches",
   "match_details",
   "teams",
   "tables",
   "team_short_names",
+  "team_badges",
   "tsdb_live",
 ]);
 const CACHE_STATE_DOMAIN_ALIASES = Object.freeze({
@@ -844,6 +876,10 @@ const CACHE_STATE_DOMAIN_ALIASES = Object.freeze({
   teamshortnames: "team_short_names",
   short_names: "team_short_names",
   shortnames: "team_short_names",
+  team_badges: "team_badges",
+  "team-badges": "team_badges",
+  teambadges: "team_badges",
+  badges: "team_badges",
 });
 const CACHE_STATE_HEADERS_BY_DOMAIN = Object.freeze({
   matches: "X-Cache-Generation-Matches",
@@ -851,6 +887,7 @@ const CACHE_STATE_HEADERS_BY_DOMAIN = Object.freeze({
   teams: "X-Cache-Generation-Teams",
   tables: "X-Cache-Generation-Tables",
   team_short_names: "X-Cache-Generation-Team-Short-Names",
+  team_badges: "X-Cache-Generation-Team-Badges",
   tsdb_live: "X-Cache-Generation-Tsdb-Live",
 });
 const eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
@@ -931,6 +968,251 @@ let tsdbTvUpdating = false;
 const BBC_RANGE_PROGRESS_WINDOWS = Object.freeze(["past", "today", "future", "all"]);
 let bbcRangeScrapeProgress = buildEmptyBbcRangeScrapeProgress();
 let cachedMergedMatches = [];
+
+// ---------------------------------------------------------------------------
+// BSD match source (evaluation toggle).
+//
+// The global default source comes from MATCH_DATA_SOURCE (env, cross-process);
+// per-request `?source=`/`X-Match-Source` overrides it for serving only. When
+// BSD is selected, matches are served from a short-lived in-memory projection
+// of the bsd_* Mongo collections (continuously updated by the bsd service),
+// refreshed stale-while-revalidate so the hot list path stays in-memory.
+// ---------------------------------------------------------------------------
+const runtimeMatchSourceDefault = SERVER_CONFIG.matchDataSource;
+const BSD_MATCHES_CACHE_TTL_MS = Number(process.env.BSD_MATCHES_CACHE_TTL_MS || 15_000);
+let cachedBsdMatches = [];
+let cachedBsdMatchesUpdatedAt = null;
+let bsdMatchesCacheBuiltMs = 0;
+let bsdMatchesRefreshInFlight = false;
+
+async function refreshBsdMatchesCache() {
+  if (bsdMatchesRefreshInFlight) return;
+  bsdMatchesRefreshInFlight = true;
+  try {
+    const matches = await projectBsdMatches();
+    cachedBsdMatches = Array.isArray(matches) ? matches : [];
+    cachedBsdMatchesUpdatedAt = new Date().toISOString();
+    bsdMatchesCacheBuiltMs = Date.now();
+  } catch (error) {
+    console.warn("[BSD] projection refresh failed:", error.message || error);
+  } finally {
+    bsdMatchesRefreshInFlight = false;
+  }
+}
+
+// Returns the BSD projection for serving. Awaits the first build (cold), then
+// serves stale-while-revalidate so subsequent requests stay millisecond-fast.
+async function getBsdMatchesForServing() {
+  const ageMs = bsdMatchesCacheBuiltMs ? Date.now() - bsdMatchesCacheBuiltMs : Infinity;
+  if (cachedBsdMatches.length === 0 && !bsdMatchesCacheBuiltMs) {
+    await refreshBsdMatchesCache();
+  } else if (ageMs > BSD_MATCHES_CACHE_TTL_MS && !bsdMatchesRefreshInFlight) {
+    void refreshBsdMatchesCache();
+  }
+  return cachedBsdMatches;
+}
+
+// BSD league tables (standings). The bsd_poller process keeps bsd_standings
+// fresh on its own cadence (live polling while a competition has matches in
+// progress, otherwise daily) — this cache just keeps the hot serving path
+// in-memory, same stale-while-revalidate shape as the matches cache above.
+const BSD_TABLES_CACHE_TTL_MS = Number(process.env.BSD_TABLES_CACHE_TTL_MS || 15_000);
+let cachedBsdTables = [];
+let cachedBsdTablesUpdatedAt = null;
+let bsdTablesCacheBuiltMs = 0;
+let bsdTablesRefreshInFlight = false;
+
+async function refreshBsdTablesCache() {
+  if (bsdTablesRefreshInFlight) return;
+  bsdTablesRefreshInFlight = true;
+  try {
+    const tables = await projectBsdStandings();
+    cachedBsdTables = Array.isArray(tables) ? tables : [];
+    cachedBsdTablesUpdatedAt = new Date().toISOString();
+    bsdTablesCacheBuiltMs = Date.now();
+  } catch (error) {
+    console.warn("[BSD] standings projection refresh failed:", error.message || error);
+  } finally {
+    bsdTablesRefreshInFlight = false;
+  }
+}
+
+async function getBsdTablesForServing() {
+  const ageMs = bsdTablesCacheBuiltMs ? Date.now() - bsdTablesCacheBuiltMs : Infinity;
+  if (cachedBsdTables.length === 0 && !bsdTablesCacheBuiltMs) {
+    await refreshBsdTablesCache();
+  } else if (ageMs > BSD_TABLES_CACHE_TTL_MS && !bsdTablesRefreshInFlight) {
+    void refreshBsdTablesCache();
+  }
+  return cachedBsdTables;
+}
+
+// BSD predictions. Unlike tables, predictions are recomputed upstream only
+// once daily (see fetch_bsd_predictions.js / bsd_poller.js), so a much longer
+// TTL is fine — this just keeps the hot serving path off Mongo on every
+// request. The admin refresh endpoint busts this cache immediately so a
+// manual refresh is reflected without waiting out the TTL.
+const BSD_PREDICTIONS_CACHE_TTL_MS = Number(process.env.BSD_PREDICTIONS_CACHE_TTL_MS || 5 * 60 * 1000);
+let cachedBsdPredictions = [];
+let cachedBsdPredictionsUpdatedAt = null;
+let bsdPredictionsCacheBuiltMs = 0;
+let bsdPredictionsRefreshInFlight = false;
+
+async function refreshBsdPredictionsCache() {
+  if (bsdPredictionsRefreshInFlight) return;
+  bsdPredictionsRefreshInFlight = true;
+  try {
+    const leagues = await projectBsdPredictions();
+    cachedBsdPredictions = Array.isArray(leagues) ? leagues : [];
+    cachedBsdPredictionsUpdatedAt = newestIsoTimestamp(
+      cachedBsdPredictions.map((league) => String((league && league.updated_at) || "").trim())
+    ) || new Date().toISOString();
+    bsdPredictionsCacheBuiltMs = Date.now();
+  } catch (error) {
+    console.warn("[BSD] predictions projection refresh failed:", error.message || error);
+  } finally {
+    bsdPredictionsRefreshInFlight = false;
+  }
+}
+
+async function getBsdPredictionsForServing() {
+  const ageMs = bsdPredictionsCacheBuiltMs ? Date.now() - bsdPredictionsCacheBuiltMs : Infinity;
+  if (cachedBsdPredictions.length === 0 && !bsdPredictionsCacheBuiltMs) {
+    await refreshBsdPredictionsCache();
+  } else if (ageMs > BSD_PREDICTIONS_CACHE_TTL_MS && !bsdPredictionsRefreshInFlight) {
+    void refreshBsdPredictionsCache();
+  }
+  return cachedBsdPredictions;
+}
+
+// Overlays IN-PROGRESS BSD match results onto a projected standings table
+// (flat or grouped), recomputing positions with default rules (3/1/0, then
+// goal difference, goals for, name). Returns the base table untouched when no
+// match in this competition is live. Adds, per affected row: `live` (the team
+// is in an in-progress match → pulse) and `previous_position` (pre-overlay
+// rank → trend arrow); sets table `realtime: true`.
+//
+// Only in-progress matches are overlaid. BSD standings figures are pre-match
+// for a live game (so overlaying one never double-counts), but already include
+// every completed match — so finished games are left to the baseline (kept
+// fresh by the 60s standings poll + settle-flush). Attempting to also overlay
+// just-finished games can't distinguish "not yet in the table" from "already
+// counted" without per-team reconciliation, and double-counts, so we don't.
+function applyLiveResultsToBsdTable(baseTable, leagueMatches) {
+  if (!baseTable) return baseTable;
+  const matches = Array.isArray(leagueMatches) ? leagueMatches : [];
+  const teamKey = (value) =>
+    normalizeTeamName(String(value || "")).replace(/\s+/g, " ").trim().toLowerCase();
+
+  const overlayMatches = [];
+  for (const match of matches) {
+    if (!isInProgressMatchStatus(match && match.score_status)) continue;
+    const homeScore = parseNumericScore(match.home_score);
+    const awayScore = parseNumericScore(match.away_score);
+    if (homeScore === null || awayScore === null) continue;
+    overlayMatches.push({
+      homeKey: teamKey(match.home_team),
+      awayKey: teamKey(match.away_team),
+      homeScore,
+      awayScore,
+    });
+  }
+  if (overlayMatches.length === 0) return baseTable;
+
+  let anyApplied = false;
+
+  const overlayRows = (rows) => {
+    if (!Array.isArray(rows) || rows.length === 0) return { rows, applied: false };
+    const copy = rows.map((row) => ({ ...row }));
+    const byTeam = new Map();
+    for (const row of copy) {
+      const key = teamKey(row.team);
+      if (key) byTeam.set(key, row);
+    }
+
+    const pulse = new Set();
+    let applied = false;
+    for (const overlay of overlayMatches) {
+      const homeRow = overlay.homeKey ? byTeam.get(overlay.homeKey) : null;
+      const awayRow = overlay.awayKey ? byTeam.get(overlay.awayKey) : null;
+      if (!homeRow || !awayRow) continue;
+
+      homeRow.played += 1;
+      awayRow.played += 1;
+      homeRow.goals_for += overlay.homeScore;
+      homeRow.goals_against += overlay.awayScore;
+      awayRow.goals_for += overlay.awayScore;
+      awayRow.goals_against += overlay.homeScore;
+      homeRow.goal_difference = homeRow.goals_for - homeRow.goals_against;
+      awayRow.goal_difference = awayRow.goals_for - awayRow.goals_against;
+
+      if (overlay.homeScore > overlay.awayScore) {
+        homeRow.won += 1;
+        homeRow.points += 3;
+        awayRow.lost += 1;
+      } else if (overlay.homeScore < overlay.awayScore) {
+        awayRow.won += 1;
+        awayRow.points += 3;
+        homeRow.lost += 1;
+      } else {
+        homeRow.drawn += 1;
+        homeRow.points += 1;
+        awayRow.drawn += 1;
+        awayRow.points += 1;
+      }
+
+      pulse.add(overlay.homeKey);
+      pulse.add(overlay.awayKey);
+      applied = true;
+    }
+    if (!applied) return { rows, applied: false };
+
+    copy.sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      if (b.goal_difference !== a.goal_difference) return b.goal_difference - a.goal_difference;
+      if (b.goals_for !== a.goals_for) return b.goals_for - a.goals_for;
+      return String(a.team || "").localeCompare(String(b.team || ""));
+    });
+    copy.forEach((row, index) => {
+      row.previous_position = row.position; // baseline rank (captured before overwrite)
+      row.position = index + 1;
+      row.live = pulse.has(teamKey(row.team));
+    });
+    return { rows: copy, applied: true };
+  };
+
+  let newRows = baseTable.rows;
+  const flat = overlayRows(baseTable.rows);
+  if (flat.applied) {
+    newRows = flat.rows;
+    anyApplied = true;
+  }
+
+  let newGroups = baseTable.groups;
+  if (Array.isArray(baseTable.groups) && baseTable.groups.length > 0) {
+    newGroups = baseTable.groups.map((group) => {
+      const result = overlayRows(group.rows);
+      if (result.applied) {
+        anyApplied = true;
+        return { ...group, rows: result.rows };
+      }
+      return group;
+    });
+  }
+
+  if (!anyApplied) return baseTable;
+  return { ...baseTable, rows: newRows, groups: newGroups, realtime: true };
+}
+
+// All BSD matches belonging to a projected table, matched by canonical league name.
+function bsdMatchesForTable(table, bsdMatches) {
+  const target = normalizeCompetitionFilterName(String((table && table.league_name) || ""));
+  if (!target || !Array.isArray(bsdMatches)) return [];
+  return bsdMatches.filter(
+    (match) => normalizeCompetitionFilterName(String((match && match.league) || "")) === target
+  );
+}
+
 // In-memory cache for deleted match IDs. Refreshed async after every
 // mark/unmark/delete operation and on a 60-second safety-net interval so
 // the /matches handler never needs a Redis round-trip to serve this.
@@ -984,6 +1266,14 @@ let recentLastUpdated = null;
 let cachedPremierLeagueTeams = [];
 let eplLastUpdated = null;
 let eplUpdating = false;
+let cachedTeamBadges = {};
+let teamBadgesLastUpdated = null;
+let teamBadgesETag = null;
+let teamBadgesUpdating = false;
+let teamBadgesDailyRefreshTimer = null;
+let teamBadgesNextDailyRefreshAt = null;
+let eplSeasonStatusDailyRefreshTimer = null;
+let eplSeasonStatusNextDailyRefreshAt = null;
 let cachedLeagueTables = [];
 let leagueTablesLastUpdated = null;
 let leagueTablesUpdating = false;
@@ -1856,6 +2146,18 @@ function applyLiveResultsToTable(baseTable, liveMatches) {
   rows.forEach((row, index) => { row.position = index + 1; });
 
   return { ...baseTable, rows, realtime: true };
+}
+
+// TSDB's stored table league_name can be a shorter/older alias than what
+// matches report for the same competition (e.g. tables: "FIFA World Cup",
+// matches: "FIFA World Cup 2026" — see normalizeLeagueName). Normalizing here
+// keeps the served table name consistent with match.league everywhere
+// clients compare the two (competition pickers, live-position lookups).
+function withNormalizedTableLeagueName(table) {
+  if (!table || !table.league_name) return table;
+  const normalized = normalizeLeagueName(table.league_name);
+  if (normalized === table.league_name) return table;
+  return { ...table, league_name: normalized };
 }
 
 const ALLOWED_COMPETITION_SET = new Set(
@@ -5502,7 +5804,7 @@ function pollFantasyAssistantManagerEntries() {
   });
 }
 
-const TSDB_CACHE_COLLECTION_NAMES = ["players", "teams", "match_lineups", "match_timelines"];
+const TSDB_CACHE_COLLECTION_NAMES = ["tsdb_players", "tsdb_teams", "tsdb_match_lineups", "tsdb_match_timelines"];
 const emptyTsdbCacheCollectionMetrics = Object.freeze({
   count: 0,
   expected_count: 0,
@@ -8875,6 +9177,8 @@ const MATCH_DETAILS_EVENT_FIELDS = [
   "away_yellow_cards",
   "home_red_cards",
   "away_red_cards",
+  "home_var_events",
+  "away_var_events",
 ];
 const MATCH_LINEUP_POSITION_CATEGORIES = new Set([
   "goalkeeper",
@@ -9826,8 +10130,6 @@ function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now
   const detailsAwayScore = parseNumericScore(
     compatibleDetailsPayload && compatibleDetailsPayload.away_score
   );
-  const homeScore = detailsHomeScore !== null ? detailsHomeScore : listHomeScore;
-  const awayScore = detailsAwayScore !== null ? detailsAwayScore : listAwayScore;
 
   const listAggregate = resolveKnownAggregateScores(listMatch);
   const detailsAggregate = resolveKnownAggregateScores(compatibleDetailsPayload);
@@ -9837,9 +10139,35 @@ function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now
     resolveMatchScoreStatus(compatibleDetailsPayload) ||
     (compatibleDetailsPayload && compatibleDetailsPayload.score_status) ||
     null;
-  const preferredStatus = pickPreferredMatchStatus(listStatus, detailsStatus, {
-    preferIncomingOnTie: true,
-  });
+  const listUpdatedAtMs = Date.parse(String(listMatch && listMatch.updated_at || "").trim());
+  const detailsUpdatedAtMs = Date.parse(
+    String(compatibleDetailsPayload && compatibleDetailsPayload.updated_at || "").trim()
+  );
+  const listStatusIsLive = isInProgressMatchStatus(listStatus);
+  const detailsStatusIsFinished = isFinishedMatchStatus(detailsStatus);
+  const listIsNewerThanDetails =
+    Number.isFinite(listUpdatedAtMs) &&
+    (!Number.isFinite(detailsUpdatedAtMs) || listUpdatedAtMs > detailsUpdatedAtMs);
+  const shouldPreferFreshLiveListStatus =
+    listMatch &&
+    listMatch.has_tsdb_source === true &&
+    listStatusIsLive &&
+    detailsStatusIsFinished &&
+    listIsNewerThanDetails;
+  const preferredStatus = shouldPreferFreshLiveListStatus
+    ? pickPreferredMatchStatus(detailsStatus, listStatus, {
+      preferIncomingOnTie: true,
+      allowTerminalRegression: true,
+    })
+    : pickPreferredMatchStatus(listStatus, detailsStatus, {
+      preferIncomingOnTie: true,
+    });
+  const homeScore = shouldPreferFreshLiveListStatus && listHomeScore !== null
+    ? listHomeScore
+    : detailsHomeScore !== null ? detailsHomeScore : listHomeScore;
+  const awayScore = shouldPreferFreshLiveListStatus && listAwayScore !== null
+    ? listAwayScore
+    : detailsAwayScore !== null ? detailsAwayScore : listAwayScore;
 
   const kickoffDate =
     (listMatch && listMatch.date) || (compatibleDetailsPayload && compatibleDetailsPayload.date) || null;
@@ -10029,15 +10357,24 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     merged.aggregate_away_score = null;
   }
 
+  const existingStatus = existing && existing.score_status !== undefined ? existing.score_status : null;
+  const incomingStatus = incoming && incoming.score_status !== undefined ? incoming.score_status : null;
+  const allowIncomingTsdbLiveCorrection =
+    incoming &&
+    incoming.has_tsdb_source === true &&
+    isFinishedMatchStatus(existingStatus) &&
+    isInProgressMatchStatus(incomingStatus);
+
   merged.score_status = incomingClearsScoreState
     ? null
     : incomingPostponedNoScoreState
       ? "POSTPONED"
       : pickPreferredMatchStatus(
-      existing && existing.score_status !== undefined ? existing.score_status : null,
-      incoming && incoming.score_status !== undefined ? incoming.score_status : null,
+      existingStatus,
+      incomingStatus,
       {
         preferIncomingOnTie: true,
+        allowTerminalRegression: allowIncomingTsdbLiveCorrection,
       }
     );
 
@@ -10046,12 +10383,19 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     const existingValue = existing && existing[field];
     // Only overwrite with incoming data when it is non-empty. An empty incoming
     // array (e.g. from a schedule entry) must not clear populated event data
-    // (e.g. goal scorers previously fetched from the match-detail timeline).
+    // (e.g. goal scorers previously fetched from the match-detail timeline) —
+    // except when incoming explicitly reverts the match to a pre-match or
+    // postponed state, in which case any previously recorded events are stale.
     if (Array.isArray(incomingValue) && incomingValue.length > 0) {
       merged[field] = incomingValue;
       return;
     }
-    if (Array.isArray(existingValue) && existingValue.length > 0) {
+    if (
+      !incomingClearsScoreState &&
+      !incomingPostponedNoScoreState &&
+      Array.isArray(existingValue) &&
+      existingValue.length > 0
+    ) {
       merged[field] = existingValue;
       return;
     }
@@ -10539,6 +10883,14 @@ async function enrichMatchDetailsAggregateImmediately(seedPayload, options = {})
     options && typeof options.persistOperationalMatchDetailsSafe === "function"
       ? options.persistOperationalMatchDetailsSafe
       : persistOperationalMatchDetailsSafe;
+  const persistTimelineFn =
+    options && typeof options.persistLiveActivityMatchTimelineSnapshotsSafe === "function"
+      ? options.persistLiveActivityMatchTimelineSnapshotsSafe
+      : persistLiveActivityMatchTimelineSnapshotsSafe;
+  const saveWriteLogFn =
+    options && typeof options.saveOperationalMatchWriteLogEntries === "function"
+      ? options.saveOperationalMatchWriteLogEntries
+      : saveOperationalMatchWriteLogEntries;
   const nowIso =
     options && typeof options.nowIso === "string" && options.nowIso.trim()
       ? options.nowIso.trim()
@@ -10558,7 +10910,9 @@ async function enrichMatchDetailsAggregateImmediately(seedPayload, options = {})
       source: persistSource,
       reason: "knockout_aggregate_enrichment",
       persistOperationalMatchDetailsSafe: persistFn,
-      persistLiveActivityMatchTimelineSnapshotsSafe,
+      persistLiveActivityMatchTimelineSnapshotsSafe: persistTimelineFn,
+      saveOperationalMatchWriteLogEntries: saveWriteLogFn,
+      historyMatchesById: options.historyMatchesById,
     });
     if (result && result.payload) {
       return result.payload;
@@ -10949,13 +11303,13 @@ async function rebuildMatchDetailsCache(source = "match_details_rebuild") {
   });
 }
 
-function collectInProgressMatchDetailTargets() {
-  const nowMs = Date.now();
+function collectInProgressMatchDetailTargets(options = {}) {
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
   pruneInactiveMatchDetailsRefreshEntries(nowMs);
 
   const targets = new Map();
   const upsertTarget = (detailsPayload) => {
-    const stablePayload = withStableMatchDetailsState(detailsPayload);
+    const stablePayload = withStableMatchDetailsState(detailsPayload, { nowMs });
     if (!stablePayload || typeof stablePayload !== "object") return;
 
     const detailsId = normalizeMatchDetailsId(stablePayload.id);
@@ -11010,7 +11364,7 @@ function collectInProgressMatchDetailTargets() {
     }
 
     mergedSeedMatch.id = detailsId;
-    mergedSeedMatch.details_url = detailsUrl;
+    mergedSeedMatch.details_url = stablePayload.details_url;
     mergedSeedMatch.in_progress =
       isInProgressMatchStatus(mergedSeedMatch.score_status) || Boolean(mergedSeedMatch.in_progress);
 
@@ -11213,6 +11567,11 @@ function normalizeMatchRecord(match) {
     record.score_status = scoreStatus;
   }
 
+  const updatedAt = String(match.updated_at || "").trim();
+  if (updatedAt) {
+    record.updated_at = updatedAt;
+  }
+
   if (match.details_url) {
     record.details_url = String(match.details_url);
   }
@@ -11223,6 +11582,11 @@ function normalizeMatchRecord(match) {
   if (match.id) {
     record.id = String(match.id);
   }
+
+  const homeTeamId = String(match.home_team_id || "").trim() || null;
+  const awayTeamId = String(match.away_team_id || "").trim() || null;
+  if (homeTeamId) record.home_team_id = homeTeamId;
+  if (awayTeamId) record.away_team_id = awayTeamId;
 
   if (match.has_tsdb_source === true) {
     record.has_tsdb_source = true;
@@ -11512,6 +11876,8 @@ function toMatchListPayload(match, options = {}) {
   if (normalized.has_tsdb_source === true) {
     payload.has_tsdb_source = true;
   }
+  if (normalized.home_team_id) payload.home_team_id = normalized.home_team_id;
+  if (normalized.away_team_id) payload.away_team_id = normalized.away_team_id;
 
   let detailsPayload = null;
   const resolveCompatibleLookupEntry = (candidateId) => {
@@ -11707,14 +12073,14 @@ function chooseSupersedingFixturePayload(lhs, rhs) {
   const rightKnownCount = countKnownTeamSlots(rhs);
   const leftHasPlaceholder = payloadHasPlaceholderTeam(lhs);
   const rightHasPlaceholder = payloadHasPlaceholderTeam(rhs);
+  const sharedKnownTeams = sharedKnownTeamCount(lhs, rhs);
+
+  if (sharedKnownTeams < 1) {
+    return null;
+  }
 
   if (leftHasPlaceholder !== rightHasPlaceholder && leftKnownCount !== rightKnownCount) {
     return leftKnownCount > rightKnownCount ? lhs : rhs;
-  }
-
-  const sharedKnownTeams = sharedKnownTeamCount(lhs, rhs);
-  if (sharedKnownTeams < 1) {
-    return null;
   }
 
   const leftScheduled = isScorelessScheduledListPayload(lhs);
@@ -12167,7 +12533,8 @@ function buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup, op
 
   return applyScoresToMatches(
     candidates,
-    Array.isArray(options && options.bbcMatches) ? options.bbcMatches : []
+    Array.isArray(options && options.bbcMatches) ? options.bbcMatches : [],
+    options && options.now instanceof Date ? options.now : new Date()
   );
 }
 
@@ -15575,6 +15942,7 @@ function buildDefaultOperationalCacheState(nowIso = new Date().toISOString()) {
       teams: buildCacheStateDomainSnapshot(defaultDomainOptions),
       tables: buildCacheStateDomainSnapshot(defaultDomainOptions),
       team_short_names: buildCacheStateDomainSnapshot(defaultDomainOptions),
+      team_badges: buildCacheStateDomainSnapshot(defaultDomainOptions),
       tsdb_live: buildCacheStateDomainSnapshot(defaultDomainOptions),
     },
   };
@@ -15747,6 +16115,7 @@ async function hydrateOperationalStateFromRedis(options = {}) {
         OP_DATASET_NATIONAL_ELO_TEAMS,
         OP_DATASET_MISSING_TEAM_LOGOS,
         OP_DATASET_TEAM_SHORT_NAMES,
+        OP_DATASET_TEAM_BADGES,
         OP_DATASET_CACHE_STATE,
       ];
   recordRuntimeComponentStart(COMPONENT_OPERATIONAL_REDIS, {
@@ -15864,6 +16233,15 @@ async function hydrateOperationalStateFromRedis(options = {}) {
       });
       scrapedTeamShortNamesByKey = restored.map;
       scrapedTeamShortNamesLastUpdated = restored.updated_at || scrapedTeamShortNamesLastUpdated;
+    }
+
+    const teamBadgesRecord = datasetRecords[OP_DATASET_TEAM_BADGES];
+    if (teamBadgesRecord && teamBadgesRecord.payload && typeof teamBadgesRecord.payload === "object") {
+      cachedTeamBadges = teamBadgesRecord.payload;
+      teamBadgesLastUpdated = teamBadgesRecord.updated_at || teamBadgesLastUpdated;
+      teamBadgesETag = require("crypto").createHash("sha1")
+        .update(JSON.stringify(cachedTeamBadges))
+        .digest("hex");
     }
 
     const cacheStateRecord = datasetRecords[OP_DATASET_CACHE_STATE];
@@ -16004,6 +16382,9 @@ function clearFootballOperationalMemoryState() {
   matchDetailsActiveRefreshUntilById.clear();
   matchDetailsRefreshNotBeforeById.clear();
   matchDetailsLastUpdated = null;
+  varHistoryGroupedCache = null;
+  varHistoryGroupedCacheExpiresAtMs = 0;
+  varHistoryGroupedCacheTask = null;
   scrapedTeamShortNamesByKey = new Map();
   scrapedTeamShortNamesLastUpdated = null;
   operationalCacheState = buildDefaultOperationalCacheState();
@@ -16109,6 +16490,13 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
     reloads.push(
       getOperationalDatasets([OP_DATASET_TEAM_SHORT_NAMES]).then((records) => {
         recordMap.team_short_names = records || {};
+      })
+    );
+  }
+  if (selectedDomains.includes("team_badges")) {
+    reloads.push(
+      getOperationalDatasets([OP_DATASET_TEAM_BADGES]).then((records) => {
+        recordMap.team_badges = records || {};
       })
     );
   }
@@ -16229,6 +16617,17 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
       scrapedTeamShortNamesLastUpdated = restored.updated_at || scrapedTeamShortNamesLastUpdated;
     }
     stageTimings.team_short_names_ms = Date.now() - startedAtMs;
+  }
+
+  if (recordMap.team_badges) {
+    const teamBadgesRecord = recordMap.team_badges[OP_DATASET_TEAM_BADGES];
+    if (teamBadgesRecord && teamBadgesRecord.payload && typeof teamBadgesRecord.payload === "object") {
+      cachedTeamBadges = teamBadgesRecord.payload;
+      teamBadgesLastUpdated = teamBadgesRecord.updated_at || teamBadgesLastUpdated;
+      teamBadgesETag = require("crypto").createHash("sha1")
+        .update(JSON.stringify(cachedTeamBadges))
+        .digest("hex");
+    }
   }
 
   const unmatchedMetricsStartedAtMs = Date.now();
@@ -17593,6 +17992,10 @@ function canonicalMatchDetailsToListPayload(payload, options = {}) {
   if (payload && payload.has_tsdb_source === true) {
     listPayload.has_tsdb_source = true;
   }
+  const canonicalHomeTeamId = statePayload.home_team_id || (payload && payload.home_team_id);
+  const canonicalAwayTeamId = statePayload.away_team_id || (payload && payload.away_team_id);
+  if (canonicalHomeTeamId) listPayload.home_team_id = String(canonicalHomeTeamId);
+  if (canonicalAwayTeamId) listPayload.away_team_id = String(canonicalAwayTeamId);
   if (statePayload.home_score !== null && statePayload.away_score !== null) {
     listPayload.home_score = statePayload.home_score;
     listPayload.away_score = statePayload.away_score;
@@ -17758,6 +18161,7 @@ function buildMatchListResponseCacheKey(options = {}) {
   // detail changes; list views poll /matches/:matchId for real-time scores.
   return JSON.stringify({
     kind: options.kind || "public",
+    source: options.source || "tsdb",
     merged_updated_at:
       options.mergedDataset && options.mergedDataset.updated_at
         ? options.mergedDataset.updated_at
@@ -17780,6 +18184,7 @@ function buildMatchListResponseCacheKey(options = {}) {
 function buildMatchQueryResponseCacheKey(options = {}) {
   return JSON.stringify({
     list_cache_key: options.listCacheKey || null,
+    source: options.source || "tsdb",
     date_from: options.dateFrom || null,
     date_to: options.dateTo || null,
     leagues: Array.isArray(options.leagues) ? options.leagues : [],
@@ -17811,8 +18216,16 @@ function getCachedMatchQueryPayload(cacheKey) {
 
 // Most recent successfully built public match-list payload, kept outside the
 // keyed/TTL cache so it survives cache clears and key changes. Used as the
-// stale-while-revalidate fallback.
-let matchListLastKnownPublicPayload = null;
+// stale-while-revalidate fallback. Keyed by source ("tsdb" | "bsd") so a
+// periodic TSDB-only warm cycle (proactivelyWarmMatchListResponseCache) can
+// never clobber the fallback a BSD-resolved request relies on, or vice versa.
+const matchListLastKnownPublicPayloadBySource = new Map();
+function getMatchListLastKnownPayload(source) {
+  return matchListLastKnownPublicPayloadBySource.get(source || "tsdb") || null;
+}
+function setMatchListLastKnownPayload(source, payload) {
+  matchListLastKnownPublicPayloadBySource.set(source || "tsdb", payload);
+}
 // Coalesces concurrent rebuilds: cacheKey -> Promise
 const matchListInFlightRebuilds = new Map();
 
@@ -17841,14 +18254,24 @@ function matchListLookupFromOptions(options = {}) {
 // within a few minutes (live scores come from /matches/:matchId polling).
 const MATCH_LIST_PERSIST_DATASET_NAME = "match_list_public_payload";
 const MATCH_LIST_PERSIST_MIN_INTERVAL_MS = 5 * 60 * 1000;
-let matchListLastPersistedAtMs = 0;
+const matchListLastPersistedAtMsBySource = new Map();
 
-function persistMatchListPayloadThrottled(payload) {
+// Source-scoped persisted dataset name, so a BSD cold-start can't seed from
+// (or clobber) the TSDB persisted snapshot, and vice versa.
+function matchListPersistDatasetName(source) {
+  return source === "bsd"
+    ? `${MATCH_LIST_PERSIST_DATASET_NAME}_bsd`
+    : MATCH_LIST_PERSIST_DATASET_NAME;
+}
+
+function persistMatchListPayloadThrottled(payload, source) {
   if (!Array.isArray(payload) || payload.length === 0) return;
+  const key = source || "tsdb";
   const nowMs = Date.now();
-  if (nowMs - matchListLastPersistedAtMs < MATCH_LIST_PERSIST_MIN_INTERVAL_MS) return;
-  matchListLastPersistedAtMs = nowMs;
-  void persistOperationalDatasetSafe(MATCH_LIST_PERSIST_DATASET_NAME, payload, {
+  const lastPersistedAtMs = matchListLastPersistedAtMsBySource.get(key) || 0;
+  if (nowMs - lastPersistedAtMs < MATCH_LIST_PERSIST_MIN_INTERVAL_MS) return;
+  matchListLastPersistedAtMsBySource.set(key, nowMs);
+  void persistOperationalDatasetSafe(matchListPersistDatasetName(key), payload, {
     source: "match_list_cache",
     updated_at: new Date().toISOString(),
   });
@@ -17858,6 +18281,7 @@ function startMatchListRebuild(cacheKey, options) {
   if (matchListInFlightRebuilds.has(cacheKey)) {
     return matchListInFlightRebuilds.get(cacheKey);
   }
+  const source = options.source || "tsdb";
   const rebuildPromise = (async () => {
     try {
       const payload = await canonicalMatchDetailsRecordsToPublicListPayloadsAsync(
@@ -17871,8 +18295,8 @@ function startMatchListRebuild(cacheKey, options) {
         createdAtMs: Date.now(),
         payload,
       });
-      matchListLastKnownPublicPayload = payload;
-      persistMatchListPayloadThrottled(payload);
+      setMatchListLastKnownPayload(source, payload);
+      persistMatchListPayloadThrottled(payload, source);
       return payload;
     } finally {
       matchListInFlightRebuilds.delete(cacheKey);
@@ -17886,6 +18310,7 @@ function startMatchListRebuild(cacheKey, options) {
 }
 
 async function getCachedCanonicalPublicMatchListPayloads(options = {}) {
+  const source = options.source || "tsdb";
   const cacheKey = buildMatchListResponseCacheKey({
     ...options,
     kind: "public",
@@ -17901,19 +18326,20 @@ async function getCachedCanonicalPublicMatchListPayloads(options = {}) {
   }
 
   // Stale-while-revalidate: prefer the expired entry for this exact key, then
-  // the most recent build for any key. The ~6s rebuild runs in the background
-  // with event-loop yields instead of blocking the requesting user.
+  // the most recent build for this SOURCE (never another source's fallback —
+  // see matchListLastKnownPublicPayloadBySource). The ~6s rebuild runs in the
+  // background with event-loop yields instead of blocking the requesting user.
   let stalePayload =
-    cached && Array.isArray(cached.payload) ? cached.payload : matchListLastKnownPublicPayload;
+    cached && Array.isArray(cached.payload) ? cached.payload : getMatchListLastKnownPayload(source);
 
   // Cold start: seed the stale payload from Redis so the first requests after
   // a restart are served in milliseconds while the real build runs.
   if (!stalePayload) {
-    const persisted = await loadOperationalDatasetSafe(MATCH_LIST_PERSIST_DATASET_NAME);
+    const persisted = await loadOperationalDatasetSafe(matchListPersistDatasetName(source));
     if (persisted && Array.isArray(persisted.payload) && persisted.payload.length > 0) {
       stalePayload = persisted.payload;
-      if (!matchListLastKnownPublicPayload) {
-        matchListLastKnownPublicPayload = persisted.payload;
+      if (!getMatchListLastKnownPayload(source)) {
+        setMatchListLastKnownPayload(source, persisted.payload);
       }
     }
   }
@@ -19623,6 +20049,14 @@ function parseMatchTimeMinutes(matchTime) {
   return null;
 }
 
+function resolveTsdbLivescorePollIntervalMs(options = {}) {
+  const hasLiveMatches =
+    typeof options.hasLiveMatches === "boolean"
+      ? options.hasLiveMatches
+      : Array.isArray(cachedTsdbLiveMatches) && cachedTsdbLiveMatches.length > 0;
+  return hasLiveMatches ? TSDB_LIVESCORE_ACTIVE_INTERVAL_MS : TSDB_LIVESCORE_INTERVAL_MS;
+}
+
 async function updateTsdbLivescores(options = {}) {
   if (tsdbLiveUpdating) return;
   tsdbLiveUpdating = true;
@@ -19939,6 +20373,120 @@ function scheduleLeaguesDailyRefresh() {
       await updateTsdbLeagues({ trigger: "daily_midnight" });
     } finally {
       scheduleLeaguesDailyRefresh();
+    }
+  }, delayMs);
+}
+
+// ---------------------------------------------------------------------------
+// TSDB team badges — fetched once per day at 00:10 London time.
+// Skipped entirely when TEAM_LOGO_SOURCE !== "tsdb" so the bundled-logo
+// default path is zero-cost. On success, persists to Redis + in-memory so
+// cold restarts serve immediately.
+// ---------------------------------------------------------------------------
+
+async function updateTsdbTeamBadges(options = {}) {
+  if (SERVER_CONFIG.teamLogoSource !== TEAM_LOGO_SOURCE_TSDB) return;
+  if (teamBadgesUpdating) return;
+  teamBadgesUpdating = true;
+  const startedAtMs = Date.now();
+  let success = false;
+  let recordsFetched = null;
+  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
+  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_TEAM_BADGES, { trigger });
+  try {
+    const byTeamId = await fetchTeamBadges({ trigger });
+    const payload = badgeMapToPayload(byTeamId);
+    recordsFetched = Object.keys(payload).length;
+    if (recordsFetched === 0) {
+      recordRuntimeComponentFailure(
+        COMPONENT_SOURCE_TSDB_TEAM_BADGES,
+        new Error("Team badges update returned no teams"),
+        { trigger }
+      );
+      console.warn("[TeamBadges] Update returned no teams");
+      return;
+    }
+
+    cachedTeamBadges = payload;
+    teamBadgesLastUpdated = new Date().toISOString();
+    teamBadgesETag = require("crypto").createHash("sha1")
+      .update(JSON.stringify(payload))
+      .digest("hex");
+    await persistOperationalDatasetSafe(OP_DATASET_TEAM_BADGES, payload, {
+      updated_at: teamBadgesLastUpdated,
+      source: SOURCE_TSDB_TEAM_BADGES,
+    });
+    invalidateCacheDomains(["team_badges"], { reason: `team_badges_${trigger}`, source: SOURCE_TSDB_TEAM_BADGES });
+    success = true;
+    console.info(
+      `[TeamBadges] Updated teams=${recordsFetched} duration_ms=${Date.now() - startedAtMs}`
+    );
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_TEAM_BADGES, {
+      trigger,
+      teams: recordsFetched,
+      duration_ms: Date.now() - startedAtMs,
+    });
+  } catch (err) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_TEAM_BADGES, err, { trigger });
+    console.warn("[TeamBadges] Failed to update:", err.message || err);
+  } finally {
+    if (!success) {
+      recordRuntimeComponentFailure(
+        COMPONENT_SOURCE_TSDB_TEAM_BADGES,
+        new Error("Team badges update did not succeed"),
+        { trigger }
+      );
+    }
+    teamBadgesUpdating = false;
+  }
+}
+
+function scheduleTeamBadgesDailyRefresh() {
+  if (teamBadgesDailyRefreshTimer) {
+    cancelRuntimeTimeout(teamBadgesDailyRefreshTimer);
+    teamBadgesDailyRefreshTimer = null;
+  }
+
+  // 00:10 London — after leagues (00:00) and tables (00:05) have refreshed.
+  const delayMs = millisecondsUntilNextLondonTime(0, 10);
+  const nextAt = new Date(Date.now() + delayMs);
+  teamBadgesNextDailyRefreshAt = nextAt.toISOString();
+  const londonTarget = londonDateTimeFormatter.format(nextAt);
+  console.info(
+    `[TeamBadges] Daily refresh scheduled next_london="${londonTarget}" next_iso=${teamBadgesNextDailyRefreshAt}`
+  );
+
+  teamBadgesDailyRefreshTimer = registerRuntimeTimeout(async () => {
+    teamBadgesDailyRefreshTimer = null;
+    try {
+      await updateTsdbTeamBadges({ trigger: "daily_midnight" });
+    } finally {
+      scheduleTeamBadgesDailyRefresh();
+    }
+  }, delayMs);
+}
+
+function scheduleEplSeasonStatusDailyRefresh() {
+  if (eplSeasonStatusDailyRefreshTimer) {
+    cancelRuntimeTimeout(eplSeasonStatusDailyRefreshTimer);
+    eplSeasonStatusDailyRefreshTimer = null;
+  }
+
+  // 00:15 London — after leagues (00:00) have refreshed.
+  const delayMs = millisecondsUntilNextLondonTime(0, 15);
+  const nextAt = new Date(Date.now() + delayMs);
+  eplSeasonStatusNextDailyRefreshAt = nextAt.toISOString();
+  const londonTarget = londonDateTimeFormatter.format(nextAt);
+  console.info(
+    `[EplSeasonStatus] Daily refresh scheduled next_london="${londonTarget}" next_iso=${eplSeasonStatusNextDailyRefreshAt}`
+  );
+
+  eplSeasonStatusDailyRefreshTimer = registerRuntimeTimeout(async () => {
+    eplSeasonStatusDailyRefreshTimer = null;
+    try {
+      await refreshEplSeasonActive();
+    } finally {
+      scheduleEplSeasonStatusDailyRefresh();
     }
   }, delayMs);
 }
@@ -22811,7 +23359,7 @@ async function buildAdminArchitectureComponentDetail(componentId) {
     },
     source_tsdb_live: {
       snapshot: feedSnapshots.tsdb_live,
-      description: "Polls SportsDB /livescore/soccer every 30 seconds (one call for all live soccer) and seeds match details.",
+      description: "Polls SportsDB /livescore/soccer faster while live matches are active, then returns to the idle interval.",
       writes_to: ["operational_memory.recent_matches", "operational_memory.match_details", "operational_redis.tsdb_live_matches", "operational_redis.match_details"],
       used_by: ["matches_api", "match_monitor"],
       failure_impact: [
@@ -23033,6 +23581,22 @@ app.get(["/healthcheck", `${API_PREFIX}/healthcheck`], (_req, res) => {
 app.get(`${API_PREFIX}/cache-state`, (_req, res) => {
   setCacheOnlyHeaders(res);
   res.json(currentCacheStateSnapshot());
+});
+
+app.get(`${API_PREFIX}/admin/match-source`, (_req, res) => {
+  setCacheOnlyHeaders(res);
+  res.status(200).json({
+    success: true,
+    // Global default is env-driven (MATCH_DATA_SOURCE), shared across processes.
+    // Per-request `?source=` / `X-Match-Source` overrides it for serving only.
+    default_source: runtimeMatchSourceDefault,
+    env_source: SERVER_CONFIG.matchDataSource,
+    valid_sources: ["tsdb", "bsd"],
+    bsd_projection: {
+      count: cachedBsdMatches.length,
+      updated_at: cachedBsdMatchesUpdatedAt,
+    },
+  });
 });
 
 app.get(`${API_PREFIX}/admin/status/overview`, async (_req, res) => {
@@ -23271,42 +23835,69 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       return;
     }
 
-    const memoryMatchDetailsSnapshot = currentMatchDetailsLookupSnapshot();
+    // Resolve the data source for this request (per-request override beats the
+    // global default). When BSD is selected the merged/range/detail datasets
+    // are replaced by the in-memory BSD projection; everything downstream
+    // (filtering, serialisation, the clients' composite ids) is unchanged.
+    const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
+    res.set("X-Match-Source", matchSource);
+    const useBsdSource = matchSource === "bsd";
+    const bsdMatchesForServing = useBsdSource ? await getBsdMatchesForServing() : null;
+
+    const memoryMatchDetailsSnapshot = useBsdSource ? null : currentMatchDetailsLookupSnapshot();
     stageStartedAtMs = Date.now();
     // Serve merged and BBC-range datasets from in-memory arrays when available
     // (they're always populated after the first BBC poll). Only fall back to
     // Redis on a cold start before the first poll has run. Deleted match IDs
     // are served from the in-memory Set maintained by refreshDeletedMatchIdsCacheAsync.
-    const mergedDataset = cachedMergedMatches.length > 0
+    const mergedDataset = useBsdSource
+      ? {
+          items: filterMatchesByCompetition(bsdMatchesForServing || []),
+          updated_at: cachedBsdMatchesUpdatedAt,
+          source: "bsd",
+        }
+      : cachedMergedMatches.length > 0
       ? {
           items: filterMatchesByCompetition(cachedMergedMatches),
           updated_at: tsdbScheduleLastUpdated || tsdbLiveLastUpdated || null,
           source: "memory",
         }
       : await getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, []);
-    const bbcRangeDataset = cachedTsdbScheduleMatches.length > 0
+    // BSD's projection already includes notstarted + finished fixtures, so it
+    // needs no separate range feed.
+    const bbcRangeDataset = useBsdSource
+      ? { items: [], updated_at: null, source: "bsd" }
+      : cachedTsdbScheduleMatches.length > 0
       ? {
           items: filterMatchesByCompetition(cachedTsdbScheduleMatches),
           updated_at: tsdbScheduleLastUpdated || null,
           source: "memory",
         }
       : await getOperationalArrayDataset(OP_DATASET_TSDB_SCHEDULE_MATCHES, []);
-    const redisMatchDetailsSnapshot = memoryMatchDetailsSnapshot
+    const redisMatchDetailsSnapshot = memoryMatchDetailsSnapshot || useBsdSource
       ? null
       : await getOperationalMatchDetailsSnapshotSafe();
     const deletedMatchIdSet = cachedDeletedMatchIds;
     timings.dataset_load_ms = Date.now() - stageStartedAtMs;
-    const canonicalLookup = memoryMatchDetailsSnapshot
+    // For BSD the list is built from the projection (passed as fallback
+    // matches); there is no separate detail lookup to merge.
+    const canonicalLookup = useBsdSource
+      ? {}
+      : memoryMatchDetailsSnapshot
       ? memoryMatchDetailsSnapshot.lookup
       : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.records
         ? redisMatchDetailsSnapshot.records
         : {};
-    const canonicalUpdatedAt = memoryMatchDetailsSnapshot
+    const canonicalUpdatedAt = useBsdSource
+      ? cachedBsdMatchesUpdatedAt
+      : memoryMatchDetailsSnapshot
       ? memoryMatchDetailsSnapshot.updated_at || matchDetailsLastUpdated || null
       : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.updated_at
         ? redisMatchDetailsSnapshot.updated_at
         : null;
-    const canonicalSource = memoryMatchDetailsSnapshot
+    const canonicalSource = useBsdSource
+      ? "bsd"
+      : memoryMatchDetailsSnapshot
       ? memoryMatchDetailsSnapshot.source || "memory"
       : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.source
         ? redisMatchDetailsSnapshot.source
@@ -23347,6 +23938,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
 
     const allTestMatches = testMatchState.getAllMatches();
     const canonicalListOptions = {
+      source: matchSource,
       matchDetailsLookup: canonicalLookup,
       matchDetailsUpdatedAt: canonicalUpdatedAt,
       matchDetailsCount: matchDetailsLookupSize(canonicalLookup),
@@ -23361,6 +23953,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const matchQueryCacheKey = canUseMatchQueryCache
       ? buildMatchQueryResponseCacheKey({
         listCacheKey: canonicalListCacheKey,
+        source: matchSource,
         dateFrom,
         dateTo,
         leagues,
@@ -23633,6 +24226,24 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     return;
   }
 
+  // When BSD is the active source, project match details on demand from the
+  // bsd_* Mongo collections (the matchId is the BSD event id carried on the
+  // BSD list projection's match_details_id).
+  const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
+  if (matchSource === "bsd") {
+    res.set("X-Match-Source", "bsd");
+    const bsdDetails = await projectBsdMatchDetails(matchId).catch((error) => {
+      console.warn(`[BSD] match details projection failed for ${matchId}:`, error.message || error);
+      return null;
+    });
+    if (bsdDetails) {
+      res.json(applyTeamShortNamesToApiValue(bsdDetails, teamShortNameLookup));
+      return;
+    }
+    res.status(404).json({ error: "No BSD match details found for match id." });
+    return;
+  }
+
   const detailsLookup = await getOperationalMatchDetailsByIdSafe(matchId);
   const payload = detailsLookup && detailsLookup.payload ? detailsLookup.payload : null;
   const detailsSource = payload ? detailsLookup.source || "unknown" : "memory_fallback";
@@ -23704,6 +24315,61 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   }
   res.json(applyTeamShortNamesToApiValue(playerEnrichedResponsePayload || enrichedResponsePayload, teamShortNameLookup));
 });
+
+app.get(`${API_PREFIX}/matches/:matchId/social`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const matchId = String(req.params.matchId || "").trim();
+  if (!/^\d+$/.test(matchId)) {
+    res.json([]);
+    return;
+  }
+
+  try {
+    const items = await getBsdSocial(
+      { eventId: matchId },
+      {
+        initiator: "api",
+        reason: "match_social_request",
+        trigger: "match_social_request",
+      }
+    );
+    const payload = normalizeBsdSocialItems(items);
+    res.set("X-Operational-Source", "bsd_social");
+    res.json(payload);
+  } catch (error) {
+    console.warn(`[BSD] social fetch failed for ${matchId}:`, error.message || error);
+    res.status(502).json({ error: "Failed to load social items." });
+  }
+});
+
+function normalizeBsdSocialItems(items) {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const url = String(item.url || "").trim();
+      const title = String(item.title || item.text || "").trim();
+      if (!url || !title) return null;
+
+      return {
+        id: String(item.id || url),
+        type: typeof item.type === "string" ? item.type : null,
+        url,
+        title,
+        text: typeof item.text === "string" && item.text.trim() ? item.text.trim() : null,
+        thumbnail: typeof item.thumbnail === "string" && item.thumbnail.trim() ? item.thumbnail.trim() : null,
+        published_at: typeof item.published_at === "string" && item.published_at.trim() ? item.published_at.trim() : null,
+        account: item.account && typeof item.account === "object"
+          ? {
+              handle: typeof item.account.handle === "string" ? item.account.handle : null,
+              name: typeof item.account.name === "string" ? item.account.name : null,
+            }
+          : null,
+      };
+    })
+    .filter(Boolean);
+}
 
 app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
   setCacheOnlyHeaders(res);
@@ -24005,7 +24671,33 @@ app.get(`${API_PREFIX}/teams/config`, (_req, res) => {
   res.set("X-Operational-Source", "server_config");
   res.status(200).json({
     default_elo: TEAM_RANKING_DEFAULT_ELO,
+    team_logo_source: SERVER_CONFIG.teamLogoSource,
+    badges_updated_at: teamBadgesLastUpdated,
     updated_at: updatedAt,
+  });
+});
+
+app.get(`${API_PREFIX}/teams/badges`, (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  if (teamBadgesETag) {
+    const clientETag = req.get("If-None-Match");
+    if (clientETag && clientETag === `"${teamBadgesETag}"`) {
+      res.status(304).end();
+      return;
+    }
+    res.set("ETag", `"${teamBadgesETag}"`);
+  }
+
+  res.set("Cache-Control", "public, max-age=300");
+  if (teamBadgesLastUpdated) {
+    res.set("X-Last-Updated", teamBadgesLastUpdated);
+  }
+  res.set("X-Operational-Source", SOURCE_TSDB_TEAM_BADGES);
+  res.status(200).json({
+    team_logo_source: SERVER_CONFIG.teamLogoSource,
+    updated_at: teamBadgesLastUpdated,
+    teams: cachedTeamBadges,
   });
 });
 
@@ -24282,13 +24974,38 @@ function liveMatchesForLeague(leagueName) {
   });
 }
 
-app.get(`${API_PREFIX}/tables`, async (_req, res) => {
+app.get(`${API_PREFIX}/tables`, async (req, res) => {
   setCacheOnlyHeaders(res);
+  const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
+  res.set("X-Match-Source", matchSource);
+
+  if (matchSource === "bsd") {
+    const [bsdTables, bsdMatches] = await Promise.all([
+      getBsdTablesForServing(),
+      getBsdMatchesForServing(),
+    ]);
+    const leagues = sortLeagueTablesForResponse(bsdTables).map((league) =>
+      applyLiveResultsToBsdTable(league, bsdMatchesForTable(league, bsdMatches))
+    );
+    const updatedAt = cachedBsdTablesUpdatedAt;
+    if (updatedAt) {
+      res.set("X-Last-Updated", updatedAt);
+    }
+    res.set("X-Operational-Source", "bsd_projection");
+    res.json({
+      updated_at: updatedAt || null,
+      count: leagues.length,
+      leagues,
+    });
+    return;
+  }
+
   const dataset = await getOperationalArrayDataset(OP_DATASET_LEAGUE_TABLES, cachedLeagueTables);
   const baseLeagues = sortLeagueTablesForResponse(dataset.items);
   const leagues = baseLeagues.map((league) => {
     const live = liveMatchesForLeague(league && league.league_name);
-    return live.length > 0 ? applyLiveResultsToTable(league, live) : league;
+    const overlaid = live.length > 0 ? applyLiveResultsToTable(league, live) : league;
+    return withNormalizedTableLeagueName(overlaid);
   });
   const updatedAt =
     dataset.updated_at ||
@@ -24311,6 +25028,35 @@ app.get(`${API_PREFIX}/tables`, async (_req, res) => {
 
 app.get(`${API_PREFIX}/tables/:leagueId`, async (req, res) => {
   setCacheOnlyHeaders(res);
+  const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
+  res.set("X-Match-Source", matchSource);
+
+  if (matchSource === "bsd") {
+    const [bsdTables, bsdMatches] = await Promise.all([
+      getBsdTablesForServing(),
+      getBsdMatchesForServing(),
+    ]);
+    const baseLeague = findLeagueTableById(bsdTables, req.params.leagueId);
+    if (!baseLeague) {
+      res.status(404).json({
+        error: "League table not found",
+        league_id: normalizeLeagueTableId(req.params.leagueId),
+        available_leagues: bsdTables.map((item) => item.league_id).filter(Boolean),
+      });
+      return;
+    }
+    const league = applyLiveResultsToBsdTable(
+      baseLeague,
+      bsdMatchesForTable(baseLeague, bsdMatches)
+    );
+    if (baseLeague.updated_at) {
+      res.set("X-Last-Updated", baseLeague.updated_at);
+    }
+    res.set("X-Operational-Source", "bsd_projection");
+    res.json(league);
+    return;
+  }
+
   const dataset = await getOperationalArrayDataset(OP_DATASET_LEAGUE_TABLES, cachedLeagueTables);
   const leagues = sortLeagueTablesForResponse(dataset.items);
   const baseLeague = findLeagueTableById(leagues, req.params.leagueId);
@@ -24323,13 +25069,53 @@ app.get(`${API_PREFIX}/tables/:leagueId`, async (req, res) => {
     return;
   }
   const live = liveMatchesForLeague(baseLeague.league_name);
-  const league = live.length > 0 ? applyLiveResultsToTable(baseLeague, live) : baseLeague;
+  const overlaid = live.length > 0 ? applyLiveResultsToTable(baseLeague, live) : baseLeague;
+  const league = withNormalizedTableLeagueName(overlaid);
   if (baseLeague.updated_at) {
     res.set("X-Last-Updated", baseLeague.updated_at);
   } else if (dataset.updated_at) {
     res.set("X-Last-Updated", dataset.updated_at);
   }
   res.set("X-Operational-Source", dataset.source || "unknown");
+  res.json(league);
+});
+
+// Predictions are BSD-exclusive data (no TSDB equivalent), so unlike /tables
+// there's no match-source branching here. The app fetches this aggregate
+// endpoint once on startup and hourly rather than hitting /predictions/league
+// once per competition.
+app.get(`${API_PREFIX}/predictions`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  const leagues = await getBsdPredictionsForServing();
+  const updatedAt = cachedBsdPredictionsUpdatedAt;
+  if (updatedAt) {
+    res.set("X-Last-Updated", updatedAt);
+  }
+  res.set("X-Operational-Source", "bsd_projection");
+  res.json({
+    updated_at: updatedAt || null,
+    count: leagues.length,
+    leagues,
+  });
+});
+
+app.get(`${API_PREFIX}/predictions/league/:id`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const leagues = await getBsdPredictionsForServing();
+  const normalizedId = String(req.params.id || "").trim();
+  const league = leagues.find((item) => String(item.league_id) === normalizedId);
+  if (!league) {
+    res.status(404).json({
+      error: "Predictions not found for league",
+      league_id: normalizedId,
+      available_leagues: leagues.map((item) => item.league_id).filter(Boolean),
+    });
+    return;
+  }
+  if (league.updated_at) {
+    res.set("X-Last-Updated", league.updated_at);
+  }
+  res.set("X-Operational-Source", "bsd_projection");
   res.json(league);
 });
 
@@ -24457,6 +25243,14 @@ app.get(`${API_PREFIX}/fantasy/gameweek/next`, (_req, res) => {
   }
 
   res.json(fantasyBootstrapNextEvent);
+});
+
+// Lets the iOS app gate the bottom-nav FPL badge to when FPL should be shown.
+// The server helper compares EPL event season_ids and caches the result daily.
+app.get(`${API_PREFIX}/fantasy/season-active`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  await refreshEplSeasonActive();
+  res.status(200).json(eplSeasonStatusSnapshot());
 });
 
 app.get(`${API_PREFIX}/fantasy/score`, async (req, res) => {
@@ -25228,6 +26022,8 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     tsdb_live_last_updated: bbcLiveDataset.updated_at || tsdbLiveLastUpdated,
     tsdb_live_output_path: path.resolve(TSDB_LIVESCORE_OUTPUT_PATH),
     tsdb_live_interval_ms: TSDB_LIVESCORE_INTERVAL_MS,
+    tsdb_live_active_interval_ms: TSDB_LIVESCORE_ACTIVE_INTERVAL_MS,
+    tsdb_live_max_calls_per_minute: TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE,
     tsdb_schedule_count: bbcRangeDataset.items.length,
     tsdb_schedule_last_updated: bbcRangeDataset.updated_at || tsdbScheduleLastUpdated,
     tsdb_schedule_output_path: path.resolve(TSDB_SCHEDULE_OUTPUT_PATH),
@@ -28316,6 +29112,57 @@ app.post(`${API_PREFIX}/admin/leagues/refresh`, async (_req, res) => {
   }
 });
 
+// Refresh TSDB team badges + brand colours (strColour1/strColour2) on demand,
+// rather than waiting for the daily scheduled fetch.
+app.post(`${API_PREFIX}/admin/team-badges/refresh`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  if (SERVER_CONFIG.teamLogoSource !== TEAM_LOGO_SOURCE_TSDB) {
+    res.status(409).json({ error: "Team badges are only fetched when team_logo_source is 'tsdb'." });
+    return;
+  }
+  if (teamBadgesUpdating) {
+    res.status(409).json({ error: "Team badges refresh already in progress." });
+    return;
+  }
+  const startedAtMs = Date.now();
+  await updateTsdbTeamBadges({ trigger: "admin_api" });
+  res.status(200).json({
+    success: true,
+    teams: Object.keys(cachedTeamBadges || {}).length,
+    updated_at: teamBadgesLastUpdated,
+    duration_ms: Date.now() - startedAtMs,
+  });
+});
+
+// Refresh BSD predictions on demand, rather than waiting for the daily
+// scheduled fetch in bsd_poller.js. Resets the in-memory serving cache's
+// built timestamp so the next /predictions request reflects the refresh
+// immediately instead of waiting out BSD_PREDICTIONS_CACHE_TTL_MS.
+app.post(`${API_PREFIX}/admin/predictions/refresh`, async (_req, res) => {
+  setCacheOnlyHeaders(res);
+  if (bsdPredictionsRefreshInFlight) {
+    res.status(409).json({ error: "Predictions refresh already in progress." });
+    return;
+  }
+  const startedAtMs = Date.now();
+  try {
+    await refreshAllPredictions();
+    bsdPredictionsCacheBuiltMs = 0;
+    await refreshBsdPredictionsCache();
+    res.status(200).json({
+      success: true,
+      leagues: cachedBsdPredictions.length,
+      updated_at: cachedBsdPredictionsUpdatedAt,
+      duration_ms: Date.now() - startedAtMs,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to refresh predictions.",
+      message: error.message || String(error),
+    });
+  }
+});
+
 // ===== League Tables Admin Endpoints =====
 
 app.post(`${API_PREFIX}/admin/league-tables/refresh`, async (req, res) => {
@@ -30378,6 +31225,7 @@ async function bootstrapOperationalState(options = {}) {
     void updateTsdbScheduleMatches({ trigger: "startup_bootstrap" });
     void updateTsdbTvListings({ trigger: "startup_bootstrap" });
     void updateTsdbPremierLeagueTeams({ trigger: "startup_bootstrap" });
+    void updateTsdbTeamBadges({ trigger: "startup_bootstrap" });
     void updateLeagueTables({ trigger: "startup_bootstrap" });
     void updateClubEloTeams({ trigger: "startup_bootstrap" });
     void updateClubEloFixtures({ trigger: "startup_bootstrap" });
@@ -30732,12 +31580,43 @@ function startMonitorIntervals() {
   startCacheStateWatcher();
 }
 
+function startTsdbLivescorePolling() {
+  let timeoutHandle = null;
+
+  const scheduleNext = () => {
+    timeoutHandle = null;
+    const intervalMs = resolveTsdbLivescorePollIntervalMs();
+    timeoutHandle = registerRuntimeTimeout(async () => {
+      try {
+        await updateTsdbLivescores({
+          trigger: Array.isArray(cachedTsdbLiveMatches) && cachedTsdbLiveMatches.length > 0
+            ? "active_interval"
+            : "interval",
+        });
+      } finally {
+        scheduleNext();
+      }
+    }, intervalMs);
+  };
+
+  const initialDelayMs = Math.min(
+    5 * 1000,
+    Math.max(0, resolveTsdbLivescorePollIntervalMs() - 1000)
+  );
+  timeoutHandle = registerRuntimeTimeout(async () => {
+    timeoutHandle = null;
+    try {
+      await updateTsdbLivescores({ trigger: "interval" });
+    } finally {
+      scheduleNext();
+    }
+  }, initialDelayMs);
+
+  return timeoutHandle;
+}
+
 function startScraperIntervals() {
-  const tsdbLiveInterval = Number.isFinite(TSDB_LIVESCORE_INTERVAL_MS) && TSDB_LIVESCORE_INTERVAL_MS > 0 ? TSDB_LIVESCORE_INTERVAL_MS : 30 * 1000;
-  const tsdbLiveIntervalOffsetMs = Math.min(5 * 1000, Math.max(0, tsdbLiveInterval - 1000));
-  registerRuntimeInterval(() => {
-    void updateTsdbLivescores({ trigger: "interval" });
-  }, tsdbLiveInterval, { initialDelayMs: tsdbLiveIntervalOffsetMs });
+  startTsdbLivescorePolling();
 
   const tsdbScheduleInterval =
     Number.isFinite(TSDB_SCHEDULE_INTERVAL_MS) && TSDB_SCHEDULE_INTERVAL_MS > 0
@@ -31469,6 +32348,24 @@ function createScraperHealthApp() {
     res.set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
     res.send(buildPrometheusMetricsText());
   });
+  scraperApp.get("/heap-stats", (_req, res) => {
+    res.json(v8.getHeapStatistics());
+  });
+  scraperApp.get("/heapdump", (_req, res) => {
+    let snapshotPath;
+    try {
+      snapshotPath = v8.writeHeapSnapshot();
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+      return;
+    }
+    res.download(snapshotPath, path.basename(snapshotPath), (err) => {
+      fs.unlink(snapshotPath, () => {});
+      if (err && !res.headersSent) {
+        res.status(500).json({ error: String(err) });
+      }
+    });
+  });
   return scraperApp;
 }
 
@@ -31548,6 +32445,9 @@ function startApiRuntime() {
   scheduleLeaguesDailyRefresh();
   void updateTsdbLeagues({ trigger: "startup" });
   scheduleLeagueTablesDailyRefresh();
+  scheduleTeamBadgesDailyRefresh();
+  void refreshEplSeasonActive();
+  scheduleEplSeasonStatusDailyRefresh();
   scheduleDeferredApiWarmTasks();
 
   runtimeServer = app.listen(PORT, () => {
@@ -31570,6 +32470,11 @@ function startMonitorRuntime() {
   matchMonitor.initialize(SERVER_BASE_URL);
   operationalBootstrapPromise = bootstrapOperationalState({ mode: "monitor" });
   startMonitorIntervals();
+  // The monitor process is what actually builds Live Activity content state
+  // (fantasyCurrentScoreForUser), so it needs its own refreshed copy of this
+  // cache — it runs in a separate Node process from the api runtime.
+  void refreshEplSeasonActive();
+  scheduleEplSeasonStatusDailyRefresh();
 
   runtimeServer = app.listen(MONITOR_PORT, () => {
     console.log(`Monitor listening on http://localhost:${MONITOR_PORT}`);
@@ -31695,6 +32600,7 @@ module.exports = {
     matchDetailsIdFromUrl,
     filterStaleMatches,
     shouldRefreshCanonicalMatchDetails,
+    resolveTsdbLivescorePollIntervalMs,
     buildDefaultOperationalCacheState,
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
@@ -31716,5 +32622,12 @@ module.exports = {
     upsertMatchDetailsFromMatch,
     preferencesSaveShouldTriggerLiveActivityReconcile,
     liveActivityReconcileTriggerForPreferencesSave,
+    TSDB_LIVESCORE_INTERVAL_MS,
+    TSDB_LIVESCORE_ACTIVE_INTERVAL_MS,
+    TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE,
+    applyLiveResultsToBsdTable,
+    bsdMatchesForTable,
+    normalizeLeagueName,
+    withNormalizedTableLeagueName,
   },
 };

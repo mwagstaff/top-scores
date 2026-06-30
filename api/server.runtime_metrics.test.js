@@ -82,7 +82,7 @@ test("buildPrometheusMetricsText includes top-scores runtime health metrics", ()
   assert.match(metricsText, /top_scores_bbc_range_match_date_timestamp_seconds\{boundary="latest"\}\s+\d+(?:\.0+)?\b/);
   assert.match(metricsText, /top_scores_bbc_range_scrape_progress_ratio\{window="past"\}\s+\d+(?:\.\d+)?\b/);
   assert.match(metricsText, /top_scores_bbc_range_scrape_progress_ratio\{window="future"\}\s+\d+(?:\.\d+)?\b/);
-  assert.match(metricsText, /top_scores_tsdb_cache_records\{collection="players"\}\s+\d+(?:\.0+)?\b/);
-  assert.match(metricsText, /top_scores_tsdb_cache_missing_records\{collection="match_lineups"\}\s+\d+(?:\.0+)?\b/);
+  assert.match(metricsText, /top_scores_tsdb_cache_records\{collection="tsdb_players"\}\s+\d+(?:\.0+)?\b/);
+  assert.match(metricsText, /top_scores_tsdb_cache_missing_records\{collection="tsdb_match_lineups"\}\s+\d+(?:\.0+)?\b/);
   resetRedisMetricsForTests();
 });

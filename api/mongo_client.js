@@ -9,6 +9,7 @@ try {
 
 const MONGODB_URI_TOP_SCORES = process.env.MONGODB_URI_TOP_SCORES || "";
 const DEFAULT_DB_NAME = "top_scores";
+const MATCH_WRITE_LOGS_TTL_SECONDS = 6 * 24 * 60 * 60;
 
 let client = null;
 let db = null;
@@ -55,6 +56,7 @@ async function ensureIndexes() {
     collection("match_write_logs").createIndexes([
       { key: { match_id: 1, timestamp_ms: -1 }, name: "match_timestamp" },
       { key: { inserted_at_ms: -1 }, name: "insertedAt_desc" },
+      { key: { inserted_at_ms: 1 }, name: "ttl_expiry", expireAfterSeconds: MATCH_WRITE_LOGS_TTL_SECONDS },
     ]),
     collection("fantasy_reminders").createIndexes([
       { key: { scheduled_for_ms: 1 }, name: "scheduledFor" },
@@ -75,31 +77,47 @@ async function ensureIndexes() {
       { key: { source: 1, timestamp_ms: -1 }, name: "source_timestamp" },
       { key: { status_code: 1, timestamp_ms: -1 }, name: "status_timestamp" },
     ]),
-    collection("tv_listings").createIndexes([
+    collection("tsdb_tv_listings").createIndexes([
       { key: { date_event: 1 }, name: "date_event" },
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
     ]),
-    collection("leagues").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
-    collection("league_tables").createIndexes([
+    collection("tsdb_leagues").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("tsdb_league_tables").createIndexes([
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
       { key: { league_name: 1 }, name: "league_name" },
     ]),
-    collection("match_lineups").createIndexes([
+    collection("tsdb_match_lineups").createIndexes([
       { key: { updated_at_ms: -1 }, name: "updatedAtMs_desc" },
       { key: { next_refresh_at_ms: 1 }, name: "nextRefreshAtMs" },
       { key: { final: 1 }, name: "final" },
     ]),
-    collection("match_timelines").createIndexes([
+    collection("tsdb_match_timelines").createIndexes([
       { key: { updated_at_ms: -1 }, name: "timelineUpdatedAtMs_desc" },
       { key: { next_refresh_at_ms: 1 }, name: "timelineNextRefreshAtMs" },
       { key: { final: 1 }, name: "timelineFinal" },
     ]),
-    collection("teams").createIndexes([
+    collection("tsdb_teams").createIndexes([
       { key: { updated_at_ms: -1 }, name: "teamUpdatedAtMs_desc" },
     ]),
-    collection("players").createIndexes([
+    collection("tsdb_players").createIndexes([
       { key: { updated_at_ms: -1 }, name: "playerUpdatedAtMs_desc" },
     ]),
+    // BSD evaluation collections (all carry an `updated_at` ISO timestamp).
+    collection("bsd_leagues").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_standings").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_teams").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_events").createIndexes([
+      { key: { updated_at: -1 }, name: "updatedAt_desc" },
+      { key: { league_id: 1, status: 1 }, name: "league_status" },
+      { key: { event_date: 1 }, name: "event_date" },
+    ]),
+    collection("bsd_incidents").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_broadcasts").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_lineups").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_players").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    // BSD<->TSDB id maps (keyed by _id = BSD player/team id).
+    collection("bsd_tsdb_player_map").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_tsdb_team_map").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
   ]);
 
   indexesEnsured = true;
@@ -533,14 +551,14 @@ async function upsertTvListings(listings) {
       upsert: true,
     },
   }));
-  const result = await collection("tv_listings").bulkWrite(ops, { ordered: false });
+  const result = await collection("tsdb_tv_listings").bulkWrite(ops, { ordered: false });
   return { upserted: result.upsertedCount, modified: result.modifiedCount };
 }
 
 async function getAllTvListings() {
   const mongoDb = await getDb();
   if (!mongoDb) return {};
-  const records = await collection("tv_listings").find({}).toArray();
+  const records = await collection("tsdb_tv_listings").find({}).toArray();
   const out = {};
   records.forEach((r) => {
     if (r._id && Array.isArray(r.channels)) {
@@ -579,14 +597,14 @@ async function upsertTsdbLeagueTables(tables) {
       upsert: true,
     },
   }));
-  const result = await collection("league_tables").bulkWrite(ops, { ordered: false });
+  const result = await collection("tsdb_league_tables").bulkWrite(ops, { ordered: false });
   return { upserted: result.upsertedCount, modified: result.modifiedCount, total: tables.length };
 }
 
 async function getAllTsdbLeagueTables() {
   const mongoDb = await getDb();
   if (!mongoDb) return [];
-  const docs = await collection("league_tables").find({}).toArray();
+  const docs = await collection("tsdb_league_tables").find({}).toArray();
   return docs.map((doc) => ({
     league_id: String(doc._id),
     league_name: doc.league_name || null,
@@ -617,14 +635,14 @@ async function upsertLeagues(leagues) {
       upsert: true,
     },
   }));
-  const result = await collection("leagues").bulkWrite(ops, { ordered: false });
+  const result = await collection("tsdb_leagues").bulkWrite(ops, { ordered: false });
   return { upserted: result.upsertedCount, modified: result.modifiedCount, total: leagues.length };
 }
 
 async function purgeStaleTvListings(cutoffDateStr) {
   const mongoDb = await getDb();
   if (!mongoDb || !cutoffDateStr) return null;
-  const result = await collection("tv_listings").deleteMany({
+  const result = await collection("tsdb_tv_listings").deleteMany({
     date_event: { $lt: String(cutoffDateStr) },
   });
   return { deleted: result.deletedCount };
@@ -790,7 +808,7 @@ async function getExpectedTsdbCacheIdsFromMongo() {
         { projection: { _id: 1, "payload.home_team_id": 1, "payload.away_team_id": 1 } }
       )
       .toArray(),
-    collection("match_lineups")
+    collection("tsdb_match_lineups")
       .find({}, { projection: { payload: 1 } })
       .toArray(),
   ]);
@@ -852,33 +870,33 @@ async function getTsdbCacheObservabilitySnapshot() {
       available: false,
       refreshed_at_seconds: Math.floor(nowMs / 1000),
       collections: {
-        players: { ...emptyCollection },
-        teams: { ...emptyCollection },
-        match_lineups: { ...emptyCollection },
-        match_timelines: { ...emptyCollection },
+        tsdb_players: { ...emptyCollection },
+        tsdb_teams: { ...emptyCollection },
+        tsdb_match_lineups: { ...emptyCollection },
+        tsdb_match_timelines: { ...emptyCollection },
       },
     };
   }
 
   const [expected, players, teams, matchLineups, matchTimelines] = await Promise.all([
     getExpectedTsdbCacheIdsFromMongo(),
-    summarizeTsdbCacheCollection("players", nowMs),
-    summarizeTsdbCacheCollection("teams", nowMs),
-    summarizeTsdbCacheCollection("match_lineups", nowMs),
-    summarizeTsdbCacheCollection("match_timelines", nowMs),
+    summarizeTsdbCacheCollection("tsdb_players", nowMs),
+    summarizeTsdbCacheCollection("tsdb_teams", nowMs),
+    summarizeTsdbCacheCollection("tsdb_match_lineups", nowMs),
+    summarizeTsdbCacheCollection("tsdb_match_timelines", nowMs),
   ]);
 
   const expectedByCollection = {
-    players: expected.playerIds,
-    teams: expected.teamIds,
-    match_lineups: expected.matchIds,
-    match_timelines: expected.matchIds,
+    tsdb_players: expected.playerIds,
+    tsdb_teams: expected.teamIds,
+    tsdb_match_lineups: expected.matchIds,
+    tsdb_match_timelines: expected.matchIds,
   };
   const summaries = {
-    players,
-    teams,
-    match_lineups: matchLineups,
-    match_timelines: matchTimelines,
+    tsdb_players: players,
+    tsdb_teams: teams,
+    tsdb_match_lineups: matchLineups,
+    tsdb_match_timelines: matchTimelines,
   };
 
   const collections = {};
@@ -908,43 +926,43 @@ async function getTsdbCacheObservabilitySnapshot() {
 }
 
 async function upsertMatchLineupCache(eventId, payload, metadata = {}) {
-  return upsertTsdbCacheRecord("match_lineups", eventId, payload, metadata);
+  return upsertTsdbCacheRecord("tsdb_match_lineups", eventId, payload, metadata);
 }
 
 async function getMatchLineupCache(eventId) {
-  return getTsdbCacheRecord("match_lineups", eventId);
+  return getTsdbCacheRecord("tsdb_match_lineups", eventId);
 }
 
 async function upsertMatchTimelineCache(eventId, payload, metadata = {}) {
-  return upsertTsdbCacheRecord("match_timelines", eventId, payload, metadata);
+  return upsertTsdbCacheRecord("tsdb_match_timelines", eventId, payload, metadata);
 }
 
 async function getMatchTimelineCache(eventId) {
-  return getTsdbCacheRecord("match_timelines", eventId);
+  return getTsdbCacheRecord("tsdb_match_timelines", eventId);
 }
 
 async function upsertTeamCache(teamId, payload, metadata = {}) {
-  return upsertTsdbCacheRecord("teams", teamId, payload, metadata);
+  return upsertTsdbCacheRecord("tsdb_teams", teamId, payload, metadata);
 }
 
 async function getTeamCache(teamId) {
-  return getTsdbCacheRecord("teams", teamId);
+  return getTsdbCacheRecord("tsdb_teams", teamId);
 }
 
 async function getTeamCaches(teamIds = []) {
-  return getTsdbCacheRecords("teams", teamIds);
+  return getTsdbCacheRecords("tsdb_teams", teamIds);
 }
 
 async function upsertPlayerCache(playerId, payload, metadata = {}) {
-  return upsertTsdbCacheRecord("players", playerId, payload, metadata);
+  return upsertTsdbCacheRecord("tsdb_players", playerId, payload, metadata);
 }
 
 async function getPlayerCache(playerId) {
-  return getTsdbCacheRecord("players", playerId);
+  return getTsdbCacheRecord("tsdb_players", playerId);
 }
 
 async function getPlayerCaches(playerIds = []) {
-  return getTsdbCacheRecords("players", playerIds);
+  return getTsdbCacheRecords("tsdb_players", playerIds);
 }
 
 async function findPlayerCachesByNames(playerNames = []) {
@@ -959,7 +977,7 @@ async function findPlayerCachesByNames(playerNames = []) {
     { "payload.strPlayer": regex },
     { "payload.strPlayerAlternate": regex },
   ]);
-  const records = await collection("players")
+  const records = await collection("tsdb_players")
     .find({
       $or: [
         { "payload.strPlayer": { $in: names } },
@@ -999,6 +1017,171 @@ function playerNameSearchRegexes(names = []) {
 
 function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ---------------------------------------------------------------------------
+// BSD evaluation collections
+//
+// Generic id-keyed upsert: one document per BSD entity, `_id` = entity id,
+// every document stamped with an `updated_at` ISO timestamp. Extra top-level
+// fields (passed via `extra`) are indexed for querying; the full payload is
+// preserved verbatim under `payload`.
+// ---------------------------------------------------------------------------
+
+function hasBsdEventRoundName(payload) {
+  return Boolean(
+    payload &&
+    typeof payload === "object" &&
+    String(payload.round_name || "").trim()
+  );
+}
+
+function shouldPreserveExistingBsdEventRoundName(collectionName, payload) {
+  return collectionName === "bsd_events" && !hasBsdEventRoundName(payload);
+}
+
+function existingBsdEventRoundNameExpression() {
+  return {
+    $and: [
+      { $ne: ["$payload.round_name", null] },
+      { $ne: ["$payload.round_name", ""] },
+    ],
+  };
+}
+
+function bsdEventPayloadPreservingRoundNameExpression(payload) {
+  return {
+    $cond: [
+      existingBsdEventRoundNameExpression(),
+      {
+        $mergeObjects: [
+          { $literal: payload },
+          { round_name: "$payload.round_name" },
+        ],
+      },
+      { $literal: payload },
+    ],
+  };
+}
+
+function bsdUpsertSetStage(collectionName, payload, extra, updatedAtIso) {
+  const setStage = {
+    payload: shouldPreserveExistingBsdEventRoundName(collectionName, payload)
+      ? bsdEventPayloadPreservingRoundNameExpression(payload)
+      : { $literal: payload },
+    updated_at: updatedAtIso,
+  };
+  Object.entries(extra && typeof extra === "object" ? extra : {}).forEach(([key, value]) => {
+    setStage[key] = { $literal: value };
+  });
+  return setStage;
+}
+
+async function upsertBsdRecord(collectionName, id, payload, extra = {}) {
+  const mongoDb = await getDb();
+  if (!mongoDb) return null;
+  const normalizedId = normalizeRecordId(id);
+  if (!normalizedId) return null;
+  const updatedAtIso = new Date().toISOString();
+  const update = shouldPreserveExistingBsdEventRoundName(collectionName, payload)
+    ? [
+        {
+          $set: {
+            ...bsdUpsertSetStage(collectionName, payload, extra, updatedAtIso),
+          },
+        },
+      ]
+    : {
+        $set: {
+          _id: normalizedId,
+          payload,
+          ...extra,
+          updated_at: updatedAtIso,
+        },
+      };
+  await collection(collectionName).updateOne(
+    { _id: normalizedId },
+    update,
+    { upsert: true }
+  );
+  return normalizedId;
+}
+
+async function upsertBsdRecords(collectionName, records = []) {
+  const mongoDb = await getDb();
+  if (!mongoDb || !Array.isArray(records) || records.length === 0) return null;
+  const nowIso = new Date().toISOString();
+  const ops = [];
+  records.forEach(({ id, payload, extra }) => {
+    const normalizedId = normalizeRecordId(id);
+    if (!normalizedId) return;
+    const update = shouldPreserveExistingBsdEventRoundName(collectionName, payload)
+      ? [
+          {
+            $set: {
+              ...bsdUpsertSetStage(collectionName, payload, extra, nowIso),
+            },
+          },
+        ]
+      : {
+          $set: {
+            _id: normalizedId,
+            payload,
+            ...(extra && typeof extra === "object" ? extra : {}),
+            updated_at: nowIso,
+          },
+        };
+    ops.push({
+      updateOne: {
+        filter: { _id: normalizedId },
+        update,
+        upsert: true,
+      },
+    });
+  });
+  if (ops.length === 0) return null;
+  const result = await collection(collectionName).bulkWrite(ops, { ordered: false });
+  return { upserted: result.upsertedCount, modified: result.modifiedCount };
+}
+
+async function getBsdRecords(collectionName, filter = {}) {
+  const mongoDb = await getDb();
+  if (!mongoDb) return [];
+  return collection(collectionName).find(filter).toArray();
+}
+
+// Lightweight existence check across a whole bsd_ collection — projects only
+// _id so callers can build a "already have this" Set without pulling every
+// payload (used to skip re-hydrating incidents/lineups for events already on
+// file).
+async function getBsdRecordIds(collectionName) {
+  const mongoDb = await getDb();
+  if (!mongoDb) return [];
+  const docs = await collection(collectionName).find({}, { projection: { _id: 1 } }).toArray();
+  return docs.map((doc) => doc._id);
+}
+
+// Prunes every doc in a bsd_ collection whose _id is NOT in `keepIds` — used
+// by the broadcasts daily snapshot so fixtures that drop all their listings
+// don't keep stale channels. Returns the deleted count.
+async function deleteBsdRecordsNotIn(collectionName, keepIds = []) {
+  const mongoDb = await getDb();
+  if (!mongoDb) return 0;
+  const normalized = (Array.isArray(keepIds) ? keepIds : [])
+    .map(normalizeRecordId)
+    .filter(Boolean);
+  const result = await collection(collectionName).deleteMany({
+    _id: { $nin: normalized },
+  });
+  return result.deletedCount || 0;
+}
+
+async function getBsdRecord(collectionName, id) {
+  const mongoDb = await getDb();
+  if (!mongoDb) return null;
+  const normalizedId = normalizeRecordId(id);
+  if (!normalizedId) return null;
+  return collection(collectionName).findOne({ _id: normalizedId });
 }
 
 module.exports = {
@@ -1043,4 +1226,16 @@ module.exports = {
   getPlayerCaches,
   findPlayerCachesByNames,
   getTsdbCacheObservabilitySnapshot,
+  upsertBsdRecord,
+  upsertBsdRecords,
+  getBsdRecords,
+  getBsdRecordIds,
+  getBsdRecord,
+  deleteBsdRecordsNotIn,
+  __private: {
+    hasBsdEventRoundName,
+    shouldPreserveExistingBsdEventRoundName,
+    bsdEventPayloadPreservingRoundNameExpression,
+    bsdUpsertSetStage,
+  },
 };

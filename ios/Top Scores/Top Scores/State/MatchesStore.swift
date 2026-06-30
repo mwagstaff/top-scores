@@ -769,6 +769,14 @@ final class MatchesStore: ObservableObject {
         startRefreshTask(preferences: preferences, mode: mode, reason: reason)
     }
 
+    func refreshOnForeground(preferences: PreferencesSnapshot) {
+        let snapshot = resolvedSnapshot(for: preferences)
+        startRefreshTask(preferences: snapshot, mode: activeMode, reason: "foreground")
+        if activeMode != .results {
+            startRefreshTask(preferences: snapshot, mode: .results, reason: "foreground_results_prefetch")
+        }
+    }
+
     func refresh(preferences: PreferencesSnapshot, mode: MatchesViewMode) async {
         if mode == .fixtures {
             await refreshFixtures(preferences: preferences)
@@ -847,8 +855,6 @@ final class MatchesStore: ObservableObject {
         }
 
         let client = APIClient(baseURL: baseURL)
-        await reconcileServerCacheStateIfNeeded(client: client)
-
         var fixtureState = state(for: .fixtures)
         if fixtureState.isLoading {
             Self.log(
@@ -864,13 +870,6 @@ final class MatchesStore: ObservableObject {
             "coverage_end=\(Self.formatDateForLog(fixtureState.fixtureCoverageEnd))"
         )
         let requestStartedAt = Date()
-        FixtureLoadDiagnosticsStore.shared.record(
-            title: "Initial fixtures start",
-            summary:
-                "window=\(Self.formatDateForLog(Self.fixtureLiveOverlapStartDate(from: Self.startOfToday())))..." +
-                "\(Self.formatDateForLog(Self.openEndedFixtureDate())) " +
-                "page_size=\(fixturesLazyPageSize) hydrate_states=false stored_before=\(fixtureState.unfilteredMatches.count)"
-        )
 
         fixturesBackgroundLoadTask?.cancel()
         fixturesBackgroundLoadTask = nil
@@ -883,6 +882,21 @@ final class MatchesStore: ObservableObject {
         if activeMode == .fixtures {
             publishState(for: .fixtures)
         }
+
+        #if DEBUG
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        guard !Task.isCancelled else { return }
+        #endif
+
+        await reconcileServerCacheStateIfNeeded(client: client)
+
+        FixtureLoadDiagnosticsStore.shared.record(
+            title: "Initial fixtures start",
+            summary:
+                "window=\(Self.formatDateForLog(Self.fixtureLiveOverlapStartDate(from: Self.startOfToday())))..." +
+                "\(Self.formatDateForLog(Self.openEndedFixtureDate())) " +
+                "page_size=\(fixturesLazyPageSize) hydrate_states=false stored_before=\(fixtureState.unfilteredMatches.count)"
+        )
 
         do {
             let today = Self.startOfToday()

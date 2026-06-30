@@ -12,6 +12,9 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var fantasyTabBadge: String?
     @State private var fantasyTabShouldPulse = false
+    @ObservedObject private var tablesNavigationCoordinator = TablesNavigationCoordinator.shared
+
+    private static let tablesTabIndex = 2
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -55,6 +58,18 @@ struct ContentView: View {
                 .tag(4)
         }
         .background(Color(.systemBackground))
+        .onChange(of: tablesNavigationCoordinator.pendingTarget) { _, newValue in
+            guard newValue != nil else { return }
+            if selectedTab != Self.tablesTabIndex {
+                tablesNavigationCoordinator.setReturnTabIndex(selectedTab)
+            }
+            selectedTab = Self.tablesTabIndex
+        }
+        .onChange(of: tablesNavigationCoordinator.returnRequestToken) { _, _ in
+            if let originTab = tablesNavigationCoordinator.consumeReturnTabIndex() {
+                selectedTab = originTab
+            }
+        }
         .overlay {
             ContentLifecycleCoordinator(
                 selectedTab: $selectedTab,
@@ -95,10 +110,17 @@ private struct ContentLifecycleCoordinator: View {
                     await syncFantasyState(managerEntryID: fantasyManagerEntryID, squad: newValue)
                 }
             }
+            .onChange(of: fantasyViewModel.isSeasonActive) { _, _ in
+                updateFantasyTabPresentation()
+            }
             .onChange(of: matchesStore.matches) { _, _ in
                 updateFantasyTabPresentation()
             }
             .task(id: fantasyManagerEntryID) {
+                updateFantasyTabPresentation()
+            }
+            .task(id: preferences.apiBaseURL) {
+                await fantasyViewModel.refreshSeasonActiveStatus(apiBaseURL: preferences.apiBaseURL)
                 updateFantasyTabPresentation()
             }
             .onChange(of: preferences.snapshot) { _, _ in
@@ -121,7 +143,8 @@ private struct ContentLifecycleCoordinator: View {
         let nextBadge: String?
         let nextShouldPulse: Bool
 
-        if !trimmedFantasyManagerEntryID.isEmpty,
+        if fantasyViewModel.isSeasonActive,
+           !trimmedFantasyManagerEntryID.isEmpty,
            let squad = fantasyViewModel.data {
             nextBadge = "\(squad.resolvedCurrentScore)"
             nextShouldPulse = matchesStore.matches.contains { match in

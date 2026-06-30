@@ -32,6 +32,24 @@ enum MatchesViewMode: String, Sendable {
         }
     }
 
+    var loadingServerText: String {
+        switch self {
+        case .fixtures:
+            return "Loading fixtures from server"
+        case .results:
+            return "Loading results from server"
+        }
+    }
+
+    var loadingServerSubtitle: String {
+        switch self {
+        case .fixtures:
+            return "Fetching latest fixture data..."
+        case .results:
+            return "Fetching latest results data..."
+        }
+    }
+
     var refreshAccessibilityLabel: String {
         switch self {
         case .fixtures:
@@ -207,14 +225,9 @@ struct MatchesView: View {
             VStack(spacing: 0) {
                 headerView
                 Group {
-                    if matchesStore.isLoading && matchesStore.groupedMatches.isEmpty {
-                        VStack(spacing: 16) {
-                            ProgressView()
-                            Text(mode.loadingText)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if matchesStore.groupedMatches.isEmpty && matchesStore.isLoading {
+                        ServerLoadingStateView(mode: mode)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if displayedMatchDays.isEmpty {
                         emptyState
                     } else {
@@ -733,7 +746,7 @@ struct MatchesView: View {
                 }
             }
 
-            if matchesStore.errorMessage != nil || (matchesStore.isLoading && matchesStore.groupedMatches.isEmpty) || matchesStore.lastUpdated != nil {
+            if matchesStore.errorMessage != nil || (matchesStore.groupedMatches.isEmpty && matchesStore.isLoading) || matchesStore.lastUpdated != nil {
                 VStack(alignment: .leading, spacing: 6) {
                     if let error = matchesStore.errorMessage {
                         Text(error)
@@ -744,11 +757,11 @@ struct MatchesView: View {
                     // Only show the loading indicator when there is no data yet (initial load).
                     // When cached/fresh data is already visible a background refresh should not
                     // disrupt the layout or replace the "Updated" timestamp with a spinner.
-                    if matchesStore.isLoading && matchesStore.groupedMatches.isEmpty {
+                    if matchesStore.groupedMatches.isEmpty && matchesStore.isLoading {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text(mode.loadingText)
+                            Text(mode.loadingServerText)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -1038,8 +1051,7 @@ struct MatchesView: View {
         predictorAvailabilityTask?.cancel()
         let apiBaseURL = preferences.apiBaseURL
         predictorAvailabilityTask = Task {
-            await TeamRankingSettingsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
-            await TeamRankingsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
+            await PredictionsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
 
             guard !Task.isCancelled else { return }
             await MainActor.run {
@@ -1213,7 +1225,7 @@ private struct DailyFixturePredictions: Codable, Identifiable, Sendable {
     let generatedAt: Date
     let totalDayMatches: Int
     let skippedKickedOffCount: Int
-    let skippedMissingEloCount: Int
+    let skippedMissingPredictionCount: Int
     let skippedUnknownCount: Int
     let predictions: [PredictedFixture]
 
@@ -1227,7 +1239,7 @@ private struct DailyFixturePredictions: Codable, Identifiable, Sendable {
         generatedAt: Date,
         totalDayMatches: Int,
         skippedKickedOffCount: Int,
-        skippedMissingEloCount: Int,
+        skippedMissingPredictionCount: Int,
         skippedUnknownCount: Int,
         predictions: [PredictedFixture]
     ) {
@@ -1236,7 +1248,7 @@ private struct DailyFixturePredictions: Codable, Identifiable, Sendable {
         self.generatedAt = generatedAt
         self.totalDayMatches = totalDayMatches
         self.skippedKickedOffCount = skippedKickedOffCount
-        self.skippedMissingEloCount = skippedMissingEloCount
+        self.skippedMissingPredictionCount = skippedMissingPredictionCount
         self.skippedUnknownCount = skippedUnknownCount
         self.predictions = predictions
     }
@@ -1248,7 +1260,7 @@ private struct DailyFixturePredictions: Codable, Identifiable, Sendable {
         generatedAt = try container.decode(Date.self, forKey: .generatedAt)
         totalDayMatches = try container.decode(Int.self, forKey: .totalDayMatches)
         skippedKickedOffCount = try container.decode(Int.self, forKey: .skippedKickedOffCount)
-        skippedMissingEloCount = try container.decode(Int.self, forKey: .skippedMissingEloCount)
+        skippedMissingPredictionCount = try container.decodeIfPresent(Int.self, forKey: .skippedMissingPredictionCount) ?? 0
         skippedUnknownCount = try container.decodeIfPresent(Int.self, forKey: .skippedUnknownCount) ?? 0
         predictions = try container.decode([PredictedFixture].self, forKey: .predictions)
     }
@@ -1272,8 +1284,6 @@ private struct PredictedFixture: Codable, Identifiable, Sendable {
     let homeWinProbability: Double?
     let drawProbability: Double?
     let awayWinProbability: Double?
-    let homeElo: Double?
-    let awayElo: Double?
     let unavailableReason: String?
     let isPostponed: Bool
 
@@ -1350,8 +1360,6 @@ extension PredictedFixture {
         case homeWinProbability
         case drawProbability
         case awayWinProbability
-        case homeElo
-        case awayElo
         case unavailableReason
         case isPostponed
     }
@@ -1375,8 +1383,6 @@ extension PredictedFixture {
         homeWinProbability = try container.decodeIfPresent(Double.self, forKey: .homeWinProbability)
         drawProbability = try container.decodeIfPresent(Double.self, forKey: .drawProbability)
         awayWinProbability = try container.decodeIfPresent(Double.self, forKey: .awayWinProbability)
-        homeElo = try container.decodeIfPresent(Double.self, forKey: .homeElo)
-        awayElo = try container.decodeIfPresent(Double.self, forKey: .awayElo)
         unavailableReason = try container.decodeIfPresent(String.self, forKey: .unavailableReason)
         isPostponed = try container.decodeIfPresent(Bool.self, forKey: .isPostponed) ?? false
     }
@@ -1400,8 +1406,6 @@ extension PredictedFixture {
         try container.encodeIfPresent(homeWinProbability, forKey: .homeWinProbability)
         try container.encodeIfPresent(drawProbability, forKey: .drawProbability)
         try container.encodeIfPresent(awayWinProbability, forKey: .awayWinProbability)
-        try container.encodeIfPresent(homeElo, forKey: .homeElo)
-        try container.encodeIfPresent(awayElo, forKey: .awayElo)
         try container.encodeIfPresent(unavailableReason, forKey: .unavailableReason)
         try container.encode(isPostponed, forKey: .isPostponed)
     }
@@ -1481,7 +1485,7 @@ private enum FixturePredictionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidAPIBaseURL:
-            return "Invalid API base URL for Elo lookup."
+            return "Invalid API base URL for predictions lookup."
         }
     }
 }
@@ -1496,15 +1500,16 @@ private enum FixturePredictionGenerator {
         let sortedMatches = job.matches.sorted { lhs, rhs in
             (lhs.dateTime ?? .distantFuture) < (rhs.dateTime ?? .distantFuture)
         }
-        await TeamRankingSettingsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
-        let settings = await TeamRankingSettingsCatalog.shared.settings()
-        let cachedRankings = await TeamRankingsCatalog.shared.cachedEntries()
-        let lookup = TeamRatingLookup(entries: cachedRankings, defaultPoints: settings.defaultElo)
-        let uniqueTeamNames = Set(sortedMatches.flatMap { [$0.homeTeam, $0.awayTeam] })
-        var ratingsByTeamName: [String: Double] = [:]
-        ratingsByTeamName.reserveCapacity(uniqueTeamNames.count)
-        for teamName in uniqueTeamNames {
-            ratingsByTeamName[teamName] = lookup.resolvedRating(for: teamName)
+        await PredictionsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
+        let leagues = await PredictionsCatalog.shared.cachedLeagues()
+        var marketsByEventID: [String: PredictionMarkets] = [:]
+        var marketsByTeamsAndDate: [String: PredictionMarkets] = [:]
+        for fixture in leagues.flatMap(\.fixtures) {
+            guard let markets = fixture.markets else { continue }
+            marketsByEventID[fixture.eventID] = markets
+            if let date = fixture.date {
+                marketsByTeamsAndDate[joinKey(home: fixture.homeTeam, away: fixture.awayTeam, date: date)] = markets
+            }
         }
 
         let computedRows = await withTaskGroup(of: PredictionComputationResult.self) { group in
@@ -1522,20 +1527,46 @@ private enum FixturePredictionGenerator {
                 let kickoff = match.dateTime
                 let isPostponed = match.isPostponed
                 let isInProgress = match.isInProgress
+                let markets = match.matchDetailsID.flatMap { marketsByEventID[$0] }
+                    ?? marketsByTeamsAndDate[joinKey(home: matchHomeTeam, away: matchAwayTeam, date: matchDate)]
+
+                #if DEBUG
+                // TEMPORARY DEBUG — remove once BSD predictions are verified in the field.
+                if let markets {
+                    NSLog(
+                        "[FixturePredictionGenerator] %@ vs %@ matchedVia=%@ xgHome=%.2f xgAway=%.2f probHome=%.1f probDraw=%.1f probAway=%.1f",
+                        matchHomeTeam,
+                        matchAwayTeam,
+                        match.matchDetailsID.flatMap { marketsByEventID[$0] } != nil ? "eventID" : "teamsAndDate",
+                        markets.expectedGoals?.home ?? -1,
+                        markets.expectedGoals?.away ?? -1,
+                        markets.matchResult?.probHome ?? -1,
+                        markets.matchResult?.probDraw ?? -1,
+                        markets.matchResult?.probAway ?? -1
+                    )
+                } else {
+                    NSLog("[FixturePredictionGenerator] %@ vs %@ matchedVia=none (no BSD prediction found)", matchHomeTeam, matchAwayTeam)
+                }
+                #endif
 
                 group.addTask {
-                    let homeElo = ratingsByTeamName[matchHomeTeam]
-                    let awayElo = ratingsByTeamName[matchAwayTeam]
-
                     let unavailableReason: String?
+                    let skippedMissingPrediction: Bool
                     if kickoff == nil {
                         unavailableReason = "Kick-off time unavailable"
+                        skippedMissingPrediction = false
                     } else if isPostponed {
                         unavailableReason = "Match postponed"
+                        skippedMissingPrediction = false
                     } else if kickoff! <= now {
                         unavailableReason = isInProgress ? "Already in progress" : "Already kicked off"
+                        skippedMissingPrediction = false
+                    } else if markets == nil {
+                        unavailableReason = "Prediction unavailable"
+                        skippedMissingPrediction = true
                     } else {
                         unavailableReason = nil
+                        skippedMissingPrediction = false
                     }
 
                     if let unavailableReason {
@@ -1559,18 +1590,16 @@ private enum FixturePredictionGenerator {
                                 homeWinProbability: nil,
                                 drawProbability: nil,
                                 awayWinProbability: nil,
-                                homeElo: homeElo,
-                                awayElo: awayElo,
                                 unavailableReason: unavailableReason,
                                 isPostponed: isPostponed
                             ),
                             skippedKickedOff: kickoff != nil && kickoff! <= now && !isPostponed,
-                            skippedMissingElo: false,
+                            skippedMissingPrediction: skippedMissingPrediction,
                             skippedUnknown: kickoff == nil
                         )
                     }
 
-                    let estimate = EloScorePredictor.predict(homeElo: homeElo!, awayElo: awayElo!)
+                    let estimate = MarketsScorePredictor.predict(markets: markets!)
                     return PredictionComputationResult(
                         index: index,
                         fixture: PredictedFixture(
@@ -1591,13 +1620,11 @@ private enum FixturePredictionGenerator {
                             homeWinProbability: estimate.homeWinProbability,
                             drawProbability: estimate.drawProbability,
                             awayWinProbability: estimate.awayWinProbability,
-                            homeElo: homeElo,
-                            awayElo: awayElo,
                             unavailableReason: nil,
                             isPostponed: false
                         ),
                         skippedKickedOff: false,
-                        skippedMissingElo: false,
+                        skippedMissingPrediction: false,
                         skippedUnknown: false
                     )
                 }
@@ -1614,7 +1641,7 @@ private enum FixturePredictionGenerator {
         let orderedRows = computedRows.sorted { $0.index < $1.index }
         let predictions = orderedRows.map(\.fixture)
         let skippedKickedOffCount = orderedRows.reduce(0) { $0 + ($1.skippedKickedOff ? 1 : 0) }
-        let skippedMissingEloCount = orderedRows.reduce(0) { $0 + ($1.skippedMissingElo ? 1 : 0) }
+        let skippedMissingPredictionCount = orderedRows.reduce(0) { $0 + ($1.skippedMissingPrediction ? 1 : 0) }
         let skippedUnknownCount = orderedRows.reduce(0) { $0 + ($1.skippedUnknown ? 1 : 0) }
 
         return DailyFixturePredictions(
@@ -1623,10 +1650,18 @@ private enum FixturePredictionGenerator {
             generatedAt: now,
             totalDayMatches: job.matches.count,
             skippedKickedOffCount: skippedKickedOffCount,
-            skippedMissingEloCount: skippedMissingEloCount,
+            skippedMissingPredictionCount: skippedMissingPredictionCount,
             skippedUnknownCount: skippedUnknownCount,
             predictions: predictions
         )
+    }
+
+    private nonisolated static func joinKey(home: String, away: String, date: String) -> String {
+        "\(normalizedTeamKey(home))|\(normalizedTeamKey(away))|\(date)"
+    }
+
+    private nonisolated static func normalizedTeamKey(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
 
@@ -1634,7 +1669,7 @@ private struct PredictionComputationResult: Sendable {
     let index: Int
     let fixture: PredictedFixture
     let skippedKickedOff: Bool
-    let skippedMissingElo: Bool
+    let skippedMissingPrediction: Bool
     let skippedUnknown: Bool
 }
 
@@ -1648,31 +1683,22 @@ private struct ScorelineEstimate: Sendable {
     let awayWinProbability: Double
 }
 
-private enum EloScorePredictor {
-    private nonisolated static let homeAdvantageElo = 64.0
-    private nonisolated static let baselineTotalGoals = 2.55
-    private nonisolated static let maxGoalsForDistribution = 8
+private enum MarketsScorePredictor {
+    // Used only when BSD's expected_goals market is missing for a fixture that
+    // otherwise has markets data (e.g. btts/over_under present, expected_goals not).
+    private nonisolated static let fallbackExpectedGoals = 1.275
 
-    nonisolated static func predict(homeElo: Double, awayElo: Double) -> ScorelineEstimate {
-        let delta = (homeElo + homeAdvantageElo) - awayElo
+    nonisolated static func predict(markets: PredictionMarkets) -> ScorelineEstimate {
+        let baseHome = max(0.15, markets.expectedGoals?.home ?? fallbackExpectedGoals)
+        let baseAway = max(0.15, markets.expectedGoals?.away ?? fallbackExpectedGoals)
 
-        let totalGoals = clamp(
-            baselineTotalGoals + Double.random(in: -0.20...0.30),
-            min: 1.90,
-            max: 3.60
-        )
-
-        let goalDiffSignal = tanh(delta / 280.0) * 1.20
-        var lambdaHome = max(0.15, (totalGoals + goalDiffSignal) / 2)
-        var lambdaAway = max(0.15, (totalGoals - goalDiffSignal) / 2)
-
-        lambdaHome *= Double.random(in: 0.88...1.20)
-        lambdaAway *= Double.random(in: 0.88...1.20)
+        var lambdaHome = baseHome * Double.random(in: 0.88...1.20)
+        var lambdaAway = baseAway * Double.random(in: 0.88...1.20)
 
         // Inject occasional volatility so underdogs still produce upset scorelines.
         if Double.random(in: 0...1) < 0.10 {
             let swing = Double.random(in: 0.12...0.42)
-            if delta >= 0 {
+            if baseHome >= baseAway {
                 lambdaHome *= (1 - swing)
                 lambdaAway *= (1 + swing)
             } else {
@@ -1686,7 +1712,9 @@ private enum EloScorePredictor {
 
         let homeGoals = samplePoisson(lambda: lambdaHome)
         let awayGoals = samplePoisson(lambda: lambdaAway)
-        let (homeWin, draw, awayWin) = outcomeProbabilities(lambdaHome: lambdaHome, lambdaAway: lambdaAway)
+        // Win/draw/away probabilities come straight from BSD's own match_result
+        // market rather than being recomputed from the sampled Poisson means.
+        let (homeWin, draw, awayWin) = outcomeProbabilities(from: markets.matchResult)
 
         return ScorelineEstimate(
             homeGoals: homeGoals,
@@ -1718,40 +1746,16 @@ private enum EloScorePredictor {
     }
 
     private nonisolated static func outcomeProbabilities(
-        lambdaHome: Double,
-        lambdaAway: Double
+        from matchResult: MatchResultMarket?
     ) -> (Double, Double, Double) {
-        var home = 0.0
-        var draw = 0.0
-        var away = 0.0
-
-        for homeGoals in 0...maxGoalsForDistribution {
-            let homePMF = poissonPMF(k: homeGoals, lambda: lambdaHome)
-            for awayGoals in 0...maxGoalsForDistribution {
-                let probability = homePMF * poissonPMF(k: awayGoals, lambda: lambdaAway)
-                if homeGoals > awayGoals {
-                    home += probability
-                } else if homeGoals == awayGoals {
-                    draw += probability
-                } else {
-                    away += probability
-                }
-            }
-        }
+        guard let matchResult else { return (0.33, 0.34, 0.33) }
+        let home = max(0, matchResult.probHome) / 100
+        let draw = max(0, matchResult.probDraw) / 100
+        let away = max(0, matchResult.probAway) / 100
 
         let total = home + draw + away
         guard total > 0 else { return (0.33, 0.34, 0.33) }
         return (home / total, draw / total, away / total)
-    }
-
-    private nonisolated static func poissonPMF(k: Int, lambda: Double) -> Double {
-        guard lambda > 0 else { return k == 0 ? 1 : 0 }
-        var value = exp(-lambda)
-        guard k > 0 else { return value }
-        for i in 1...k {
-            value *= lambda / Double(i)
-        }
-        return value
     }
 }
 
@@ -2236,6 +2240,126 @@ private struct ShareAppIconView: View {
             return nil
         }
         return image
+    }
+}
+
+private struct ServerLoadingStateView: View {
+    let mode: MatchesViewMode
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var animateSpinner = false
+
+    var body: some View {
+        VStack(spacing: 18) {
+            LiquidServerSpinner(isAnimating: animateSpinner && !reduceMotion)
+
+            VStack(spacing: 5) {
+                Text(mode.loadingServerText)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Text(mode.loadingServerSubtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
+        .background {
+            loadingBackground
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.24), radius: 26, x: 0, y: 18)
+        .padding(.horizontal, 32)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(mode.loadingServerText)
+        .onAppear {
+            animateSpinner = true
+        }
+        .onDisappear {
+            animateSpinner = false
+        }
+    }
+
+    @ViewBuilder
+    private var loadingBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: 30, style: .continuous)
+        if #available(iOS 26.0, *) {
+            shape
+                .fill(.clear)
+                .glassEffect(.regular, in: shape)
+        } else {
+            shape
+                .fill(.ultraThinMaterial)
+        }
+    }
+}
+
+private struct LiquidServerSpinner: View {
+    let isAnimating: Bool
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.accentColor.opacity(0.24),
+                            Color.accentColor.opacity(0.04),
+                            .clear,
+                        ],
+                        center: .center,
+                        startRadius: 2,
+                        endRadius: 46
+                    )
+                )
+                .frame(width: 82, height: 82)
+
+            Circle()
+                .stroke(.white.opacity(0.16), lineWidth: 1)
+                .frame(width: 68, height: 68)
+
+            Circle()
+                .trim(from: 0.08, to: 0.76)
+                .stroke(
+                    AngularGradient(
+                        colors: [
+                            Color.accentColor.opacity(0.15),
+                            Color.accentColor,
+                            .white.opacity(0.92),
+                            Color.accentColor.opacity(0.18),
+                        ],
+                        center: .center
+                    ),
+                    style: StrokeStyle(lineWidth: 5, lineCap: .round)
+                )
+                .frame(width: 58, height: 58)
+                .rotationEffect(.degrees(isAnimating ? 360 : 0))
+                .animation(.linear(duration: 1.15).repeatForever(autoreverses: false), value: isAnimating)
+
+            Circle()
+                .trim(from: 0.0, to: 0.32)
+                .stroke(
+                    .white.opacity(0.72),
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                )
+                .frame(width: 42, height: 42)
+                .rotationEffect(.degrees(isAnimating ? -360 : 0))
+                .animation(.linear(duration: 1.65).repeatForever(autoreverses: false), value: isAnimating)
+
+            Image(systemName: "arrow.down.to.line.compact")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.white, Color.accentColor)
+                .symbolRenderingMode(.palette)
+                .shadow(color: Color.accentColor.opacity(0.55), radius: 10, x: 0, y: 0)
+        }
+        .frame(width: 92, height: 92)
     }
 }
 

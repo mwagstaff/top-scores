@@ -75,11 +75,33 @@ function normalizeTeamRankingSource(value) {
   return null;
 }
 
+const TEAM_LOGO_SOURCE_BUNDLED = "bundled";
+const TEAM_LOGO_SOURCE_TSDB = "tsdb";
+
+function normalizeTeamLogoSource(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === TEAM_LOGO_SOURCE_TSDB) return TEAM_LOGO_SOURCE_TSDB;
+  return TEAM_LOGO_SOURCE_BUNDLED;
+}
+
+const MATCH_SOURCE_TSDB = "tsdb";
+const MATCH_SOURCE_BSD = "bsd";
+
+// Normalises a match-data-source label to "tsdb" | "bsd", or null if unrecognised.
+function normalizeMatchSource(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === MATCH_SOURCE_BSD) return MATCH_SOURCE_BSD;
+  if (normalized === MATCH_SOURCE_TSDB || normalized === "thesportsdb") return MATCH_SOURCE_TSDB;
+  return null;
+}
+
 const envCompetitionAllowlist = parseCsvEnv(process.env.COMPETITION_ALLOWLIST);
 const envTeamRankingDefaultSource = normalizeTeamRankingSource(
   process.env.TEAM_RANKING_DEFAULT_SOURCE
 );
 const envTeamRankingDefaultElo = parseNumberEnv(process.env.TEAM_RANKING_DEFAULT_ELO, 1000);
+const envTeamLogoSource = normalizeTeamLogoSource(process.env.TEAM_LOGO_SOURCE || TEAM_LOGO_SOURCE_TSDB);
+const envMatchDataSource = normalizeMatchSource(process.env.MATCH_DATA_SOURCE) || MATCH_SOURCE_TSDB;
 
 const SERVER_CONFIG = {
   competitionAllowlist:
@@ -89,6 +111,9 @@ const SERVER_CONFIG = {
   teamRankingDefaultSource:
     envTeamRankingDefaultSource || TEAM_RANKING_SOURCE_MERGED,
   teamRankingDefaultElo: envTeamRankingDefaultElo,
+  teamLogoSource: envTeamLogoSource,
+  // Default match data source when no request override or runtime flag is set.
+  matchDataSource: envMatchDataSource,
 };
 
 module.exports = {
@@ -100,7 +125,13 @@ module.exports = {
   TEAM_RANKING_SOURCE_CLUBELO,
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
   TEAM_RANKING_SOURCE_NATIONAL_ELO,
+  TEAM_LOGO_SOURCE_BUNDLED,
+  TEAM_LOGO_SOURCE_TSDB,
+  MATCH_SOURCE_TSDB,
+  MATCH_SOURCE_BSD,
   normalizeTeamRankingSource,
+  normalizeTeamLogoSource,
+  normalizeMatchSource,
   loadCompetitionWeightsConfig,
   SERVER_CONFIG,
 };

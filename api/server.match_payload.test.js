@@ -190,6 +190,10 @@ function buildStartingLineupFromRows(startNumber, rows) {
       return {
         number: startNumber + index,
         name: `${row.prefix} Player ${index + 1}`,
+        id_player: null,
+        position: null,
+        position_short: null,
+        cutout_url: null,
         position_category: row.position_category,
         formation_row_index: rowIndex,
         formation_slot_index: slotIndex,
@@ -598,7 +602,7 @@ test("buildCanonicalMatchWriteAuditEntry captures previous and next summaries", 
       away_team: "Liverpool",
       home_score: 3,
       away_score: 2,
-      score_status: "FT",
+      score_status: "Pens",
       penalty_result: null,
       updated_at: "2026-03-03T22:00:00.000Z",
     },
@@ -1982,6 +1986,43 @@ test("dedupeMatchListPayloads collapses duplicate fixtures even when one row lac
   assert.deepEqual(deduped[0].tv_channels, ["BBC Sport Website"]);
 });
 
+test("dedupeMatchListPayloads keeps same-day placeholder knockout fixtures separate", () => {
+  const deduped = dedupeMatchListPayloads([
+    {
+      date: "2026-07-01",
+      time: "02:00",
+      league: "FIFA World Cup 2026",
+      league_subcategory: "Round of 32",
+      home_team: "Mexico",
+      away_team: "Ecuador",
+      match_details_id: "8365",
+    },
+    {
+      date: "2026-07-01",
+      time: "17:00",
+      league: "FIFA World Cup 2026",
+      league_subcategory: "Round of 32",
+      home_team: "England",
+      away_team: "TBC",
+      match_details_id: "8366",
+    },
+    {
+      date: "2026-07-01",
+      time: "21:00",
+      league: "FIFA World Cup 2026",
+      league_subcategory: "Round of 32",
+      home_team: "Belgium",
+      away_team: "TBC",
+      match_details_id: "8367",
+    },
+  ]);
+
+  assert.deepEqual(
+    deduped.map((match) => match.match_details_id).sort(),
+    ["8365", "8366", "8367"]
+  );
+});
+
 test("dedupeMatchListPayloads collapses Bundesliga alias rows and keeps the BBC live match id", () => {
   const deduped = dedupeMatchListPayloads([
     {
@@ -2276,6 +2317,9 @@ test("enrichMatchDetailsAggregateImmediately fetches knockout aggregate for stal
     persistOperationalMatchDetailsSafe: async (recordsById, options) => {
       persisted.push({ recordsById, options });
     },
+    persistLiveActivityMatchTimelineSnapshotsSafe: async () => {},
+    saveOperationalMatchWriteLogEntries: async () => {},
+    historyMatchesById: new Map(),
   });
 
   assert.equal(enriched.aggregate_home_score, 1);
@@ -2309,6 +2353,9 @@ test("enrichKnockoutAggregatesForListMatches updates lookup for stale fixture ag
       aggregate_away_score: 0,
     }),
     persistOperationalMatchDetailsSafe: async () => {},
+    persistLiveActivityMatchTimelineSnapshotsSafe: async () => {},
+    saveOperationalMatchWriteLogEntries: async () => {},
+    historyMatchesById: new Map(),
   });
 
   assert.equal(result.enrichedCount, 1);
@@ -2595,6 +2642,42 @@ test("mergeMatchDetailsPayload preserves FT when refreshed live poll regresses t
   assert.equal(merged.score_status, "FT");
 });
 
+test("mergeMatchDetailsPayload lets TSDB live state correct a stale terminal status", () => {
+  const nowMs = Date.parse("2026-06-18T20:56:21.000Z");
+  const existing = normalizeMatchDetailsPayload({
+    id: "2461110",
+    match_details_id: "2461110",
+    date: "2026-06-18",
+    time: "20:00",
+    league: "FIFA World Cup",
+    home_team: "Switzerland",
+    away_team: "Bosnia-Herzegovina",
+    home_score: 2,
+    away_score: 0,
+    score_status: "FT",
+  }, { nowMs });
+
+  const incoming = normalizeMatchDetailsPayload({
+    id: "2461110",
+    match_details_id: "2461110",
+    date: "2026-06-18",
+    time: "20:00",
+    league: "FIFA World Cup",
+    home_team: "Switzerland",
+    away_team: "Bosnia-Herzegovina",
+    home_score: 3,
+    away_score: 1,
+    score_status: "90+6",
+    has_tsdb_source: true,
+  }, { nowMs });
+
+  const merged = mergeMatchDetailsPayload(existing, incoming, "2026-06-18T20:56:21.000Z");
+  assert.equal(merged.score_status, "90+6");
+  assert.equal(merged.home_score, 3);
+  assert.equal(merged.away_score, 1);
+  assert.equal(merged.in_progress, true);
+});
+
 test("mergeMatchDetailsPayload upgrades first-half stoppage time to HT", () => {
   const existing = normalizeMatchDetailsPayload({
     details_url: DETAILS_URL,
@@ -2709,6 +2792,7 @@ test("mergeConfirmedVarDisallowedGoalsIntoPayload appends confirmed disallowed g
 });
 
 test("mergeConfirmedVarDisallowedGoalsIntoPayload removes stale disallowed goals from scorelines", async () => {
+  clearFootballOperationalMemoryState();
   const merged = await mergeConfirmedVarDisallowedGoalsIntoPayload(
     {
       id: DETAILS_ID,
@@ -2809,6 +2893,7 @@ test("mergeConfirmedVarDisallowedGoalsIntoPayload removes stale disallowed goals
 });
 
 test("mergeConfirmedVarDisallowedGoalsIntoPayload removes stale disallowed goals by minute when scorer name differs", async () => {
+  clearFootballOperationalMemoryState();
   const merged = await mergeConfirmedVarDisallowedGoalsIntoPayload(
     {
       id: DETAILS_ID,
@@ -2896,6 +2981,7 @@ test("mergeConfirmedVarDisallowedGoalsIntoPayload removes stale disallowed goals
 });
 
 test("mergeConfirmedVarDisallowedGoalsIntoPayloads corrects paged list payloads with shared history", async () => {
+  clearFootballOperationalMemoryState();
   let loadHistoryCalls = 0;
   const merged = await mergeConfirmedVarDisallowedGoalsIntoPayloads(
     [
@@ -2995,6 +3081,7 @@ test("mergeConfirmedVarDisallowedGoalsIntoPayloads skips shared history for upco
 });
 
 test("mergeConfirmedVarDisallowedGoalsIntoPayload corrects list payloads that only carry match_details_id", async () => {
+  clearFootballOperationalMemoryState();
   const merged = await mergeConfirmedVarDisallowedGoalsIntoPayload(
     {
       match_details_id: DETAILS_ID,
@@ -3121,7 +3208,7 @@ test("filterStaleMatches accepts a corrected scoreless kickoff fixture over stal
 test("normalizeCacheStateDomains resolves aliases and rejects unknown values", () => {
   const normalized = normalizeCacheStateDomains(["fixtures", "match-details", "bbc", "bogus"]);
 
-  assert.deepStrictEqual(normalized.domains, ["matches", "match_details", "bbc_live"]);
+  assert.deepStrictEqual(normalized.domains, ["matches", "match_details", "tsdb_live"]);
   assert.deepStrictEqual(normalized.invalid, ["bogus"]);
 });
 
@@ -3138,9 +3225,9 @@ test("bumpCacheStateSnapshot increments only requested cache generations", () =>
     bumped.domains.match_details.generation,
     base.domains.match_details.generation
   );
-  assert.equal(bumped.domains.bbc_live.generation, base.domains.bbc_live.generation + 1);
+  assert.equal(bumped.domains.tsdb_live.generation, base.domains.tsdb_live.generation + 1);
   assert.equal(bumped.domains.matches.reason, "incident_fix");
-  assert.equal(bumped.domains.bbc_live.source, "admin_api");
+  assert.equal(bumped.domains.tsdb_live.source, "admin_api");
   assert.equal(bumped.updated_at, "2026-03-08T09:05:00.000Z");
 });
 
@@ -3159,7 +3246,7 @@ test("normalizeOperationalCacheState backfills missing domains", () => {
 
   assert.equal(normalized.domains.matches.generation, 4);
   assert.equal(normalized.domains.match_details.generation, 1);
-  assert.equal(normalized.domains.bbc_live.generation, 1);
+  assert.equal(normalized.domains.tsdb_live.generation, 1);
   assert.equal(normalized.updated_at, "2026-03-08T09:10:00.000Z");
 });
 
@@ -3423,6 +3510,46 @@ test("toMatchListPayload stabilizes stale in-progress status to FT once kickoff 
   assert.equal(payload.away_score, 3);
 });
 
+test("toMatchListPayload prefers fresher TSDB live list state over stale details FT", () => {
+  const payload = toMatchListPayload(
+    {
+      id: "2461110",
+      match_details_id: "2461110",
+      date: "2026-06-18",
+      time: "20:00",
+      league: "FIFA World Cup",
+      home_team: "Switzerland",
+      away_team: "Bosnia-Herzegovina",
+      home_score: 3,
+      away_score: 1,
+      score_status: "90+6",
+      has_tsdb_source: true,
+      updated_at: "2026-06-18T20:56:21.000Z",
+    },
+    {
+      matchDetailsLookup: {
+        2461110: {
+          id: "2461110",
+          date: "2026-06-18",
+          time: "20:00",
+          league: "FIFA World Cup",
+          home_team: "Switzerland",
+          away_team: "Bosnia-Herzegovina",
+          home_score: 2,
+          away_score: 0,
+          score_status: "FT",
+          updated_at: "2026-06-18T20:03:00.000Z",
+        },
+      },
+      nowMs: Date.parse("2026-06-18T20:58:00.000Z"),
+    }
+  );
+
+  assert.equal(payload.score_status, "90+6");
+  assert.equal(payload.home_score, 3);
+  assert.equal(payload.away_score, 1);
+});
+
 test("toMonitorCandidateFromDetailsPayload can expose live fields without a date when explicitly allowed", () => {
   const candidate = toMonitorCandidateFromDetailsPayload(
     {
@@ -3619,6 +3746,7 @@ test("buildMonitorCandidatesForDate overlays BBC live state when merged details 
           match_time: "42",
         },
       ],
+      now: new Date("2026-04-04T18:12:00.000Z"),
     }
   );
 
@@ -3728,12 +3856,12 @@ test("collectInProgressMatchDetailTargets includes live matches without active r
       away_score: 2,
       has_tsdb_source: true,
     }),
-    "2026-03-03T21:21:00.000Z"
+    new Date(Date.now() - 5 * 60 * 1000).toISOString()
   );
 
   const targets = collectInProgressMatchDetailTargets();
   assert.deepStrictEqual(
-    targets.map((target) => ({ id: target.id, details_url: target.details_url })),
+    targets.map((target) => ({ id: target.id, details_url: target.seed_match.details_url })),
     [{ id: DETAILS_ID, details_url: DETAILS_URL }]
   );
 
@@ -4120,6 +4248,7 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
     penalty_result: null,
     in_progress: false,
     updated_at: null,
+    tv_channels: [],
     league_subcategory: "5th Round",
     home_goal_scorers: [{ player: "W. Evans", goal_times: ["50'"] }],
     away_goal_scorers: [
@@ -4146,7 +4275,9 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
           { prefix: "Home", count: 4, position_category: "midfielder" },
           { prefix: "Home", count: 2, position_category: "attacker" },
         ]),
-        substitutes: [{ number: 12, name: "Home Sub 1" }],
+        substitutes: [
+          { number: 12, name: "Home Sub 1", id_player: null, position: null, position_short: null, cutout_url: null },
+        ],
         substitutions: [],
       },
       away: {
@@ -4160,7 +4291,9 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
           { prefix: "Away", count: 1, position_category: "midfielder" },
           { prefix: "Away", count: 1, position_category: "attacker" },
         ]),
-        substitutes: [{ number: 40, name: "Away Sub 1" }],
+        substitutes: [
+          { number: 40, name: "Away Sub 1", id_player: null, position: null, position_short: null, cutout_url: null },
+        ],
         substitutions: [],
       },
     },

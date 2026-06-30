@@ -16,6 +16,26 @@ final class WatchTeamLogoResolver {
         loadLogos()
     }
 
+    func image(for teamName: String, teamId: String?, alternateNames: [String] = []) -> UIImage? {
+        if let teamId, let badge = watchBadgeImage(forTeamId: teamId) {
+            return badge
+        }
+        return image(for: teamName, alternateNames: alternateNames)
+    }
+
+    private func watchBadgeImage(forTeamId teamId: String) -> UIImage? {
+        guard let dir = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: WatchAppGroupConfig.identifier)?
+            .appendingPathComponent("team-badges", isDirectory: true) else { return nil }
+        let manifestURL = dir.appendingPathComponent("manifest.json")
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode([String: String].self, from: data),
+              let filename = manifest[teamId] else { return nil }
+        let fileURL = dir.appendingPathComponent(filename)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        return UIImage(contentsOfFile: fileURL.path)
+    }
+
     func image(for teamName: String, alternateNames: [String] = []) -> UIImage? {
         let cacheKey = Self.cacheKey(for: teamName, alternateNames: alternateNames)
         if let cached = cache[cacheKey] {
@@ -362,15 +382,24 @@ final class WatchTvLogoResolver {
             return cached
         }
 
-        if let assetImage = resolveAssetImage(for: channelName) ?? resolveAssetFallbackImage() {
+        if let assetImage = resolveAssetImage(for: channelName) {
             cache[channelName] = assetImage
             return assetImage
         }
 
-        let url = resolveURL(for: channelName) ?? resolveURL(for: fallbackName)
-        guard let url else { return nil }
+        if let url = resolveURL(for: channelName),
+           let image = UIImage(contentsOfFile: url.path) {
+            cache[channelName] = image
+            return image
+        }
 
-        let image = UIImage(contentsOfFile: url.path)
+        if let fallbackImage = resolveAssetFallbackImage() {
+            cache[channelName] = fallbackImage
+            return fallbackImage
+        }
+
+        guard let fallbackURL = resolveURL(for: fallbackName) else { return nil }
+        let image = UIImage(contentsOfFile: fallbackURL.path)
         if let image {
             cache[channelName] = image
         }

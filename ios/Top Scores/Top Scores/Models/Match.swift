@@ -150,6 +150,22 @@ struct MatchYellowCardEvent: Codable, Hashable, Sendable {
     }
 }
 
+struct MatchVarEvent: Codable, Hashable, Sendable {
+    let player: String?
+    let minute: String?
+    let detail: String
+    let cutoutURL: String?
+    let idPlayer: String?
+
+    enum CodingKeys: String, CodingKey {
+        case player
+        case minute
+        case detail
+        case cutoutURL = "cutout_url"
+        case idPlayer = "id_player"
+    }
+}
+
 struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
     let number: Int
     let name: String
@@ -287,6 +303,33 @@ struct PlayerDetails: Codable, Hashable, Sendable {
     }
 }
 
+struct MatchSocialItem: Codable, Hashable, Identifiable, Sendable {
+    let id: String
+    let type: String?
+    let url: String
+    let title: String
+    let text: String?
+    let thumbnail: String?
+    let publishedAt: String?
+    let account: Account?
+
+    struct Account: Codable, Hashable, Sendable {
+        let handle: String?
+        let name: String?
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case url
+        case title
+        case text
+        case thumbnail
+        case publishedAt = "published_at"
+        case account
+    }
+}
+
 struct MatchTeamLineup: Codable, Hashable, Sendable {
     let team: String?
     let manager: String?
@@ -349,6 +392,8 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
     let awayYellowCards: [MatchYellowCardEvent]
     let homeRedCards: [MatchRedCardEvent]
     let awayRedCards: [MatchRedCardEvent]
+    let homeVarEvents: [MatchVarEvent]
+    let awayVarEvents: [MatchVarEvent]
     let teamLineups: MatchTeamLineups?
     let penaltyResult: String?
     let inProgress: Bool?
@@ -379,6 +424,8 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
         case awayYellowCards = "away_yellow_cards"
         case homeRedCards = "home_red_cards"
         case awayRedCards = "away_red_cards"
+        case homeVarEvents = "home_var_events"
+        case awayVarEvents = "away_var_events"
         case teamLineups = "team_lineups"
         case penaltyResult = "penalty_result"
         case inProgress = "in_progress"
@@ -411,6 +458,8 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
         awayYellowCards = try container.decodeIfPresent([MatchYellowCardEvent].self, forKey: .awayYellowCards) ?? []
         homeRedCards = try container.decodeIfPresent([MatchRedCardEvent].self, forKey: .homeRedCards) ?? []
         awayRedCards = try container.decodeIfPresent([MatchRedCardEvent].self, forKey: .awayRedCards) ?? []
+        homeVarEvents = try container.decodeIfPresent([MatchVarEvent].self, forKey: .homeVarEvents) ?? []
+        awayVarEvents = try container.decodeIfPresent([MatchVarEvent].self, forKey: .awayVarEvents) ?? []
         teamLineups = try container.decodeIfPresent(MatchTeamLineups.self, forKey: .teamLineups)
         penaltyResult = try container.decodeIfPresent(String.self, forKey: .penaltyResult)
         inProgress = try container.decodeIfPresent(Bool.self, forKey: .inProgress)
@@ -461,6 +510,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let time: String
     let homeTeam: String
     let awayTeam: String
+    let homeTeamId: String?
+    let awayTeamId: String?
     let homeShortName: String?
     let awayShortName: String?
     let league: String
@@ -485,6 +536,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let awayYellowCards: [MatchYellowCardEvent]
     let homeRedCards: [MatchRedCardEvent]
     let awayRedCards: [MatchRedCardEvent]
+    let homeVarEvents: [MatchVarEvent]
+    let awayVarEvents: [MatchVarEvent]
     let teamLineups: MatchTeamLineups?
     let penaltyResult: String?
     let isTestMatch: Bool?
@@ -494,6 +547,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         time: String,
         homeTeam: String,
         awayTeam: String,
+        homeTeamId: String? = nil,
+        awayTeamId: String? = nil,
         homeShortName: String? = nil,
         awayShortName: String? = nil,
         league: String,
@@ -518,6 +573,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         awayYellowCards: [MatchYellowCardEvent] = [],
         homeRedCards: [MatchRedCardEvent] = [],
         awayRedCards: [MatchRedCardEvent] = [],
+        homeVarEvents: [MatchVarEvent] = [],
+        awayVarEvents: [MatchVarEvent] = [],
         teamLineups: MatchTeamLineups? = nil,
         penaltyResult: String? = nil,
         isTestMatch: Bool? = nil
@@ -526,6 +583,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.time = time
         self.homeTeam = homeTeam
         self.awayTeam = awayTeam
+        self.homeTeamId = homeTeamId
+        self.awayTeamId = awayTeamId
         self.homeShortName = homeShortName
         self.awayShortName = awayShortName
         self.league = league
@@ -550,6 +609,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.awayYellowCards = awayYellowCards
         self.homeRedCards = homeRedCards
         self.awayRedCards = awayRedCards
+        self.homeVarEvents = homeVarEvents
+        self.awayVarEvents = awayVarEvents
         self.teamLineups = teamLineups
         self.penaltyResult = penaltyResult
         self.isTestMatch = isTestMatch
@@ -651,6 +712,39 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return "\(winner) win \(homeScore) - \(awayScore) after extra time"
     }
 
+    var penaltyDetailSummaryText: String? {
+        let trimmedPenaltyResult = penaltyResult?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmedPenaltyResult, !trimmedPenaltyResult.isEmpty else {
+            return nil
+        }
+        guard let scorePair = Self.firstScorePair(in: trimmedPenaltyResult) else {
+            return "AET: \(trimmedPenaltyResult)"
+        }
+
+        let homeMentioned = Self.containsTeamName(homeTeam, in: trimmedPenaltyResult)
+        let awayMentioned = Self.containsTeamName(awayTeam, in: trimmedPenaltyResult)
+        let winner: String
+        let winnerScore: Int
+        let loserScore: Int
+
+        if homeMentioned != awayMentioned {
+            let mentionedHome = homeMentioned
+            winner = mentionedHome ? homeTeam : awayTeam
+            winnerScore = scorePair.0
+            loserScore = scorePair.1
+        } else if scorePair.0 == scorePair.1 {
+            return "AET: \(trimmedPenaltyResult)"
+        } else {
+            let homeWins = scorePair.0 > scorePair.1
+            winner = homeWins ? homeTeam : awayTeam
+            winnerScore = homeWins ? scorePair.0 : scorePair.1
+            loserScore = homeWins ? scorePair.1 : scorePair.0
+        }
+
+        return "AET: \(winner) win \(winnerScore)-\(loserScore) on penalties"
+    }
+
     var displayScoreStatus: String? {
         if let penaltyDisplayScoreText {
             return penaltyDisplayScoreText
@@ -671,6 +765,10 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
 
     nonisolated var isPostponed: Bool {
         MatchStatusFormatter.isPostponed(scoreStatus)
+    }
+
+    nonisolated var isFinalRound: Bool {
+        leagueSubcategory?.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("Final") == .orderedSame
     }
 
     nonisolated var isUpcomingScorelessFixture: Bool {
@@ -718,6 +816,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             time: time,
             homeTeam: homeTeam,
             awayTeam: awayTeam,
+            homeTeamId: homeTeamId,
+            awayTeamId: awayTeamId,
             homeShortName: homeShortName,
             awayShortName: awayShortName,
             league: league,
@@ -742,6 +842,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             awayYellowCards: awayYellowCards,
             homeRedCards: homeRedCards,
             awayRedCards: awayRedCards,
+            homeVarEvents: homeVarEvents,
+            awayVarEvents: awayVarEvents,
             teamLineups: teamLineups,
             penaltyResult: penaltyResult,
             isTestMatch: isTestMatch
@@ -754,6 +856,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             time: time,
             homeTeam: homeTeam,
             awayTeam: awayTeam,
+            homeTeamId: homeTeamId,
+            awayTeamId: awayTeamId,
             homeShortName: homeShortName,
             awayShortName: awayShortName,
             league: league,
@@ -778,6 +882,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             awayYellowCards: awayYellowCards,
             homeRedCards: homeRedCards,
             awayRedCards: awayRedCards,
+            homeVarEvents: homeVarEvents,
+            awayVarEvents: awayVarEvents,
             teamLineups: teamLineups,
             penaltyResult: penaltyResult,
             isTestMatch: isTestMatch
@@ -790,6 +896,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         time = try container.decode(String.self, forKey: .time)
         homeTeam = try container.decode(String.self, forKey: .homeTeam)
         awayTeam = try container.decode(String.self, forKey: .awayTeam)
+        homeTeamId = try container.decodeIfPresent(String.self, forKey: .homeTeamId)
+        awayTeamId = try container.decodeIfPresent(String.self, forKey: .awayTeamId)
         homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
         awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
         league = try container.decode(String.self, forKey: .league)
@@ -816,6 +924,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         awayYellowCards = try container.decodeIfPresent([MatchYellowCardEvent].self, forKey: .awayYellowCards) ?? []
         homeRedCards = try container.decodeIfPresent([MatchRedCardEvent].self, forKey: .homeRedCards) ?? []
         awayRedCards = try container.decodeIfPresent([MatchRedCardEvent].self, forKey: .awayRedCards) ?? []
+        homeVarEvents = try container.decodeIfPresent([MatchVarEvent].self, forKey: .homeVarEvents) ?? []
+        awayVarEvents = try container.decodeIfPresent([MatchVarEvent].self, forKey: .awayVarEvents) ?? []
         teamLineups = try container.decodeIfPresent(MatchTeamLineups.self, forKey: .teamLineups)
         penaltyResult = try container.decodeIfPresent(String.self, forKey: .penaltyResult)
         isTestMatch = try container.decodeIfPresent(Bool.self, forKey: .isTestMatch)
@@ -827,6 +937,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case time
         case homeTeam = "home_team"
         case awayTeam = "away_team"
+        case homeTeamId = "home_team_id"
+        case awayTeamId = "away_team_id"
         case homeShortName = "home_short_name"
         case awayShortName = "away_short_name"
         case league
@@ -851,6 +963,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case awayYellowCards = "away_yellow_cards"
         case homeRedCards = "home_red_cards"
         case awayRedCards = "away_red_cards"
+        case homeVarEvents = "home_var_events"
+        case awayVarEvents = "away_var_events"
         case teamLineups = "team_lineups"
         case penaltyResult = "penalty_result"
         case isTestMatch = "is_test_match"
@@ -862,6 +976,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         try container.encode(time, forKey: .time)
         try container.encode(homeTeam, forKey: .homeTeam)
         try container.encode(awayTeam, forKey: .awayTeam)
+        try container.encodeIfPresent(homeTeamId, forKey: .homeTeamId)
+        try container.encodeIfPresent(awayTeamId, forKey: .awayTeamId)
         try container.encodeIfPresent(homeShortName, forKey: .homeShortName)
         try container.encodeIfPresent(awayShortName, forKey: .awayShortName)
         try container.encode(league, forKey: .league)
@@ -886,6 +1002,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         try container.encode(awayYellowCards, forKey: .awayYellowCards)
         try container.encode(homeRedCards, forKey: .homeRedCards)
         try container.encode(awayRedCards, forKey: .awayRedCards)
+        try container.encode(homeVarEvents, forKey: .homeVarEvents)
+        try container.encode(awayVarEvents, forKey: .awayVarEvents)
         try container.encodeIfPresent(teamLineups, forKey: .teamLineups)
         try container.encodeIfPresent(penaltyResult, forKey: .penaltyResult)
         try container.encodeIfPresent(isTestMatch, forKey: .isTestMatch)
@@ -920,9 +1038,13 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         lhs.awayYellowCards == rhs.awayYellowCards &&
         lhs.homeRedCards == rhs.homeRedCards &&
         lhs.awayRedCards == rhs.awayRedCards &&
+        lhs.homeVarEvents == rhs.homeVarEvents &&
+        lhs.awayVarEvents == rhs.awayVarEvents &&
         lhs.teamLineups == rhs.teamLineups &&
         lhs.penaltyResult == rhs.penaltyResult &&
-        lhs.isTestMatch == rhs.isTestMatch
+        lhs.isTestMatch == rhs.isTestMatch &&
+        lhs.homeTeamId == rhs.homeTeamId &&
+        lhs.awayTeamId == rhs.awayTeamId
     }
 
     func withDetails(_ details: MatchDetailsPayload) -> Match {
@@ -951,6 +1073,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             time: details.time ?? time,
             homeTeam: details.homeTeam ?? homeTeam,
             awayTeam: details.awayTeam ?? awayTeam,
+            homeTeamId: homeTeamId,
+            awayTeamId: awayTeamId,
             homeShortName: details.homeShortName ?? homeShortName,
             awayShortName: details.awayShortName ?? awayShortName,
             league: details.league ?? league,
@@ -975,6 +1099,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             awayYellowCards: details.awayYellowCards,
             homeRedCards: details.homeRedCards,
             awayRedCards: details.awayRedCards,
+            homeVarEvents: details.homeVarEvents,
+            awayVarEvents: details.awayVarEvents,
             teamLineups: details.teamLineups ?? teamLineups,
             penaltyResult: details.penaltyResult ?? penaltyResult,
             isTestMatch: isTestMatch
@@ -1234,7 +1360,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
 }
 
 enum MatchStatusFormatter {
-    private nonisolated static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE"]
+    private nonisolated static let inProgressTokens: Set<String> = ["1H", "2H", "HT", "ET", "INPLAY", "LIVE"]
     private nonisolated static let completeTokens: Set<String> = ["FT", "AET", "PENS"]
     private nonisolated static let postponedTokens: Set<String> = ["POSTPONED", "MATCH POSTPONED"]
     private nonisolated static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#

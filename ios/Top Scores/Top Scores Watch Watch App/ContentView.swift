@@ -10,7 +10,6 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var matchesStore: WatchMatchesStore
-    @State private var selectedScope: WatchMatchScope = .fixtures
 
     private let refreshFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -34,37 +33,21 @@ struct ContentView: View {
                     .padding()
                 } else {
                     List {
-                        Section {
-                            Picker("View", selection: $selectedScope) {
-                                ForEach(WatchMatchScope.allCases) { scope in
-                                    Text(scope.title).tag(scope)
-                                }
-                            }
-                        }
-
-                        if let lastUpdated = matchesStore.lastUpdated {
-                            Section {
-                                Text("Updated \(refreshFormatter.string(from: lastUpdated))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        if scopedDays.isEmpty {
+                        if todaySections.isEmpty {
                             Section {
                                 VStack(spacing: 8) {
                                     Image(systemName: "calendar.badge.exclamationmark")
                                         .font(.title3)
                                         .foregroundStyle(.secondary)
-                                    Text(selectedScope.isResultsView ? "No results" : "No matches")
+                                    Text("No matches")
                                         .font(.caption)
                                 }
                                 .frame(maxWidth: .infinity)
                             }
                         } else {
-                            ForEach(scopedDays) { day in
-                                Section(day.displayDate) {
-                                    ForEach(day.matches) { match in
+                            ForEach(todaySections) { section in
+                                Section(section.title) {
+                                    ForEach(section.matches) { match in
                                         NavigationLink {
                                             WatchMatchDetailView(match: match)
                                         } label: {
@@ -77,100 +60,274 @@ struct ContentView: View {
                                 }
                             }
                         }
+
+                        Section {
+                            NavigationLink {
+                                WatchFixturesView(days: fixtureDays)
+                            } label: {
+                                Label("Fixtures", systemImage: "calendar")
+                            }
+
+                            NavigationLink {
+                                WatchResultsView(days: resultDays)
+                            } label: {
+                                Label("Results", systemImage: "clock.arrow.circlepath")
+                            }
+                        }
+
+                        if let lastUpdated = matchesStore.lastUpdated {
+                            Section {
+                                Text("Updated \(refreshFormatter.string(from: lastUpdated))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                            }
+                            .listRowBackground(Color.clear)
+                        }
                     }
                     .listStyle(.plain)
                 }
             }
             .navigationTitle("Top Scores")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        matchesStore.refresh(requestPhoneSync: true)
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .accessibilityLabel("Refresh from phone")
-                }
-            }
         }
         .onAppear {
-            matchesStore.refresh(requestPhoneSync: true)
+            matchesStore.startAutomaticRefresh()
         }
     }
 
-    private var scopedDays: [WatchMatchDay] {
+    private var todaySections: [WatchFixtureSection] {
+        WatchMatchCollections.todaySections(from: sourceMatches)
+    }
+
+    private var resultDays: [WatchMatchDay] {
+        WatchMatchCollections.resultDays(from: sourceMatches)
+    }
+
+    private var fixtureDays: [WatchMatchDay] {
+        WatchMatchCollections.fixtureDays(from: sourceMatches)
+    }
+
+    private var sourceMatches: [WatchMatch] {
+        matchesStore.groupedDays.flatMap(\.matches)
+    }
+}
+
+private enum WatchMatchCollections {
+    static func todaySections(from matches: [WatchMatch]) -> [WatchFixtureSection] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
 
-        let sourceDays = matchesStore.groupedDays
-
-        let filtered = sourceDays.compactMap { day -> WatchMatchDay? in
-            guard let parsedDay = WatchMatchDateParser.shared.parse(date: day.id, time: "00:00") else {
-                if selectedScope.isResultsView {
-                    return nil
-                }
-                let unresolvedMatches = day.matches.filter { match in
-                    !(isMatchFinished(match) && !match.isInProgress)
-                }
-                guard !unresolvedMatches.isEmpty else { return nil }
-                return WatchMatchDay(id: day.id, displayDate: day.displayDate, matches: unresolvedMatches)
+        let live = matches
+            .filter { match in
+                guard isSameDay(match, as: today, calendar: calendar) else { return false }
+                return match.isInProgress
             }
-            let dayStart = calendar.startOfDay(for: parsedDay)
+            .sorted(by: ascendingMatchDate)
 
-            if selectedScope.isResultsView {
-                // Results view: show previous days, plus today's matches that are in progress or finished
-                if dayStart < today {
-                    return day
-                } else if dayStart == today {
-                    let filteredMatches = day.matches.filter { match in
-                        match.isInProgress || isMatchFinished(match)
-                    }
-                    guard !filteredMatches.isEmpty else { return nil }
-                    return WatchMatchDay(id: day.id, displayDate: day.displayDate, matches: filteredMatches)
-                } else {
-                    return nil
+        let upcoming = matches
+            .filter { match in
+                guard isSameDay(match, as: today, calendar: calendar) else { return false }
+                guard let date = match.dateTime ?? WatchMatchDateParser.shared.parse(date: match.date, time: "00:00") else {
+                    return false
                 }
-            } else {
-                // Fixtures view: show today onwards
-                return dayStart >= today ? day : nil
+                return date >= Date() && !match.isInProgress && !isFinished(match)
             }
-        }
+            .sorted(by: ascendingMatchDate)
 
-        return selectedScope.isResultsView ? filtered.reversed() : filtered
+        let playedToday = matches
+            .filter { match in
+                isSameDay(match, as: today, calendar: calendar) && isFinished(match)
+            }
+            .sorted(by: ascendingMatchDate)
+
+        return [
+            WatchFixtureSection(id: "live", title: "Live", matches: live),
+            WatchFixtureSection(id: "upcoming", title: "Upcoming", matches: upcoming),
+            WatchFixtureSection(id: "playedToday", title: "Played Today", matches: playedToday)
+        ].filter { !$0.matches.isEmpty }
     }
 
-    private func isMatchFinished(_ match: WatchMatch) -> Bool {
+    static func fixtureDays(from matches: [WatchMatch]) -> [WatchMatchDay] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let start = calendar.date(byAdding: .day, value: 1, to: today) ?? today
+        let end = calendar.date(byAdding: .day, value: 7, to: today) ?? today
+        let fixtures = matches
+            .filter { match in
+                guard let matchDate = day(for: match, calendar: calendar) else { return false }
+                return matchDate >= start && matchDate <= end && !match.isInProgress && !isFinished(match)
+            }
+            .sorted(by: ascendingMatchDate)
+
+        return groupedDays(fixtures, descending: false)
+    }
+
+    static func resultDays(from matches: [WatchMatch]) -> [WatchMatchDay] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+        let results = matches
+            .filter { match in
+                guard let matchDate = day(for: match, calendar: calendar) else { return false }
+                return matchDate >= start && matchDate <= today && isFinished(match)
+            }
+            .sorted(by: descendingMatchDate)
+
+        return groupedDays(results, descending: true)
+    }
+
+    static func isFinished(_ match: WatchMatch) -> Bool {
         guard let status = match.scoreStatus else { return false }
         let normalized = status
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
             .replacingOccurrences(of: ".", with: "")
-        return normalized.hasPrefix("FT") || normalized.hasPrefix("AET")
+        return normalized.hasPrefix("FT") || normalized.hasPrefix("AET") || normalized == "PENS"
+    }
+
+    private static func groupedDays(_ matches: [WatchMatch], descending: Bool) -> [WatchMatchDay] {
+        let byDate = Dictionary(grouping: matches) { $0.date }
+        let keys = byDate.keys.sorted { lhs, rhs in
+            descending ? lhs > rhs : lhs < rhs
+        }
+
+        return keys.compactMap { key in
+            guard let dateMatches = byDate[key] else { return nil }
+            let sortedMatches = descending
+                ? dateMatches.sorted(by: descendingMatchDate)
+                : dateMatches.sorted(by: ascendingMatchDate)
+            let displayDate: String
+            if let parsed = WatchMatchDateParser.shared.parse(date: key, time: "00:00") {
+                displayDate = WatchMatchDateParser.shared.displayDateWithRelative(parsed)
+            } else {
+                displayDate = key
+            }
+            return WatchMatchDay(id: key, displayDate: displayDate, matches: sortedMatches)
+        }
+    }
+
+    private static func isSameDay(_ match: WatchMatch, as day: Date, calendar: Calendar) -> Bool {
+        guard let matchDay = self.day(for: match, calendar: calendar) else { return false }
+        return matchDay == day
+    }
+
+    private static func day(for match: WatchMatch, calendar: Calendar) -> Date? {
+        guard let date = WatchMatchDateParser.shared.parse(date: match.date, time: "00:00") else {
+            return nil
+        }
+        return calendar.startOfDay(for: date)
+    }
+
+    private static func ascendingMatchDate(_ lhs: WatchMatch, _ rhs: WatchMatch) -> Bool {
+        let leftDate = lhs.dateTime ?? WatchMatchDateParser.shared.parse(date: lhs.date, time: "00:00") ?? .distantFuture
+        let rightDate = rhs.dateTime ?? WatchMatchDateParser.shared.parse(date: rhs.date, time: "00:00") ?? .distantFuture
+        if leftDate != rightDate {
+            return leftDate < rightDate
+        }
+        if lhs.competitionWeight != rhs.competitionWeight {
+            return (lhs.competitionWeight ?? 0) > (rhs.competitionWeight ?? 0)
+        }
+        return lhs.id < rhs.id
+    }
+
+    private static func descendingMatchDate(_ lhs: WatchMatch, _ rhs: WatchMatch) -> Bool {
+        let leftDate = lhs.dateTime ?? WatchMatchDateParser.shared.parse(date: lhs.date, time: "00:00") ?? .distantPast
+        let rightDate = rhs.dateTime ?? WatchMatchDateParser.shared.parse(date: rhs.date, time: "00:00") ?? .distantPast
+        if leftDate != rightDate {
+            return leftDate > rightDate
+        }
+        if lhs.competitionWeight != rhs.competitionWeight {
+            return (lhs.competitionWeight ?? 0) > (rhs.competitionWeight ?? 0)
+        }
+        return lhs.id < rhs.id
     }
 }
 
-private enum WatchMatchScope: String, CaseIterable, Identifiable {
-    case fixtures
-    case results
+private struct WatchFixtureSection: Identifiable {
+    let id: String
+    let title: String
+    let matches: [WatchMatch]
+}
 
-    var id: String { rawValue }
+private struct WatchFixturesView: View {
+    let days: [WatchMatchDay]
 
-    var title: String {
-        switch self {
-        case .fixtures:
-            return "Fixtures"
-        case .results:
-            return "Results"
+    var body: some View {
+        List {
+            if days.isEmpty {
+                Section {
+                    VStack(spacing: 8) {
+                        Image(systemName: "calendar.badge.exclamationmark")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                        Text("No fixtures")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            } else {
+                ForEach(days) { day in
+                    Section(day.displayDate) {
+                        ForEach(day.matches) { match in
+                            NavigationLink {
+                                WatchMatchDetailView(match: match)
+                            } label: {
+                                WatchMatchLozenge(match: match)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                        }
+                    }
+                }
+            }
         }
+        .listStyle(.plain)
+        .navigationTitle("Fixtures")
     }
+}
 
-    var isResultsView: Bool {
-        switch self {
-        case .results:
-            return true
-        case .fixtures:
-            return false
+private struct WatchResultsView: View {
+    let days: [WatchMatchDay]
+
+    var body: some View {
+        List {
+            if days.isEmpty {
+                Section {
+                    VStack(spacing: 8) {
+                        Image(systemName: "calendar.badge.exclamationmark")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                        Text("No results")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            } else {
+                ForEach(days) { day in
+                    Section(day.displayDate) {
+                        ForEach(day.matches) { match in
+                            NavigationLink {
+                                WatchMatchDetailView(match: match)
+                            } label: {
+                                WatchMatchLozenge(match: match)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                        }
+                    }
+                }
+            }
         }
+        .listStyle(.plain)
+        .navigationTitle("Results")
+    }
+}
+
+private enum WatchMatchStatusRules {
+    static func isFinished(_ match: WatchMatch) -> Bool {
+        WatchMatchCollections.isFinished(match)
     }
 }
 
@@ -193,10 +350,6 @@ private struct WatchMatchLozenge: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .center)
-
-            if !isMatchFinished {
-                WatchChannelLogoRow(channels: match.tvChannels)
-            }
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)
@@ -207,10 +360,6 @@ private struct WatchMatchLozenge: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var isMatchFinished: Bool {
-        guard let status = match.scoreStatus?.uppercased() else { return false }
-        return status == "FT" || status == "AET"
-    }
 }
 
 private struct WatchMatchLozengeTopRow: View {
@@ -224,10 +373,6 @@ private struct WatchMatchLozengeTopRow: View {
             return "-"
         }
         return match.time
-    }
-
-    private var centeredValue: String {
-        match.scoreLine ?? match.time
     }
 
     var body: some View {
@@ -249,26 +394,55 @@ private struct WatchMatchLozengeTopRow: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
 
-            ZStack {
-                Text(centeredValue)
-                    .font(.footnote)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                    .frame(maxWidth: .infinity, alignment: .center)
+            HStack(spacing: 8) {
+                WatchTeamLogo(
+                    name: match.homeTeam,
+                    alternateNames: [match.homeShortName].compactMap { $0 },
+                    teamId: match.homeTeamId
+                )
 
-                HStack(spacing: 8) {
-                    WatchTeamLogo(
-                        name: match.homeTeam,
-                        alternateNames: [match.homeShortName].compactMap { $0 }
-                    )
-                    Spacer(minLength: 0)
-                    WatchTeamLogo(
-                        name: match.awayTeam,
-                        alternateNames: [match.awayShortName].compactMap { $0 }
-                    )
+                Spacer(minLength: 0)
+
+                if match.hasScore, isFinished {
+                    Text(match.scoreLine ?? "-")
+                        .font(.footnote)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                } else if match.hasScore {
+                    WatchScoreText(value: match.homeScore)
+
+                    WatchPrimaryChannelLogo(channels: match.tvChannels)
+
+                    WatchScoreText(value: match.awayScore)
+                } else {
+                    WatchPrimaryChannelLogo(channels: match.tvChannels)
                 }
+
+                Spacer(minLength: 0)
+
+                WatchTeamLogo(
+                    name: match.awayTeam,
+                    alternateNames: [match.awayShortName].compactMap { $0 },
+                    teamId: match.awayTeamId
+                )
             }
         }
+    }
+
+    private var isFinished: Bool {
+        WatchMatchStatusRules.isFinished(match)
+    }
+}
+
+private struct WatchScoreText: View {
+    let value: Int?
+
+    var body: some View {
+        Text(value.map(String.init) ?? "-")
+            .font(.footnote)
+            .fontWeight(.semibold)
+            .monospacedDigit()
+            .frame(minWidth: 14, alignment: .center)
     }
 }
 
@@ -278,24 +452,26 @@ private struct WatchMatchStatusIndicatorView: View {
 
     @State private var isPulsing = false
 
+    private let liveTint = Color(red: 0.32, green: 0.82, blue: 0.51)
+
     var body: some View {
         Text(text)
             .font(.caption2)
             .fontWeight(isLive ? .semibold : .regular)
-            .foregroundStyle(isLive ? Color.red : Color.secondary)
+            .foregroundStyle(isLive ? liveTint : Color.secondary)
             .monospacedDigit()
             .padding(.horizontal, isLive ? 6 : 0)
             .padding(.vertical, isLive ? 3 : 0)
             .background {
                 if isLive {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.red.opacity(isPulsing ? 0.14 : 0.26))
+                        .fill(liveTint.opacity(isPulsing ? 0.14 : 0.26))
                 }
             }
             .overlay {
                 if isLive {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.red.opacity(isPulsing ? 0.45 : 0.95), lineWidth: 1)
+                        .stroke(liveTint.opacity(isPulsing ? 0.45 : 0.95), lineWidth: 1)
                         .scaleEffect(isPulsing ? 1.08 : 0.96)
                 }
             }
@@ -329,7 +505,8 @@ private struct WatchMatchTopRow: View {
         HStack(spacing: 6) {
             WatchTeamLogo(
                 name: match.homeTeam,
-                alternateNames: [match.homeShortName].compactMap { $0 }
+                alternateNames: [match.homeShortName].compactMap { $0 },
+                teamId: match.homeTeamId
             )
             Text(match.displayHomeTeam)
                 .font(.footnote)
@@ -343,7 +520,8 @@ private struct WatchMatchTopRow: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
             WatchTeamLogo(
                 name: match.awayTeam,
-                alternateNames: [match.awayShortName].compactMap { $0 }
+                alternateNames: [match.awayShortName].compactMap { $0 },
+                teamId: match.awayTeamId
             )
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -353,10 +531,11 @@ private struct WatchMatchTopRow: View {
 private struct WatchTeamLogo: View {
     let name: String
     var alternateNames: [String] = []
+    var teamId: String? = nil
 
     var body: some View {
         Group {
-            if let image = WatchTeamLogoResolver.shared.image(for: name, alternateNames: alternateNames) {
+            if let image = WatchTeamLogoResolver.shared.image(for: name, teamId: teamId, alternateNames: alternateNames) {
                 Image(uiImage: image)
                     .resizable()
             } else {
@@ -371,29 +550,29 @@ private struct WatchTeamLogo: View {
     }
 }
 
-private struct WatchChannelLogoRow: View {
+private struct WatchPrimaryChannelLogo: View {
     let channels: [String]
 
     var body: some View {
-        let sortedChannels = channels.uniqueSortedCaseInsensitive()
-        let images = WatchTvLogoResolver.shared.images(for: sortedChannels)
-
-        if images.isEmpty {
-            Text("TV TBA")
+        if let primaryChannel = primaryChannel,
+           let image = WatchTvLogoResolver.shared.image(for: primaryChannel) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(height: 12)
+                .frame(minWidth: 18, idealWidth: 22)
+        } else {
+            Image(systemName: "tv")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-        } else {
-            HStack(spacing: 6) {
-                ForEach(images.indices, id: \.self) { index in
-                    Image(uiImage: images[index])
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 14)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
+                .frame(minWidth: 18, idealWidth: 22)
         }
+    }
+
+    private var primaryChannel: String? {
+        channels
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
     }
 }
 
@@ -403,6 +582,12 @@ private struct WatchMatchDetailView: View {
     let match: WatchMatch
 
     @State private var detailedMatch: WatchMatch?
+    @State private var detailRefreshTask: Task<Void, Never>?
+    @State private var isRefreshingLatestData = false
+
+    private let liveDetailRefreshIntervalNanos: UInt64 = 15_000_000_000
+    private let standardDetailRefreshIntervalNanos: UInt64 = 60_000_000_000
+    private let finishedDetailRefreshIntervalNanos: UInt64 = 5 * 60_000_000_000
 
     private var activeMatch: WatchMatch {
         detailedMatch ?? match
@@ -434,8 +619,7 @@ private struct WatchMatchDetailView: View {
     }
 
     private var isMatchFinished: Bool {
-        guard let status = activeMatch.scoreStatus?.uppercased() else { return false }
-        return status == "FT" || status == "AET"
+        WatchMatchStatusRules.isFinished(activeMatch)
     }
 
     private func teamEventEntries(for currentMatch: WatchMatch) -> [WatchTeamEventEntry] {
@@ -452,6 +636,17 @@ private struct WatchMatchDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
+                if isRefreshingLatestData {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .scaleEffect(0.55)
+                            .frame(width: 12, height: 12)
+                            .accessibilityLabel("Refreshing latest match data")
+                    }
+                    .padding(.horizontal, 4)
+                }
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(activeMatch.league)
                         .font(.footnote)
@@ -486,7 +681,8 @@ private struct WatchMatchDetailView: View {
                     HStack(spacing: 6) {
                         WatchTeamLogo(
                             name: activeMatch.homeTeam,
-                            alternateNames: [activeMatch.homeShortName].compactMap { $0 }
+                            alternateNames: [activeMatch.homeShortName].compactMap { $0 },
+                            teamId: activeMatch.homeTeamId
                         )
 
                         if activeMatch.hasScore {
@@ -515,7 +711,8 @@ private struct WatchMatchDetailView: View {
 
                         WatchTeamLogo(
                             name: activeMatch.awayTeam,
-                            alternateNames: [activeMatch.awayShortName].compactMap { $0 }
+                            alternateNames: [activeMatch.awayShortName].compactMap { $0 },
+                            teamId: activeMatch.awayTeamId
                         )
                     }
 
@@ -526,10 +723,6 @@ private struct WatchMatchDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                     }
 
-                    let entries = teamEventEntries(for: activeMatch)
-                    if !entries.isEmpty {
-                        WatchTeamEventListView(entries: entries)
-                    }
                 }
                 .padding(.vertical, 6)
                 .padding(.horizontal, 4)
@@ -537,6 +730,9 @@ private struct WatchMatchDetailView: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color.gray.opacity(0.18))
                 )
+
+                WatchKeyEventsCard(match: activeMatch)
+                WatchStartingLineupsSection(match: activeMatch)
 
                 if !isMatchFinished {
                     VStack(alignment: .leading, spacing: 3) {
@@ -552,6 +748,7 @@ private struct WatchMatchDetailView: View {
                     }
                     .padding(.vertical, 6)
                     .padding(.horizontal, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(Color.gray.opacity(0.18))
@@ -563,40 +760,93 @@ private struct WatchMatchDetailView: View {
         }
         .navigationTitle("Match Details")
         .onAppear {
-            fetchMatchDetails()
+            loadCachedDetails()
+            startAutomaticDetailRefresh()
+        }
+        .onDisappear {
+            detailRefreshTask?.cancel()
+            detailRefreshTask = nil
+            isRefreshingLatestData = false
         }
     }
 
-    private func fetchMatchDetails() {
+    private func startAutomaticDetailRefresh() {
+        detailRefreshTask?.cancel()
+        detailRefreshTask = Task {
+            await refreshMatchDetails()
+
+            while !Task.isCancelled {
+                let interval = await MainActor.run {
+                    detailRefreshIntervalNanos
+                }
+                do {
+                    try await Task.sleep(nanoseconds: interval)
+                } catch {
+                    return
+                }
+                await refreshMatchDetails()
+            }
+        }
+    }
+
+    private func loadCachedDetails() {
+        guard detailedMatch == nil,
+              let cachedMatch = matchesStore.cachedDetails(for: match) else {
+            return
+        }
+        detailedMatch = cachedMatch
+    }
+
+    private var detailRefreshIntervalNanos: UInt64 {
+        if activeMatch.isInProgress {
+            return liveDetailRefreshIntervalNanos
+        }
+        if isMatchFinished {
+            return finishedDetailRefreshIntervalNanos
+        }
+        return standardDetailRefreshIntervalNanos
+    }
+
+    private func refreshMatchDetails() async {
         guard let matchID = match.matchDetailsIDValue else {
             NSLog("[WatchMatchDetailView] No match details ID for %@ vs %@", match.homeTeam, match.awayTeam)
             return
         }
-        guard let baseURL = URL(string: matchesStore.apiBaseURL) else {
-            NSLog("[WatchMatchDetailView] Invalid API base URL: %@", matchesStore.apiBaseURL)
+        let apiBaseURL = await MainActor.run {
+            matchesStore.apiBaseURL
+        }
+        guard let baseURL = URL(string: apiBaseURL) else {
+            NSLog("[WatchMatchDetailView] Invalid API base URL: %@", apiBaseURL)
             return
         }
 
         NSLog("[WatchMatchDetailView] Fetching details for match ID: %@ (baseURL: %@)", matchID, baseURL.absoluteString)
 
-        Task {
-            let client = WatchAPIClient(baseURL: baseURL)
-            do {
-                let details = try await client.fetchMatchDetails(matchId: matchID)
-                NSLog("[WatchMatchDetailView] Fetched details - homeGoals=%d awayGoals=%d homeAssists=%d awayAssists=%d",
-                      details.homeGoalScorers.count,
-                      details.awayGoalScorers.count,
-                      details.homeAssists.count,
-                      details.awayAssists.count)
-                await MainActor.run {
-                    let updated = match.withDetails(details)
-                    detailedMatch = updated
-                    let entries = teamEventEntries(for: updated)
-                    NSLog("[WatchMatchDetailView] Updated detailedMatch - teamEventEntries count: %d", entries.count)
-                }
-            } catch {
-                NSLog("[WatchMatchDetailView] Failed to fetch match details: %@", String(describing: error))
+        let client = WatchAPIClient(baseURL: baseURL)
+        await MainActor.run {
+            isRefreshingLatestData = true
+        }
+        do {
+            let details = try await client.fetchMatchDetails(matchId: matchID)
+            NSLog("[WatchMatchDetailView] Fetched details - homeGoals=%d awayGoals=%d homeAssists=%d awayAssists=%d",
+                  details.homeGoalScorers.count,
+                  details.awayGoalScorers.count,
+                  details.homeAssists.count,
+                  details.awayAssists.count)
+            await MainActor.run {
+                let baseMatch = detailedMatch ?? match
+                let updated = baseMatch.withDetails(details)
+                detailedMatch = updated
+                matchesStore.cacheDetails(updated)
+                isRefreshingLatestData = false
+                let entries = teamEventEntries(for: updated)
+                NSLog("[WatchMatchDetailView] Updated detailedMatch - teamEventEntries count: %d", entries.count)
             }
+        } catch {
+            await MainActor.run {
+                isRefreshingLatestData = false
+            }
+            NSLog("[WatchMatchDetailView] Failed to fetch match details: %@", String(describing: error))
         }
     }
 
@@ -834,6 +1084,7 @@ private struct WatchTvChannelRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1007,6 +1258,513 @@ private struct WatchTeamTimelineEvent {
 
 private enum WatchMinuteParser {
     static let regex = try! NSRegularExpression(pattern: "(\\d{1,3})(?:\\s*'\\s*)?(?:\\+\\s*(\\d{1,2}))?")
+}
+
+private struct WatchKeyEventsCard: View {
+    let match: WatchMatch
+
+    private var entries: [WatchMatchEventEntry] {
+        WatchMatchEventEntry.entries(for: match)
+    }
+
+    var body: some View {
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Key Events")
+                    .font(.footnote)
+                    .fontWeight(.semibold)
+
+                VStack(spacing: 6) {
+                    ForEach(entries) { entry in
+                        WatchKeyEventRow(entry: entry)
+                    }
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.gray.opacity(0.18))
+            )
+        }
+    }
+}
+
+private struct WatchKeyEventRow: View {
+    let entry: WatchMatchEventEntry
+
+    private var isGoal: Bool {
+        entry.kind == .goal
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 7) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.minute)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+
+                WatchTeamLogo(name: entry.sideLabel)
+            }
+            .frame(width: 28, alignment: .leading)
+            .padding(.top, 2)
+
+            WatchKeyEventIcon(kind: entry.kind)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 2) {
+                if entry.kind == .substitution,
+                   let playerOff = entry.substitutionPlayerOff,
+                   let playerOn = entry.substitutionPlayerOn {
+                    WatchSubstitutionPlayerLine(name: playerOff, systemImage: "arrow.down", tint: .red)
+                    WatchSubstitutionPlayerLine(name: playerOn, systemImage: "arrow.up", tint: .green)
+                } else {
+                    Text(entry.title)
+                        .font(.caption)
+                        .fontWeight(isGoal ? .semibold : .medium)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let subtitle = entry.subtitle {
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Text(entry.sideLabel)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, isGoal ? 7 : 5)
+        .padding(.horizontal, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isGoal ? Color.green.opacity(0.10) : Color.gray.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isGoal ? Color.green.opacity(0.45) : Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
+private struct WatchSubstitutionPlayerLine: View {
+    let name: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 10, alignment: .center)
+
+            Text(name)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct WatchKeyEventIcon: View {
+    let kind: WatchMatchEventEntry.Kind
+
+    var body: some View {
+        Group {
+            switch kind {
+            case .goal:
+                ZStack {
+                    Circle().fill(Color.green)
+                    Image(systemName: "soccerball")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .shadow(color: Color.green.opacity(0.45), radius: 4)
+            case .yellowCard:
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    .fill(Color.yellow)
+                    .frame(width: 10, height: 14)
+            case .redCard:
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    .fill(Color.red)
+                    .frame(width: 10, height: 14)
+            case .varEvent:
+                Image(systemName: "video")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.orange)
+            case .substitution:
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 22, height: 22)
+    }
+}
+
+private struct WatchStartingLineupsSection: View {
+    let match: WatchMatch
+
+    var body: some View {
+        if let lineups = match.teamLineups,
+           let home = lineups.home,
+           let away = lineups.away,
+           !home.startingLineup.isEmpty,
+           !away.startingLineup.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Starting Line-ups")
+                    .font(.footnote)
+                    .fontWeight(.semibold)
+
+                WatchLineupList(teamName: home.team ?? match.displayHomeTeam, teamId: match.homeTeamId, lineup: home)
+                WatchLineupList(teamName: away.team ?? match.displayAwayTeam, teamId: match.awayTeamId, lineup: away)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.gray.opacity(0.18))
+            )
+        }
+    }
+}
+
+private struct WatchLineupList: View {
+    let teamName: String
+    let teamId: String?
+    let lineup: WatchTeamLineup
+
+    private var displayFormation: String? {
+        if let collapsedFormation = collapsedOutfieldFormation {
+            return collapsedFormation
+        }
+
+        guard let formation = lineup.formation, !formation.isEmpty else {
+            return nil
+        }
+        return formation
+    }
+
+    private var collapsedOutfieldFormation: String? {
+        var defenderCount = 0
+        var midfielderCount = 0
+        var forwardCount = 0
+
+        for player in lineup.startingLineup {
+            switch formationRole(for: player) {
+            case "D":
+                defenderCount += 1
+            case "M":
+                midfielderCount += 1
+            case "F":
+                forwardCount += 1
+            default:
+                continue
+            }
+        }
+
+        guard defenderCount + midfielderCount + forwardCount == 10,
+              defenderCount > 0,
+              midfielderCount > 0,
+              forwardCount > 0 else {
+            return nil
+        }
+
+        return "\(defenderCount)-\(midfielderCount)-\(forwardCount)"
+    }
+
+    private func formationRole(for player: WatchLineupPlayer) -> String? {
+        if let shortPosition = player.positionShort?.uppercased(), !shortPosition.isEmpty {
+            if shortPosition.hasPrefix("D") {
+                return "D"
+            }
+            if shortPosition.hasPrefix("M") || shortPosition == "AM" || shortPosition == "DM" {
+                return "M"
+            }
+            if shortPosition.hasPrefix("F") || shortPosition.hasPrefix("ST") || shortPosition.hasPrefix("W") {
+                return "F"
+            }
+            if shortPosition.hasPrefix("G") {
+                return "G"
+            }
+        }
+
+        let position = player.position?.lowercased() ?? ""
+        if position.contains("defender") {
+            return "D"
+        }
+        if position.contains("midfielder") {
+            return "M"
+        }
+        if position.contains("forward") || position.contains("striker") || position.contains("winger") {
+            return "F"
+        }
+        if position.contains("goalkeeper") {
+            return "G"
+        }
+
+        return nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(teamName)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if let formation = displayFormation {
+                        Text(formation)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                WatchTeamLogo(name: teamName, teamId: teamId)
+            }
+
+            ForEach(lineup.startingLineup) { player in
+                HStack(spacing: 6) {
+                    Text(player.number > 0 ? "\(player.number)" : "-")
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, alignment: .trailing)
+                    Text(player.name)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 0)
+                    if let position = player.positionShort ?? player.position, !position.isEmpty {
+                        Text(position)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct WatchMatchEventEntry: Identifiable {
+    enum Side {
+        case home
+        case away
+    }
+
+    enum Kind {
+        case goal
+        case yellowCard
+        case redCard
+        case varEvent
+        case substitution
+    }
+
+    let minute: String
+    let sortMinute: Int
+    let kind: Kind
+    let side: Side
+    let sideLabel: String
+    let title: String
+    let subtitle: String?
+    var substitutionPlayerOff: String? = nil
+    var substitutionPlayerOn: String? = nil
+
+    var id: String {
+        "\(sortMinute)|\(minute)|\(kind)|\(side)|\(title)|\(subtitle ?? "")|\(substitutionPlayerOff ?? "")|\(substitutionPlayerOn ?? "")"
+    }
+
+    static func entries(for match: WatchMatch) -> [WatchMatchEventEntry] {
+        var output: [WatchMatchEventEntry] = []
+        appendGoals(from: match.homeGoalScorers, assists: match.homeAssists, side: .home, sideLabel: match.displayHomeTeam, to: &output)
+        appendGoals(from: match.awayGoalScorers, assists: match.awayAssists, side: .away, sideLabel: match.displayAwayTeam, to: &output)
+        appendYellowCards(from: match.homeYellowCards, side: .home, sideLabel: match.displayHomeTeam, to: &output)
+        appendYellowCards(from: match.awayYellowCards, side: .away, sideLabel: match.displayAwayTeam, to: &output)
+        appendRedCards(from: match.homeRedCards, side: .home, sideLabel: match.displayHomeTeam, to: &output)
+        appendRedCards(from: match.awayRedCards, side: .away, sideLabel: match.displayAwayTeam, to: &output)
+        appendVarEvents(from: match.homeVarEvents, side: .home, sideLabel: match.displayHomeTeam, to: &output)
+        appendVarEvents(from: match.awayVarEvents, side: .away, sideLabel: match.displayAwayTeam, to: &output)
+        appendSubstitutions(from: match.teamLineups?.home, side: .home, sideLabel: match.displayHomeTeam, to: &output)
+        appendSubstitutions(from: match.teamLineups?.away, side: .away, sideLabel: match.displayAwayTeam, to: &output)
+
+        return output.sorted { lhs, rhs in
+            if lhs.sortMinute != rhs.sortMinute {
+                return lhs.sortMinute < rhs.sortMinute
+            }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
+
+    private static func appendGoals(
+        from scorers: [WatchGoalScorer],
+        assists: [WatchAssistProvider],
+        side: Side,
+        sideLabel: String,
+        to output: inout [WatchMatchEventEntry]
+    ) {
+        let assistsByMinute = assistProviderByMinute(assists)
+        for scorer in scorers {
+            for minute in scorer.goalTimes {
+                output.append(
+                    WatchMatchEventEntry(
+                        minute: formattedMinute(minute),
+                        sortMinute: sortMinute(minute),
+                        kind: .goal,
+                        side: side,
+                        sideLabel: sideLabel,
+                        title: scorer.player,
+                        subtitle: assistsByMinute[normalizedMinute(minute)].map { "Assist: \($0)" }
+                    )
+                )
+            }
+            for minute in scorer.ownGoalTimes {
+                output.append(event(minute: minute, kind: .goal, side: side, sideLabel: sideLabel, title: "\(scorer.player) (OG)"))
+            }
+            for minute in scorer.disallowedGoalTimes {
+                output.append(event(minute: minute, kind: .goal, side: side, sideLabel: sideLabel, title: "\(scorer.player) disallowed goal"))
+            }
+        }
+    }
+
+    private static func appendYellowCards(
+        from cards: [WatchYellowCardEvent],
+        side: Side,
+        sideLabel: String,
+        to output: inout [WatchMatchEventEntry]
+    ) {
+        for card in cards {
+            for minute in card.yellowCardTimes {
+                output.append(event(minute: minute, kind: .yellowCard, side: side, sideLabel: sideLabel, title: card.player))
+            }
+        }
+    }
+
+    private static func appendRedCards(
+        from cards: [WatchRedCardEvent],
+        side: Side,
+        sideLabel: String,
+        to output: inout [WatchMatchEventEntry]
+    ) {
+        for card in cards {
+            for minute in card.redCardTimes {
+                output.append(event(minute: minute, kind: .redCard, side: side, sideLabel: sideLabel, title: card.player))
+            }
+        }
+    }
+
+    private static func appendVarEvents(
+        from events: [WatchVarEvent],
+        side: Side,
+        sideLabel: String,
+        to output: inout [WatchMatchEventEntry]
+    ) {
+        for varEvent in events {
+            guard let minute = varEvent.minute, !minute.isEmpty else { continue }
+            output.append(
+                WatchMatchEventEntry(
+                    minute: formattedMinute(minute),
+                    sortMinute: sortMinute(minute),
+                    kind: .varEvent,
+                    side: side,
+                    sideLabel: sideLabel,
+                    title: varEvent.player ?? varEvent.detail,
+                    subtitle: varEvent.player == nil ? nil : varEvent.detail
+                )
+            )
+        }
+    }
+
+    private static func appendSubstitutions(
+        from lineup: WatchTeamLineup?,
+        side: Side,
+        sideLabel: String,
+        to output: inout [WatchMatchEventEntry]
+    ) {
+        guard let lineup else { return }
+        for substitution in lineup.substitutions {
+            output.append(
+                WatchMatchEventEntry(
+                    minute: formattedMinute(substitution.minute),
+                    sortMinute: sortMinute(substitution.minute),
+                    kind: .substitution,
+                    side: side,
+                    sideLabel: sideLabel,
+                    title: "Substitution",
+                    subtitle: nil,
+                    substitutionPlayerOff: substitution.playerOff.name,
+                    substitutionPlayerOn: substitution.playerOn.name
+                )
+            )
+        }
+    }
+
+    private static func event(
+        minute: String,
+        kind: Kind,
+        side: Side,
+        sideLabel: String,
+        title: String
+    ) -> WatchMatchEventEntry {
+        WatchMatchEventEntry(
+            minute: formattedMinute(minute),
+            sortMinute: sortMinute(minute),
+            kind: kind,
+            side: side,
+            sideLabel: sideLabel,
+            title: title,
+            subtitle: nil
+        )
+    }
+
+    private static func assistProviderByMinute(_ assists: [WatchAssistProvider]) -> [String: String] {
+        var lookup: [String: String] = [:]
+        for assist in assists {
+            for minute in assist.assistTimes {
+                lookup[normalizedMinute(minute)] = assist.player
+            }
+        }
+        return lookup
+    }
+
+    private static func formattedMinute(_ value: String) -> String {
+        let normalized = normalizedMinute(value)
+        guard !normalized.isEmpty else { return value }
+        return normalized.hasSuffix("'") ? normalized : "\(normalized)'"
+    }
+
+    private static func normalizedMinute(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "′", with: "'")
+            .replacingOccurrences(of: "'", with: "")
+    }
+
+    private static func sortMinute(_ value: String) -> Int {
+        let normalized = normalizedMinute(value)
+        return normalized
+            .split { !$0.isNumber }
+            .first
+            .flatMap { Int($0) } ?? Int.max
+    }
 }
 
 private extension Array where Element == String {

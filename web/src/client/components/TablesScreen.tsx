@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { fetchLeagueTables } from "../api";
 import type { LeagueTable, LeagueTableRow } from "../types";
 
@@ -22,6 +23,8 @@ export function TablesScreen() {
   const [selectedLeagueID, setSelectedLeagueID] = useState("premier-league");
   const [state, setState] = useState<TablesState>(initialState);
   const [reloadToken, reload] = useReducer((value) => value + 1, 0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -69,6 +72,46 @@ export function TablesScreen() {
     };
   }, [reloadToken]);
 
+  // While the Tables tab is open, refresh on a live cadence so in-progress
+  // scores flow into the standings within ~30s. The endpoint is cached
+  // server-side (stale-while-revalidate), so this stays cheap.
+  useEffect(() => {
+    const id = window.setInterval(() => reload(), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Deep link from MatchTeamLeaguePositionsLink (?league=&team=): select the
+  // league, scroll to + briefly highlight the team's row, then clear the params.
+  useEffect(() => {
+    const leagueID = searchParams.get("league");
+    const teamName = searchParams.get("team");
+    if (!leagueID || !teamName || state.leagues.length === 0) {
+      return;
+    }
+
+    const league = state.leagues.find((candidate) => candidate.leagueID === leagueID);
+    if (!league) {
+      setSearchParams({}, { replace: true });
+      return;
+    }
+
+    const allRows = league.rows.length > 0 ? league.rows : league.groups.flatMap((group) => group.rows);
+    const row = allRows.find(
+      (candidate) => candidate.team.localeCompare(teamName, undefined, { sensitivity: "base" }) === 0
+    );
+
+    setSelectedLeagueID(leagueID);
+    setSearchParams({}, { replace: true });
+
+    if (row) {
+      window.setTimeout(() => {
+        document.getElementById(`table-row-${row.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        setHighlightedRowId(row.id);
+        window.setTimeout(() => setHighlightedRowId((current) => (current === row.id ? null : current)), 2500);
+      }, 200);
+    }
+  }, [searchParams, state.leagues, setSearchParams]);
+
   const sortedLeagues = useMemo(
     () =>
       [...state.leagues].sort((left, right) =>
@@ -108,7 +151,13 @@ export function TablesScreen() {
           {selectedLeague ? (
             <>
               <LeagueTableHero league={selectedLeague} />
-              <LeagueTableCard league={selectedLeague} />
+              {leagueHasLiveRows(selectedLeague) ? (
+                <div className="tables-live-note">
+                  <span className="tables-live-dot" aria-hidden="true" />
+                  Positions update live from in-progress scores and are provisional.
+                </div>
+              ) : null}
+              <LeagueTableCard league={selectedLeague} highlightedRowId={highlightedRowId} />
               {state.lastUpdated ? (
                 <div className="tables-updated">Updated {formatLastUpdated(state.lastUpdated)}</div>
               ) : null}
@@ -121,21 +170,7 @@ export function TablesScreen() {
 }
 
 function LeagueTableHero({ league }: { league: LeagueTable }) {
-  const rows = league.rows.length > 0 ? league.rows : league.groups.flatMap((group) => group.rows);
-  const sortedRows = [...rows].sort((left, right) => {
-    if (left.position !== right.position) return left.position - right.position;
-    return right.points - left.points;
-  });
-  const leader = sortedRows[0] || null;
-  const second = sortedRows[1] || null;
   const visibleStageName = normalizeStageName(league.stageName);
-  const leaderSummary = leader
-    ? second
-      ? leader.points > second.points
-        ? `${leader.team} lead by ${leader.points - second.points} ${leader.points - second.points === 1 ? "point" : "points"}`
-        : `${leader.team} lead on goal difference`
-      : `${leader.team} lead`
-    : null;
 
   return (
     <section className="league-hero">
@@ -148,21 +183,37 @@ function LeagueTableHero({ league }: { league: LeagueTable }) {
       </div>
       <div className="league-hero-title">
         <h2>{league.leagueName}</h2>
-        <p>
-          {[visibleStageName, `${rows.length} teams`].filter(Boolean).join(" · ")}
-        </p>
+        {visibleStageName ? <p>{visibleStageName}</p> : null}
       </div>
-      {leaderSummary ? (
-        <div className="league-hero-leader">
-          <span>Leader</span>
-          <strong>{leaderSummary}</strong>
-        </div>
-      ) : null}
     </section>
   );
 }
 
-function LeagueTableCard({ league }: { league: LeagueTable }) {
+function leagueHasLiveRows(league: LeagueTable | null): boolean {
+  if (!league) return false;
+  if (league.rows.some((row) => row.live)) return true;
+  return league.groups.some((group) => group.rows.some((row) => row.live));
+}
+
+function PositionTrend({ row }: { row: LeagueTableRow }) {
+  const previous = row.previousPosition;
+  if (previous == null) return null;
+  if (previous > row.position) {
+    return <span className="table-trend is-up" aria-label="Up" title="Up">▲</span>;
+  }
+  if (previous < row.position) {
+    return <span className="table-trend is-down" aria-label="Down" title="Down">▼</span>;
+  }
+  return <span className="table-trend is-same" aria-label="No change" title="No change">–</span>;
+}
+
+function LeagueTableCard({
+  league,
+  highlightedRowId = null,
+}: {
+  league: LeagueTable;
+  highlightedRowId?: string | null;
+}) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const visibleStageName = normalizeStageName(league.stageName);
   const groups = league.groups.length > 0
@@ -218,11 +269,15 @@ function LeagueTableCard({ league }: { league: LeagueTable }) {
                 <div className="league-table-row-wrap" key={`${groupIndex}-${row.id}`}>
                   <button
                     type="button"
-                    className="league-table-row"
+                    id={`table-row-${row.id}`}
+                    className={`league-table-row${row.live ? " is-live" : ""}${row.id === highlightedRowId ? " is-highlighted" : ""}`}
                     onClick={() => toggleRow(row.id)}
                     aria-expanded={isExpanded}
                   >
-                    <span className="table-cell table-cell-position">{row.position}</span>
+                    <span className="table-cell table-cell-position">
+                      {league.realtime ? <PositionTrend row={row} /> : null}
+                      {row.position}
+                    </span>
                     <TableTeamLogo teamName={row.team} />
                     <span className="table-cell table-cell-team table-team-name">{row.team}</span>
                     <span className="table-cell table-cell-played">{row.played}</span>

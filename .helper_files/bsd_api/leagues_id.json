@@ -1,0 +1,15 @@
+{
+  "id": 27,
+  "name": "World Cup 2026",
+  "country": "International",
+  "is_women": false,
+  "is_active": true,
+  "current_season": {
+    "id": 188,
+    "name": "World Cup 2026",
+    "year": 2026,
+    "start_date": "2026-01-01",
+    "end_date": "2026-12-31",
+    "is_current": true
+  }
+}

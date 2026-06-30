@@ -19,6 +19,7 @@ struct MatchDetailView: View {
     @State private var detailedMatch: Match?
     @State private var detailsRefreshTask: Task<Void, Never>?
     @State private var detailsErrorMessage: String?
+    @State private var socialItems: [MatchSocialItem] = []
     @State private var pendingEventsQuickRetry = false
     @State private var screenOpenedAt: Date?
     @State private var screenViewSent = false
@@ -217,6 +218,21 @@ struct MatchDetailView: View {
                 )
                 .padding(.horizontal)
 
+                if let penaltyDetailSummary = activeMatch.penaltyDetailSummaryText {
+                    MatchPenaltyShootoutSummary(text: penaltyDetailSummary)
+                        .padding(.horizontal)
+                }
+
+                // Unconditional: shown for any match status (upcoming/live/finished)
+                // whenever a tracked competition table has the team(s) — the link
+                // itself renders nothing when no table/team match is found, so it
+                // should never be gated on shouldShowMatchActions/isMatchFinished etc.
+                MatchTeamLeaguePositionsLink(
+                    match: activeMatch,
+                    apiBaseURL: preferences.apiBaseURL
+                )
+                .padding(.horizontal)
+
                 MatchEventsCard(match: activeMatch)
                     .padding(.horizontal)
 
@@ -255,11 +271,20 @@ struct MatchDetailView: View {
                     actionPanel
                         .padding(.horizontal)
                 }
+
+                if !socialItems.isEmpty {
+                    MatchSocialSection(items: socialItems)
+                        .padding(.horizontal)
+                }
             }
             .padding(.vertical, 12)
         }
+        .task(id: "\(preferences.apiBaseURL)|\(match.matchDetailsID ?? "")") {
+            await loadMatchSocial()
+        }
         .refreshable {
             await refreshDetailsManually()
+            await loadMatchSocial()
         }
         .navigationTitle("Match Details")
         .navigationBarTitleDisplayMode(.inline)
@@ -599,6 +624,33 @@ struct MatchDetailView: View {
         }
     }
 
+    private func loadMatchSocial() async {
+        guard match.isTestMatch != true else {
+            await MainActor.run { socialItems = [] }
+            return
+        }
+        guard let detailsID = match.matchDetailsID,
+              let baseURL = URL(string: preferences.apiBaseURL)
+        else {
+            await MainActor.run { socialItems = [] }
+            return
+        }
+
+        do {
+            let items = try await APIClient(baseURL: baseURL).fetchMatchSocial(matchId: detailsID)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                socialItems = items
+            }
+        } catch {
+            if Self.isCancellationError(error) { return }
+            NSLog("[MatchDetail][WARN] social_load_failed id=%@ error=%@", detailsID, String(describing: error))
+            await MainActor.run {
+                socialItems = []
+            }
+        }
+    }
+
     private func refreshIntervalNanos(for match: Match) -> UInt64 {
         if match.matchDetailsID == nil || match.isInProgress {
             return Self.detailsRefreshIntervalNanos
@@ -781,6 +833,9 @@ private struct MatchDetailScoreboardHero: View {
     }
 
     private var statusText: String {
+        if match.penaltyDetailSummaryText != nil {
+            return "AET"
+        }
         if let displayScoreStatus = match.displayScoreStatus {
             return displayScoreStatus
         }
@@ -814,6 +869,7 @@ private struct MatchDetailScoreboardHero: View {
                 teamColumn(
                     name: match.displayHomeTeam,
                     fullName: match.homeTeam,
+                    teamId: match.homeTeamId,
                     alternateNames: [match.homeShortName].compactMap { $0 }
                 )
 
@@ -837,6 +893,7 @@ private struct MatchDetailScoreboardHero: View {
                 teamColumn(
                     name: match.displayAwayTeam,
                     fullName: match.awayTeam,
+                    teamId: match.awayTeamId,
                     alternateNames: [match.awayShortName].compactMap { $0 }
                 )
             }
@@ -866,10 +923,10 @@ private struct MatchDetailScoreboardHero: View {
         .shadow(color: Color.black.opacity(0.18), radius: 22, x: 0, y: 12)
     }
 
-    private func teamColumn(name: String, fullName: String, alternateNames: [String]) -> some View {
+    private func teamColumn(name: String, fullName: String, teamId: String? = nil, alternateNames: [String]) -> some View {
         VStack(spacing: 10) {
             Group {
-                if let image = LogoResolver.shared.image(for: fullName, alternateNames: alternateNames) {
+                if let image = LogoResolver.shared.image(for: fullName, teamId: teamId, alternateNames: alternateNames) {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
@@ -894,11 +951,34 @@ private struct MatchDetailScoreboardHero: View {
     }
 }
 
+private struct MatchPenaltyShootoutSummary: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            )
+            .accessibilityLabel(text)
+    }
+}
+
 private struct MatchEventsCard: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @State private var selectedPlayer: MatchLineupPlayer?
 
     let match: Match
+
+    private static let subPhotoSize: CGFloat = 34
+    /// Neutral accent for teams TSDB has no brand colour for (~80% of teams),
+    /// so every card still shows a consistent home-left / away-right stripe.
+    private static let neutralAccent = Color(red: 0.42, green: 0.46, blue: 0.52)
 
     private var entries: [MatchEventEntry] {
         Self.entries(for: match).sorted { left, right in
@@ -907,6 +987,31 @@ private struct MatchEventsCard: View {
             }
             return left.title.localizedCaseInsensitiveCompare(right.title) == .orderedAscending
         }
+    }
+
+    private var timelineEntries: [MatchEventEntry] {
+        entries.filter { !$0.isOtherTimelineEvent }
+    }
+
+    private var otherEntries: [MatchEventEntry] {
+        entries.filter { $0.isOtherTimelineEvent }
+    }
+
+    private var homeAccentColor: Color {
+        accentColor(teamId: match.homeTeamId)
+    }
+
+    private var awayAccentColor: Color {
+        accentColor(teamId: match.awayTeamId)
+    }
+
+    private func accentColor(teamId: String?) -> Color {
+        // The team's real TSDB brand colour (strColour1) keyed by team id, when
+        // TSDB has it; otherwise a neutral accent so the stripe is consistent.
+        if let teamId, let badgeColor = TeamBadgeCache.shared.accentColor(forTeamId: teamId) {
+            return badgeColor
+        }
+        return Self.neutralAccent
     }
 
     var body: some View {
@@ -918,10 +1023,25 @@ private struct MatchEventsCard: View {
                     .font(.headline)
                     .foregroundStyle(.primary)
 
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(entries) { entry in
-                        eventRow(entry)
+                if !timelineEntries.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(timelineEntries) { entry in
+                            eventCard(entry)
+                        }
                     }
+                }
+
+                if !otherEntries.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Other")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        ForEach(otherEntries) { entry in
+                            eventCard(entry)
+                        }
+                    }
+                    .padding(.top, timelineEntries.isEmpty ? 0 : 4)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -937,47 +1057,172 @@ private struct MatchEventsCard: View {
     }
 
     @ViewBuilder
-    private func eventRow(_ entry: MatchEventEntry) -> some View {
+    private func eventCard(_ entry: MatchEventEntry) -> some View {
+        let isHome = entry.side == .home
+        let isGoal = entry.kind == .goal
+        let accent = isHome ? homeAccentColor : awayAccentColor
+
+        ZStack(alignment: isHome ? .leading : .trailing) {
+            // Full-height accent bar; clipped to the card shape below so it
+            // fills the rounded corners on its edge.
+            Rectangle()
+                .fill(accent)
+                .frame(width: 6)
+
+            Group {
+                if entry.kind == .substitution {
+                    substitutionContent(entry, isHome: isHome)
+                } else {
+                    standardContent(entry, isHome: isHome, isGoal: isGoal)
+                }
+            }
+            .padding(.vertical, isGoal ? 9 : 8)
+            .padding(.horizontal, 12)
+            .padding(isHome ? .leading : .trailing, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isGoal ? Color.green.opacity(0.07) : Color(.tertiarySystemBackground))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    isGoal ? Color.green.opacity(0.45) : Color.primary.opacity(0.07),
+                    lineWidth: isGoal ? 1.5 : 1
+                )
+        )
+        .shadow(color: isGoal ? Color.green.opacity(0.22) : Color.clear, radius: isGoal ? 8 : 0)
+    }
+
+    @ViewBuilder
+    private func standardContent(_ entry: MatchEventEntry, isHome: Bool, isGoal: Bool) -> some View {
+        let displayedPlayer = entry.isOtherTimelineEvent ? nil : entry.player
+
         Button {
-            if let player = entry.player, player.idPlayer != nil {
+            if let player = displayedPlayer, player.idPlayer != nil {
                 selectedPlayer = player
             }
         } label: {
-            HStack(alignment: .center, spacing: 12) {
-                if entry.side == .away {
-                    eventPortrait(entry.player)
+            HStack(alignment: .center, spacing: 10) {
+                let iconSize: CGFloat = isGoal ? 34 : 24
+                if isHome {
+                    minuteText(entry.minute, alignment: .leading)
+                    eventIcon(entry.kind)
+                        .frame(width: iconSize, height: iconSize)
+                    eventText(entry, alignment: .leading, textAlignment: .leading)
+                    Spacer(minLength: 8)
+                    eventPortrait(displayedPlayer)
+                } else {
+                    eventPortrait(displayedPlayer)
                     Spacer(minLength: 8)
                     eventText(entry, alignment: .trailing, textAlignment: .trailing)
                     eventIcon(entry.kind)
-                        .frame(width: 22, height: 22)
-                    minuteText(entry.minute)
-                } else {
-                    minuteText(entry.minute)
-                    eventIcon(entry.kind)
-                        .frame(width: 22, height: 22)
-                    eventText(entry, alignment: .leading, textAlignment: .leading)
-                    Spacer(minLength: 8)
-                    eventPortrait(entry.player)
+                        .frame(width: iconSize, height: iconSize)
+                    minuteText(entry.minute, alignment: .trailing)
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .allowsHitTesting(entry.player?.idPlayer != nil)
+        .allowsHitTesting(displayedPlayer?.idPlayer != nil)
     }
 
-    private func minuteText(_ minute: String) -> some View {
+    @ViewBuilder
+    private func substitutionContent(_ entry: MatchEventEntry, isHome: Bool) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            if isHome {
+                minuteText(entry.minute, alignment: .leading)
+                VStack(spacing: 7) {
+                    subLine(player: entry.playerOff, name: entry.playerOffName ?? "", isOut: true, isHome: isHome)
+                    subLine(player: entry.player, name: entry.playerOnName ?? "", isOut: false, isHome: isHome)
+                }
+            } else {
+                VStack(spacing: 7) {
+                    subLine(player: entry.playerOff, name: entry.playerOffName ?? "", isOut: true, isHome: isHome)
+                    subLine(player: entry.player, name: entry.playerOnName ?? "", isOut: false, isHome: isHome)
+                }
+                minuteText(entry.minute, alignment: .trailing)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func subLine(player: MatchLineupPlayer?, name: String, isOut: Bool, isHome: Bool) -> some View {
+        Button {
+            if let player, player.idPlayer != nil {
+                selectedPlayer = player
+            }
+        } label: {
+            HStack(spacing: 8) {
+                if isHome {
+                    subPill(isOut: isOut)
+                    Text(name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 6)
+                    subPhoto(player)
+                } else {
+                    subPhoto(player)
+                    Spacer(minLength: 6)
+                    Text(name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .multilineTextAlignment(.trailing)
+                    subPill(isOut: isOut)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(player?.idPlayer != nil)
+    }
+
+    private func subPill(isOut: Bool) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: isOut ? "arrow.down" : "arrow.up")
+                .font(.system(size: 9, weight: .black))
+            Text(isOut ? "OUT" : "IN")
+                .font(.system(size: 10, weight: .heavy))
+                .frame(width: 26, alignment: .leading)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            Capsule(style: .continuous)
+                .fill(isOut ? Color.red : Color(red: 0.13, green: 0.7, blue: 0.32))
+        )
+    }
+
+    @ViewBuilder
+    private func subPhoto(_ player: MatchLineupPlayer?) -> some View {
+        if let player {
+            MatchLineupPlayerPortraitView(player: player, diameter: Self.subPhotoSize)
+        } else {
+            Color.clear
+                .frame(width: Self.subPhotoSize, height: Self.subPhotoSize)
+        }
+    }
+
+    private func minuteText(_ minute: String, alignment: Alignment = .trailing) -> some View {
         Text(minute)
             .font(.caption.weight(.semibold))
             .monospacedDigit()
             .foregroundStyle(.secondary)
-            .frame(width: 38, alignment: .trailing)
+            .frame(width: 38, alignment: alignment)
     }
 
     private func eventText(_ entry: MatchEventEntry, alignment: HorizontalAlignment, textAlignment: TextAlignment) -> some View {
         VStack(alignment: alignment, spacing: 3) {
             Text(entry.title)
-                .font(.subheadline.weight(.medium))
+                .font(.subheadline.weight(entry.kind == .goal ? .bold : .medium))
                 .foregroundStyle(.primary)
             if let subtitle = entry.subtitle {
                 Text(subtitle)
@@ -1002,17 +1247,30 @@ private struct MatchEventsCard: View {
     private func eventIcon(_ kind: MatchEventEntry.Kind) -> some View {
         switch kind {
         case .goal:
-            Image(systemName: "soccerball")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.primary)
+            ZStack {
+                Circle()
+                    .fill(Color.green)
+                Image(systemName: "soccerball")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .shadow(color: Color.green.opacity(0.55), radius: 6, x: 0, y: 0)
         case .yellowCard:
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Color.yellow)
-                .frame(width: 11, height: 16)
+                .frame(width: 13, height: 18)
         case .redCard:
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Color.red)
-                .frame(width: 11, height: 16)
+                .frame(width: 13, height: 18)
+        case .varEvent:
+            Image(systemName: "theatermask.and.paintbrush")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.orange)
+        case .substitution:
+            Image(systemName: "arrow.left.arrow.right")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -1039,6 +1297,10 @@ private struct MatchEventsCard: View {
         appendCards(from: match.awayYellowCards, teamName: match.displayAwayTeam, kind: .yellowCard, side: .away, match: match, to: &output)
         appendCards(from: match.homeRedCards, teamName: match.displayHomeTeam, kind: .redCard, side: .home, match: match, to: &output)
         appendCards(from: match.awayRedCards, teamName: match.displayAwayTeam, kind: .redCard, side: .away, match: match, to: &output)
+        appendVarEvents(from: match.homeVarEvents, side: .home, match: match, to: &output)
+        appendVarEvents(from: match.awayVarEvents, side: .away, match: match, to: &output)
+        appendSubstitutions(from: match.teamLineups?.home, side: .home, to: &output)
+        appendSubstitutions(from: match.teamLineups?.away, side: .away, to: &output)
 
         return output
     }
@@ -1148,6 +1410,91 @@ private struct MatchEventsCard: View {
         }
     }
 
+    private static func appendVarEvents(
+        from varEvents: [MatchVarEvent],
+        side: MatchEventEntry.Side,
+        match: Match,
+        to output: inout [MatchEventEntry]
+    ) {
+        for event in varEvents {
+            guard let minute = event.minute, !minute.isEmpty else { continue }
+            let player: MatchLineupPlayer?
+            if let cutoutURL = event.cutoutURL, !cutoutURL.isEmpty {
+                player = MatchLineupPlayer(
+                    number: 0,
+                    name: event.player ?? "",
+                    idPlayer: event.idPlayer,
+                    positionCategory: nil,
+                    cutoutURL: cutoutURL,
+                    formationRowIndex: nil,
+                    formationSlotIndex: nil,
+                    formationRowSize: nil
+                )
+            } else if let name = event.player, !name.isEmpty {
+                player = playerForEvent(named: name, side: side, match: match)
+            } else {
+                player = nil
+            }
+            let title = event.player.map { $0 } ?? event.detail
+            let subtitle = event.player != nil ? event.detail : nil
+            output.append(
+                MatchEventEntry(
+                    minute: formattedMatchMinute(minute),
+                    sortMinute: sortMinute(minute),
+                    kind: .varEvent,
+                    side: side,
+                    title: title,
+                    subtitle: subtitle,
+                    player: player
+                )
+            )
+        }
+    }
+
+    private static func appendSubstitutions(
+        from lineup: MatchTeamLineup?,
+        side: MatchEventEntry.Side,
+        to output: inout [MatchEventEntry]
+    ) {
+        guard let lineup else { return }
+        for sub in lineup.substitutions {
+            let player = MatchLineupPlayer(
+                number: sub.playerOn.number,
+                name: sub.playerOn.name,
+                idPlayer: sub.playerOn.idPlayer,
+                positionCategory: nil,
+                cutoutURL: sub.playerOn.cutoutURL,
+                formationRowIndex: nil,
+                formationSlotIndex: nil,
+                formationRowSize: nil
+            )
+            let playerOff = MatchLineupPlayer(
+                number: sub.playerOff.number,
+                name: sub.playerOff.name,
+                idPlayer: sub.playerOff.idPlayer,
+                positionCategory: nil,
+                cutoutURL: sub.playerOff.cutoutURL,
+                formationRowIndex: nil,
+                formationSlotIndex: nil,
+                formationRowSize: nil
+            )
+            output.append(
+                MatchEventEntry(
+                    minute: formattedMatchMinute(sub.minute),
+                    sortMinute: sortMinute(sub.minute),
+                    kind: .substitution,
+                    side: side,
+                    title: "\(sub.playerOff.name) ▸ \(sub.playerOn.name)",
+                    subtitle: nil,
+                    player: player,
+                    playerOff: playerOff,
+                    playerOffName: sub.playerOff.name,
+                    playerOnName: sub.playerOn.name
+                )
+            )
+        }
+    }
+
     private static func playerForEvent(named name: String, side: MatchEventEntry.Side, match: Match) -> MatchLineupPlayer? {
         let lineup = side == .home ? match.teamLineups?.home : match.teamLineups?.away
         let candidates = eventPlayerCandidates(from: lineup)
@@ -1187,6 +1534,10 @@ private struct MatchEventsCard: View {
     }
 
     private static func sortMinute(_ value: String) -> Int {
+        if isOtherMatchTimelineMinute(value) {
+            return MatchEventEntry.otherTimelineSortMinute
+        }
+
         let normalized = normalizedMinute(value)
         let firstNumber = normalized
             .split { !$0.isNumber }
@@ -1206,6 +1557,8 @@ private struct MatchEventEntry: Identifiable {
         case goal
         case yellowCard
         case redCard
+        case varEvent
+        case substitution
     }
 
     let minute: String
@@ -1215,6 +1568,15 @@ private struct MatchEventEntry: Identifiable {
     let title: String
     let subtitle: String?
     let player: MatchLineupPlayer?
+    var playerOff: MatchLineupPlayer? = nil
+    var playerOffName: String? = nil
+    var playerOnName: String? = nil
+
+    static let otherTimelineSortMinute = Int.max
+
+    var isOtherTimelineEvent: Bool {
+        sortMinute == Self.otherTimelineSortMinute && minute.isEmpty
+    }
 
     var id: String {
         "\(sortMinute)|\(minute)|\(title)|\(subtitle ?? "")|\(kind)|\(side)"
@@ -1391,6 +1753,97 @@ private struct MatchActionAlert: Identifiable {
 private struct CalendarChoice: Identifiable {
     let id: String
     let title: String
+}
+
+// MARK: - Social Media
+
+private struct MatchSocialSection: View {
+    let items: [MatchSocialItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Social media")
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            VStack(spacing: 8) {
+                ForEach(items) { item in
+                    if let url = URL(string: item.url) {
+                        Link(destination: url) {
+                            MatchSocialRow(item: item)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct MatchSocialRow: View {
+    let item: MatchSocialItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            MatchSocialThumbnail(urlString: item.thumbnail)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(3)
+
+                if let sourceText {
+                    Text(sourceText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+    }
+
+    private var sourceText: String? {
+        item.account?.name ?? item.account?.handle
+    }
+}
+
+private struct MatchSocialThumbnail: View {
+    let urlString: String?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(.tertiarySystemFill))
+
+            if let url = urlString.flatMap(URL.init) {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                Image(systemName: "link")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 92, height: 52)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
 }
 
 // MARK: - TV Channel Row
@@ -1686,6 +2139,7 @@ private struct MatchLineupPlayerPortraitView: View {
     static let size: CGFloat = 54
 
     let player: MatchLineupPlayer
+    var diameter: CGFloat = MatchLineupPlayerPortraitView.size
 
     private var portraitURLCandidates: [URL] {
         guard let value = player.cutoutURL?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1716,7 +2170,7 @@ private struct MatchLineupPlayerPortraitView: View {
                 initialsView
             }
         }
-        .frame(width: Self.size, height: Self.size)
+        .frame(width: diameter, height: diameter)
         .clipShape(Circle())
         .overlay {
             Circle()
@@ -1727,7 +2181,7 @@ private struct MatchLineupPlayerPortraitView: View {
 
     private var initialsView: some View {
         Text(initials)
-            .font(.system(size: 13, weight: .black, design: .rounded))
+            .font(.system(size: diameter * 0.24, weight: .black, design: .rounded))
             .foregroundStyle(.white)
     }
 }
@@ -2454,10 +2908,17 @@ private struct MatchLineupPitchBackground: View {
 private func formattedMatchMinute(_ rawValue: String) -> String {
     let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return "-" }
+    if isOtherMatchTimelineMinute(trimmed) {
+        return ""
+    }
     if trimmed.contains("'") {
         return trimmed
     }
     return "\(trimmed)'"
+}
+
+private func isOtherMatchTimelineMinute(_ rawValue: String) -> Bool {
+    rawValue.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("-")
 }
 
 private struct MatchLineupPlayerEventSummary {

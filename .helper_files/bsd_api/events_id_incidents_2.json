@@ -1,0 +1,88 @@
+{
+  "event_id": 8325,
+  "incidents": [
+    {
+      "text": "Second half",
+      "type": "period",
+      "minute": 90,
+      "is_live": true,
+      "away_score": 1,
+      "home_score": 2
+    },
+    {
+      "type": "substitution",
+      "minute": 46,
+      "is_home": false,
+      "player_in": "D. Duarte",
+      "added_time": null,
+      "player_out": "T. Arcanjo",
+      "player_in_id": 3314,
+      "player_out_id": 2701
+    },
+    {
+      "text": "HT",
+      "type": "period",
+      "minute": 45,
+      "is_live": false,
+      "away_score": 1,
+      "home_score": 2
+    },
+    {
+      "type": "goal",
+      "assist": "M. Araújo",
+      "minute": 45,
+      "player": "A. Canobbio",
+      "is_home": true,
+      "goal_type": "regular",
+      "player_id": 2908,
+      "added_time": 6,
+      "away_score": 1,
+      "home_score": 2
+    },
+    {
+      "type": "injuryTime",
+      "length": 5,
+      "minute": 45
+    },
+    {
+      "type": "goal",
+      "minute": 44,
+      "player": "M. Araújo",
+      "is_home": true,
+      "goal_type": "regular",
+      "player_id": 1215,
+      "added_time": null,
+      "away_score": 1,
+      "home_score": 1
+    },
+    {
+      "type": "goal",
+      "minute": 21,
+      "player": "K. Lenini",
+      "is_home": false,
+      "goal_type": "regular",
+      "player_id": 22076,
+      "added_time": null,
+      "away_score": 1,
+      "home_score": 0
+    },
+    {
+      "type": "card",
+      "minute": 20,
+      "player": "R. Bentancur",
+      "is_home": true,
+      "card_type": "yellow",
+      "player_id": 723,
+      "added_time": null
+    },
+    {
+      "type": "card",
+      "minute": 5,
+      "player": "S. L. Cabral",
+      "is_home": false,
+      "card_type": "yellow",
+      "player_id": 1235,
+      "added_time": null
+    }
+  ]
+}

@@ -19,6 +19,7 @@ const {
   timelinePayloadHasEntries,
   matchTimelineCacheFresh,
   preferredSlotsForHint,
+  isDisallowedGoalVarDetail,
 } = __private;
 
 // ---------------------------------------------------------------------------
@@ -69,8 +70,12 @@ test("mapTsdbStatus: ET with progress returns the minute", () => {
   assert.equal(mapTsdbStatus("ET", "105"), "105");
 });
 
-test("mapTsdbStatus: 1H with no progress returns null", () => {
-  assert.equal(mapTsdbStatus("1H", ""), null);
+test("mapTsdbStatus: 1H with no progress keeps the match live", () => {
+  assert.equal(mapTsdbStatus("1H", ""), "LIVE");
+});
+
+test("mapTsdbStatus: 2H with no progress keeps the match live", () => {
+  assert.equal(mapTsdbStatus("2H", ""), "LIVE");
 });
 
 test("mapTsdbStatus: null input returns null", () => {
@@ -285,6 +290,66 @@ test("parseTimelineEvents: yellow-red treated as red card", () => {
   const result = parseTimelineEvents([entry], null, "FT");
   assert.equal(result.home_red_cards.length, 1);
   assert.equal(result.home_yellow_cards.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// VAR events: only a disallowed goal is surfaced (see isDisallowedGoalVarDetail)
+// ---------------------------------------------------------------------------
+
+test("isDisallowedGoalVarDetail: true for goal overturned phrasing", () => {
+  assert.equal(isDisallowedGoalVarDetail("Goal Disallowed"), true);
+  assert.equal(isDisallowedGoalVarDetail("goal not awarded"), true);
+  assert.equal(isDisallowedGoalVarDetail("Goal overturned by VAR"), true);
+});
+
+test("isDisallowedGoalVarDetail: false for confirmed goals and non-goal reviews", () => {
+  assert.equal(isDisallowedGoalVarDetail("Goal Awarded"), false);
+  assert.equal(isDisallowedGoalVarDetail("Penalty Awarded"), false);
+  assert.equal(isDisallowedGoalVarDetail("Red Card Confirmed"), false);
+  assert.equal(isDisallowedGoalVarDetail("Offside Check"), false);
+  assert.equal(isDisallowedGoalVarDetail(""), false);
+  assert.equal(isDisallowedGoalVarDetail(null), false);
+});
+
+test("parseTimelineEvents: var entry for a disallowed goal is surfaced", () => {
+  const entry = {
+    strTimeline: "Var",
+    strTimelineDetail: "Goal Disallowed",
+    strPlayer: "X",
+    intTime: "22",
+    strHome: "Yes",
+    idTeam: null,
+  };
+  const result = parseTimelineEvents([entry], null, "45");
+  assert.equal(result.home_var_events.length, 1);
+  assert.equal(result.home_var_events[0].detail, "Goal Disallowed");
+});
+
+test("parseTimelineEvents: var entry for a confirmed goal is dropped", () => {
+  const entry = {
+    strTimeline: "Var",
+    strTimelineDetail: "Goal Awarded",
+    strPlayer: "X",
+    intTime: "22",
+    strHome: "Yes",
+    idTeam: null,
+  };
+  const result = parseTimelineEvents([entry], null, "45");
+  assert.equal(result.home_var_events.length, 0);
+});
+
+test("parseTimelineEvents: non-goal var review is dropped", () => {
+  const entry = {
+    strTimeline: "Var",
+    strTimelineDetail: "Penalty Awarded",
+    strPlayer: "X",
+    intTime: "22",
+    strHome: "Yes",
+    idTeam: null,
+  };
+  const result = parseTimelineEvents([entry], null, "45");
+  assert.equal(result.home_var_events.length, 0);
+  assert.equal(result.away_var_events.length, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -554,10 +619,34 @@ test("assignFormationGridPositions: overloaded side hints keep normal row spacin
   assert.deepEqual(attackers.map((player) => player.name), ["Left 1", "Left 2", "Left 3"]);
 });
 
+test("assignFormationGridPositions: away back four keeps right-back wide of centre-back", () => {
+  const starters = [
+    { name: "Fernando Muslera", number: 1, position_category: "goalkeeper", position: "Goalkeeper" },
+    { name: "Mathías Olivera", number: 16, position_category: "defender", position: "Left-Back" },
+    { name: "Matías Viña", number: 17, position_category: "defender", position: "Left-Back" },
+    { name: "Guillermo Varela", number: 13, position_category: "defender", position: "Right-Back" },
+    { name: "Sebastián Cáceres", number: 3, position_category: "defender", position: "Centre-Back" },
+    { name: "M1", number: 6, position_category: "midfielder", position: "Midfielder" },
+    { name: "M2", number: 7, position_category: "midfielder", position: "Midfielder" },
+    { name: "M3", number: 8, position_category: "midfielder", position: "Midfielder" },
+    { name: "M4", number: 9, position_category: "midfielder", position: "Midfielder" },
+    { name: "F1", number: 10, position_category: "attacker", position: "Centre-Forward" },
+    { name: "F2", number: 11, position_category: "attacker", position: "Centre-Forward" },
+  ];
+
+  const result = assignFormationGridPositions(starters, "4-4-2", { side: "away" });
+  const varela = result.find((player) => player.name === "Guillermo Varela");
+  const caceres = result.find((player) => player.name === "Sebastián Cáceres");
+  assert.equal(varela.formation_row_index, 1);
+  assert.equal(caceres.formation_row_index, 1);
+  assert.equal(varela.formation_slot_index, 3);
+  assert.equal(caceres.formation_slot_index, 2);
+});
+
 test("preferredSlotsForHint: home side is mirrored from user perspective", () => {
   assert.deepEqual(preferredSlotsForHint("right", 4, "home"), [0, 1]);
-  assert.deepEqual(preferredSlotsForHint("left", 4, "home"), [2, 3]);
-  assert.deepEqual(preferredSlotsForHint("right", 4, "away"), [2, 3]);
+  assert.deepEqual(preferredSlotsForHint("left", 4, "home"), [3, 2]);
+  assert.deepEqual(preferredSlotsForHint("right", 4, "away"), [3, 2]);
   assert.deepEqual(preferredSlotsForHint("left", 4, "away"), [0, 1]);
 });
 

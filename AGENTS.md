@@ -87,3 +87,119 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+
+# BSD API
+
+The BSD APIs will be used in combination with the existing TSDB APIs, potentially with a view to ultimately replacing them if appropriate.
+
+Some data may be sourced from TSDB with other data being from BSD being merged as needed - final approach TBD.
+
+## Implementation approach
+
+- Call BSD APIs and save output to Mongo using collections with a `bsd_` prefix (to distinguish them from other data sources, e.g. TSDB - TheSportsDB)
+- Data should be upserted as needed
+- All collections should include an internal timestamp to reflect the time the data was last updated
+- The `limit` parameter for all API calls should be set to 200 (max allowed)
+- Handle API pagination with the `offset` parameter as needed
+- Example API responses under .helper_files/bsd_api
+- Key APIs:
+ - https://sports.bzzoiro.com/api/v2/leagues - returns a collection of leagues/competitions, e.g. `.helper_files/bsd_api/leagues.json`
+ - https://sports.bzzoiro.com/api/v2/leagues/:id - returns data for a given league competition, .e.g: `.helper_files/bsd_api/leagues_id.json`
+ - https://sports.bzzoiro.com/api/v2/leagues/:id/standings - returns the league table or group standings for a given league competition, e.g. `.helper_files/bsd_api/leagues_id_standings.json`
+ - https://sports.bzzoiro.com/api/v2/teams/:id - maps team IDs to names, e.g. `.helper_files/bsd_api/teams_id.json` - note for competitions such as the World Cup where future fixtures are not yet determined, they may not represent real teams (e.g. `W101`)
+ - https://sports.bzzoiro.com/api/v2/events?league_id=:league_id&status=:status - gets matches (called `events` in BSD speak) by the given league ID (e.g. 27 for World Cup) and status (`notstarted` for upcoming fixtures, `finished` for results), e.g. `.helper_files/bsd_api/events.json`
+ - https://sports.bzzoiro.com/api/v2/events/live - live matches in progress, e.g. `.helper_files/bsd_api/events_live.json` - should be polled regularly when matches are in progress, e.g. every 10s
+ - https://sports.bzzoiro.com/api/v2/events/:id - information on a given match, e.g. `.helper_files/bsd_api/events_id.json`
+ - https://sports.bzzoiro.com/api/v2/events/:id/incidents - match details such as goal scorers, cards, assists, etc, e.g. `.helper_files/bsd_api/events_id_incidents.json` and `.helper_files/bsd_api/events_id_incidents_2.json` - should be polled regularly when matches are in progress, e.g. every 30s
+ - https://sports.bzzoiro.com/api/v2/events/:id/lineups - player lineups for a given match, e.g. `.helper_files/bsd_api/events_id_lineups.json`
+ - https://sports.bzzoiro.com/api/v2/players/:id - details on a given player, e.g. `.helper_files/bsd_api/players_id.json`
+
+An MCP is available here for implementation questions and information: https://sports.bzzoiro.com/mcp
+
+Standard HTTP response codes will indicate the success or failure of calls, including HTTP 429 responses for rate limiting. This should be catered for with a strategy around exponential backoff + retry logic.
+
+## API authentication
+
+This header should be added to every request:
+`Authorization: Token BSD_API_KEY`
+
+In Production, the `BSD_API_KEY` environment variable will be used to determine the value of `BSD_API_KEY`
+
+### Match details
+
+Match details are populated using the events/:id/incidents API, e.g.: https://sports.bzzoiro.com/api/v2/events/8324/incidents
+
+Example goal with assist:
+
+```json
+{
+    "type": "goal",
+    "assist": "M. Araújo",
+    "minute": 45,
+    "player": "A. Canobbio",
+    "is_home": true,
+    "goal_type": "regular",
+    "player_id": 2908,
+    "added_time": 6,
+    "away_score": 1,
+    "home_score": 2
+}
+```
+
+Example yellow card:
+
+```json
+{
+    "type": "card",
+    "minute": 33,
+    "player": "S. Ezatolahi",
+    "is_home": false,
+    "card_type": "yellow",
+    "player_id": 53951,
+    "added_time": null
+}
+```
+
+Example red card:
+
+```json
+{
+    "type": "card",
+    "minute": 67,
+    "player": "N. Ngoy",
+    "is_home": true,
+    "card_type": "red",
+    "player_id": 1447,
+    "added_time": null
+}
+```
+
+Example VAR decision of goal being disallowed:
+
+```json
+{
+    "type": "varDecision",
+    "minute": 25,
+    "player": "M. Taremi",
+    "is_home": false,
+    "decision": "goalAwarded",
+    "confirmed": false,
+    "player_id": 3487
+}
+```
+
+Example of player substitution:
+
+```json
+{
+    "type": "substitution",
+    "minute": 46,
+    "is_home": false,
+    "player_in": "A. Jahanbakhsh",
+    "added_time": null,
+    "player_out": "S. Hardani",
+    "player_in_id": 7605,
+    "player_out_id": 16837
+}
+```

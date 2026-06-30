@@ -16,13 +16,14 @@ struct APIClient {
         return URLSession(configuration: config)
     }
 
+    // Shared across all APIClient instances (constructed frequently for polling/lazy-load
+    // requests) so we don't spin up a new URLSession - and its delegate queue/connection
+    // cache - on every call.
+    private nonisolated static let sharedNoCacheSession = makeNoCacheSession()
+
     nonisolated init(baseURL: URL, session: URLSession? = nil) {
         self.baseURL = baseURL
-        if let session = session {
-            self.session = session
-        } else {
-            self.session = Self.makeNoCacheSession()
-        }
+        self.session = session ?? Self.sharedNoCacheSession
     }
 
     func fetchMatches(preferences: PreferencesSnapshot) async throws -> MatchResponse {
@@ -304,6 +305,25 @@ struct APIClient {
         )
     }
 
+    func fetchPredictions() async throws -> [PredictionLeague] {
+        let request = try buildRequest(path: "predictions", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "predictions")
+        try validateSuccess(http, data: data, operation: "predictions")
+        return try JSONDecoder().decode(PredictionsEnvelope.self, from: data).leagues
+    }
+
+    func fetchFantasySeasonActive() async throws -> FantasySeasonStatus {
+        var request = try buildRequest(path: "fantasy/season-active", queryItems: [])
+        request.timeoutInterval = 4
+        let (data, http) = try await performRequest(
+            request,
+            operation: "fantasy_season_active",
+            maxAttempts: 1
+        )
+        try validateSuccess(http, data: data, operation: "fantasy_season_active")
+        return try JSONDecoder().decode(FantasySeasonStatus.self, from: data)
+    }
+
     func fetchFantasyCurrentGameweek() async throws -> FantasyGameweek {
         var request = try buildRequest(path: "fantasy/gameweek/current", queryItems: [])
         request.timeoutInterval = 4
@@ -434,6 +454,16 @@ struct APIClient {
         let (data, http) = try await performRequest(request, operation: "match_details")
         try validateSuccess(http, data: data, operation: "match_details")
         return try JSONDecoder().decode(MatchDetailsPayload.self, from: data)
+    }
+
+    func fetchMatchSocial(matchId: String) async throws -> [MatchSocialItem] {
+        guard let normalizedID = Self.normalizedMatchDetailsID(matchId) else {
+            throw APIClientError.invalidMatchDetailsID(matchId)
+        }
+        let request = try buildRequest(path: "matches/\(normalizedID)/social", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "match_social")
+        try validateSuccess(http, data: data, operation: "match_social")
+        return try JSONDecoder().decode([MatchSocialItem].self, from: data)
     }
 
     func fetchPlayerDetails(playerId: String) async throws -> PlayerDetails {

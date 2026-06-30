@@ -18,7 +18,8 @@ const { sendNotification, sendLiveActivityPush } = require("./apns_client");
 // (match_monitor handles this without prose text via consecutivePolls logic).
 const liveActivityMetrics = require("./live_activity_metrics");
 const fantasyScore = require("./fantasy_score");
-const { DEFAULT_COMPETITION_WEIGHTS } = require("./config");
+const { isEplSeasonActiveCached } = require("./epl_season_status");
+const { DEFAULT_COMPETITION_WEIGHTS, SERVER_CONFIG } = require("./config");
 const {
   matchIsMajorGameOfInterest,
   matchIsMajorUefaClubKnockoutFixture,
@@ -42,13 +43,6 @@ const MAX_MONITOR_DURATION_MS = 6 * 60 * 60 * 1000; // Keep monitoring up to 6h 
 const NOTIFICATION_DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000; // Keep event dedupe for a full match window
 const KICKOFF_STATUS_MINUTE_THRESHOLD = 15; // Ignore kickoff if first seen too late in the match
 const GOAL_TIMELINE_BACKLOG_LIMIT = 64; // Keep bounded unreconciled timeline events per match
-// BBC live data can briefly oscillate between reverted and stale scorelines after VAR.
-// Requiring five 10s polls delayed confirmation long enough to miss genuine reversals.
-const SCORE_REVERSION_CONFIRMATION_POLLS = 3;
-// Non-VAR score corrections are more likely to be BBC backend skew than a real correction.
-// Hold them longer unless live text explicitly shows an on-pitch cancellation like offside.
-const SCORE_CORRECTION_CONFIRMATION_POLLS = 5;
-const VAR_DECISION_REVIEW_WINDOW_MINUTES = 5;
 const MONITOR_DIAGNOSTICS_RECENT_LIMIT = 300; // Keep a rolling in-memory diagnostics window
 const MATCH_MONITOR_VERBOSE_LOG_ENABLED = process.env.MATCH_MONITOR_VERBOSE_LOG === "1";
 const MATCH_MONITOR_DECISION_LOG_ENABLED = process.env.MATCH_MONITOR_DECISION_LOG === "1";
@@ -591,20 +585,28 @@ function hasPenaltyShootoutResult(match) {
   return Boolean(String(match && match.penalty_result ? match.penalty_result : "").trim());
 }
 
+function firstScorePair(value) {
+  const match = String(value || "").match(/(\d+)\s*-\s*(\d+)/);
+  if (!match) return null;
+  const first = Number(match[1]);
+  const second = Number(match[2]);
+  if (!Number.isFinite(first) || !Number.isFinite(second)) return null;
+  return { first, second };
+}
+
 function penaltyShootoutWinnerSide(match) {
   const penaltyResult = String(match && match.penalty_result ? match.penalty_result : "").trim();
   if (!penaltyResult) return null;
+  const scorePair = firstScorePair(penaltyResult);
 
   const winnerSegment = penaltyResult.split(/\bwin\b/i)[0].trim();
-  if (!winnerSegment) return null;
-
-  const normalizedWinner = normalizeLiveActivityFixtureToken(winnerSegment);
   const normalizedHomeTeam = normalizeLiveActivityFixtureToken(
     (match && (match.home_team || match.homeTeam)) || ""
   );
   const normalizedAwayTeam = normalizeLiveActivityFixtureToken(
     (match && (match.away_team || match.awayTeam)) || ""
   );
+  const normalizedWinner = normalizeLiveActivityFixtureToken(winnerSegment);
 
   if (
     normalizedWinner &&
@@ -626,6 +628,10 @@ function penaltyShootoutWinnerSide(match) {
     return "away";
   }
 
+  if (scorePair && scorePair.first !== scorePair.second) {
+    return scorePair.first > scorePair.second ? "home" : "away";
+  }
+
   return null;
 }
 
@@ -633,7 +639,16 @@ function isResolvedPenaltyShootoutMatch(match) {
   return isPenaltyShootoutStatus(match && match.score_status) && hasPenaltyShootoutResult(match);
 }
 
+function isUnresolvedTiedAetMatch(match) {
+  const status = normalizeStatusToken(match && match.score_status);
+  if (status !== "AET" || hasPenaltyShootoutResult(match)) return false;
+  const homeScore = toNumericScore(match && match.home_score);
+  const awayScore = toNumericScore(match && match.away_score);
+  return Number.isFinite(homeScore) && Number.isFinite(awayScore) && homeScore === awayScore;
+}
+
 function isTerminalMatchState(match) {
+  if (isUnresolvedTiedAetMatch(match)) return false;
   return isFinishedMatchStatus(match && match.score_status) || isResolvedPenaltyShootoutMatch(match);
 }
 
@@ -1313,461 +1328,6 @@ function diffGoalEvents(oldMatch, newMatch) {
   return newEvents;
 }
 
-function diffRemovedGoalEvents(oldMatch, newMatch) {
-  return diffGoalEvents(newMatch || {}, oldMatch || {});
-}
-
-function sameScoreSnapshot(lhs, rhs) {
-  if (!lhs || !rhs) return false;
-  return lhs.home_score === rhs.home_score && lhs.away_score === rhs.away_score;
-}
-
-function detectScoreReversion(oldMatch, newMatch) {
-  const previous = scoreSnapshot(oldMatch || {});
-  const current = scoreSnapshot(newMatch || {});
-  const homeDelta = current.home_score - previous.home_score;
-  const awayDelta = current.away_score - previous.away_score;
-  const totalGoalsRemoved = Math.max(0, -homeDelta) + Math.max(0, -awayDelta);
-
-  if (totalGoalsRemoved !== 1) {
-    return null;
-  }
-
-  let affectedTeam = null;
-  if (homeDelta === -1 && awayDelta === 0) {
-    affectedTeam = "home";
-  } else if (homeDelta === 0 && awayDelta === -1) {
-    affectedTeam = "away";
-  }
-  if (!affectedTeam) {
-    return null;
-  }
-
-  const removedGoalEvents = diffRemovedGoalEvents(oldMatch || {}, newMatch || {})
-    .filter((event) => event.team === affectedTeam)
-    .sort((lhs, rhs) => {
-      const leftMinute = Number.isFinite(lhs.minute) ? lhs.minute : -1;
-      const rightMinute = Number.isFinite(rhs.minute) ? rhs.minute : -1;
-      if (leftMinute !== rightMinute) return rightMinute - leftMinute;
-      return rhs.sourceOrder - lhs.sourceOrder;
-    });
-  const removedGoal = removedGoalEvents[0] || null;
-
-  return {
-    baseline: previous,
-    reverted: current,
-    affectedTeam,
-    removedGoal,
-  };
-}
-
-function updateScoreReversionState(monitorState, oldMatch, newMatch, nowMs = Date.now()) {
-  const current = scoreSnapshot(newMatch || {});
-  const directReversion = detectScoreReversion(oldMatch, newMatch);
-  const previousState =
-    monitorState && monitorState.scoreReversionState && typeof monitorState.scoreReversionState === "object"
-      ? monitorState.scoreReversionState
-      : null;
-
-  if (directReversion) {
-    monitorState.scoreReversionState = {
-      baseline: directReversion.baseline,
-      reverted: directReversion.reverted,
-      affectedTeam: directReversion.affectedTeam,
-      removedGoal: directReversion.removedGoal,
-      consecutivePolls: 1,
-      firstDetectedAtMs: nowMs,
-      lastDetectedAtMs: nowMs,
-      confirmedAtMs: null,
-    };
-    return monitorState.scoreReversionState;
-  }
-
-  if (!previousState) {
-    return null;
-  }
-
-  if (sameScoreSnapshot(current, previousState.baseline)) {
-    monitorState.scoreReversionState = null;
-    return null;
-  }
-
-  if (sameScoreSnapshot(current, previousState.reverted)) {
-    previousState.consecutivePolls = Number(previousState.consecutivePolls || 0) + 1;
-    previousState.lastDetectedAtMs = nowMs;
-    monitorState.scoreReversionState = previousState;
-    return previousState;
-  }
-
-  monitorState.scoreReversionState = null;
-  return null;
-}
-
-function escapedRegexFragment(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function normalizeLiveTextEntryText(value) {
-  return String(value || "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-function entryMinuteWithinWindow(entryMinute, targetMinute, tolerance = 2) {
-  if (!Number.isFinite(targetMinute)) return true;
-  if (!Number.isFinite(entryMinute)) return false;
-  return Math.abs(entryMinute - targetMinute) <= tolerance;
-}
-
-function matchesVarDecisionScoreline(entryText, newMatch, revertedSnapshot) {
-  const homeTeam = String(newMatch && newMatch.home_team ? newMatch.home_team : "").trim();
-  const awayTeam = String(newMatch && newMatch.away_team ? newMatch.away_team : "").trim();
-  const homeScore = Number(revertedSnapshot && revertedSnapshot.home_score);
-  const awayScore = Number(revertedSnapshot && revertedSnapshot.away_score);
-  if (!homeTeam || !awayTeam || !Number.isFinite(homeScore) || !Number.isFinite(awayScore)) {
-    return false;
-  }
-
-  const fragments = [
-    escapedRegexFragment(homeTeam.toLowerCase()),
-    String(homeScore),
-    "-",
-    String(awayScore),
-    escapedRegexFragment(awayTeam.toLowerCase()),
-  ];
-  return new RegExp(fragments.join("\\s*")).test(entryText);
-}
-
-function matchesOnPitchScoreCorrection(entryText, newMatch, reversionState, expectedScorer, entryMinute) {
-  if (!entryText.includes("offside")) {
-    return false;
-  }
-
-  const targetGoalMinute =
-    reversionState && reversionState.removedGoal && Number.isFinite(reversionState.removedGoal.minute)
-      ? reversionState.removedGoal.minute
-      : null;
-  if (!entryMinuteWithinWindow(entryMinute, targetGoalMinute, 2)) {
-    return false;
-  }
-
-  const expectedTeamName =
-    reversionState && reversionState.affectedTeam === "away"
-      ? String(newMatch && newMatch.away_team ? newMatch.away_team : "").trim()
-      : String(newMatch && newMatch.home_team ? newMatch.home_team : "").trim();
-  const normalizedExpectedScorer = normalizeLiveTextEntryText(expectedScorer);
-  const normalizedExpectedTeam = normalizeLiveTextEntryText(expectedTeamName);
-
-  return (
-    (normalizedExpectedScorer && entryText.includes(normalizedExpectedScorer)) ||
-    (normalizedExpectedTeam && entryText.includes(normalizedExpectedTeam))
-  );
-}
-
-function buildVarDisallowedGoalEvent(matchId, newMatch, confirmation, reversionState) {
-  const removedGoal = reversionState && reversionState.removedGoal ? reversionState.removedGoal : null;
-  const goalTime =
-    (removedGoal && removedGoal.goalTime) ||
-    (confirmation && confirmation.goalMinuteLabel) ||
-    (confirmation && confirmation.decisionMinuteLabel) ||
-    null;
-  const scorer = confirmation && confirmation.scorer ? confirmation.scorer : removedGoal && removedGoal.player;
-  const assister =
-    removedGoal && removedGoal.assister ? removedGoal.assister : null;
-  const team =
-    confirmation && confirmation.team
-      ? confirmation.team
-      : reversionState && reversionState.affectedTeam
-        ? reversionState.affectedTeam
-        : null;
-  const current = scoreSnapshot(newMatch || {});
-
-  return {
-    type: "goal",
-    team,
-    title: goalTime ? `Goal disallowed by VAR ${goalTime}` : "Goal disallowed by VAR",
-    body: formatScoreline(newMatch, current.home_score, current.away_score),
-    goalTime,
-    scorer: scorer || null,
-    assister,
-    ownGoal: false,
-    disallowedByVar: true,
-    varDecisionTime:
-      confirmation && confirmation.decisionMinuteLabel ? confirmation.decisionMinuteLabel : null,
-    eventKey: [
-      "var_disallowed",
-      String(team || ""),
-      String(goalTime || ""),
-      String(scorer || ""),
-      String(matchId || ""),
-    ].join(":"),
-  };
-}
-
-function buildScoreCorrectionEvent(matchId, newMatch, confirmation, reversionState) {
-  const removedGoal = reversionState && reversionState.removedGoal ? reversionState.removedGoal : null;
-  const current = scoreSnapshot(newMatch || {});
-  const goalTime =
-    (removedGoal && removedGoal.goalTime) ||
-    (confirmation && confirmation.goalMinuteLabel) ||
-    null;
-  const scorer =
-    (confirmation && confirmation.scorer) ||
-    (removedGoal && removedGoal.player) ||
-    null;
-  const assister =
-    removedGoal && removedGoal.assister ? removedGoal.assister : null;
-  const team =
-    (confirmation && confirmation.team) ||
-    (reversionState && reversionState.affectedTeam) ||
-    null;
-
-  return {
-    type: "goal",
-    team,
-    title: "Score correction",
-    body: formatScoreline(newMatch, current.home_score, current.away_score),
-    goalTime,
-    scorer,
-    assister,
-    ownGoal: Boolean(removedGoal && removedGoal.ownGoal),
-    scoreCorrection: true,
-    eventKey: [
-      "score_correction",
-      String(team || ""),
-      String(goalTime || ""),
-      String(scorer || ""),
-      String(current.home_score),
-      String(current.away_score),
-      String(matchId || ""),
-    ].join(":"),
-  };
-}
-
-async function resolveScoreReversion(matchId, newMatch, reversionState, options = {}) {
-  if (!newMatch || !reversionState) return null;
-  if (Number(reversionState.consecutivePolls || 0) < SCORE_REVERSION_CONFIRMATION_POLLS) {
-    return null;
-  }
-  if (Number.isFinite(Number(reversionState.confirmedAtMs))) {
-    return null;
-  }
-
-  const targetGoalMinute = Number(
-    reversionState.removedGoal && Number.isFinite(reversionState.removedGoal.minute)
-      ? reversionState.removedGoal.minute
-      : null
-  );
-  const expectedScorer = String(
-    reversionState.removedGoal && reversionState.removedGoal.player
-      ? reversionState.removedGoal.player
-      : ""
-  ).trim();
-  const revertedSnapshot = reversionState.reverted || scoreSnapshot(newMatch || {});
-
-  let liveText;
-  if (Array.isArray(newMatch.live_text_entries) && newMatch.live_text_entries.length > 0) {
-    // Structured live_text_entries can be injected by tests for VAR confirmation.
-    liveText = { entries: newMatch.live_text_entries };
-  } else if (options && typeof options.fetchLiveText === "function") {
-    // Allow tests / callers to inject a live-text fetcher.
-    try {
-      liveText = await options.fetchLiveText(newMatch.details_url);
-    } catch (error) {
-      logDecision("var_disallowed_confirmation", {
-        match_id: matchId,
-        result: "fetch_error",
-        error: error && error.message ? error.message : String(error),
-      });
-      return null;
-    }
-  } else {
-    // No live text available from TSDB — VAR confirmation is not possible.
-    return null;
-  }
-
-  const entries = Array.isArray(liveText && liveText.entries) ? liveText.entries : [];
-  if (entries.length === 0) {
-    logDecision("var_disallowed_confirmation", {
-      match_id: matchId,
-      result: "no_live_text_entries",
-    });
-    return null;
-  }
-
-  let overturnedEntry = null;
-  let noGoalEntry = null;
-  let nearbyVarEntry = null;
-  let onPitchCorrectionEntry = null;
-  const varReviewMinute =
-    Number.isFinite(targetGoalMinute) ? targetGoalMinute + VAR_DECISION_REVIEW_WINDOW_MINUTES : null;
-
-  entries.forEach((entry) => {
-    if (!entry || !entry.text) return;
-    const normalizedText = normalizeLiveTextEntryText(entry.text);
-    if (
-      !nearbyVarEntry &&
-      normalizedText.includes("var") &&
-      (
-        entryMinuteWithinWindow(entry.minute_value, targetGoalMinute, VAR_DECISION_REVIEW_WINDOW_MINUTES) ||
-        entryMinuteWithinWindow(entry.minute_value, varReviewMinute, VAR_DECISION_REVIEW_WINDOW_MINUTES)
-      )
-    ) {
-      nearbyVarEntry = entry;
-    }
-
-    if (
-      !onPitchCorrectionEntry &&
-      matchesOnPitchScoreCorrection(normalizedText, newMatch, reversionState, expectedScorer, entry.minute_value)
-    ) {
-      onPitchCorrectionEntry = entry;
-    }
-
-    if (
-      normalizedText.includes("goal overturned by var") &&
-      (!expectedScorer || normalizedText.includes(normalizeLiveTextEntryText(expectedScorer))) &&
-      entryMinuteWithinWindow(entry.minute_value, targetGoalMinute, 2)
-    ) {
-      if (!overturnedEntry) overturnedEntry = entry;
-      return;
-    }
-
-    if (
-      normalizedText.includes("var decision: no goal") &&
-      matchesVarDecisionScoreline(normalizedText, newMatch, revertedSnapshot) &&
-      entryMinuteWithinWindow(
-        entry.minute_value,
-        varReviewMinute,
-        VAR_DECISION_REVIEW_WINDOW_MINUTES
-      )
-    ) {
-      if (!noGoalEntry) noGoalEntry = entry;
-    }
-  });
-
-  if (overturnedEntry || noGoalEntry) {
-    const scorerMatch =
-      overturnedEntry && overturnedEntry.text
-        ? overturnedEntry.text.match(/^GOAL OVERTURNED BY VAR:\s+(.+?)\s+\((.+?)\)\s+scores\b/i)
-        : null;
-    const scorer = scorerMatch && scorerMatch[1] ? scorerMatch[1].trim() : expectedScorer || null;
-    const teamName = scorerMatch && scorerMatch[2] ? scorerMatch[2].trim() : null;
-    const team =
-      teamName && String(newMatch.home_team || "").trim() === teamName
-        ? "home"
-        : teamName && String(newMatch.away_team || "").trim() === teamName
-          ? "away"
-          : reversionState.affectedTeam;
-
-    const goalMinuteLabel =
-      reversionState.removedGoal && reversionState.removedGoal.goalTime
-        ? reversionState.removedGoal.goalTime
-        : overturnedEntry && overturnedEntry.minute
-          ? overturnedEntry.minute
-          : null;
-    const decisionMinuteLabel =
-      noGoalEntry && noGoalEntry.minute
-        ? noGoalEntry.minute
-        : overturnedEntry && overturnedEntry.minute
-          ? overturnedEntry.minute
-          : null;
-
-    reversionState.confirmedAtMs = Date.now();
-    reversionState.resolutionKind = "var_disallowed";
-    logDecision("var_disallowed_confirmation", {
-      match_id: matchId,
-      result: "confirmed",
-      goal_minute: goalMinuteLabel || null,
-      decision_minute: decisionMinuteLabel || null,
-      scorer: scorer || null,
-      team: team || null,
-    });
-
-    return {
-      kind: "var_disallowed",
-      team,
-      scorer,
-      goalMinuteLabel,
-      decisionMinuteLabel,
-    };
-  }
-
-  if (
-    !onPitchCorrectionEntry &&
-    Number(reversionState.consecutivePolls || 0) < SCORE_CORRECTION_CONFIRMATION_POLLS
-  ) {
-    logDecision("score_correction_confirmation", {
-      match_id: matchId,
-      result: "awaiting_stable_reversion",
-      consecutive_polls: Number(reversionState.consecutivePolls || 0),
-      required_polls: SCORE_CORRECTION_CONFIRMATION_POLLS,
-      expected_scorer: expectedScorer || null,
-      reverted_home_score: revertedSnapshot.home_score,
-      reverted_away_score: revertedSnapshot.away_score,
-    });
-    return null;
-  }
-
-  if (nearbyVarEntry) {
-    logDecision("score_correction_confirmation", {
-      match_id: matchId,
-      result: "fallback_after_unresolved_var_context",
-      consecutive_polls: Number(reversionState.consecutivePolls || 0),
-      var_minute: nearbyVarEntry.minute || null,
-      expected_scorer: expectedScorer || null,
-    });
-  }
-
-  const goalMinuteLabel =
-    reversionState.removedGoal && reversionState.removedGoal.goalTime
-      ? reversionState.removedGoal.goalTime
-      : null;
-  const correctionMinuteLabel =
-    onPitchCorrectionEntry && onPitchCorrectionEntry.minute ? onPitchCorrectionEntry.minute : null;
-  const team = reversionState.affectedTeam || null;
-
-  reversionState.confirmedAtMs = Date.now();
-  reversionState.resolutionKind = "score_correction";
-  logDecision("score_correction_confirmation", {
-    match_id: matchId,
-    result: "confirmed",
-    goal_minute: goalMinuteLabel || null,
-    correction_minute: correctionMinuteLabel || null,
-    scorer: expectedScorer || null,
-    team,
-    consecutive_polls: Number(reversionState.consecutivePolls || 0),
-  });
-
-  return {
-    kind: "score_correction",
-    team,
-    scorer: expectedScorer || null,
-    goalMinuteLabel,
-    correctionMinuteLabel,
-  };
-}
-
-async function confirmVarDisallowedGoal(matchId, newMatch, reversionState, options = {}) {
-  const resolution = await resolveScoreReversion(matchId, newMatch, reversionState, options);
-  if (!resolution || resolution.kind !== "var_disallowed") {
-    return null;
-  }
-  const { kind, ...confirmation } = resolution;
-  return confirmation;
-}
-
-async function confirmScoreCorrection(matchId, newMatch, reversionState, options = {}) {
-  const resolution = await resolveScoreReversion(matchId, newMatch, reversionState, options);
-  if (!resolution || resolution.kind !== "score_correction") {
-    return null;
-  }
-  const { kind, ...confirmation } = resolution;
-  return confirmation;
-}
-
 function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), context = null) {
   const events = [];
   const lifecycle = monitorState.lifecycle;
@@ -1818,19 +1378,22 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   if (!lifecycle.fulltimeEmitted && newIsFulltime && oldStatus !== newStatus) {
     const homeScore = toNumericScore(newMatch.home_score) ?? countGoals(newMatch.home_goal_scorers);
     const awayScore = toNumericScore(newMatch.away_score) ?? countGoals(newMatch.away_goal_scorers);
-    let ftBody = formatScoreline(newMatch, homeScore, awayScore);
+    const penaltyFullTimeBody = formatPenaltyShootoutFullTimeBody(newMatch, homeScore, awayScore);
+    let ftBody = penaltyFullTimeBody || formatScoreline(newMatch, homeScore, awayScore);
 
-    if (newStatus === "AET") {
-      ftBody += " (AET)";
-    }
-    const penaltySuffix = penaltyResultSuffix(newMatch);
-    if (penaltySuffix) {
-      ftBody += penaltySuffix;
+    if (!penaltyFullTimeBody) {
+      if (newStatus === "AET") {
+        ftBody += " (AET)";
+      }
+      const penaltySuffix = penaltyResultSuffix(newMatch);
+      if (penaltySuffix) {
+        ftBody += penaltySuffix;
+      }
     }
 
     events.push({
       type: "fulltime",
-      title: newStatus === "AET" ? "AET" : isPenaltyShootoutStatus(newStatus) ? "FT (Pens)" : "FT",
+      title: penaltyFullTimeBody ? "FT" : newStatus === "AET" ? "AET" : isPenaltyShootoutStatus(newStatus) ? "FT (Pens)" : "FT",
       body: ftBody,
       eventKey: `fulltime:${newStatus || "FT"}`,
     });
@@ -1888,8 +1451,18 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
 
   // Start from a base score that ensures emitted goal events reconcile exactly
   // to the current score (prevents impossible inflated scorelines).
-  let runningHomeScore = currentSnapshot.home_score - newHomeGoalsCount;
-  let runningAwayScore = currentSnapshot.away_score - newAwayGoalsCount;
+  // Cap at previousSnapshot: if the score jumped ahead of what the timeline explains
+  // (e.g. score goes 0→2 but only one timeline goal arrived), start from the last
+  // known score so the first notified goal shows the correct step-up (1-0, not 2-0).
+  // unresolvedGoalCount carries the remainder for future notifications.
+  let runningHomeScore = Math.min(
+    currentSnapshot.home_score - newHomeGoalsCount,
+    previousSnapshot.home_score
+  );
+  let runningAwayScore = Math.min(
+    currentSnapshot.away_score - newAwayGoalsCount,
+    previousSnapshot.away_score
+  );
   const oldGoalTimeline = buildGoalTimeline(oldMatch || {});
   const oldTimelineHomeScore = oldGoalTimeline.filter((goal) => goal.team === "home").length;
   const oldTimelineAwayScore = oldGoalTimeline.filter((goal) => goal.team === "away").length;
@@ -1987,6 +1560,54 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
       redCardTime,
       player: lastRedCard,
       eventKey: `red:${redCardTime || "unknown"}:${lastRedCard || "unknown"}:away`,
+    });
+  }
+
+  // VAR events
+  const oldHomeVarCount = Array.isArray(oldMatch && oldMatch.home_var_events) ? oldMatch.home_var_events.length : 0;
+  const newHomeVarCount = Array.isArray(newMatch && newMatch.home_var_events) ? newMatch.home_var_events.length : 0;
+  const oldAwayVarCount = Array.isArray(oldMatch && oldMatch.away_var_events) ? oldMatch.away_var_events.length : 0;
+  const newAwayVarCount = Array.isArray(newMatch && newMatch.away_var_events) ? newMatch.away_var_events.length : 0;
+
+  for (let i = oldHomeVarCount; i < newHomeVarCount; i++) {
+    const varEvent = newMatch.home_var_events[i];
+    const detail = varEvent && varEvent.detail ? String(varEvent.detail) : "VAR decision";
+    const varTime = varEvent && varEvent.minute ? String(varEvent.minute) : null;
+    let varTitle = "VAR";
+    if (varTime) varTitle += ` ${varTime}`;
+    events.push({
+      type: "var",
+      team: "home",
+      title: varTitle,
+      body: `${newMatch.home_team}: ${detail}${varEvent && varEvent.player ? ` (${varEvent.player})` : ""}`,
+      varTime,
+      player: varEvent && varEvent.player ? varEvent.player : null,
+      detail,
+      // A goal-related VAR decision (awarded or disallowed) is as notification-
+      // worthy as an actual goal, so it rides the user's existing "goal"
+      // preference (on by default) rather than requiring a separate opt-in to
+      // the generic "var" event type. See evaluateUserNotificationDecision.
+      goalRelated: /goal/i.test(detail),
+      eventKey: `var:home:${varTime || "unknown"}:${detail}`,
+    });
+  }
+
+  for (let i = oldAwayVarCount; i < newAwayVarCount; i++) {
+    const varEvent = newMatch.away_var_events[i];
+    const detail = varEvent && varEvent.detail ? String(varEvent.detail) : "VAR decision";
+    const varTime = varEvent && varEvent.minute ? String(varEvent.minute) : null;
+    let varTitle = "VAR";
+    if (varTime) varTitle += ` ${varTime}`;
+    events.push({
+      type: "var",
+      team: "away",
+      title: varTitle,
+      body: `${newMatch.away_team}: ${detail}${varEvent && varEvent.player ? ` (${varEvent.player})` : ""}`,
+      varTime,
+      player: varEvent && varEvent.player ? varEvent.player : null,
+      detail,
+      goalRelated: /goal/i.test(detail),
+      eventKey: `var:away:${varTime || "unknown"}:${detail}`,
     });
   }
 
@@ -2127,6 +1748,53 @@ function penaltyResultSuffix(match) {
     return "";
   }
   return ` (${penaltyResult})`;
+}
+
+function penaltyShootoutSummary(match) {
+  const penaltyResult = String(match && match.penalty_result ? match.penalty_result : "").trim();
+  if (!penaltyResult) return null;
+  const scorePair = firstScorePair(penaltyResult);
+  if (!scorePair) return null;
+
+  const winnerSide = penaltyShootoutWinnerSide(match);
+  if (winnerSide !== "home" && winnerSide !== "away") return null;
+
+  const homeTeam = match && match.home_team ? match.home_team : "Home";
+  const awayTeam = match && match.away_team ? match.away_team : "Away";
+  const homeMentioned = normalizeLiveActivityFixtureToken(penaltyResult).includes(
+    normalizeLiveActivityFixtureToken(homeTeam)
+  );
+  const awayMentioned = normalizeLiveActivityFixtureToken(penaltyResult).includes(
+    normalizeLiveActivityFixtureToken(awayTeam)
+  );
+
+  let homePenaltyScore;
+  let awayPenaltyScore;
+  if (homeMentioned !== awayMentioned) {
+    homePenaltyScore = homeMentioned ? scorePair.first : scorePair.second;
+    awayPenaltyScore = homeMentioned ? scorePair.second : scorePair.first;
+  } else {
+    homePenaltyScore = scorePair.first;
+    awayPenaltyScore = scorePair.second;
+  }
+
+  const homeWins = winnerSide === "home";
+  return {
+    winnerTeam: homeWins ? homeTeam : awayTeam,
+    loserTeam: homeWins ? awayTeam : homeTeam,
+    winnerScore: homeWins ? homePenaltyScore : awayPenaltyScore,
+    loserScore: homeWins ? awayPenaltyScore : homePenaltyScore,
+  };
+}
+
+function formatPenaltyShootoutFullTimeBody(match, homeScore, awayScore) {
+  const summary = penaltyShootoutSummary(match);
+  if (!summary) return null;
+  return (
+    `${summary.winnerTeam} beat ${summary.loserTeam} ` +
+    `${summary.winnerScore}-${summary.loserScore} on penalties ` +
+    `(${homeScore}-${awayScore} AET)`
+  );
 }
 
 function buildScoreChangeEvent(oldMatch, newMatch) {
@@ -2274,6 +1942,16 @@ let fantasyDeadlineReminderLastStats = null;
 let dailyMatchesCheckInFlight = false;
 let liveActivityStartupKickTimers = [];
 let apiBaseURL = "http://localhost:3000/api/v1";
+
+// The monitor follows the global match data source (env-driven, cross-process).
+// Per-request `?source=` overrides are serving-only; the monitor uses the global
+// default so the matches it monitors and the details it polls come from the same
+// source the app/website default to.
+const MONITOR_MATCH_SOURCE = SERVER_CONFIG.matchDataSource;
+function withMatchSourceParam(url) {
+  if (MONITOR_MATCH_SOURCE !== "bsd") return url;
+  return `${url}${url.includes("?") ? "&" : "?"}source=bsd`;
+}
 
 async function runScheduledDailyMatchesCheck(reason = "interval") {
   if (!isMonitoring) return;
@@ -2440,9 +2118,10 @@ async function fetchTodaysMatchesWithPagination(today) {
   const seenMatchIds = new Set();
 
   for (let page = 1; page <= maxPages; page += 1) {
-    const url =
+    const url = withMatchSourceParam(
       `${apiBaseURL}/matches?start=${today}&end=${today}` +
-      `&page=${page}&page_size=${pageSize}`;
+      `&page=${page}&page_size=${pageSize}`
+    );
 
     const response = await fetch(url);
     if (!response.ok) {
@@ -2476,6 +2155,13 @@ async function fetchTodaysMatchesWithPagination(today) {
 }
 
 async function fetchTodaysMonitorCandidates(today) {
+  // The /monitor/candidates endpoint is built from the TSDB pipeline and is not
+  // source-aware. When BSD is the active source, monitor the BSD matches list
+  // directly (already filtered to the allowlist by the serving projection).
+  if (MONITOR_MATCH_SOURCE === "bsd") {
+    const bsdMatches = await fetchTodaysMatchesWithPagination(today);
+    return { matches: bsdMatches, source: "matches_bsd", sourceMeta: null };
+  }
   const monitorCandidatesUrl = `${apiBaseURL}/monitor/candidates?date=${today}`;
   try {
     const response = await fetch(monitorCandidatesUrl);
@@ -2762,7 +2448,6 @@ async function monitorMatch(matchId, initialMatch) {
     kickoffTimeMs,
     history: [],
     unresolvedGoalCount: 0,
-    scoreReversionState: null,
     lifecycle: {
       // If the first state is already live, don't send a synthetic delayed kickoff later.
       kickoffEmitted: isLiveMatchStatus(initialStatus),
@@ -2812,7 +2497,7 @@ function mergeSnapshotWithFallback(fallbackMatch, payloadMatch) {
 
 async function fetchInitialMatchSnapshot(matchId, fallbackMatch) {
   const fallback = fallbackMatch && typeof fallbackMatch === "object" ? fallbackMatch : {};
-  const url = `${apiBaseURL}/matches/${matchId}`;
+  const url = withMatchSourceParam(`${apiBaseURL}/matches/${matchId}`);
 
   try {
     const response = await fetch(url);
@@ -2862,7 +2547,7 @@ async function pollMatchDetails(matchId) {
   const monitorState = monitoredMatches.get(matchId);
   if (!monitorState) return;
 
-  const url = `${apiBaseURL}/matches/${matchId}`;
+  const url = withMatchSourceParam(`${apiBaseURL}/matches/${matchId}`);
 
   try {
     const response = await fetch(url);
@@ -3007,15 +2692,6 @@ function stopMonitoringMatch(matchId, reason = "unspecified") {
 async function detectAndNotifyChanges(matchId, monitorState, oldMatch, newMatch) {
   const nowMs = Date.now();
   const events = buildMatchEvents(oldMatch, newMatch, monitorState, nowMs, { matchId });
-  const reversionState = updateScoreReversionState(monitorState, oldMatch, newMatch, nowMs);
-  const confirmedReversion = await resolveScoreReversion(matchId, newMatch, reversionState);
-  if (confirmedReversion && confirmedReversion.kind === "var_disallowed") {
-    events.push(buildVarDisallowedGoalEvent(matchId, newMatch, confirmedReversion, reversionState));
-    monitorState.scoreReversionState = null;
-  } else if (confirmedReversion && confirmedReversion.kind === "score_correction") {
-    events.push(buildScoreCorrectionEvent(matchId, newMatch, confirmedReversion, reversionState));
-    monitorState.scoreReversionState = null;
-  }
   const scoreChangeEvent = buildScoreChangeEvent(oldMatch, newMatch);
 
   if (scoreChangeEvent) {
@@ -3115,9 +2791,14 @@ function evaluateUserNotificationDecision(user, match, event) {
     };
   }
 
-  // Check event type filter
+  // Check event type filter. A goal-related VAR decision (event.goalRelated)
+  // also qualifies under the user's "goal" preference, since it's reporting
+  // on the same goal a user already wants to be notified about — without
+  // requiring a separate opt-in to the generic "var" event type.
   if (prefs.notificationEventTypes && prefs.notificationEventTypes.length > 0) {
-    if (!prefs.notificationEventTypes.includes(event.type)) {
+    const allowedViaGoalPreference =
+      event.type === "var" && event.goalRelated && prefs.notificationEventTypes.includes("goal");
+    if (!prefs.notificationEventTypes.includes(event.type) && !allowedViaGoalPreference) {
       return {
         shouldNotify: false,
         reason: "event_type_filtered_out",
@@ -3199,6 +2880,13 @@ function normalizeTextToken(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+// tv_channels entries may be a structured TvChannel object ({ name, country, ... })
+// or a plain string, depending on the data source. Extract just the name either way.
+function extractTvChannelName(channel) {
+  if (channel && typeof channel === "object") return String(channel.name || "").trim();
+  return String(channel || "").trim();
+}
+
 function normalizeChannelSelection(selection) {
   const normalized = normalizeTextToken(selection);
   if (!normalized) return "";
@@ -3218,7 +2906,8 @@ function channelMatchesSelection(channelName, selection) {
   return normalizedChannel.includes(normalizedSelection);
 }
 
-function canonicalLiveActivityChannelName(channelName) {
+function canonicalLiveActivityChannelName(channel) {
+  const channelName = extractTvChannelName(channel);
   const normalizedChannel = normalizeTextToken(channelName).replace(/[^a-z0-9]+/g, "");
   if (!normalizedChannel) return null;
   if (
@@ -3267,7 +2956,8 @@ function canonicalLiveActivityChannelName(channelName) {
   return String(channelName || "").trim() || null;
 }
 
-function canonicalLiveActivityTvLogoKey(channelName) {
+function canonicalLiveActivityTvLogoKey(channel) {
+  const channelName = extractTvChannelName(channel);
   const normalizedChannel = normalizeTextToken(channelName).replace(/[^a-z0-9]+/g, "");
   if (!normalizedChannel) return null;
   if (
@@ -5295,6 +4985,7 @@ function isFantasyDeadlineReminderDue(record, nowMs = Date.now()) {
 }
 
 function fantasyCurrentScoreForUser(user) {
+  if (!isEplSeasonActiveCached()) return null;
   const fantasy = user && user.fantasy && typeof user.fantasy === "object" ? user.fantasy : null;
   if (!hasConnectedFantasyTeam(fantasy)) return null;
   return calculateFantasyCurrentScore(fantasy);
@@ -7886,15 +7577,9 @@ module.exports = {
     buildFantasyDeadlineReminderId,
     buildFantasyDeadlineReminderRecord,
     buildNotificationPayload,
-    buildScoreCorrectionEvent,
     buildScoreChangeEvent,
     buildNotificationId,
-    buildVarDisallowedGoalEvent,
-    confirmScoreCorrection,
-    confirmVarDisallowedGoal,
     countGoals,
-    detectScoreReversion,
-    diffRemovedGoalEvents,
     mergeSnapshotWithFallback,
     diffGoalEvents,
     isMatchRelevant,
@@ -7902,6 +7587,7 @@ module.exports = {
     isFinishedMatchStatus,
     isPenaltyShootoutStatus,
     isResolvedPenaltyShootoutMatch,
+    isUnresolvedTiedAetMatch,
     penaltyShootoutWinnerSide,
     shouldStopMonitoringAsIrrelevant,
     buildLiveActivityContentState,
@@ -7947,6 +7633,5 @@ module.exports = {
     liveActivityRecentDismissalCooldownIsBlocking,
     liveActivityPendingStartMaxMsForMode,
     liveActivityStaleAfterSecondsForMode,
-    updateScoreReversionState,
   },
 };

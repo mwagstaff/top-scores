@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useRef, useState, memo } from "react";
-import { clearMatchDetailsCache, fetchMatchDetails, fetchPlayerDetails, shouldRetryMatchDetails } from "../api";
+import { useEffect, useMemo, useRef, useState, memo, type CSSProperties } from "react";
+import { clearMatchDetailsCache, fetchMatchDetails, fetchMatchSocial, fetchPlayerDetails, shouldRetryMatchDetails, teamAccentColor, teamBadgeUrl } from "../api";
+import { MatchTeamLeaguePositionsLink } from "./MatchTeamLeaguePositionsLink";
+
+// Neutral accent for teams TSDB has no brand colour for (~80% of teams),
+// so every card still shows a consistent home-left / away-right stripe.
+const NEUTRAL_EVENT_ACCENT = "#6b7280";
 import {
   aggregateSummary,
   displayStatus,
@@ -13,11 +18,13 @@ import type {
   MatchGoalScorer,
   MatchLineupPlayer,
   MatchLineupSubstitution,
+  MatchSocialItem,
   MatchTeamLineup,
   MatchTeamLineups,
   PlayerDetails,
   MatchRedCardEvent,
   MatchYellowCardEvent,
+  MatchVarEvent,
   TvChannel,
 } from "../types";
 
@@ -57,6 +64,8 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
   const [details, setDetails]                 = useState<MatchDetails | null>(match.matchDetails ?? null);
   const [detailsLoading, setDetailsLoading]   = useState(false);
   const [detailsError, setDetailsError]       = useState<string | null>(null);
+  const [socialItems, setSocialItems]         = useState<MatchSocialItem[]>([]);
+  const [socialLoading, setSocialLoading]     = useState(false);
   const retriedIncompleteDetailsIdRef         = useRef<string | null>(null);
 
   const status        = displayStatus(match);
@@ -73,8 +82,8 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
   // Show TV logo in centre for upcoming fixtures; for live matches with scores, show flanking scores instead
   const showTvOnly = !hasScore && hasTvLogo;
   const showLiveScore = isLive && hasScore;
-  // Right column: "P4-3" when decided by penalties; otherwise status (FT / AET / 45' / 15:00)
-  const rightText  = match.penaltyResult ? `P${match.penaltyResult}` : status;
+  // Right column: "P 3-4" when decided by penalties; otherwise status (FT / AET / 45' / 15:00)
+  const rightText  = penaltyShootoutDisplay(match) ?? status;
   const homeDisplayName = displayTeamName(match.homeTeam, match.homeShortName, useShortTeamNames);
   const awayDisplayName = displayTeamName(match.awayTeam, match.awayShortName, useShortTeamNames);
 
@@ -83,6 +92,8 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
     setDetails(match.matchDetails ?? null);
     setDetailsLoading(false);
     setDetailsError(null);
+    setSocialItems([]);
+    setSocialLoading(false);
     retriedIncompleteDetailsIdRef.current = null;
   }, [match.id]);
 
@@ -119,6 +130,21 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
 
     return () => { cancelled = true; };
   }, [details, detailsError, isExpanded, match.matchDetailsId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isExpanded || !match.matchDetailsId) {
+      return () => { cancelled = true; };
+    }
+
+    setSocialLoading(true);
+    void fetchMatchSocial(match.matchDetailsId)
+      .then((items) => { if (!cancelled) setSocialItems(items); })
+      .catch(() => { if (!cancelled) setSocialItems([]); })
+      .finally(() => { if (!cancelled) setSocialLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [isExpanded, match.matchDetailsId]);
 
   // If the match has since ended but cached details pre-date the final whistle, clear and re-fetch
   useEffect(() => {
@@ -165,6 +191,7 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
       {/* Home logo */}
       <TeamBadge
         teamName={match.homeTeam}
+        teamId={match.homeTeamId}
         missing={homeLogoMissing}
         onMissing={() => setHomeLogoMissing(true)}
       />
@@ -213,6 +240,7 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
       {/* Away logo */}
       <TeamBadge
         teamName={match.awayTeam}
+        teamId={match.awayTeamId}
         missing={awayLogoMissing}
         onMissing={() => setAwayLogoMissing(true)}
       />
@@ -242,7 +270,7 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
   );
 
   return (
-    <article className={`match-card${highlightToday ? " is-highlighted" : ""}`}>
+    <article className={`match-card${isLive ? " is-live" : highlightToday ? " is-highlighted" : ""}`}>
       {/* Use a button when expandable so the whole row is keyboard/click accessible */}
       {isExpandable ? (
         <button
@@ -263,15 +291,24 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
       {/* Expanded match details panel */}
       {isExpandable && isExpanded && (
         <div className="match-details-panel" id={detailPanelId}>
+          <MatchTeamLeaguePositionsLink match={match} />
           {detailsLoading ? (
             <div className="match-details-message">Loading match details…</div>
           ) : detailsError ? (
             <div className="match-details-message is-error">{detailsError}</div>
           ) : details ? (
-            <ExpandedMatchDetails details={details} tvChannels={match.tvChannels} />
+            <ExpandedMatchDetails
+              details={details}
+              tvChannels={match.tvChannels}
+              homeTeamId={match.homeTeamId}
+              awayTeamId={match.awayTeamId}
+            />
+          ) : socialItems.length > 0 ? null : socialLoading ? (
+            <div className="match-details-message">Loading match details…</div>
           ) : (
             <div className="match-details-message">No additional match details available.</div>
           )}
+          <MatchSocialSection items={socialItems} />
         </div>
       )}
       {/* Debug panel always visible in debug mode, regardless of expand state */}
@@ -282,6 +319,38 @@ export function MatchCard({ match, highlightToday = false, useShortTeamNames = f
       )}
     </article>
   );
+}
+
+function penaltyShootoutDisplay(match: Match): string | null {
+  const text = (match.penaltyResult ?? "").trim();
+  if (!text) return null;
+  const scoreMatch = text.match(/(\d+)\s*-\s*(\d+)/);
+  if (!scoreMatch) return null;
+
+  const homeMentioned = containsTeamName(text, match.homeTeam);
+  const awayMentioned = containsTeamName(text, match.awayTeam);
+  if (homeMentioned !== awayMentioned) {
+    return homeMentioned
+      ? `P ${scoreMatch[1]}-${scoreMatch[2]}`
+      : `P ${scoreMatch[2]}-${scoreMatch[1]}`;
+  }
+
+  return `P ${scoreMatch[1]}-${scoreMatch[2]}`;
+}
+
+function containsTeamName(text: string, teamName: string): boolean {
+  const normalizedText = normalizeTeamToken(text);
+  const normalizedTeam = normalizeTeamToken(teamName);
+  return Boolean(normalizedText && normalizedTeam && normalizedText.includes(normalizedTeam));
+}
+
+function normalizeTeamToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // ── Debug panel ───────────────────────────────────────────────────
@@ -387,11 +456,12 @@ function tvLogoBrand(ch: string): string {
 
 interface TeamBadgeProps {
   teamName: string;
+  teamId?: string | null;
   missing: boolean;
   onMissing: () => void;
 }
 
-function TeamBadge({ teamName, missing, onMissing }: TeamBadgeProps) {
+function TeamBadge({ teamName, teamId, missing, onMissing }: TeamBadgeProps) {
   const initials = teamName
     .split(/\s+/).filter(Boolean)
     .slice(0, 2)
@@ -402,10 +472,13 @@ function TeamBadge({ teamName, missing, onMissing }: TeamBadgeProps) {
     return <div className="team-logo-fallback">{initials || "?"}</div>;
   }
 
+  const tsdbUrl = teamId ? teamBadgeUrl(teamId) : null;
+  const src = tsdbUrl ?? `/logos/team?name=${encodeURIComponent(teamName)}`;
+
   return (
     <img
       className="team-logo"
-      src={`/logos/team?name=${encodeURIComponent(teamName)}`}
+      src={src}
       alt=""
       onError={onMissing}
     />
@@ -510,11 +583,26 @@ function WhereToWatch({ channels }: { channels: TvChannel[] }) {
   );
 }
 
-function ExpandedMatchDetails({ details, tvChannels = [] }: { details: MatchDetails; tvChannels?: TvChannel[] }) {
+function ExpandedMatchDetails({
+  details,
+  tvChannels = [],
+  homeTeamId,
+  awayTeamId,
+}: {
+  details: MatchDetails;
+  tvChannels?: TvChannel[];
+  homeTeamId?: string | null;
+  awayTeamId?: string | null;
+}) {
   const timelineEntries    = useMemo(() => buildTimelineEntries(details), [details]);
   const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
   const hasTvData          = tvChannels.length > 0;
   const [selectedTimelinePlayer, setSelectedTimelinePlayer] = useState<MatchLineupPlayer | null>(null);
+
+  // The team's real TSDB brand colour (strColour1) keyed by team id, when TSDB
+  // has it; otherwise a neutral accent so the stripe is consistent across games.
+  const homeAccent    = teamAccentColor(homeTeamId) ?? NEUTRAL_EVENT_ACCENT;
+  const awayAccent    = teamAccentColor(awayTeamId) ?? NEUTRAL_EVENT_ACCENT;
 
   if (timelineEntries.length === 0 && !hasCompleteLineups && !hasTvData) {
     return <div className="match-details-message">No additional match details available.</div>;
@@ -526,32 +614,50 @@ function ExpandedMatchDetails({ details, tvChannels = [] }: { details: MatchDeta
         <section className="details-section">
           <div className="details-section-title">Key events</div>
           <div className="timeline-list">
-            {timelineEntries.map((entry) => (
-              <button
-                key={`${entry.side}-${entry.kind}-${entry.minute}-${entry.player}`}
-                type="button"
-                className={`timeline-row timeline-row-${entry.side}`}
-                onClick={() => entry.lineupPlayer?.idPlayer && setSelectedTimelinePlayer(entry.lineupPlayer)}
-                disabled={!entry.lineupPlayer?.idPlayer}
-                aria-label={entry.lineupPlayer?.idPlayer ? `Show ${entry.player} details` : entry.text}
-              >
-                {entry.side === "away" && <TimelinePlayerPortrait player={entry.lineupPlayer} />}
-                {entry.side === "home" ? (
-                  <>
-                    <span className="timeline-minute">{entry.minute}</span>
-                    <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
-                    <span className="timeline-text">{entry.text}</span>
-                    <TimelinePlayerPortrait player={entry.lineupPlayer} />
-                  </>
-                ) : (
-                  <>
-                    <span className="timeline-text">{entry.text}</span>
-                    <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
-                    <span className="timeline-minute">{entry.minute}</span>
-                  </>
-                )}
-              </button>
-            ))}
+            {timelineEntries.map((entry) => {
+              const isGoal = entry.kind === "goal" || entry.kind === "own-goal";
+              const isSub  = entry.kind === "substitution";
+              const accent = entry.side === "home" ? homeAccent : awayAccent;
+              const rowClass = `timeline-row timeline-row-${entry.side}${isGoal ? " timeline-row-goal" : ""}${isSub ? " timeline-row-substitution" : ""}`;
+              const rowStyle = { "--event-accent": accent } as CSSProperties;
+              const key = `${entry.side}-${entry.kind}-${entry.minute}-${entry.player}`;
+
+              if (isSub) {
+                return (
+                  <div key={key} className={rowClass} style={rowStyle}>
+                    <TimelineSubstitutionContent entry={entry} onSelectPlayer={setSelectedTimelinePlayer} />
+                  </div>
+                );
+              }
+
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={rowClass}
+                  style={rowStyle}
+                  onClick={() => entry.lineupPlayer?.idPlayer && setSelectedTimelinePlayer(entry.lineupPlayer)}
+                  disabled={!entry.lineupPlayer?.idPlayer}
+                  aria-label={entry.lineupPlayer?.idPlayer ? `Show ${entry.player} details` : entry.text}
+                >
+                  {entry.side === "away" && <TimelinePlayerPortrait player={entry.lineupPlayer} />}
+                  {entry.side === "home" ? (
+                    <>
+                      <span className="timeline-minute">{entry.minute}</span>
+                      <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
+                      <span className="timeline-text">{entry.text}</span>
+                      <TimelinePlayerPortrait player={entry.lineupPlayer} />
+                    </>
+                  ) : (
+                    <>
+                      <span className="timeline-text">{entry.text}</span>
+                      <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
+                      <span className="timeline-minute">{entry.minute}</span>
+                    </>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </section>
       )}
@@ -568,11 +674,136 @@ function ExpandedMatchDetails({ details, tvChannels = [] }: { details: MatchDeta
   );
 }
 
+function MatchSocialSection({ items }: { items: MatchSocialItem[] }) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="details-section match-social-section">
+      <div className="details-section-title">Social media</div>
+      <div className="match-social-list">
+        {items.map((item) => (
+          <a
+            key={item.id}
+            className="match-social-item"
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {item.thumbnail ? (
+              <img className="match-social-thumb" src={item.thumbnail} alt="" loading="lazy" />
+            ) : (
+              <span className="match-social-thumb match-social-thumb-placeholder" aria-hidden="true" />
+            )}
+            <span className="match-social-copy">
+              <span className="match-social-title">{item.title}</span>
+              {(item.account?.name || item.account?.handle) && (
+                <span className="match-social-meta">
+                  {item.account.name || item.account.handle}
+                </span>
+              )}
+            </span>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function TimelinePlayerPortrait({ player }: { player: MatchLineupPlayer | null }) {
   if (!player) {
     return <span className="lineup-player-portrait timeline-player-portrait-placeholder" aria-hidden="true" />;
   }
   return <LineupPlayerPortrait player={player} />;
+}
+
+function TimelineSubstitutionContent({
+  entry,
+  onSelectPlayer,
+}: {
+  entry: TimelineEntry;
+  onSelectPlayer: (player: MatchLineupPlayer) => void;
+}) {
+  const isHome = entry.side === "home";
+  const minute = <span className="timeline-minute">{entry.minute}</span>;
+  const block = (
+    <div className={`timeline-sub-rows${isHome ? "" : " timeline-sub-rows-away"}`}>
+      <TimelineSubLine
+        player={entry.lineupPlayerOff ?? null}
+        name={entry.playerOffName ?? ""}
+        isOut
+        isHome={isHome}
+        onSelectPlayer={onSelectPlayer}
+      />
+      <TimelineSubLine
+        player={entry.lineupPlayer}
+        name={entry.playerOnName ?? ""}
+        isOut={false}
+        isHome={isHome}
+        onSelectPlayer={onSelectPlayer}
+      />
+    </div>
+  );
+
+  return isHome ? (
+    <>
+      {minute}
+      {block}
+    </>
+  ) : (
+    <>
+      {block}
+      {minute}
+    </>
+  );
+}
+
+function TimelineSubLine({
+  player,
+  name,
+  isOut,
+  isHome,
+  onSelectPlayer,
+}: {
+  player: MatchLineupPlayer | null;
+  name: string;
+  isOut: boolean;
+  isHome: boolean;
+  onSelectPlayer: (player: MatchLineupPlayer) => void;
+}) {
+  const pill = (
+    <span className={`timeline-sub-pill timeline-sub-pill-${isOut ? "out" : "in"}`}>
+      <span className="timeline-sub-pill-arrow" aria-hidden="true">{isOut ? "↓" : "↑"}</span>
+      {isOut ? "OUT" : "IN"}
+    </span>
+  );
+  const nameEl = <span className="timeline-sub-name">{name}</span>;
+  const photo  = <TimelinePlayerPortrait player={player} />;
+
+  return (
+    <button
+      type="button"
+      className={`timeline-sub-row timeline-sub-row-${isOut ? "out" : "in"}`}
+      onClick={() => player?.idPlayer && onSelectPlayer(player)}
+      disabled={!player?.idPlayer}
+      aria-label={player?.idPlayer ? `Show ${name} details` : `${isOut ? "Off" : "On"}: ${name}`}
+    >
+      {isHome ? (
+        <>
+          {pill}
+          {nameEl}
+          {photo}
+        </>
+      ) : (
+        <>
+          {photo}
+          {nameEl}
+          {pill}
+        </>
+      )}
+    </button>
+  );
 }
 
 
@@ -998,12 +1229,14 @@ function buildRoleLineupRows(starters: MatchLineupPlayer[]): LineupRow[] {
   ]
     .map((players) => ({
       players: [...players].sort((left, right) => {
+        const leftSlot = left.formationSlotIndex;
+        const rightSlot = right.formationSlotIndex;
         if (
-          Number.isInteger(left.formationSlotIndex) &&
-          Number.isInteger(right.formationSlotIndex) &&
-          left.formationSlotIndex !== right.formationSlotIndex
+          Number.isInteger(leftSlot) &&
+          Number.isInteger(rightSlot) &&
+          leftSlot !== rightSlot
         ) {
-          return left.formationSlotIndex - right.formationSlotIndex;
+          return (leftSlot ?? 0) - (rightSlot ?? 0);
         }
         const leftScore = horizontalLineupScore(left);
         const rightScore = horizontalLineupScore(right);
@@ -1166,6 +1399,9 @@ interface TimelineEntry {
   baseMinute: number;
   extraMinute: number;
   sequence: number;
+  playerOffName?: string;
+  playerOnName?: string;
+  lineupPlayerOff?: MatchLineupPlayer | null;
 }
 
 function buildTimelineEntries(details: MatchDetails) {
@@ -1266,6 +1502,72 @@ function buildTimelineEntries(details: MatchDetails) {
         baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++ });
     }
   }
+
+  const addVarEvents = (varEvents: MatchVarEvent[], side: "home" | "away") => {
+    for (const event of varEvents) {
+      if (!event.minute) continue;
+      const parsed = parseMinute(event.minute);
+      if (!parsed) continue;
+      const playerName = event.player ?? "";
+      let lineupPlayer: MatchLineupPlayer | null = null;
+      if (event.cutoutUrl || event.idPlayer) {
+        lineupPlayer = {
+          number: 0,
+          name: playerName,
+          idPlayer: event.idPlayer ?? null,
+          cutoutUrl: event.cutoutUrl ?? null,
+        };
+      } else if (playerName) {
+        lineupPlayer = playerForEvent(playerName, side);
+      }
+      entries.push({
+        side, minute: parsed.display, player: playerName,
+        lineupPlayer,
+        text: event.player ? `${abbreviatePlayerName(event.player)}: ${event.detail}` : event.detail,
+        kind: "var", icon: "📋",
+        baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++,
+      });
+    }
+  };
+
+  addVarEvents(details.homeVarEvents, "home");
+  addVarEvents(details.awayVarEvents, "away");
+
+  const addSubstitutions = (lineup: MatchTeamLineups["home"] | MatchTeamLineups["away"], side: "home" | "away") => {
+    if (!lineup) return;
+    for (const sub of lineup.substitutions) {
+      if (!sub.minute) continue;
+      const parsed = parseMinute(sub.minute);
+      if (!parsed) continue;
+      const playerOnName = sub.playerOn.name;
+      const playerOffName = sub.playerOff.name;
+      const lineupPlayer: MatchLineupPlayer = {
+        number: sub.playerOn.number,
+        name: playerOnName,
+        idPlayer: sub.playerOn.idPlayer ?? null,
+        cutoutUrl: sub.playerOn.cutoutUrl ?? null,
+      };
+      const lineupPlayerOff: MatchLineupPlayer = {
+        number: sub.playerOff.number,
+        name: playerOffName,
+        idPlayer: sub.playerOff.idPlayer ?? null,
+        cutoutUrl: sub.playerOff.cutoutUrl ?? null,
+      };
+      entries.push({
+        side, minute: parsed.display, player: playerOnName,
+        lineupPlayer,
+        text: `${abbreviatePlayerName(playerOffName)} ▸ ${abbreviatePlayerName(playerOnName)}`,
+        kind: "substitution", icon: "↕",
+        baseMinute: parsed.base, extraMinute: parsed.extra, sequence: sequence++,
+        playerOffName,
+        playerOnName,
+        lineupPlayerOff,
+      });
+    }
+  };
+
+  addSubstitutions(details.teamLineups?.home, "home");
+  addSubstitutions(details.teamLineups?.away, "away");
 
   return entries.sort((l, r) =>
     l.baseMinute  !== r.baseMinute  ? l.baseMinute  - r.baseMinute  :

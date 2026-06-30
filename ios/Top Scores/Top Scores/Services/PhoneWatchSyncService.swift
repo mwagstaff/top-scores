@@ -38,7 +38,7 @@ final class PhoneWatchSyncService: NSObject {
     }
 
     private func replyWithLatestPayloadIfAvailable(_ replyHandler: @escaping ([String: Any]) -> Void) {
-        guard let data = SharedMatchesBridge.loadRawData() else {
+        guard let data = latestWatchPayloadData() else {
             replyHandler([:])
             return
         }
@@ -46,8 +46,12 @@ final class PhoneWatchSyncService: NSObject {
     }
 
     private func pushLatestPayloadIfAvailable() {
-        guard let data = SharedMatchesBridge.loadRawData() else { return }
+        guard let data = latestWatchPayloadData() else { return }
         sendLatestPayload(data)
+    }
+
+    private func latestWatchPayloadData() -> Data? {
+        SharedMatchesBridge.loadWatchTransferData() ?? SharedMatchesBridge.loadRawData()
     }
 }
 

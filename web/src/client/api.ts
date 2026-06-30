@@ -12,6 +12,7 @@ import {
   type MatchLineupPlayer,
   type MatchLineupSubstitution,
   type MatchRedCardEvent,
+  type MatchSocialItem,
   type MatchTeamLineup,
   type MatchTeamLineups,
   type Match,
@@ -21,6 +22,7 @@ import {
   type Preferences,
   type TeamRankingEntry,
   type MatchYellowCardEvent,
+  type MatchVarEvent,
 } from "./types";
 
 let competitionsPromise: Promise<string[]> | null = null;
@@ -31,8 +33,67 @@ let competitionsCache: string[] | null = null;
 let channelsCache: string[] | null = null;
 let teamRankingsCache: TeamRankingEntry[] | null = null;
 let competitionWeightsCache: CompetitionWeightEntry[] | null = null;
+
+// Team badge catalog — populated lazily when TEAM_LOGO_SOURCE === "tsdb".
+// Maps idTeam → badge URL. A null map means catalog not loaded yet.
+let teamBadgesByIdCache: Map<string, string> | null = null;
+// Maps idTeam → TSDB brand colours (strColour1/strColour2).
+let teamColorsByIdCache: Map<string, { primary: string | null; secondary: string | null }> | null = null;
+let teamBadgesETag: string | null = null;
+let teamBadgesLoading = false;
+
+export function teamBadgeUrl(teamId: string | null | undefined): string | null {
+  if (!teamId || !teamBadgesByIdCache) return null;
+  return teamBadgesByIdCache.get(teamId) ?? null;
+}
+
+// Primary brand colour (TSDB strColour1) for a team, as `#RRGGBB`, or null.
+export function teamAccentColor(teamId: string | null | undefined): string | null {
+  if (!teamId || !teamColorsByIdCache) return null;
+  return teamColorsByIdCache.get(teamId)?.primary ?? null;
+}
+
+export async function warmTeamBadges(): Promise<void> {
+  if (teamBadgesLoading) return;
+  teamBadgesLoading = true;
+  try {
+    const configRes = await fetch("/api/v1/teams/config");
+    if (!configRes.ok) return;
+    const config = await configRes.json() as Record<string, unknown>;
+    if (String(config.team_logo_source ?? "") !== "tsdb") return;
+
+    const headers: Record<string, string> = {};
+    if (teamBadgesETag) headers["If-None-Match"] = teamBadgesETag;
+    const res = await fetch("/api/v1/teams/badges", { headers });
+    if (res.status === 304) return;
+    if (!res.ok) return;
+
+    const etag = res.headers.get("ETag");
+    const payload = await res.json() as {
+      teams?: Record<string, { badge_url?: string; color_primary?: string | null; color_secondary?: string | null }>;
+    };
+    const teams = payload.teams ?? {};
+    const map = new Map<string, string>();
+    const colorMap = new Map<string, { primary: string | null; secondary: string | null }>();
+    for (const [id, entry] of Object.entries(teams)) {
+      if (entry.badge_url) map.set(id, entry.badge_url);
+      if (entry.color_primary || entry.color_secondary) {
+        colorMap.set(id, { primary: entry.color_primary ?? null, secondary: entry.color_secondary ?? null });
+      }
+    }
+    teamBadgesByIdCache = map;
+    teamColorsByIdCache = colorMap;
+    if (etag) teamBadgesETag = etag;
+  } catch {
+    // non-fatal: fall back to bundled logos
+  } finally {
+    teamBadgesLoading = false;
+  }
+}
 const matchDetailsCache = new Map<string, MatchDetails>();
 const matchDetailsPromises = new Map<string, Promise<MatchDetails>>();
+const matchSocialCache = new Map<string, MatchSocialItem[]>();
+const matchSocialPromises = new Map<string, Promise<MatchSocialItem[]>>();
 const playerDetailsCache = new Map<string, PlayerDetails>();
 const playerDetailsPromises = new Map<string, Promise<PlayerDetails>>();
 const OPEN_ENDED_FIXTURE_END_DATE = "9999-12-31";
@@ -188,6 +249,46 @@ export function fetchCompetitionWeights(): Promise<CompetitionWeightEntry[]> {
 
 export function fetchMatchDetails(matchDetailsId: string): Promise<MatchDetails> {
   return fetchMatchDetailsInternal(matchDetailsId, false);
+}
+
+export function fetchMatchSocial(matchDetailsId: string): Promise<MatchSocialItem[]> {
+  const normalizedId = matchDetailsId.trim();
+  if (!normalizedId) {
+    return Promise.reject(new Error("Missing match details id"));
+  }
+
+  const cached = matchSocialCache.get(normalizedId);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+
+  const inFlight = matchSocialPromises.get(normalizedId);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const request = requestJson<unknown[]>(
+    `/api/v1/matches/${encodeURIComponent(normalizedId)}/social`,
+    undefined,
+    { cache: "no-store" }
+  )
+    .then(normalizeMatchSocialItems)
+    .then((items) => {
+      if (items.length > 0) {
+        matchSocialCache.set(normalizedId, items);
+      } else {
+        matchSocialCache.delete(normalizedId);
+      }
+      matchSocialPromises.delete(normalizedId);
+      return items;
+    })
+    .catch((error) => {
+      matchSocialPromises.delete(normalizedId);
+      throw error;
+    });
+
+  matchSocialPromises.set(normalizedId, request);
+  return request;
 }
 
 export function fetchPlayerDetails(playerId: string): Promise<PlayerDetails> {
@@ -389,6 +490,8 @@ function normalizeMatch(raw: Record<string, unknown>): Match {
     time,
     homeTeam,
     awayTeam,
+    homeTeamId: optionalString(raw.home_team_id),
+    awayTeamId: optionalString(raw.away_team_id),
     homeShortName: optionalString(raw.home_short_name),
     awayShortName: optionalString(raw.away_short_name),
     league,
@@ -457,6 +560,8 @@ function normalizeMatchDetails(raw: Record<string, unknown>): MatchDetails {
     awayYellowCards: normalizeYellowCards(raw.away_yellow_cards),
     homeRedCards: normalizeRedCards(raw.home_red_cards),
     awayRedCards: normalizeRedCards(raw.away_red_cards),
+    homeVarEvents: normalizeVarEvents(raw.home_var_events),
+    awayVarEvents: normalizeVarEvents(raw.away_var_events),
     teamLineups: normalizeTeamLineups(raw.team_lineups),
     penaltyResult: optionalString(raw.penalty_result),
     inProgress: optionalBoolean(raw.in_progress),
@@ -480,6 +585,41 @@ function normalizePlayerDetails(raw: Record<string, unknown>): PlayerDetails {
   };
 }
 
+function normalizeMatchSocialItems(value: unknown): MatchSocialItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    const url = asString(source.url).trim();
+    const title = asString(source.title).trim();
+    if (!url || !title) {
+      return [];
+    }
+
+    const account = typeof source.account === "object" && source.account
+      ? (source.account as Record<string, unknown>)
+      : null;
+
+    return [{
+      id: asString(source.id) || url,
+      type: optionalString(source.type),
+      url,
+      title,
+      text: optionalString(source.text),
+      thumbnail: optionalString(source.thumbnail),
+      publishedAt: optionalString(source.published_at),
+      account: account
+        ? {
+            handle: optionalString(account.handle),
+            name: optionalString(account.name),
+          }
+        : null,
+    }];
+  });
+}
+
 function normalizeLeagueTables(value: unknown): LeagueTable[] {
   if (!Array.isArray(value)) {
     return [];
@@ -497,6 +637,7 @@ function normalizeLeagueTables(value: unknown): LeagueTable[] {
       stageName: optionalString(source.stage_name),
       sourceUrl: optionalString(source.source_url),
       updatedAt: optionalString(source.updated_at),
+      realtime: source.realtime === true,
       groups: normalizeLeagueTableGroups(source.groups),
       rows: normalizeLeagueTableRows(source.rows),
     };
@@ -547,6 +688,8 @@ function normalizeLeagueTableRows(value: unknown): LeagueTableRow[] {
       points: optionalNumber(source.points) ?? 0,
       form: normalizeStringArray(source.form),
       rankStatus: optionalString(source.rank_status),
+      live: source.live === true,
+      previousPosition: optionalNumber(source.previous_position) ?? null,
     };
   });
 }
@@ -607,6 +750,26 @@ function normalizeYellowCards(value: unknown): MatchYellowCardEvent[] {
       yellowCardTimes: normalizeStringArray(source.yellow_card_times),
     };
   });
+}
+
+function normalizeVarEvents(value: unknown): MatchVarEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.reduce<MatchVarEvent[]>((acc, item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    const detail = optionalString(source.detail);
+    if (!detail) return acc;
+    acc.push({
+      player: optionalString(source.player),
+      minute: optionalString(source.minute),
+      detail,
+      cutoutUrl: optionalString(source.cutout_url),
+      idPlayer: optionalString(source.id_player),
+    });
+    return acc;
+  }, []);
 }
 
 function normalizeTeamLineups(value: unknown): MatchTeamLineups | null {

@@ -1,5 +1,10 @@
 import Foundation
 
+struct FantasySeasonStatus: Codable, Hashable {
+    let active: Bool
+    let checkedAt: String?
+}
+
 struct FantasyGameweek: Codable, Hashable {
     let id: Int
     let name: String?

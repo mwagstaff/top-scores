@@ -14,6 +14,10 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var myProfile: FantasyEntryProfile?
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var assistantManagerPreview: FantasyAssistantManagerResponse?
+    // Whether the Premier League season is currently active, per the server's daily
+    // bsd_leagues check. Gates the bottom-nav FPL badge so it doesn't show outside
+    // the season. Defaults to false until the server/cache confirms the season.
+    @Published private(set) var isSeasonActive = false
     @Published var errorMessage: String?
     /// Pre-computed context for MatchRow. Updated whenever squad data, expected points, or the
     /// bootstrap lookup changes. MatchRow observes this value rather than the whole FantasyViewModel,
@@ -39,6 +43,9 @@ final class FantasyViewModel: ObservableObject {
     private var cachedSeasonFixtures: [FantasyFixture] = []
     private var cachedSeasonFixturesFetchedAt: Date?
     private let seasonFixturesCacheTTL: TimeInterval = 30 * 60
+    private let seasonActiveCacheTTL: TimeInterval = 24 * 60 * 60
+    private let seasonActiveDefaultsKey = "fantasy.seasonActive.events.value"
+    private let seasonActiveCheckedAtDefaultsKey = "fantasy.seasonActive.events.checkedAt"
     private var rivalRefreshToken = UUID()
     private var leagueRefreshToken = UUID()
     private var rivalRefreshTask: Task<Void, Never>?
@@ -52,6 +59,14 @@ final class FantasyViewModel: ObservableObject {
     var isShowingGameUpdatingState: Bool {
         guard let errorMessage else { return false }
         return Self.containsGameUpdatingText(errorMessage)
+    }
+
+    func refreshSeasonActiveStatus(apiBaseURL: String) async {
+        guard let baseURL = URL(string: apiBaseURL) else {
+            isSeasonActive = false
+            return
+        }
+        await refreshSeasonActiveIfNeeded(serverClient: APIClient(baseURL: baseURL))
     }
 
     private struct FantasySquadSnapshot {
@@ -291,12 +306,14 @@ final class FantasyViewModel: ObservableObject {
                 serverClient: serverClient
             )
             async let seasonFixturesTask = fetchSeasonFixtures()
+            async let seasonActiveTask: Void = refreshSeasonActiveIfNeeded(serverClient: serverClient)
 
-            let (bootstrapLookup, myProfile, nextGameweek, seasonFixtures) = try await (
+            let (bootstrapLookup, myProfile, nextGameweek, seasonFixtures, _) = try await (
                 bootstrapLookupTask,
                 myProfileTask,
                 nextGameweekTask,
-                seasonFixturesTask
+                seasonFixturesTask,
+                seasonActiveTask
             )
             self.myProfile = myProfile
 
@@ -1144,6 +1161,36 @@ final class FantasyViewModel: ObservableObject {
         )
     }
 
+    // Best-effort: a stale or missing flag should never block the rest of the
+    // fantasy refresh. The presentation fails closed until a fresh server check exists.
+    private func refreshSeasonActiveIfNeeded(serverClient: APIClient) async {
+        let defaults = UserDefaults.standard
+        let now = Date()
+        let checkedAt = defaults.object(forKey: seasonActiveCheckedAtDefaultsKey) as? Date
+        if let checkedAt, now.timeIntervalSince(checkedAt) < seasonActiveCacheTTL {
+            isSeasonActive = defaults.bool(forKey: seasonActiveDefaultsKey)
+            return
+        }
+
+        do {
+            let status = try await serverClient.fetchFantasySeasonActive()
+            guard let serverCheckedAt = Self.parseSeasonStatusCheckedAt(status.checkedAt) else {
+                isSeasonActive = false
+                return
+            }
+            defaults.set(status.active, forKey: seasonActiveDefaultsKey)
+            defaults.set(serverCheckedAt, forKey: seasonActiveCheckedAtDefaultsKey)
+            isSeasonActive = status.active
+        } catch {
+            if let checkedAt, now.timeIntervalSince(checkedAt) < seasonActiveCacheTTL {
+                isSeasonActive = defaults.bool(forKey: seasonActiveDefaultsKey)
+            } else {
+                isSeasonActive = false
+            }
+            logPerf("season_active_fetch_failed error=\(error)")
+        }
+    }
+
     private func fetchSeasonFixtures() async throws -> [FantasyFixture] {
         let now = Date()
         if let cachedSeasonFixturesFetchedAt,
@@ -1205,6 +1252,18 @@ final class FantasyViewModel: ObservableObject {
             }
             return false
         }
+    }
+
+    private static func parseSeasonStatusCheckedAt(_ value: String?) -> Date? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: trimmed) {
+            return date
+        }
+        return ISO8601DateFormatter().date(from: trimmed)
     }
 
     private func fetchMyProfile(entryID: Int) async -> FantasyEntryProfile? {

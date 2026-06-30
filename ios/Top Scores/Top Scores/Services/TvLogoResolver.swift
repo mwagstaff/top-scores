@@ -185,6 +185,7 @@ final class TvLogoResolver {
         ("dazn", "dazn"),
         ("disneyplus", "disneyplus"),
         ("disney", "disneyplus"),
+        ("nowtv", "now"),
         ("premiersports", "premiersports"),
         ("laligatv", "laligatv"),
         ("laliga", "laligatv")

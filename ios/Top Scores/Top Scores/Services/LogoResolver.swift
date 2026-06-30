@@ -60,6 +60,18 @@ final class LogoResolver {
         return image
     }
 
+    /// Resolves a logo, preferring a TSDB badge downloaded by TeamBadgeCache
+    /// when a teamId is provided, then falling back to the bundled lookup.
+    func image(for teamName: String, teamId: String?, alternateNames: [String] = []) -> UIImage? {
+        if let teamId {
+            if let badge = TeamBadgeCache.shared.image(forTeamId: teamId) {
+                return badge
+            }
+            print("[LogoResolver] badge miss teamId=\(teamId) team='\(teamName)'")
+        }
+        return image(for: teamName, alternateNames: alternateNames)
+    }
+
     func hasDedicatedLogo(for teamName: String, alternateNames: [String] = []) -> Bool {
         guard let resolved = resolvePreferredSource(for: teamName, alternateNames: alternateNames) else {
             return false
@@ -294,7 +306,7 @@ final class LogoResolver {
 
         return lowered
             .split { !$0.isLetter && !$0.isNumber }
-            .map { String($0) }
+            .map { stripLeadingZeros(String($0)) }
             .filter { token in
                 if genericStopWords.contains(token) {
                     return false
@@ -304,6 +316,15 @@ final class LogoResolver {
                 }
                 return true
             }
+    }
+
+    /// Xcode strips leading zeros from trailing numbers in asset catalog
+    /// imageset names (e.g. "1. FSV Mainz 05" -> "1. FSV Mainz 5"), so
+    /// numeric tokens are normalized the same way on both sides of the lookup.
+    private static func stripLeadingZeros(_ token: String) -> String {
+        guard token.count > 1, token.allSatisfy(\.isNumber) else { return token }
+        let stripped = token.drop { $0 == "0" }
+        return stripped.isEmpty ? "0" : String(stripped)
     }
 
     private static func aliases(for name: String) -> [String] {

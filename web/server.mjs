@@ -499,6 +499,7 @@ function resolveTvLogo(channelName) {
   if (normalized.includes("hbo")) return tvLogoIndex.get("hbo max") || null;
   if (normalized.includes("itv")) return tvLogoIndex.get("itv") || null;
   if (normalized.includes("laliga")) return tvLogoIndex.get("laliga tv") || null;
+  if (normalized.includes("now tv") || normalized.includes("nowtv")) return tvLogoIndex.get("now") || null;
   if (normalized.includes("premier sports") || normalized.includes("premiersports")) {
     return tvLogoIndex.get("premier sports") || null;
   }

@@ -32,6 +32,8 @@ export interface Match {
   time: string;
   homeTeam: string;
   awayTeam: string;
+  homeTeamId?: string | null;
+  awayTeamId?: string | null;
   homeShortName?: string | null;
   awayShortName?: string | null;
   league: string;
@@ -73,6 +75,14 @@ export interface MatchYellowCardEvent {
   yellowCardTimes: string[];
 }
 
+export interface MatchVarEvent {
+  player: string | null;
+  minute: string | null;
+  detail: string;
+  cutoutUrl?: string | null;
+  idPlayer?: string | null;
+}
+
 export interface MatchLineupPlayer {
   number: number;
   name: string;
@@ -98,6 +108,20 @@ export interface PlayerDetails {
   cutoutUrl?: string | null;
   thumbUrl?: string | null;
   renderUrl?: string | null;
+}
+
+export interface MatchSocialItem {
+  id: string;
+  type?: string | null;
+  url: string;
+  title: string;
+  text?: string | null;
+  thumbnail?: string | null;
+  publishedAt?: string | null;
+  account?: {
+    handle?: string | null;
+    name?: string | null;
+  } | null;
 }
 
 export interface MatchLineupSubstitution {
@@ -143,6 +167,8 @@ export interface MatchDetails {
   awayYellowCards: MatchYellowCardEvent[];
   homeRedCards: MatchRedCardEvent[];
   awayRedCards: MatchRedCardEvent[];
+  homeVarEvents: MatchVarEvent[];
+  awayVarEvents: MatchVarEvent[];
   teamLineups?: MatchTeamLineups | null;
   penaltyResult?: string | null;
   inProgress?: boolean | null;
@@ -186,6 +212,10 @@ export interface LeagueTableRow {
   points: number;
   form: string[];
   rankStatus?: string | null;
+  /** True while this team is in an in-progress match (live overlay → pulse). */
+  live?: boolean;
+  /** Pre-overlay rank, present only on a live/realtime table (drives the trend arrow). */
+  previousPosition?: number | null;
 }
 
 export interface LeagueTableGroup {
@@ -200,6 +230,8 @@ export interface LeagueTable {
   stageName?: string | null;
   sourceUrl?: string | null;
   updatedAt?: string | null;
+  /** True when live/just-finished results have been overlaid (positions are provisional). */
+  realtime?: boolean;
   groups: LeagueTableGroup[];
   rows: LeagueTableRow[];
 }

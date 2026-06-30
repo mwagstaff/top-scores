@@ -28,6 +28,9 @@ struct Top_ScoresApp: App {
         PerformanceSignposter.startup.emitEvent("AppInit")
         BackgroundRefreshManager.register()
         PhoneWatchSyncService.shared.activate()
+        // Force early singleton init so the badge manifest is loaded from disk
+        // before views first render (the singleton loads manifest synchronously in init).
+        _ = TeamBadgeCache.shared
     }
 
     var body: some Scene {
@@ -51,6 +54,8 @@ struct Top_ScoresApp: App {
             case .active:
                 NSLog("[TopScoresApp] scenePhase active -> reconcileOnForeground")
                 LiveActivitySyncService.shared.reconcileOnForeground()
+                let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+                matchesStore.refreshOnForeground(preferences: snapshot)
                 scheduleDeferredStartupWork(snapshot: preferences.snapshot)
             default:
                 break
@@ -66,6 +71,10 @@ struct Top_ScoresApp: App {
 
             try? await Task.sleep(nanoseconds: startupDeferredDelayNanos)
             guard !Task.isCancelled else { return }
+
+            // Kick off badge download early so images are ready by the time views render.
+            PerformanceSignposter.startup.emitEvent("DeferredStartupTeamBadges")
+            TeamBadgeCache.shared.restoreFromDisk(apiBaseURL: snapshot.apiBaseURL)
 
             PerformanceSignposter.startup.emitEvent("DeferredStartupPreferencesSync")
             await PreferencesSyncService.shared.syncPreferences(snapshot)
@@ -106,6 +115,13 @@ struct Top_ScoresApp: App {
 
             PerformanceSignposter.startup.emitEvent("DeferredStartupTeamRatings")
             await TeamRankingsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
+            guard !Task.isCancelled else { return }
+
+            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
+            guard !Task.isCancelled else { return }
+
+            PerformanceSignposter.startup.emitEvent("DeferredStartupPredictions")
+            await PredictionsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
             guard !Task.isCancelled else { return }
 
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)

@@ -1,0 +1,25 @@
+{
+  "count": 1,
+  "events": [
+    {
+      "id": 8325,
+      "league_id": 27,
+      "league_name": "World Cup 2026",
+      "home_team_id": 480,
+      "home_team": "Uruguay",
+      "away_team_id": 476,
+      "away_team": "Cabo Verde",
+      "event_date": "2026-06-21T22:00:00Z",
+      "status": "inprogress",
+      "period": "1st_half",
+      "current_minute": 45,
+      "home_score": 1,
+      "away_score": 1,
+      "home_score_ht": 1,
+      "away_score_ht": 1,
+      "live_websocket": true,
+      "websocket_plus": true,
+      "last_updated": "2026-06-21T22:46:11Z"
+    }
+  ]
+}

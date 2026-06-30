@@ -65,10 +65,11 @@ function mapTsdbStatus(strStatus, strProgress) {
     case "VOID": return "POSTPONED";
     default:
       // In-progress: strProgress gives the current minute.
-      // "1H", "2H", "ET" → use strProgress if available.
+      // "1H", "2H", "ET" → use strProgress if available, otherwise keep
+      // the match live so a missing minute cannot look like pre-match state.
       if (s === "1H" || s === "2H" || s === "ET" || s === "INPLAY") {
         const progress = String(strProgress || "").trim();
-        return progress || null;
+        return progress || (s === "ET" ? "ET" : "LIVE");
       }
       return null;
   }
@@ -128,6 +129,17 @@ function isMissedPenalty(entry) {
   return String(entry.strTimelineDetail || "").toLowerCase() === "missed penalty";
 }
 
+// True only for a VAR detail describing a goal that was overturned on review
+// (e.g. "Goal Disallowed"). Excludes confirmed goal-awards and any non-goal
+// VAR review (penalty/card checks, offside checks, etc.) — those are noise
+// the user doesn't want in Match Events or notifications. TSDB's timeline has
+// no structured confirmed/decision field (unlike BSD's varDecision incidents),
+// so this infers intent from the free-text detail string.
+function isDisallowedGoalVarDetail(detail) {
+  const text = String(detail || "");
+  return /goal/i.test(text) && /disallow|not award|overturn|cancel|void/i.test(text);
+}
+
 /**
  * Parse the goal scorers, assists, red cards, and yellow cards from a
  * timeline array. Also derives penalty_result for PEN matches.
@@ -139,6 +151,7 @@ function isMissedPenalty(entry) {
  *                       home_assists, away_assists,
  *                       home_yellow_cards, away_yellow_cards,
  *                       home_red_cards, away_red_cards,
+ *                       home_var_events, away_var_events,
  *                       penalty_result }
  */
 function parseTimelineEvents(timeline, homeTeamId, matchStatus) {
@@ -151,6 +164,8 @@ function parseTimelineEvents(timeline, homeTeamId, matchStatus) {
     away_yellow_cards: [],
     home_red_cards: [],
     away_red_cards: [],
+    home_var_events: [],
+    away_var_events: [],
     penalty_result: null,
   };
 
@@ -254,6 +269,21 @@ function parseTimelineEvents(timeline, homeTeamId, matchStatus) {
         addCardTime(home ? homeRed : awayRed, player, minute);
       } else if (detail.includes("yellow")) {
         addCardTime(home ? homeYellow : awayYellow, player, minute);
+      }
+    } else if (type === "var") {
+      const detail = String(entry.strTimelineDetail || "").trim() || null;
+      // Mirrors the BSD adapter's restriction: only a disallowed goal is
+      // notification/display-worthy; other VAR reviews (confirmed goals,
+      // penalty/card checks, offside checks) are noise. TSDB's timeline has
+      // no structured confirmed/decision field, so this infers intent from
+      // the detail text rather than a structured flag.
+      if (detail && isDisallowedGoalVarDetail(detail)) {
+        const varEvent = { player, minute, detail };
+        const cutout = String(entry.strCutout || "").trim();
+        if (cutout) varEvent.cutout_url = cutout;
+        const idPlayer = String(entry.idPlayer || "").trim();
+        if (idPlayer && idPlayer !== "0") varEvent.id_player = idPlayer;
+        (home ? result.home_var_events : result.away_var_events).push(varEvent);
       }
     }
     // "subst" entries are part of the lineup — handled separately.
@@ -414,8 +444,10 @@ function preferredSlotsForHint(hint, rowSize, side) {
   const screenRightSlots = slots.filter((slot) => slot >= rowSize - middle);
   if (hint === "centre") return centreSlots;
 
-  const logicalLeftSlots = side === "home" ? screenRightSlots : screenLeftSlots;
-  const logicalRightSlots = side === "home" ? screenLeftSlots : screenRightSlots;
+  const screenLeftPreferredSlots = screenLeftSlots;
+  const screenRightPreferredSlots = rowSize === 4 ? [...screenRightSlots].reverse() : screenRightSlots;
+  const logicalLeftSlots = side === "home" ? screenRightPreferredSlots : screenLeftPreferredSlots;
+  const logicalRightSlots = side === "home" ? screenLeftPreferredSlots : screenRightPreferredSlots;
   return hint === "left" ? logicalLeftSlots : logicalRightSlots;
 }
 
@@ -1423,6 +1455,7 @@ module.exports = {
   __private: {
     mapTsdbStatus,
     parseTimelineEvents,
+    isDisallowedGoalVarDetail,
     parseLineups,
     assignFormationGridPositions,
     positionSideHint,
