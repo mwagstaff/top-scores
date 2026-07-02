@@ -975,7 +975,6 @@ private struct MatchEventsCard: View {
 
     let match: Match
 
-    private static let subPhotoSize: CGFloat = 34
     /// Neutral accent for teams TSDB has no brand colour for (~80% of teams),
     /// so every card still shows a consistent home-left / away-right stripe.
     private static let neutralAccent = Color(red: 0.42, green: 0.46, blue: 0.52)
@@ -1113,9 +1112,9 @@ private struct MatchEventsCard: View {
                         .frame(width: iconSize, height: iconSize)
                     eventText(entry, alignment: .leading, textAlignment: .leading)
                     Spacer(minLength: 8)
-                    eventPortrait(displayedPlayer)
+                    eventPortrait(displayedPlayer, kind: entry.kind)
                 } else {
-                    eventPortrait(displayedPlayer)
+                    eventPortrait(displayedPlayer, kind: entry.kind)
                     Spacer(minLength: 8)
                     eventText(entry, alignment: .trailing, textAlignment: .trailing)
                     eventIcon(entry.kind)
@@ -1138,11 +1137,13 @@ private struct MatchEventsCard: View {
                     subLine(player: entry.playerOff, name: entry.playerOffName ?? "", isOut: true, isHome: isHome)
                     subLine(player: entry.player, name: entry.playerOnName ?? "", isOut: false, isHome: isHome)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 VStack(spacing: 7) {
                     subLine(player: entry.playerOff, name: entry.playerOffName ?? "", isOut: true, isHome: isHome)
                     subLine(player: entry.player, name: entry.playerOnName ?? "", isOut: false, isHome: isHome)
                 }
+                .frame(maxWidth: .infinity, alignment: .trailing)
                 minuteText(entry.minute, alignment: .trailing)
             }
         }
@@ -1164,9 +1165,9 @@ private struct MatchEventsCard: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                     Spacer(minLength: 6)
-                    subPhoto(player)
+                    hiddenSubPhotoPlaceholder()
                 } else {
-                    subPhoto(player)
+                    hiddenSubPhotoPlaceholder()
                     Spacer(minLength: 6)
                     Text(name)
                         .font(.subheadline.weight(.semibold))
@@ -1184,6 +1185,11 @@ private struct MatchEventsCard: View {
         .allowsHitTesting(player?.idPlayer != nil)
     }
 
+    private func hiddenSubPhotoPlaceholder() -> some View {
+        Color.clear
+            .frame(width: 34, height: 34)
+    }
+
     private func subPill(isOut: Bool) -> some View {
         HStack(spacing: 3) {
             Image(systemName: isOut ? "arrow.down" : "arrow.up")
@@ -1199,16 +1205,6 @@ private struct MatchEventsCard: View {
             Capsule(style: .continuous)
                 .fill(isOut ? Color.red : Color(red: 0.13, green: 0.7, blue: 0.32))
         )
-    }
-
-    @ViewBuilder
-    private func subPhoto(_ player: MatchLineupPlayer?) -> some View {
-        if let player {
-            MatchLineupPlayerPortraitView(player: player, diameter: Self.subPhotoSize)
-        } else {
-            Color.clear
-                .frame(width: Self.subPhotoSize, height: Self.subPhotoSize)
-        }
     }
 
     private func minuteText(_ minute: String, alignment: Alignment = .trailing) -> some View {
@@ -1234,13 +1230,49 @@ private struct MatchEventsCard: View {
     }
 
     @ViewBuilder
-    private func eventPortrait(_ player: MatchLineupPlayer?) -> some View {
+    private func eventPortrait(_ player: MatchLineupPlayer?, kind: MatchEventEntry.Kind) -> some View {
         if let player {
-            MatchLineupPlayerPortraitView(player: player)
+            MatchLineupPlayerPortraitView(
+                player: player,
+                borderColor: portraitBorderColor(for: kind),
+                borderLineWidth: portraitBorderLineWidth(for: kind),
+                glowColor: portraitGlowColor(for: kind),
+                glowRadius: portraitGlowRadius(for: kind)
+            )
         } else {
             Color.clear
                 .frame(width: MatchLineupPlayerPortraitView.size, height: MatchLineupPlayerPortraitView.size)
         }
+    }
+
+    private func portraitBorderColor(for kind: MatchEventEntry.Kind) -> Color {
+        switch kind {
+        case .goal:
+            return Color.green
+        case .yellowCard:
+            return Color.yellow
+        case .redCard:
+            return Color.red
+        case .varEvent, .substitution:
+            return Color.white.opacity(0.82)
+        }
+    }
+
+    private func portraitBorderLineWidth(for kind: MatchEventEntry.Kind) -> CGFloat {
+        switch kind {
+        case .goal, .yellowCard, .redCard:
+            return 2
+        case .varEvent, .substitution:
+            return 1.4
+        }
+    }
+
+    private func portraitGlowColor(for kind: MatchEventEntry.Kind) -> Color {
+        kind == .goal ? Color.green.opacity(0.7) : Color.clear
+    }
+
+    private func portraitGlowRadius(for kind: MatchEventEntry.Kind) -> CGFloat {
+        kind == .goal ? 8 : 0
     }
 
     @ViewBuilder
@@ -1538,12 +1570,15 @@ private struct MatchEventsCard: View {
             return MatchEventEntry.otherTimelineSortMinute
         }
 
-        let normalized = normalizedMinute(value)
-        let firstNumber = normalized
-            .split { !$0.isNumber }
-            .first
-            .flatMap { Int($0) }
-        return firstNumber ?? Int.max
+        let minuteParts = normalizedMinute(value)
+            .split(separator: "+", maxSplits: 1)
+            .compactMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+
+        if minuteParts.count == 2 {
+            return minuteParts[0] * 100 + minuteParts[1]
+        }
+
+        return minuteParts.first.map { $0 * 100 } ?? Int.max
     }
 }
 
@@ -2140,6 +2175,10 @@ private struct MatchLineupPlayerPortraitView: View {
 
     let player: MatchLineupPlayer
     var diameter: CGFloat = MatchLineupPlayerPortraitView.size
+    var borderColor: Color = Color.white.opacity(0.82)
+    var borderLineWidth: CGFloat = 1.4
+    var glowColor: Color = .clear
+    var glowRadius: CGFloat = 0
 
     private var portraitURLCandidates: [URL] {
         guard let value = player.cutoutURL?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2174,8 +2213,9 @@ private struct MatchLineupPlayerPortraitView: View {
         .clipShape(Circle())
         .overlay {
             Circle()
-                .stroke(Color.white.opacity(0.82), lineWidth: 1.4)
+                .stroke(borderColor, lineWidth: borderLineWidth)
         }
+        .shadow(color: glowColor, radius: glowRadius, x: 0, y: 0)
         .shadow(color: .black.opacity(0.20), radius: 4, x: 0, y: 2)
     }
 

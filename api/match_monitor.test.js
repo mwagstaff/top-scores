@@ -561,6 +561,42 @@ test("shouldAllowInactiveLiveActivityEvaluation allows forced or targeted reconc
   );
 });
 
+test("hasImminentUpcomingLiveActivityMatch allows late-night fixtures close to kickoff", () => {
+  const nowMs = Date.parse("2026-07-01T00:42:00Z");
+
+  assert.equal(
+    __testHooks.hasImminentUpcomingLiveActivityMatch(
+      [
+        {
+          date: "2026-07-01",
+          time: "02:00",
+          home_team: "Mexico",
+          away_team: "Ecuador",
+          score_status: null,
+        },
+      ],
+      nowMs
+    ),
+    true
+  );
+
+  assert.equal(
+    __testHooks.hasImminentUpcomingLiveActivityMatch(
+      [
+        {
+          date: "2026-07-01",
+          time: "17:00",
+          home_team: "England",
+          away_team: "DR Congo",
+          score_status: null,
+        },
+      ],
+      nowMs
+    ),
+    false
+  );
+});
+
 test("filterCanonicalLiveActivityMatchesForUser keeps major UEFA knockout fixtures when EPL-only is expanded", () => {
   const nowMs = Date.parse("2026-04-07T19:05:00Z");
 
@@ -1686,6 +1722,110 @@ test("mergeCanonicalLiveActivityMatch prefers resolved penalty result over trans
   assert.equal(merged.penalty_result, "Leeds United win 4 - 2 on penalties");
 });
 
+test("combineLiveActivityOperationalMatches prefers BSD penalty result over stale fallback duplicate", () => {
+  const matches = __testHooks.combineLiveActivityOperationalMatches(
+    [
+      {
+        match_details_id: "8362",
+        date: "2026-06-30",
+        time: "02:00",
+        league: "FIFA World Cup 2026",
+        league_subcategory: "Round of 32",
+        home_team: "Netherlands",
+        away_team: "Morocco",
+        home_score: 1,
+        away_score: 1,
+        score_status: "AET",
+        penalty_result: "Morocco win 3 - 2 on penalties",
+        updated_at: "2026-06-30T22:10:00.000Z",
+        tv_channels: ["ITV"],
+      },
+    ],
+    [
+      {
+        match_details_id: "2499836",
+        date: "2026-06-30",
+        time: "02:00",
+        league: "FIFA World Cup 2026",
+        league_subcategory: "Round of 32",
+        home_team: "Netherlands",
+        away_team: "Morocco",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+        tv_channels: ["ITV"],
+      },
+    ]
+  );
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].match_details_id, "8362");
+  assert.equal(matches[0].home_score, 1);
+  assert.equal(matches[0].away_score, 1);
+  assert.equal(matches[0].score_status, "AET");
+  assert.equal(matches[0].penalty_result, "Morocco win 3 - 2 on penalties");
+});
+
+test("buildLiveActivityContentState sends penalty shootout score in home-away order", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_live",
+    [
+      {
+        match_details_id: "8362",
+        date: "2026-06-30",
+        time: "02:00",
+        league: "FIFA World Cup 2026",
+        league_subcategory: "Round of 32",
+        home_team: "Netherlands",
+        away_team: "Morocco",
+        home_score: 1,
+        away_score: 1,
+        score_status: "AET",
+        penalty_result: "Morocco win 3 - 2 on penalties",
+        tv_channels: ["ITV"],
+      },
+    ],
+    2,
+    Date.parse("2026-06-30T22:31:00Z")
+  );
+
+  assert.equal(contentState.matches[0].matchId, "8362");
+  assert.equal(contentState.matches[0].homeScore, 1);
+  assert.equal(contentState.matches[0].awayScore, 1);
+  assert.equal(contentState.matches[0].matchTime, "AET");
+  assert.equal(contentState.matches[0].penaltyWinner, "away");
+  assert.equal(contentState.matches[0].penaltyResult, "P 2-3");
+});
+
+test("buildLiveActivityContentState clears pre-kickoff live status and uses primary canonical TV logo", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_live",
+    [
+      {
+        match_details_id: "8365",
+        date: "2026-07-01",
+        time: "02:00",
+        league: "FIFA World Cup 2026",
+        league_subcategory: "Round of 32",
+        home_team: "Mexico",
+        away_team: "Ecuador",
+        home_score: 0,
+        away_score: 0,
+        score_status: "LIVE",
+        tv_channels: ["ITV", "DAZN"],
+      },
+    ],
+    2,
+    Date.parse("2026-07-01T00:31:00Z")
+  );
+
+  assert.equal(contentState.matches[0].homeScore, undefined);
+  assert.equal(contentState.matches[0].awayScore, undefined);
+  assert.equal(contentState.matches[0].matchTime, undefined);
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["ITV"]);
+  assert.equal(contentState.matches[0].tvLogoKey, "itv");
+});
+
 test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly payloads", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "single_finished",
@@ -1711,6 +1851,52 @@ test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly 
   assert.equal(contentState.matches[0].tvLogoKey, "amazon");
   assert.equal(contentState.matches[0].homeLogoKey, "Newcastle United");
   assert.equal(contentState.matches[0].awayLogoKey, "Barcelona");
+});
+
+test("buildLiveActivityContentState prefers a recognized broadcaster over an unrecognized one listed first", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_upcoming",
+    [
+      {
+        match_details_id: "2503636",
+        date: "2026-07-02",
+        time: "20:00",
+        league: "FIFA World Cup 2026",
+        league_subcategory: "Round of 32",
+        home_team: "Spain",
+        away_team: "Austria",
+        tv_channels: ["CT Sport", "ERT 2 GR", "NPO 1", "BBC One", "TVP Sport"],
+      },
+    ],
+    2,
+    Date.now()
+  );
+
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["BBC"]);
+  assert.equal(contentState.matches[0].tvLogoKey, "bbc");
+});
+
+test("buildLiveActivityContentState falls back to the first channel when none are recognized broadcasters", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_upcoming",
+    [
+      {
+        match_details_id: "2503637",
+        date: "2026-07-02",
+        time: "20:00",
+        league: "FIFA World Cup 2026",
+        league_subcategory: "Round of 32",
+        home_team: "Portugal",
+        away_team: "Croatia",
+        tv_channels: ["CT Sport", "ERT 2 GR", "NPO 1"],
+      },
+    ],
+    2,
+    Date.now()
+  );
+
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["CT Sport"]);
+  assert.equal(contentState.matches[0].tvLogoKey, undefined);
 });
 
 test("buildLiveActivityContentState sends provided short names as display-ready team names", () => {
@@ -1792,6 +1978,33 @@ test("buildLiveActivityContentState resolves actual fixture team logo keys from 
   assert.equal(contentState.matches[2].awayLogoKey, "Mansfield");
   assert.equal(contentState.matches[2].homeTeam, "Peterborough");
   assert.equal(contentState.matches[2].awayTeam, "Mansfield");
+});
+
+test("buildLiveActivityContentState resolves a hyphenated full name to its logo asset via the static short-name fallback", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_finished",
+    [
+      {
+        match_details_id: "8368",
+        date: "2026-07-02",
+        time: "01:00",
+        league: "FIFA World Cup 2026",
+        home_team: "USA",
+        away_team: "Bosnia-Herzegovina",
+        home_score: 2,
+        away_score: 0,
+        score_status: "FT",
+        tv_channels: ["ITV"],
+      },
+    ],
+    2,
+    Date.now()
+  );
+
+  // "Bosnia-Herzegovina" has no exact team_logo_assets entry and no BSD/TSDB
+  // short name of its own — without the static team_short_names.json fallback
+  // this resolves to null and the widget falls back to a "B" letter circle.
+  assert.equal(contentState.matches[0].awayLogoKey, "Bosnia");
 });
 
 test("buildLiveActivityContentState falls back to team aliases as display-ready team names", () => {
@@ -2106,6 +2319,142 @@ test("enrichLiveActivityOperationalMatches restores missing match id and finishe
   assert.equal(matches[0].aggregate_away_score, 2);
   assert.equal(matches[0].score_status, "AET");
   assert.equal(matches[0].penalty_result, "Nottingham Forest win 3 - 0 on penalties");
+});
+
+test("enrichLiveActivityOperationalMatches prefers canonical TV channels with supported logos", () => {
+  const matches = __testHooks.enrichLiveActivityOperationalMatches(
+    [
+      {
+        match_details_id: "2503391",
+        date: "2026-07-01",
+        time: "17:00",
+        league: "FIFA World Cup 2026",
+        league_subcategory: "Round of 32",
+        home_team: "England",
+        away_team: "DR Congo",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+        tv_channels: ["Arena Sport 1 Premium RS"],
+      },
+    ],
+    {
+      "8366": {
+        id: "8366",
+        date: "2026-07-01",
+        time: "17:00",
+        league: "FIFA World Cup 2026",
+        league_subcategory: "Round of 32",
+        home_team: "England",
+        away_team: "DR Congo",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+        tv_channels: [
+          { name: "BBC iPlayer", country: "United Kingdom", countryCode: "GB" },
+          { name: "BBC One", country: "United Kingdom", countryCode: "GB" },
+          { name: "BBC Sport Web", country: "United Kingdom", countryCode: "GB" },
+        ],
+      },
+    }
+  );
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].match_details_id, "8366");
+  assert.deepStrictEqual(matches[0].tv_channels, ["BBC"]);
+
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_upcoming",
+    matches,
+    2,
+    Date.parse("2026-07-01T00:42:00Z")
+  );
+
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["BBC"]);
+  assert.equal(contentState.matches[0].tvLogoKey, "bbc");
+});
+
+test("combineLiveActivityOperationalMatches keeps public-list TV logos over legacy fallback rows", () => {
+  const publicMatches = [
+    {
+      match_details_id: "8366",
+      date: "2026-07-01",
+      time: "17:00",
+      league: "FIFA World Cup 2026",
+      league_subcategory: "Round of 32",
+      home_team: "England",
+      away_team: "DR Congo",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+      tv_channels: [{ name: "BBC iPlayer", country: "United Kingdom", countryCode: "GB" }],
+    },
+    {
+      match_details_id: "8367",
+      date: "2026-07-01",
+      time: "21:00",
+      league: "FIFA World Cup 2026",
+      league_subcategory: "Round of 32",
+      home_team: "Belgium",
+      away_team: "Senegal",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+      tv_channels: [{ name: "ITV", country: "United Kingdom", countryCode: "GB" }],
+    },
+  ];
+  const legacyFallbackMatches = [
+    {
+      match_details_id: "2503391",
+      date: "2026-07-01",
+      time: "17:00",
+      league: "FIFA World Cup 2026",
+      league_subcategory: "Round of 32",
+      home_team: "England",
+      away_team: "DR Congo",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+      tv_channels: ["Arena Sport 1 Premium RS"],
+    },
+    {
+      match_details_id: "2503392",
+      date: "2026-07-01",
+      time: "21:00",
+      league: "FIFA World Cup 2026",
+      league_subcategory: "Round of 32",
+      home_team: "Belgium",
+      away_team: "Senegal",
+      home_score: null,
+      away_score: null,
+      score_status: null,
+      tv_channels: ["Arena Sport 1 Premium RS", "C More Sport 1 FI", "DAZN Italy", "ITV"],
+    },
+  ];
+
+  const matches = __testHooks.combineLiveActivityOperationalMatches(
+    publicMatches,
+    legacyFallbackMatches
+  );
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_upcoming",
+    matches,
+    2,
+    Date.parse("2026-07-01T10:10:36Z")
+  );
+
+  assert.deepStrictEqual(
+    contentState.matches.map((match) => ({
+      homeTeam: match.homeTeam,
+      awayTeam: match.awayTeam,
+      tvChannels: match.tvChannels,
+      tvLogoKey: match.tvLogoKey,
+    })),
+    [
+      { homeTeam: "England", awayTeam: "DR Congo", tvChannels: ["BBC"], tvLogoKey: "bbc" },
+      { homeTeam: "Belgium", awayTeam: "Senegal", tvChannels: ["ITV"], tvLogoKey: "itv" },
+    ]
+  );
 });
 
 test("buildLiveActivityPresentationForUser clears delayed aggregate when current snapshot explicitly clears it", () => {

@@ -328,6 +328,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let firstLegAwayScore: Int?
     let matchTime: String?
     let penaltyWinner: String?
+    let penaltyResult: String?
     let tvChannels: [String]
     let tvLogoKey: String?
 
@@ -351,6 +352,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         case firstLegAwayScore
         case matchTime
         case penaltyWinner
+        case penaltyResult
         case tvChannels
         case tvLogoKey
     }
@@ -375,6 +377,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         firstLegAwayScore: Int? = nil,
         matchTime: String? = nil,
         penaltyWinner: String? = nil,
+        penaltyResult: String? = nil,
         tvChannels: [String] = [],
         tvLogoKey: String? = nil
     ) {
@@ -397,6 +400,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         self.firstLegAwayScore = firstLegAwayScore
         self.matchTime = matchTime
         self.penaltyWinner = penaltyWinner
+        self.penaltyResult = penaltyResult
         self.tvChannels = tvChannels
         self.tvLogoKey = tvLogoKey
     }
@@ -422,6 +426,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         firstLegAwayScore = try container.decodeIfPresent(Int.self, forKey: .firstLegAwayScore)
         matchTime = try container.decodeIfPresent(String.self, forKey: .matchTime)
         penaltyWinner = try container.decodeIfPresent(String.self, forKey: .penaltyWinner)
+        penaltyResult = try container.decodeIfPresent(String.self, forKey: .penaltyResult)
         // Decode tv_channels tolerantly: accepts [String] or [{name,...}] objects
         struct TvChannelRaw: Decodable {
             let name: String?
@@ -486,6 +491,20 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
 
     var awayWonOnPenalties: Bool {
         penaltyWinner?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "away"
+    }
+
+    var penaltyShootoutScoreText: String? {
+        let trimmed = penaltyResult?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.range(of: #"^P\s+\d+\s*-\s*\d+$"#, options: .regularExpression) != nil {
+            return trimmed.replacingOccurrences(of: #"\s*-\s*"#, with: "-", options: .regularExpression)
+        }
+        guard let match = trimmed.range(of: #"(\d+)\s*-\s*(\d+)"#, options: .regularExpression) else {
+            return nil
+        }
+        let score = String(trimmed[match])
+            .replacingOccurrences(of: #"\s*-\s*"#, with: "-", options: .regularExpression)
+        return "P \(score)"
     }
 
     var shouldShowAggregateBracketScoresInline: Bool {
@@ -1456,15 +1475,23 @@ private struct WidgetTeamLogo: View {
 
 private struct WidgetChannelBadge: View {
     let channels: [String]
+    var logoKey: String? = nil
     let compact: Bool
 
     private var primaryChannel: String? { channels.first }
+    private var preferredLogoIdentifier: String? {
+        let trimmedLogoKey = logoKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedLogoKey.isEmpty {
+            return trimmedLogoKey
+        }
+        return primaryChannel
+    }
 
     var body: some View {
         Group {
-            if let primaryChannel,
+            if let preferredLogoIdentifier,
                let image = WidgetTvLogoResolver.shared.image(
-                   for: primaryChannel,
+                   for: preferredLogoIdentifier,
                    idealPointSize: compact ? 12 : 14
                ) {
                 Image(uiImage: image)
@@ -2802,6 +2829,9 @@ private struct TopScoresLiveActivityWidget: Widget {
 
     private func compactTrailingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
         guard let first = LiveActivityMatchDisplayFilter.displayMatches(for: state).first else { return "" }
+        if let penaltyShootoutScoreText = first.penaltyShootoutScoreText {
+            return penaltyShootoutScoreText
+        }
         if let home = first.homeScore, let away = first.awayScore {
             return "\(home)-\(away)"
         }
@@ -3161,11 +3191,13 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
 
     private func homeScoreText(for match: TopScoresLiveActivityMatchState) -> String {
         guard let homeScore = match.homeScore else { return "-" }
+        if match.penaltyShootoutScoreText != nil { return "\(homeScore)" }
         return match.homeWonOnPenalties ? "\(homeScore)P" : "\(homeScore)"
     }
 
     private func awayScoreText(for match: TopScoresLiveActivityMatchState) -> String {
         guard let awayScore = match.awayScore else { return "-" }
+        if match.penaltyShootoutScoreText != nil { return "\(awayScore)" }
         return match.awayWonOnPenalties ? "\(awayScore)P" : "\(awayScore)"
     }
 
@@ -3186,6 +3218,9 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
     }
 
     private func matchTimeText(for match: TopScoresLiveActivityMatchState) -> String {
+        if let penaltyShootoutScoreText = match.penaltyShootoutScoreText {
+            return penaltyShootoutScoreText
+        }
         if let matchTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines),
            !matchTime.isEmpty {
             return matchTime
@@ -3354,15 +3389,20 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
 
     private func homeScoreText(for match: TopScoresLiveActivityMatchState) -> String {
         guard let homeScore = match.homeScore else { return "-" }
+        if match.penaltyShootoutScoreText != nil { return "\(homeScore)" }
         return match.homeWonOnPenalties ? "\(homeScore)P" : "\(homeScore)"
     }
 
     private func awayScoreText(for match: TopScoresLiveActivityMatchState) -> String {
         guard let awayScore = match.awayScore else { return "-" }
+        if match.penaltyShootoutScoreText != nil { return "\(awayScore)" }
         return match.awayWonOnPenalties ? "\(awayScore)P" : "\(awayScore)"
     }
 
     private func matchTimeText(for match: TopScoresLiveActivityMatchState) -> String {
+        if let penaltyShootoutScoreText = match.penaltyShootoutScoreText {
+            return penaltyShootoutScoreText
+        }
         if let matchTime = match.matchTime?.trimmingCharacters(in: .whitespacesAndNewlines),
            !matchTime.isEmpty {
             return matchTime
@@ -3953,6 +3993,9 @@ private struct LiveActivitySingleScoreRow: View {
     }
 
     private var scoreSeparatorText: String {
+        if let penaltyShootoutScoreText = match.penaltyShootoutScoreText {
+            return penaltyShootoutScoreText
+        }
         if match.homeWonOnPenalties || match.awayWonOnPenalties {
             return "-"
         }
@@ -3966,11 +4009,13 @@ private struct LiveActivitySingleScoreRow: View {
     }
 
     private func homeScoreText(_ score: Int) -> String {
-        match.homeWonOnPenalties ? "\(score) (P)" : "\(score)"
+        if match.penaltyShootoutScoreText != nil { return "\(score)" }
+        return match.homeWonOnPenalties ? "\(score) (P)" : "\(score)"
     }
 
     private func awayScoreText(_ score: Int) -> String {
-        match.awayWonOnPenalties ? "\(score) (P)" : "\(score)"
+        if match.penaltyShootoutScoreText != nil { return "\(score)" }
+        return match.awayWonOnPenalties ? "\(score) (P)" : "\(score)"
     }
 }
 
@@ -4582,6 +4627,9 @@ private struct UnifiedMultiMatchListView: View {
     }
 
     private func primaryStatusText(for match: TopScoresLiveActivityMatchState) -> String {
+        if let penaltyShootoutScoreText = match.penaltyShootoutScoreText {
+            return penaltyShootoutScoreText
+        }
         guard let home = match.homeScore, let away = match.awayScore else {
             return fallbackStatusText(for: match)
         }
@@ -5024,6 +5072,7 @@ private extension TopScoresLiveActivityMatchState {
             aggregateHomeScore.map(String.init) ?? "nil",
             aggregateAwayScore.map(String.init) ?? "nil",
             matchTime ?? "nil",
+            penaltyResult ?? "nil",
             tvLogoKey ?? "nil",
         ]
         return parts.joined(separator: "|")

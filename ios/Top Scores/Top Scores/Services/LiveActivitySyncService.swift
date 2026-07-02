@@ -26,6 +26,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     let firstLegAwayScore: Int?
     let matchTime: String?
     let penaltyWinner: String?
+    let penaltyResult: String?
     let tvChannels: [String]
     let tvLogoKey: String?
 
@@ -49,6 +50,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         case firstLegAwayScore
         case matchTime
         case penaltyWinner
+        case penaltyResult
         case tvChannels
         case tvLogoKey
     }
@@ -73,6 +75,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         firstLegAwayScore: Int? = nil,
         matchTime: String? = nil,
         penaltyWinner: String? = nil,
+        penaltyResult: String? = nil,
         tvChannels: [String] = [],
         tvLogoKey: String? = nil
     ) {
@@ -95,6 +98,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         self.firstLegAwayScore = firstLegAwayScore
         self.matchTime = matchTime
         self.penaltyWinner = penaltyWinner
+        self.penaltyResult = penaltyResult
         self.tvChannels = tvChannels
         self.tvLogoKey = tvLogoKey
     }
@@ -120,6 +124,7 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         firstLegAwayScore = try container.decodeIfPresent(Int.self, forKey: .firstLegAwayScore)
         matchTime = try container.decodeIfPresent(String.self, forKey: .matchTime)
         penaltyWinner = try container.decodeIfPresent(String.self, forKey: .penaltyWinner)
+        penaltyResult = try container.decodeIfPresent(String.self, forKey: .penaltyResult)
         tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
         tvLogoKey = try container.decodeIfPresent(String.self, forKey: .tvLogoKey)
     }
@@ -171,6 +176,12 @@ final class LiveActivitySyncService {
     private var pendingForegroundStartContentState: TopScoresLiveActivityAttributes.ContentState?
     private var pendingForegroundStartRetryTask: Task<Void, Never>?
     private var foregroundReconcileInFlight = false
+    // Three independent call sites can each decide to start a foreground activity
+    // around the same time (scene-active retry, delayed retry timer, foreground
+    // reconcile) — Activity<...>.activities stays empty until Activity.request()
+    // actually registers, so checking it alone doesn't prevent concurrent requests.
+    // This flag closes that window.
+    private var isRequestingForegroundActivity = false
 
     private init() {}
 
@@ -746,6 +757,24 @@ final class LiveActivitySyncService {
             await requestDeferredForegroundPushToStart(contentState: contentState)
             return
         }
+
+        let shouldProceed = lock.withLock { () -> Bool in
+            if isRequestingForegroundActivity {
+                return false
+            }
+            isRequestingForegroundActivity = true
+            return true
+        }
+        guard shouldProceed else {
+            NSLog("[LiveActivitySync] Foreground start skipped: request already in flight")
+            return
+        }
+        defer {
+            lock.withLock {
+                isRequestingForegroundActivity = false
+            }
+        }
+
         do {
             let attributes = TopScoresLiveActivityAttributes(appScope: "top-scores")
             let sanitizedState = sanitizedContentState(contentState)

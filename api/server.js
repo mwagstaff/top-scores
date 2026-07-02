@@ -1318,6 +1318,7 @@ let clubEloManualMappingsMtimeMs = null;
 let matchDetailsById = new Map();
 let matchDetailsLastUpdated = null;
 let matchDetailsUpdating = false;
+let matchDetailsChangelogSyncMs = null;
 const matchDetailsBackfillTasks = new Map();
 const matchDetailsWarmTasks = new Map();
 let matchDetailsSnapshotWarmTask = null;
@@ -16265,6 +16266,7 @@ async function hydrateOperationalStateFromRedis(options = {}) {
       if (matchDetailsSnapshot.updated_at) {
         matchDetailsLastUpdated = matchDetailsSnapshot.updated_at;
       }
+      matchDetailsChangelogSyncMs = Date.now();
       setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
     }
 
@@ -16461,9 +16463,19 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
     );
   }
   if (selectedDomains.includes("match_details")) {
+    const canSyncIncrementally = matchDetailsById.size > 0 && Number.isFinite(matchDetailsChangelogSyncMs);
     reloads.push(
-      getAllOperationalMatchDetails().then((snapshot) => {
-        recordMap.match_details = snapshot || null;
+      (canSyncIncrementally
+        ? getOperationalMatchDetailsUpdatesSince(matchDetailsChangelogSyncMs).then((delta) => ({
+            incremental: true,
+            delta,
+          }))
+        : getAllOperationalMatchDetails().then((snapshot) => ({
+            incremental: false,
+            snapshot,
+          }))
+      ).then((result) => {
+        recordMap.match_details = result || null;
       })
     );
   }
@@ -16538,14 +16550,38 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
     stageTimings.matches_ms = Date.now() - startedAtMs;
   }
 
-  if (recordMap.match_details && recordMap.match_details.records) {
+  if (recordMap.match_details && recordMap.match_details.incremental) {
     const startedAtMs = Date.now();
-    const filteredRecords = filterMatchDetailsRecordsByCompetition(recordMap.match_details.records);
+    const delta = recordMap.match_details.delta;
+    if (delta) {
+      const filteredRecords = filterMatchDetailsRecordsByCompetition(delta.records || {});
+      Object.entries(filteredRecords).forEach(([id, payload]) => {
+        if (/^\d+$/.test(String(id || ""))) {
+          matchDetailsById.set(id, payload);
+        }
+      });
+      (delta.removed_ids || []).forEach((id) => {
+        matchDetailsById.delete(String(id || ""));
+      });
+      matchDetailsLastUpdated = delta.updated_at || matchDetailsLastUpdated || nowIso;
+      matchDetailsChangelogSyncMs = Number.isFinite(delta.synced_at_ms)
+        ? delta.synced_at_ms
+        : Date.now();
+      setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
+      if ((delta.changed_ids || []).length > 0) {
+        clearMatchListResponseCache();
+      }
+    }
+    stageTimings.match_details_ms = Date.now() - startedAtMs;
+  } else if (recordMap.match_details && recordMap.match_details.snapshot && recordMap.match_details.snapshot.records) {
+    const startedAtMs = Date.now();
+    const snapshot = recordMap.match_details.snapshot;
+    const filteredRecords = filterMatchDetailsRecordsByCompetition(snapshot.records);
     matchDetailsById = new Map(
       Object.entries(filteredRecords).filter(([id]) => /^\d+$/.test(String(id || "")))
     );
-    matchDetailsLastUpdated =
-      recordMap.match_details.updated_at || matchDetailsLastUpdated || nowIso;
+    matchDetailsLastUpdated = snapshot.updated_at || matchDetailsLastUpdated || nowIso;
+    matchDetailsChangelogSyncMs = Date.now();
     setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
     clearMatchListResponseCache();
     stageTimings.match_details_ms = Date.now() - startedAtMs;
@@ -26230,6 +26266,7 @@ const {
   saveOperationalMatchDetailsRecords,
   getOperationalMatchDetails,
   getAllOperationalMatchDetails,
+  getOperationalMatchDetailsUpdatesSince,
   getOperationalMatchDetailsSummary,
   deleteOperationalMatchDetailsRecords,
   saveOperationalMatchWriteLogEntries,

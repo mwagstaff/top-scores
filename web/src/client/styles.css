@@ -1499,6 +1499,12 @@ button.match-row:hover {
   border-width: 1px;
 }
 
+.timeline-sub-photo-placeholder {
+  width: 2.15rem;
+  height: 2.15rem;
+  flex: 0 0 2.15rem;
+}
+
 
 /* ── 11. LINEUP ──────────────────────────────────────────────── */
 
@@ -1706,6 +1712,23 @@ button.match-row:hover {
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.34);
   box-shadow: 0 4px 12px rgba(0,0,0,0.22);
+}
+
+.lineup-player-portrait.timeline-player-portrait-goal,
+.lineup-player-portrait.timeline-player-portrait-own-goal {
+  border-color: #22c55e;
+  border-width: 2px;
+  box-shadow: 0 0 14px rgba(34, 197, 94, 0.62), 0 4px 12px rgba(0,0,0,0.22);
+}
+
+.lineup-player-portrait.timeline-player-portrait-yellow-card {
+  border-color: #facc15;
+  border-width: 2px;
+}
+
+.lineup-player-portrait.timeline-player-portrait-red-card {
+  border-color: #ef4444;
+  border-width: 2px;
 }
 
 .lineup-player-portrait img {

@@ -1499,6 +1499,9 @@ enum MatchStatusFormatter {
         now: Date = Date()
     ) -> String? {
         guard let trimmed = canonicalStatus(rawStatus) else { return nil }
+        if let kickoff, kickoff > now, !hasScore, isInProgress(trimmed) {
+            return nil
+        }
 
         guard hasScore, isInProgress(trimmed), let kickoff else {
             return trimmed

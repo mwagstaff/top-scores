@@ -117,8 +117,17 @@ function mapBsdStatus(event, options = {}) {
     minute !== null && minute !== undefined && minute !== "" && Number.isFinite(Number(minute))
       ? String(Number(minute))
       : null;
+  const kickoffMs = Date.parse(String(event.event_date || ""));
+  const isFutureScorelessKickoff =
+    Number.isFinite(kickoffMs) &&
+    kickoffMs > Date.now() &&
+    toNumber(event.home_score) === null &&
+    toNumber(event.away_score) === null;
 
   if (!status || status === "notstarted" || status === "not_started" || status === "ns") {
+    return null;
+  }
+  if (isFutureScorelessKickoff && !minuteStr && !period) {
     return null;
   }
   if (["postponed", "cancelled", "canceled", "abandoned", "suspended", "void"].includes(status)) {

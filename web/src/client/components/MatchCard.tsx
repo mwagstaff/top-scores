@@ -640,13 +640,13 @@ function ExpandedMatchDetails({
                   disabled={!entry.lineupPlayer?.idPlayer}
                   aria-label={entry.lineupPlayer?.idPlayer ? `Show ${entry.player} details` : entry.text}
                 >
-                  {entry.side === "away" && <TimelinePlayerPortrait player={entry.lineupPlayer} />}
+                  {entry.side === "away" && <TimelinePlayerPortrait player={entry.lineupPlayer} kind={entry.kind} />}
                   {entry.side === "home" ? (
                     <>
                       <span className="timeline-minute">{entry.minute}</span>
                       <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
                       <span className="timeline-text">{entry.text}</span>
-                      <TimelinePlayerPortrait player={entry.lineupPlayer} />
+                      <TimelinePlayerPortrait player={entry.lineupPlayer} kind={entry.kind} />
                     </>
                   ) : (
                     <>
@@ -711,11 +711,11 @@ function MatchSocialSection({ items }: { items: MatchSocialItem[] }) {
   );
 }
 
-function TimelinePlayerPortrait({ player }: { player: MatchLineupPlayer | null }) {
+function TimelinePlayerPortrait({ player, kind }: { player: MatchLineupPlayer | null; kind: string }) {
   if (!player) {
     return <span className="lineup-player-portrait timeline-player-portrait-placeholder" aria-hidden="true" />;
   }
-  return <LineupPlayerPortrait player={player} />;
+  return <LineupPlayerPortrait player={player} className={`timeline-player-portrait-${kind}`} />;
 }
 
 function TimelineSubstitutionContent({
@@ -779,7 +779,7 @@ function TimelineSubLine({
     </span>
   );
   const nameEl = <span className="timeline-sub-name">{name}</span>;
-  const photo  = <TimelinePlayerPortrait player={player} />;
+  const photo  = <span className="timeline-sub-photo-placeholder" aria-hidden="true" />;
 
   return (
     <button
@@ -981,10 +981,10 @@ function LineupPlayerMarker({ player, summary, replacementSummary, onSelectPlaye
   );
 }
 
-function LineupPlayerPortrait({ player }: { player: MatchLineupPlayer }) {
+function LineupPlayerPortrait({ player, className = "" }: { player: MatchLineupPlayer; className?: string }) {
   const initials = playerInitials(player.name);
   return (
-    <div className="lineup-player-portrait">
+    <div className={`lineup-player-portrait${className ? ` ${className}` : ""}`}>
       {player.cutoutUrl ? (
         <img src={player.cutoutUrl} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = "none"; }} />
       ) : null}

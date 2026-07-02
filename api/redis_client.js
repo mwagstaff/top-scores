@@ -104,6 +104,7 @@ const OPERATIONAL_DATASET_PREFIX = `${DB_NAME}:operational:dataset:`;
 const OPERATIONAL_MATCH_DETAILS_PREFIX = `${DB_NAME}:operational:match_details:`;
 const OPERATIONAL_MATCH_DETAILS_INDEX_KEY = `${DB_NAME}:operational:match_details:index`;
 const OPERATIONAL_MATCH_DETAILS_META_KEY = `${DB_NAME}:operational:match_details:meta`;
+const OPERATIONAL_MATCH_DETAILS_CHANGELOG_KEY = `${DB_NAME}:operational:match_details:changelog`;
 const OPERATIONAL_MATCH_WRITE_LOG_PREFIX = `${DB_NAME}:operational:match_write_log:`;
 const DELETED_MATCH_PREFIX = `${DB_NAME}:operational:match_deleted:`;
 const DELETED_MATCHES_INDEX_KEY = `${DB_NAME}:operational:deleted_matches_index`;
@@ -2206,6 +2207,7 @@ async function saveOperationalMatchDetailsRecords(recordsById, options = {}) {
 
   const replace = Boolean(options.replace);
   const updatedAt = options.updated_at || new Date().toISOString();
+  const changelogAtMs = Date.now();
 
   try {
     const redisClient = await getClient();
@@ -2224,6 +2226,9 @@ async function saveOperationalMatchDetailsRecords(recordsById, options = {}) {
       const transactionClear = redisClient.multi();
       existingIds.forEach((matchId) => {
         transactionClear.del(buildOperationalMatchDetailsKey(matchId));
+        transactionClear.zAdd(OPERATIONAL_MATCH_DETAILS_CHANGELOG_KEY, [
+          { score: changelogAtMs, value: matchId },
+        ]);
       });
       if (existingIds.length > 0) {
         transactionClear.del(OPERATIONAL_MATCH_DETAILS_INDEX_KEY);
@@ -2258,6 +2263,9 @@ async function saveOperationalMatchDetailsRecords(recordsById, options = {}) {
           const matchKey = buildOperationalMatchDetailsKey(matchId);
           transaction.del(matchKey);
           transaction.sRem(OPERATIONAL_MATCH_DETAILS_INDEX_KEY, matchId);
+          transaction.zAdd(OPERATIONAL_MATCH_DETAILS_CHANGELOG_KEY, [
+            { score: changelogAtMs, value: matchId },
+          ]);
         });
         removed = staleIds.length;
       }
@@ -2273,6 +2281,9 @@ async function saveOperationalMatchDetailsRecords(recordsById, options = {}) {
       payloadBytes += utf8ByteLength(serializedPayload);
       transaction.set(buildOperationalMatchDetailsKey(matchId), serializedPayload);
       transaction.sAdd(OPERATIONAL_MATCH_DETAILS_INDEX_KEY, normalizedPayload.id);
+      transaction.zAdd(OPERATIONAL_MATCH_DETAILS_CHANGELOG_KEY, [
+        { score: changelogAtMs, value: normalizedPayload.id },
+      ]);
     });
 
     let total;
@@ -2458,6 +2469,110 @@ async function getAllOperationalMatchDetails() {
   }
 }
 
+// Fetches only match details records that changed since `sinceMs`, using the
+// changelog sorted set instead of the full index + mget of every match. Callers
+// that already hold a hydrated snapshot use this to apply a cheap delta rather
+// than re-fetching all match_details on every cache-state poll. Note: bulk
+// replace-mode writes (rebuildMatchDetailsCache, reconciliation repair) touch
+// every record, so the first delta fetch after one of those will legitimately
+// return everything — that's a one-time cost equivalent to a full fetch, not a
+// bug; subsequent polls stay cheap because the cursor advances past it.
+async function getOperationalMatchDetailsUpdatesSince(sinceMs) {
+  const startedAtMs = Date.now();
+  const timings = {};
+  const normalizedSinceMs = Number.isFinite(Number(sinceMs)) ? Number(sinceMs) : 0;
+  try {
+    const redisClient = await getClient();
+    const changelogStartedAtMs = Date.now();
+    const changedIds = await redisClient.zRangeByScore(
+      OPERATIONAL_MATCH_DETAILS_CHANGELOG_KEY,
+      normalizedSinceMs + 1,
+      "+inf"
+    );
+    recordTiming(timings, "redis_changelog_ms", changelogStartedAtMs);
+
+    const uniqueIds = Array.from(
+      new Set(changedIds.map((matchId) => String(matchId || "").trim().toLowerCase()).filter(Boolean))
+    );
+
+    const metaStartedAtMs = Date.now();
+    const metaRaw = await redisClient.get(OPERATIONAL_MATCH_DETAILS_META_KEY);
+    recordTiming(timings, "redis_meta_ms", metaStartedAtMs);
+    const meta = metaRaw ? safeJsonParse(metaRaw, "operational match details meta") : null;
+
+    if (uniqueIds.length === 0) {
+      maybeLogSlowOperationalRead("get_match_details_updates_since", startedAtMs, timings, {
+        source: "redis",
+        since_ms: normalizedSinceMs,
+        changed: 0,
+      });
+      return {
+        updated_at: meta && meta.updated_at ? meta.updated_at : null,
+        since_ms: normalizedSinceMs,
+        synced_at_ms: startedAtMs,
+        changed_ids: [],
+        removed_ids: [],
+        records: {},
+      };
+    }
+
+    const mgetStartedAtMs = Date.now();
+    const keys = uniqueIds.map((matchId) => buildOperationalMatchDetailsKey(matchId));
+    const values = await redisClient.mGet(keys);
+    recordTiming(timings, "redis_mget_ms", mgetStartedAtMs);
+
+    const records = {};
+    const removedIds = [];
+    let payloadBytes = 0;
+    const parseStartedAtMs = Date.now();
+    uniqueIds.forEach((matchId, index) => {
+      const raw = values[index];
+      if (!raw) {
+        removedIds.push(matchId);
+        return;
+      }
+      payloadBytes += utf8ByteLength(raw);
+      const parsed = safeJsonParse(raw, `operational match details ${matchId}`);
+      if (!parsed || typeof parsed !== "object") {
+        removedIds.push(matchId);
+        return;
+      }
+      const normalizedId = String(parsed.id || matchId).trim().toLowerCase();
+      records[normalizedId] = parsed;
+    });
+    recordTiming(timings, "parse_ms", parseStartedAtMs);
+
+    maybeLogSlowOperationalRead("get_match_details_updates_since", startedAtMs, timings, {
+      source: "redis",
+      since_ms: normalizedSinceMs,
+      changed: uniqueIds.length,
+      updated: Object.keys(records).length,
+      removed: removedIds.length,
+      payload_bytes: payloadBytes,
+    });
+
+    return attachRedisMetricMeta({
+      updated_at: meta && meta.updated_at ? meta.updated_at : null,
+      since_ms: normalizedSinceMs,
+      synced_at_ms: startedAtMs,
+      changed_ids: uniqueIds,
+      removed_ids: removedIds,
+      records,
+    }, { payloadBytes });
+  } catch (error) {
+    console.error("[Redis] Error retrieving incremental operational match details:", error);
+    return {
+      updated_at: null,
+      since_ms: normalizedSinceMs,
+      synced_at_ms: startedAtMs,
+      changed_ids: [],
+      removed_ids: [],
+      records: {},
+      error: error.message || String(error),
+    };
+  }
+}
+
 async function getOperationalMatchDetailsSummary() {
   try {
     const mongoSummary = shouldReadMongoPrimary()
@@ -2522,10 +2637,14 @@ async function deleteOperationalMatchDetailsRecords(matchIds, options = {}) {
     });
 
     if (deletedIds.length > 0) {
+      const changelogAtMs = Date.now();
       const transaction = redisClient.multi();
       deletedIds.forEach((matchId) => {
         transaction.del(buildOperationalMatchDetailsKey(matchId));
         transaction.sRem(OPERATIONAL_MATCH_DETAILS_INDEX_KEY, matchId);
+        transaction.zAdd(OPERATIONAL_MATCH_DETAILS_CHANGELOG_KEY, [
+          { score: changelogAtMs, value: matchId },
+        ]);
         if (options.delete_write_logs) {
           transaction.del(buildOperationalMatchWriteLogKey(matchId));
         }
@@ -3288,6 +3407,10 @@ module.exports = {
   saveOperationalMatchDetailsRecords: _withMetrics("save_match_details", saveOperationalMatchDetailsRecords),
   getOperationalMatchDetails: _withMetrics("get_match_details", getOperationalMatchDetails),
   getAllOperationalMatchDetails: _withMetrics("get_all_match_details", getAllOperationalMatchDetails),
+  getOperationalMatchDetailsUpdatesSince: _withMetrics(
+    "get_match_details_updates_since",
+    getOperationalMatchDetailsUpdatesSince
+  ),
   getOperationalMatchDetailsSummary: _withMetrics("get_match_details_summary", getOperationalMatchDetailsSummary),
   deleteOperationalMatchDetailsRecords: _withMetrics("delete_match_details", deleteOperationalMatchDetailsRecords),
   saveOperationalMatchWriteLogEntries: _withMetrics("save_match_write_log", saveOperationalMatchWriteLogEntries),

@@ -49,6 +49,20 @@ test("mapBsdStatus: in-progress → minute / HT / LIVE", () => {
   assert.equal(mapBsdStatus({ status: "inprogress", current_minute: null }), "LIVE");
 });
 
+test("mapBsdStatus: future scoreless started event remains upcoming", () => {
+  assert.equal(
+    mapBsdStatus({
+      status: "started",
+      period: "",
+      current_minute: null,
+      home_score: null,
+      away_score: null,
+      event_date: "2999-07-01T01:00:00Z",
+    }),
+    null
+  );
+});
+
 test("mapBsdStatus: postponed/abandoned → POSTPONED", () => {
   assert.equal(mapBsdStatus({ status: "postponed" }), "POSTPONED");
   assert.equal(mapBsdStatus({ status: "abandoned" }), "POSTPONED");

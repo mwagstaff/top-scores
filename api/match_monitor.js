@@ -81,11 +81,12 @@ const LIVE_ACTIVITY_FINISHED_RETENTION_MS = 8 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_DELAY_SNAPSHOT_STALE_TOLERANCE_MS = Math.max(POLL_INTERVAL_MS * 3, 60 * 1000);
 // Default active window for Live Activities (Europe/London local time).
 // Outside this window the server ends any running activity that has no live/recent-kickoff
-// matches, and suppresses push-to-start. This conserves the Apple 8-hour daily budget and
-// avoids overnight stale-spinner states. The window is bypassed when matches are in play.
+// matches or imminent upcoming kickoffs, and suppresses push-to-start. This conserves the
+// Apple 8-hour daily budget and avoids overnight stale-spinner states.
 const LIVE_ACTIVITY_WINDOW_START_HOUR = 8;  // 08:00 Europe/London
 const LIVE_ACTIVITY_WINDOW_END_HOUR = 23;   // 23:00 Europe/London
 const LIVE_ACTIVITY_WINDOW_TIMEZONE = "Europe/London";
+const LIVE_ACTIVITY_IMMINENT_UPCOMING_WINDOW_MS = 2 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_ATTRIBUTES_TYPE = "TopScoresLiveActivityAttributes";
 const LIVE_ACTIVITY_ATTRIBUTES = { appScope: "topscores" };
 const FANTASY_DEADLINE_REMINDER_EVAL_INTERVAL_MS = 60 * 1000;
@@ -152,6 +153,14 @@ let liveActivityMatchDetailsProvider = null;
 let liveActivityOperationalMatchesProvider = null;
 let canonicalMatchStateWriter = null;
 let liveActivityTeamShortNameLookup = buildLiveActivityTeamShortNameLookup(
+  TEAM_SHORT_NAMES_PAYLOAD
+);
+// refreshLiveActivityTeamShortNameLookup() replaces liveActivityTeamShortNameLookup
+// wholesale with the Redis-backed dataset once one exists, so static-file entries
+// stop being consulted at all once any dynamic data arrives. Keep this fixed
+// lookup around as a permanent supplemental source so curated static mappings
+// (e.g. teams the scraper hasn't picked up a short name for) always apply.
+const STATIC_LIVE_ACTIVITY_TEAM_SHORT_NAME_LOOKUP = buildLiveActivityTeamShortNameLookup(
   TEAM_SHORT_NAMES_PAYLOAD
 );
 const LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP = Object.entries(
@@ -279,7 +288,9 @@ function resolveLiveActivityTeamShortName(shortNameValue, fullNameValue) {
   if (!fullName) return null;
   const key = normalizeLiveActivityTeamShortNameKey(fullName);
   if (!key) return null;
-  const resolved = liveActivityTeamShortNameLookup.get(key);
+  const resolved =
+    liveActivityTeamShortNameLookup.get(key) ||
+    STATIC_LIVE_ACTIVITY_TEAM_SHORT_NAME_LOOKUP.get(key);
   const displayAliasResolved = LIVE_ACTIVITY_TEAM_DISPLAY_ALIAS_LOOKUP.get(key);
   const aliasResolved = LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP.get(key);
   const resolvedValue = resolved || displayAliasResolved || aliasResolved;
@@ -633,6 +644,17 @@ function penaltyShootoutWinnerSide(match) {
   }
 
   return null;
+}
+
+function penaltyShootoutScoreText(match) {
+  const penaltyResult = String(match && match.penalty_result ? match.penalty_result : "").trim();
+  const scorePair = firstScorePair(penaltyResult);
+  if (!scorePair) return null;
+  const winnerSide = penaltyShootoutWinnerSide(match);
+  if (winnerSide === "away") {
+    return `P ${scorePair.second}-${scorePair.first}`;
+  }
+  return `P ${scorePair.first}-${scorePair.second}`;
 }
 
 function isResolvedPenaltyShootoutMatch(match) {
@@ -3142,6 +3164,7 @@ function resolveLiveActivityTeamLogoKey(teamName, shortName = null) {
   const teamKey = normalizeLiveActivityTeamShortNameKey(teamName);
   const shortKey = normalizeLiveActivityTeamShortNameKey(shortName);
   addCandidate(liveActivityTeamShortNameLookup.get(teamKey));
+  addCandidate(STATIC_LIVE_ACTIVITY_TEAM_SHORT_NAME_LOOKUP.get(teamKey));
   addCandidate(LIVE_ACTIVITY_TEAM_DISPLAY_ALIAS_LOOKUP.get(teamKey));
   addCandidate(LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP.get(teamKey));
   addCandidate(LIVE_ACTIVITY_TEAM_DISPLAY_ALIAS_LOOKUP.get(shortKey));
@@ -3359,9 +3382,10 @@ function mergeDuplicateLiveActivityEntries(existingEntry, incomingEntry) {
       : incomingEntry.state;
   const mergedMatch = mergeSnapshotWithFallback(fallbackEntry.match, preferredEntry.match);
 
-  const channels = canonicalLiveActivityChannelsForMatch(preferredEntry.match);
-  const fallbackChannels = canonicalLiveActivityChannelsForMatch(fallbackEntry.match);
-  mergedMatch.tv_channels = channels.length > 0 ? channels : fallbackChannels;
+  mergedMatch.tv_channels = preferredLiveActivityChannels(
+    preferredEntry.match,
+    fallbackEntry.match
+  );
   mergedMatch.match_details_id = String(
     preferredEntry.matchId ||
       preferredEntry.match.match_details_id ||
@@ -3504,6 +3528,9 @@ function enrichLiveActivityOperationalMatch(match, detailsLookup) {
     first_leg_away_score: toNumericScore(detailsPayload.first_leg_away_score),
     score_status: String(detailsPayload.score_status || "").trim() || null,
     penalty_result: String(detailsPayload.penalty_result || "").trim() || null,
+    tv_channels: Array.isArray(detailsPayload.tv_channels)
+      ? detailsPayload.tv_channels
+      : undefined,
     updated_at: String(detailsPayload.updated_at || "").trim() || null,
     home_goal_scorers: Array.isArray(detailsPayload.home_goal_scorers)
       ? detailsPayload.home_goal_scorers
@@ -3535,6 +3562,7 @@ function enrichLiveActivityOperationalMatch(match, detailsLookup) {
   if (detailsId) {
     enriched.match_details_id = detailsId;
   }
+  enriched.tv_channels = preferredLiveActivityChannels(enriched, match);
 
   return enriched;
 }
@@ -3972,6 +4000,30 @@ function canonicalLiveActivityChannelsForMatch(match) {
   return channels;
 }
 
+function liveActivityChannelsHaveLogo(channels) {
+  return canonicalLiveActivityTvLogoKeys(channels).length > 0;
+}
+
+function liveActivityPrimaryChannelHasLogo(channels) {
+  const firstChannel = Array.isArray(channels) && channels.length > 0 ? channels[0] : null;
+  return Boolean(firstChannel && canonicalLiveActivityTvLogoKey(firstChannel));
+}
+
+function preferredLiveActivityChannels(primaryMatch, fallbackMatch) {
+  const primaryChannels = canonicalLiveActivityChannelsForMatch(primaryMatch);
+  const fallbackChannels = canonicalLiveActivityChannelsForMatch(fallbackMatch);
+  if (primaryChannels.length === 0) return fallbackChannels;
+  if (fallbackChannels.length === 0) return primaryChannels;
+  const primaryFirstHasLogo = liveActivityPrimaryChannelHasLogo(primaryChannels);
+  const fallbackFirstHasLogo = liveActivityPrimaryChannelHasLogo(fallbackChannels);
+  if (primaryFirstHasLogo !== fallbackFirstHasLogo) {
+    return fallbackFirstHasLogo ? fallbackChannels : primaryChannels;
+  }
+  const primaryHasLogo = liveActivityChannelsHaveLogo(primaryChannels);
+  const fallbackHasLogo = liveActivityChannelsHaveLogo(fallbackChannels);
+  return !primaryHasLogo && fallbackHasLogo ? fallbackChannels : primaryChannels;
+}
+
 function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.now()) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
   const englishPremierLeagueTeamsOnly = prefs.englishPremierLeagueTeamsOnly === true;
@@ -4123,9 +4175,7 @@ function mergeCanonicalLiveActivityMatch(canonicalMatch, liveStateMatch) {
 
   const merged = mergeSnapshotWithFallback(liveState, canonical);
 
-  const canonicalChannels = canonicalLiveActivityChannelsForMatch(canonical);
-  const liveStateChannels = canonicalLiveActivityChannelsForMatch(liveState);
-  merged.tv_channels = canonicalChannels.length > 0 ? canonicalChannels : liveStateChannels;
+  merged.tv_channels = preferredLiveActivityChannels(canonical, liveState);
   merged.match_details_id =
     String(canonical.match_details_id || liveState.match_details_id || "").trim() || null;
 
@@ -4440,6 +4490,7 @@ function buildActivityMatchSnapshot(match) {
     aggregate_home_score: toNumericScore(match.aggregate_home_score),
     aggregate_away_score: toNumericScore(match.aggregate_away_score),
     score_status: match.score_status || null,
+    penalty_result: match.penalty_result || null,
     home_goal_scorers: Array.isArray(match.home_goal_scorers)
       ? match.home_goal_scorers.map((entry) => ({ ...entry }))
       : [],
@@ -5037,6 +5088,15 @@ function resolveLiveActivityAggregateScores(match) {
 function shouldSuppressPreKickoffScoresForLiveActivity(match, nowMs = Date.now()) {
   if (!match || typeof match !== "object") return false;
 
+  const kickoffMs = parseMatchDateTimeMs(match);
+  if (!Number.isFinite(kickoffMs)) {
+    return false;
+  }
+  const diffMs = kickoffMs - nowMs;
+  if (diffMs > 0 && isLiveMatchStatus(match.score_status)) {
+    return true;
+  }
+
   const status = match.score_status;
   if (
     isLiveMatchStatus(status) ||
@@ -5057,12 +5117,6 @@ function shouldSuppressPreKickoffScoresForLiveActivity(match, nowMs = Date.now()
     return false;
   }
 
-  const kickoffMs = parseMatchDateTimeMs(match);
-  if (!Number.isFinite(kickoffMs)) {
-    return false;
-  }
-
-  const diffMs = kickoffMs - nowMs;
   if (diffMs > 0) {
     return true;
   }
@@ -5124,9 +5178,7 @@ function buildLiveActivityContentState(
   const normalizedMatches = dedupeLiveActivityMatches(matches)
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES)
     .map((rawMatch) => {
-      const match = mode.includes("upcoming")
-        ? sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state")
-        : rawMatch;
+      const match = sanitizePreKickoffScoresForLiveActivity(rawMatch, nowMs, "content_state");
       const aggregate = resolveLiveActivityAggregateScores(match);
       const fullHomeTeam = String(match.home_team || "");
       const fullAwayTeam = String(match.away_team || "");
@@ -5198,12 +5250,27 @@ function buildLiveActivityContentState(
       if (penaltyWinner) {
         normalizedMatch.penaltyWinner = penaltyWinner;
       }
+      const penaltyResult = penaltyShootoutScoreText(match);
+      if (penaltyResult) {
+        normalizedMatch.penaltyResult = penaltyResult;
+      }
       const rawTvChannels = match.tv_channels || match.tvChannels;
-      const tvChannels = canonicalLiveActivityChannels(rawTvChannels).slice(0, 1);
+      const canonicalChannels = canonicalLiveActivityChannels(rawTvChannels);
+      // tv_channels from the data source is an unordered worldwide broadcaster
+      // list (whatever channel happens to be first is arbitrary, e.g. a Czech
+      // or Greek feed) — prefer whichever entry we actually recognize a logo
+      // for instead of blindly taking index 0, so a UK broadcaster further
+      // down the list still wins. Falls back to the raw first entry (name only,
+      // no logo) when nothing in the list is a recognized broadcaster.
+      const preferredChannel =
+        canonicalChannels.find((channel) => canonicalLiveActivityTvLogoKey(channel)) ||
+        canonicalChannels[0] ||
+        null;
+      const tvChannels = preferredChannel ? [preferredChannel] : [];
       if (tvChannels.length > 0) {
         normalizedMatch.tvChannels = tvChannels;
       }
-      const tvLogoKey = canonicalLiveActivityTvLogoKeys(rawTvChannels)[0];
+      const tvLogoKey = canonicalLiveActivityTvLogoKeys(tvChannels)[0];
       if (tvLogoKey) {
         normalizedMatch.tvLogoKey = tvLogoKey;
       }
@@ -5275,6 +5342,7 @@ function logLiveActivityPayloadDiagnostics(
       away_short: match && match.awayShortName ? String(match.awayShortName) : null,
       home_logo: match && match.homeLogoKey ? String(match.homeLogoKey) : null,
       away_logo: match && match.awayLogoKey ? String(match.awayLogoKey) : null,
+      tv_channels: Array.isArray(match && match.tvChannels) ? match.tvChannels : [],
       tv_logo: match && match.tvLogoKey ? String(match.tvLogoKey) : null,
       score:
         Number.isFinite(match && match.homeScore) && Number.isFinite(match && match.awayScore)
@@ -5629,6 +5697,10 @@ function logLiveActivitySkipDiagnostics(user, presentation, contentState, state,
     matches: Array.isArray(contentState && contentState.matches)
       ? contentState.matches.map((match) => ({
         match_id: String(match && match.matchId ? match.matchId : ""),
+        home: String(match && match.homeTeam ? match.homeTeam : ""),
+        away: String(match && match.awayTeam ? match.awayTeam : ""),
+        tv_channels: Array.isArray(match && match.tvChannels) ? match.tvChannels : [],
+        tv_logo: match && match.tvLogoKey ? String(match.tvLogoKey) : null,
         score:
           Number.isFinite(match && match.homeScore) && Number.isFinite(match && match.awayScore)
             ? `${match.homeScore}-${match.awayScore}`
@@ -5681,6 +5753,17 @@ function isWithinLiveActivityActiveWindow(nowMs) {
 function isLiveOrRecentKickoffMode(mode) {
   if (!mode || typeof mode !== "string") return false;
   return mode.includes("live") || mode.includes("recent_kickoff");
+}
+
+function hasImminentUpcomingLiveActivityMatch(matches, nowMs = Date.now()) {
+  return (Array.isArray(matches) ? matches : []).some((match) => {
+    if (!match || typeof match !== "object") return false;
+    if (isLiveMatchStatus(match.score_status)) return false;
+    const kickoffMs = parseMatchDateTimeMs(match);
+    if (!Number.isFinite(kickoffMs)) return false;
+    const untilKickoffMs = kickoffMs - nowMs;
+    return untilKickoffMs >= 0 && untilKickoffMs <= LIVE_ACTIVITY_IMMINENT_UPCOMING_WINDOW_MS;
+  });
 }
 
 function shouldPreserveExistingLiveActivityOnEmpty(activityPushToken, options = {}, state = {}) {
@@ -5927,9 +6010,17 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
 
   // --- Active-window gate ---
   // Outside 08:00–23:00 Europe/London, end any running activity and suppress push-to-start
-  // UNLESS at least one match is currently live or at very recent kickoff.
+  // unless a match is live/recent-kickoff or close enough to kickoff to be useful.
   const withinActiveWindow = isWithinLiveActivityActiveWindow(nowMs);
-  if (!withinActiveWindow && !isLiveOrRecentKickoffMode(presentation.mode)) {
+  const hasImminentUpcomingMatch = hasImminentUpcomingLiveActivityMatch(
+    presentation.matches,
+    nowMs
+  );
+  if (
+    !withinActiveWindow &&
+    !isLiveOrRecentKickoffMode(presentation.mode) &&
+    !hasImminentUpcomingMatch
+  ) {
     if (!activityPushToken) {
       console.log(
         `[MatchMonitor] Live Activity decision ${JSON.stringify({
@@ -7619,6 +7710,7 @@ module.exports = {
     matchIsMajorUefaClubKnockoutFixture,
     isEligibleForLiveActivityByPreferences,
     shouldAllowInactiveLiveActivityEvaluation,
+    hasImminentUpcomingLiveActivityMatch,
     firstFixtureSectionMatches,
     isFantasyDeadlineReminderDue,
     isEnglishPremierLeagueTeam,
