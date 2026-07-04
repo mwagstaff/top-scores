@@ -316,6 +316,20 @@ test("bsdEventToCanonicalMatch: no penalty_shootout → penalty_result is null",
   assert.equal(m.penalty_result, null);
 });
 
+test("bsdEventToCanonicalMatch: extra time goals are added to the regular-time score (no shootout)", () => {
+  // Match 8373: Argentina 1-1 Cabo Verde after 90, then 2-1 in extra time → 3-2 final.
+  const event = {
+    id: 8373, league_id: 27, home_team: "Argentina", away_team: "Cabo Verde",
+    home_score: 1, away_score: 1, status: "finished", period: "extra_time",
+    event_date: "2026-07-03T22:00:00Z",
+    extra_time_score: { home: 2, away: 1 },
+  };
+  const m = bsdEventToCanonicalMatch(event);
+  assert.equal(m.home_score, 3);
+  assert.equal(m.away_score, 2);
+  assert.equal(m.score_status, "AET");
+});
+
 // ---------------------------------------------------------------------------
 // TV broadcasts join
 // ---------------------------------------------------------------------------

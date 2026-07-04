@@ -419,7 +419,8 @@ struct MatchesView: View {
             matchesStore.queueRefresh(
                 preferences: snapshot,
                 mode: mode,
-                reason: "pull_to_refresh"
+                reason: "pull_to_refresh",
+                force: true
             )
             await Task.yield()
             let durationMs = Int(Date().timeIntervalSince(refreshStart) * 1000)

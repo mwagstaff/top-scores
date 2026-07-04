@@ -750,6 +750,40 @@ test("filterCanonicalLiveActivityMatchesForUser canonicalizes selected league na
   );
 });
 
+test("filterCanonicalLiveActivityMatchesForUser keeps a match that kicked off yesterday and is still live", () => {
+  const nowMs = Date.parse("2026-07-04T00:03:00Z");
+
+  const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+    [
+      {
+        date: "2026-07-03",
+        time: "23:00",
+        league: "FIFA World Cup 2026",
+        home_team: "Argentina",
+        away_team: "Cape Verde",
+        score_status: "45",
+        tv_channels: [],
+      },
+      {
+        date: "2026-07-03",
+        time: "20:00",
+        league: "FIFA World Cup 2026",
+        home_team: "Portugal",
+        away_team: "Croatia",
+        score_status: "FT",
+        tv_channels: [],
+      },
+    ],
+    liveActivityUser(0),
+    nowMs
+  );
+
+  assert.deepEqual(
+    filtered.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Argentina|Cape Verde"]
+  );
+});
+
 test("buildLiveActivityPresentationForUser keeps major UEFA knockout fixtures when EPL-only is expanded", () => {
   const nowMs = Date.parse("2026-04-07T18:05:00Z");
 
@@ -1108,6 +1142,47 @@ test("buildLiveActivityEntriesForUser excludes retained previous-day matches aft
   assert.deepEqual(
     entries.map((entry) => entry.match.match_details_id),
     ["newcastle-sunderland", "arsenal-city"]
+  );
+});
+
+test("buildLiveActivityEntriesForUser keeps a still-live previous-day match alongside today's upcoming fixtures", () => {
+  const nowMs = Date.parse("2026-07-04T00:03:00Z");
+
+  const entries = __testHooks.buildLiveActivityEntriesForUser(
+    liveActivityUser(0),
+    [],
+    [
+      {
+        match_details_id: "argentina-capeverde",
+        date: "2026-07-03",
+        time: "23:00",
+        league: "FIFA World Cup 2026",
+        home_team: "Argentina",
+        away_team: "Cape Verde",
+        home_score: 1,
+        away_score: 0,
+        score_status: "45",
+        tv_channels: ["Sky Sport"],
+      },
+      {
+        match_details_id: "colombia-ghana",
+        date: "2026-07-04",
+        time: "02:30",
+        league: "FIFA World Cup 2026",
+        home_team: "Colombia",
+        away_team: "Ghana",
+        home_score: null,
+        away_score: null,
+        score_status: null,
+        tv_channels: ["ITV"],
+      },
+    ],
+    nowMs
+  );
+
+  assert.deepEqual(
+    entries.map((entry) => entry.match.match_details_id),
+    ["argentina-capeverde", "colombia-ghana"]
   );
 });
 
@@ -3866,7 +3941,7 @@ test("buildLiveActivityPresentationForUser uses delayed snapshot goal timeline w
   assert.equal(presentation.matches[0].away_score, 1);
 });
 
-test("buildLiveActivityPresentationForUser preserves delayed scores when current scorer arrays lag behind history", () => {
+test("buildLiveActivityPresentationForUser trusts the latest eligible delayed snapshot's own score as-is", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 95 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -3947,9 +4022,79 @@ test("buildLiveActivityPresentationForUser preserves delayed scores when current
   assert.equal(presentation.mode, "single_live");
   assert.equal(presentation.delayMinutes, 5);
   assert.equal(presentation.matches.length, 1);
+  // The "89" history entry is the latest one at or before the delay target —
+  // BSD is a single authoritative source, so its score (3-1) is used as-is,
+  // even though an earlier entry momentarily had a higher home score (4-0).
   assert.equal(presentation.matches[0].score_status, "89");
-  assert.equal(presentation.matches[0].home_score, 4);
+  assert.equal(presentation.matches[0].home_score, 3);
   assert.equal(presentation.matches[0].away_score, 1);
+});
+
+test("buildLiveActivityPresentationForUser falls back to the computed delayed minute when the snapshot's minute is ahead of the current minute", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 95 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    { preferences: { notificationDelayMinutes: 2 } },
+    [
+      {
+        state: {
+          lastState: {
+            match_details_id: "argentina-capeverde",
+            date: kickoff.date,
+            time: kickoff.time,
+            league: "FIFA World Cup 2026",
+            home_team: "Argentina",
+            away_team: "Cape Verde",
+            home_score: 2,
+            away_score: 1,
+            score_status: "90+3",
+            updated_at: new Date(nowMs).toISOString(),
+          },
+          history: [
+            {
+              // A previously-announced (and later revised down) added-time value
+              // was captured here, leaving this snapshot's own minute (97) ahead
+              // of the current match minute (93) even though it's chronologically
+              // the delayed one — the delayed minute must never outrun "now".
+              timestampMs: nowMs - 2 * 60 * 1000,
+              match: {
+                match_details_id: "argentina-capeverde",
+                date: kickoff.date,
+                time: kickoff.time,
+                league: "FIFA World Cup 2026",
+                home_team: "Argentina",
+                away_team: "Cape Verde",
+                home_score: 2,
+                away_score: 1,
+                score_status: "90+7",
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "argentina-capeverde",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "FIFA World Cup 2026",
+          home_team: "Argentina",
+          away_team: "Cape Verde",
+          home_score: 2,
+          away_score: 1,
+          score_status: "90+3",
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  // Computed fallback: currentMinute (93) - delayMinutes (2) = 91, not the
+  // untrustworthy snapshot minute of 97.
+  assert.equal(presentation.matches[0].score_status, "91");
 });
 
 test("buildLiveActivityPresentationForUser keeps delayed minute and score aligned when timeline is complete", () => {

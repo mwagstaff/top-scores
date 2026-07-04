@@ -471,14 +471,20 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
   const delayedMinute = parseStatusMinute(delayedStatusToken);
   const shouldNormalizeFirstHalfStoppageCarryover =
     delayedStatusToken.startsWith("45+") && currentMinute >= 46;
-  const resolvedDelayedStatus =
-    shouldNormalizeFirstHalfStoppageCarryover || !Number.isFinite(delayedMinute)
-      ? String(computedDelayedMinute)
-      : delayedStatusToken;
+  // A snapshot's added-time announcement can be revised mid-half (e.g. "+2" later
+  // corrected to "+7"), so a stored delayed minute can end up ahead of the current
+  // minute even though it's chronologically earlier. The delay feature only makes
+  // sense showing a minute <= currentMinute, so treat anything past that as stale
+  // and fall back to the computed delayed minute instead of trusting the token.
+  const delayedMinuteIsTrustworthy =
+    Number.isFinite(delayedMinute) &&
+    !shouldNormalizeFirstHalfStoppageCarryover &&
+    delayedMinute <= currentMinute;
+  const resolvedDelayedStatus = delayedMinuteIsTrustworthy
+    ? delayedStatusToken
+    : String(computedDelayedMinute);
 
-  const resolvedDelayedMinute = Number.isFinite(delayedMinute) && !shouldNormalizeFirstHalfStoppageCarryover
-    ? delayedMinute
-    : computedDelayedMinute;
+  const resolvedDelayedMinute = delayedMinuteIsTrustworthy ? delayedMinute : computedDelayedMinute;
   if (resolvedDelayedMinute <= 0) {
     return null;
   }
@@ -4032,7 +4038,15 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
 
   return (Array.isArray(matches) ? matches : [])
     .filter((match) => match && typeof match === "object")
-    .filter((match) => isLiveActivityMatchOnDateKey(match, todayDateKey))
+    // A match that kicked off yesterday and is still in progress (crossing
+    // midnight) must keep showing — the date-key match alone would otherwise
+    // drop it the moment "today" rolls over. isLikelyTerminalStaleLiveMatch
+    // downstream still catches a match that's implausibly stuck live.
+    .filter(
+      (match) =>
+        isLiveActivityMatchOnDateKey(match, todayDateKey) ||
+        isLiveMatchStatus(match && match.score_status)
+    )
     .filter((match) => !isPostponedMatchStatus(match && match.score_status))
     .filter((match) => {
       if (
@@ -4106,11 +4120,20 @@ function compareCanonicalFixtureMatchesByKickoffAsc(lhs, rhs) {
   return lhsAway.localeCompare(rhsAway);
 }
 
-function firstFixtureSectionMatches(matches) {
+// Restricts the widget to "today's fixture day" so it doesn't mix in a future
+// day's schedule — but a match that kicked off yesterday and is still live
+// must stay regardless, so it's kept alongside whatever counts as "today"
+// rather than letting it (being earliest by kickoff) define the section.
+function firstFixtureSectionMatches(matches, todayDateKey) {
   if (!Array.isArray(matches) || matches.length === 0) return [];
-  const firstDate = String(matches[0] && matches[0].date ? matches[0].date : "").trim();
-  if (!firstDate) return [];
-  return matches.filter((match) => String(match && match.date ? match.date : "").trim() === firstDate);
+  const sectionDate =
+    todayDateKey || String(matches[0] && matches[0].date ? matches[0].date : "").trim();
+  if (!sectionDate) return [];
+  return matches.filter(
+    (match) =>
+      String(match && match.date ? match.date : "").trim() === sectionDate ||
+      isLiveMatchStatus(match && match.score_status)
+  );
 }
 
 function liveActivityStatusProgressValue(status) {
@@ -4264,7 +4287,7 @@ function buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatc
   const canonicalMatches = filterCanonicalLiveActivityMatchesForUser(operationalMatches, user, nowMs)
     .slice()
     .sort(compareCanonicalFixtureMatchesByKickoffAsc);
-  const fixtureSectionMatches = firstFixtureSectionMatches(canonicalMatches);
+  const fixtureSectionMatches = firstFixtureSectionMatches(canonicalMatches, currentLondonDateKey(nowMs));
   const entries = [];
   const seenKeys = new Set();
 
@@ -4527,26 +4550,13 @@ function delayedSnapshotForMatch(monitorState, delayMinutes, nowMs = Date.now())
   const history = monitorState.history;
   let latestEligible = null;
   let latestEligibleTimestampMs = null;
-  let maxHomeScore = null;
-  let maxAwayScore = null;
   for (let index = history.length - 1; index >= 0; index -= 1) {
     const entry = history[index];
     if (!entry || !entry.match) continue;
     if (Number(entry.timestampMs) <= targetMs) {
-      if (!latestEligible) {
-        latestEligible = entry.match;
-        latestEligibleTimestampMs = Number(entry.timestampMs);
-      }
-      const candidateHomeScore = toNumericScore(entry.match.home_score);
-      const candidateAwayScore = toNumericScore(entry.match.away_score);
-      if (Number.isFinite(candidateHomeScore)) {
-        maxHomeScore =
-          maxHomeScore === null ? candidateHomeScore : Math.max(maxHomeScore, candidateHomeScore);
-      }
-      if (Number.isFinite(candidateAwayScore)) {
-        maxAwayScore =
-          maxAwayScore === null ? candidateAwayScore : Math.max(maxAwayScore, candidateAwayScore);
-      }
+      latestEligible = entry.match;
+      latestEligibleTimestampMs = Number(entry.timestampMs);
+      break;
     }
   }
   if (latestEligible) {
@@ -4556,11 +4566,11 @@ function delayedSnapshotForMatch(monitorState, delayMinutes, nowMs = Date.now())
     ) {
       return null;
     }
-    return {
-      ...latestEligible,
-      home_score: maxHomeScore === null ? latestEligible.home_score : maxHomeScore,
-      away_score: maxAwayScore === null ? latestEligible.away_score : maxAwayScore,
-    };
+    // BSD is a single authoritative source, so this snapshot's own score is
+    // trusted as-is — no need to guard against inconsistent scorelines across
+    // backend servers, which was only ever a concern under the old
+    // multi-source BBC scraping setup.
+    return latestEligible;
   }
   const first = history[0];
   return first && first.match ? first.match : monitorState.lastState || null;
@@ -6413,8 +6423,11 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   // Guard: stop hammering push-to-start if previous attempts have repeatedly gone
   // unanswered. iOS silently drops these when Live Activities are disabled or the
   // app has been rate-limited after rapid activity churn.
+  // Uses console.log (not monitorVerboseLog) deliberately: this suppression is a
+  // silent dead-end for the rest of the UTC day otherwise, with no other signal
+  // that push-to-start has stopped — it must always be visible.
   if (pushToStartAttempts >= LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS) {
-    monitorVerboseLog(
+    console.log(
       `[MatchMonitor] Push-to-start suppressed: ${pushToStartAttempts} unanswered attempts, device=${shortDeviceToken(user && user.deviceToken)}`
     );
     return;

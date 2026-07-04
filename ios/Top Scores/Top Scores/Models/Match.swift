@@ -1067,6 +1067,12 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             current: scoreStatus,
             incoming: details.scoreStatus
         )
+        // A details payload can lag the list (e.g. a monitor snapshot frozen
+        // mid-match): if the list already knows the match finished but details
+        // doesn't, details' score is stale too — keep the list's own score
+        // rather than pairing a fresh status with a stale scoreline.
+        let detailsScoreIsStale = MatchStatusFormatter.isFinished(scoreStatus ?? "") &&
+            !MatchStatusFormatter.isFinished(details.scoreStatus ?? "")
 
         return Match(
             date: details.date ?? date,
@@ -1084,8 +1090,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             matchDetailsID: details.id,
             hasBbcSource: hasBbcSourceValue,
             tvChannels: tvChannels,
-            homeScore: shouldClearScores ? nil : (details.homeScore ?? homeScore),
-            awayScore: shouldClearScores ? nil : (details.awayScore ?? awayScore),
+            homeScore: shouldClearScores ? nil : (detailsScoreIsStale ? homeScore : (details.homeScore ?? homeScore)),
+            awayScore: shouldClearScores ? nil : (detailsScoreIsStale ? awayScore : (details.awayScore ?? awayScore)),
             aggregateHomeScore: details.aggregateHomeScore ?? aggregateHomeScore,
             aggregateAwayScore: details.aggregateAwayScore ?? aggregateAwayScore,
             firstLegHomeScore: details.firstLegHomeScore ?? firstLegHomeScore,

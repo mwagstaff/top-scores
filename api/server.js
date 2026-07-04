@@ -18569,49 +18569,6 @@ function mergedMatchesForResponse() {
   return Array.isArray(cachedMergedMatches) ? cachedMergedMatches : [];
 }
 
-function liveActivityOperationalMatchesForResponse() {
-  return [
-    ...mergedMatchesForResponse(),
-    ...(Array.isArray(cachedTsdbScheduleMatches)
-      ? cachedTsdbScheduleMatches.map((match) => ({ ...match, has_tsdb_source: true }))
-      : []),
-  ];
-}
-
-async function resolveLiveActivityOperationalFallbackMatches() {
-  const memoryMatches = liveActivityOperationalMatchesForResponse();
-  if (memoryMatches.length > 0) {
-    return memoryMatches;
-  }
-
-  try {
-    const datasetRecords = await getOperationalDatasets([
-      "merged_matches",
-      OP_DATASET_TSDB_SCHEDULE_MATCHES,
-      "recent_matches",
-    ]);
-
-    return [
-      ...memoryMatches,
-      ...(Array.isArray(datasetRecords.merged_matches && datasetRecords.merged_matches.payload)
-        ? datasetRecords.merged_matches.payload
-        : []),
-      ...(Array.isArray(datasetRecords[OP_DATASET_TSDB_SCHEDULE_MATCHES] && datasetRecords[OP_DATASET_TSDB_SCHEDULE_MATCHES].payload)
-        ? datasetRecords[OP_DATASET_TSDB_SCHEDULE_MATCHES].payload.map((match) => ({ ...match, has_tsdb_source: true }))
-        : []),
-      ...(Array.isArray(datasetRecords.recent_matches && datasetRecords.recent_matches.payload)
-        ? datasetRecords.recent_matches.payload
-        : []),
-    ];
-  } catch (error) {
-    console.warn(
-      "[API] Failed resolving live activity operational fallback matches from Redis:",
-      error.message || error
-    );
-    return memoryMatches;
-  }
-}
-
 function currentMergedMatchesDatasetSnapshot() {
   return {
     items: mergedMatchesForResponse(),
@@ -27600,17 +27557,22 @@ function liveActivityPendingStartIsBlocking(liveActivityState, nowMs = Date.now(
   return Number.isFinite(ageMs) && ageMs < LIVE_ACTIVITY_PENDING_START_GRACE_MS;
 }
 
+// BSD is the sole source of truth for match data — same rationale as the
+// setLiveActivityMatchDetailsProvider/setLiveActivityOperationalMatchesProvider
+// wiring below: this function feeds the /live-activity/reconcile foregroundStart
+// path, a second content-state pipeline parallel to the monitor's push dispatch,
+// so it needs the identical BSD source to avoid the same duplicate-ID freshness
+// race (TSDB copy briefly winning over the BSD copy with the live score).
 async function resolveCanonicalLiveActivityOperationalMatches() {
-  const snapshot = await getOperationalMatchDetailsSnapshotSafe();
-  const detailsRecords = snapshot && snapshot.records && typeof snapshot.records === "object"
-    ? snapshot.records
-    : {};
+  const bsdMatches = await getBsdMatchesForServing();
+  const detailsRecords = {};
+  bsdMatches.forEach((match) => {
+    const id = match && match.id != null ? String(match.id) : null;
+    if (id) detailsRecords[id] = match;
+  });
   const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
   if (hooks && typeof hooks.buildLiveActivityOperationalMatches === "function") {
-    return hooks.buildLiveActivityOperationalMatches(
-      detailsRecords,
-      await resolveLiveActivityOperationalFallbackMatches()
-    );
+    return hooks.buildLiveActivityOperationalMatches(detailsRecords, bsdMatches);
   }
   return canonicalLiveActivityMatchesFromDetailsRecords(detailsRecords);
 }
@@ -31946,23 +31908,22 @@ app.post(`${API_PREFIX}/test-harness/match/delete`, (req, res) => {
 const matchMonitor = require("./match_monitor");
 
 const SERVER_BASE_URL = `http://localhost:${PORT}${API_PREFIX}`;
-matchMonitor.setLiveActivityMatchDetailsProvider(() => {
-  const memorySnapshot = currentMatchDetailsLookupSnapshot();
-  if (memorySnapshot && memorySnapshot.lookup instanceof Map && memorySnapshot.lookup.size > 0) {
-    return memorySnapshot.lookup;
-  }
-  if (isMonitorRuntime()) {
-    return {};
-  }
-
-  return getPreferredOperationalMatchDetailsSnapshotSafe().then((snapshot) =>
-    snapshot && snapshot.records ? snapshot.records : {}
-  );
+// BSD is the sole source of truth for match data (scores, status, TV channels).
+// Both providers read the same getBsdMatchesForServing() cache so the details
+// lookup and the operational match list are always the same record under the
+// same BSD event id — no more TSDB/BSD duplicate-ID freshness race where one
+// side had a live score and the other didn't.
+matchMonitor.setLiveActivityMatchDetailsProvider(async () => {
+  const bsdMatches = await getBsdMatchesForServing();
+  const detailsById = new Map();
+  bsdMatches.forEach((match) => {
+    const id = match && match.id != null ? String(match.id) : null;
+    if (id) detailsById.set(id, match);
+  });
+  return detailsById;
 });
 if (typeof matchMonitor.setLiveActivityOperationalMatchesProvider === "function") {
-  matchMonitor.setLiveActivityOperationalMatchesProvider(() =>
-    resolveLiveActivityOperationalFallbackMatches()
-  );
+  matchMonitor.setLiveActivityOperationalMatchesProvider(() => getBsdMatchesForServing());
 }
 if (typeof matchMonitor.setCanonicalMatchStateWriter === "function") {
   matchMonitor.setCanonicalMatchStateWriter((match, metadata = {}) =>

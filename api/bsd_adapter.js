@@ -196,6 +196,22 @@ function resolveBsdPenaltyShootout(event, periodSummary) {
   return { home, away };
 }
 
+// BSD's top-level home_score/away_score is the regular-time score; goals
+// scored in extra time are reported separately in extra_time_score and must
+// be added on to get the true final score (e.g. 1-1 after 90 + 2-1 in ET = 3-2).
+function resolveBsdExtraTimeScore(event) {
+  const extraTime = event && event.extra_time_score;
+  if (extraTime == null) return null;
+  if (typeof extraTime === "string") return parseScorePair(extraTime);
+  if (typeof extraTime === "object") {
+    const home = toNumber(extraTime.home);
+    const away = toNumber(extraTime.away);
+    if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
+    return { home, away };
+  }
+  return null;
+}
+
 function buildPenaltyResultText(homeTeam, awayTeam, shootout) {
   if (!shootout || !Number.isFinite(shootout.home) || !Number.isFinite(shootout.away)) {
     return null;
@@ -591,6 +607,17 @@ function bsdEventToCanonicalMatch(event, options = {}) {
     shootout && (periodSummary.extraTimeScore || periodSummary.fullTimeScore)
       ? periodSummary.extraTimeScore || periodSummary.fullTimeScore
       : null;
+  const extraTimeScore = resolveBsdExtraTimeScore(event);
+  const regularHomeScore = toNumber(event.home_score);
+  const regularAwayScore = toNumber(event.away_score);
+  const finalHomeScore =
+    extraTimeScore && Number.isFinite(regularHomeScore)
+      ? regularHomeScore + extraTimeScore.home
+      : regularHomeScore;
+  const finalAwayScore =
+    extraTimeScore && Number.isFinite(regularAwayScore)
+      ? regularAwayScore + extraTimeScore.away
+      : regularAwayScore;
 
   // TV channels join: list projection passes a pre-loaded channelsByEventId
   // Map; detail projection passes the single event's broadcastsPayload.
@@ -608,8 +635,8 @@ function bsdEventToCanonicalMatch(event, options = {}) {
     away_team,
     home_team_id: event.home_team_id != null ? String(event.home_team_id) : null,
     away_team_id: event.away_team_id != null ? String(event.away_team_id) : null,
-    home_score: normalTimeScore ? normalTimeScore.home : toNumber(event.home_score),
-    away_score: normalTimeScore ? normalTimeScore.away : toNumber(event.away_score),
+    home_score: normalTimeScore ? normalTimeScore.home : finalHomeScore,
+    away_score: normalTimeScore ? normalTimeScore.away : finalAwayScore,
     aggregate_home_score: null,
     aggregate_away_score: null,
     score_status: scoreStatus,

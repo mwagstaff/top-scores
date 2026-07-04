@@ -1,273 +1,118 @@
-=====================================
-Top Scores App Init - BUILD TIMESTAMP: 2026-02-15 16:45:00
-=====================================
-Application context data is nil
-Application context data is nil
-[TeamBadgeCache] init: loaded 1564/1564 from manifest
-[TeamBadgeCache] init: loaded 259 team colours
-[LiveActivitySync] Monitoring push-to-start token updates
-[LiveActivitySync] Existing ActivityKit activities on start: 0
-[LiveActivitySync] Monitoring activity push token updates
-[MatchesStore] mode_visibility mode=fixtures visible=true
-[MatchesView] onAppear mode=fixtures selected=1 snapshot=competition=false epl=false major_uefa=true home_nations=true major=true channels=false show_all=false
-[MatchesStore] configure mode=fixtures selected_snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false previous_snapshot=nil snapshot_changed=true data_source_changed=true server_filters_changed=false mode_changed=false
-[MatchesStore] refresh_task_start mode=fixtures reason=configure snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false
-[MatchesStore] refresh_task_start mode=results reason=startup_results_prefetch snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false
-[MatchesStore] fixtures_refresh_begin snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false visible=1227 stored=1227 coverage_end=9999-12-31
-[APIClient][INFO] start id=946ADEA2 op=cache_state attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/cache-state
-[TopScoresApp] scenePhase changed to active
-[TopScoresApp] scenePhase active -> reconcileOnForeground
-[LiveActivitySync] reconcileOnForeground scheduling activeCount=0
-[MatchesStore] refresh_task_skip mode=fixtures reason=foreground existing_in_flight=true snapshot_unchanged=true
-[MatchesStore] refresh_task_skip mode=results reason=foreground_results_prefetch existing_in_flight=true snapshot_unchanged=true
-quic_crypto_queue_append not enqueing more packets (max 5 reached)
-quic_crypto_queue_append not enqueing more packets (max 5 reached)
-quic_crypto_queue_append not enqueing more packets (max 5 reached)
-quic_crypto_queue_append not enqueing more packets (max 5 reached)
-quic_crypto_queue_append not enqueing more packets (max 5 reached)
-quic_crypto_queue_append not enqueing more packets (max 5 reached)
-[LiveActivitySync] reconcileLiveActivityStateOnForeground begin activeCount=0
-[LiveActivitySync] Foreground reconcile found no active local activities
-nw_protocol_instance_set_output_handler Not calling remove_input_handler on 0x121b821c0:udp
-nw_protocol_instance_set_output_handler Not calling remove_input_handler on 0x121b821c0:udp
-nw_protocol_instance_set_output_handler Not calling remove_input_handler on 0x1229d0280:udp
-nw_protocol_instance_set_output_handler Not calling remove_input_handler on 0x1229d0280:udp
-nw_connection_copy_protocol_metadata_internal_block_invoke [C5] Client called nw_connection_copy_protocol_metadata_internal on unconnected nw_connection
-nw_connection_copy_protocol_metadata_internal_block_invoke [C5] Client called nw_connection_copy_protocol_metadata_internal on unconnected nw_connection
-nw_connection_copy_protocol_metadata_internal_block_invoke [C5] Client called nw_connection_copy_protocol_metadata_internal on unconnected nw_connection
-nw_connection_copy_connected_local_endpoint_block_invoke [C5] Client called nw_connection_copy_connected_local_endpoint on unconnected nw_connection
-nw_connection_copy_connected_remote_endpoint_block_invoke [C5] Client called nw_connection_copy_connected_remote_endpoint on unconnected nw_connection
-nw_protocol_instance_set_output_handler Not calling remove_input_handler on 0x121b821c0:udp
-nw_connection_copy_protocol_metadata_internal_block_invoke [C6] Client called nw_connection_copy_protocol_metadata_internal on unconnected nw_connection
-nw_connection_copy_protocol_metadata_internal_block_invoke [C6] Client called nw_connection_copy_protocol_metadata_internal on unconnected nw_connection
-nw_connection_copy_protocol_metadata_internal_block_invoke [C6] Client called nw_connection_copy_protocol_metadata_internal on unconnected nw_connection
-nw_connection_copy_connected_local_endpoint_block_invoke [C6] Client called nw_connection_copy_connected_local_endpoint on unconnected nw_connection
-nw_connection_copy_connected_remote_endpoint_block_invoke [C6] Client called nw_connection_copy_connected_remote_endpoint on unconnected nw_connection
-nw_protocol_instance_set_output_handler Not calling remove_input_handler on 0x1229d0280:udp
-quic_conn_process_inbound [C3.1.1.1:2] [-01ebdcb8fe7136d4c8e8c5b8aa71fdd4c88ba662] unable to parse packet
-Couldn't read values in CFPrefsPlistSource<0x115753500> (Domain: group.dev.skynolimit.topscores, User: kCFPreferencesAnyUser, ByHost: Yes, Container: (null), Contents Need Refresh: Yes): Using kCFPreferencesAnyUser with a container is only allowed for System Containers, detaching from cfprefsd
-[TeamBadgeCache] image: no URL for teamId=457
-[LogoResolver] badge miss teamId=457 team='USA'
-[TeamBadgeCache] image: no URL for teamId=931
-[LogoResolver] badge miss teamId=931 team='Bosnia-Herzegovina'
-[TeamBadgeCache] image: no URL for teamId=475
-[LogoResolver] badge miss teamId=475 team='Spain'
-[TeamBadgeCache] image: no URL for teamId=483
-[LogoResolver] badge miss teamId=483 team='Austria'
-[TeamBadgeCache] image: no URL for teamId=491
-[LogoResolver] badge miss teamId=491 team='Portugal'
-[TeamBadgeCache] image: no URL for teamId=494
-[LogoResolver] badge miss teamId=494 team='Croatia'
-[TeamBadgeCache] image: no URL for teamId=462
-[LogoResolver] badge miss teamId=462 team='Switzerland'
-[TeamBadgeCache] image: no URL for teamId=490
-[LogoResolver] badge miss teamId=490 team='Algeria'
-[TeamBadgeCache] image: no URL for teamId=459
-[LogoResolver] badge miss teamId=459 team='Australia'
-[TeamBadgeCache] image: no URL for teamId=478
-[LogoResolver] badge miss teamId=478 team='Egypt'
-[TeamBadgeCache] image: no URL for teamId=489
-[LogoResolver] badge miss teamId=489 team='Argentina'
-[TeamBadgeCache] image: no URL for teamId=476
-[LogoResolver] badge miss teamId=476 team='Cape Verde'
-[TeamBadgeCache] image: no URL for teamId=498
-[LogoResolver] badge miss teamId=498 team='Colombia'
-[TeamBadgeCache] image: no URL for teamId=495
-[LogoResolver] badge miss teamId=495 team='Ghana'
-[TeamBadgeCache] image: no URL for teamId=455
-[LogoResolver] badge miss teamId=455 team='Canada'
-[TeamBadgeCache] image: no URL for teamId=464
-[LogoResolver] badge miss teamId=464 team='Morocco'
-[TeamBadgeCache] image: no URL for teamId=458
-[LogoResolver] badge miss teamId=458 team='Paraguay'
-[TeamBadgeCache] image: no URL for teamId=485
-[LogoResolver] badge miss teamId=485 team='France'
-[TeamBadgeCache] image: no URL for teamId=463
-[LogoResolver] badge miss teamId=463 team='Brazil'
-[TeamBadgeCache] image: no URL for teamId=488
-[LogoResolver] badge miss teamId=488 team='Norway'
-[FantasyPerf] refresh_start entry_id=6653695 rivals=0 leagues=0
-[APIClient][INFO] start id=CE538369 op=fantasy_gameweek_current attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/fantasy/gameweek/current
-[LiveActivitySync] Deferring push-to-start token upload while app is active
-[LiveActivitySync] Reconcile request activeCount=0 force=1 ids=
-[LiveActivitySync] live-activity-reconcile request url=https://api.skynolimit.dev/top-scores/api/v1/live-activity/reconcile payload={"activeActivityCount":0,"activeActivityIds":[],"deviceToken":"BF4D495F-E69A-4E...","force":true,"isDevelopmentBuild":true,"trigger":"app_foreground"} bytes=167
-[APIClient][INFO] done id=946ADEA2 op=cache_state attempt=1 status=200 bytes=1044 duration_ms=2935 source=redis-operational external=none
-[MatchesStore] results_refresh_begin snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false visible=3583 stored=3583 range=2025-07-02...2026-07-02 page=1
-[MatchesStore] results_refresh_force_revalidate reason=stale_cached_results sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Belgium v Senegal [FIFA World Cup 2026] | England v DR Congo [FIFA World Cup 2026] | Mexico v Ecuador [FIFA World Cup 2026]]
-[APIClient][INFO] start id=1B4AC7D8 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=1&page_size=500
-[APIClient][INFO] done id=CE538369 op=fantasy_gameweek_current attempt=1 status=200 bytes=898 duration_ms=121 source=redis-operational external=none
-[FantasyPerf] current_gameweek ok duration_ms=121
-[FixtureLoadDebug] Initial fixtures start window=2026-07-01...9999-12-31 page_size=2000 hydrate_states=false stored_before=1227
-[APIClient][INFO] start id=C1C84F49 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2026-07-01&end=9999-12-31&mode=fixtures&sort=asc&filter_mode=intersection&page=1&page_size=2000
-[APIClient][INFO] start id=46B3E844 op=fantasy_bootstrap_lookup attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/fantasy/bootstrap/lookup
-[APIClient][INFO] start id=8538A7F4 op=fantasy_gameweek_next attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/fantasy/gameweek/next
-[FantasyPerf] my_profile ok duration_ms=140
-[FantasyPerf] season_fixtures ok duration_ms=170
-[APIClient][INFO] done id=1B4AC7D8 op=matches_page attempt=1 status=200 bytes=208173 duration_ms=373 source=redis-operational external=none
-[APIClient][INFO] start id=99E701B6 op=match_states attempt=1 method=POST url=https://api.skynolimit.dev/top-scores/api/v1/matches/states
-[APIClient][INFO] done id=C1C84F49 op=matches_page attempt=1 status=200 bytes=298360 duration_ms=390 source=redis-operational external=none
-[MatchesStore] fixtures_refresh_complete visible=1227 stored=1227 last_updated=2026-07-02 coverage_end=9999-12-31 sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Spain v Austria [FIFA World Cup 2026] | Portugal v Croatia [FIFA World Cup 2026] | Switzerland v Algeria [FIFA World Cup 2026]]
-[FixtureLoadDebug] Initial fixtures complete window=2026-07-02...9999-12-31 duration_ms=3634 returned=1227 visible=1227 stored=1227 page_size=2000 hydrate_states=false
-[APIClient][INFO] done id=8538A7F4 op=fantasy_gameweek_next attempt=1 status=404 bytes=71 duration_ms=816 source=redis-operational external=none
-[APIClient][ERROR] bad_status op=fantasy_gameweek_next status=404 url=https://api.skynolimit.dev/top-scores/api/v1/fantasy/gameweek/next body={"error":"No next gameweek found in fantasy bootstrap-static dataset."}
-[FantasyPerf] next_gameweek failed duration_ms=816 error="Request failed with status 404: https://api.skynolimit.dev/top-scores/api/v1/fantasy/gameweek/next body={"error":"No next gameweek found in fantasy bootstrap-static dataset."}"
-[APIClient][INFO] done id=46B3E844 op=fantasy_bootstrap_lookup attempt=1 status=200 bytes=156228 duration_ms=818 source=redis-operational external=none
-[FantasyPerf] bootstrap_lookup_fetch ok duration_ms=822
-[FantasyPerf] my_live event_id=38 ok duration_ms=118
-[FantasyPerf] my_picks entry_id=6653695 event_id=38 ok duration_ms=120
-[FantasyPerf] my_fixtures event_id=38 ok duration_ms=121
-[FantasyPerf] refresh_complete entry_id=6653695 rivals_loaded=0 duration_ms=1276
+[MatchesStore] grouping_complete mode=fixtures matches=1227 days=105 duration_ms=1138
+[TeamBadgeCache] restoreFromDisk: triggering network refresh cachedURLs=1564
+[TeamBadgeCache] warmIfNeeded: starting refresh apiBaseURL=https://api.skynolimit.dev/top-scores/api/v1
 [PreferencesSync] Sending sync device=BF4D495F-E69 fantasy=manager=6653695 squadManager=6653695
-[APIClient][INFO] done id=99E701B6 op=match_states attempt=1 status=200 bytes=429854 duration_ms=1205 source=redis-operational external=none
-[MatchesStore] results_refresh_complete visible=500 stored=500 range=2025-07-02...2026-07-02 duration_ms=1629 sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Belgium v Senegal [FIFA World Cup 2026] | England v DR Congo [FIFA World Cup 2026] | Mexico v Ecuador [FIFA World Cup 2026]]
-[APIClient][INFO] start id=61E97F89 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=2&page_size=500
-[APIClient][INFO] done id=61E97F89 op=matches_page attempt=1 status=200 bytes=149208 duration_ms=137 source=redis-operational external=none
-[APIClient][INFO] start id=6F6A0C7F op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=3&page_size=500
-[APIClient][INFO] done id=6F6A0C7F op=matches_page attempt=1 status=200 bytes=145661 duration_ms=250 source=redis-operational external=none
-[APIClient][INFO] start id=BBDCA7A4 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=4&page_size=500
+[LiveActivitySync] Server debug state activityId=927FD96E-DDA4-4A2E-9E27-82A10E76AF93 tokenUpdatedAt=<null> lastDispatchAt=2026-07-03T19:24:53.909Z serverMode=multi_live delay=2 ff=0 contentStateBytes=1235 archiveEstimateBytes=1291 matches=[Portugal v Croatia 2-1 FT ch=[noCh] | Switzerland v Algeria 2-0 FT ch=[noCh] | Australia v Egypt 1-2 60 ch=[noCh] | Argentina v Cape Verde <null>-<null> <null> ch=[noCh]]
 [PreferencesSync] Successfully synced preferences to Redis device=BF4D495F-E69 fantasy=manager=6653695 squadManager=6653695
-[APIClient][INFO] done id=BBDCA7A4 op=matches_page attempt=1 status=200 bytes=145702 duration_ms=263 source=redis-operational external=none
-[APIClient][INFO] start id=4D5A6D76 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=5&page_size=500
-[APIClient][INFO] done id=4D5A6D76 op=matches_page attempt=1 status=200 bytes=145160 duration_ms=161 source=redis-operational external=none
-[APIClient][INFO] start id=30A52957 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=6&page_size=500
-[APIClient][INFO] done id=30A52957 op=matches_page attempt=1 status=200 bytes=147151 duration_ms=775 source=redis-operational external=none
-[APIClient][INFO] start id=CE10F9F4 op=audit_missing_team_logos_post attempt=1 method=POST url=https://api.skynolimit.dev/top-scores/api/v1/audit/missing-team-logos
-[APIClient][INFO] start id=61D381A3 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=7&page_size=500
+[TeamBadgeCache] refresh: fetched manifest teams=1564
 [TopScoresApp] scenePhase changed to inactive
-[APIClient][INFO] done id=CE10F9F4 op=audit_missing_team_logos_post attempt=1 status=200 bytes=108 duration_ms=719 source=redis-operational external=none
-[APIClient][INFO] done id=61D381A3 op=matches_page attempt=1 status=200 bytes=149932 duration_ms=797 source=redis-operational external=none
-[APIClient][INFO] start id=C6D20339 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=8&page_size=500
-[APIClient][INFO] done id=C6D20339 op=matches_page attempt=1 status=200 bytes=27503 duration_ms=98 source=redis-operational external=none
+[TeamBadgeCache] refresh: complete cachedURLs=1564
 [LiveActivitySync] Upload push-to-start token token=803d1a29f614b2d9 appState=UIApplicationState(rawValue: 1)
 [LiveActivitySync] push-to-start request url=https://api.skynolimit.dev/top-scores/api/v1/live-activity/push-to-start-token payload={"deviceToken":"BF4D495F-E69A-4E...","isDevelopmentBuild":true,"pushToStartToken":"803d1a29f614b2d9..."} bytes=262
-[LiveActivitySync] push-to-start succeeded: HTTP 200 bytes=9625
+[LiveActivitySync] push-to-start succeeded: HTTP 200 bytes=9759
 [TopScoresApp] scenePhase changed to active
 [TopScoresApp] scenePhase active -> reconcileOnForeground
-[LiveActivitySync] reconcileOnForeground scheduling activeCount=0
-[LiveActivitySync] reconcileOnForeground skipped: reconcile already in flight
+[LiveActivitySync] reconcileOnForeground scheduling activeCount=1
 [MatchesStore] refresh_task_start mode=fixtures reason=foreground snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false
 [MatchesStore] refresh_task_start mode=results reason=foreground_results_prefetch snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false
+[LiveActivitySync] reconcileLiveActivityStateOnForeground begin activeCount=1
+[LiveActivitySync] Foreground reconcile active activity 927FD96E-DDA4-4A2E-9E27-82A10E76AF93 state=active tokenPresent=1 mode=multi_live generatedAt=1783106691 delay=2 matches=4 [Portugal v Croatia 2-1 FT ch=[BBC] tvLogo=bbc | Switzerland v Algeria 2-0 FT ch=[BBC] tvLogo=bbc | Australia v Egypt 1-2 60' ch=[BBC] tvLogo=bbc | Argentina v Cape Verde nil nil ch=[BBC] tvLogo=bbc]
 [MatchesStore] fixtures_refresh_begin snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false visible=1227 stored=1227 coverage_end=9999-12-31
-[MatchesStore] results_refresh_begin snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false visible=3583 stored=3583 range=2025-07-02...2026-07-02 page=1
-[MatchesStore] results_refresh_force_revalidate reason=stale_cached_results sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Belgium v Senegal [FIFA World Cup 2026] | England v DR Congo [FIFA World Cup 2026] | Mexico v Ecuador [FIFA World Cup 2026]]
-[APIClient][INFO] start id=29421A51 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=1&page_size=500
+[MatchesStore] results_refresh_begin snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false visible=3587 stored=3587 range=2025-07-03...2026-07-03 page=1
+[MatchesStore] results_refresh_force_revalidate reason=stale_cached_results sample=[Australia v Egypt [FIFA World Cup 2026] | Switzerland v Algeria [FIFA World Cup 2026] | Portugal v Croatia [FIFA World Cup 2026] | Spain v Austria [FIFA World Cup 2026]]
+[APIClient][INFO] start id=56A668A9 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=1&page_size=500
 [TopScoresApp] scenePhase changed to inactive
 [TopScoresApp] scenePhase changed to background
-[APIClient][INFO] done id=29421A51 op=matches_page attempt=1 status=200 bytes=208173 duration_ms=632 source=redis-operational external=none
-[APIClient][INFO] start id=D62117B1 op=match_states attempt=1 method=POST url=https://api.skynolimit.dev/top-scores/api/v1/matches/states
+[APIClient][INFO] done id=56A668A9 op=matches_page attempt=1 status=200 bytes=209808 duration_ms=427 source=redis-operational external=none
+[APIClient][INFO] start id=4810D558 op=match_states attempt=1 method=POST url=https://api.skynolimit.dev/top-scores/api/v1/matches/states
 ...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
 ...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
-[LiveActivitySync] Begin observing activity 00DF724A-F2DB-4902-93CD-FE1574CA46A9 state=active mode=single_finished generatedAt=1783017005 delay=2 matches=2 [USA v Bosnia-Herzegovina 2-0 FT ch=[ITV] tvLogo=itv | Spain v Austria nil nil ch=[BBC] tvLogo=bbc]
-[APIClient][INFO] done id=D62117B1 op=match_states attempt=1 status=200 bytes=429854 duration_ms=731 source=redis-operational external=none
-[MatchesStore] results_refresh_complete visible=500 stored=500 range=2025-07-02...2026-07-02 duration_ms=1465 sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Belgium v Senegal [FIFA World Cup 2026] | England v DR Congo [FIFA World Cup 2026] | Mexico v Ecuador [FIFA World Cup 2026]]
-[APIClient][INFO] start id=CA2BF5CE op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=2&page_size=500
-...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
-...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
-[LiveActivitySync] Activity content update 00DF724A-F2DB-4902-93CD-FE1574CA46A9 staleDate=2026-07-02 22:30:05 +0000 mode=single_finished generatedAt=1783017005 delay=2 matches=2 [USA v Bosnia-Herzegovina 2-0 FT ch=[ITV] tvLogo=itv | Spain v Austria nil nil ch=[BBC] tvLogo=bbc]
-[LiveActivitySync] Activity state update 00DF724A-F2DB-4902-93CD-FE1574CA46A9 state=active
-[APIClient][INFO] done id=CA2BF5CE op=matches_page attempt=1 status=200 bytes=149208 duration_ms=170 source=redis-operational external=none
-[APIClient][INFO] start id=B8177011 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=3&page_size=500
-[LiveActivitySync] Activity push token update 00DF724A-F2DB-4902-93CD-FE1574CA46A9 token=807b1c4fbaf6ca95
-[LiveActivitySync] Upload activity token activityId=00DF724A-F2DB-4902-93CD-FE1574CA46A9 token=807b1c4fbaf6ca95 generatedAt=Optional(1783017005)
-[LiveActivitySync] activity-token request url=https://api.skynolimit.dev/top-scores/api/v1/live-activity/activity-token payload={"activityGeneratedAtEpochSeconds":1783017005,"activityId":"00DF724A-F2DB-4902-93CD-FE1574CA46A9","activityPushToken":"807b1c4fbaf6ca95...","deviceToken":"BF4D495F-E69A-4E...","isDevelopmentBuild":true} bytes=360
-[APIClient][INFO] done id=B8177011 op=matches_page attempt=1 status=200 bytes=145661 duration_ms=118 source=redis-operational external=none
-[APIClient][INFO] start id=F4080CA2 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=4&page_size=500
-[LiveActivitySync] activity-token succeeded: HTTP 200 bytes=9926
-[APIClient][INFO] done id=F4080CA2 op=matches_page attempt=1 status=200 bytes=145702 duration_ms=111 source=redis-operational external=none
-[APIClient][INFO] start id=460BAB91 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=5&page_size=500
-[APIClient][INFO] done id=460BAB91 op=matches_page attempt=1 status=200 bytes=145160 duration_ms=113 source=redis-operational external=none
-[APIClient][INFO] start id=0BFAE07B op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=6&page_size=500
-[APIClient][INFO] done id=0BFAE07B op=matches_page attempt=1 status=200 bytes=147151 duration_ms=95 source=redis-operational external=none
-[APIClient][INFO] start id=60F54012 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=7&page_size=500
-[APIClient][INFO] done id=60F54012 op=matches_page attempt=1 status=200 bytes=149932 duration_ms=106 source=redis-operational external=none
-[APIClient][INFO] start id=0B586FB1 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=8&page_size=500
-[APIClient][INFO] done id=0B586FB1 op=matches_page attempt=1 status=200 bytes=27503 duration_ms=101 source=redis-operational external=none
-[MatchesStore] grouping_complete mode=fixtures matches=1227 days=105 duration_ms=1944
-...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
-...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
-[FixtureLoadDebug] Initial fixtures start window=2026-07-01...9999-12-31 page_size=2000 hydrate_states=false stored_before=1227
-[APIClient][INFO] start id=0A82E1E1 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2026-07-01&end=9999-12-31&mode=fixtures&sort=asc&filter_mode=intersection&page=1&page_size=2000
-[APIClient][INFO] done id=0A82E1E1 op=matches_page attempt=1 status=200 bytes=298360 duration_ms=136 source=redis-operational external=none
-[MatchesStore] fixtures_refresh_complete visible=1227 stored=1227 last_updated=2026-07-02 coverage_end=9999-12-31 sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Spain v Austria [FIFA World Cup 2026] | Portugal v Croatia [FIFA World Cup 2026] | Switzerland v Algeria [FIFA World Cup 2026]]
-[FixtureLoadDebug] Initial fixtures complete window=2026-07-02...9999-12-31 duration_ms=3307 returned=1227 visible=1227 stored=1227 page_size=2000 hydrate_states=false
-[TopScoresApp] scenePhase changed to inactive
-[LiveActivitySync] live-activity-reconcile succeeded: HTTP 200 bytes=855
-[LiveActivitySync] Reconcile response bytes=855
-[LiveActivitySync] Reconcile foregroundStart contentBytes=585 mode=single_finished generatedAt=1783017005 delay=2 matches=2 [USA v Bosnia-Herzegovina 2-0 FT ch=[ITV] tvLogo=itv | Spain v Austria nil nil ch=[BBC] tvLogo=bbc]
-[LiveActivitySync] reconcile response currentActiveCount=1 hasForegroundStart=1
 [NotificationManager] Notification permission granted
 [APNS] Successfully registered for remote notifications
 [APNS] Device token: f5f883b0bc5b...
 [NotificationManager] APNS token updated and saved
+...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
+...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
+[PreferencesSync] Sending sync device=BF4D495F-E69 fantasy=manager=6653695 squadManager=6653695
+[PreferencesSync] Successfully synced preferences to Redis device=BF4D495F-E69 fantasy=manager=6653695 squadManager=6653695
+[APIClient][INFO] done id=4810D558 op=match_states attempt=1 status=200 bytes=484594 duration_ms=1420 source=redis-operational external=none
+[MatchesStore] results_refresh_complete visible=500 stored=500 range=2025-07-03...2026-07-03 duration_ms=1932 sample=[Australia v Egypt [FIFA World Cup 2026] | Switzerland v Algeria [FIFA World Cup 2026] | Portugal v Croatia [FIFA World Cup 2026] | Spain v Austria [FIFA World Cup 2026]]
+[APIClient][INFO] start id=CAA53ACB op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=2&page_size=500
+[APIClient][INFO] done id=CAA53ACB op=matches_page attempt=1 status=200 bytes=149260 duration_ms=157 source=redis-operational external=none
+[APIClient][INFO] start id=6FE931A2 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=3&page_size=500
+[APIClient][INFO] done id=6FE931A2 op=matches_page attempt=1 status=200 bytes=145636 duration_ms=199 source=redis-operational external=none
+[APIClient][INFO] start id=F98E2BC5 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=4&page_size=500
+[APIClient][INFO] done id=F98E2BC5 op=matches_page attempt=1 status=200 bytes=145725 duration_ms=198 source=redis-operational external=none
+[APIClient][INFO] start id=92C47E5E op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=5&page_size=500
+[LiveActivitySync] Server debug state activityId=927FD96E-DDA4-4A2E-9E27-82A10E76AF93 tokenUpdatedAt=2026-07-03T19:24:55.049Z lastDispatchAt=2026-07-03T19:24:53.909Z serverMode=multi_live delay=2 ff=0 contentStateBytes=1235 archiveEstimateBytes=1291 matches=[Portugal v Croatia 2-1 FT ch=[noCh] | Switzerland v Algeria 2-0 FT ch=[noCh] | Australia v Egypt 1-2 60 ch=[noCh] | Argentina v Cape Verde <null>-<null> <null> ch=[noCh]]
+[APIClient][INFO] done id=92C47E5E op=matches_page attempt=1 status=200 bytes=145123 duration_ms=408 source=redis-operational external=none
+[APIClient][INFO] start id=45CE9CAD op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=6&page_size=500
+[FixtureLoadDebug] Initial fixtures start window=2026-07-02...9999-12-31 page_size=2000 hydrate_states=false stored_before=1227
+[APIClient][INFO] start id=8892A3B0 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2026-07-02&end=9999-12-31&mode=fixtures&sort=asc&filter_mode=intersection&page=1&page_size=2000
+[APIClient][INFO] done id=45CE9CAD op=matches_page attempt=1 status=200 bytes=147158 duration_ms=217 source=redis-operational external=none
+[APIClient][INFO] start id=1168BA8F op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=7&page_size=500
+[APIClient][INFO] done id=8892A3B0 op=matches_page attempt=1 status=304 bytes=0 duration_ms=184 source=redis-operational external=none
+[MatchesStore] fixtures_refresh_not_modified visible=1227 stored=1227 last_updated=2026-07-03 coverage_end=9999-12-31
+[FixtureLoadDebug] Initial fixtures unchanged window=2026-07-02...9999-12-31 duration_ms=3304
+...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
+...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
+[APIClient][INFO] done id=1168BA8F op=matches_page attempt=1 status=200 bytes=149734 duration_ms=227 source=redis-operational external=none
+[APIClient][INFO] start id=E9A61508 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=8&page_size=500
+[LiveActivitySync] Activity state update 927FD96E-DDA4-4A2E-9E27-82A10E76AF93 state=dismissed
+[LiveActivitySync] Upload activity-ended activityId=927FD96E-DDA4-4A2E-9E27-82A10E76AF93 reason=dismissed activeCount=0
+[LiveActivitySync] activity-ended request url=https://api.skynolimit.dev/top-scores/api/v1/live-activity/activity-ended payload={"activeActivityCount":0,"activityGeneratedAtEpochSeconds":null,"activityId":"927FD96E-DDA4-4A2E-9E27-82A10E76AF93","deviceToken":"BF4D495F-E69A-4E...","isDevelopmentBuild":true,"reason":"dismissed"} bytes=216
+[APIClient][INFO] done id=E9A61508 op=matches_page attempt=1 status=200 bytes=28853 duration_ms=205 source=redis-operational external=none
+[LiveActivitySync] activity-ended succeeded: HTTP 200 bytes=9558
+[TopScoresApp] scenePhase changed to inactive
 [TopScoresApp] scenePhase changed to active
 [TopScoresApp] scenePhase active -> reconcileOnForeground
-[LiveActivitySync] reconcileOnForeground scheduling activeCount=1
-[LiveActivitySync] reconcileOnForeground skipped: reconcile already in flight
+[LiveActivitySync] reconcileOnForeground scheduling activeCount=0
 [MatchesStore] refresh_task_start mode=fixtures reason=foreground snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false
 [MatchesStore] refresh_task_start mode=results reason=foreground_results_prefetch snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false
+[LiveActivitySync] reconcileLiveActivityStateOnForeground begin activeCount=0
+[LiveActivitySync] Foreground reconcile found no active local activities
 [MatchesStore] fixtures_refresh_begin snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false visible=1227 stored=1227 coverage_end=9999-12-31
-[MatchesStore] results_refresh_begin snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false visible=3583 stored=3583 range=2025-07-02...2026-07-02 page=1
-[MatchesStore] results_refresh_force_revalidate reason=stale_cached_results sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Belgium v Senegal [FIFA World Cup 2026] | England v DR Congo [FIFA World Cup 2026] | Mexico v Ecuador [FIFA World Cup 2026]]
-[APIClient][INFO] start id=59A2171B op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=1&page_size=500
-[PreferencesSync] Sending sync device=BF4D495F-E69 fantasy=manager=6653695 squadManager=6653695
-[APIClient][INFO] done id=59A2171B op=matches_page attempt=1 status=200 bytes=208173 duration_ms=187 source=redis-operational external=none
-[APIClient][INFO] start id=087807D6 op=match_states attempt=1 method=POST url=https://api.skynolimit.dev/top-scores/api/v1/matches/states
-[PreferencesSync] Successfully synced preferences to Redis device=BF4D495F-E69 fantasy=manager=6653695 squadManager=6653695
-[APIClient][INFO] done id=087807D6 op=match_states attempt=1 status=200 bytes=429854 duration_ms=253 source=redis-operational external=none
-[MatchesStore] results_refresh_complete visible=500 stored=500 range=2025-07-02...2026-07-02 duration_ms=505 sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Belgium v Senegal [FIFA World Cup 2026] | England v DR Congo [FIFA World Cup 2026] | Mexico v Ecuador [FIFA World Cup 2026]]
-[APIClient][INFO] start id=64553C06 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=2&page_size=500
-[APIClient][INFO] done id=64553C06 op=matches_page attempt=1 status=200 bytes=149208 duration_ms=207 source=redis-operational external=none
-[APIClient][INFO] start id=31DC8599 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=3&page_size=500
-[APIClient][INFO] done id=31DC8599 op=matches_page attempt=1 status=200 bytes=145661 duration_ms=105 source=redis-operational external=none
-[APIClient][INFO] start id=C37B9BA1 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=4&page_size=500
-[APIClient][INFO] done id=C37B9BA1 op=matches_page attempt=1 status=200 bytes=145702 duration_ms=99 source=redis-operational external=none
-[APIClient][INFO] start id=BB9233CE op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=5&page_size=500
+[MatchesStore] results_refresh_begin snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false visible=3587 stored=3587 range=2025-07-03...2026-07-03 page=1
+[MatchesStore] results_refresh_force_revalidate reason=stale_cached_results sample=[Australia v Egypt [FIFA World Cup 2026] | Switzerland v Algeria [FIFA World Cup 2026] | Portugal v Croatia [FIFA World Cup 2026] | Spain v Austria [FIFA World Cup 2026]]
+[APIClient][INFO] start id=741F31B8 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=1&page_size=500
+[LiveActivitySync] Reconcile request activeCount=0 force=1 ids=
+[LiveActivitySync] live-activity-reconcile request url=https://api.skynolimit.dev/top-scores/api/v1/live-activity/reconcile payload={"activeActivityCount":0,"activeActivityIds":[],"deviceToken":"BF4D495F-E69A-4E...","force":true,"isDevelopmentBuild":true,"trigger":"app_foreground"} bytes=167
 [TopScoresApp] scenePhase changed to inactive
-[APIClient][INFO] done id=BB9233CE op=matches_page attempt=1 status=200 bytes=145160 duration_ms=268 source=redis-operational external=none
-[APIClient][INFO] start id=4E99C104 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=6&page_size=500
-[APIClient][INFO] done id=4E99C104 op=matches_page attempt=1 status=200 bytes=147151 duration_ms=124 source=redis-operational external=none
-[APIClient][INFO] start id=5078DABF op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=7&page_size=500
-[APIClient][INFO] done id=5078DABF op=matches_page attempt=1 status=200 bytes=149932 duration_ms=123 source=redis-operational external=none
-[APIClient][INFO] start id=6624983F op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=8&page_size=500
-[APIClient][INFO] done id=6624983F op=matches_page attempt=1 status=200 bytes=27503 duration_ms=98 source=redis-operational external=none
-[MatchesStore] grouping_complete mode=fixtures matches=1227 days=105 duration_ms=2651
-[TopScoresApp] scenePhase changed to active
-[TopScoresApp] scenePhase active -> reconcileOnForeground
-[LiveActivitySync] reconcileOnForeground scheduling activeCount=1
-[LiveActivitySync] reconcileOnForeground skipped: reconcile already in flight
-[MatchesStore] refresh_task_skip mode=fixtures reason=foreground existing_in_flight=true snapshot_unchanged=true
-[MatchesStore] refresh_task_start mode=results reason=foreground_results_prefetch snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false
-[MatchesStore] results_refresh_begin snapshot=competition=false leagues=23 channels=false selected_channels=5 epl=false/effective=false major_uefa=true/effective=false home_nations=true/effective=false major=true/effective=false show_all=false visible=3583 stored=3583 range=2025-07-02...2026-07-02 page=1
-[MatchesStore] results_refresh_force_revalidate reason=stale_cached_results sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Belgium v Senegal [FIFA World Cup 2026] | England v DR Congo [FIFA World Cup 2026] | Mexico v Ecuador [FIFA World Cup 2026]]
-[APIClient][INFO] start id=18777F2E op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=1&page_size=500
-[TopScoresApp] scenePhase changed to inactive
+[APIClient][INFO] done id=741F31B8 op=matches_page attempt=1 status=200 bytes=209808 duration_ms=467 source=redis-operational external=none
+[APIClient][INFO] start id=53360AC2 op=match_states attempt=1 method=POST url=https://api.skynolimit.dev/top-scores/api/v1/matches/states
 [TopScoresApp] scenePhase changed to background
-[FixtureLoadDebug] Initial fixtures start window=2026-07-01...9999-12-31 page_size=2000 hydrate_states=false stored_before=1227
-[APIClient][INFO] start id=D8F1D336 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2026-07-01&end=9999-12-31&mode=fixtures&sort=asc&filter_mode=intersection&page=1&page_size=2000
-[APIClient][INFO] done id=18777F2E op=matches_page attempt=1 status=200 bytes=208173 duration_ms=923 source=redis-operational external=none
-[APIClient][INFO] start id=1343BB34 op=match_states attempt=1 method=POST url=https://api.skynolimit.dev/top-scores/api/v1/matches/states
-[APIClient][INFO] done id=D8F1D336 op=matches_page attempt=1 status=200 bytes=298360 duration_ms=133 source=redis-operational external=none
-[MatchesStore] fixtures_refresh_complete visible=1227 stored=1227 last_updated=2026-07-02 coverage_end=9999-12-31 sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Spain v Austria [FIFA World Cup 2026] | Portugal v Croatia [FIFA World Cup 2026] | Switzerland v Algeria [FIFA World Cup 2026]]
-[FixtureLoadDebug] Initial fixtures complete window=2026-07-02...9999-12-31 duration_ms=4201 returned=1227 visible=1227 stored=1227 page_size=2000 hydrate_states=false
-[APIClient][INFO] done id=1343BB34 op=match_states attempt=1 status=200 bytes=429854 duration_ms=1075 source=redis-operational external=none
-[MatchesStore] results_refresh_complete visible=500 stored=500 range=2025-07-02...2026-07-02 duration_ms=2081 sample=[USA v Bosnia-Herzegovina [FIFA World Cup 2026] | Belgium v Senegal [FIFA World Cup 2026] | England v DR Congo [FIFA World Cup 2026] | Mexico v Ecuador [FIFA World Cup 2026]]
-[APIClient][INFO] start id=600411BB op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=2&page_size=500
+[APIClient][INFO] done id=53360AC2 op=match_states attempt=1 status=200 bytes=484594 duration_ms=1189 source=redis-operational external=none
+[MatchesStore] results_refresh_complete visible=500 stored=500 range=2025-07-03...2026-07-03 duration_ms=1736 sample=[Australia v Egypt [FIFA World Cup 2026] | Switzerland v Algeria [FIFA World Cup 2026] | Portugal v Croatia [FIFA World Cup 2026] | Spain v Austria [FIFA World Cup 2026]]
+[APIClient][INFO] start id=41D412E2 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=2&page_size=500
+[LiveActivitySync] live-activity-reconcile succeeded: HTTP 200 bytes=1505
+[LiveActivitySync] Reconcile response bytes=1505
+[LiveActivitySync] Reconcile foregroundStart contentBytes=1235 mode=multi_live generatedAt=1783106707 delay=2 matches=4 [Portugal v Croatia 2-1 FT ch=[BBC] tvLogo=bbc | Switzerland v Algeria 2-0 FT ch=[BBC] tvLogo=bbc | Australia v Egypt 1-2 60' ch=[BBC] tvLogo=bbc | Argentina v Cape Verde nil nil ch=[BBC] tvLogo=bbc]
+[LiveActivitySync] reconcile response currentActiveCount=0 hasForegroundStart=1
+[APIClient][INFO] done id=41D412E2 op=matches_page attempt=1 status=200 bytes=149260 duration_ms=96 source=redis-operational external=none
+[APIClient][INFO] start id=7CE9F333 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=3&page_size=500
+[LiveActivitySync] Foreground start skipped: app is not active
+[LiveActivitySync] Requesting deferred push-to-start after inactive foreground response activeCount=0 mode=multi_live generatedAt=1783106707 delay=2 matches=4 [Portugal v Croatia 2-1 FT ch=[BBC] tvLogo=bbc | Switzerland v Algeria 2-0 FT ch=[BBC] tvLogo=bbc | Australia v Egypt 1-2 60' ch=[BBC] tvLogo=bbc | Argentina v Cape Verde nil nil ch=[BBC] tvLogo=bbc]
+[LiveActivitySync] live-activity-deferred-push-start request url=https://api.skynolimit.dev/top-scores/api/v1/live-activity/reconcile payload={"activeActivityCount":0,"activeActivityIds":[],"deviceToken":"BF4D495F-E69A-4E...","force":true,"isDevelopmentBuild":true,"trigger":"foreground_start_deferred"} bytes=178
+[APIClient][INFO] done id=7CE9F333 op=matches_page attempt=1 status=200 bytes=145636 duration_ms=106 source=redis-operational external=none
+[APIClient][INFO] start id=583BC4F1 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=4&page_size=500
+[APIClient][INFO] done id=583BC4F1 op=matches_page attempt=1 status=200 bytes=145725 duration_ms=111 source=redis-operational external=none
+[APIClient][INFO] start id=F27C1D95 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=5&page_size=500
+[APIClient][INFO] done id=F27C1D95 op=matches_page attempt=1 status=200 bytes=145123 duration_ms=93 source=redis-operational external=none
+[APIClient][INFO] start id=309EF5B3 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=6&page_size=500
+[APIClient][INFO] done id=309EF5B3 op=matches_page attempt=1 status=200 bytes=147158 duration_ms=104 source=redis-operational external=none
+[APIClient][INFO] start id=B21410E9 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=7&page_size=500
+[APIClient][INFO] done id=B21410E9 op=matches_page attempt=1 status=200 bytes=149734 duration_ms=100 source=redis-operational external=none
+[APIClient][INFO] start id=7F2C260B op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-03&end=2026-07-03&mode=results&sort=desc&filter_mode=intersection&page=8&page_size=500
+[APIClient][INFO] done id=7F2C260B op=matches_page attempt=1 status=200 bytes=28853 duration_ms=130 source=redis-operational external=none
+[FixtureLoadDebug] Initial fixtures start window=2026-07-02...9999-12-31 page_size=2000 hydrate_states=false stored_before=1227
+[APIClient][INFO] start id=8ACAA08A op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2026-07-02&end=9999-12-31&mode=fixtures&sort=asc&filter_mode=intersection&page=1&page_size=2000
+[APIClient][INFO] done id=8ACAA08A op=matches_page attempt=1 status=200 bytes=298441 duration_ms=131 source=redis-operational external=none
+[MatchesStore] fixtures_refresh_complete visible=1227 stored=1227 last_updated=2026-07-03 coverage_end=9999-12-31 sample=[Portugal v Croatia [FIFA World Cup 2026] | Switzerland v Algeria [FIFA World Cup 2026] | Australia v Egypt [FIFA World Cup 2026] | Argentina v Cape Verde [FIFA World Cup 2026]]
+[FixtureLoadDebug] Initial fixtures complete window=2026-07-03...9999-12-31 duration_ms=3262 returned=1227 visible=1227 stored=1227 page_size=2000 hydrate_states=false
+[LiveActivitySync] live-activity-deferred-push-start succeeded: HTTP 200 bytes=1505
 ...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
 ...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
-[APIClient][INFO] done id=600411BB op=matches_page attempt=1 status=200 bytes=149208 duration_ms=208 source=redis-operational external=none
-[APIClient][INFO] start id=5A41018C op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=3&page_size=500
-[LiveActivitySync] Server debug state activityId=00DF724A-F2DB-4902-93CD-FE1574CA46A9 tokenUpdatedAt=2026-07-02T18:30:11.872Z lastDispatchAt=2026-07-02T18:30:05.904Z serverMode=single_finished delay=2 ff=0 contentStateBytes=560 archiveEstimateBytes=616 matches=[USA v Bosnia-Herzegovina 2-0 FT ch=[noCh] | Spain v Austria <null>-<null> <null> ch=[noCh]]
-[APIClient][INFO] done id=5A41018C op=matches_page attempt=1 status=200 bytes=145661 duration_ms=126 source=redis-operational external=none
-[APIClient][INFO] start id=CC24CDF1 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=4&page_size=500
-[APIClient][INFO] done id=CC24CDF1 op=matches_page attempt=1 status=200 bytes=145702 duration_ms=125 source=redis-operational external=none
-[APIClient][INFO] start id=E460A638 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=5&page_size=500
-[APIClient][INFO] done id=E460A638 op=matches_page attempt=1 status=200 bytes=145160 duration_ms=121 source=redis-operational external=none
-[APIClient][INFO] start id=16830232 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=6&page_size=500
-[APIClient][INFO] done id=16830232 op=matches_page attempt=1 status=200 bytes=147151 duration_ms=89 source=redis-operational external=none
-[APIClient][INFO] start id=D858032C op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=7&page_size=500
-[APIClient][INFO] done id=D858032C op=matches_page attempt=1 status=200 bytes=149932 duration_ms=105 source=redis-operational external=none
-[APIClient][INFO] start id=2FA4B092 op=matches_page attempt=1 method=GET url=https://api.skynolimit.dev/top-scores/api/v1/matches?start=2025-07-02&end=2026-07-02&mode=results&sort=desc&filter_mode=intersection&page=8&page_size=500
-[MatchesStore] grouping_complete mode=fixtures matches=1227 days=105 duration_ms=1949
+[MatchesStore] grouping_complete mode=fixtures matches=1227 days=105 duration_ms=1340
 ...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
 ...retrieving pasteboard named com.apple.UIKit.pboard.general failed with error: Error Domain=PBErrorDomain Code=10 "Pasteboard com.apple.UIKit.pboard.general is not available at this time." UserInfo={NSLocalizedDescription=Pasteboard com.apple.UIKit.pboard.general is not available at this time.}
-[APIClient][INFO] done id=2FA4B092 op=matches_page attempt=1 status=200 bytes=27503 duration_ms=341 source=redis-operational external=none
+[LiveActivitySync] Server debug state activityId=<null> tokenUpdatedAt=2026-07-03T19:24:55.049Z lastDispatchAt=2026-07-03T19:25:01.581Z serverMode=multi_live delay=2 ff=0 contentStateBytes=1235 archiveEstimateBytes=1291 matches=[Portugal v Croatia 2-1 FT ch=[noCh] | Switzerland v Algeria 2-0 FT ch=[noCh] | Australia v Egypt 1-2 60 ch=[noCh] | Argentina v Cape Verde <null>-<null> <null> ch=[noCh]]

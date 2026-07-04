@@ -764,9 +764,10 @@ final class MatchesStore: ObservableObject {
     func queueRefresh(
         preferences: PreferencesSnapshot,
         mode: MatchesViewMode,
-        reason: String = "manual_refresh"
+        reason: String = "manual_refresh",
+        force: Bool = false
     ) {
-        startRefreshTask(preferences: preferences, mode: mode, reason: reason)
+        startRefreshTask(preferences: preferences, mode: mode, reason: reason, force: force)
     }
 
     func refreshOnForeground(preferences: PreferencesSnapshot) {
@@ -777,11 +778,11 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    func refresh(preferences: PreferencesSnapshot, mode: MatchesViewMode) async {
+    func refresh(preferences: PreferencesSnapshot, mode: MatchesViewMode, force: Bool = false) async {
         if mode == .fixtures {
-            await refreshFixtures(preferences: preferences)
+            await refreshFixtures(preferences: preferences, force: force)
         } else {
-            await refreshResults(preferences: preferences)
+            await refreshResults(preferences: preferences, force: force)
         }
     }
 
@@ -800,7 +801,8 @@ final class MatchesStore: ObservableObject {
     private func startRefreshTask(
         preferences: PreferencesSnapshot,
         mode: MatchesViewMode,
-        reason: String
+        reason: String,
+        force: Bool = false
     ) {
         if refreshTasks[mode] != nil, refreshTaskSnapshots[mode] == preferences {
             Self.log(
@@ -826,7 +828,7 @@ final class MatchesStore: ObservableObject {
         )
         let task = Task { [weak self] in
             guard let self else { return }
-            await self.refresh(preferences: preferences, mode: mode)
+            await self.refresh(preferences: preferences, mode: mode, force: force)
             if self.refreshTaskIDs[mode] == taskID {
                 self.refreshTasks[mode] = nil
                 self.refreshTaskIDs[mode] = nil
@@ -845,7 +847,7 @@ final class MatchesStore: ObservableObject {
         refreshTaskSnapshots.removeAll()
     }
 
-    private func refreshFixtures(preferences: PreferencesSnapshot) async {
+    private func refreshFixtures(preferences: PreferencesSnapshot, force: Bool = false) async {
         let signpost = PerformanceSignposter.matches.beginInterval("MatchesRefreshFixtures")
         defer { PerformanceSignposter.matches.endInterval("MatchesRefreshFixtures", signpost) }
 
@@ -902,7 +904,7 @@ final class MatchesStore: ObservableObject {
             let today = Self.startOfToday()
             let fixtureStart = Self.fixtureLiveOverlapStartDate(from: today)
             let initialEnd = Self.openEndedFixtureDate()
-            let ifModifiedSince = fixtureState.lastValidatedSnapshot == preferences &&
+            let ifModifiedSince = !force && fixtureState.lastValidatedSnapshot == preferences &&
                 fixtureState.fixtureCoverageEnd.map { $0 >= initialEnd } == true
                 ? fixtureState.lastUpdated
                 : nil
@@ -1029,7 +1031,7 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private func refreshResults(preferences: PreferencesSnapshot) async {
+    private func refreshResults(preferences: PreferencesSnapshot, force: Bool = false) async {
         let signpost = PerformanceSignposter.matches.beginInterval("MatchesRefreshResults")
         defer { PerformanceSignposter.matches.endInterval("MatchesRefreshResults", signpost) }
 
@@ -1076,11 +1078,13 @@ final class MatchesStore: ObservableObject {
         }
 
         do {
-            let ifModifiedSince = resultState.lastValidatedSnapshot == preferences &&
+            let ifModifiedSince = !force && resultState.lastValidatedSnapshot == preferences &&
                 !hasPotentiallyStaleCachedResults
                 ? resultState.lastUpdated
                 : nil
-            if hasPotentiallyStaleCachedResults {
+            if force {
+                Self.log("results_refresh_force_revalidate reason=force")
+            } else if hasPotentiallyStaleCachedResults {
                 Self.log(
                     "results_refresh_force_revalidate reason=stale_cached_results " +
                     "sample=\(Self.matchSample(resultState.unfilteredMatches))"

@@ -1509,33 +1509,20 @@ async function getLiveActivityMatchTimelineSnapshotsAt(matchIds = [], targetMs =
           return;
         }
 
+        // BSD is a single authoritative source, so the latest snapshot at or
+        // before the delay target is always trusted as-is — no need to guard
+        // against inconsistent scorelines across backend servers, which was
+        // only ever a concern under the old multi-source BBC scraping setup.
         let latest = null;
-        let maxHomeScore = null;
-        let maxAwayScore = null;
         for (let index = members.length - 1; index >= 0; index -= 1) {
-          const member = members[index];
-          const parsed = safeJsonParse(member, `live activity match timeline ${matchId}`);
-          if (!parsed || typeof parsed !== "object") {
-            continue;
-          }
-          if (!latest) {
+          const parsed = safeJsonParse(members[index], `live activity match timeline ${matchId}`);
+          if (parsed && typeof parsed === "object") {
             latest = parsed;
-          }
-          const homeScore = Number(parsed.home_score);
-          const awayScore = Number(parsed.away_score);
-          if (Number.isFinite(homeScore)) {
-            maxHomeScore = maxHomeScore === null ? homeScore : Math.max(maxHomeScore, homeScore);
-          }
-          if (Number.isFinite(awayScore)) {
-            maxAwayScore = maxAwayScore === null ? awayScore : Math.max(maxAwayScore, awayScore);
+            break;
           }
         }
         if (latest) {
-          result[matchId] = {
-            ...latest,
-            home_score: maxHomeScore !== null ? maxHomeScore : latest.home_score,
-            away_score: maxAwayScore !== null ? maxAwayScore : latest.away_score,
-          };
+          result[matchId] = latest;
         }
       })
     );
