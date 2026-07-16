@@ -21,7 +21,9 @@ const fantasyScore = require("./fantasy_score");
 const { isEplSeasonActiveCached } = require("./epl_season_status");
 const { DEFAULT_COMPETITION_WEIGHTS, SERVER_CONFIG } = require("./config");
 const {
+  matchIncludesHomeNation,
   matchIsMajorGameOfInterest,
+  matchIsMajorTournament,
   matchIsMajorUefaClubKnockoutFixture,
 } = require("./major_games_of_interest");
 const crypto = require("crypto");
@@ -75,8 +77,6 @@ const LIVE_ACTIVITY_DISMISSED_START_COOLDOWN_MS = 10 * 60 * 1000;
 const LIVE_ACTIVITY_HEARTBEAT_MARGIN_SECONDS = 5 * 60;
 const LIVE_ACTIVITY_PAYLOAD_HARD_LIMIT_BYTES = 4096;
 const LIVE_ACTIVITY_PAYLOAD_WARN_BYTES = LIVE_ACTIVITY_PAYLOAD_HARD_LIMIT_BYTES - 256;
-const LIVE_ACTIVITY_STALE_LIVE_UPDATED_GRACE_MS = 5 * 60 * 1000;
-const LIVE_ACTIVITY_STALE_LIVE_KICKOFF_GRACE_MS = 2 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_FINISHED_RETENTION_MS = 8 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_DELAY_SNAPSHOT_STALE_TOLERANCE_MS = Math.max(POLL_INTERVAL_MS * 3, 60 * 1000);
 // Default active window for Live Activities (Europe/London local time).
@@ -684,30 +684,60 @@ function isPostponedMatchStatus(status) {
   return MATCH_STATUS_POSTPONED_TOKENS.has(normalizeStatusToken(status));
 }
 
-function parseMatchDateTimeMs(match) {
-  if (!match || !match.date || !match.time) return null;
-  const value = Date.parse(`${match.date}T${match.time}:00`);
-  if (!Number.isFinite(value)) return null;
-  return value;
+// Match date/time fields are Europe/London wall-clock (see the BSD adapter's
+// zonedKickoff), NOT server-local time — parsing them naively on a UTC server
+// makes every kickoff appear an hour late during British Summer Time, which
+// (among other things) triggers the pre-kickoff spoiler suppression for the
+// entire first hour of a live match.
+const MATCH_KICKOFF_TIME_ZONE = "Europe/London";
+
+const matchKickoffZoneFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: MATCH_KICKOFF_TIME_ZONE,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+// Converts a London wall-clock instant (expressed as if it were UTC) to the
+// real UTC epoch ms. Two passes so the offset is taken at the corrected
+// instant, which keeps DST-boundary conversions stable.
+function londonWallClockToUtcMs(wallClockAsUtcMs) {
+  let utcMs = wallClockAsUtcMs;
+  for (let pass = 0; pass < 2; pass += 1) {
+    const parts = {};
+    matchKickoffZoneFormatter.formatToParts(new Date(utcMs)).forEach((part) => {
+      parts[part.type] = part.value;
+    });
+    const observedWallMs = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute)
+    );
+    utcMs = wallClockAsUtcMs - (observedWallMs - utcMs);
+  }
+  return utcMs;
 }
 
-function isLikelyTerminalStaleLiveMatch(match, kickoffMs, nowMs = Date.now()) {
-  if (!match || typeof match !== "object") return false;
+const parseMatchDateTimeCache = new Map();
 
-  const statusMinute = parseStatusMinute(match.score_status);
-  if (statusMinute === null || statusMinute < 90) return false;
-
-  const resolvedKickoffMs = Number.isFinite(kickoffMs) ? kickoffMs : parseMatchDateTimeMs(match);
-  if (!Number.isFinite(resolvedKickoffMs)) return false;
-  if (nowMs - resolvedKickoffMs < LIVE_ACTIVITY_STALE_LIVE_KICKOFF_GRACE_MS) return false;
-
-  const updatedAtMs = Date.parse(String(match.updated_at || "").trim());
-  if (Number.isFinite(updatedAtMs)) {
-    if (nowMs <= updatedAtMs) return false;
-    if (nowMs - updatedAtMs < LIVE_ACTIVITY_STALE_LIVE_UPDATED_GRACE_MS) return false;
+function parseMatchDateTimeMs(match) {
+  if (!match || !match.date || !match.time) return null;
+  const key = `${match.date}T${match.time}`;
+  if (parseMatchDateTimeCache.has(key)) return parseMatchDateTimeCache.get(key);
+  const wallClockAsUtcMs = Date.parse(`${key}:00Z`);
+  const value = Number.isFinite(wallClockAsUtcMs)
+    ? londonWallClockToUtcMs(wallClockAsUtcMs)
+    : null;
+  if (parseMatchDateTimeCache.size > 5000) {
+    parseMatchDateTimeCache.clear();
   }
-
-  return true;
+  parseMatchDateTimeCache.set(key, value);
+  return value;
 }
 
 function toNumericScore(value) {
@@ -2835,34 +2865,12 @@ function evaluateUserNotificationDecision(user, match, event) {
     }
   }
 
-  // Check competition filter
-  // When notificationUseViewingFilter is true (or absent), use the viewing competition filter.
-  // When false, use the dedicated notification competition filter.
-  const useViewingFilter = prefs.notificationUseViewingFilter !== false;
-  if (useViewingFilter) {
-    if (prefs.competitionFilterEnabled && prefs.selectedLeagues && prefs.selectedLeagues.length > 0) {
-      if (!liveActivityPreferenceLeagueMatchesSelectedLeagues(prefs.selectedLeagues, match.league)) {
-        return {
-          shouldNotify: false,
-          reason: "league_filtered_by_viewing_preferences",
-          delayMinutes,
-        };
-      }
-    }
-  } else if (
-    prefs.notificationCompetitionFilterEnabled &&
-    prefs.notificationSelectedLeagues &&
-    prefs.notificationSelectedLeagues.length > 0
-  ) {
-    if (
-      !liveActivityPreferenceLeagueMatchesSelectedLeagues(
-        prefs.notificationSelectedLeagues,
-        match.league
-      )
-    ) {
+  // Check competition filter (notifications mirror the viewing competition filter)
+  if (prefs.competitionFilterEnabled && prefs.selectedLeagues && prefs.selectedLeagues.length > 0) {
+    if (!liveActivityPreferenceLeagueMatchesSelectedLeagues(prefs.selectedLeagues, match.league)) {
       return {
         shouldNotify: false,
-        reason: "league_filtered_by_notification_preferences",
+        reason: "league_filtered_by_viewing_preferences",
         delayMinutes,
       };
     }
@@ -4040,8 +4048,8 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
     .filter((match) => match && typeof match === "object")
     // A match that kicked off yesterday and is still in progress (crossing
     // midnight) must keep showing — the date-key match alone would otherwise
-    // drop it the moment "today" rolls over. isLikelyTerminalStaleLiveMatch
-    // downstream still catches a match that's implausibly stuck live.
+    // drop it the moment "today" rolls over. BSD reliably reports full time,
+    // so a match never stays stuck live.
     .filter(
       (match) =>
         isLiveActivityMatchOnDateKey(match, todayDateKey) ||
@@ -4094,7 +4102,12 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
       ) {
         return true;
       }
-      return majorUEFAClubGamesEnabled && matchIsMajorGameOfInterest(match);
+      if (majorUEFAClubGamesEnabled && matchIsMajorGameOfInterest(match)) return true;
+      // Mirror the app's fixture-list category filters: home-nations and
+      // major-tournament matches stay visible alongside EPL-only mode, so the
+      // widget must not drop what the fixtures screen is showing.
+      if (prefs.homeNationsFilterEnabled === true && matchIncludesHomeNation(match)) return true;
+      return prefs.majorTournamentsFilterEnabled === true && matchIsMajorTournament(match);
     });
 }
 
@@ -4243,10 +4256,6 @@ function shouldIncludeMonitoredEntryForLiveActivity(entry, user, nowMs = Date.no
     return false;
   }
 
-  if (isLikelyTerminalStaleLiveMatch(match, kickoffMs, nowMs)) {
-    return false;
-  }
-
   if (isResolvedPenaltyShootoutMatch(match)) {
     const hasTrackedState = Boolean(entry && entry.state && typeof entry.state === "object");
     if (!hasTrackedState && parseUpdatedAtMs(match) === null) {
@@ -4387,6 +4396,13 @@ async function loadRedisDelayedSnapshotsByMatchId(matchIds, delayMinutes, nowMs 
 }
 
 function compareLiveActivityMatches(lhs, rhs) {
+  // Matches still in progress always lead the list, ahead of finished ones —
+  // otherwise an earlier-kickoff finished match (or one in a higher-weighted
+  // competition) could bump a currently-live match further down.
+  const lhsLive = isLiveMatchStatus(lhs && lhs.score_status);
+  const rhsLive = isLiveMatchStatus(rhs && rhs.score_status);
+  if (lhsLive !== rhsLive) return lhsLive ? -1 : 1;
+
   const lhsWeight = liveActivityCompetitionWeight(lhs);
   const rhsWeight = liveActivityCompetitionWeight(rhs);
   if (lhsWeight !== rhsWeight) return rhsWeight - lhsWeight;
@@ -4484,7 +4500,11 @@ function isEligibleForLiveActivityByPreferences(user, match) {
     if (
       !homeInPremierLeague &&
       !awayInPremierLeague &&
-      !(prefs.majorUEFAClubGamesEnabled && matchIsMajorGameOfInterest(match))
+      !(prefs.majorUEFAClubGamesEnabled && matchIsMajorGameOfInterest(match)) &&
+      // Mirror the app's fixture-list category filters: home-nations and
+      // major-tournament matches stay visible alongside EPL-only mode.
+      !(prefs.homeNationsFilterEnabled === true && matchIncludesHomeNation(match)) &&
+      !(prefs.majorTournamentsFilterEnabled === true && matchIsMajorTournament(match))
     ) {
       return {
         eligible: false,
@@ -4774,6 +4794,58 @@ function isValidTimeZone(value) {
   } catch (_error) {
     return false;
   }
+}
+
+function resolveLiveActivityTimeZone(user) {
+  const prefs = userPreferencesForReminder(user);
+  const candidates = [
+    prefs.deviceTimeZone,
+    prefs.deviceTimezone,
+    prefs.timeZone,
+    prefs.timezone,
+  ];
+  for (const candidate of candidates) {
+    if (isValidTimeZone(candidate)) {
+      return String(candidate).trim();
+    }
+  }
+  return MATCH_KICKOFF_TIME_ZONE;
+}
+
+function localizedLiveActivityKickoff(match, timeZone) {
+  const fallback = {
+    date: String((match && match.date) || ""),
+    time: String((match && match.time) || ""),
+  };
+  if (!isValidTimeZone(timeZone) || timeZone === MATCH_KICKOFF_TIME_ZONE) {
+    return fallback;
+  }
+
+  const kickoffMs = parseMatchDateTimeMs(match);
+  if (!Number.isFinite(kickoffMs)) return fallback;
+
+  const parts = {};
+  safeIntlDateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  })
+    .formatToParts(new Date(kickoffMs))
+    .forEach((part) => {
+      parts[part.type] = part.value;
+    });
+
+  if (!parts.year || !parts.month || !parts.day || !parts.hour || !parts.minute) {
+    return fallback;
+  }
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    time: `${parts.hour}:${parts.minute}`,
+  };
 }
 
 function userPreferencesForReminder(user) {
@@ -5183,7 +5255,8 @@ function buildLiveActivityContentState(
   matches,
   delayMinutes,
   nowMs = Date.now(),
-  fantasyCurrentScore = null
+  fantasyCurrentScore = null,
+  timeZone = MATCH_KICKOFF_TIME_ZONE
 ) {
   const normalizedMatches = dedupeLiveActivityMatches(matches)
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES)
@@ -5192,6 +5265,7 @@ function buildLiveActivityContentState(
       const aggregate = resolveLiveActivityAggregateScores(match);
       const fullHomeTeam = String(match.home_team || "");
       const fullAwayTeam = String(match.away_team || "");
+      const kickoff = localizedLiveActivityKickoff(match, timeZone);
       const homeShortName = resolveLiveActivityTeamShortName(
         match.home_short_name ?? match.homeShortName,
         fullHomeTeam
@@ -5204,8 +5278,8 @@ function buildLiveActivityContentState(
       const awayLogoKey = resolveLiveActivityTeamLogoKey(fullAwayTeam, awayShortName);
       const normalizedMatch = {
         matchId: String(match.match_details_id || ""),
-        date: String(match.date || ""),
-        time: String(match.time || ""),
+        date: kickoff.date,
+        time: kickoff.time,
         league: String(match.league || ""),
         homeTeam: resolveLiveActivityDisplayTeamName({
           explicitShortName: homeShortName,
@@ -6142,7 +6216,8 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     presentation.matches,
     presentation.delayMinutes,
     nowMs,
-    presentation.fantasyCurrentScore
+    presentation.fantasyCurrentScore,
+    resolveLiveActivityTimeZone(user)
   );
   const payloadHash = buildLiveActivityPayloadHash(contentState);
   const scoreHash = buildLiveActivityScoreHash(contentState);
@@ -6604,10 +6679,6 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     const status = currentMatch ? currentMatch.score_status : null;
 
     if (isPostponedMatchStatus(status)) {
-      continue;
-    }
-
-    if (isLikelyTerminalStaleLiveMatch(currentMatch, kickoffMs, nowMs)) {
       continue;
     }
 
@@ -7675,6 +7746,7 @@ module.exports = {
   sendFantasyDeadlineReminderNow,
   __testHooks: {
     annotateMatchWithLiveActivityTeamRatings,
+    parseMatchDateTimeMs,
     buildMatchEvents,
     buildFantasyDeadlineReminderBody,
     buildFantasyDeadlineReminderBodyFromRecord,
@@ -7727,7 +7799,6 @@ module.exports = {
     firstFixtureSectionMatches,
     isFantasyDeadlineReminderDue,
     isEnglishPremierLeagueTeam,
-    isLikelyTerminalStaleLiveMatch,
     mergeCanonicalLiveActivityMatch,
     loadRedisDelayedSnapshotsByMatchId,
     sanitizePreKickoffScoresForLiveActivity,

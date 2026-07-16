@@ -4,7 +4,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { __private } = require("./bsd_poller");
-const { computeLiveLeagueIds, diffSettledLeagueIds, millisecondsUntilNextLondonTime } = __private;
+const {
+  computeLiveLeagueIds,
+  diffSettledLeagueIds,
+  millisecondsUntilNextLondonTime,
+  buildMetricsText,
+} = __private;
 
 test("computeLiveLeagueIds: keeps only allowlisted league ids, deduped", () => {
   const events = [
@@ -43,4 +48,11 @@ test("millisecondsUntilNextLondonTime: clamps out-of-range hour/minute", () => {
   const delayMs = millisecondsUntilNextLondonTime(99, 99);
   assert.ok(delayMs > 0);
   assert.ok(delayMs <= 24 * 60 * 60 * 1000);
+});
+
+test("buildMetricsText exposes BSD poller metrics", () => {
+  const text = buildMetricsText();
+  assert.match(text, /top_scores_runtime_info\{[^}]*runtime="bsd_poller"[^}]*\}\s+1\b/);
+  assert.match(text, /^# HELP top_scores_bsd_http_requests_total\b/m);
+  assert.match(text, /^# HELP top_scores_bsd_http_timeouts_total\b/m);
 });

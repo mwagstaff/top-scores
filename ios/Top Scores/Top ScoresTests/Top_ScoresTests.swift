@@ -24,7 +24,6 @@ struct Top_ScoresTests {
         #expect(store.notificationsEnabled)
         #expect(store.notificationDelayMinutes == 2)
         #expect(store.notificationEventTypes == PreferencesStore.defaultNotificationEventTypes)
-        #expect(store.notificationUseViewingFilter)
         #expect(store.fantasyDeadlineRemindersEnabled)
         #expect(store.matchGroupSortOrder == .kickoffThenTeamScore)
         #expect(!store.showTodayUnfinishedFixturesBadge)
@@ -123,6 +122,7 @@ struct Top_ScoresTests {
 
         let names = Set(queryItems.map(\.name))
         #expect(!names.contains("league"))
+        #expect(names.contains("time_zone"))
         #expect(names.contains("epl_only"))
         #expect(names.contains("major_uefa"))
         #expect(names.contains("home_nations"))

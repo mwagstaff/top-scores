@@ -35,7 +35,7 @@ struct Top_ScoresApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(matchesStore: matchesStore)
                 .environmentObject(preferences)
                 .environmentObject(matchesStore)
                 .environmentObject(fantasyViewModel)

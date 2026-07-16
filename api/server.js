@@ -11,7 +11,7 @@ const zlib = require("zlib");
 const { monitorEventLoopDelay, performance } = require("perf_hooks");
 const express = require("express");
 const liveActivityMetrics = require("./live_activity_metrics");
-const { zonedDateTimeToUtcMs } = require("./match_time");
+const { zonedDateTimeToUtcMs, zonedDateTimeToZonedDateTime } = require("./match_time");
 const {
   matchIsMajorGameOfInterest,
   matchIsMajorUefaClubKnockoutFixture,
@@ -34,7 +34,11 @@ const {
   projectBsdStandings,
   projectBsdPredictions,
 } = require("./bsd_adapter");
-const { getSocial: getBsdSocial } = require("./bsd_client");
+const {
+  getSocial: getBsdSocial,
+  setRequestObserver: setBsdRequestObserver,
+} = require("./bsd_client");
+const bsdHttpMetrics = require("./bsd_http_metrics");
 const { refreshAllPredictions } = require("./fetch_bsd_predictions");
 const { refreshEplSeasonActive, eplSeasonStatusSnapshot } = require("./epl_season_status");
 const { fetchTeamBadges, badgeMapToPayload } = require("./fetch_tsdb_team_badges");
@@ -3232,6 +3236,7 @@ function trackBbcHttpRequestMetric({
 
 setTsdbRequestObserver(trackBbcHttpRequestMetric);
 setBbcLeagueTablesRequestObserver(trackBbcHttpRequestMetric);
+setBsdRequestObserver(bsdHttpMetrics.trackRequestMetric);
 
 function logPollSuccess(job, details = {}) {
   const fields = Object.entries(details)
@@ -6331,6 +6336,8 @@ function buildPrometheusMetricsText() {
   ).forEach((entry) => {
     pushPrometheusSample(lines, "top_scores_tsdb_http_slow_url_requests", entry.count, entry.labels);
   });
+
+  bsdHttpMetrics.appendPrometheusMetrics(lines, nowMs);
 
   lines.push("# HELP source_records_fetched_total Total number of source records fetched.");
   lines.push("# TYPE source_records_fetched_total counter");
@@ -10470,6 +10477,16 @@ function upsertMatchDetailsFromMatch(match, updatedAtIso = new Date().toISOStrin
     }
   }
   const merged = mergeMatchDetailsPayload(existing, incoming, updatedAtIso);
+  if (
+    existing &&
+    hashComparablePayload(canonicalMatchComparablePayload(existing)) ===
+      hashComparablePayload(canonicalMatchComparablePayload(merged))
+  ) {
+    // Content-identical refresh: keep the previous updated_at so downstream
+    // replace-mode persists produce byte-identical docs (no-op writes) and the
+    // stale-in-progress staleness check isn't masked by timestamp churn.
+    merged.updated_at = existing.updated_at || merged.updated_at;
+  }
   matchDetailsById.set(incoming.id, merged);
   return incoming.id;
 }
@@ -10478,6 +10495,10 @@ function canonicalMatchComparablePayload(payload) {
   if (!payload || typeof payload !== "object") return null;
   const comparable = toOperationalAdminMatchPayload(payload);
   if (!comparable) return null;
+  // Callers stamp a fresh updated_at on the candidate payload before comparing,
+  // so including it here would make every payload hash as "changed" and defeat
+  // the no-op write short-circuits downstream.
+  delete comparable.updated_at;
   return {
     ...comparable,
     tv_channels: uniqueChannels(payload.tv_channels),
@@ -12915,6 +12936,34 @@ function isNotModifiedRequest(req, latestUpdated) {
 }
 
 const MATCH_DISPLAY_TIME_ZONE = process.env.MATCH_DISPLAY_TIME_ZONE || "Europe/London";
+
+function requestedMatchTimeZone(value) {
+  const timeZone = String(value || "").trim();
+  if (!timeZone || timeZone === MATCH_DISPLAY_TIME_ZONE) return null;
+
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone }).format();
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
+
+function localizeMatchPayloads(matches, timeZone) {
+  if (!timeZone || !Array.isArray(matches)) return matches;
+
+  return matches.map((match) => {
+    if (!match || typeof match !== "object") return match;
+    const localized = zonedDateTimeToZonedDateTime(
+      match.date,
+      match.time,
+      MATCH_DISPLAY_TIME_ZONE,
+      timeZone
+    );
+    if (!localized.date || !localized.time) return match;
+    return { ...match, ...localized };
+  });
+}
 
 function parseKickoff(match) {
   if (!match || !match.date || !match.time) return null;
@@ -23922,6 +23971,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const pageSize = parsePositiveInt(req.query.page_size, 500, 1, 2000);
     const page = parsePositiveInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
     const includeMeta = isTruthyParam(req.query.include_meta);
+    const displayTimeZone = requestedMatchTimeZone(req.query.time_zone);
     const dateFrom = range.start;
     const dateTo = range.end;
     const eplOnly = isTruthyParam(req.query.epl_only);
@@ -24092,7 +24142,9 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     res.set("X-Total-Pages", String(totalPages));
     res.set("X-Has-More", hasMore ? "true" : "false");
     res.set("X-Sort-Order", sortOrder);
-    const pagedWithLeagueId = addLeagueIdToMatchPayloads(paged);
+    const pagedWithLeagueId = addLeagueIdToMatchPayloads(
+      localizeMatchPayloads(paged, displayTimeZone)
+    );
     if (includeMeta) {
       res.json({
         matches: applyTeamShortNamesToApiValue(pagedWithLeagueId, teamShortNameLookup),
@@ -24159,6 +24211,7 @@ app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
       return getMatchDetailsStatePayload(detailsPayload);
     })
     .filter(Boolean);
+  const displayTimeZone = requestedMatchTimeZone(req.query.time_zone);
 
   const latestUpdated = newestIsoTimestamp(
     payload.map((item) => (item && item.updated_at ? item.updated_at : null))
@@ -24167,7 +24220,12 @@ app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
     res.set("X-Last-Updated", latestUpdated);
   }
 
-  res.json(applyTeamShortNamesToApiValue(payload, teamShortNameLookup));
+  res.json(
+    applyTeamShortNamesToApiValue(
+      localizeMatchPayloads(payload, displayTimeZone),
+      teamShortNameLookup
+    )
+  );
 });
 
 app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
@@ -24183,6 +24241,9 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     res.status(400).json({ error: "Invalid match id. Expected BBC details id (e.g. c043pne0q3kt)." });
     return;
   }
+  const displayTimeZone = requestedMatchTimeZone(req.query.time_zone);
+  const localizeMatchDetailsPayload = (payload) =>
+    localizeMatchPayloads([payload], displayTimeZone)[0] || payload;
   markMatchDetailsActive(matchId);
 
   // Check if this is a test match (search all test matches by their ID)
@@ -24215,7 +24276,12 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
       in_progress: testMatch.in_progress,
       updated_at: testMatch.updated_at,
     };
-    res.json(applyTeamShortNamesToApiValue(testMatchDetails, teamShortNameLookup));
+    res.json(
+      applyTeamShortNamesToApiValue(
+        localizeMatchDetailsPayload(testMatchDetails),
+        teamShortNameLookup
+      )
+    );
     return;
   }
 
@@ -24230,7 +24296,12 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
       return null;
     });
     if (bsdDetails) {
-      res.json(applyTeamShortNamesToApiValue(bsdDetails, teamShortNameLookup));
+      res.json(
+        applyTeamShortNamesToApiValue(
+          localizeMatchDetailsPayload(bsdDetails),
+          teamShortNameLookup
+        )
+      );
       return;
     }
     res.status(404).json({ error: "No BSD match details found for match id." });
@@ -24306,7 +24377,12 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   } else if (matchDetailsLastUpdated) {
     res.set("X-Last-Updated", matchDetailsLastUpdated);
   }
-  res.json(applyTeamShortNamesToApiValue(playerEnrichedResponsePayload || enrichedResponsePayload, teamShortNameLookup));
+  res.json(
+    applyTeamShortNamesToApiValue(
+      localizeMatchDetailsPayload(playerEnrichedResponsePayload || enrichedResponsePayload),
+      teamShortNameLookup
+    )
+  );
 });
 
 app.get(`${API_PREFIX}/matches/:matchId/social`, async (req, res) => {
@@ -27242,12 +27318,8 @@ function summarizeAdminDeviceRecord(record, suffixCounts = new Map()) {
     notifications_enabled: preferences.notificationsEnabled === true,
     english_premier_league_teams_only: preferences.englishPremierLeagueTeamsOnly === true,
     competition_filter_enabled: preferences.competitionFilterEnabled === true,
-    notification_use_viewing_filter: preferences.notificationUseViewingFilter !== false,
     selected_leagues_count: Array.isArray(preferences.selectedLeagues)
       ? preferences.selectedLeagues.length
-      : 0,
-    notification_selected_leagues_count: Array.isArray(preferences.notificationSelectedLeagues)
-      ? preferences.notificationSelectedLeagues.length
       : 0,
   };
 }

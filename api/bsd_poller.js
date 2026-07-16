@@ -8,7 +8,9 @@
 //
 //   - leagues refresh                                   every 12h  (+ on start)
 //   - events refresh (events + incidents/lineups/teams) every 1h (+ on start)
-//   - live poll (/events/live)                          every 10s
+//   - events recon (event lists only, all leagues)      every 5m
+//   - live poll (/events/live)                          every 10s while a match
+//     is in progress, dropping to a once-a-minute recon between matches
 //   - incidents poll for in-progress events              every 30s
 //   - lineups poll for in-progress events not yet confirmed every 30s
 //   - standings (tables): live poll while an allowlisted league has a match
@@ -20,7 +22,9 @@
 // ---------------------------------------------------------------------------
 
 const bsd = require("./bsd_client");
-const { eventToRecord, refreshAllEvents } = require("./fetch_bsd_events");
+const http = require("http");
+const bsdHttpMetrics = require("./bsd_http_metrics");
+const { eventToRecord, ingestLeagueEvents, refreshAllEvents } = require("./fetch_bsd_events");
 const {
   ingestLeagues,
   ingestStandings,
@@ -39,6 +43,13 @@ const {
 } = require("./mongo_client");
 
 const LIVE_POLL_MS = Number(process.env.BSD_LIVE_POLL_MS || 10_000);
+// With no match in progress, /events/live is only checked at this lighter
+// recon cadence; the full LIVE_POLL_MS cadence resumes once a match appears.
+const LIVE_IDLE_POLL_MS = Number(process.env.BSD_LIVE_IDLE_POLL_MS || 60_000);
+// Event lists (no incidents/lineups/teams) re-checked for every allowlisted
+// league, so missed status transitions are healed well before the hourly
+// full events refresh.
+const EVENTS_RECON_MS = Number(process.env.BSD_EVENTS_RECON_MS || 5 * 60 * 1000);
 const INCIDENTS_POLL_MS = Number(process.env.BSD_INCIDENTS_POLL_MS || 30_000);
 const LINEUPS_POLL_MS = Number(process.env.BSD_LINEUPS_POLL_MS || 30_000);
 const REFERENCE_REFRESH_MS = Number(process.env.BSD_REFERENCE_REFRESH_MS || 12 * 60 * 60 * 1000);
@@ -51,6 +62,7 @@ const PREDICTIONS_REFRESH_MS = Number(process.env.BSD_PREDICTIONS_REFRESH_MS || 
 const MAP_REFRESH_MS = Number(process.env.BSD_MAP_REFRESH_MS || 5 * 60 * 1000);
 // Standings (tables): poll cadence while an allowlisted league has a live match.
 const STANDINGS_LIVE_POLL_MS = Number(process.env.BSD_STANDINGS_LIVE_POLL_MS || 60_000);
+const BSD_METRICS_PORT = Number(process.env.BSD_METRICS_PORT || 3016);
 // Standings daily refresh target time (London), used once no league is live.
 const STANDINGS_DAILY_HOUR_UK = Number(process.env.BSD_STANDINGS_DAILY_HOUR_UK ?? 0);
 const STANDINGS_DAILY_MINUTE_UK = Number(process.env.BSD_STANDINGS_DAILY_MINUTE_UK ?? 15);
@@ -60,7 +72,9 @@ let liveEventIds = [];
 // Allowlisted league ids with at least one currently live match.
 let liveLeagueIds = new Set();
 let livePollInFlight = false;
+let lastLivePollAt = 0;
 let incidentsPollInFlight = false;
+let eventsReconInFlight = false;
 let lineupsPollInFlight = false;
 let referenceRefreshInFlight = false;
 let eventsRefreshInFlight = false;
@@ -69,7 +83,10 @@ let predictionsRefreshInFlight = false;
 let mapRefreshInFlight = false;
 let standingsPollInFlight = false;
 let standingsDailyRefreshTimer = null;
+let metricsServer = null;
 let timers = [];
+
+bsd.setRequestObserver(bsdHttpMetrics.trackRequestMetric);
 
 // Mirrors server.js's millisecondsUntilNextLondonTime — duplicated rather than
 // shared because bsd_poller.js is a separate standalone process from the
@@ -135,7 +152,12 @@ function diffSettledLeagueIds(previousLiveIds, nextLiveIds) {
 
 async function pollLiveEvents() {
   if (livePollInFlight) return;
+  // Downtime tier: nothing was live on the last check, so only recon at the
+  // lighter cadence. The 10s interval keeps ticking, so the full cadence
+  // resumes on the first poll that finds a live match.
+  if (liveEventIds.length === 0 && Date.now() - lastLivePollAt < LIVE_IDLE_POLL_MS) return;
   livePollInFlight = true;
+  lastLivePollAt = Date.now();
   try {
     const data = await bsd.getLiveEvents({ initiator: "bsd_runtime" });
     const events = Array.isArray(data && data.events) ? data.events : [];
@@ -214,6 +236,59 @@ function scheduleStandingsDailyRefresh() {
   if (standingsDailyRefreshTimer && typeof standingsDailyRefreshTimer.unref === "function") {
     standingsDailyRefreshTimer.unref();
   }
+}
+
+function buildMetricsText() {
+  return bsdHttpMetrics.buildPrometheusMetricsText({
+    runtime: "bsd_poller",
+    service: "top-scores-bsd-poller",
+  });
+}
+
+function startMetricsServer() {
+  if (!Number.isFinite(BSD_METRICS_PORT) || BSD_METRICS_PORT <= 0) {
+    console.log("[bsd-runtime] metrics endpoint disabled");
+    return null;
+  }
+  if (metricsServer) return metricsServer;
+
+  const server = http.createServer((req, res) => {
+    const path = String(req.url || "").split("?")[0];
+    if (path === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true, service: "top-scores-bsd-poller" }));
+      return;
+    }
+    if (path === "/metrics") {
+      res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" });
+      res.end(buildMetricsText());
+      return;
+    }
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Not found\n");
+  });
+
+  // A broken metrics endpoint (e.g. port already in use) must never take down
+  // data ingestion — log and carry on without metrics.
+  server.on("error", (error) => {
+    console.error(`[bsd-runtime] metrics server error: ${error.message || error}`);
+    if (metricsServer === server) metricsServer = null;
+  });
+
+  metricsServer = server;
+  server.listen(BSD_METRICS_PORT, () => {
+    console.log(`[bsd-runtime] metrics listening on http://localhost:${BSD_METRICS_PORT}/metrics`);
+  });
+  return metricsServer;
+}
+
+function closeMetricsServer() {
+  if (!metricsServer) return Promise.resolve();
+  const server = metricsServer;
+  metricsServer = null;
+  return new Promise((resolve) => {
+    server.close(() => resolve());
+  });
 }
 
 async function pollIncidents() {
@@ -312,6 +387,28 @@ async function refreshLeagues() {
   }
 }
 
+// Lightweight events recon: re-fetch just the event lists for every
+// allowlisted league so fixture changes and missed status transitions (e.g. a
+// match finishing while live polling was down) are picked up within minutes,
+// without the incidents/lineups/teams hydration the hourly refresh does.
+async function reconEvents() {
+  if (eventsReconInFlight || eventsRefreshInFlight) return;
+  eventsReconInFlight = true;
+  try {
+    for (const leagueId of BSD_LEAGUE_ALLOWLIST) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await ingestLeagueEvents(leagueId);
+      } catch (error) {
+        console.error(`[bsd-runtime] events recon league ${leagueId} failed: ${error.message || error}`);
+      }
+    }
+    console.log(`[bsd-runtime] events recon complete for ${BSD_LEAGUE_ALLOWLIST.length} leagues`);
+  } finally {
+    eventsReconInFlight = false;
+  }
+}
+
 async function refreshEvents() {
   if (eventsRefreshInFlight) return;
   eventsRefreshInFlight = true;
@@ -350,11 +447,13 @@ async function refreshPredictions() {
 
 function start() {
   console.log(
-    `[bsd-runtime] starting (live=${LIVE_POLL_MS}ms, incidents=${INCIDENTS_POLL_MS}ms, ` +
-      `lineups=${LINEUPS_POLL_MS}ms, events=${EVENTS_REFRESH_MS}ms, reference=${REFERENCE_REFRESH_MS}ms, ` +
+    `[bsd-runtime] starting (live=${LIVE_POLL_MS}ms, live_idle=${LIVE_IDLE_POLL_MS}ms, incidents=${INCIDENTS_POLL_MS}ms, ` +
+      `lineups=${LINEUPS_POLL_MS}ms, events=${EVENTS_REFRESH_MS}ms, events_recon=${EVENTS_RECON_MS}ms, reference=${REFERENCE_REFRESH_MS}ms, ` +
       `broadcasts=${BROADCASTS_REFRESH_MS}ms, predictions=${PREDICTIONS_REFRESH_MS}ms, map=${MAP_REFRESH_MS}ms, ` +
       `standings_live=${STANDINGS_LIVE_POLL_MS}ms, standings_daily=${STANDINGS_DAILY_HOUR_UK}:${String(STANDINGS_DAILY_MINUTE_UK).padStart(2, "0")} Europe/London)`
   );
+
+  startMetricsServer();
 
   // Kick off immediate runs so a freshly started/deployed process is
   // populated without waiting for the first interval to elapse.
@@ -371,6 +470,7 @@ function start() {
   timers.push(setInterval(pollLineups, LINEUPS_POLL_MS));
   timers.push(setInterval(pollLiveStandings, STANDINGS_LIVE_POLL_MS));
   timers.push(setInterval(refreshEvents, EVENTS_REFRESH_MS));
+  timers.push(setInterval(reconEvents, EVENTS_RECON_MS));
   timers.push(setInterval(refreshLeagues, REFERENCE_REFRESH_MS));
   timers.push(setInterval(refreshBroadcasts, BROADCASTS_REFRESH_MS));
   timers.push(setInterval(refreshPredictions, PREDICTIONS_REFRESH_MS));
@@ -386,6 +486,7 @@ async function stop(signal) {
     standingsDailyRefreshTimer = null;
   }
   try {
+    await closeMetricsServer();
     await closeMongoConnection();
   } catch (_err) {
     // best effort
@@ -409,14 +510,18 @@ module.exports = {
   refreshReference,
   refreshLeagues,
   refreshEvents,
+  reconEvents,
   refreshBroadcasts,
   refreshPredictions,
   refreshMaps,
+  startMetricsServer,
+  closeMetricsServer,
   start,
   stop,
   __private: {
     computeLiveLeagueIds,
     diffSettledLeagueIds,
     millisecondsUntilNextLondonTime,
+    buildMetricsText,
   },
 };

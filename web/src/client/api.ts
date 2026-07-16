@@ -421,6 +421,7 @@ async function requestJson<T>(url: string, signal?: AbortSignal, init?: RequestI
 function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: number): URLSearchParams {
   const params = new URLSearchParams();
   const today = new Date();
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   if (mode === "fixtures") {
     params.set("sort", "asc");
@@ -435,6 +436,9 @@ function buildMatchQuery(mode: MatchesMode, preferences: Preferences, page: numb
   params.set("end", mode === "fixtures" ? OPEN_ENDED_FIXTURE_END_DATE : formatDateParam(today));
   params.set("page", String(page));
   params.set("page_size", "200");
+  if (timeZone) {
+    params.set("time_zone", timeZone);
+  }
 
   if (mode === "fixtures" && preferences.channelFilterEnabled) {
     for (const channel of channelApiQueryValues(preferences.selectedChannels)) {

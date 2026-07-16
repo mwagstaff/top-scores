@@ -2809,8 +2809,25 @@ private struct TopScoresLiveActivityWidget: Widget {
                     TopScoresLiveActivityMinimalExpandedView(state: context.state, isStale: context.isStale)
                 }
             } compactLeading: {
-                Text(compactLeadingText(state: context.state))
-                    .font(.caption2.weight(.semibold))
+                if let first = LiveActivityMatchDisplayFilter.displayMatches(for: context.state).first {
+                    HStack(spacing: 3) {
+                        LiveActivityPrecomputedTeamLogo(
+                            logoKey: first.homeLogoKey,
+                            teamName: first.displayHomeTeam,
+                            size: 14
+                        )
+                        LiveActivityPrecomputedTeamLogo(
+                            logoKey: first.awayLogoKey,
+                            teamName: first.displayAwayTeam,
+                            size: 14
+                        )
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(first.displayHomeTeam) versus \(first.displayAwayTeam)")
+                } else {
+                    Text("TS")
+                        .font(.caption2.weight(.semibold))
+                }
             } compactTrailing: {
                 Text(compactTrailingText(state: context.state))
                     .font(.caption2.weight(.semibold))
@@ -2820,11 +2837,6 @@ private struct TopScoresLiveActivityWidget: Widget {
                     .font(.caption2.weight(.bold))
             }
         }
-    }
-
-    private func compactLeadingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
-        guard let first = LiveActivityMatchDisplayFilter.displayMatches(for: state).first else { return "TS" }
-        return String(first.displayHomeTeam.prefix(3)).uppercased()
     }
 
     private func compactTrailingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {

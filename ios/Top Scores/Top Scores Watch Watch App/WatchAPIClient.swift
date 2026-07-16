@@ -17,9 +17,14 @@ struct WatchAPIClient {
             throw WatchAPIClientError.invalidMatchDetailsID(matchId)
         }
 
-        let url = baseURL
+        let matchURL = baseURL
             .appendingPathComponent("matches")
             .appendingPathComponent(normalizedID)
+        var components = URLComponents(url: matchURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "time_zone", value: TimeZone.current.identifier)]
+        guard let url = components?.url else {
+            throw WatchAPIClientError.invalidHTTPResponse
+        }
 
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData

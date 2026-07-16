@@ -8,6 +8,10 @@
 import SwiftUI
 
 struct ContentView: View {
+    // Plain reference (not @EnvironmentObject) so ContentView does not re-render
+    // on every store publish; MatchesView observes its own per-mode view state.
+    let matchesStore: MatchesStore
+
     @AppStorage("fantasy.managerEntryID") private var fantasyManagerEntryID = ""
     @State private var selectedTab = 0
     @State private var fantasyTabBadge: String?
@@ -18,12 +22,12 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            MatchesView(mode: .fixtures, isSelected: selectedTab == 0)
+            MatchesView(mode: .fixtures, isSelected: selectedTab == 0, store: matchesStore)
                 .tabItem {
                     Label("Fixtures", systemImage: "calendar")
                 }
                 .tag(0)
-            MatchesView(mode: .results, isSelected: selectedTab == 1)
+            MatchesView(mode: .results, isSelected: selectedTab == 1, store: matchesStore)
                 .tabItem {
                     Label("Results", systemImage: "clock.arrow.circlepath")
                 }
@@ -180,8 +184,9 @@ private struct ContentLifecycleCoordinator: View {
 }
 
 #Preview {
-    ContentView()
+    let store = MatchesStore()
+    return ContentView(matchesStore: store)
         .environmentObject(PreferencesStore())
-        .environmentObject(MatchesStore())
+        .environmentObject(store)
         .environmentObject(FantasyViewModel())
 }

@@ -164,6 +164,7 @@ struct APIClient {
         queryItems.append(URLQueryItem(name: "filter_mode", value: "intersection"))
         queryItems.append(URLQueryItem(name: "page", value: String(max(1, page))))
         queryItems.append(URLQueryItem(name: "page_size", value: String(max(1, pageSize))))
+        queryItems.append(URLQueryItem(name: "time_zone", value: TimeZone.current.identifier))
         if includePreferenceFilters && preferences.competitionFilterEnabled {
             preferences.selectedLeagues.forEach { queryItems.append(URLQueryItem(name: "league", value: $0)) }
         }
@@ -241,6 +242,7 @@ struct APIClient {
             URLQueryItem(name: "sort", value: "asc"),
             URLQueryItem(name: "filter_mode", value: "intersection"),
             URLQueryItem(name: "page_size", value: String(max(1, pageSize))),
+            URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
         ]
 
         let request = try buildRequest(path: "matches", queryItems: queryItems)
@@ -450,7 +452,10 @@ struct APIClient {
         guard let normalizedID = Self.normalizedMatchDetailsID(matchId) else {
             throw APIClientError.invalidMatchDetailsID(matchId)
         }
-        let request = try buildRequest(path: "matches/\(normalizedID)", queryItems: [])
+        let request = try buildRequest(
+            path: "matches/\(normalizedID)",
+            queryItems: [URLQueryItem(name: "time_zone", value: TimeZone.current.identifier)]
+        )
         let (data, http) = try await performRequest(request, operation: "match_details")
         try validateSuccess(http, data: data, operation: "match_details")
         return try JSONDecoder().decode(MatchDetailsPayload.self, from: data)
@@ -490,7 +495,10 @@ struct APIClient {
             let endIndex = min(startIndex + Self.matchStatesBatchLimit, normalizedIDs.count)
             let batch = Array(normalizedIDs[startIndex..<endIndex])
 
-            var request = try buildRequest(path: "matches/states", queryItems: [])
+            var request = try buildRequest(
+                path: "matches/states",
+                queryItems: [URLQueryItem(name: "time_zone", value: TimeZone.current.identifier)]
+            )
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(MatchStatesRequestBody(ids: batch))

@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const {
   utcDateTimeToZonedDateTime,
   zonedDateTimeToUtcMs,
+  zonedDateTimeToZonedDateTime,
 } = require("./match_time");
 
 test("utcDateTimeToZonedDateTime converts summer UTC kickoffs to Europe/London", () => {
@@ -40,5 +41,19 @@ test("zonedDateTimeToUtcMs parses winter London kickoffs without DST offset", ()
   assert.equal(
     new Date(zonedDateTimeToUtcMs("2026-12-17", "20:00", "Europe/London")).toISOString(),
     "2026-12-17T20:00:00.000Z"
+  );
+});
+
+test("zonedDateTimeToZonedDateTime converts London kickoffs to the user's local zone", () => {
+  assert.deepEqual(
+    zonedDateTimeToZonedDateTime("2026-07-14", "20:00", "Europe/London", "Europe/Vienna"),
+    { date: "2026-07-14", time: "21:00" }
+  );
+});
+
+test("zonedDateTimeToZonedDateTime preserves the correct local day across midnight", () => {
+  assert.deepEqual(
+    zonedDateTimeToZonedDateTime("2026-07-14", "23:30", "Europe/London", "Europe/Vienna"),
+    { date: "2026-07-15", time: "00:30" }
   );
 });

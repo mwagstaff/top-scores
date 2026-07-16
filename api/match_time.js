@@ -86,8 +86,27 @@ function zonedDateTimeToUtcMs(dateString, timeString, timeZone = DEFAULT_MATCH_T
   return guessMs;
 }
 
+function zonedDateTimeToZonedDateTime(
+  dateString,
+  timeString,
+  sourceTimeZone = DEFAULT_MATCH_TIME_ZONE,
+  targetTimeZone = DEFAULT_MATCH_TIME_ZONE
+) {
+  const timestampMs = zonedDateTimeToUtcMs(dateString, timeString, sourceTimeZone);
+  if (!Number.isFinite(timestampMs)) {
+    return {
+      date: String(dateString || "").trim() || null,
+      time: String(timeString || "").trim() || null,
+    };
+  }
+
+  const iso = new Date(timestampMs).toISOString();
+  return utcDateTimeToZonedDateTime(iso.slice(0, 10), iso.slice(11, 16), targetTimeZone);
+}
+
 module.exports = {
   DEFAULT_MATCH_TIME_ZONE,
   utcDateTimeToZonedDateTime,
   zonedDateTimeToUtcMs,
+  zonedDateTimeToZonedDateTime,
 };

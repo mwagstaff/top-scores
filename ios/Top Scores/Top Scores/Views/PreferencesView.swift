@@ -13,7 +13,6 @@ struct PreferencesView: View {
     #endif
     @State private var leagueSearch = ""
     @State private var channelSearch = ""
-    @State private var notificationLeagueSearch = ""
     @State private var reloadTask: Task<Void, Never>?
     @State private var isSendingTestNotification = false
     @State private var testNotificationStatusMessage: String?
@@ -199,33 +198,9 @@ struct PreferencesView: View {
                         }
 
                         Section("Notification Competitions") {
-                            Toggle("Use viewing competition preferences", isOn: notificationUseViewingFilterBinding)
-
-                            if preferences.notificationUseViewingFilter {
-                                Text("Notifications use the same competition filter as the viewing preferences.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                TextField("Search competitions", text: $notificationLeagueSearch)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-
-                                if viewModel.isLoadingLeagues {
-                                    ProgressView("Loading competitions")
-                                } else if viewModel.availableLeagues.isEmpty {
-                                    Text("No competitions loaded")
-                                        .foregroundStyle(.secondary)
-                                } else {
-                                    ForEach(filteredNotificationLeagues, id: \.self) { league in
-                                        MultiSelectRow(
-                                            title: league,
-                                            isSelected: preferences.notificationSelectedLeagues.contains(league)
-                                        ) {
-                                            toggleNotificationLeague(league)
-                                        }
-                                    }
-                                }
-                            }
+                            Text("Notifications use the same competition filter as the viewing preferences.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                     }
 
@@ -679,33 +654,6 @@ struct PreferencesView: View {
             get: { preferences.notificationMajorTournamentsFilterEnabled },
             set: { preferences.notificationMajorTournamentsFilterEnabled = $0 }
         )
-    }
-
-    private var notificationUseViewingFilterBinding: Binding<Bool> {
-        Binding(
-            get: { preferences.notificationUseViewingFilter },
-            set: { newValue in
-                if !newValue && preferences.notificationSelectedLeagues.isEmpty {
-                    preferences.notificationSelectedLeagues = preferences.selectedLeagues
-                }
-                preferences.notificationUseViewingFilter = newValue
-            }
-        )
-    }
-
-    private var filteredNotificationLeagues: [String] {
-        let trimmed = notificationLeagueSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return viewModel.availableLeagues }
-        return viewModel.availableLeagues.filter { $0.localizedCaseInsensitiveContains(trimmed) }
-    }
-
-    private func toggleNotificationLeague(_ league: String) {
-        if let index = preferences.notificationSelectedLeagues.firstIndex(of: league) {
-            preferences.notificationSelectedLeagues.remove(at: index)
-        } else {
-            preferences.notificationSelectedLeagues.append(league)
-            preferences.notificationSelectedLeagues.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-        }
     }
 
     private var filteredLeagues: [String] {

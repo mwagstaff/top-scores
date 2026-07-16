@@ -534,6 +534,20 @@ private enum MatchGroupingEngine {
     }
 }
 
+/// Per-tab published state so the Fixtures and Results views each observe only
+/// their own mode's data. Publishing to one mode no longer invalidates the other
+/// tab's view, and switching tabs no longer swaps the visible dataset.
+@MainActor
+final class MatchesModeViewState: ObservableObject {
+    @Published fileprivate(set) var matches: [Match] = []
+    @Published fileprivate(set) var groupedMatches: [MatchDay] = []
+    @Published fileprivate(set) var isLoading = false
+    @Published fileprivate(set) var isLoadingMoreMatches = false
+    @Published fileprivate(set) var errorMessage: String?
+    @Published fileprivate(set) var lastUpdated: Date?
+    @Published fileprivate(set) var isUsingCache = false
+}
+
 @MainActor
 final class MatchesStore: ObservableObject {
     @Published private(set) var matches: [Match] = []
@@ -543,6 +557,13 @@ final class MatchesStore: ObservableObject {
     @Published var errorMessage: String?
     @Published var lastUpdated: Date?
     @Published var isUsingCache = false
+
+    let fixturesViewState = MatchesModeViewState()
+    let resultsViewState = MatchesModeViewState()
+
+    func viewState(for mode: MatchesViewMode) -> MatchesModeViewState {
+        mode == .fixtures ? fixturesViewState : resultsViewState
+    }
 
     private struct ModeState {
         var matches: [Match] = []
@@ -578,8 +599,8 @@ final class MatchesStore: ObservableObject {
     private var fixturesBackgroundLoadTask: Task<Void, Never>?
     private var fixturesDeferredVisibleUpdatePending = false
     private var teamRankingsRefreshTask: Task<Void, Never>?
-    private var groupingTask: Task<Void, Never>?
-    private var groupingTaskID: UUID?
+    private var groupingTasks: [MatchesViewMode: Task<Void, Never>] = [:]
+    private var groupingTaskIDs: [MatchesViewMode: UUID] = [:]
     private var cachePersistTask: Task<Void, Never>?
     private var lastAppliedTeamRankingEntries: [TeamRankingEntry] = []
     private var lastAppliedTeamRatingDefaultElo = TeamRankingSettings.defaultDefaultElo
@@ -669,7 +690,7 @@ final class MatchesStore: ObservableObject {
             startRefreshTask(preferences: snapshot, mode: .results, reason: "startup_results_prefetch")
         }
 
-        publishState(for: mode)
+        publishAllModes(priorityMode: mode)
         refreshTeamRatingLookup(apiBaseURL: snapshot.apiBaseURL)
         updateRefreshTimer(using: snapshot, matches: combinedLoadedMatches())
     }
@@ -700,9 +721,9 @@ final class MatchesStore: ObservableObject {
         refreshTimer?.invalidate()
         refreshTimer = nil
         cancelRefreshTasks(reason: "stop_auto_refresh")
-        groupingTask?.cancel()
-        groupingTask = nil
-        groupingTaskID = nil
+        groupingTasks.values.forEach { $0.cancel() }
+        groupingTasks.removeAll()
+        groupingTaskIDs.removeAll()
         bbcLiveRefreshTask?.cancel()
         bbcLiveRefreshTask = nil
         fixturesBackgroundLoadTask?.cancel()
@@ -730,9 +751,9 @@ final class MatchesStore: ObservableObject {
             reapplyLocalFilters(using: snapshot)
         }
 
-        if publishVisibleState {
-            publishState(for: activeMode)
-        }
+        // Always publish per-mode view state so hidden tabs stay warm; the
+        // store-level (active mode) mirror is gated on visibility internally.
+        publishAllModes(priorityMode: activeMode)
     }
 
     func setModeVisibility(_ mode: MatchesViewMode, isVisible: Bool) {
@@ -881,14 +902,7 @@ final class MatchesStore: ObservableObject {
         fixtureState.errorMessage = nil
         fixtureState.isUsingCache = fixtureState.isUsingCache && !fixtureState.matches.isEmpty
         modeStates[.fixtures] = fixtureState
-        if activeMode == .fixtures {
-            publishState(for: .fixtures)
-        }
-
-        #if DEBUG
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
-        guard !Task.isCancelled else { return }
-        #endif
+        publishState(for: .fixtures)
 
         await reconcileServerCacheStateIfNeeded(client: client)
 
@@ -944,9 +958,7 @@ final class MatchesStore: ObservableObject {
                         "duration_ms=\(Int(Date().timeIntervalSince(requestStartedAt) * 1000))"
                 )
 
-                if activeMode == .fixtures {
-                    publishState(for: .fixtures)
-                }
+                publishState(for: .fixtures)
                 scheduleRemainingFixtureLoadingIfNeeded(preferences: resolvedSnapshot(for: preferences))
                 return
             }
@@ -1002,9 +1014,7 @@ final class MatchesStore: ObservableObject {
 
             persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
 
-            if activeMode == .fixtures {
-                publishState(for: .fixtures)
-            }
+            publishState(for: .fixtures)
             refreshTeamRatingLookup(apiBaseURL: effectiveSnapshot.apiBaseURL)
             updateRefreshTimer(using: effectiveSnapshot, matches: combinedLoadedMatches())
         } catch {
@@ -1014,9 +1024,7 @@ final class MatchesStore: ObservableObject {
                 cancelledState.isLoadingMore = false
                 cancelledState.errorMessage = nil
                 modeStates[.fixtures] = cancelledState
-                if activeMode == .fixtures {
-                    publishState(for: .fixtures)
-                }
+                publishState(for: .fixtures)
                 NSLog("Matches refresh cancelled for mode=%@", MatchesViewMode.fixtures.rawValue)
                 return
             }
@@ -1073,9 +1081,7 @@ final class MatchesStore: ObservableObject {
         resultState.errorMessage = nil
         resultState.isUsingCache = resultState.isUsingCache && !resultState.matches.isEmpty
         modeStates[.results] = resultState
-        if activeMode == .results {
-            publishState(for: .results)
-        }
+        publishState(for: .results)
 
         do {
             let ifModifiedSince = !force && resultState.lastValidatedSnapshot == preferences &&
@@ -1122,9 +1128,7 @@ final class MatchesStore: ObservableObject {
                     "range=\(Self.formatDateForLog(loadRange.lowerBound))...\(Self.formatDateForLog(loadRange.upperBound)) " +
                     "duration_ms=\(Int(Date().timeIntervalSince(requestStartedAt) * 1000))"
                 )
-                if activeMode == .results {
-                    publishState(for: .results)
-                }
+                publishState(for: .results)
                 updateRefreshTimer(using: resolvedSnapshot(for: preferences), matches: combinedLoadedMatches())
                 await loadRemainingResultsIfNeeded(preferences: preferences)
                 return
@@ -1169,9 +1173,7 @@ final class MatchesStore: ObservableObject {
             )
             persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
 
-            if activeMode == .results {
-                publishState(for: .results)
-            }
+            publishState(for: .results)
             refreshTeamRatingLookup(apiBaseURL: effectiveSnapshot.apiBaseURL)
             updateRefreshTimer(using: effectiveSnapshot, matches: combinedLoadedMatches())
             await loadRemainingResultsIfNeeded(preferences: effectiveSnapshot)
@@ -1182,9 +1184,7 @@ final class MatchesStore: ObservableObject {
                 cancelledState.isLoadingMore = false
                 cancelledState.errorMessage = nil
                 modeStates[.results] = cancelledState
-                if activeMode == .results {
-                    publishState(for: .results)
-                }
+                publishState(for: .results)
                 NSLog("Matches refresh cancelled for mode=%@", MatchesViewMode.results.rawValue)
                 return
             }
@@ -1213,9 +1213,7 @@ final class MatchesStore: ObservableObject {
         resultState.isLoadingMore = true
         resultState.errorMessage = nil
         modeStates[.results] = resultState
-        if activeMode == .results {
-            publishState(for: .results)
-        }
+        publishState(for: .results)
 
         do {
             let effectiveSnapshot = resolvedSnapshot(for: preferences)
@@ -1246,9 +1244,7 @@ final class MatchesStore: ObservableObject {
             nextState.errorMessage = nil
             modeStates[.results] = nextState
 
-            if activeMode == .results {
-                publishState(for: .results)
-            }
+            publishState(for: .results)
             persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
         } catch {
             if Self.isCancellationError(error) {
@@ -1256,9 +1252,7 @@ final class MatchesStore: ObservableObject {
                 cancelledState.isLoading = false
                 cancelledState.isLoadingMore = false
                 modeStates[.results] = cancelledState
-                if activeMode == .results {
-                    publishState(for: .results)
-                }
+                publishState(for: .results)
                 return
             }
             var failedState = state(for: .results)
@@ -1266,9 +1260,7 @@ final class MatchesStore: ObservableObject {
             failedState.isLoadingMore = false
             failedState.errorMessage = "Unable to load more results. Check your API URL or connection."
             modeStates[.results] = failedState
-            if activeMode == .results {
-                publishState(for: .results)
-            }
+            publishState(for: .results)
         }
     }
 
@@ -1536,9 +1528,7 @@ final class MatchesStore: ObservableObject {
                 "stored=\(fixtureState.unfilteredMatches.count)"
         )
         persistCombinedCacheAndSync(snapshot: snapshot)
-        if activeMode == .fixtures && visibleModes.contains(.fixtures) {
-            publishState(for: .fixtures)
-        }
+        publishState(for: .fixtures)
         updateRefreshTimer(using: snapshot, matches: combinedLoadedMatches())
     }
 
@@ -1759,15 +1749,13 @@ final class MatchesStore: ObservableObject {
         fixtureState.groupedMatches = []
         fixtureState.groupedMatchesRevision = nil
         modeStates[.fixtures] = fixtureState
-        if activeMode == .fixtures {
-            publishState(for: .fixtures)
-        }
+        publishState(for: .fixtures)
     }
 
     private func loadCache(snapshot: PreferencesSnapshot) {
         guard let payload = MatchCache.load(for: snapshot) else {
             modeStates = [.fixtures: ModeState(), .results: ModeState()]
-            publishState(for: activeMode)
+            publishAllModes(priorityMode: activeMode)
             return
         }
 
@@ -1803,7 +1791,7 @@ final class MatchesStore: ObservableObject {
 
         modeStates = [.fixtures: fixtureState, .results: resultState]
         bbcLiveLastFetchedAt = nil
-        publishState(for: activeMode)
+        publishAllModes(priorityMode: activeMode)
         scheduleCachePersistence(
             visibleMatchCollections: modeStates.values.map(\.matches),
             unfilteredMatchCollections: modeStates.values.map(\.unfilteredMatches),
@@ -1872,7 +1860,7 @@ final class MatchesStore: ObservableObject {
         let nextLookup = TeamRatingLookup(entries: entries, defaultPoints: defaultElo)
         teamRatingLookup = nextLookup
         groupingRevision &+= 1
-        publishState(for: activeMode)
+        publishAllModes(priorityMode: activeMode)
     }
 
     func teamRatingDebugText(for match: Match) -> String {
@@ -1905,41 +1893,70 @@ final class MatchesStore: ObservableObject {
         current.isLoadingMore = false
         current.errorMessage = message
         modeStates[mode] = current
-        if mode == activeMode {
-            publishState(for: mode)
-        }
+        publishState(for: mode)
     }
 
     private func state(for mode: MatchesViewMode) -> ModeState {
         modeStates[mode] ?? ModeState()
     }
 
+    private func publishAllModes(priorityMode: MatchesViewMode) {
+        publishState(for: priorityMode)
+        publishState(for: priorityMode == .fixtures ? .results : .fixtures)
+    }
+
     private func publishState(for mode: MatchesViewMode) {
         let signpost = PerformanceSignposter.matches.beginInterval("MatchesPublishState")
         defer { PerformanceSignposter.matches.endInterval("MatchesPublishState", signpost) }
 
-        activeMode = mode
         let current = state(for: mode)
-        guard visibleModes.contains(mode) else { return }
+        let modeViewState = viewState(for: mode)
 
-        matches = current.matches
-        isLoading = current.isLoading
-        isLoadingMoreMatches = current.isLoadingMore
-        errorMessage = current.errorMessage
-        lastUpdated = current.lastUpdated
-        isUsingCache = current.isUsingCache
+        // Skip no-op assignments: every @Published write fires objectWillChange and
+        // re-renders the observing tab, even when the value is unchanged.
+        func update<Value: Equatable>(
+            _ keyPath: ReferenceWritableKeyPath<MatchesModeViewState, Value>,
+            _ value: Value
+        ) {
+            if modeViewState[keyPath: keyPath] != value {
+                modeViewState[keyPath: keyPath] = value
+            }
+        }
+
+        update(\.matches, current.matches)
+        update(\.isLoading, current.isLoading)
+        update(\.isLoadingMoreMatches, current.isLoadingMore)
+        update(\.errorMessage, current.errorMessage)
+        update(\.lastUpdated, current.lastUpdated)
+        update(\.isUsingCache, current.isUsingCache)
+
+        let mirrorsActiveMode = activeMode == mode && visibleModes.contains(mode)
+        if mirrorsActiveMode {
+            matches = current.matches
+            isLoading = current.isLoading
+            isLoadingMoreMatches = current.isLoadingMore
+            errorMessage = current.errorMessage
+            lastUpdated = current.lastUpdated
+            isUsingCache = current.isUsingCache
+        }
 
         // Cancel any previous grouping task so stale results can't overwrite newer ones.
-        groupingTask?.cancel()
-        groupingTaskID = nil
+        groupingTasks[mode]?.cancel()
+        groupingTaskIDs[mode] = nil
         if current.groupedMatchesRevision == groupingRevision {
-            groupedMatches = current.groupedMatches
+            update(\.groupedMatches, current.groupedMatches)
+            if mirrorsActiveMode {
+                groupedMatches = current.groupedMatches
+            }
             return
         }
 
         let matchesToGroup = current.matches
         if matchesToGroup.isEmpty {
-            groupedMatches = []
+            update(\.groupedMatches, [])
+            if mirrorsActiveMode {
+                groupedMatches = []
+            }
             var emptyState = current
             emptyState.groupedMatches = []
             emptyState.groupedMatchesRevision = groupingRevision
@@ -1953,8 +1970,8 @@ final class MatchesStore: ObservableObject {
         let ratingLookup = teamRatingLookup
         let groupingRevisionAtStart = groupingRevision
         let taskID = UUID()
-        groupingTaskID = taskID
-        groupingTask = Task.detached(priority: .userInitiated) { [weak self] in
+        groupingTaskIDs[mode] = taskID
+        groupingTasks[mode] = Task.detached(priority: .userInitiated) { [weak self] in
             let signpost = PerformanceSignposter.matches.beginInterval("MatchesGroupMatches")
             defer { PerformanceSignposter.matches.endInterval("MatchesGroupMatches", signpost) }
 
@@ -1970,10 +1987,8 @@ final class MatchesStore: ObservableObject {
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self,
-                      self.groupingTaskID == taskID,
-                      self.groupingRevision == groupingRevisionAtStart,
-                      self.activeMode == mode,
-                      self.visibleModes.contains(mode) else { return }
+                      self.groupingTaskIDs[mode] == taskID,
+                      self.groupingRevision == groupingRevisionAtStart else { return }
                 if durationMs >= 100 {
                     MatchesStore.log(
                         "grouping_complete mode=\(mode.rawValue) matches=\(matchesToGroup.count) days=\(grouped.count) duration_ms=\(durationMs)"
@@ -1983,7 +1998,10 @@ final class MatchesStore: ObservableObject {
                 cachedState.groupedMatches = grouped
                 cachedState.groupedMatchesRevision = groupingRevisionAtStart
                 self.modeStates[mode] = cachedState
-                self.groupedMatches = grouped
+                self.viewState(for: mode).groupedMatches = grouped
+                if self.activeMode == mode && self.visibleModes.contains(mode) {
+                    self.groupedMatches = grouped
+                }
             }
         }
 

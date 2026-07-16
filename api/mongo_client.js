@@ -10,6 +10,7 @@ try {
 const MONGODB_URI_TOP_SCORES = process.env.MONGODB_URI_TOP_SCORES || "";
 const DEFAULT_DB_NAME = "top_scores";
 const MATCH_WRITE_LOGS_TTL_SECONDS = 6 * 24 * 60 * 60;
+const BBC_REQUESTS_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 let client = null;
 let db = null;
@@ -53,11 +54,19 @@ async function ensureIndexes() {
       { key: { score_status: 1 }, name: "score_status" },
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
     ]),
-    collection("match_write_logs").createIndexes([
-      { key: { match_id: 1, timestamp_ms: -1 }, name: "match_timestamp" },
-      { key: { inserted_at_ms: -1 }, name: "insertedAt_desc" },
-      { key: { inserted_at_ms: 1 }, name: "ttl_expiry", expireAfterSeconds: MATCH_WRITE_LOGS_TTL_SECONDS },
-    ]),
+    // The legacy ttl_expiry index was on numeric inserted_at_ms, which Mongo's
+    // TTL monitor silently ignores (it only expires BSON Date fields) — drop it
+    // and index the Date-typed inserted_at instead.
+    collection("match_write_logs")
+      .dropIndex("ttl_expiry")
+      .catch(() => {})
+      .then(() =>
+        collection("match_write_logs").createIndexes([
+          { key: { match_id: 1, timestamp_ms: -1 }, name: "match_timestamp" },
+          { key: { inserted_at_ms: -1 }, name: "insertedAt_desc" },
+          { key: { inserted_at: 1 }, name: "inserted_at_ttl", expireAfterSeconds: MATCH_WRITE_LOGS_TTL_SECONDS },
+        ])
+      ),
     collection("fantasy_reminders").createIndexes([
       { key: { scheduled_for_ms: 1 }, name: "scheduledFor" },
       { key: { device_token: 1, scheduled_for_ms: -1 }, name: "device_scheduledFor" },
@@ -76,6 +85,7 @@ async function ensureIndexes() {
       { key: { timestamp_ms: -1 }, name: "timestamp_desc" },
       { key: { source: 1, timestamp_ms: -1 }, name: "source_timestamp" },
       { key: { status_code: 1, timestamp_ms: -1 }, name: "status_timestamp" },
+      { key: { inserted_at: 1 }, name: "inserted_at_ttl", expireAfterSeconds: BBC_REQUESTS_TTL_SECONDS },
     ]),
     collection("tsdb_tv_listings").createIndexes([
       { key: { date_event: 1 }, name: "date_event" },
@@ -420,6 +430,8 @@ async function saveOperationalMatchWriteLogEntries(entriesByMatchId) {
           match_id: normalizeRecordId(entry.match_id || matchId).toLowerCase(),
           timestamp_ms: Number.isFinite(Number(entry.timestamp_ms)) ? Number(entry.timestamp_ms) : nowMs,
           inserted_at_ms: nowMs,
+          // BSON Date required for the inserted_at_ttl TTL index to expire docs.
+          inserted_at: new Date(nowMs),
         });
       });
     }
@@ -521,7 +533,8 @@ async function saveBbcRequestHistory(record) {
   const mongoDb = await getDb();
   if (!mongoDb || !record) return null;
   const id = `${record.timestamp_ms || Date.now()}:${record.request_id || Math.random().toString(16).slice(2)}`;
-  const doc = { ...record, _id: id };
+  // BSON Date required for the inserted_at_ttl TTL index to expire docs.
+  const doc = { ...record, _id: id, inserted_at: new Date() };
   await collection("bbc_requests").updateOne({ _id: id }, { $set: doc }, { upsert: true });
   return stripMongoId(doc);
 }

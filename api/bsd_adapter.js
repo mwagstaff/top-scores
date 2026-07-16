@@ -647,6 +647,9 @@ function bsdEventToCanonicalMatch(event, options = {}) {
     league_subcategory: leagueSubcategory,
     details_url: null,
     has_bsd_source: true,
+    // BSD's own freshness timestamp — used e.g. to time finished-match
+    // retention on the Live Activity widget.
+    updated_at: event.last_updated ? String(event.last_updated) : null,
     tv_channels: tvChannels,
     home_goal_scorers: [],
     away_goal_scorers: [],

@@ -91,8 +91,12 @@ struct MatchesView: View {
     let mode: MatchesViewMode
     var isSelected: Bool = true
 
+    // Deliberately not observed: only this mode's view state should trigger
+    // re-renders. Store access is for method calls (configure/refresh/etc).
+    private let matchesStore: MatchesStore
+    @ObservedObject private var viewState: MatchesModeViewState
+
     @EnvironmentObject private var preferences: PreferencesStore
-    @EnvironmentObject private var matchesStore: MatchesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
     @State private var showToast = false
@@ -119,6 +123,15 @@ struct MatchesView: View {
     @State private var navigationMatch: MatchNavigation?
     @State private var screenOpenedAt: Date?
     @State private var screenViewSentForActivation = false
+    @State private var visibleGroupedDays: [MatchDay] = []
+    @State private var visibleGroupedDaysSource: [MatchDay] = []
+
+    init(mode: MatchesViewMode, isSelected: Bool = true, store: MatchesStore) {
+        self.mode = mode
+        self.isSelected = isSelected
+        self.matchesStore = store
+        self.viewState = store.viewState(for: mode)
+    }
 
     private static let minimumSearchCharacters = 3
     private static let searchDebounceNanoseconds: UInt64 = 250_000_000
@@ -178,9 +191,20 @@ struct MatchesView: View {
     }
 
     private var displayedMatchDays: [MatchDay] {
-        let days = isSearchFilteringActive ? filteredMatchDays : matchesStore.groupedMatches
-        guard !preferences.showPostponedGames else { return days }
-        return Self.filteringPostponed(days)
+        if isSearchFilteringActive {
+            guard !preferences.showPostponedGames else { return filteredMatchDays }
+            return Self.filteringPostponed(filteredMatchDays)
+        }
+        // Postponed filtering over the full dataset is cached in visibleGroupedDays
+        // so it doesn't run on every body evaluation.
+        return visibleGroupedDays
+    }
+
+    private func refreshVisibleGroupedDays(from days: [MatchDay], force: Bool = false) {
+        // Identical-storage arrays compare in O(1), so unchanged data is a no-op.
+        if !force && days == visibleGroupedDaysSource { return }
+        visibleGroupedDaysSource = days
+        visibleGroupedDays = preferences.showPostponedGames ? days : Self.filteringPostponed(days)
     }
 
     private static func filteringPostponed(_ days: [MatchDay]) -> [MatchDay] {
@@ -225,7 +249,7 @@ struct MatchesView: View {
             VStack(spacing: 0) {
                 headerView
                 Group {
-                    if matchesStore.groupedMatches.isEmpty && matchesStore.isLoading {
+                    if viewState.groupedMatches.isEmpty && viewState.isLoading {
                         ServerLoadingStateView(mode: mode)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if displayedMatchDays.isEmpty {
@@ -260,6 +284,7 @@ struct MatchesView: View {
             navigationStackContent
         }
         .onAppear {
+            refreshVisibleGroupedDays(from: viewState.groupedMatches)
             guard isSelected else { return }
             runActivationIfNeeded(logEvent: "onAppear")
             beginScreenViewTiming()
@@ -273,10 +298,11 @@ struct MatchesView: View {
                 screenViewSentForActivation = false
                 return
             }
+            refreshVisibleGroupedDays(from: viewState.groupedMatches)
             runActivationIfNeeded(logEvent: "isSelected")
             beginScreenViewTiming()
         }
-        .onChange(of: matchesStore.isLoading) { _, isLoading in
+        .onChange(of: viewState.isLoading) { _, isLoading in
             guard !isLoading else { return }
             sendTimedScreenView()
         }
@@ -286,7 +312,7 @@ struct MatchesView: View {
             NSLog("[MatchesView] snapshot_change mode=%@ showAllMatches=%d epl_pref=%d effective_snapshot=%@",
                   mode.rawValue, showAllMatches, preferences.englishPremierLeagueTeamsOnly, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
-            scheduleGroupedSideEffects(for: matchesStore.groupedMatches, immediate: false)
+            scheduleGroupedSideEffects(for: viewState.groupedMatches, immediate: false)
         }
         .onChange(of: preferences.showAllMatches) { _, newValue in
             guard isSelected else { return }
@@ -304,14 +330,18 @@ struct MatchesView: View {
                 }
             }
         }
-        .onChange(of: matchesStore.groupedMatches) { _, days in
+        .onChange(of: viewState.groupedMatches) { _, days in
+            refreshVisibleGroupedDays(from: days)
             guard isSelected else { return }
             scheduleGroupedSideEffects(for: days, immediate: false)
+        }
+        .onChange(of: preferences.showPostponedGames) { _, _ in
+            refreshVisibleGroupedDays(from: viewState.groupedMatches, force: true)
         }
         .onReceive(NotificationCenter.default.publisher(for: FixturePredictionStore.didChangeNotification)) { _ in
             guard isSelected else { return }
             predictionDateKeys = FixturePredictionStore.storedDateKeys()
-            scheduleGroupedSideEffects(for: matchesStore.groupedMatches, immediate: false)
+            scheduleGroupedSideEffects(for: viewState.groupedMatches, immediate: false)
         }
         .onChange(of: searchText) { _, newValue in
             scheduleDebouncedSearch(for: newValue)
@@ -346,7 +376,7 @@ struct MatchesView: View {
     private func beginScreenViewTiming() {
         screenOpenedAt = Date()
         screenViewSentForActivation = false
-        if !matchesStore.isLoading {
+        if !viewState.isLoading {
             sendTimedScreenView()
         }
     }
@@ -366,7 +396,7 @@ struct MatchesView: View {
               fantasyViewModel.data == nil,
               !fantasyViewModel.isLoading,
               !fantasyViewModel.isRefreshing,
-              matchesStore.groupedMatches.contains(where: { day in
+              viewState.groupedMatches.contains(where: { day in
                   day.leagues.contains(where: { league in
                       league.matches.contains(where: {
                           $0.league.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -405,7 +435,7 @@ struct MatchesView: View {
                 }
             }
 
-            if mode == .results && matchesStore.isLoadingMoreMatches {
+            if mode == .results && viewState.isLoadingMoreMatches {
                 loadingMoreMatchesRow
             }
         }
@@ -719,7 +749,7 @@ struct MatchesView: View {
                             isSearchVisible = true
                         }
                         isSearchFieldFocused = true
-                        rebuildSearchIndex(from: matchesStore.groupedMatches)
+                        rebuildSearchIndex(from: viewState.groupedMatches)
                         AppMetricsService.shared.fireActivity("search_activated", screen: mode.rawValue, apiBaseURL: preferences.apiBaseURL)
                     }
                 } label: {
@@ -747,9 +777,9 @@ struct MatchesView: View {
                 }
             }
 
-            if matchesStore.errorMessage != nil || (matchesStore.groupedMatches.isEmpty && matchesStore.isLoading) || matchesStore.lastUpdated != nil {
+            if viewState.errorMessage != nil || (viewState.groupedMatches.isEmpty && viewState.isLoading) || viewState.lastUpdated != nil {
                 VStack(alignment: .leading, spacing: 6) {
-                    if let error = matchesStore.errorMessage {
+                    if let error = viewState.errorMessage {
                         Text(error)
                             .font(.footnote)
                             .foregroundStyle(.red)
@@ -758,7 +788,7 @@ struct MatchesView: View {
                     // Only show the loading indicator when there is no data yet (initial load).
                     // When cached/fresh data is already visible a background refresh should not
                     // disrupt the layout or replace the "Updated" timestamp with a spinner.
-                    if matchesStore.groupedMatches.isEmpty && matchesStore.isLoading {
+                    if viewState.groupedMatches.isEmpty && viewState.isLoading {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
@@ -766,8 +796,8 @@ struct MatchesView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
-                    } else if let lastUpdated = matchesStore.lastUpdated {
-                        let cachedSuffix = matchesStore.isUsingCache ? " (cached)" : ""
+                    } else if let lastUpdated = viewState.lastUpdated {
+                        let cachedSuffix = viewState.isUsingCache ? " (cached)" : ""
                         Text("Updated \(refreshFormatter.string(from: lastUpdated))\(cachedSuffix)")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -830,7 +860,7 @@ struct MatchesView: View {
         let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
         NSLog("[MatchesView] %@ mode=%@ selected=%d snapshot=%@", logEvent, mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
         matchesStore.configure(with: snapshot, mode: mode)
-        let days = matchesStore.groupedMatches
+        let days = viewState.groupedMatches
         scheduleGroupedSideEffects(for: days, immediate: false)
         predictionDateKeys = FixturePredictionStore.storedDateKeys()
     }
@@ -2383,8 +2413,9 @@ private struct ToastView: View {
 }
 
 #Preview {
-    MatchesView(mode: .fixtures)
+    let store = MatchesStore()
+    return MatchesView(mode: .fixtures, store: store)
         .environmentObject(PreferencesStore())
-        .environmentObject(MatchesStore())
+        .environmentObject(store)
         .environmentObject(FantasyViewModel())
 }

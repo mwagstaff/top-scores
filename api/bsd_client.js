@@ -198,6 +198,7 @@ function _fetchJson(url, options = {}) {
         trigger,
         url: requestedUrl,
         statusCode,
+        errorCode: error && error.code ? String(error.code) : null,
         durationMs: Date.now() - startedAtMs,
         timestampMs: Date.now(),
       });

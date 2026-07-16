@@ -104,10 +104,56 @@ function matchIsMajorGameOfInterest(match) {
   );
 }
 
+// Mirrors the category-filter semantics of the fixtures pipeline in server.js
+// (matchIncludesHomeNation / matchIsMajorTournament) so Live Activity
+// eligibility agrees with what the app's fixture list shows.
+const HOME_NATIONS_TEAMS = new Set([
+  "england",
+  "northern ireland",
+  "scotland",
+  "wales",
+]);
+
+const MAJOR_TOURNAMENT_PATTERNS = [
+  /^fifa world cup(?:\s+\d{4})?$/i,
+  /^(?:uefa\s+)?european championship(?:\s+\d{4})?$/i,
+  /^(?:uefa\s+)?euro(?:\s+\d{4})?$/i,
+];
+
+const QUALIFYING_COMPETITION_PATTERN = /\bqualif(?:ying|ication)\b/i;
+
+function matchIncludesHomeNation(match) {
+  if (!match) return false;
+  return [match.home_team || match.homeTeam, match.away_team || match.awayTeam].some(
+    (teamName) => HOME_NATIONS_TEAMS.has(normalizeTeam(teamName))
+  );
+}
+
+function matchIsMajorTournament(match) {
+  if (!match) return false;
+
+  const rawLeague = String(match.league || "").trim();
+  const rawSubcategory = String(match.league_subcategory || "").trim();
+  if (!rawLeague) return false;
+  if (
+    QUALIFYING_COMPETITION_PATTERN.test(rawLeague) ||
+    QUALIFYING_COMPETITION_PATTERN.test(rawSubcategory)
+  ) {
+    return false;
+  }
+
+  const normalizedLeague = normalizeMajorGameText(rawLeague);
+  if (!normalizedLeague) return false;
+
+  return MAJOR_TOURNAMENT_PATTERNS.some((pattern) => pattern.test(normalizedLeague));
+}
+
 module.exports = {
   MAJOR_CLUB_DERBIES,
+  matchIncludesHomeNation,
   matchIsMajorClubDerby,
   matchIsMajorGameOfInterest,
+  matchIsMajorTournament,
   matchIsMajorUefaClubKnockoutFixture,
   matchIsPromotionPlayoff,
 };

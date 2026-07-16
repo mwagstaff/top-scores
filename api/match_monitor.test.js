@@ -17,16 +17,26 @@ function newMonitorState(overrides = {}) {
   };
 }
 
+// Match date/time fields are Europe/London wall-clock, so format them in that
+// zone explicitly — keeps these tests correct on any host timezone.
+const londonDateTimeFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/London",
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 function formatLocalDateTimeParts(timestampMs) {
-  const date = new Date(timestampMs);
-  const yyyy = String(date.getFullYear());
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
+  const parts = {};
+  londonDateTimeFormatter.formatToParts(new Date(timestampMs)).forEach((part) => {
+    parts[part.type] = part.value;
+  });
   return {
-    date: `${yyyy}-${mm}-${dd}`,
-    time: `${hh}:${min}`,
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    time: `${parts.hour}:${parts.minute}`,
   };
 }
 
@@ -53,6 +63,37 @@ function liveActivityUserWithFantasyScore(score, delayMinutes = 5, extraPreferen
     },
   };
 }
+
+test("parseMatchDateTimeMs treats match date/time as Europe/London wall-clock", () => {
+  // 18:00 London on a BST date is 17:00 UTC — the naive host-local parse on the
+  // UTC production server made this 18:00 UTC, so every kickoff looked an hour
+  // late and live scores were spoiler-suppressed for the first hour of a match.
+  assert.equal(
+    __testHooks.parseMatchDateTimeMs({ date: "2026-07-04", time: "18:00" }),
+    Date.parse("2026-07-04T17:00:00Z")
+  );
+  // GMT date: London matches UTC.
+  assert.equal(
+    __testHooks.parseMatchDateTimeMs({ date: "2026-01-10", time: "15:00" }),
+    Date.parse("2026-01-10T15:00:00Z")
+  );
+});
+
+test("parseMatchDateTimeMs is independent of the host timezone", () => {
+  // The production server runs UTC while this suite typically runs in
+  // Europe/London, so re-run the BST conversion in a UTC child process.
+  const { execFileSync } = require("node:child_process");
+  const output = execFileSync(
+    process.execPath,
+    [
+      "-e",
+      `const { __testHooks } = require(${JSON.stringify(require.resolve("./match_monitor"))});
+       console.log(__testHooks.parseMatchDateTimeMs({ date: "2026-07-04", time: "18:00" }));`,
+    ],
+    { env: { ...process.env, TZ: "UTC" }, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+  );
+  assert.equal(Number(output.trim()), Date.parse("2026-07-04T17:00:00Z"));
+});
 
 test("isMatchRelevant keeps recently kicked off fixtures eligible until live status arrives", () => {
   const nowMs = Date.now();
@@ -482,7 +523,11 @@ test("liveActivityPendingStartMaxMsForMode follows stale window by mode", () => 
   );
 });
 
-test("buildLiveActivityPresentationForUser suppresses stale high-minute live status and ends activity", () => {
+test("buildLiveActivityPresentationForUser keeps a high-minute live match long after kickoff", () => {
+  // BSD reliably reports full time, so a match deep in stoppage/extra time
+  // 130+ minutes after kickoff is genuinely still in progress — there is no
+  // stale-live heuristic second-guessing the feed (that was a hangover from
+  // the BBC/TSDB days).
   const nowMs = Date.now();
   const kickoffMs = nowMs - 130 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -509,9 +554,9 @@ test("buildLiveActivityPresentationForUser suppresses stale high-minute live sta
     nowMs
   );
 
-  assert.equal(presentation.mode, null);
-  assert.equal(Array.isArray(presentation.matches), true);
-  assert.equal(presentation.matches.length, 0);
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].match_details_id, "c4gq92l5de2t");
 });
 
 test("buildLiveActivityPresentationForUser excludes non-Premier League matches when EPL-only filter is enabled", () => {
@@ -660,6 +705,92 @@ test("filterCanonicalLiveActivityMatchesForUser keeps major UEFA knockout fixtur
   assert.deepEqual(
     filtered.map((match) => `${match.home_team}|${match.away_team}`),
     ["Real Madrid|Bayern Munich"]
+  );
+});
+
+test("filterCanonicalLiveActivityMatchesForUser keeps major tournament fixtures under EPL-only when the major tournaments filter is enabled", () => {
+  const nowMs = Date.parse("2026-07-04T18:55:00Z");
+
+  const matches = [
+    {
+      date: "2026-07-04",
+      time: "18:00",
+      league: "FIFA World Cup 2026",
+      league_subcategory: "Round of 16",
+      home_team: "Canada",
+      away_team: "Morocco",
+      score_status: "92",
+      tv_channels: ["ITV"],
+    },
+    {
+      // Qualifiers are excluded from the major-tournament allowance.
+      date: "2026-07-04",
+      time: "19:00",
+      league: "FIFA World Cup 2026 Qualifying",
+      home_team: "Moldova",
+      away_team: "Malta",
+      tv_channels: [],
+    },
+    {
+      // A non-major league without an EPL team stays excluded.
+      date: "2026-07-04",
+      time: "19:00",
+      league: "La Liga",
+      home_team: "Getafe",
+      away_team: "Osasuna",
+      tv_channels: [],
+    },
+  ];
+
+  const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+    matches,
+    liveActivityUser(0, {
+      englishPremierLeagueTeamsOnly: true,
+      majorUEFAClubGamesEnabled: true,
+      majorTournamentsFilterEnabled: true,
+    }),
+    nowMs
+  );
+
+  assert.deepEqual(
+    filtered.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Canada|Morocco"]
+  );
+
+  const eligibility = __testHooks.isEligibleForLiveActivityByPreferences(
+    liveActivityUser(0, {
+      englishPremierLeagueTeamsOnly: true,
+      majorTournamentsFilterEnabled: true,
+    }),
+    matches[0]
+  );
+  assert.equal(eligibility.eligible, true);
+});
+
+test("filterCanonicalLiveActivityMatchesForUser keeps home nations fixtures under EPL-only when the home nations filter is enabled", () => {
+  const nowMs = Date.parse("2026-07-04T18:55:00Z");
+
+  const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+    [
+      {
+        date: "2026-07-04",
+        time: "20:00",
+        league: "International Friendlies",
+        home_team: "Scotland",
+        away_team: "Norway",
+        tv_channels: [],
+      },
+    ],
+    liveActivityUser(0, {
+      englishPremierLeagueTeamsOnly: true,
+      homeNationsFilterEnabled: true,
+    }),
+    nowMs
+  );
+
+  assert.deepEqual(
+    filtered.map((match) => `${match.home_team}|${match.away_team}`),
+    ["Scotland|Norway"]
   );
 });
 
@@ -1899,6 +2030,29 @@ test("buildLiveActivityContentState clears pre-kickoff live status and uses prim
   assert.equal(contentState.matches[0].matchTime, undefined);
   assert.deepStrictEqual(contentState.matches[0].tvChannels, ["ITV"]);
   assert.equal(contentState.matches[0].tvLogoKey, "itv");
+});
+
+test("buildLiveActivityContentState localizes kickoff times for the device time zone", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_upcoming",
+    [
+      {
+        match_details_id: "france-spain",
+        date: "2026-07-14",
+        time: "20:00",
+        league: "FIFA World Cup 2026",
+        home_team: "France",
+        away_team: "Spain",
+      },
+    ],
+    0,
+    Date.parse("2026-07-14T12:00:00Z"),
+    null,
+    "Europe/Vienna"
+  );
+
+  assert.equal(contentState.matches[0].date, "2026-07-14");
+  assert.equal(contentState.matches[0].time, "21:00");
 });
 
 test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly payloads", () => {
@@ -4263,6 +4417,32 @@ test("compareLiveActivityMatches sorts earlier kickoffs first", () => {
 
   const sorted = [laterKickoffMatch, earlierKickoffMatch].sort(__testHooks.compareLiveActivityMatches);
   assert.equal(sorted[0].match_details_id, "earlier");
+});
+
+test("compareLiveActivityMatches sorts in-progress matches ahead of finished ones regardless of kickoff time or competition weight", () => {
+  const finishedEarlierKickoffHigherWeight = {
+    match_details_id: "8374",
+    league: "FIFA World Cup 2026",
+    home_team: "Colombia",
+    away_team: "Ghana",
+    date: "2026-07-04",
+    time: "02:30",
+    score_status: "FT",
+  };
+  const liveLaterKickoffLowerWeight = {
+    match_details_id: "8381",
+    league: "Championship",
+    home_team: "Middlesbrough",
+    away_team: "Southampton",
+    date: "2026-07-04",
+    time: "18:00",
+    score_status: "63",
+  };
+
+  const sorted = [finishedEarlierKickoffHigherWeight, liveLaterKickoffLowerWeight].sort(
+    __testHooks.compareLiveActivityMatches
+  );
+  assert.equal(sorted[0].match_details_id, "8381");
 });
 
 test("compareUpcomingLiveActivityMatches sorts earlier kickoffs first", () => {

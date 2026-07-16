@@ -226,6 +226,32 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
   assert.equal(compositeId, "2026-06-21|20:00|FIFA World Cup 2026|Cape Verde|Uruguay");
 });
 
+test("bsdEventToCanonicalMatch: surfaces BSD last_updated as updated_at", () => {
+  // The Live Activity stale-live heuristic needs updated_at to keep a match
+  // that's genuinely still in progress past kickoff+2h (extra time, heavy
+  // stoppage) on the widget.
+  const base = {
+    id: 8375,
+    league_id: 27,
+    home_team: "Canada",
+    away_team: "Morocco",
+    home_score: 0,
+    away_score: 3,
+    status: "inprogress",
+    period: "2nd_half",
+    current_minute: 98,
+    event_date: "2026-07-04T17:00:00Z",
+  };
+  const withTimestamp = bsdEventToCanonicalMatch({
+    ...base,
+    last_updated: "2026-07-04T19:04:25Z",
+  });
+  assert.equal(withTimestamp.updated_at, "2026-07-04T19:04:25Z");
+
+  const withoutTimestamp = bsdEventToCanonicalMatch(base);
+  assert.equal(withoutTimestamp.updated_at, null);
+});
+
 test("bsdEventToCanonicalMatch: surfaces round_name as league_subcategory", () => {
   const event = {
     id: 8359,

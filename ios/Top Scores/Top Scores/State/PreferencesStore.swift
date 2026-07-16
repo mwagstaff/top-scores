@@ -63,9 +63,6 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let notificationsEnabled: Bool
     let notificationDelayMinutes: Int
     let notificationEventTypes: Set<String>
-    let notificationUseViewingFilter: Bool
-    let notificationCompetitionFilterEnabled: Bool
-    let notificationSelectedLeagues: [String]
     let notificationPremierLeagueTeamsOnly: Bool
     let notificationMajorUEFAClubGamesEnabled: Bool
     let notificationHomeNationsFilterEnabled: Bool
@@ -118,9 +115,6 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         notificationsEnabled: Bool = PreferencesStore.defaultNotificationsEnabled,
         notificationDelayMinutes: Int = PreferencesStore.defaultNotificationDelayMinutes,
         notificationEventTypes: Set<String> = PreferencesStore.defaultNotificationEventTypes,
-        notificationUseViewingFilter: Bool = PreferencesStore.defaultNotificationUseViewingFilter,
-        notificationCompetitionFilterEnabled: Bool = PreferencesStore.defaultNotificationCompetitionFilterEnabled,
-        notificationSelectedLeagues: [String] = PreferencesStore.defaultNotificationSelectedLeagues,
         notificationPremierLeagueTeamsOnly: Bool = PreferencesStore.defaultNotificationPremierLeagueTeamsOnly,
         notificationMajorUEFAClubGamesEnabled: Bool = PreferencesStore.defaultNotificationMajorUEFAClubGamesEnabled,
         notificationHomeNationsFilterEnabled: Bool = PreferencesStore.defaultNotificationHomeNationsFilterEnabled,
@@ -152,9 +146,6 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.notificationsEnabled = notificationsEnabled
         self.notificationDelayMinutes = notificationDelayMinutes
         self.notificationEventTypes = notificationEventTypes
-        self.notificationUseViewingFilter = notificationUseViewingFilter
-        self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
-        self.notificationSelectedLeagues = notificationSelectedLeagues
         self.notificationPremierLeagueTeamsOnly = notificationPremierLeagueTeamsOnly
         self.notificationMajorUEFAClubGamesEnabled = notificationMajorUEFAClubGamesEnabled
         self.notificationHomeNationsFilterEnabled = notificationHomeNationsFilterEnabled
@@ -188,9 +179,6 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case notificationsEnabled
         case notificationDelayMinutes
         case notificationEventTypes
-        case notificationUseViewingFilter
-        case notificationCompetitionFilterEnabled
-        case notificationSelectedLeagues
         case notificationPremierLeagueTeamsOnly
         case notificationMajorUEFAClubGamesEnabled
         case notificationHomeNationsFilterEnabled
@@ -232,9 +220,6 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         notificationDelayMinutes = try container.decodeIfPresent(Int.self, forKey: .notificationDelayMinutes) ?? PreferencesStore.defaultNotificationDelayMinutes
         let eventTypesArray = try container.decodeIfPresent([String].self, forKey: .notificationEventTypes)
         notificationEventTypes = eventTypesArray.map { Set($0) } ?? PreferencesStore.defaultNotificationEventTypes
-        notificationUseViewingFilter = try container.decodeIfPresent(Bool.self, forKey: .notificationUseViewingFilter) ?? PreferencesStore.defaultNotificationUseViewingFilter
-        notificationCompetitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationCompetitionFilterEnabled) ?? PreferencesStore.defaultNotificationCompetitionFilterEnabled
-        notificationSelectedLeagues = try container.decodeIfPresent([String].self, forKey: .notificationSelectedLeagues) ?? PreferencesStore.defaultNotificationSelectedLeagues
         notificationPremierLeagueTeamsOnly = try container.decodeIfPresent(Bool.self, forKey: .notificationPremierLeagueTeamsOnly) ?? PreferencesStore.defaultNotificationPremierLeagueTeamsOnly
         notificationMajorUEFAClubGamesEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationMajorUEFAClubGamesEnabled) ?? PreferencesStore.defaultNotificationMajorUEFAClubGamesEnabled
         notificationHomeNationsFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationHomeNationsFilterEnabled) ?? PreferencesStore.defaultNotificationHomeNationsFilterEnabled
@@ -273,9 +258,6 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
         try container.encode(notificationDelayMinutes, forKey: .notificationDelayMinutes)
         try container.encode(Array(notificationEventTypes).sorted(), forKey: .notificationEventTypes)
-        try container.encode(notificationUseViewingFilter, forKey: .notificationUseViewingFilter)
-        try container.encode(notificationCompetitionFilterEnabled, forKey: .notificationCompetitionFilterEnabled)
-        try container.encode(notificationSelectedLeagues, forKey: .notificationSelectedLeagues)
         try container.encode(notificationPremierLeagueTeamsOnly, forKey: .notificationPremierLeagueTeamsOnly)
         try container.encode(notificationMajorUEFAClubGamesEnabled, forKey: .notificationMajorUEFAClubGamesEnabled)
         try container.encode(notificationHomeNationsFilterEnabled, forKey: .notificationHomeNationsFilterEnabled)
@@ -309,9 +291,6 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         lhs.notificationsEnabled == rhs.notificationsEnabled &&
         lhs.notificationDelayMinutes == rhs.notificationDelayMinutes &&
         lhs.notificationEventTypes == rhs.notificationEventTypes &&
-        lhs.notificationUseViewingFilter == rhs.notificationUseViewingFilter &&
-        lhs.notificationCompetitionFilterEnabled == rhs.notificationCompetitionFilterEnabled &&
-        lhs.notificationSelectedLeagues == rhs.notificationSelectedLeagues &&
         lhs.notificationPremierLeagueTeamsOnly == rhs.notificationPremierLeagueTeamsOnly &&
         lhs.notificationMajorUEFAClubGamesEnabled == rhs.notificationMajorUEFAClubGamesEnabled &&
         lhs.notificationHomeNationsFilterEnabled == rhs.notificationHomeNationsFilterEnabled &&
@@ -356,9 +335,6 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultNotificationsEnabled = true
     nonisolated static let defaultNotificationDelayMinutes = 2
     nonisolated static let defaultNotificationEventTypes: Set<String> = ["goal", "kickoff", "halftime", "fulltime", "redcard"]
-    nonisolated static let defaultNotificationUseViewingFilter = true
-    nonisolated static let defaultNotificationCompetitionFilterEnabled = true
-    nonisolated static let defaultNotificationSelectedLeagues: [String] = []
     nonisolated static let defaultNotificationPremierLeagueTeamsOnly = true
     nonisolated static let defaultNotificationMajorUEFAClubGamesEnabled = true
     nonisolated static let defaultNotificationHomeNationsFilterEnabled = true
@@ -436,18 +412,6 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var notificationEventTypes: Set<String> {
-        didSet { persist() }
-    }
-
-    @Published var notificationUseViewingFilter: Bool {
-        didSet { persist() }
-    }
-
-    @Published var notificationCompetitionFilterEnabled: Bool {
-        didSet { persist() }
-    }
-
-    @Published var notificationSelectedLeagues: [String] {
         didSet { persist() }
     }
 
@@ -547,12 +511,6 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationDelayMinutes
         let notificationEventTypesArray = userDefaults.stringArray(forKey: Keys.notificationEventTypes)
         let notificationEventTypes = notificationEventTypesArray.map { Set($0) } ?? Self.defaultNotificationEventTypes
-        let notificationUseViewingFilter = userDefaults.object(forKey: Keys.notificationUseViewingFilter) as? Bool
-            ?? Self.defaultNotificationUseViewingFilter
-        let notificationCompetitionFilterEnabled = userDefaults.object(forKey: Keys.notificationCompetitionFilterEnabled) as? Bool
-            ?? Self.defaultNotificationCompetitionFilterEnabled
-        let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
-            ?? Self.defaultNotificationSelectedLeagues
         let notificationPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.notificationPremierLeagueTeamsOnly) as? Bool
             ?? Self.defaultNotificationPremierLeagueTeamsOnly
         let notificationMajorUEFAClubGamesEnabled = userDefaults.object(forKey: Keys.notificationMajorUEFAClubGamesEnabled) as? Bool
@@ -606,9 +564,6 @@ final class PreferencesStore: ObservableObject {
         self.notificationsEnabled = notificationsEnabled
         self.notificationDelayMinutes = max(0, min(10, notificationDelayMinutes))
         self.notificationEventTypes = notificationEventTypes
-        self.notificationUseViewingFilter = notificationUseViewingFilter
-        self.notificationCompetitionFilterEnabled = notificationCompetitionFilterEnabled
-        self.notificationSelectedLeagues = notificationSelectedLeagues
         self.notificationPremierLeagueTeamsOnly = notificationPremierLeagueTeamsOnly
         self.notificationMajorUEFAClubGamesEnabled = notificationMajorUEFAClubGamesEnabled
         self.notificationHomeNationsFilterEnabled = notificationHomeNationsFilterEnabled
@@ -652,9 +607,6 @@ final class PreferencesStore: ObservableObject {
             notificationsEnabled: notificationsEnabled,
             notificationDelayMinutes: notificationDelayMinutes,
             notificationEventTypes: notificationEventTypes,
-            notificationUseViewingFilter: notificationUseViewingFilter,
-            notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
-            notificationSelectedLeagues: notificationSelectedLeagues,
             notificationPremierLeagueTeamsOnly: notificationPremierLeagueTeamsOnly,
             notificationMajorUEFAClubGamesEnabled: notificationMajorUEFAClubGamesEnabled,
             notificationHomeNationsFilterEnabled: notificationHomeNationsFilterEnabled,
@@ -694,9 +646,6 @@ final class PreferencesStore: ObservableObject {
             notificationsEnabled: notificationsEnabled,
             notificationDelayMinutes: notificationDelayMinutes,
             notificationEventTypes: notificationEventTypes,
-            notificationUseViewingFilter: notificationUseViewingFilter,
-            notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
-            notificationSelectedLeagues: notificationSelectedLeagues,
             notificationPremierLeagueTeamsOnly: notificationPremierLeagueTeamsOnly,
             notificationMajorUEFAClubGamesEnabled: notificationMajorUEFAClubGamesEnabled,
             notificationHomeNationsFilterEnabled: notificationHomeNationsFilterEnabled,
@@ -731,9 +680,6 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(notificationsEnabled, forKey: Keys.notificationsEnabled)
         userDefaults.set(notificationDelayMinutes, forKey: Keys.notificationDelayMinutes)
         userDefaults.set(Array(notificationEventTypes), forKey: Keys.notificationEventTypes)
-        userDefaults.set(notificationUseViewingFilter, forKey: Keys.notificationUseViewingFilter)
-        userDefaults.set(notificationCompetitionFilterEnabled, forKey: Keys.notificationCompetitionFilterEnabled)
-        userDefaults.set(notificationSelectedLeagues, forKey: Keys.notificationSelectedLeagues)
         userDefaults.set(notificationPremierLeagueTeamsOnly, forKey: Keys.notificationPremierLeagueTeamsOnly)
         userDefaults.set(notificationMajorUEFAClubGamesEnabled, forKey: Keys.notificationMajorUEFAClubGamesEnabled)
         userDefaults.set(notificationHomeNationsFilterEnabled, forKey: Keys.notificationHomeNationsFilterEnabled)
@@ -797,12 +743,6 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationDelayMinutes
         let notificationEventTypesArray = userDefaults.stringArray(forKey: Keys.notificationEventTypes)
         let notificationEventTypes = notificationEventTypesArray.map { Set($0) } ?? Self.defaultNotificationEventTypes
-        let notificationUseViewingFilter = userDefaults.object(forKey: Keys.notificationUseViewingFilter) as? Bool
-            ?? Self.defaultNotificationUseViewingFilter
-        let notificationCompetitionFilterEnabled = userDefaults.object(forKey: Keys.notificationCompetitionFilterEnabled) as? Bool
-            ?? Self.defaultNotificationCompetitionFilterEnabled
-        let notificationSelectedLeagues = userDefaults.stringArray(forKey: Keys.notificationSelectedLeagues)
-            ?? Self.defaultNotificationSelectedLeagues
         let notificationPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.notificationPremierLeagueTeamsOnly) as? Bool
             ?? Self.defaultNotificationPremierLeagueTeamsOnly
         let notificationMajorUEFAClubGamesEnabled = userDefaults.object(forKey: Keys.notificationMajorUEFAClubGamesEnabled) as? Bool
@@ -853,9 +793,6 @@ final class PreferencesStore: ObservableObject {
             notificationsEnabled: notificationsEnabled,
             notificationDelayMinutes: max(0, min(10, notificationDelayMinutes)),
             notificationEventTypes: notificationEventTypes,
-            notificationUseViewingFilter: notificationUseViewingFilter,
-            notificationCompetitionFilterEnabled: notificationCompetitionFilterEnabled,
-            notificationSelectedLeagues: notificationSelectedLeagues,
             notificationPremierLeagueTeamsOnly: notificationPremierLeagueTeamsOnly,
             notificationMajorUEFAClubGamesEnabled: notificationMajorUEFAClubGamesEnabled,
             notificationHomeNationsFilterEnabled: notificationHomeNationsFilterEnabled,
@@ -890,9 +827,6 @@ final class PreferencesStore: ObservableObject {
         static let notificationsEnabled = "preferences.notificationsEnabled"
         static let notificationDelayMinutes = "preferences.notificationDelayMinutes"
         static let notificationEventTypes = "preferences.notificationEventTypes"
-        static let notificationUseViewingFilter = "preferences.notificationUseViewingFilter"
-        static let notificationCompetitionFilterEnabled = "preferences.notificationCompetitionFilterEnabled"
-        static let notificationSelectedLeagues = "preferences.notificationSelectedLeagues"
         static let notificationPremierLeagueTeamsOnly = "preferences.notificationPremierLeagueTeamsOnly"
         static let notificationMajorUEFAClubGamesEnabled = "preferences.notificationMajorUEFAClubGamesEnabled"
         static let notificationHomeNationsFilterEnabled = "preferences.notificationHomeNationsFilterEnabled"
