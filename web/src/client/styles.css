@@ -40,6 +40,12 @@
   --error:           rgba(220, 38, 38, 0.12);
   --error-text:      #f8b4b4;
 
+  /* Predicted scores */
+  --predict:         #9d9aff;
+  --predict-soft:    rgba(157, 154, 255, 0.14);
+  --predict-border:  rgba(157, 154, 255, 0.35);
+  --predict-away:    #3ebfb0;
+
   /* Shadows */
   --shadow:          0 16px 48px rgba(0, 0, 0, 0.32);
   --shadow-sm:       0 4px 16px  rgba(0, 0, 0, 0.20);
@@ -82,6 +88,11 @@
     --error:           rgba(220, 38, 38, 0.07);
     --error-text:      #9f1d1d;
 
+    --predict:         #5b57e0;
+    --predict-soft:    rgba(91, 87, 224, 0.10);
+    --predict-border:  rgba(91, 87, 224, 0.28);
+    --predict-away:    #0f9d90;
+
     --shadow:          0 12px 40px rgba(20, 33, 61, 0.08);
     --shadow-sm:       0 3px 12px  rgba(20, 33, 61, 0.06);
 
@@ -115,6 +126,10 @@
   --live:            #52d083;
   --live-bg:         rgba(82, 208, 131, 0.10);
   --warning:         #f0c15b;
+  --predict:         #9d9aff;
+  --predict-soft:    rgba(157, 154, 255, 0.14);
+  --predict-border:  rgba(157, 154, 255, 0.35);
+  --predict-away:    #3ebfb0;
   --field-border:    rgba(173, 197, 240, 0.15);
   --field-bg:        rgba(7, 16, 29, 0.65);
   --hover-bg:        rgba(120, 170, 255, 0.07);
@@ -144,6 +159,10 @@
   --warning:         #e8a716;
   --error:           rgba(220, 38, 38, 0.07);
   --error-text:      #9f1d1d;
+  --predict:         #5b57e0;
+  --predict-soft:    rgba(91, 87, 224, 0.10);
+  --predict-border:  rgba(91, 87, 224, 0.28);
+  --predict-away:    #0f9d90;
   --shadow:          0 12px 40px rgba(20, 33, 61, 0.08);
   --shadow-sm:       0 3px 12px  rgba(20, 33, 61, 0.06);
   --field-border:    rgba(19, 34, 56, 0.12);
@@ -969,6 +988,111 @@ button.match-row:hover {
 .mc-right.is-live {
   color: var(--live);
 }
+
+/* Predicted score strip — a chip plus a home/draw/away probability bar,
+   shown as a second row beneath the fixture row. The probabilities are the
+   frozen pre-match snapshot and never change once shown. */
+.match-predict-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 0.9rem 0.65rem 3rem;
+}
+
+.match-predict-pending-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+/* Predicted score chip — indigo while undecided; green once finished and
+   correct; muted once finished and it missed. */
+.mc-predict {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: var(--predict);
+  background: var(--predict-soft);
+  border: 1px solid var(--predict-border);
+  border-radius: 0.4rem;
+  padding: 0.16rem 0.34rem;
+}
+
+.mc-predict.is-correct {
+  color: var(--live);
+  background: var(--live-bg);
+  border-color: color-mix(in srgb, var(--live) 45%, transparent);
+}
+
+.mc-predict.is-missed {
+  color: var(--text-muted);
+  background: transparent;
+  border-color: var(--surface-border);
+  opacity: 0.75;
+}
+
+.mc-predict-icon {
+  width: 0.6rem;
+  height: 0.6rem;
+  flex-shrink: 0;
+}
+
+.mc-predict-spinner {
+  width: 0.6rem;
+  height: 0.6rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1.5px solid var(--predict-border);
+  border-top-color: var(--predict);
+  animation: mc-predict-spin 0.7s linear infinite;
+}
+
+@keyframes mc-predict-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Home/draw/away probability bar */
+.match-predict-bar {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  height: 0.3rem;
+  min-width: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  gap: 1.5px;
+  background: var(--surface-border);
+}
+
+.match-predict-bar span {
+  display: block;
+  height: 100%;
+}
+
+.mpb-home { background: var(--predict); }
+.mpb-draw { background: var(--text-muted); opacity: 0.4; }
+.mpb-away { background: var(--predict-away); }
+
+.match-predict-label {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mpl-home { color: var(--predict); }
+.mpl-away { color: var(--predict-away); }
+.mpl-sep { opacity: 0.5; }
 
 /* Expand chevron */
 .mc-chevron-wrap {

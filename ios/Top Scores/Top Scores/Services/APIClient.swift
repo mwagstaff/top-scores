@@ -165,7 +165,7 @@ struct APIClient {
         queryItems.append(URLQueryItem(name: "page", value: String(max(1, page))))
         queryItems.append(URLQueryItem(name: "page_size", value: String(max(1, pageSize))))
         queryItems.append(URLQueryItem(name: "time_zone", value: TimeZone.current.identifier))
-        if includePreferenceFilters && preferences.competitionFilterEnabled {
+        if includePreferenceFilters && preferences.usesFixtureCompetitionSelection {
             preferences.selectedLeagues.forEach { queryItems.append(URLQueryItem(name: "league", value: $0)) }
         }
         if includePreferenceFilters && mode == .fixtures && preferences.channelFilterEnabled {

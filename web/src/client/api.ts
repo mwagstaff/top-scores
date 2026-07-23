@@ -23,6 +23,7 @@ import {
   type TeamRankingEntry,
   type MatchYellowCardEvent,
   type MatchVarEvent,
+  type PredictionLeague,
 } from "./types";
 
 let competitionsPromise: Promise<string[]> | null = null;
@@ -219,6 +220,37 @@ export function fetchTeamRankings(): Promise<TeamRankingEntry[]> {
       throw error;
     });
   return teamRankingsPromise;
+}
+
+let predictionsCache: PredictionLeague[] | null = null;
+let predictionsPromise: Promise<PredictionLeague[]> | null = null;
+
+// Predictions are BSD-exclusive (no TSDB equivalent) and change slowly, so the
+// server response is cached in-memory for the tab's lifetime rather than
+// re-fetched per fixtures-screen mount. Callers that need a hard refresh
+// (e.g. after the module-level 1hr TTL in predictions.ts expires) should
+// clear this via `clearPredictionsCache`.
+export function fetchPredictions(): Promise<PredictionLeague[]> {
+  if (predictionsCache) {
+    return Promise.resolve(predictionsCache);
+  }
+
+  predictionsPromise ||= requestJson<{ leagues?: unknown[] }>("/api/v1/predictions")
+    .then((payload) => (Array.isArray(payload.leagues) ? payload.leagues.map(normalizePredictionLeague) : []))
+    .then((leagues) => {
+      predictionsCache = leagues;
+      return leagues;
+    })
+    .catch((error) => {
+      predictionsPromise = null;
+      throw error;
+    });
+  return predictionsPromise;
+}
+
+export function clearPredictionsCache(): void {
+  predictionsCache = null;
+  predictionsPromise = null;
 }
 
 export function fetchCompetitionWeights(): Promise<CompetitionWeightEntry[]> {
@@ -537,6 +569,51 @@ function normalizeTeamRanking(raw: unknown): TeamRankingEntry {
       : Array.isArray(source.Aliases)
         ? source.Aliases.filter((item): item is string => typeof item === "string")
         : [],
+  };
+}
+
+function normalizePredictionLeague(raw: unknown): PredictionLeague {
+  const source = typeof raw === "object" && raw ? (raw as Record<string, unknown>) : {};
+  const fixtures = Array.isArray(source.fixtures) ? source.fixtures : [];
+  return {
+    leagueId: asString(source.league_id),
+    leagueName: asString(source.league_name),
+    fixtures: fixtures.map((item) => {
+      const fixture = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+      const marketsSource = typeof fixture.markets === "object" && fixture.markets
+        ? (fixture.markets as Record<string, unknown>)
+        : null;
+      const matchResultSource = marketsSource && typeof marketsSource.match_result === "object" && marketsSource.match_result
+        ? (marketsSource.match_result as Record<string, unknown>)
+        : null;
+      const expectedGoalsSource = marketsSource && typeof marketsSource.expected_goals === "object" && marketsSource.expected_goals
+        ? (marketsSource.expected_goals as Record<string, unknown>)
+        : null;
+      return {
+        eventId: asString(fixture.event_id),
+        homeTeam: asString(fixture.home_team),
+        awayTeam: asString(fixture.away_team),
+        date: typeof fixture.date === "string" ? fixture.date : null,
+        time: typeof fixture.time === "string" ? fixture.time : null,
+        markets: marketsSource
+          ? {
+              matchResult: matchResultSource
+                ? {
+                    probHome: optionalNumber(matchResultSource.prob_home) ?? 0,
+                    probDraw: optionalNumber(matchResultSource.prob_draw) ?? 0,
+                    probAway: optionalNumber(matchResultSource.prob_away) ?? 0,
+                  }
+                : null,
+              expectedGoals: expectedGoalsSource
+                ? {
+                    home: optionalNumber(expectedGoalsSource.home) ?? 0,
+                    away: optionalNumber(expectedGoalsSource.away) ?? 0,
+                  }
+                : null,
+            }
+          : null,
+      };
+    }),
   };
 }
 

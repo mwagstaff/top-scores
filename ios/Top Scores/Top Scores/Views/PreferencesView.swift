@@ -5,6 +5,7 @@ import UIKit
 
 struct PreferencesView: View {
     var embeddedInNavigation: Bool = false
+    var showsOnlyAdvancedSettings: Bool = false
 
     @EnvironmentObject private var preferences: PreferencesStore
     @StateObject private var viewModel = PreferencesViewModel()
@@ -12,6 +13,7 @@ struct PreferencesView: View {
     @ObservedObject private var fixtureLoadDiagnostics = FixtureLoadDiagnosticsStore.shared
     #endif
     @State private var leagueSearch = ""
+    @State private var notificationLeagueSearch = ""
     @State private var channelSearch = ""
     @State private var reloadTask: Task<Void, Never>?
     @State private var isSendingTestNotification = false
@@ -24,7 +26,7 @@ struct PreferencesView: View {
         Group {
             if embeddedInNavigation {
                 content
-                    .navigationTitle("Preferences")
+                    .navigationTitle(showsOnlyAdvancedSettings ? "Advanced" : "Preferences")
                     .navigationBarTitleDisplayMode(.inline)
             } else {
                 NavigationStack {
@@ -58,30 +60,45 @@ struct PreferencesView: View {
             VStack(spacing: 0) {
                 Form {
 
-                    Section("Club games") {
-                        Toggle("Premier League teams only", isOn: englishPremierLeagueTeamsOnlyBinding)
-                        Text("Only show club games involving at least one English Premier League team.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    if !showsOnlyAdvancedSettings {
+                        Section("Fixtures") {
+                            Toggle("All major matches", isOn: fixtureAllMajorMatchesBinding)
+                            Text("Premier League teams, major club games, home nations, and major international tournaments.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
 
-                        Toggle("Major games of interest", isOn: majorUEFAClubGamesEnabledBinding)
-                        Text("Always show UEFA club knockout games, end of season promotion play-offs, and configured major club derbies, even when no Premier League team is involved.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            if !preferences.fixtureAllMajorMatchesEnabled {
+                                competitionPicker(
+                                    search: $leagueSearch,
+                                    selectedLeagues: preferences.selectedLeagues,
+                                    selectionChanged: toggleFixtureLeague
+                                )
+                            }
+                        }
+
+                        Section("Notifications") {
+                            Toggle("All major matches", isOn: notificationAllMajorMatchesBinding)
+                            Text("Use the same major-match coverage for push notifications, independently of Fixtures.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
+                            if !preferences.notificationAllMajorMatchesEnabled {
+                                competitionPicker(
+                                    search: $notificationLeagueSearch,
+                                    selectedLeagues: preferences.selectedNotificationLeagues,
+                                    selectionChanged: toggleNotificationLeague
+                                )
+                            }
+                        }
+
+                        Section {
+                            NavigationLink("Advanced settings") {
+                                PreferencesView(embeddedInNavigation: true, showsOnlyAdvancedSettings: true)
+                            }
+                        }
                     }
 
-                    Section("International games") {
-                        Toggle("Home nations", isOn: homeNationsFilterEnabledBinding)
-                        Text("Show international matches involving England, Northern Ireland, Scotland, or Wales (including friendlies).")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        Toggle("Major tournaments", isOn: majorTournamentsFilterEnabledBinding)
-                        Text("Show FIFA World Cup and UEFA European Championship matches, excluding qualifying games.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
+                    if showsOnlyAdvancedSettings {
                     Section("Display") {
                         Toggle("Show postponed games", isOn: showPostponedGamesBinding)
                         Text("When off, postponed matches are hidden from the Fixtures screen.")
@@ -107,64 +124,16 @@ struct PreferencesView: View {
                         Text("Shows kick-off time divider headings to easily distinguish different match kick-off times")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                    }
 
-                    Section("Other competitions") {
-                        Toggle("Enable competition filter", isOn: competitionFilterEnabledBinding)
-
-                        if preferences.competitionFilterEnabled {
-                            TextField("Search competitions", text: $leagueSearch)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-
-                            if viewModel.isLoadingLeagues {
-                                ProgressView("Loading competitions")
-                            } else if viewModel.availableLeagues.isEmpty {
-                                Text("No competitions loaded")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(filteredLeagues, id: \.self) { league in
-                                    MultiSelectRow(
-                                        title: league,
-                                        isSelected: preferences.selectedLeagues.contains(league)
-                                    ) {
-                                        toggleLeague(league)
-                                    }
-                                }
-                            }
-                        } else {
-                            Text("Competition filtering is off. Fixtures and results include all competitions.")
-                                .foregroundStyle(.secondary)
-                        }
+                        Toggle("Predicted scores", isOn: showPredictedScoresBinding)
+                        Text("Shows a predicted scoreline on upcoming fixtures, and how it compared once the match finishes. Can also be toggled from the Fixtures screen.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
                     Section("Notifications") {
                         Toggle("Enable push notifications", isOn: notificationsEnabledBinding)
                         Text("Get notified of goals, red cards, kick-offs, half-time, and full-time for your selected matches.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        Toggle("Premier League teams only", isOn: notificationPremierLeagueTeamsOnlyBinding)
-                            .disabled(!preferences.notificationsEnabled)
-                        Text("Only receive notifications for matches where at least one team is in the English Premier League.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        Toggle("Domestic: Major games of interest", isOn: notificationMajorUEFAClubGamesEnabledBinding)
-                            .disabled(!preferences.notificationsEnabled)
-                        Text("Always receive notifications for UEFA club knockout games, end of season promotion play-offs, and configured major club derbies, even when no Premier League team is involved.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        Toggle("International: Home nations", isOn: notificationHomeNationsFilterEnabledBinding)
-                            .disabled(!preferences.notificationsEnabled)
-                        Text("Receive notifications for international matches involving England, Northern Ireland, Scotland, or Wales, including friendlies.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        Toggle("International: Major tournaments", isOn: notificationMajorTournamentsFilterEnabledBinding)
-                            .disabled(!preferences.notificationsEnabled)
-                        Text("Receive notifications for FIFA World Cup and UEFA European Championship matches, excluding qualifying games.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -197,11 +166,6 @@ struct PreferencesView: View {
                             NotificationEventToggle(label: "Red cards", eventType: "redcard", eventTypes: notificationEventTypesBinding)
                         }
 
-                        Section("Notification Competitions") {
-                            Text("Notifications use the same competition filter as the viewing preferences.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
                     }
 
                     Section("Sorting") {
@@ -285,6 +249,7 @@ struct PreferencesView: View {
                     Section {
                         Button("Clear selections", role: .destructive) {
                             preferences.selectedLeagues = []
+                            preferences.selectedNotificationLeagues = []
                             preferences.selectedChannels = []
                         }
                     }
@@ -343,8 +308,6 @@ struct PreferencesView: View {
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
 
-                            Toggle("Show prediction redo button", isOn: showPredictionRedoButtonBinding)
-
                             Button("Clear saved predictions", role: .destructive) {
                                 FixturePredictionStore.clearAll()
                                 predictionDebugStatusMessage = "Cleared all saved predictions."
@@ -356,7 +319,7 @@ struct PreferencesView: View {
                                     .foregroundStyle(.secondary)
                             }
 
-                            Text("Shows the \"Redo\" control for regenerating saved predictions. Off by default, even in debug builds.")
+                            Text("Predictions are frozen once computed so they stay comparable to the eventual result. Clearing removes all saved predictions from this device.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -418,6 +381,7 @@ struct PreferencesView: View {
                         .padding(.vertical, 4)
                     }
                     #endif
+                    }
                 }
                 .scrollContentBackground(.hidden)
                 .background(Color(.systemGroupedBackground))
@@ -430,6 +394,32 @@ struct PreferencesView: View {
         TopLevelScreenHeader(screenTitle: "Preferences") {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 24, weight: .semibold))
+        }
+    }
+
+    @ViewBuilder
+    private func competitionPicker(
+        search: Binding<String>,
+        selectedLeagues: [String],
+        selectionChanged: @escaping (String) -> Void
+    ) -> some View {
+        TextField("Search competitions", text: search)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+        if viewModel.isLoadingLeagues {
+            ProgressView("Loading competitions")
+        } else if viewModel.availableLeagues.isEmpty {
+            Text("No competitions loaded")
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(filteredLeagues(matching: search.wrappedValue), id: \.self) { league in
+                MultiSelectRow(
+                    title: league,
+                    isSelected: selectedLeagues.contains(league),
+                    action: { selectionChanged(league) }
+                )
+            }
         }
     }
 
@@ -531,6 +521,13 @@ struct PreferencesView: View {
         )
     }
 
+    private var showPredictedScoresBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.showPredictedScores },
+            set: { preferences.showPredictedScores = $0 }
+        )
+    }
+
     private var showKickoffTimeDividersBinding: Binding<Bool> {
         Binding(
             get: { preferences.showKickoffTimeDividers },
@@ -566,21 +563,41 @@ struct PreferencesView: View {
         )
     }
 
-    #if DEBUG
-    private var showPredictionRedoButtonBinding: Binding<Bool> {
-        Binding(
-            get: { preferences.showPredictionRedoButton },
-            set: { preferences.showPredictionRedoButton = $0 }
-        )
-    }
-    #endif
-
     private var competitionFilterEnabledBinding: Binding<Bool> {
         Binding(
             get: { preferences.competitionFilterEnabled },
             set: {
                 preferences.competitionFilterEnabled = $0
                 AppMetricsService.shared.fireActivity("pref_competition_filter_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
+            }
+        )
+    }
+
+    private var fixtureAllMajorMatchesBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.fixtureAllMajorMatchesEnabled },
+            set: { enabled in
+                preferences.fixtureAllMajorMatchesEnabled = enabled
+                preferences.competitionFilterEnabled = !enabled
+                preferences.englishPremierLeagueTeamsOnly = enabled
+                preferences.majorUEFAClubGamesEnabled = enabled
+                preferences.homeNationsFilterEnabled = enabled
+                preferences.majorTournamentsFilterEnabled = enabled
+                AppMetricsService.shared.fireActivity("pref_fixtures_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
+            }
+        )
+    }
+
+    private var notificationAllMajorMatchesBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.notificationAllMajorMatchesEnabled },
+            set: { enabled in
+                preferences.notificationAllMajorMatchesEnabled = enabled
+                preferences.notificationPremierLeagueTeamsOnly = enabled
+                preferences.notificationMajorUEFAClubGamesEnabled = enabled
+                preferences.notificationHomeNationsFilterEnabled = enabled
+                preferences.notificationMajorTournamentsFilterEnabled = enabled
+                AppMetricsService.shared.fireActivity("pref_notifications_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
             }
         )
     }
@@ -656,11 +673,9 @@ struct PreferencesView: View {
         )
     }
 
-    private var filteredLeagues: [String] {
-        let trimmed = leagueSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let leagues = viewModel.availableLeagues.filter {
-            $0.localizedCaseInsensitiveCompare("Premier League") != .orderedSame
-        }
+    private func filteredLeagues(matching search: String) -> [String] {
+        let trimmed = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let leagues = viewModel.availableLeagues
         guard !trimmed.isEmpty else { return leagues }
         return leagues.filter { $0.localizedCaseInsensitiveContains(trimmed) }
     }
@@ -671,12 +686,21 @@ struct PreferencesView: View {
         return viewModel.availableChannels.filter { $0.localizedCaseInsensitiveContains(trimmed) }
     }
 
-    private func toggleLeague(_ league: String) {
+    private func toggleFixtureLeague(_ league: String) {
         if let index = preferences.selectedLeagues.firstIndex(of: league) {
             preferences.selectedLeagues.remove(at: index)
         } else {
             preferences.selectedLeagues.append(league)
             preferences.selectedLeagues.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        }
+    }
+
+    private func toggleNotificationLeague(_ league: String) {
+        if let index = preferences.selectedNotificationLeagues.firstIndex(of: league) {
+            preferences.selectedNotificationLeagues.remove(at: index)
+        } else {
+            preferences.selectedNotificationLeagues.append(league)
+            preferences.selectedNotificationLeagues.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         }
     }
 

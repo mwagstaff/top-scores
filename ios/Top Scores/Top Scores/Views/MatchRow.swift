@@ -7,6 +7,22 @@ enum MatchRowLayoutStyle {
     case compactFixture
 }
 
+/// What a row's predicted-score chip should show. Rows compute this from a shared,
+/// on-disk prediction store (see `FixturePredictionStore` in MatchesView.swift) that
+/// freezes each match's prediction the first time it's generated, so `.available`
+/// stays valid — and comparable to the eventual result — for the lifetime of the match.
+enum FixturePredictionDisplayState: Hashable, Sendable {
+    case hidden
+    case pending
+    case available(
+        homeGoals: Int,
+        awayGoals: Int,
+        homeWinProbability: Double,
+        drawProbability: Double,
+        awayWinProbability: Double
+    )
+}
+
 struct MatchRowPreferences: Equatable {
     let hasFantasyManagerEntry: Bool
     let showFantasyExpectedPoints: Bool
@@ -66,6 +82,7 @@ struct MatchRow: View {
     var layoutStyle: MatchRowLayoutStyle = .standard
     var fantasyContext: FantasyMatchRowContext = .empty
     var rowPreferences: MatchRowPreferences = .disabledFantasy
+    var predictionDisplay: FixturePredictionDisplayState = .hidden
     var body: some View {
         matchCard
             .opacity(match.isPostponed ? 0.5 : 1.0)
@@ -226,6 +243,11 @@ struct MatchRow: View {
                 )
 
                 compactFixtureTrailingAccessory
+            }
+
+            if predictionDisplay != .hidden {
+                PredictionStripView(match: match, predictionDisplay: predictionDisplay)
+                    .padding(.leading, logoSize + compactFixtureHorizontalSpacing)
             }
         }
         .padding(cardPadding)
@@ -865,6 +887,158 @@ struct MatchRow: View {
     }
 }
 
+/// A predicted-score chip plus a home/draw/away probability bar, shown as a strip
+/// beneath a fixture row (or a match's scoreboard hero). Indigo while the match is
+/// still to be decided; green once finished and the prediction matched the final
+/// score; muted once finished and it missed — the probabilities themselves are the
+/// frozen pre-match snapshot and never change.
+struct PredictionStripView: View {
+    let match: Match
+    let predictionDisplay: FixturePredictionDisplayState
+    var isLargePresentation: Bool = false
+
+    var body: some View {
+        switch predictionDisplay {
+        case .hidden:
+            EmptyView()
+        case .pending:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text("Calculating prediction…")
+                    .font(labelFont)
+                    .foregroundStyle(.secondary)
+            }
+        case .available(let homeGoals, let awayGoals, let homeWinProbability, let drawProbability, let awayWinProbability):
+            HStack(spacing: isLargePresentation ? 10 : 8) {
+                scoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
+                PredictionProbabilityBar(
+                    homeWinProbability: homeWinProbability,
+                    drawProbability: drawProbability,
+                    awayWinProbability: awayWinProbability
+                )
+                .frame(height: isLargePresentation ? 5 : 4)
+                PredictionProbabilityLabel(
+                    homeWinProbability: homeWinProbability,
+                    drawProbability: drawProbability,
+                    awayWinProbability: awayWinProbability,
+                    font: labelFont
+                )
+            }
+        }
+    }
+
+    private func scoreChip(homeGoals: Int, awayGoals: Int) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: isResolved ? (wasCorrect ? "checkmark.seal.fill" : "sparkles") : "sparkles")
+                .font(.system(size: isLargePresentation ? 9 : 8, weight: .bold))
+            Text("\(homeGoals)–\(awayGoals)")
+                .font(scoreFont)
+                .monospacedDigit()
+        }
+        .foregroundStyle(accentColor)
+        .padding(.horizontal, isLargePresentation ? 7 : 6)
+        .padding(.vertical, isLargePresentation ? 3 : 2)
+        .background(
+            Capsule(style: .continuous)
+                .fill(accentColor.opacity(0.16))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(accentColor.opacity(0.42), lineWidth: 1)
+        )
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel(homeGoals: homeGoals, awayGoals: awayGoals))
+    }
+
+    private var isResolved: Bool {
+        match.isFinished
+    }
+
+    private var wasCorrect: Bool {
+        guard case .available(let homeGoals, let awayGoals, _, _, _) = predictionDisplay else { return false }
+        return match.homeScore == homeGoals && match.awayScore == awayGoals
+    }
+
+    private var accentColor: Color {
+        guard isResolved else { return .predictedScore }
+        return wasCorrect ? .liveMatch : Color(.tertiaryLabel)
+    }
+
+    private var scoreFont: Font {
+        (isLargePresentation ? Font.caption : .caption2).weight(.semibold)
+    }
+
+    private var labelFont: Font {
+        isLargePresentation ? .caption2 : .system(size: 9.5, weight: .semibold)
+    }
+
+    private func accessibilityLabel(homeGoals: Int, awayGoals: Int) -> String {
+        guard isResolved else {
+            return "Predicted score \(homeGoals) to \(awayGoals)"
+        }
+        return wasCorrect
+            ? "Predicted score \(homeGoals) to \(awayGoals), correct"
+            : "Predicted score \(homeGoals) to \(awayGoals), final score was different"
+    }
+}
+
+private struct PredictionProbabilityBar: View {
+    let homeWinProbability: Double
+    let drawProbability: Double
+    let awayWinProbability: Double
+
+    var body: some View {
+        GeometryReader { geometry in
+            HStack(spacing: 1.5) {
+                segment(color: .predictedScore, fraction: homeWinProbability, totalWidth: geometry.size.width)
+                segment(color: Color(.tertiaryLabel), fraction: drawProbability, totalWidth: geometry.size.width)
+                segment(color: .predictedAwayWin, fraction: awayWinProbability, totalWidth: geometry.size.width)
+            }
+        }
+    }
+
+    private func segment(color: Color, fraction: Double, totalWidth: CGFloat) -> some View {
+        let total = max(homeWinProbability + drawProbability + awayWinProbability, 0.0001)
+        return Capsule(style: .continuous)
+            .fill(color.opacity(0.85))
+            .frame(width: max(2, totalWidth * CGFloat(fraction / total)))
+    }
+}
+
+private struct PredictionProbabilityLabel: View {
+    let homeWinProbability: Double
+    let drawProbability: Double
+    let awayWinProbability: Double
+    let font: Font
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text("H \(percentText(homeWinProbability))")
+                .foregroundStyle(Color.predictedScore)
+            Text("·").foregroundStyle(.secondary)
+            Text("D \(percentText(drawProbability))")
+                .foregroundStyle(.secondary)
+            Text("·").foregroundStyle(.secondary)
+            Text("A \(percentText(awayWinProbability))")
+                .foregroundStyle(Color.predictedAwayWin)
+        }
+        .font(font)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "Home win \(percentText(homeWinProbability)) percent, "
+                + "draw \(percentText(drawProbability)) percent, "
+                + "away win \(percentText(awayWinProbability)) percent"
+        )
+    }
+
+    private func percentText(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))"
+    }
+}
+
 func fantasyParticipationBadgeVisibility(
     for match: Match,
     showFantasyBadge: Bool,
@@ -1428,6 +1602,10 @@ extension Color {
     static let liveMatch = Color(red: 0.32, green: 0.82, blue: 0.51)
     /// Gold used to highlight Final-round fixtures (e.g. World Cup Final).
     static let finalMatch = Color(red: 0.85, green: 0.68, blue: 0.21)
+    /// Indigo used for predicted-score chips, matched to the website's `--predict` token.
+    static let predictedScore = Color(red: 0.49, green: 0.48, blue: 1.0)
+    /// Teal used for the "away win" segment of a prediction's probability bar.
+    static let predictedAwayWin = Color(red: 0.24, green: 0.75, blue: 0.69)
 }
 
 /// Card background + border for a match row. In-progress matches get an elegant

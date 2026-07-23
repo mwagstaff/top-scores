@@ -101,16 +101,11 @@ struct MatchesView: View {
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
     @State private var showToast = false
     @State private var toastMessage = ""
-    @State private var predictionDateKeys = FixturePredictionStore.storedDateKeys()
-    @State private var activePredictionJob: PredictionJob?
-    @State private var activePredictions: DailyFixturePredictions?
-    @State private var predictionTask: Task<Void, Never>?
-    @State private var predictorAvailabilityTask: Task<Void, Never>?
+    @State private var predictionIndex = FixturePredictionStore.allPredictions()
+    @State private var pendingPredictionDateKeys: Set<String> = []
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var searchFilterWorkItem: DispatchWorkItem?
     @State private var groupedSideEffectsTask: Task<Void, Never>?
-    @State private var predictionErrorMessage: String?
-    @State private var predictableDateKeys: Set<String> = []
     @State private var isSearchVisible = false
     @State private var isSearchFieldFocused = false
     @State private var searchText = ""
@@ -118,7 +113,6 @@ struct MatchesView: View {
     @State private var filteredMatchDays: [MatchDay] = []
     @State private var indexedMatchDays: [IndexedMatchDay] = []
     @State private var reportedMissingLogoNames: Set<String> = []
-    @State private var lastPredictorCandidateDateKeys: Set<String> = []
     @State private var didRunActivationForVisibleCycle = false
     @State private var navigationMatch: MatchNavigation?
     @State private var screenOpenedAt: Date?
@@ -226,17 +220,6 @@ struct MatchesView: View {
         }
     }
 
-    private var predictionErrorPresented: Binding<Bool> {
-        Binding(
-            get: { predictionErrorMessage != nil },
-            set: { isPresented in
-                if !isPresented {
-                    predictionErrorMessage = nil
-                }
-            }
-        )
-    }
-
     private let refreshFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -274,7 +257,8 @@ struct MatchesView: View {
             MatchDetailView(
                 match: nav.match,
                 highlightToday: nav.highlightToday,
-                showFantasyBadge: nav.showFantasyBadge
+                showFantasyBadge: nav.showFantasyBadge,
+                predictionDisplay: nav.predictionDisplay
             )
         }
     }
@@ -333,6 +317,7 @@ struct MatchesView: View {
         .onChange(of: viewState.groupedMatches) { _, days in
             refreshVisibleGroupedDays(from: days)
             guard isSelected else { return }
+            warmPredictionsForVisibleDays(days: days)
             scheduleGroupedSideEffects(for: days, immediate: false)
         }
         .onChange(of: preferences.showPostponedGames) { _, _ in
@@ -340,8 +325,7 @@ struct MatchesView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: FixturePredictionStore.didChangeNotification)) { _ in
             guard isSelected else { return }
-            predictionDateKeys = FixturePredictionStore.storedDateKeys()
-            scheduleGroupedSideEffects(for: viewState.groupedMatches, immediate: false)
+            predictionIndex = FixturePredictionStore.allPredictions()
         }
         .onChange(of: searchText) { _, newValue in
             scheduleDebouncedSearch(for: newValue)
@@ -349,27 +333,9 @@ struct MatchesView: View {
         .onDisappear {
             matchesStore.setModeVisibility(mode, isVisible: false)
             isSearchFieldFocused = false
-            predictionTask?.cancel()
-            predictorAvailabilityTask?.cancel()
             searchDebounceTask?.cancel()
             searchFilterWorkItem?.cancel()
             groupedSideEffectsTask?.cancel()
-        }
-        .fullScreenCover(item: $activePredictionJob) { job in
-            PredictionInterstitialView(displayDate: job.displayDate)
-                .interactiveDismissDisabled()
-        }
-        .sheet(item: $activePredictions) { prediction in
-            NavigationStack {
-                DayPredictionsView(prediction: prediction)
-            }
-            .environmentObject(preferences)
-            .environmentObject(fantasyViewModel)
-        }
-        .alert("Predictions Unavailable", isPresented: predictionErrorPresented) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(predictionErrorMessage ?? "Unable to generate predictions right now.")
         }
     }
 
@@ -483,10 +449,6 @@ struct MatchesView: View {
                 .fontWeight(.semibold)
 
             Spacer()
-
-            if mode == .fixtures && shouldShowPredictorButton(for: day) {
-                predictorControls(for: day)
-            }
         }
         .padding(.top, isFirst ? compactFixturesSpacing.dayHeaderTopFirst : compactFixturesSpacing.dayHeaderTop)
         .padding(.bottom, compactFixturesSpacing.dayHeaderBottom)
@@ -574,7 +536,8 @@ struct MatchesView: View {
             navigationMatch = MatchNavigation(
                 match: match,
                 highlightToday: day.isToday,
-                showFantasyBadge: mode == .fixtures
+                showFantasyBadge: mode == .fixtures,
+                predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
             )
         } label: {
             HStack(spacing: 0) {
@@ -583,7 +546,8 @@ struct MatchesView: View {
                     isFixtureMode: mode == .fixtures,
                     highlightToday: day.isToday,
                     rowPreferences: matchRowPreferences,
-                    fantasyContext: fantasyViewModel.matchRowContext
+                    fantasyContext: fantasyViewModel.matchRowContext,
+                    predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
                 )
                 .equatable()
                 Image(systemName: "chevron.right")
@@ -605,6 +569,11 @@ struct MatchesView: View {
                     mode: mode
                 )
             }
+            if mode == .fixtures {
+                // Safety net so a day that scrolled into view before the batch
+                // warm-up reached it still gets its predictions computed.
+                warmPredictionsForVisibleDays(days: [day])
+            }
         }
         .listRowInsets(
             EdgeInsets(
@@ -622,79 +591,73 @@ struct MatchesView: View {
         return matchesStore.teamRatingDebugText(for: match)
     }
 
-    private func shouldShowPredictorButton(for day: MatchDay) -> Bool {
-        if predictionDateKeys.contains(day.dateKey) {
-            return true
+    /// Resolves what a row's trailing prediction chip should show. Predictions are
+    /// precomputed in the background (see `warmPredictionsForVisibleDays`), so by the
+    /// time a row scrolls into view its prediction is normally already in `predictionIndex`;
+    /// `.pending` only appears for the brief window where a newly-loaded day is still warming up.
+    private func predictionDisplayState(for match: Match, dateKey: String) -> FixturePredictionDisplayState {
+        guard preferences.showPredictedScores else { return .hidden }
+        if let stored = predictionIndex[match.id], stored.isPredicted {
+            return .available(
+                homeGoals: stored.homeGoals ?? 0,
+                awayGoals: stored.awayGoals ?? 0,
+                homeWinProbability: stored.homeWinProbability ?? 0,
+                drawProbability: stored.drawProbability ?? 0,
+                awayWinProbability: stored.awayWinProbability ?? 0
+            )
         }
-        return predictableDateKeys.contains(day.dateKey)
+        guard mode == .fixtures, !match.isPostponed, let kickoff = match.dateTime, kickoff > Date() else {
+            return .hidden
+        }
+        return pendingPredictionDateKeys.contains(dateKey) ? .pending : .hidden
     }
 
-    private func predictorControls(for day: MatchDay) -> some View {
-        HStack(spacing: 8) {
-            predictorButton(for: day)
-            #if DEBUG
-            if preferences.showPredictionRedoButton && predictionDateKeys.contains(day.dateKey) {
-                redoPredictorButton(for: day)
+    /// Precomputes and freezes predictions for any visible day that has upcoming,
+    /// not-yet-predicted fixtures. Idempotent per match: a match that already has a
+    /// stored prediction is never recomputed, so once frozen it stays comparable
+    /// against the eventual real result.
+    private func warmPredictionsForVisibleDays(days: [MatchDay]) {
+        guard mode == .fixtures else { return }
+        let now = Date()
+        var newlyQueued: [(dateKey: String, displayDate: String, matches: [Match])] = []
+        for day in days {
+            guard !pendingPredictionDateKeys.contains(day.dateKey) else { continue }
+            let matches = day.leagues.flatMap(\.matches)
+            let needsPrediction = matches.contains { match in
+                guard let kickoff = match.dateTime, kickoff > now, !match.isPostponed else { return false }
+                if let stored = predictionIndex[match.id], stored.isPredicted { return false }
+                return true
             }
-            #endif
+            guard needsPrediction else { continue }
+            newlyQueued.append((day.dateKey, day.displayDate, matches))
         }
-    }
+        guard !newlyQueued.isEmpty else { return }
+        pendingPredictionDateKeys.formUnion(newlyQueued.map(\.dateKey))
 
-    private func predictorButton(for day: MatchDay) -> some View {
-        let isRunning = predictionTask != nil
-        let hasStoredPrediction = predictionDateKeys.contains(day.dateKey)
-        return Button {
-            handlePredictorTap(for: day)
-        } label: {
-            HStack(spacing: 6) {
-                if isRunning {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: hasStoredPrediction ? "sparkles.rectangle.stack.fill" : "sparkles")
-                        .font(.caption)
+        let apiBaseURL = preferences.apiBaseURL
+        let existingSnapshot = predictionIndex
+        Task {
+            await PredictionsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
+            for (dateKey, displayDate, matches) in newlyQueued {
+                guard !Task.isCancelled else { return }
+                let job = PredictionJob(dateKey: dateKey, displayDate: displayDate, matches: matches)
+                let fixtures = try? await FixturePredictionGenerator.generate(
+                    for: job,
+                    apiBaseURL: apiBaseURL,
+                    existingPredictions: existingSnapshot
+                )
+                await MainActor.run {
+                    if let fixtures {
+                        FixturePredictionStore.save(fixtures)
+                        for fixture in fixtures where fixture.isPredicted {
+                            predictionIndex[fixture.id] = fixture
+                        }
+                    }
+                    pendingPredictionDateKeys.remove(dateKey)
                 }
-                Text(hasStoredPrediction ? "View" : "Predict")
-                    .font(.caption)
-                    .fontWeight(.semibold)
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(
-                Capsule()
-                    .fill(Color(.tertiarySystemBackground))
-            )
         }
-        .buttonStyle(.plain)
-        .disabled(isRunning)
-        .accessibilityLabel(hasStoredPrediction ? "View saved predictions for \(day.displayDate)" : "Predict fixtures for \(day.displayDate)")
     }
-
-    #if DEBUG
-    private func redoPredictorButton(for day: MatchDay) -> some View {
-        let isRunning = predictionTask != nil
-        return Button {
-            handlePredictorTap(for: day, forceRegenerate: true)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.caption)
-                Text("Redo")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .fill(Color(.tertiarySystemBackground))
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(isRunning)
-        .accessibilityLabel("Regenerate predictions for \(day.displayDate)")
-    }
-    #endif
 
     private var emptyState: some View {
         VStack(spacing: 16) {
@@ -739,6 +702,25 @@ struct MatchesView: View {
                         ))
                 }
                 .accessibilityLabel(preferences.englishPremierLeagueTeamsOnly ? "Premier League teams only – tap for all competitions" : "All competitions – tap for Premier League teams only")
+
+                // Predicted scores toggle
+                Button {
+                    preferences.showPredictedScores.toggle()
+                    if preferences.showPredictedScores {
+                        warmPredictionsForVisibleDays(days: viewState.groupedMatches)
+                    }
+                } label: {
+                    Image(systemName: preferences.showPredictedScores ? "sparkles.rectangle.stack.fill" : "sparkles")
+                        .font(.title3)
+                        .padding(10)
+                        .background(Circle().fill(
+                            preferences.showPredictedScores
+                                ? AnyShapeStyle(Color.accentColor.opacity(0.15))
+                                : AnyShapeStyle(.ultraThinMaterial)
+                        ))
+                        .foregroundStyle(preferences.showPredictedScores ? Color.accentColor : Color.primary)
+                }
+                .accessibilityLabel(preferences.showPredictedScores ? "Hide predicted scores" : "Show predicted scores")
 
                 // Search toggle
                 Button {
@@ -849,7 +831,6 @@ struct MatchesView: View {
             rebuildSearchIndex(from: days)
             ensureFantasySquadLoadedIfNeeded()
             reportMissingTeamLogosIfNeeded(days: days)
-            refreshPredictorAvailability(days: days)
         }
     }
 
@@ -861,8 +842,9 @@ struct MatchesView: View {
         NSLog("[MatchesView] %@ mode=%@ selected=%d snapshot=%@", logEvent, mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
         matchesStore.configure(with: snapshot, mode: mode)
         let days = viewState.groupedMatches
+        predictionIndex = FixturePredictionStore.allPredictions()
+        warmPredictionsForVisibleDays(days: days)
         scheduleGroupedSideEffects(for: days, immediate: false)
-        predictionDateKeys = FixturePredictionStore.storedDateKeys()
     }
 
     private func rebuildSearchIndex(from days: [MatchDay]) {
@@ -969,126 +951,6 @@ struct MatchesView: View {
         }
 
         return result
-    }
-
-    private func handlePredictorTap(for day: MatchDay, forceRegenerate: Bool = false) {
-        guard predictionTask == nil else { return }
-
-        if !forceRegenerate, let cached = FixturePredictionStore.prediction(for: day.dateKey) {
-            activePredictions = cached
-            return
-        }
-
-        guard forceRegenerate || predictableDateKeys.contains(day.dateKey) else {
-            predictionErrorMessage = "No eligible fixtures can be predicted for this day."
-            return
-        }
-
-        let dayMatches = day.leagues.flatMap(\.matches)
-        guard !dayMatches.isEmpty else {
-            predictionErrorMessage = "No fixtures found for this day."
-            return
-        }
-
-        let job = PredictionJob(dateKey: day.dateKey, displayDate: day.displayDate, matches: dayMatches)
-        activePredictionJob = job
-        startPredictionTask(for: job)
-    }
-
-    private func startPredictionTask(for job: PredictionJob) {
-        predictionTask?.cancel()
-        let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-
-        predictionTask = Task {
-            let startedAt = Date()
-            defer {
-                Task { @MainActor in
-                    predictionTask = nil
-                }
-            }
-
-            do {
-                let prediction = try await FixturePredictionGenerator.generate(
-                    for: job,
-                    apiBaseURL: snapshot.apiBaseURL
-                )
-                guard !Task.isCancelled else { return }
-
-                let elapsed = Date().timeIntervalSince(startedAt)
-                let remaining = max(0, 3.0 - elapsed)
-                if remaining > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-                }
-                guard !Task.isCancelled else { return }
-
-                await MainActor.run {
-                    FixturePredictionStore.save(prediction)
-                    predictionDateKeys.insert(job.dateKey)
-                    if activePredictionJob?.id == job.id {
-                        activePredictionJob = nil
-                    }
-                    activePredictions = prediction
-                }
-            } catch is CancellationError {
-                return
-            } catch {
-                guard !Task.isCancelled else { return }
-
-                let elapsed = Date().timeIntervalSince(startedAt)
-                let remaining = max(0, 3.0 - elapsed)
-                if remaining > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-                }
-                guard !Task.isCancelled else { return }
-
-                await MainActor.run {
-                    if activePredictionJob?.id == job.id {
-                        activePredictionJob = nil
-                    }
-                    predictionErrorMessage = error.localizedDescription
-                }
-            }
-        }
-    }
-
-    private func refreshPredictorAvailability(days: [MatchDay]) {
-        guard mode == .fixtures else {
-            predictableDateKeys = []
-            return
-        }
-
-        let now = Date()
-        let candidateDays = days.reduce(into: [String: [Match]]()) { partialResult, day in
-            let upcoming = day.leagues
-                .flatMap(\.matches)
-                .filter { match in
-                    guard let kickoff = match.dateTime else { return false }
-                    return kickoff > now && !match.isPostponed
-                }
-            guard !upcoming.isEmpty else { return }
-            partialResult[day.dateKey] = upcoming
-        }
-
-        guard !candidateDays.isEmpty else {
-            lastPredictorCandidateDateKeys = []
-            predictableDateKeys = []
-            return
-        }
-
-        let candidateDateKeys = Set(candidateDays.keys)
-        guard candidateDateKeys != lastPredictorCandidateDateKeys else { return }
-        lastPredictorCandidateDateKeys = candidateDateKeys
-
-        predictorAvailabilityTask?.cancel()
-        let apiBaseURL = preferences.apiBaseURL
-        predictorAvailabilityTask = Task {
-            await PredictionsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
-
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                predictableDateKeys = Set(candidateDays.keys)
-            }
-        }
     }
 
     private func reportMissingTeamLogosIfNeeded(days: [MatchDay]) {
@@ -1219,6 +1081,7 @@ private struct MatchesListRowLabel: View, Equatable {
     let highlightToday: Bool
     let rowPreferences: MatchRowPreferences
     let fantasyContext: FantasyMatchRowContext
+    let predictionDisplay: FixturePredictionDisplayState
 
     var body: some View {
         MatchRow(
@@ -1231,7 +1094,8 @@ private struct MatchesListRowLabel: View, Equatable {
             showsFinishedInlineAggregateBrackets: true,
             layoutStyle: .compactFixture,
             fantasyContext: fantasyContext,
-            rowPreferences: rowPreferences
+            rowPreferences: rowPreferences,
+            predictionDisplay: predictionDisplay
         )
     }
 }
@@ -1240,6 +1104,7 @@ private struct MatchNavigation: Identifiable, Hashable, Sendable {
     let match: Match
     let highlightToday: Bool
     let showFantasyBadge: Bool
+    let predictionDisplay: FixturePredictionDisplayState
     var id: String { match.id }
 }
 
@@ -1248,53 +1113,6 @@ private struct PredictionJob: Identifiable, Sendable {
     let dateKey: String
     let displayDate: String
     let matches: [Match]
-}
-
-private struct DailyFixturePredictions: Codable, Identifiable, Sendable {
-    let dateKey: String
-    let displayDate: String
-    let generatedAt: Date
-    let totalDayMatches: Int
-    let skippedKickedOffCount: Int
-    let skippedMissingPredictionCount: Int
-    let skippedUnknownCount: Int
-    let predictions: [PredictedFixture]
-
-    var id: String {
-        "\(dateKey)|\(generatedAt.timeIntervalSince1970)"
-    }
-
-    init(
-        dateKey: String,
-        displayDate: String,
-        generatedAt: Date,
-        totalDayMatches: Int,
-        skippedKickedOffCount: Int,
-        skippedMissingPredictionCount: Int,
-        skippedUnknownCount: Int,
-        predictions: [PredictedFixture]
-    ) {
-        self.dateKey = dateKey
-        self.displayDate = displayDate
-        self.generatedAt = generatedAt
-        self.totalDayMatches = totalDayMatches
-        self.skippedKickedOffCount = skippedKickedOffCount
-        self.skippedMissingPredictionCount = skippedMissingPredictionCount
-        self.skippedUnknownCount = skippedUnknownCount
-        self.predictions = predictions
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        dateKey = try container.decode(String.self, forKey: .dateKey)
-        displayDate = try container.decode(String.self, forKey: .displayDate)
-        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
-        totalDayMatches = try container.decode(Int.self, forKey: .totalDayMatches)
-        skippedKickedOffCount = try container.decode(Int.self, forKey: .skippedKickedOffCount)
-        skippedMissingPredictionCount = try container.decodeIfPresent(Int.self, forKey: .skippedMissingPredictionCount) ?? 0
-        skippedUnknownCount = try container.decodeIfPresent(Int.self, forKey: .skippedUnknownCount) ?? 0
-        predictions = try container.decode([PredictedFixture].self, forKey: .predictions)
-    }
 }
 
 private struct PredictedFixture: Codable, Identifiable, Sendable {
@@ -1320,55 +1138,6 @@ private struct PredictedFixture: Codable, Identifiable, Sendable {
 
     var isPredicted: Bool {
         homeGoals != nil && awayGoals != nil && unavailableReason == nil && !isPostponed
-    }
-
-    var displayLeague: String {
-        let baseLeague = league.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let leagueSubcategory, !leagueSubcategory.isEmpty {
-            return "\(baseLeague): \(leagueSubcategory)"
-        }
-        return baseLeague
-    }
-
-    var displayHomeTeam: String {
-        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? homeTeam : trimmed
-    }
-
-    var displayAwayTeam: String {
-        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? awayTeam : trimmed
-    }
-
-    var asMatch: Match {
-        Match(
-            date: date,
-            time: time,
-            homeTeam: homeTeam,
-            awayTeam: awayTeam,
-            homeShortName: homeShortName,
-            awayShortName: awayShortName,
-            league: league,
-            leagueSubcategory: leagueSubcategory,
-            tvChannels: [],
-            homeScore: homeGoals,
-            awayScore: awayGoals,
-            scoreStatus: isPostponed ? "POSTPONED" : nil
-        )
-    }
-
-    var statusLabelText: String {
-        if isPostponed {
-            return "Match postponed"
-        }
-        if isPredicted {
-            return "Predicted"
-        }
-        return unavailableReason ?? "Unavailable"
-    }
-
-    var cardOpacity: Double {
-        isPostponed ? 1.0 : (isPredicted ? 1.0 : 0.55)
     }
 }
 
@@ -1442,31 +1211,31 @@ extension PredictedFixture {
     }
 }
 
-private struct PredictionLeagueSection: Identifiable {
-    let id: String
-    let league: String
-    let fixtures: [PredictedFixture]
-}
-
 private struct FixturePredictionCachePayload: Codable {
-    var entries: [String: DailyFixturePredictions]
+    // Keyed by match id. Entries are written once (when a prediction is first
+    // computed for an upcoming fixture) and never overwritten, so a finished
+    // match's prediction stays available to compare against the real result.
+    var entries: [String: PredictedFixture]
 }
 
 enum FixturePredictionStore {
     private static let fileName = "fixture-predictions.json"
     static let didChangeNotification = Notification.Name("FixturePredictionStore.didChange")
 
-    static func storedDateKeys() -> Set<String> {
-        Set(loadCache().entries.keys)
+    fileprivate static func allPredictions() -> [String: PredictedFixture] {
+        loadCache().entries
     }
 
-    fileprivate static func prediction(for dateKey: String) -> DailyFixturePredictions? {
-        loadCache().entries[dateKey]
-    }
-
-    fileprivate static func save(_ prediction: DailyFixturePredictions) {
+    /// Persists newly-computed predictions. Only successfully-predicted fixtures
+    /// are stored; matches that couldn't be predicted (no markets yet, postponed,
+    /// etc.) are left out so they're retried on a future warm-up pass.
+    fileprivate static func save(_ fixtures: [PredictedFixture]) {
+        let predicted = fixtures.filter(\.isPredicted)
+        guard !predicted.isEmpty else { return }
         var cache = loadCache()
-        cache.entries[prediction.dateKey] = prediction
+        for fixture in predicted {
+            cache.entries[fixture.id] = fixture
+        }
         persist(cache)
     }
 
@@ -1481,7 +1250,6 @@ enum FixturePredictionStore {
             return FixturePredictionCachePayload(entries: [:])
         }
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
         guard let payload = try? decoder.decode(FixturePredictionCachePayload.self, from: data) else {
             return FixturePredictionCachePayload(entries: [:])
         }
@@ -1490,8 +1258,7 @@ enum FixturePredictionStore {
 
     private static func persist(_ payload: FixturePredictionCachePayload) {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(payload) else { return }
         try? data.write(to: cacheURL, options: [.atomic])
         notifyDidChange()
@@ -1522,7 +1289,15 @@ private enum FixturePredictionError: LocalizedError {
 }
 
 private enum FixturePredictionGenerator {
-    static func generate(for job: PredictionJob, apiBaseURL: String) async throws -> DailyFixturePredictions {
+    /// - Parameter existingPredictions: Previously-frozen predictions keyed by match id.
+    ///   Matches already present here are reused verbatim rather than recomputed, since
+    ///   `MarketsScorePredictor` samples randomly and re-running it would silently change
+    ///   a prediction that's supposed to be a fixed, comparable-later snapshot.
+    static func generate(
+        for job: PredictionJob,
+        apiBaseURL: String,
+        existingPredictions: [String: PredictedFixture]
+    ) async throws -> [PredictedFixture] {
         guard URL(string: apiBaseURL) != nil else {
             throw FixturePredictionError.invalidAPIBaseURL
         }
@@ -1580,24 +1355,25 @@ private enum FixturePredictionGenerator {
                 }
                 #endif
 
+                if let frozen = existingPredictions[matchID], frozen.isPredicted {
+                    group.addTask {
+                        PredictionComputationResult(index: index, fixture: frozen)
+                    }
+                    continue
+                }
+
                 group.addTask {
                     let unavailableReason: String?
-                    let skippedMissingPrediction: Bool
                     if kickoff == nil {
                         unavailableReason = "Kick-off time unavailable"
-                        skippedMissingPrediction = false
                     } else if isPostponed {
                         unavailableReason = "Match postponed"
-                        skippedMissingPrediction = false
                     } else if kickoff! <= now {
                         unavailableReason = isInProgress ? "Already in progress" : "Already kicked off"
-                        skippedMissingPrediction = false
                     } else if markets == nil {
                         unavailableReason = "Prediction unavailable"
-                        skippedMissingPrediction = true
                     } else {
                         unavailableReason = nil
-                        skippedMissingPrediction = false
                     }
 
                     if let unavailableReason {
@@ -1623,10 +1399,7 @@ private enum FixturePredictionGenerator {
                                 awayWinProbability: nil,
                                 unavailableReason: unavailableReason,
                                 isPostponed: isPostponed
-                            ),
-                            skippedKickedOff: kickoff != nil && kickoff! <= now && !isPostponed,
-                            skippedMissingPrediction: skippedMissingPrediction,
-                            skippedUnknown: kickoff == nil
+                            )
                         )
                     }
 
@@ -1653,10 +1426,7 @@ private enum FixturePredictionGenerator {
                             awayWinProbability: estimate.awayWinProbability,
                             unavailableReason: nil,
                             isPostponed: false
-                        ),
-                        skippedKickedOff: false,
-                        skippedMissingPrediction: false,
-                        skippedUnknown: false
+                        )
                     )
                 }
             }
@@ -1669,22 +1439,7 @@ private enum FixturePredictionGenerator {
             return results
         }
 
-        let orderedRows = computedRows.sorted { $0.index < $1.index }
-        let predictions = orderedRows.map(\.fixture)
-        let skippedKickedOffCount = orderedRows.reduce(0) { $0 + ($1.skippedKickedOff ? 1 : 0) }
-        let skippedMissingPredictionCount = orderedRows.reduce(0) { $0 + ($1.skippedMissingPrediction ? 1 : 0) }
-        let skippedUnknownCount = orderedRows.reduce(0) { $0 + ($1.skippedUnknown ? 1 : 0) }
-
-        return DailyFixturePredictions(
-            dateKey: job.dateKey,
-            displayDate: job.displayDate,
-            generatedAt: now,
-            totalDayMatches: job.matches.count,
-            skippedKickedOffCount: skippedKickedOffCount,
-            skippedMissingPredictionCount: skippedMissingPredictionCount,
-            skippedUnknownCount: skippedUnknownCount,
-            predictions: predictions
-        )
+        return computedRows.sorted { $0.index < $1.index }.map(\.fixture)
     }
 
     private nonisolated static func joinKey(home: String, away: String, date: String) -> String {
@@ -1699,9 +1454,6 @@ private enum FixturePredictionGenerator {
 private struct PredictionComputationResult: Sendable {
     let index: Int
     let fixture: PredictedFixture
-    let skippedKickedOff: Bool
-    let skippedMissingPrediction: Bool
-    let skippedUnknown: Bool
 }
 
 private struct ScorelineEstimate: Sendable {
@@ -1787,490 +1539,6 @@ private enum MarketsScorePredictor {
         let total = home + draw + away
         guard total > 0 else { return (0.33, 0.34, 0.33) }
         return (home / total, draw / total, away / total)
-    }
-}
-
-private struct PredictionInterstitialView: View {
-    let displayDate: String
-    @State private var animate = false
-    @State private var statusMessage = PredictionInterstitialMessages.random()
-
-    var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.08, green: 0.15, blue: 0.27),
-                    Color(red: 0.05, green: 0.28, blue: 0.38),
-                    Color(red: 0.09, green: 0.20, blue: 0.48),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            VStack(spacing: 28) {
-                ZStack {
-                    Circle()
-                        .stroke(.white.opacity(0.18), lineWidth: 1)
-                        .frame(width: 210, height: 210)
-
-                    Circle()
-                        .trim(from: 0.10, to: 0.88)
-                        .stroke(
-                            AngularGradient(colors: [.white.opacity(0.2), .white, .white.opacity(0.2)], center: .center),
-                            style: StrokeStyle(lineWidth: 8, lineCap: .round)
-                        )
-                        .frame(width: 170, height: 170)
-                        .rotationEffect(.degrees(animate ? 360 : 0))
-                        .animation(.linear(duration: 2.4).repeatForever(autoreverses: false), value: animate)
-
-                    Circle()
-                        .trim(from: 0.05, to: 0.45)
-                        .stroke(
-                            Color.white.opacity(0.70),
-                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
-                        )
-                        .frame(width: 140, height: 140)
-                        .rotationEffect(.degrees(animate ? -360 : 0))
-                        .animation(.linear(duration: 1.8).repeatForever(autoreverses: false), value: animate)
-
-                    ForEach(0..<24, id: \.self) { index in
-                        Circle()
-                            .fill(.white.opacity(animate ? 0.95 : 0.35))
-                            .frame(width: index.isMultiple(of: 3) ? 7 : 4, height: index.isMultiple(of: 3) ? 7 : 4)
-                            .offset(y: -84)
-                            .rotationEffect(.degrees(Double(index) * 15 + (animate ? 360 : 0)))
-                            .animation(
-                                .easeInOut(duration: 1.2)
-                                    .repeatForever(autoreverses: true)
-                                    .delay(Double(index) * 0.03),
-                                value: animate
-                            )
-                    }
-
-                    Image(systemName: "cpu.fill")
-                        .font(.system(size: 42, weight: .bold))
-                        .foregroundStyle(.white)
-                        .shadow(color: .white.opacity(0.45), radius: 10, x: 0, y: 0)
-                }
-
-                VStack(spacing: 8) {
-                    Text(statusMessage)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 28)
-                        .padding(.top, 10)
-                }
-
-                ProgressView()
-                    .tint(.white)
-            }
-            .padding(24)
-        }
-        .onAppear {
-            animate = true
-            statusMessage = PredictionInterstitialMessages.random()
-        }
-    }
-}
-
-private struct DayPredictionsView: View {
-    let prediction: DailyFixturePredictions
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var preferences: PreferencesStore
-    @EnvironmentObject private var fantasyViewModel: FantasyViewModel
-    @State private var shareItems: [Any] = []
-    @State private var isShareSheetPresented = false
-    @State private var isLaunchingShareSheet = false
-    @State private var cachedShareImage: UIImage?
-    @State private var shareRenderTask: Task<Void, Never>?
-    @State private var isPreparingShareImage = false
-    @State private var pendingShareAfterRender = false
-
-    private static let exportDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
-
-    private var sections: [PredictionLeagueSection] {
-        let grouped = Dictionary(grouping: prediction.predictions) { $0.displayLeague }
-        return grouped.map { entry in
-            let (league, fixtures) = entry
-            let sorted = fixtures.sorted { lhs, rhs in
-                let leftDate = MatchDateParser.parse(date: lhs.date, time: lhs.time) ?? .distantFuture
-                let rightDate = MatchDateParser.parse(date: rhs.date, time: rhs.time) ?? .distantFuture
-                if leftDate != rightDate {
-                    return leftDate < rightDate
-                }
-                let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
-                if homeCompare != .orderedSame {
-                    return homeCompare == .orderedAscending
-                }
-                return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
-            }
-            return PredictionLeagueSection(
-                id: "\(prediction.dateKey)|\(league)",
-                league: league,
-                fixtures: sorted
-            )
-        }
-        .sorted { lhs, rhs in
-            let lhsKickoff = lhs.fixtures.first.flatMap { MatchDateParser.parse(date: $0.date, time: $0.time) } ?? .distantFuture
-            let rhsKickoff = rhs.fixtures.first.flatMap { MatchDateParser.parse(date: $0.date, time: $0.time) } ?? .distantFuture
-            if lhsKickoff != rhsKickoff {
-                return lhsKickoff < rhsKickoff
-            }
-            return lhs.league.localizedCaseInsensitiveCompare(rhs.league) == .orderedAscending
-        }
-    }
-
-    var body: some View {
-        List {
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "sparkles")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Predictions for \(prediction.displayDate)")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    Text("Generated \(Self.exportDateFormatter.string(from: prediction.generatedAt))")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 2)
-            }
-            .textCase(nil)
-
-            ForEach(sections) { section in
-                Section {
-                    Text(section.league)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.secondary)
-                        .textCase(nil)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 2, trailing: 16))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-
-                    ForEach(section.fixtures) { fixture in
-                        PredictedMatchCard(fixture: fixture)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                    }
-                }
-            }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Predictions")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Done") {
-                    dismiss()
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    if let image = cachedShareImage {
-                        presentShareSheet(with: [image])
-                        return
-                    }
-
-                    pendingShareAfterRender = true
-                    prepareShareImageIfNeeded(force: false)
-                } label: {
-                    if isLaunchingShareSheet || (isPreparingShareImage && cachedShareImage == nil) {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                }
-                .disabled(
-                    prediction.predictions.isEmpty
-                        || isLaunchingShareSheet
-                        || (isPreparingShareImage && cachedShareImage == nil)
-                )
-                .accessibilityLabel("Share predictions")
-            }
-        }
-        .onAppear {
-            prepareShareImageIfNeeded()
-        }
-        .onDisappear {
-            shareRenderTask?.cancel()
-            shareRenderTask = nil
-            cachedShareImage = nil
-            isLaunchingShareSheet = false
-        }
-        .sheet(isPresented: $isShareSheetPresented, onDismiss: {
-            shareItems = []
-            isLaunchingShareSheet = false
-        }) {
-            ShareSheet(activityItems: shareItems)
-        }
-    }
-
-    private func presentShareSheet(with items: [Any]) {
-        guard !items.isEmpty else { return }
-        guard !isLaunchingShareSheet && !isShareSheetPresented else { return }
-        isLaunchingShareSheet = true
-        shareItems = items
-        DispatchQueue.main.async {
-            isShareSheetPresented = true
-            isLaunchingShareSheet = false
-        }
-    }
-
-    private func prepareShareImageIfNeeded(force: Bool = false) {
-        guard !prediction.predictions.isEmpty else { return }
-        if cachedShareImage != nil && !force { return }
-        if isPreparingShareImage { return }
-
-        shareRenderTask?.cancel()
-        isPreparingShareImage = true
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        let displayDate = prediction.displayDate
-        let generated = Self.exportDateFormatter.string(from: prediction.generatedAt)
-        let snapshotSections = sections
-
-        shareRenderTask = Task { @MainActor in
-            let rendered = PredictionShareImageRenderer.render(
-                title: displayDate,
-                generatedAtText: generated,
-                sections: snapshotSections,
-                preferences: preferences,
-                fantasyViewModel: fantasyViewModel
-            )
-            guard !Task.isCancelled else { return }
-
-            cachedShareImage = rendered
-            isPreparingShareImage = false
-            #if DEBUG
-            let elapsedMs = Int((CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
-            print("[PredictionsShare] Prepared image in \(elapsedMs)ms, success=\(rendered != nil)")
-            #endif
-
-            if pendingShareAfterRender {
-                if let rendered {
-                    presentShareSheet(with: [rendered])
-                } else {
-                    presentShareSheet(with: [shareText])
-                }
-                pendingShareAfterRender = false
-            }
-        }
-    }
-
-    private var shareText: String {
-        var lines: [String] = []
-        lines.append("Top Scores predictions")
-        lines.append("\(prediction.displayDate)")
-        lines.append("Generated \(Self.exportDateFormatter.string(from: prediction.generatedAt))")
-        lines.append("")
-
-        for section in sections {
-            lines.append(section.league)
-            for fixture in section.fixtures {
-                if fixture.isPredicted {
-                    let home = fixture.homeGoals ?? 0
-                    let away = fixture.awayGoals ?? 0
-                    lines.append("\(fixture.time)  \(fixture.displayHomeTeam) \(home)-\(away) \(fixture.displayAwayTeam)")
-                } else if fixture.isPostponed {
-                    lines.append("\(fixture.time)  \(fixture.displayHomeTeam) P-P \(fixture.displayAwayTeam)  [Match postponed]")
-                } else {
-                    lines.append("\(fixture.time)  \(fixture.displayHomeTeam) vs \(fixture.displayAwayTeam)  [\(fixture.statusLabelText)]")
-                }
-            }
-            lines.append("")
-        }
-
-        lines.append("Note: Not real results. Yet.")
-        return lines.joined(separator: "\n")
-    }
-}
-
-private struct PredictedMatchCard: View {
-    let fixture: PredictedFixture
-
-    var body: some View {
-        MatchRow(
-            match: fixture.asMatch,
-            highlightToday: false,
-            showLeague: false,
-            showBroadcastDetails: false,
-            showFantasyBadge: false,
-            centerFooterText: fixture.isPredicted ? nil : fixture.statusLabelText,
-            centerFooterColor: fixture.isPredicted ? .accentColor : .secondary
-        )
-        .opacity(fixture.cardOpacity)
-    }
-}
-
-private struct ShareSheet: UIViewControllerRepresentable {
-    let activityItems: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
-        controller.excludedActivityTypes = [.assignToContact, .addToReadingList]
-        return controller
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
-private enum PredictionShareImageRenderer {
-    private static let viewportWidth: CGFloat = 360
-
-    @MainActor
-    static func render(
-        title: String,
-        generatedAtText: String,
-        sections: [PredictionLeagueSection],
-        preferences: PreferencesStore,
-        fantasyViewModel: FantasyViewModel
-    ) -> UIImage? {
-        let fixtureCount = sections.reduce(0) { partial, section in
-            partial + section.fixtures.count
-        }
-        let snapshot = PredictionShareSnapshotView(
-            title: title,
-            generatedAtText: generatedAtText,
-            sections: sections
-        )
-            .environment(\.colorScheme, .dark)
-            .environmentObject(preferences)
-            .environmentObject(fantasyViewModel)
-            .frame(width: viewportWidth, alignment: .topLeading)
-            .background(Color.black)
-            .fixedSize(horizontal: false, vertical: true)
-
-        let renderer = ImageRenderer(content: snapshot)
-        renderer.proposedSize = ProposedViewSize(width: viewportWidth, height: nil)
-        renderer.scale = exportScale(forFixtureCount: fixtureCount)
-        if #available(iOS 17.0, *) {
-            renderer.isOpaque = true
-        }
-        return renderer.uiImage
-    }
-
-    private static func exportScale(forFixtureCount fixtureCount: Int) -> CGFloat {
-        switch fixtureCount {
-        case ...16:
-            return 2.5
-        case ...30:
-            return 2.0
-        default:
-            return 1.5
-        }
-    }
-}
-
-private struct PredictionShareSnapshotView: View {
-    let title: String
-    let generatedAtText: String
-    let sections: [PredictionLeagueSection]
-
-    var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.03, green: 0.03, blue: 0.05),
-                    Color(red: 0.07, green: 0.08, blue: 0.12),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        ShareAppIconView(size: 20)
-                        Text("Top Scores Predictions")
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-                    Text(title)
-                        .font(.system(size: 19, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.88))
-                    Text("Generated \(generatedAtText)")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.62))
-                }
-
-                ForEach(sections) { section in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(section.league)
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.82))
-
-                        ForEach(section.fixtures) { fixture in
-                            MatchRow(
-                                match: fixture.asMatch,
-                                highlightToday: false,
-                                showLeague: false,
-                                showBroadcastDetails: false,
-                                showFantasyBadge: false,
-                                centerFooterText: fixture.isPredicted ? nil : fixture.statusLabelText,
-                                centerFooterColor: fixture.isPredicted ? .accentColor : .secondary,
-                                isLargePresentation: true
-                            )
-                            .opacity(fixture.cardOpacity)
-                        }
-                    }
-                }
-
-                Text("Not real results. Yet.")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .padding(.top, 2)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 14)
-        }
-    }
-}
-
-private struct ShareAppIconView: View {
-    let size: CGFloat
-
-    var body: some View {
-        Group {
-            if let uiImage = appIconImage {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .interpolation(.high)
-            } else {
-                Image(systemName: "app.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(Color.accentColor)
-                    .padding(3)
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
-    }
-
-    private var appIconImage: UIImage? {
-        guard
-            let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-            let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-            let iconFiles = primary["CFBundleIconFiles"] as? [String],
-            let iconName = iconFiles.last,
-            let image = UIImage(named: iconName)
-        else {
-            return nil
-        }
-        return image
     }
 }
 

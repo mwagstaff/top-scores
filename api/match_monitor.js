@@ -2865,17 +2865,6 @@ function evaluateUserNotificationDecision(user, match, event) {
     }
   }
 
-  // Check competition filter (notifications mirror the viewing competition filter)
-  if (prefs.competitionFilterEnabled && prefs.selectedLeagues && prefs.selectedLeagues.length > 0) {
-    if (!liveActivityPreferenceLeagueMatchesSelectedLeagues(prefs.selectedLeagues, match.league)) {
-      return {
-        shouldNotify: false,
-        reason: "league_filtered_by_viewing_preferences",
-        delayMinutes,
-      };
-    }
-  }
-
   // Check channel filter (only applies to fixtures, but we'll use it for consistency)
   if (prefs.channelFilterEnabled && prefs.selectedChannels && prefs.selectedChannels.length > 0) {
     const matchChannels = match.tv_channels || [];
@@ -2889,11 +2878,55 @@ function evaluateUserNotificationDecision(user, match, event) {
     }
   }
 
-  // Check notification EPL teams filter
+  const notificationAllMajorMatchesEnabled = prefs.notificationAllMajorMatchesEnabled;
+  if (notificationAllMajorMatchesEnabled === false) {
+    const selectedLeagues = Array.isArray(prefs.selectedNotificationLeagues)
+      ? prefs.selectedNotificationLeagues
+      : [];
+    if (
+      selectedLeagues.length === 0 ||
+      !liveActivityPreferenceLeagueMatchesSelectedLeagues(selectedLeagues, match.league)
+    ) {
+      return {
+        shouldNotify: false,
+        reason: "league_filtered_by_notification_preferences",
+        delayMinutes,
+      };
+    }
+  } else if (notificationAllMajorMatchesEnabled === true) {
+    const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
+    const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
+    const isMajorMatch =
+      homeInPremierLeague ||
+      awayInPremierLeague ||
+      matchIsMajorGameOfInterest(match) ||
+      matchIncludesHomeNation(match) ||
+      matchIsMajorTournament(match);
+    if (!isMajorMatch) {
+      return {
+        shouldNotify: false,
+        reason: "all_major_matches_filter",
+        delayMinutes,
+      };
+    }
+  } else if (prefs.competitionFilterEnabled && prefs.selectedLeagues && prefs.selectedLeagues.length > 0) {
+    // Preserve the previous shared competition-filter behaviour for devices
+    // that have not yet saved the new notification preference.
+    if (!liveActivityPreferenceLeagueMatchesSelectedLeagues(prefs.selectedLeagues, match.league)) {
+      return {
+        shouldNotify: false,
+        reason: "league_filtered_by_viewing_preferences",
+        delayMinutes,
+      };
+    }
+  }
+
+  // Preserve the legacy EPL-only notification filter for devices that have
+  // not yet saved the new All major matches preference.
   const notifEplOnly = prefs.notificationPremierLeagueTeamsOnly !== undefined
     ? prefs.notificationPremierLeagueTeamsOnly
     : prefs.englishPremierLeagueTeamsOnly;
-  if (notifEplOnly) {
+  if (notificationAllMajorMatchesEnabled !== true && notifEplOnly) {
     const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
     const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
     if (!homeInPremierLeague && !awayInPremierLeague) {

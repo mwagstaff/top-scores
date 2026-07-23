@@ -5918,6 +5918,59 @@ test("evaluateUserNotificationDecision allows Premier League matches when EPL-on
   assert.equal(decision.reason, "eligible");
 });
 
+test("evaluateUserNotificationDecision includes major international matches when All major matches is enabled", () => {
+  const decision = __testHooks.evaluateUserNotificationDecision(
+    {
+      apnsToken: "apns-token",
+      preferences: {
+        notificationsEnabled: true,
+        notificationDelayMinutes: 0,
+        notificationEventTypes: ["goal"],
+        notificationAllMajorMatchesEnabled: true,
+      },
+    },
+    {
+      home_team: "France",
+      away_team: "Germany",
+      league: "FIFA World Cup 2026",
+      tv_channels: [],
+    },
+    { type: "goal" }
+  );
+
+  assert.equal(decision.shouldNotify, true);
+  assert.equal(decision.reason, "eligible");
+});
+
+test("evaluateUserNotificationDecision uses its own competition selection when All major matches is disabled", () => {
+  const decision = __testHooks.evaluateUserNotificationDecision(
+    {
+      apnsToken: "apns-token",
+      preferences: {
+        notificationsEnabled: true,
+        notificationDelayMinutes: 0,
+        notificationEventTypes: ["goal"],
+        notificationAllMajorMatchesEnabled: false,
+        selectedNotificationLeagues: ["FA Cup"],
+        notificationPremierLeagueTeamsOnly: false,
+      },
+    },
+    {
+      home_team: "Arsenal",
+      away_team: "Chelsea",
+      league: "Premier League",
+      tv_channels: [],
+    },
+    { type: "goal" }
+  );
+
+  assert.deepStrictEqual(decision, {
+    shouldNotify: false,
+    reason: "league_filtered_by_notification_preferences",
+    delayMinutes: 0,
+  });
+});
+
 test("evaluateUserNotificationDecision treats confirmed VAR reversals as delayed goal notifications", () => {
   const decision = __testHooks.evaluateUserNotificationDecision(
     {

@@ -319,8 +319,11 @@ actor PreferencesSyncService {
             "fantasy": fantasyState,
             "preferences": [
                 "selectedLeagues": snapshot.selectedLeagues,
+                "selectedNotificationLeagues": snapshot.selectedNotificationLeagues,
                 "selectedChannels": snapshot.selectedChannels,
-                "competitionFilterEnabled": snapshot.competitionFilterEnabled,
+                "fixtureAllMajorMatchesEnabled": snapshot.fixtureAllMajorMatchesEnabled,
+                "notificationAllMajorMatchesEnabled": snapshot.notificationAllMajorMatchesEnabled,
+                "competitionFilterEnabled": snapshot.usesFixtureCompetitionSelection,
                 "channelFilterEnabled": snapshot.channelFilterEnabled,
                 "englishPremierLeagueTeamsOnly": snapshot.englishPremierLeagueTeamsOnly,
                 "majorUEFAClubGamesEnabled": snapshot.majorUEFAClubGamesEnabled,
@@ -484,7 +487,24 @@ actor PreferencesSyncService {
             let legacyShowFantasyMatchPills = preferences["showFantasyMatchPills"] as? Bool ?? PreferencesStore.defaultShowFantasyMatchPills
             let snapshot = PreferencesSnapshot(
                 selectedLeagues: preferences["selectedLeagues"] as? [String] ?? PreferencesStore.defaultSelectedLeagues,
+                selectedNotificationLeagues: preferences["selectedNotificationLeagues"] as? [String]
+                    ?? preferences["selectedLeagues"] as? [String]
+                    ?? PreferencesStore.defaultSelectedNotificationLeagues,
                 selectedChannels: preferences["selectedChannels"] as? [String] ?? PreferencesStore.defaultSelectedChannels,
+                fixtureAllMajorMatchesEnabled: preferences["fixtureAllMajorMatchesEnabled"] as? Bool
+                    ?? (
+                        (preferences["englishPremierLeagueTeamsOnly"] as? Bool ?? PreferencesStore.defaultEnglishPremierLeagueTeamsOnly) &&
+                        (preferences["majorUEFAClubGamesEnabled"] as? Bool ?? PreferencesStore.defaultMajorUEFAClubGamesEnabled) &&
+                        (preferences["homeNationsFilterEnabled"] as? Bool ?? PreferencesStore.defaultHomeNationsFilterEnabled) &&
+                        (preferences["majorTournamentsFilterEnabled"] as? Bool ?? PreferencesStore.defaultMajorTournamentsFilterEnabled)
+                    ),
+                notificationAllMajorMatchesEnabled: preferences["notificationAllMajorMatchesEnabled"] as? Bool
+                    ?? (
+                        (preferences["notificationPremierLeagueTeamsOnly"] as? Bool ?? PreferencesStore.defaultNotificationPremierLeagueTeamsOnly) &&
+                        (preferences["notificationMajorUEFAClubGamesEnabled"] as? Bool ?? PreferencesStore.defaultNotificationMajorUEFAClubGamesEnabled) &&
+                        (preferences["notificationHomeNationsFilterEnabled"] as? Bool ?? PreferencesStore.defaultNotificationHomeNationsFilterEnabled) &&
+                        (preferences["notificationMajorTournamentsFilterEnabled"] as? Bool ?? PreferencesStore.defaultNotificationMajorTournamentsFilterEnabled)
+                    ),
                 competitionFilterEnabled: preferences["competitionFilterEnabled"] as? Bool ?? PreferencesStore.defaultCompetitionFilterEnabled,
                 channelFilterEnabled: preferences["channelFilterEnabled"] as? Bool ?? PreferencesStore.defaultChannelFilterEnabled,
                 englishPremierLeagueTeamsOnly: preferences["englishPremierLeagueTeamsOnly"] as? Bool ?? PreferencesStore.defaultEnglishPremierLeagueTeamsOnly,

@@ -4,6 +4,12 @@ import { fetchMatchesPage, fetchTeamRankings, fetchCompetitionWeights, fetchComp
 import { usePreferences } from "../preferences";
 import { CompetitionWeightLookup, TeamRatingLookup, groupMatches } from "../matchGrouping";
 import { useShouldUseShortTeamNames } from "../useResponsiveTeamNames";
+import {
+  loadShowPredictedScores,
+  saveShowPredictedScores,
+  subscribeToPredictionChanges,
+  warmPredictionsForDays,
+} from "../predictions";
 import { MatchCard } from "./MatchCard";
 import type { ChangeEvent } from "react";
 import type { Match, MatchDayGroup, MatchesMode, Preferences } from "../types";
@@ -43,6 +49,10 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
   const [searchText, setSearchText]   = useState("");
   const [showSearch, setShowSearch]   = useState(false);
   const [debugMode, setDebugMode]     = useState(false);
+  const [showPredictions, setShowPredictions] = useState(loadShowPredictedScores);
+  // Bumped whenever the prediction store changes (warm-up completes, a day starts/finishes
+  // pending) so rows re-render and pick up freshly-computed or newly-frozen predictions.
+  const [, forcePredictionsRerender] = useReducer((v) => v + 1, 0);
   const [state, setState]             = useState<ScreenState>(initialState);
   const [reloadToken, reload]         = useReducer((v) => v + 1, 0);
   const useShortTeamNames             = useShouldUseShortTeamNames();
@@ -100,6 +110,17 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
     preferences.majorTournamentsFilterEnabled,
     customCompetitions,
   ]);
+
+  // Re-render whenever a background warm-up freezes new predictions or a day's
+  // pending state changes, so chips appear without needing another data load.
+  useEffect(() => subscribeToPredictionChanges(forcePredictionsRerender), []);
+
+  // Precompute predictions for upcoming fixtures in the background as soon as they
+  // load — never on demand, so a row's chip is normally already there once visible.
+  useEffect(() => {
+    if (mode !== "fixtures") return;
+    void warmPredictionsForDays(state.groups);
+  }, [mode, state.groups]);
 
   const requestKey = JSON.stringify({ mode, preferences, reloadToken });
 
@@ -326,6 +347,28 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
           </span>
         )}
 
+        {/* Predicted scores toggle */}
+        <button
+          type="button"
+          className={`control-btn${showPredictions ? " is-active" : ""}`}
+          onClick={() => {
+            setShowPredictions((v) => {
+              const next = !v;
+              saveShowPredictedScores(next);
+              if (next) void warmPredictionsForDays(state.groups);
+              return next;
+            });
+          }}
+          aria-label={showPredictions ? "Hide predicted scores" : "Show predicted scores"}
+          style={showPredictions ? { color: "var(--predict)", borderColor: "var(--predict-border)", background: "var(--predict-soft)" } : undefined}
+        >
+          {/* Sparkle icon */}
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor" stroke="none">
+            <path d="M12 3.5c.3 3.1 1.1 4.9 2.2 6 1.1 1.1 2.9 1.9 6 2.2-3.1.3-4.9 1.1-6 2.2-1.1 1.1-1.9 2.9-2.2 6-.3-3.1-1.1-4.9-2.2-6-1.1-1.1-2.9-1.9-6-2.2 3.1-.3 4.9-1.1 6-2.2 1.1-1.1 1.9-2.9 2.2-6Z" />
+            <path d="M18.5 2c.12 1.3.46 2.05.9 2.5.45.44 1.2.78 2.5.9-1.3.12-2.05.46-2.5.9-.44.45-.78 1.2-.9 2.5-.12-1.3-.46-2.05-.9-2.5-.45-.44-1.2-.78-2.5-.9 1.3-.12 2.05-.46 2.5-.9.44-.45.78-1.2.9-2.5Z" />
+          </svg>
+        </button>
+
         {/* Competitions dropdown */}
         <CompetitionsDropdown
           customCompetitions={customCompetitions}
@@ -414,6 +457,8 @@ export function MatchesScreen({ mode }: MatchesScreenProps) {
                         highlightToday={day.isToday}
                         useShortTeamNames={useShortTeamNames}
                         debugMode={debugMode}
+                        showPrediction={showPredictions}
+                        predictionDateKey={day.dateKey}
                       />
                     ))}
                   </div>

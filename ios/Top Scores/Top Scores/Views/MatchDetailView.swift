@@ -10,6 +10,7 @@ struct MatchDetailView: View {
     let match: Match
     var highlightToday: Bool = false
     var showFantasyBadge: Bool = true
+    var predictionDisplay: FixturePredictionDisplayState = .hidden
 
     @State private var actionAlert: MatchActionAlert?
     @State private var showCalendarPicker = false
@@ -217,6 +218,15 @@ struct MatchDetailView: View {
                     kickoffText: kickoffText
                 )
                 .padding(.horizontal)
+
+                if predictionDisplay != .hidden {
+                    PredictionStripView(
+                        match: activeMatch,
+                        predictionDisplay: predictionDisplay,
+                        isLargePresentation: true
+                    )
+                    .padding(.horizontal)
+                }
 
                 if let penaltyDetailSummary = activeMatch.penaltyDetailSummaryText {
                     MatchPenaltyShootoutSummary(text: penaltyDetailSummary)

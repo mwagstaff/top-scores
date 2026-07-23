@@ -20,6 +20,8 @@ struct Top_ScoresTests {
         #expect(store.englishPremierLeagueTeamsOnly)
         #expect(store.homeNationsFilterEnabled)
         #expect(store.majorTournamentsFilterEnabled)
+        #expect(store.fixtureAllMajorMatchesEnabled)
+        #expect(store.notificationAllMajorMatchesEnabled)
         #expect(!store.competitionFilterEnabled)
         #expect(store.notificationsEnabled)
         #expect(store.notificationDelayMinutes == 2)
@@ -194,6 +196,26 @@ struct Top_ScoresTests {
         #expect(names.contains("major_uefa"))
         #expect(names.contains("home_nations"))
         #expect(names.contains("major_tournaments"))
+    }
+
+    @Test func matchesPageQueryItems_useIndividualCompetitionSelectionWhenAllMajorMatchesIsOff() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: ["FA Cup"],
+            selectedChannels: [],
+            fixtureAllMajorMatchesEnabled: false,
+            englishPremierLeagueTeamsOnly: false,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+        let queryItems = APIClient.matchesPageQueryItems(
+            preferences: snapshot,
+            mode: .fixtures,
+            page: 1,
+            dateRangeQueryItems: []
+        )
+
+        #expect(queryItems.contains(URLQueryItem(name: "league", value: "FA Cup")))
+        #expect(!queryItems.contains(URLQueryItem(name: "epl_only", value: "true")))
     }
 
     @Test func matchesPageQueryItems_omitAllPreferenceFiltersWhenDisabledForRequest() async throws {

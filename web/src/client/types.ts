@@ -390,3 +390,49 @@ export const matchOrderOptions: Array<{
     description: "Show earliest matches first, then stronger fixtures first.",
   },
 ];
+
+// ── Predictions (BSD markets) ───────────────────────────────────────
+// Mirrors the iOS app's Prediction.swift — the /api/v1/predictions endpoint
+// serves the same BSD projection to both clients.
+
+export interface PredictionMatchResultMarket {
+  probHome: number;
+  probDraw: number;
+  probAway: number;
+}
+
+export interface PredictionExpectedGoalsMarket {
+  home: number;
+  away: number;
+}
+
+export interface PredictionMarkets {
+  matchResult?: PredictionMatchResultMarket | null;
+  expectedGoals?: PredictionExpectedGoalsMarket | null;
+}
+
+export interface PredictionFixture {
+  eventId: string;
+  homeTeam: string;
+  awayTeam: string;
+  date: string | null;
+  time: string | null;
+  markets: PredictionMarkets | null;
+}
+
+export interface PredictionLeague {
+  leagueId: string;
+  leagueName: string;
+  fixtures: PredictionFixture[];
+}
+
+// A single match's frozen, comparable-later prediction. Stored locally
+// keyed by match id — see predictions.ts.
+export interface StoredPrediction {
+  matchId: string;
+  homeGoals: number;
+  awayGoals: number;
+  homeWinProbability: number;
+  drawProbability: number;
+  awayWinProbability: number;
+}

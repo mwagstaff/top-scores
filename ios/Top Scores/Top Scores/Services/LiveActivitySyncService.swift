@@ -693,7 +693,10 @@ final class LiveActivitySyncService {
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
-            "force": activeActivities.isEmpty,
+            // Reconcile existing activities too. ActivityKit can retain stale content
+            // after a missed APNs update, so a foreground refresh must not be limited
+            // to the no-activity start path.
+            "force": true,
             "trigger": "app_foreground",
             "activeActivityCount": activeActivities.count,
             "activeActivityIds": activeActivities.map { $0.id }
@@ -701,7 +704,7 @@ final class LiveActivitySyncService {
         NSLog(
             "[LiveActivitySync] Reconcile request activeCount=%d force=%d ids=%@",
             activeActivities.count,
-            activeActivities.isEmpty ? 1 : 0,
+            1,
             activeActivities.map { $0.id }.joined(separator: ",")
         )
         guard let responseData = await sendJSONRequestReturningData(url: endpoint, payload: payload, logContext: "live-activity-reconcile") else {

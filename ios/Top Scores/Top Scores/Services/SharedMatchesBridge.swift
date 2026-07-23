@@ -299,7 +299,7 @@ enum SharedMatchesBridge {
         guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
         defaults.set(snapshot.selectedLeagues, forKey: AppGroupConfig.selectedLeaguesKey)
         defaults.set(snapshot.selectedChannels, forKey: AppGroupConfig.selectedChannelsKey)
-        defaults.set(snapshot.competitionFilterEnabled, forKey: AppGroupConfig.competitionFilterEnabledKey)
+        defaults.set(snapshot.usesFixtureCompetitionSelection, forKey: AppGroupConfig.competitionFilterEnabledKey)
         defaults.set(snapshot.channelFilterEnabled, forKey: AppGroupConfig.channelFilterEnabledKey)
         defaults.set(snapshot.englishPremierLeagueTeamsOnly, forKey: AppGroupConfig.englishPremierLeagueTeamsOnlyKey)
         defaults.set(snapshot.majorUEFAClubGamesEnabled, forKey: AppGroupConfig.majorUEFAClubGamesEnabledKey)

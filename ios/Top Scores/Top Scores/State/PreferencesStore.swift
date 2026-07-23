@@ -49,7 +49,10 @@ enum FixturesViewDensity: String, Codable, Sendable {
 
 struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let selectedLeagues: [String]
+    let selectedNotificationLeagues: [String]
     let selectedChannels: [String]
+    let fixtureAllMajorMatchesEnabled: Bool
+    let notificationAllMajorMatchesEnabled: Bool
     let competitionFilterEnabled: Bool
     let channelFilterEnabled: Bool
     let englishPremierLeagueTeamsOnly: Bool
@@ -83,25 +86,32 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showFantasyFixtureLogos || showFantasyExpectedPoints || showFantasyRealTimePoints
     }
 
+    nonisolated var usesFixtureCompetitionSelection: Bool {
+        !fixtureAllMajorMatchesEnabled
+    }
+
     nonisolated var effectiveEnglishPremierLeagueTeamsOnly: Bool {
-        englishPremierLeagueTeamsOnly
+        fixtureAllMajorMatchesEnabled && englishPremierLeagueTeamsOnly
     }
 
     nonisolated var effectiveMajorUEFAClubGamesEnabled: Bool {
-        englishPremierLeagueTeamsOnly && majorUEFAClubGamesEnabled
+        fixtureAllMajorMatchesEnabled && englishPremierLeagueTeamsOnly && majorUEFAClubGamesEnabled
     }
 
     nonisolated var effectiveHomeNationsFilterEnabled: Bool {
-        englishPremierLeagueTeamsOnly && homeNationsFilterEnabled
+        fixtureAllMajorMatchesEnabled && englishPremierLeagueTeamsOnly && homeNationsFilterEnabled
     }
 
     nonisolated var effectiveMajorTournamentsFilterEnabled: Bool {
-        englishPremierLeagueTeamsOnly && majorTournamentsFilterEnabled
+        fixtureAllMajorMatchesEnabled && englishPremierLeagueTeamsOnly && majorTournamentsFilterEnabled
     }
 
     nonisolated init(
         selectedLeagues: [String],
+        selectedNotificationLeagues: [String] = PreferencesStore.defaultSelectedNotificationLeagues,
         selectedChannels: [String],
+        fixtureAllMajorMatchesEnabled: Bool = PreferencesStore.defaultFixtureAllMajorMatchesEnabled,
+        notificationAllMajorMatchesEnabled: Bool = PreferencesStore.defaultNotificationAllMajorMatchesEnabled,
         competitionFilterEnabled: Bool = PreferencesStore.defaultCompetitionFilterEnabled,
         channelFilterEnabled: Bool = PreferencesStore.defaultChannelFilterEnabled,
         englishPremierLeagueTeamsOnly: Bool,
@@ -132,7 +142,10 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showPostponedGames: Bool = PreferencesStore.defaultShowPostponedGames
     ) {
         self.selectedLeagues = selectedLeagues
+        self.selectedNotificationLeagues = selectedNotificationLeagues
         self.selectedChannels = selectedChannels
+        self.fixtureAllMajorMatchesEnabled = fixtureAllMajorMatchesEnabled
+        self.notificationAllMajorMatchesEnabled = notificationAllMajorMatchesEnabled
         self.competitionFilterEnabled = competitionFilterEnabled
         self.channelFilterEnabled = channelFilterEnabled
         self.englishPremierLeagueTeamsOnly = englishPremierLeagueTeamsOnly
@@ -165,7 +178,10 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case selectedLeagues
+        case selectedNotificationLeagues
         case selectedChannels
+        case fixtureAllMajorMatchesEnabled
+        case notificationAllMajorMatchesEnabled
         case competitionFilterEnabled
         case channelFilterEnabled
         case englishPremierLeagueTeamsOnly
@@ -203,6 +219,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         selectedLeagues = try container.decode([String].self, forKey: .selectedLeagues)
+        selectedNotificationLeagues = try container.decodeIfPresent([String].self, forKey: .selectedNotificationLeagues)
+            ?? selectedLeagues
         selectedChannels = try container.decode([String].self, forKey: .selectedChannels)
         competitionFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .competitionFilterEnabled) ?? PreferencesStore.defaultCompetitionFilterEnabled
         channelFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .channelFilterEnabled) ?? PreferencesStore.defaultChannelFilterEnabled
@@ -210,6 +228,13 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         majorUEFAClubGamesEnabled = try container.decodeIfPresent(Bool.self, forKey: .majorUEFAClubGamesEnabled) ?? PreferencesStore.defaultMajorUEFAClubGamesEnabled
         homeNationsFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .homeNationsFilterEnabled) ?? PreferencesStore.defaultHomeNationsFilterEnabled
         majorTournamentsFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .majorTournamentsFilterEnabled) ?? PreferencesStore.defaultMajorTournamentsFilterEnabled
+        fixtureAllMajorMatchesEnabled = try container.decodeIfPresent(Bool.self, forKey: .fixtureAllMajorMatchesEnabled)
+            ?? (
+                englishPremierLeagueTeamsOnly &&
+                majorUEFAClubGamesEnabled &&
+                homeNationsFilterEnabled &&
+                majorTournamentsFilterEnabled
+            )
         apiBaseURL = try container.decode(String.self, forKey: .apiBaseURL)
         refreshIntervalMinutes = try container.decode(Int.self, forKey: .refreshIntervalMinutes)
         showAllMatches = try container.decodeIfPresent(Bool.self, forKey: .showAllMatches) ?? false
@@ -224,6 +249,13 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         notificationMajorUEFAClubGamesEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationMajorUEFAClubGamesEnabled) ?? PreferencesStore.defaultNotificationMajorUEFAClubGamesEnabled
         notificationHomeNationsFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationHomeNationsFilterEnabled) ?? PreferencesStore.defaultNotificationHomeNationsFilterEnabled
         notificationMajorTournamentsFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationMajorTournamentsFilterEnabled) ?? PreferencesStore.defaultNotificationMajorTournamentsFilterEnabled
+        notificationAllMajorMatchesEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationAllMajorMatchesEnabled)
+            ?? (
+                notificationPremierLeagueTeamsOnly &&
+                notificationMajorUEFAClubGamesEnabled &&
+                notificationHomeNationsFilterEnabled &&
+                notificationMajorTournamentsFilterEnabled
+            )
         fantasyDeadlineRemindersEnabled = try container.decodeIfPresent(Bool.self, forKey: .fantasyDeadlineRemindersEnabled) ?? PreferencesStore.defaultFantasyDeadlineRemindersEnabled
         showTodayUnfinishedFixturesBadge = try container.decodeIfPresent(Bool.self, forKey: .showTodayUnfinishedFixturesBadge) ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
         fixturesViewDensity = try container.decodeIfPresent(FixturesViewDensity.self, forKey: .fixturesViewDensity) ?? PreferencesStore.defaultFixturesViewDensity
@@ -244,7 +276,10 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     nonisolated func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(selectedLeagues, forKey: .selectedLeagues)
+        try container.encode(selectedNotificationLeagues, forKey: .selectedNotificationLeagues)
         try container.encode(selectedChannels, forKey: .selectedChannels)
+        try container.encode(fixtureAllMajorMatchesEnabled, forKey: .fixtureAllMajorMatchesEnabled)
+        try container.encode(notificationAllMajorMatchesEnabled, forKey: .notificationAllMajorMatchesEnabled)
         try container.encode(competitionFilterEnabled, forKey: .competitionFilterEnabled)
         try container.encode(channelFilterEnabled, forKey: .channelFilterEnabled)
         try container.encode(englishPremierLeagueTeamsOnly, forKey: .englishPremierLeagueTeamsOnly)
@@ -277,7 +312,10 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
 
     nonisolated static func == (lhs: PreferencesSnapshot, rhs: PreferencesSnapshot) -> Bool {
         lhs.selectedLeagues == rhs.selectedLeagues &&
+        lhs.selectedNotificationLeagues == rhs.selectedNotificationLeagues &&
         lhs.selectedChannels == rhs.selectedChannels &&
+        lhs.fixtureAllMajorMatchesEnabled == rhs.fixtureAllMajorMatchesEnabled &&
+        lhs.notificationAllMajorMatchesEnabled == rhs.notificationAllMajorMatchesEnabled &&
         lhs.competitionFilterEnabled == rhs.competitionFilterEnabled &&
         lhs.channelFilterEnabled == rhs.channelFilterEnabled &&
         lhs.englishPremierLeagueTeamsOnly == rhs.englishPremierLeagueTeamsOnly &&
@@ -319,6 +357,9 @@ final class PreferencesStore: ObservableObject {
         "UEFA Conference League",
         "UEFA Europa League"
     ]
+    nonisolated static let defaultSelectedNotificationLeagues = defaultSelectedLeagues
+    nonisolated static let defaultFixtureAllMajorMatchesEnabled = true
+    nonisolated static let defaultNotificationAllMajorMatchesEnabled = true
     nonisolated static let productionApiBaseURL = "https://api.skynolimit.dev/top-scores/api/v1"
     nonisolated static let developmentApiBaseURL = "http://Mikes-MacBook-Air.local:3011/api/v1"
     nonisolated static let defaultApiBaseURL = productionApiBaseURL
@@ -351,11 +392,13 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultShowFantasyMatchPills = false
     nonisolated static let defaultPremierLeagueMatchesFirst = true
     nonisolated static let defaultShowPostponedGames = false
-    #if DEBUG
-    nonisolated static let defaultShowPredictionRedoButton = false
-    #endif
+    nonisolated static let defaultShowPredictedScores = false
 
     @Published var selectedLeagues: [String] {
+        didSet { persist() }
+    }
+
+    @Published var selectedNotificationLeagues: [String] {
         didSet { persist() }
     }
 
@@ -364,6 +407,14 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var competitionFilterEnabled: Bool {
+        didSet { persist() }
+    }
+
+    @Published var fixtureAllMajorMatchesEnabled: Bool {
+        didSet { persist() }
+    }
+
+    @Published var notificationAllMajorMatchesEnabled: Bool {
         didSet { persist() }
     }
 
@@ -475,17 +526,33 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
-    #if DEBUG
-    @Published var showPredictionRedoButton: Bool {
+    /// Whether predicted scores are shown inline on Fixtures/Results rows. Purely a
+    /// display toggle — not part of `PreferencesSnapshot` since it doesn't affect what
+    /// matches are fetched or filtered, only how a row already on screen is rendered.
+    @Published var showPredictedScores: Bool {
         didSet { persist() }
     }
-    #endif
 
     init(userDefaults: UserDefaults = .standard) {
         let leagues = userDefaults.stringArray(forKey: Keys.selectedLeagues) ?? Self.defaultSelectedLeagues
+        let notificationLeagues = userDefaults.stringArray(forKey: Keys.selectedNotificationLeagues) ?? leagues
         let channels = userDefaults.stringArray(forKey: Keys.selectedChannels) ?? Self.defaultSelectedChannels
         let competitionFilterEnabled = userDefaults.object(forKey: Keys.competitionFilterEnabled) as? Bool
             ?? Self.defaultCompetitionFilterEnabled
+        let fixtureAllMajorMatchesEnabled = userDefaults.object(forKey: Keys.fixtureAllMajorMatchesEnabled) as? Bool
+            ?? (
+                (userDefaults.object(forKey: Keys.englishPremierLeagueTeamsOnly) as? Bool ?? Self.defaultEnglishPremierLeagueTeamsOnly) &&
+                (userDefaults.object(forKey: Keys.majorUEFAClubGamesEnabled) as? Bool ?? Self.defaultMajorUEFAClubGamesEnabled) &&
+                (userDefaults.object(forKey: Keys.homeNationsFilterEnabled) as? Bool ?? Self.defaultHomeNationsFilterEnabled) &&
+                (userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool ?? Self.defaultMajorTournamentsFilterEnabled)
+            )
+        let notificationAllMajorMatchesEnabled = userDefaults.object(forKey: Keys.notificationAllMajorMatchesEnabled) as? Bool
+            ?? (
+                (userDefaults.object(forKey: Keys.notificationPremierLeagueTeamsOnly) as? Bool ?? Self.defaultNotificationPremierLeagueTeamsOnly) &&
+                (userDefaults.object(forKey: Keys.notificationMajorUEFAClubGamesEnabled) as? Bool ?? Self.defaultNotificationMajorUEFAClubGamesEnabled) &&
+                (userDefaults.object(forKey: Keys.notificationHomeNationsFilterEnabled) as? Bool ?? Self.defaultNotificationHomeNationsFilterEnabled) &&
+                (userDefaults.object(forKey: Keys.notificationMajorTournamentsFilterEnabled) as? Bool ?? Self.defaultNotificationMajorTournamentsFilterEnabled)
+            )
         let channelFilterEnabled = userDefaults.object(forKey: Keys.channelFilterEnabled) as? Bool
             ?? Self.defaultChannelFilterEnabled
         let englishPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.englishPremierLeagueTeamsOnly) as? Bool
@@ -544,14 +611,15 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultPremierLeagueMatchesFirst
         let showPostponedGames = userDefaults.object(forKey: Keys.showPostponedGames) as? Bool
             ?? Self.defaultShowPostponedGames
-        #if DEBUG
-        let showPredictionRedoButton = userDefaults.object(forKey: Keys.showPredictionRedoButton) as? Bool
-            ?? Self.defaultShowPredictionRedoButton
-        #endif
+        let showPredictedScores = userDefaults.object(forKey: Keys.showPredictedScores) as? Bool
+            ?? Self.defaultShowPredictedScores
 
         self.selectedLeagues = leagues
+        self.selectedNotificationLeagues = notificationLeagues
         self.selectedChannels = ChannelSelection.normalizedSelectedOptions(channels)
         self.competitionFilterEnabled = competitionFilterEnabled
+        self.fixtureAllMajorMatchesEnabled = fixtureAllMajorMatchesEnabled
+        self.notificationAllMajorMatchesEnabled = notificationAllMajorMatchesEnabled
         self.channelFilterEnabled = channelFilterEnabled
         self.englishPremierLeagueTeamsOnly = englishPremierLeagueTeamsOnly
         self.majorUEFAClubGamesEnabled = majorUEFAClubGamesEnabled
@@ -579,9 +647,7 @@ final class PreferencesStore: ObservableObject {
         self.showFantasyRealTimePoints = showFantasyRealTimePoints
         self.premierLeagueMatchesFirst = premierLeagueMatchesFirst
         self.showPostponedGames = showPostponedGames
-        #if DEBUG
-        self.showPredictionRedoButton = showPredictionRedoButton
-        #endif
+        self.showPredictedScores = showPredictedScores
 
         if !showTodayUnfinishedFixturesBadge {
             Task {
@@ -593,7 +659,10 @@ final class PreferencesStore: ObservableObject {
     var snapshot: PreferencesSnapshot {
         PreferencesSnapshot(
             selectedLeagues: selectedLeagues,
+            selectedNotificationLeagues: selectedNotificationLeagues,
             selectedChannels: selectedChannels,
+            fixtureAllMajorMatchesEnabled: fixtureAllMajorMatchesEnabled,
+            notificationAllMajorMatchesEnabled: notificationAllMajorMatchesEnabled,
             competitionFilterEnabled: competitionFilterEnabled,
             channelFilterEnabled: channelFilterEnabled,
             englishPremierLeagueTeamsOnly: englishPremierLeagueTeamsOnly,
@@ -632,7 +701,10 @@ final class PreferencesStore: ObservableObject {
     var unfilteredSnapshot: PreferencesSnapshot {
         PreferencesSnapshot(
             selectedLeagues: selectedLeagues,
+            selectedNotificationLeagues: selectedNotificationLeagues,
             selectedChannels: selectedChannels,
+            fixtureAllMajorMatchesEnabled: false,
+            notificationAllMajorMatchesEnabled: notificationAllMajorMatchesEnabled,
             competitionFilterEnabled: false,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: false,
@@ -666,8 +738,11 @@ final class PreferencesStore: ObservableObject {
 
     func persist(userDefaults: UserDefaults = .standard) {
         userDefaults.set(selectedLeagues, forKey: Keys.selectedLeagues)
+        userDefaults.set(selectedNotificationLeagues, forKey: Keys.selectedNotificationLeagues)
         userDefaults.set(selectedChannels, forKey: Keys.selectedChannels)
         userDefaults.set(competitionFilterEnabled, forKey: Keys.competitionFilterEnabled)
+        userDefaults.set(fixtureAllMajorMatchesEnabled, forKey: Keys.fixtureAllMajorMatchesEnabled)
+        userDefaults.set(notificationAllMajorMatchesEnabled, forKey: Keys.notificationAllMajorMatchesEnabled)
         userDefaults.set(channelFilterEnabled, forKey: Keys.channelFilterEnabled)
         userDefaults.set(englishPremierLeagueTeamsOnly, forKey: Keys.englishPremierLeagueTeamsOnly)
         userDefaults.set(majorUEFAClubGamesEnabled, forKey: Keys.majorUEFAClubGamesEnabled)
@@ -696,9 +771,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(premierLeagueMatchesFirst, forKey: Keys.premierLeagueMatchesFirst)
         userDefaults.set(showPostponedGames, forKey: Keys.showPostponedGames)
         userDefaults.set(showsFantasyDataInFixtures, forKey: Keys.showFantasyMatchPills)
-        #if DEBUG
-        userDefaults.set(showPredictionRedoButton, forKey: Keys.showPredictionRedoButton)
-        #endif
+        userDefaults.set(showPredictedScores, forKey: Keys.showPredictedScores)
         SharedMatchesBridge.saveSnapshotToSharedDefaults(snapshot)
 
         if !showTodayUnfinishedFixturesBadge {
@@ -715,9 +788,24 @@ final class PreferencesStore: ObservableObject {
 
     static func loadSnapshot(userDefaults: UserDefaults = .standard) -> PreferencesSnapshot {
         let leagues = userDefaults.stringArray(forKey: Keys.selectedLeagues) ?? Self.defaultSelectedLeagues
+        let notificationLeagues = userDefaults.stringArray(forKey: Keys.selectedNotificationLeagues) ?? leagues
         let channels = userDefaults.stringArray(forKey: Keys.selectedChannels) ?? Self.defaultSelectedChannels
         let competitionFilterEnabled = userDefaults.object(forKey: Keys.competitionFilterEnabled) as? Bool
             ?? Self.defaultCompetitionFilterEnabled
+        let fixtureAllMajorMatchesEnabled = userDefaults.object(forKey: Keys.fixtureAllMajorMatchesEnabled) as? Bool
+            ?? (
+                (userDefaults.object(forKey: Keys.englishPremierLeagueTeamsOnly) as? Bool ?? Self.defaultEnglishPremierLeagueTeamsOnly) &&
+                (userDefaults.object(forKey: Keys.majorUEFAClubGamesEnabled) as? Bool ?? Self.defaultMajorUEFAClubGamesEnabled) &&
+                (userDefaults.object(forKey: Keys.homeNationsFilterEnabled) as? Bool ?? Self.defaultHomeNationsFilterEnabled) &&
+                (userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool ?? Self.defaultMajorTournamentsFilterEnabled)
+            )
+        let notificationAllMajorMatchesEnabled = userDefaults.object(forKey: Keys.notificationAllMajorMatchesEnabled) as? Bool
+            ?? (
+                (userDefaults.object(forKey: Keys.notificationPremierLeagueTeamsOnly) as? Bool ?? Self.defaultNotificationPremierLeagueTeamsOnly) &&
+                (userDefaults.object(forKey: Keys.notificationMajorUEFAClubGamesEnabled) as? Bool ?? Self.defaultNotificationMajorUEFAClubGamesEnabled) &&
+                (userDefaults.object(forKey: Keys.notificationHomeNationsFilterEnabled) as? Bool ?? Self.defaultNotificationHomeNationsFilterEnabled) &&
+                (userDefaults.object(forKey: Keys.notificationMajorTournamentsFilterEnabled) as? Bool ?? Self.defaultNotificationMajorTournamentsFilterEnabled)
+            )
         let channelFilterEnabled = userDefaults.object(forKey: Keys.channelFilterEnabled) as? Bool
             ?? Self.defaultChannelFilterEnabled
         let englishPremierLeagueTeamsOnly = userDefaults.object(forKey: Keys.englishPremierLeagueTeamsOnly) as? Bool
@@ -779,7 +867,10 @@ final class PreferencesStore: ObservableObject {
 
         return PreferencesSnapshot(
             selectedLeagues: leagues,
+            selectedNotificationLeagues: notificationLeagues,
             selectedChannels: ChannelSelection.normalizedSelectedOptions(channels),
+            fixtureAllMajorMatchesEnabled: fixtureAllMajorMatchesEnabled,
+            notificationAllMajorMatchesEnabled: notificationAllMajorMatchesEnabled,
             competitionFilterEnabled: competitionFilterEnabled,
             channelFilterEnabled: channelFilterEnabled,
             englishPremierLeagueTeamsOnly: englishPremierLeagueTeamsOnly,
@@ -813,8 +904,11 @@ final class PreferencesStore: ObservableObject {
 
     private enum Keys {
         static let selectedLeagues = "preferences.selectedLeagues"
+        static let selectedNotificationLeagues = "preferences.selectedNotificationLeagues"
         static let selectedChannels = "preferences.selectedChannels"
         static let competitionFilterEnabled = "preferences.competitionFilterEnabled"
+        static let fixtureAllMajorMatchesEnabled = "preferences.fixtureAllMajorMatchesEnabled"
+        static let notificationAllMajorMatchesEnabled = "preferences.notificationAllMajorMatchesEnabled"
         static let channelFilterEnabled = "preferences.channelFilterEnabled"
         static let englishPremierLeagueTeamsOnly = "preferences.englishPremierLeagueTeamsOnly"
         static let majorUEFAClubGamesEnabled = "preferences.majorUEFAClubGamesEnabled"
@@ -843,8 +937,6 @@ final class PreferencesStore: ObservableObject {
         static let showFantasyMatchPills = "preferences.showFantasyMatchPills"
         static let premierLeagueMatchesFirst = "preferences.premierLeagueMatchesFirst"
         static let showPostponedGames = "preferences.showPostponedGames"
-        #if DEBUG
-        static let showPredictionRedoButton = "preferences.showPredictionRedoButton"
-        #endif
+        static let showPredictedScores = "preferences.showPredictedScores"
     }
 }
