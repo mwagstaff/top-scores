@@ -4810,6 +4810,89 @@ function dedupePushNotificationUsers(users) {
   return Array.from(deduped.values());
 }
 
+function liveActivityPushToStartTokenUpdatedAtMs(user) {
+  const value =
+    user && user.liveActivity && typeof user.liveActivity === "object"
+      ? user.liveActivity.pushToStartTokenUpdatedAt
+      : null;
+  const parsed = Date.parse(String(value || "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildLiveActivityTarget(user) {
+  const liveActivity =
+    user && user.liveActivity && typeof user.liveActivity === "object" ? user.liveActivity : {};
+  const pushToStartToken = String(liveActivity.pushToStartToken || "").trim();
+  if (pushToStartToken) {
+    return `push-to-start:${pushToStartToken}`;
+  }
+
+  const deviceToken = String(user && user.deviceToken ? user.deviceToken : "").trim();
+  return deviceToken ? `device:${deviceToken}` : null;
+}
+
+function liveActivityStateForUser(user) {
+  return user && user.liveActivity && typeof user.liveActivity === "object"
+    ? user.liveActivity
+    : {};
+}
+
+function mergeDuplicateLiveActivityTargetState(owner, records) {
+  const ownerState = liveActivityStateForUser(owner);
+  const latestStartedRecord = records.reduce((latest, candidate) => {
+    const latestMs = Date.parse(String(liveActivityStateForUser(latest).lastStartAt || ""));
+    const candidateMs = Date.parse(String(liveActivityStateForUser(candidate).lastStartAt || ""));
+    return Number.isFinite(candidateMs) && (!Number.isFinite(latestMs) || candidateMs > latestMs)
+      ? candidate
+      : latest;
+  }, owner);
+  const latestStartedState = liveActivityStateForUser(latestStartedRecord);
+  const maxPushToStartAttempts = records.reduce(
+    (maximum, candidate) =>
+      Math.max(maximum, Math.max(0, Number(liveActivityStateForUser(candidate).pushToStartAttempts) || 0)),
+    Math.max(0, Number(ownerState.pushToStartAttempts) || 0)
+  );
+
+  return {
+    ...owner,
+    liveActivity: {
+      ...ownerState,
+      lastStartAt: latestStartedState.lastStartAt || ownerState.lastStartAt || null,
+      pushToStartAttempts: maxPushToStartAttempts,
+    },
+  };
+}
+
+function dedupeLiveActivityUsers(users) {
+  const grouped = new Map();
+
+  (Array.isArray(users) ? users : []).forEach((user) => {
+    const target = buildLiveActivityTarget(user);
+    if (!target) return;
+    const records = grouped.get(target) || [];
+    records.push(user);
+    grouped.set(target, records);
+  });
+
+  return Array.from(grouped.values()).map((records) => {
+    const owner = records.reduce((current, candidate) => {
+      const currentTokenUpdatedAtMs = liveActivityPushToStartTokenUpdatedAtMs(current);
+      const candidateTokenUpdatedAtMs = liveActivityPushToStartTokenUpdatedAtMs(candidate);
+      if (
+        candidateTokenUpdatedAtMs > currentTokenUpdatedAtMs ||
+        (candidateTokenUpdatedAtMs === currentTokenUpdatedAtMs &&
+          userRecordUpdatedAtMs(candidate) >= userRecordUpdatedAtMs(current))
+      ) {
+        return candidate;
+      }
+      return current;
+    });
+    return records.length > 1
+      ? mergeDuplicateLiveActivityTargetState(owner, records)
+      : owner;
+  });
+}
+
 function safeIntlDateTimeFormat(locale, options) {
   try {
     return new Intl.DateTimeFormat(locale || undefined, options);
@@ -6952,9 +7035,27 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
     const users = await getAllUserPreferences();
     if (!Array.isArray(users) || users.length === 0) return;
 
+    // A push-to-start token belongs to an app/device installation, but old
+    // server-side device identities can retain the same token. Dispatching once
+    // per record would start multiple activities on that single device and could
+    // use stale fixture preferences. Keep the record that registered the token
+    // most recently, which represents the current app identity and preferences.
+    const uniqueUsers = dedupeLiveActivityUsers(users);
+    if (uniqueUsers.length !== users.length) {
+      console.log(
+        `[MatchMonitor] Live Activity targets deduped ${JSON.stringify({
+          records_total: users.length,
+          targets_total: uniqueUsers.length,
+          duplicate_records: users.length - uniqueUsers.length,
+        })}`
+      );
+    }
     const filteredUsers = userDeviceTokenFilter
-      ? users.filter((user) => String(user && user.deviceToken ? user.deviceToken : "") === userDeviceTokenFilter)
-      : users;
+      ? uniqueUsers.filter(
+          (user) =>
+            String(user && user.deviceToken ? user.deviceToken : "") === userDeviceTokenFilter
+        )
+      : uniqueUsers;
     const candidateMatchIds = collectLiveActivityTimelineCandidateMatchIds(
       monitoredEntries,
       operationalMatches
@@ -7818,6 +7919,7 @@ module.exports = {
     dedupeLiveActivityMatches,
     enrichLiveActivityOperationalMatches,
     dedupePushNotificationUsers,
+    dedupeLiveActivityUsers,
     dedupeFantasyDeadlineReminderUsers,
     evaluateFantasyDeadlineReminderDecision,
     formatFantasyDeadlineReminderTime,

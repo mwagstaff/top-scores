@@ -326,25 +326,6 @@ struct APIClient {
         return try JSONDecoder().decode(FantasySeasonStatus.self, from: data)
     }
 
-    func fetchFantasyCurrentGameweek() async throws -> FantasyGameweek {
-        var request = try buildRequest(path: "fantasy/gameweek/current", queryItems: [])
-        request.timeoutInterval = 4
-        let (data, http) = try await performRequest(
-            request,
-            operation: "fantasy_gameweek_current",
-            maxAttempts: 1
-        )
-        try validateSuccess(http, data: data, operation: "fantasy_gameweek_current")
-        return try JSONDecoder().decode(FantasyGameweek.self, from: data)
-    }
-
-    func fetchFantasyNextGameweek() async throws -> FantasyGameweek {
-        let request = try buildRequest(path: "fantasy/gameweek/next", queryItems: [])
-        let (data, http) = try await performRequest(request, operation: "fantasy_gameweek_next")
-        try validateSuccess(http, data: data, operation: "fantasy_gameweek_next")
-        return try JSONDecoder().decode(FantasyGameweek.self, from: data)
-    }
-
     func fetchFantasyBootstrapLookup() async throws -> FantasyBootstrapLookup {
         let request = try buildRequest(path: "fantasy/bootstrap/lookup", queryItems: [])
         let (data, http) = try await performRequest(request, operation: "fantasy_bootstrap_lookup")

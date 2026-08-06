@@ -11,6 +11,29 @@ import Testing
 
 struct Top_ScoresTests {
 
+    @Test func fantasyPlayerProfileImageURL_usesBootstrapPlayerCode() {
+        let url = FantasyPlayerProfileImageURL.make(fromPlayerCode: 141746)
+
+        #expect(
+            url?.absoluteString ==
+                "https://resources.premierleague.com/premierleague25/photos/players/110x140/141746.png"
+        )
+        #expect(FantasyPlayerProfileImageURL.make(fromPlayerCode: nil) == nil)
+        #expect(FantasyPlayerProfileImageURL.make(fromPlayerCode: 0) == nil)
+    }
+
+    @Test func fantasyBootstrapElement_playerCodeFallsBackToPhotoFilename() {
+        let player = makeFantasyBootstrapElement(
+            id: 1,
+            team: 1,
+            elementType: 1,
+            webName: "Raya",
+            photo: "154561.jpg"
+        )
+
+        #expect(player.playerCode == 154561)
+    }
+
     @Test @MainActor func preferencesStore_usesRequestedDefaultsForNewInstalls() async throws {
         let defaults = UserDefaults(suiteName: #function)!
         defaults.removePersistentDomain(forName: #function)
@@ -1617,6 +1640,65 @@ struct Top_ScoresTests {
         )
     }
 
+    @Test func fantasySquadDisplayData_sumsOfficialExpectedPointsForStartersOnly() async throws {
+        let squad = FantasySquadDisplayData(
+            gameweekID: 1,
+            gameweekTitle: "GW1",
+            deadlineGameweekID: 1,
+            deadlineTime: nil,
+            totalPoints: 0,
+            hasActiveFixtures: false,
+            hasStartedFixturesInGameweek: false,
+            hasFixturesPlayedToday: false,
+            isEstimatedScore: false,
+            estimatedCurrentScore: 0,
+            scoreCalculationRulesApplied: [],
+            rank: nil,
+            overallRank: nil,
+            transfersCost: nil,
+            pointsOnBench: nil,
+            activeChips: [],
+            goalkeepers: [
+                makeFantasyPlayer(
+                    elementID: 1,
+                    pickPosition: 1,
+                    positionType: .goalkeeper,
+                    displayName: "Keeper",
+                    fullName: "Test Keeper",
+                    teamName: "Arsenal",
+                    officialExpectedPointsNextGameweek: 3.2
+                )
+            ],
+            defenders: [
+                makeFantasyPlayer(
+                    elementID: 2,
+                    pickPosition: 2,
+                    positionType: .defender,
+                    displayName: "Captain",
+                    fullName: "Test Captain",
+                    teamName: "Arsenal",
+                    multiplier: 2,
+                    officialExpectedPointsNextGameweek: 4.5
+                )
+            ],
+            midfielders: [],
+            forwards: [],
+            bench: [
+                makeFantasyPlayer(
+                    elementID: 3,
+                    pickPosition: 12,
+                    positionType: .midfielder,
+                    displayName: "Bench",
+                    fullName: "Test Bench",
+                    teamName: "Arsenal",
+                    officialExpectedPointsNextGameweek: 9.9
+                )
+            ]
+        )
+
+        #expect(abs((squad.officialExpectedPointsNextGameweek ?? 0) - 12.2) < 0.001)
+    }
+
     @Test func fantasySquadBuilder_appliesBenchPointsForLiveZeroMinuteStarter() async throws {
         let gameweek = FantasyGameweek(
             id: 30,
@@ -1800,56 +1882,89 @@ struct Top_ScoresTests {
         #expect(squad.activeChipSummaryText == "Active chip: Free Hit")
     }
 
-    @Test func fantasySquadGameweekResolver_usesNextGameweekWhenCurrentIsFinished() async throws {
-        let current = FantasyGameweek(
-            id: 29,
-            name: "Gameweek 29",
-            isCurrent: true,
-            isNext: false,
-            finished: true,
-            deadlineTime: "2026-03-01T11:00:00Z"
-        )
-        let next = FantasyGameweek(
-            id: 30,
-            name: "Gameweek 30",
-            isCurrent: false,
-            isNext: true,
-            finished: false,
-            deadlineTime: "2026-03-08T11:00:00Z"
-        )
+    @Test func fantasyTeamGameweekResolver_usesNextEventForCurrentTeamBeforeSeasonStarts() async throws {
+        let events = [
+            FantasyGameweek(
+                id: 1,
+                name: "Gameweek 1",
+                isCurrent: false,
+                isNext: true,
+                finished: false,
+                deadlineTime: "2026-08-14T17:30:00Z"
+            ),
+            FantasyGameweek(
+                id: 2,
+                name: "Gameweek 2",
+                isCurrent: false,
+                isNext: false,
+                finished: false,
+                deadlineTime: "2026-08-21T17:30:00Z"
+            )
+        ]
 
-        let resolved = FantasySquadGameweekResolver.resolve(
-            currentGameweek: current,
-            nextGameweek: next
-        )
-
-        #expect(resolved.id == 30)
+        #expect(FantasyTeamGameweekResolver.currentTeamGameweek(from: events)?.id == 1)
+        #expect(FantasyTeamGameweekResolver.previousTeamGameweek(from: events) == nil)
     }
 
-    @Test func fantasySquadGameweekResolver_keepsCurrentGameweekWhenCurrentIsStillLive() async throws {
-        let current = FantasyGameweek(
-            id: 29,
-            name: "Gameweek 29",
-            isCurrent: true,
-            isNext: false,
-            finished: false,
-            deadlineTime: "2026-03-01T11:00:00Z"
-        )
-        let next = FantasyGameweek(
-            id: 30,
-            name: "Gameweek 30",
-            isCurrent: false,
-            isNext: true,
-            finished: false,
-            deadlineTime: "2026-03-08T11:00:00Z"
-        )
+    @Test func fantasyTeamGameweekResolver_usesLatestFinishedEventForPreviousTeam() async throws {
+        let events = [
+            FantasyGameweek(
+                id: 1,
+                name: "Gameweek 1",
+                isCurrent: false,
+                isNext: false,
+                finished: true,
+                deadlineTime: nil
+            ),
+            FantasyGameweek(
+                id: 2,
+                name: "Gameweek 2",
+                isCurrent: true,
+                isNext: false,
+                finished: false,
+                deadlineTime: nil
+            ),
+            FantasyGameweek(
+                id: 3,
+                name: "Gameweek 3",
+                isCurrent: false,
+                isNext: true,
+                finished: false,
+                deadlineTime: nil
+            )
+        ]
 
-        let resolved = FantasySquadGameweekResolver.resolve(
-            currentGameweek: current,
-            nextGameweek: next
-        )
+        #expect(FantasyTeamGameweekResolver.currentTeamGameweek(from: events)?.id == 3)
+        #expect(FantasyTeamGameweekResolver.previousTeamGameweek(from: events)?.id == 1)
+    }
 
-        #expect(resolved.id == 29)
+    @Test func fantasyCurrentTeamResponse_convertsPicksWithoutInventingPoints() async throws {
+        let json = """
+        {
+          "picks": [
+            {
+              "element": 42,
+              "position": 1,
+              "multiplier": 1,
+              "is_captain": false,
+              "is_vice_captain": true,
+              "selling_price": 55
+            }
+          ],
+          "chips": [],
+          "transfers": { "bank": 10 }
+        }
+        """
+
+        let response = try JSONDecoder().decode(
+            FantasyCurrentTeamResponse.self,
+            from: Data(json.utf8)
+        )
+        let picks = response.asPicksResponse(eventID: 1)
+
+        #expect(picks.picks.map(\.element) == [42])
+        #expect(picks.entryHistory.event == 1)
+        #expect(picks.entryHistory.points == 0)
     }
 
     @Test func lineupPlayerInitials_handlesParticlesAndHyphenatedSurnames() async throws {
@@ -2322,6 +2437,29 @@ struct Top_ScoresTests {
         )
     }
 
+    @Test func fantasyFixture_decodesTeamSpecificDifficulty() throws {
+        let payload = """
+        {
+          "id": 101,
+          "event": 1,
+          "team_h": 1,
+          "team_a": 2,
+          "team_h_difficulty": 2,
+          "team_a_difficulty": 4,
+          "kickoff_time": "2026-08-21T18:30:00Z",
+          "started": false,
+          "finished": false,
+          "finished_provisional": false
+        }
+        """
+
+        let fixture = try JSONDecoder().decode(FantasyFixture.self, from: Data(payload.utf8))
+
+        #expect(fixture.difficulty(forTeamID: 1) == 2)
+        #expect(fixture.difficulty(forTeamID: 2) == 4)
+        #expect(fixture.difficulty(forTeamID: 999) == nil)
+    }
+
     private func formattedDate(offsetDays: Int) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -2403,7 +2541,8 @@ struct Top_ScoresTests {
         appliedPoints: Int = 0,
         displayPoints: Int = 0,
         multiplier: Int = 1,
-        isCaptain: Bool = false
+        isCaptain: Bool = false,
+        officialExpectedPointsNextGameweek: Double? = nil
     ) -> FantasyDisplayPlayer {
         FantasyDisplayPlayer(
             elementID: elementID,
@@ -2412,6 +2551,7 @@ struct Top_ScoresTests {
             displayName: displayName,
             fullName: fullName,
             teamName: teamName,
+            profileImageURL: nil,
             nowCostMillions: 5.0,
             rawPoints: rawPoints,
             appliedPoints: appliedPoints,
@@ -2429,6 +2569,9 @@ struct Top_ScoresTests {
             futureAvailabilityIssueGameweek: nil,
             minutesPlayed: minutesPlayed,
             upcomingOpponentDisplay: nil,
+            fixtureDifficulty: nil,
+            expectedPointsThisGameweek: nil,
+            officialExpectedPointsNextGameweek: officialExpectedPointsNextGameweek,
             goalsScored: 0,
             assists: 0,
             yellowCards: 0,
@@ -2460,20 +2603,25 @@ struct Top_ScoresTests {
         id: Int,
         team: Int,
         elementType: Int,
-        webName: String
+        webName: String,
+        photo: String? = nil,
+        expectedPointsNextGameweek: String? = nil
     ) -> FantasyBootstrapElement {
         FantasyBootstrapElement(
             id: id,
+            code: nil,
             webName: webName,
             firstName: webName,
             secondName: "Test",
             team: team,
             elementType: elementType,
-            photo: nil,
+            photo: photo,
             status: "a",
             news: nil,
             nowCost: 50,
             form: "0.0",
+            expectedPointsThisGameweek: nil,
+            expectedPointsNextGameweek: expectedPointsNextGameweek,
             pointsPerGame: "0.0",
             eventPoints: 0,
             totalPoints: 0,

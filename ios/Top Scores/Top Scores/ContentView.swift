@@ -5,6 +5,7 @@
 //  Created by Mike Wagstaff on 11/02/2026.
 //
 
+import Combine
 import SwiftUI
 
 struct ContentView: View {
@@ -91,11 +92,18 @@ private struct ContentLifecycleCoordinator: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var matchesStore: MatchesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @Environment(\.scenePhase) private var scenePhase
 
     @Binding var selectedTab: Int
     let fantasyManagerEntryID: String
     @Binding var fantasyTabBadge: String?
     @Binding var fantasyTabShouldPulse: Bool
+
+    private let fantasyBackgroundRefreshTimer = Timer.publish(
+        every: 300,
+        on: .main,
+        in: .common
+    ).autoconnect()
 
     var body: some View {
         Color.clear
@@ -122,10 +130,18 @@ private struct ContentLifecycleCoordinator: View {
             }
             .task(id: fantasyManagerEntryID) {
                 updateFantasyTabPresentation()
+                await refreshFantasyInBackground()
             }
             .task(id: preferences.apiBaseURL) {
                 await fantasyViewModel.refreshSeasonActiveStatus(apiBaseURL: preferences.apiBaseURL)
+                await refreshFantasyInBackground()
                 updateFantasyTabPresentation()
+            }
+            .onReceive(fantasyBackgroundRefreshTimer) { _ in
+                guard scenePhase == .active else { return }
+                Task {
+                    await refreshFantasyInBackground()
+                }
             }
             .onChange(of: preferences.snapshot) { _, _ in
                 guard selectedTab != 0, selectedTab != 1 else { return }
@@ -141,6 +157,38 @@ private struct ContentLifecycleCoordinator: View {
 
     private var trimmedFantasyManagerEntryID: String {
         fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func refreshFantasyInBackground() async {
+        guard !trimmedFantasyManagerEntryID.isEmpty else { return }
+
+        let defaults = UserDefaults.standard
+        let rivals = Self.decodeRivals(defaults.string(forKey: "fantasy.rivalManagersJSON"))
+        let leagues = Self.decodeLeagues(defaults.string(forKey: "fantasy.trackedLeaguesJSON"))
+        await fantasyViewModel.refreshInBackground(
+            managerEntryID: trimmedFantasyManagerEntryID,
+            apiBaseURL: preferences.apiBaseURL,
+            rivalManagers: rivals,
+            trackedLeagues: leagues
+        )
+    }
+
+    private static func decodeRivals(_ value: String?) -> [FantasyRivalManager] {
+        guard let value,
+              let data = value.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([FantasyRivalManager].self, from: data) else {
+            return []
+        }
+        return decoded
+    }
+
+    private static func decodeLeagues(_ value: String?) -> [FantasyTrackedLeague] {
+        guard let value,
+              let data = value.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([FantasyTrackedLeague].self, from: data) else {
+            return []
+        }
+        return decoded
     }
 
     private func updateFantasyTabPresentation() {

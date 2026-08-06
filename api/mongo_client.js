@@ -128,6 +128,45 @@ async function ensureIndexes() {
     // BSD<->TSDB id maps (keyed by _id = BSD player/team id).
     collection("bsd_tsdb_player_map").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_tsdb_team_map").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("gg_players").createIndexes([
+      { key: { updated_at: -1 }, name: "updatedAt_desc" },
+    ]),
+    collection("gg_sessions").createIndexes([
+      { key: { player_id: 1 }, name: "player" },
+      { key: { updated_at: -1 }, name: "updatedAt_desc" },
+    ]),
+    collection("gg_identities").createIndexes([
+      { key: { provider: 1, subject: 1 }, name: "provider_subject_unique", unique: true },
+      { key: { email_normalized: 1, email_verified: 1 }, name: "verified_email" },
+      { key: { player_id: 1 }, name: "player" },
+    ]),
+    collection("gg_login_challenges").createIndexes([
+      { key: { expires_at: 1 }, name: "expires_at_ttl", expireAfterSeconds: 0 },
+      { key: { email_normalized: 1, created_at: -1 }, name: "email_created" },
+    ]),
+    collection("gg_auth_assertions").createIndex({ expires_at: 1 }, { name: "expires_at_ttl", expireAfterSeconds: 0 }),
+    collection("gg_leagues").createIndexes([
+      { key: { join_code: 1 }, name: "joinCode_unique", unique: true },
+      { key: { owner_player_id: 1, archived: 1 }, name: "owner_archived" },
+    ]),
+    collection("gg_memberships").createIndexes([
+      { key: { league_id: 1, player_id: 1 }, name: "league_player_unique", unique: true },
+      { key: { player_id: 1, joined_at: -1 }, name: "player_joined" },
+    ]),
+    collection("gg_contests").createIndexes([
+      { key: { competition_key: 1, season_key: 1, game_type: 1 }, name: "contest_identity", unique: true },
+    ]),
+    collection("gg_fixtures").createIndexes([
+      { key: { source_key: 1 }, name: "sourceKey_unique", unique: true },
+      { key: { contest_id: 1, kickoff_at: 1 }, name: "contest_kickoff" },
+      { key: { contest_id: 1, pick_week_id: 1 }, name: "contest_pickWeek" },
+      { key: { status: 1, result_revision: 1 }, name: "status_revision" },
+    ]),
+    collection("gg_picks").createIndexes([
+      { key: { player_id: 1, fixture_id: 1 }, name: "player_fixture_unique", unique: true },
+      { key: { player_id: 1, pick_week_id: 1 }, name: "player_week_power_unique", unique: true, partialFilterExpression: { power_pick: true } },
+      { key: { fixture_id: 1 }, name: "fixture" },
+    ]),
   ]);
 
   indexesEnsured = true;

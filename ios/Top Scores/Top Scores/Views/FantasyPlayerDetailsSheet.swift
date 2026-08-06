@@ -2,6 +2,31 @@ import SwiftUI
 import UIKit
 
 struct FantasyPlayerDetailsSheet: View {
+    private enum DetailsTab: String, CaseIterable, Identifiable {
+        case overview = "Overview"
+        case history = "History"
+        case stats = "Stats"
+        case comparison = "Comparison"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .overview: return "chart.bar.xaxis"
+            case .history: return "clock.arrow.circlepath"
+            case .stats: return "chart.bar.doc.horizontal"
+            case .comparison: return "rectangle.split.3x1"
+            }
+        }
+    }
+
+    private enum RecommendationRoute: String, Identifiable {
+        case browse
+        case comparison
+
+        var id: String { rawValue }
+    }
+
     let selection: FantasySelectedPlayerSelection
     let apiBaseURL: String
 
@@ -18,6 +43,9 @@ struct FantasyPlayerDetailsSheet: View {
     @State private var recommendationDetailsByElementID: [Int: FantasyPlayerDetailsData] = [:]
     @State private var loadingRecommendationDetailElementIDs: Set<Int> = []
     @State private var recommendationDetailErrorsByElementID: [Int: String] = [:]
+    @State private var selectedTab: DetailsTab = .overview
+    @State private var recommendationRoute: RecommendationRoute?
+    @State private var comparisonElementIDs: [Int] = []
 
     var body: some View {
         NavigationStack {
@@ -32,21 +60,20 @@ struct FantasyPlayerDetailsSheet: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let details {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            playerHeader(details)
+                        VStack(alignment: .leading, spacing: 16) {
+                            premiumPlayerHeader(details)
                             if !details.statusUpdates.isEmpty {
                                 availabilitySection(details)
                             }
-                            metricsSection(details)
-                            if !details.latestPointsBreakdown.isEmpty {
-                                latestPointsBreakdownSection(details)
-                            }
+                            expectedPointsSummary(details)
                             fixturesSection(details)
-                            historySection(details)
-                            transferRecommendationsSection
+                            detailsTabBar
+                            selectedTabContent(details)
+                            transferRecommendationsButton
+                            ictIndexFootnote
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
                     }
                     .refreshable {
                         await loadDetails()
@@ -55,23 +82,868 @@ struct FantasyPlayerDetailsSheet: View {
                     unavailableState
                 }
             }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle(selection.player.displayName)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.body.weight(.semibold))
-                    }
-                    .accessibilityLabel("Close")
-                }
+            .background(Color(red: 0.025, green: 0.035, blue: 0.031).ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(item: $recommendationRoute) { route in
+                transferRecommendationsScreen(selectionMode: route == .comparison)
             }
         }
         .task(id: selection.id) {
+            selectedTab = .overview
             await loadDetails()
+        }
+    }
+
+    private func premiumPlayerHeader(_ details: FantasyPlayerDetailsData) -> some View {
+        let firstFixture = details.upcomingFixtures.first(where: { !$0.isBlank })
+
+        return ZStack(alignment: .bottomLeading) {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.025, green: 0.17, blue: 0.10),
+                    Color(red: 0.015, green: 0.07, blue: 0.05),
+                    Color.black.opacity(0.96)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            HStack(alignment: .bottom, spacing: 8) {
+                playerPortrait(url: details.profileImageURL)
+                    .frame(width: 140, height: 210, alignment: .bottom)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(details.position)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.green)
+
+                    Text(details.playerName)
+                        .font(.system(.title2, design: .rounded, weight: .bold))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+
+                    HStack(spacing: 8) {
+                        teamLogoView(teamName: details.teamName, size: 22)
+                        Text(details.teamName)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Color.white.opacity(0.86))
+                    }
+
+                    HStack(spacing: 0) {
+                        headerMetric(metricValue(details, title: "Price"), label: "Price")
+                        headerMetric(
+                            details.ownershipPercent.formatted(.number.precision(.fractionLength(1))) + "%",
+                            label: "Ownership"
+                        )
+                        headerMetric(metricValue(details, title: "ICT Index"), label: "ICT Index")
+                    }
+                    .padding(.top, 8)
+                }
+                .padding(.bottom, 18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let difficulty = firstFixture?.difficulty {
+                VStack(spacing: 4) {
+                    Text("\(difficulty)")
+                        .font(.title3.monospacedDigit().weight(.heavy))
+                        .foregroundStyle(difficulty <= 2 ? Color.black.opacity(0.82) : Color.white)
+                        .frame(width: 44, height: 44)
+                        .background(fixtureDifficultyColor(difficulty), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    Text("Difficulty")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(Color.white.opacity(0.65))
+                }
+                .padding(12)
+            }
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Color.black.opacity(0.36), in: Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
+            }
+            .accessibilityLabel("Close")
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(12)
+        }
+        .frame(height: 250)
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.green.opacity(0.16), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func playerPortrait(url: URL?) -> some View {
+        FantasyPlayerProfileImage(url: url, size: 140, height: 210)
+    }
+
+    private func headerMetric(_ value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value)
+                .font(.subheadline.monospacedDigit().weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(Color.white.opacity(0.55))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func expectedPointsSummary(_ details: FantasyPlayerDetailsData) -> some View {
+        let firstFixture = details.upcomingFixtures.first(where: { !$0.isBlank })
+        let fixtureIndex = firstFixture.flatMap { details.upcomingFixtures.firstIndex(of: $0) } ?? 0
+        let expectedPoints = firstFixture.map {
+            FantasyExpectedPointsEstimator.estimate(details: details, fixture: $0, fixtureIndex: fixtureIndex)
+        }
+
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Text("Expected points")
+                        .font(.subheadline.weight(.semibold))
+                    if let gameweek = firstFixture?.gameweek {
+                        Text("GW \(gameweek)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(expectedPoints.map { fantasyExpectedPointsText($0) + " xP" } ?? "—")
+                    .font(.system(size: 31, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.78, green: 0.38, blue: 1.0))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(
+                LinearGradient(
+                    colors: [Color.purple.opacity(0.16), Color(.secondarySystemGroupedBackground)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.purple.opacity(0.62), lineWidth: 1)
+            )
+
+            compactMetric(title: "Form", value: metricValue(details, title: "Form"), accent: .green)
+            compactMetric(title: "Pts / match", value: metricValue(details, title: "Pts / Match"), accent: .white)
+        }
+    }
+
+    private func compactMetric(title: String, value: String, accent: Color) -> some View {
+        VStack(spacing: 8) {
+            Text(title)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.title3.monospacedDigit().weight(.bold))
+                .foregroundStyle(accent)
+        }
+        .frame(width: 86, height: 80)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var detailsTabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(DetailsTab.allCases) { tab in
+                Button {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        selectedTab = tab
+                    }
+                } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: tab.icon)
+                            .font(.caption.weight(.semibold))
+                        Text(tab.rawValue)
+                            .font(.caption2.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(selectedTab == tab ? Color.green : Color.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(
+                        selectedTab == tab ? Color.white.opacity(0.07) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func selectedTabContent(_ details: FantasyPlayerDetailsData) -> some View {
+        switch selectedTab {
+        case .overview:
+            overviewTab(details)
+        case .history:
+            historyTab(details)
+        case .stats:
+            statsTab(details)
+        case .comparison:
+            comparisonTab(details)
+        }
+    }
+
+    private var transferRecommendationsButton: some View {
+        Button {
+            recommendationRoute = .browse
+        } label: {
+            Label("View transfer recommendations", systemImage: "arrow.left.arrow.right")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .foregroundStyle(.white)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.35, green: 0.03, blue: 0.48), Color(red: 0.55, green: 0.06, blue: 0.62)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var ictIndexFootnote: some View {
+        Text("ICT Index combines a player's influence, creativity and threat, as calculated by FPL.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+    }
+
+    private func overviewTab(_ details: FantasyPlayerDetailsData) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 10) {
+                sectionContainer(title: "This season") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 14) {
+                        overviewMetric("Total points", metricValue(details, title: "Total Pts"))
+                        overviewMetric("Clean sheets", "\(details.seasonTotals.cleanSheets)")
+                        overviewMetric("Saves", "\(details.seasonTotals.saves)")
+                        overviewMetric("Goals", "\(details.seasonTotals.goals)")
+                        overviewMetric("Assists", "\(details.seasonTotals.assists)")
+                        overviewMetric("Bonus", "\(details.seasonTotals.bonus)")
+                    }
+                }
+
+                ownershipPanel(details)
+                    .frame(width: 132)
+            }
+
+            recentMatchesSection(details)
+        }
+    }
+
+    private func sectionContainer<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title)
+                .font(.headline)
+            content()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.055), lineWidth: 1)
+        )
+    }
+
+    private func overviewMetric(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 5) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(value)
+                .font(.title3.monospacedDigit().weight(.semibold))
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func ownershipPanel(_ details: FantasyPlayerDetailsData) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            Text("Ownership")
+                .font(.headline)
+            Text(details.ownershipPercent.formatted(.number.precision(.fractionLength(1))) + "%")
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.11))
+                    Capsule()
+                        .fill(Color.purple)
+                        .frame(width: proxy.size.width * min(max(details.ownershipPercent / 100, 0), 1))
+                }
+            }
+            .frame(height: 8)
+            if let managerCount = ownedManagerCount(details) {
+                Text("\(compactNumber(managerCount)) managers")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Text(ownershipDescription(details.ownershipPercent))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.purple.opacity(0.95))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.purple.opacity(0.13), in: Capsule())
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.055), lineWidth: 1)
+        )
+    }
+
+    private func recentMatchesSection(_ details: FantasyPlayerDetailsData) -> some View {
+        sectionContainer(title: "Recent matches") {
+            if hasPlayedMatches(details) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(details.historyRows.prefix(5)) { row in
+                            VStack(alignment: .leading, spacing: 9) {
+                                HStack {
+                                    Text("GW \(row.gameweek)")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text("\(row.points) pts")
+                                        .font(.caption2.monospacedDigit().weight(.bold))
+                                        .foregroundStyle(pointsHeatmapColor(row.points))
+                                }
+                                Text("\(teamAbbreviation(row.opponentTeamName)) (\(row.wasHome ? "H" : "A"))")
+                                    .font(.subheadline.weight(.semibold))
+                                HStack(spacing: 14) {
+                                    matchMetric("Min", "\(row.minutes)")
+                                    matchMetric("G", "\(row.goalsScored)")
+                                    matchMetric("A", "\(row.assists)")
+                                }
+                            }
+                            .padding(12)
+                            .frame(width: 154, alignment: .leading)
+                            .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(pointsHeatmapColor(row.points).opacity(0.28), lineWidth: 1)
+                            )
+                        }
+                    }
+                }
+            } else {
+                matchHistoryEmptyState
+            }
+        }
+    }
+
+    private func matchMetric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.headline.monospacedDigit())
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func hasPlayedMatches(_ details: FantasyPlayerDetailsData) -> Bool {
+        details.historyRows.contains { $0.minutes > 0 }
+    }
+
+    private var matchHistoryEmptyState: some View {
+        Label("Match data will appear once the season starts and this player takes part.", systemImage: "clock")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+    }
+
+    private func historyTab(_ details: FantasyPlayerDetailsData) -> some View {
+        VStack(spacing: 14) {
+            historySection(details)
+            pointsTimeline(details)
+        }
+    }
+
+    private func pointsTimeline(_ details: FantasyPlayerDetailsData) -> some View {
+        let rows = Array(details.historyRows.reversed())
+        let maximum = max(rows.map(\.points).max() ?? 1, 1)
+
+        return sectionContainer(title: "Points timeline") {
+            if hasPlayedMatches(details) {
+                HStack(alignment: .bottom, spacing: 8) {
+                    ForEach(rows) { row in
+                        VStack(spacing: 6) {
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.purple)
+                                .frame(height: max(5, 88 * CGFloat(row.points) / CGFloat(maximum)))
+                            Text("\(row.gameweek)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .frame(height: 116, alignment: .bottom)
+            } else {
+                matchHistoryEmptyState
+            }
+        }
+    }
+
+    private func statsTab(_ details: FantasyPlayerDetailsData) -> some View {
+        let minutes = max(details.seasonTotals.minutes, 1)
+
+        return VStack(spacing: 14) {
+            sectionContainer(title: "Key stats") {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                    premiumStat("Points / match", metricValue(details, title: "Pts / Match"), rank: nil)
+                    premiumStat("Form", metricValue(details, title: "Form"), rank: nil)
+                    premiumStat("ICT index", metricValue(details, title: "ICT Index"), rank: nil)
+                    premiumStat("Goals / 90", per90(details.seasonTotals.goals, minutes: minutes), rank: nil)
+                    premiumStat("Assists / 90", per90(details.seasonTotals.assists, minutes: minutes), rank: nil)
+                    premiumStat("Saves / 90", per90(details.seasonTotals.saves, minutes: minutes), rank: nil)
+                }
+            }
+
+            sectionContainer(title: "Season breakdown") {
+                VStack(spacing: 12) {
+                    statBreakdownRow("Minutes", value: details.seasonTotals.minutes, maximum: max(details.seasonTotals.minutes, 1))
+                    statBreakdownRow("Clean sheets", value: details.seasonTotals.cleanSheets, maximum: max(10, details.seasonTotals.cleanSheets))
+                    statBreakdownRow("Goals conceded", value: details.seasonTotals.goalsConceded, maximum: max(30, details.seasonTotals.goalsConceded))
+                    statBreakdownRow("Bonus points", value: details.seasonTotals.bonus, maximum: max(20, details.seasonTotals.bonus))
+                    statBreakdownRow("Penalties saved", value: details.seasonTotals.penaltiesSaved, maximum: max(3, details.seasonTotals.penaltiesSaved))
+                    statBreakdownRow("Yellow cards", value: details.seasonTotals.yellowCards, maximum: max(8, details.seasonTotals.yellowCards))
+                }
+            }
+
+            if !details.latestPointsBreakdown.isEmpty {
+                latestPointsBreakdownSection(details)
+            }
+        }
+    }
+
+    private func premiumStat(_ title: String, _ value: String, rank: String?) -> some View {
+        VStack(spacing: 7) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Text(value)
+                .font(.title3.monospacedDigit().weight(.bold))
+            if let rank {
+                Text(rank)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.green)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 82)
+        .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+
+    private func statBreakdownRow(_ title: String, value: Int, maximum: Int) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.subheadline)
+                .frame(width: 112, alignment: .leading)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.09))
+                    Capsule()
+                        .fill(Color.purple.opacity(0.86))
+                        .frame(width: proxy.size.width * CGFloat(value) / CGFloat(max(maximum, 1)))
+                }
+            }
+            .frame(height: 7)
+            Text("\(value)")
+                .font(.subheadline.monospacedDigit().weight(.semibold))
+                .frame(width: 42, alignment: .trailing)
+        }
+    }
+
+    private func comparisonTab(_ details: FantasyPlayerDetailsData) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionContainer(title: "Compare players") {
+                Text("Select up to three recommended replacements.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        comparisonPlayerCard(
+                            name: details.playerName,
+                            team: details.teamName,
+                            imageURL: details.profileImageURL,
+                            removable: false,
+                            elementID: details.elementID
+                        )
+
+                        ForEach(comparisonRecommendations) { item in
+                            comparisonPlayerCard(
+                                name: item.webName.isEmpty ? item.playerName : item.webName,
+                                team: item.teamShortName ?? item.teamName,
+                                imageURL: recommendationDetailsByElementID[item.elementID]?.profileImageURL ?? item.profileImageURL,
+                                removable: true,
+                                elementID: item.elementID
+                            )
+                        }
+                    }
+                }
+
+                Button {
+                    recommendationRoute = .comparison
+                } label: {
+                    Label("Choose comparison players", systemImage: "person.2.badge.plus")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                }
+                .buttonStyle(.bordered)
+                .tint(.purple)
+            }
+
+            comparisonMetrics(details)
+        }
+    }
+
+    private var comparisonRecommendations: [FantasyTransferRecommendation] {
+        allTransferRecommendations.filter { comparisonElementIDs.contains($0.elementID) }
+    }
+
+    private func comparisonPlayerCard(
+        name: String,
+        team: String,
+        imageURL: URL?,
+        removable: Bool,
+        elementID: Int
+    ) -> some View {
+        VStack(spacing: 7) {
+            ZStack(alignment: .topTrailing) {
+                FantasyPlayerProfileImage(url: imageURL, size: 68)
+                if removable {
+                    Button {
+                        comparisonElementIDs.removeAll { $0 == elementID }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.bold))
+                            .frame(width: 20, height: 20)
+                            .background(Color.black.opacity(0.72), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text(name)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+            Text(team)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(width: 106)
+        .background(Color.green.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.green.opacity(0.30), lineWidth: 1)
+        )
+    }
+
+    private func comparisonMetrics(_ details: FantasyPlayerDetailsData) -> some View {
+        let selectedDetails = comparisonRecommendations.compactMap { recommendationDetailsByElementID[$0.elementID] }
+        let columns = [details] + selectedDetails
+
+        return sectionContainer(title: "Key stats") {
+            if columns.count == 1 && !comparisonElementIDs.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading comparison data…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    comparisonMetricRow("Player", details: columns) { $0.playerName.components(separatedBy: " ").last ?? $0.playerName }
+                    comparisonMetricRow("Price", details: columns) { metricValue($0, title: "Price") }
+                    comparisonMetricRow("Form", details: columns) { metricValue($0, title: "Form") }
+                    comparisonMetricRow("Points / match", details: columns) { metricValue($0, title: "Pts / Match") }
+                    comparisonMetricRow("Ownership", details: columns) {
+                        $0.ownershipPercent.formatted(.number.precision(.fractionLength(1))) + "%"
+                    }
+                    comparisonMetricRow("ICT index", details: columns) { metricValue($0, title: "ICT Index") }
+                    comparisonMetricRow("Expected", details: columns) { comparisonExpectedPoints($0) }
+                }
+            }
+        }
+    }
+
+    private func comparisonMetricRow(
+        _ label: String,
+        details: [FantasyPlayerDetailsData],
+        value: @escaping (FantasyPlayerDetailsData) -> String
+    ) -> some View {
+        HStack(spacing: 0) {
+            Text(label)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 112, alignment: .leading)
+            ForEach(details, id: \.elementID) { item in
+                Text(value(item))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .frame(width: 92, alignment: .center)
+            }
+        }
+        .padding(.vertical, 9)
+        .overlay(alignment: .bottom) { Divider().opacity(0.25) }
+    }
+
+    private func comparisonExpectedPoints(_ details: FantasyPlayerDetailsData) -> String {
+        guard let fixture = details.upcomingFixtures.first(where: { !$0.isBlank }) else { return "—" }
+        let index = details.upcomingFixtures.firstIndex(of: fixture) ?? 0
+        let value = FantasyExpectedPointsEstimator.estimate(details: details, fixture: fixture, fixtureIndex: index)
+        return fantasyExpectedPointsText(value) + " xP"
+    }
+
+    private func fantasyExpectedPointsText(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(1)))
+    }
+
+    private func transferRecommendationsScreen(selectionMode: Bool) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 12) {
+                    Button {
+                        recommendationRoute = nil
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.body.weight(.semibold))
+                            .frame(width: 42, height: 42)
+                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(selectionMode ? "Choose comparison players" : "Transfer recommendations")
+                            .font(.title2.weight(.bold))
+                        Text(selectionMode ? "Select up to three players" : "Recommended replacements for \(selection.player.displayName)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if isLoadingTransferRecommendations {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Finding the strongest alternatives…")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                } else if let transferRecommendationsErrorMessage {
+                    Text(transferRecommendationsErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                } else if let transferRecommendations {
+                    premiumRecommendationGroup(
+                        title: "Similar value",
+                        subtitle: "Closest upgrades within the same price range",
+                        items: Array(transferRecommendations.similarValue.prefix(10)),
+                        selectionMode: selectionMode
+                    )
+
+                    premiumRecommendationGroup(
+                        title: "Budget options",
+                        subtitle: "Lower-cost alternatives that release funds",
+                        items: Array(transferRecommendations.budget.prefix(10)),
+                        selectionMode: selectionMode
+                    )
+                } else {
+                    Text("No transfer recommendations available.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if selectionMode {
+                    Button {
+                        recommendationRoute = nil
+                    } label: {
+                        Text("Done · \(comparisonElementIDs.count) selected")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                }
+            }
+            .padding(16)
+        }
+        .background(Color(red: 0.025, green: 0.035, blue: 0.031).ignoresSafeArea())
+    }
+
+    private func premiumRecommendationGroup(
+        title: String,
+        subtitle: String,
+        items: [FantasyTransferRecommendation],
+        selectionMode: Bool
+    ) -> some View {
+        sectionContainer(title: title) {
+            Text(subtitle)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if items.isEmpty {
+                Text("No players found for this category.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        premiumRecommendationRow(item, selectionMode: selectionMode)
+                        if index < items.count - 1 {
+                            Divider().opacity(0.22)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func premiumRecommendationRow(
+        _ item: FantasyTransferRecommendation,
+        selectionMode: Bool
+    ) -> some View {
+        let fixtures = Array(normalizedRecommendationUpcomingFixtures(item.upcomingFixtures).prefix(3))
+        let isSelected = comparisonElementIDs.contains(item.elementID)
+
+        return HStack(spacing: 12) {
+            FantasyPlayerProfileImage(
+                url: recommendationDetailsByElementID[item.elementID]?.profileImageURL ?? item.profileImageURL,
+                size: 48
+            )
+            .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.webName.isEmpty ? item.playerName : item.webName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text("\(item.teamName) · £\(item.nowCostMillions.formatted(.number.precision(.fractionLength(1))))m")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    Text("\(item.epNext.formatted(.number.precision(.fractionLength(1)))) xP")
+                        .foregroundStyle(Color.purple)
+                    Text("Form \(item.form.formatted(.number.precision(.fractionLength(1))))")
+                    if let ownership = item.selectedByPercent {
+                        Text("\(ownership.formatted(.number.precision(.fractionLength(1))))%")
+                    }
+                }
+                .font(.caption2.monospacedDigit().weight(.medium))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            recommendationDifficultyDots(fixtures: fixtures)
+                .frame(width: 52)
+
+            if selectionMode {
+                Button {
+                    toggleComparisonPlayer(item)
+                } label: {
+                    Image(systemName: isSelected ? "checkmark" : "plus")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(isSelected ? Color.white : Color.purple)
+                        .frame(width: 30, height: 30)
+                        .background(isSelected ? Color.purple : Color.purple.opacity(0.12), in: Circle())
+                        .overlay(Circle().stroke(Color.purple.opacity(0.72), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(!isSelected && comparisonElementIDs.count >= 3)
+                .opacity(!isSelected && comparisonElementIDs.count >= 3 ? 0.35 : 1)
+                .accessibilityLabel(isSelected ? "Remove from comparison" : "Add to comparison")
+            }
+        }
+        .padding(.vertical, 11)
+    }
+
+    private var allTransferRecommendations: [FantasyTransferRecommendation] {
+        guard let transferRecommendations else { return [] }
+        var seen = Set<Int>()
+        return (transferRecommendations.similarValue + transferRecommendations.budget).filter {
+            seen.insert($0.elementID).inserted
+        }
+    }
+
+    private func toggleComparisonPlayer(_ item: FantasyTransferRecommendation) {
+        if comparisonElementIDs.contains(item.elementID) {
+            comparisonElementIDs.removeAll { $0 == item.elementID }
+            return
+        }
+        guard comparisonElementIDs.count < 3 else { return }
+        comparisonElementIDs.append(item.elementID)
+        Task {
+            await loadRecommendationDetailsIfNeeded(for: item.elementID)
+        }
+    }
+
+    private func metricValue(_ details: FantasyPlayerDetailsData, title: String) -> String {
+        details.metrics.first(where: { $0.title == title })?.value ?? "—"
+    }
+
+    private func per90(_ value: Int, minutes: Int) -> String {
+        guard minutes > 0 else { return "0.0" }
+        return (Double(value) * 90 / Double(minutes)).formatted(.number.precision(.fractionLength(1)))
+    }
+
+    private func ownedManagerCount(_ details: FantasyPlayerDetailsData) -> Int? {
+        guard let totalManagers = details.totalManagers else { return nil }
+        return Int((Double(totalManagers) * details.ownershipPercent / 100).rounded())
+    }
+
+    private func compactNumber(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return (Double(value) / 1_000_000).formatted(.number.precision(.fractionLength(2))) + "M"
+        }
+        if value >= 1_000 {
+            return (Double(value) / 1_000).formatted(.number.precision(.fractionLength(1))) + "K"
+        }
+        return "\(value)"
+    }
+
+    private func ownershipDescription(_ ownership: Double) -> String {
+        switch ownership {
+        case 25...: return "Highly owned"
+        case 10..<25: return "Popular pick"
+        case 3..<10: return "Differential"
+        default: return "Rare pick"
         }
     }
 
@@ -93,7 +965,7 @@ struct FantasyPlayerDetailsSheet: View {
 
     private func playerHeader(_ details: FantasyPlayerDetailsData) -> some View {
         HStack(spacing: 12) {
-            teamLogoView(teamName: details.teamName, size: 62)
+            FantasyPlayerProfileImage(url: details.profileImageURL, size: 62)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(details.position)
@@ -281,7 +1153,7 @@ struct FantasyPlayerDetailsSheet: View {
                 ForEach(Array(details.upcomingFixtures.prefix(5).enumerated()), id: \.element.id) { index, fixture in
                     let expectedPoints = fixture.isBlank
                         ? nil
-                        : expectedPointsForDetailsFixture(
+                        : FantasyExpectedPointsEstimator.estimate(
                             details: details,
                             fixture: fixture,
                             fixtureIndex: index
@@ -336,20 +1208,24 @@ struct FantasyPlayerDetailsSheet: View {
             Text("Previous 10 gameweeks")
                 .font(.headline)
 
-            VStack(spacing: 0) {
-                historyHeader
-                ForEach(Array(details.historyRows.enumerated()), id: \.element.id) { index, row in
-                    historyRow(row)
-                    if index < details.historyRows.count - 1 {
-                        Divider()
-                            .overlay(Color.secondary.opacity(0.28))
+            if hasPlayedMatches(details) {
+                VStack(spacing: 0) {
+                    historyHeader
+                    ForEach(Array(details.historyRows.enumerated()), id: \.element.id) { index, row in
+                        historyRow(row)
+                        if index < details.historyRows.count - 1 {
+                            Divider()
+                                .overlay(Color.secondary.opacity(0.28))
+                        }
                     }
                 }
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(.tertiarySystemGroupedBackground))
+                )
+            } else {
+                matchHistoryEmptyState
             }
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(.tertiarySystemGroupedBackground))
-            )
         }
         .padding(12)
         .background(
@@ -1243,60 +2119,6 @@ struct FantasyPlayerDetailsSheet: View {
         return (bounded * 10).rounded() / 10
     }
 
-    private func expectedPointsForDetailsFixture(
-        details: FantasyPlayerDetailsData,
-        fixture: FantasyPlayerDetailsData.UpcomingFixture,
-        fixtureIndex: Int
-    ) -> Double {
-        let pointsPerMatch = metricDouble(details.metrics, title: "Pts / Match") ?? 0
-        let form = metricDouble(details.metrics, title: "Form") ?? pointsPerMatch
-        let previousTen = details.historyRows.prefix(10).map(\.points)
-        let previousTenAverage = previousTen.isEmpty
-            ? ((pointsPerMatch * 0.65) + (form * 0.35))
-            : Double(previousTen.reduce(0, +)) / Double(previousTen.count)
-
-        let formVsPPG = pointsPerMatch > 0
-            ? form / max(pointsPerMatch, 0.1)
-            : 1.0
-        let momentumMultiplier = min(max(formVsPPG, 0.78), 1.25)
-
-        let difficultyMultiplier: Double = {
-            switch fixture.difficulty ?? 3 {
-            case ...1: return 1.32
-            case 2: return 1.16
-            case 3: return 1.0
-            case 4: return 0.84
-            default: return 0.68
-            }
-        }()
-
-        let homeAwayMultiplier: Double = fixture.isHome == true ? 1.04 : 0.96
-        let horizonDecay = 1.0 - (Double(fixtureIndex) * 0.02)
-
-        let raw = previousTenAverage *
-            momentumMultiplier *
-            difficultyMultiplier *
-            homeAwayMultiplier *
-            max(0.85, horizonDecay)
-
-        let bounded = min(max(raw, 0.0), 20.0)
-        return (bounded * 10).rounded() / 10
-    }
-
-    private func metricDouble(
-        _ metrics: [FantasyPlayerDetailsData.Metric],
-        title: String
-    ) -> Double? {
-        guard let value = metrics.first(where: { $0.title == title })?.value else {
-            return nil
-        }
-        let normalized = value
-            .replacingOccurrences(of: "%", with: "")
-            .replacingOccurrences(of: ",", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return Double(normalized)
-    }
-
     private func recommendationStrengthBar(_ strength: Double) -> some View {
         let clamped = min(max(strength, 0), 1)
         let fillRatio = 0.2 + (0.8 * clamped)
@@ -1422,7 +2244,19 @@ struct FantasyPlayerDetailsSheet: View {
                 gameweekID: selection.gameweekID,
                 apiBaseURL: apiBaseURL
             )
-            transferRecommendations = filteredTransferRecommendations(recommendations)
+            let filtered = filteredTransferRecommendations(recommendations)
+            transferRecommendations = filtered
+            if comparisonElementIDs.isEmpty {
+                comparisonElementIDs = Array(filtered.similarValue.prefix(3).map(\.elementID))
+            }
+            let comparisonIDs = comparisonElementIDs
+            isLoadingTransferRecommendations = false
+            Task {
+                for elementID in comparisonIDs {
+                    await loadRecommendationDetailsIfNeeded(for: elementID)
+                }
+            }
+            return
         } catch {
             transferRecommendations = nil
             transferRecommendationsErrorMessage = userFriendlyTransferRecommendationError(error)
@@ -1441,6 +2275,8 @@ struct FantasyPlayerDetailsSheet: View {
         recommendationDetailsByElementID = [:]
         loadingRecommendationDetailElementIDs = []
         recommendationDetailErrorsByElementID = [:]
+        comparisonElementIDs = []
+        recommendationRoute = nil
 
         do {
             let loaded = try await fantasyViewModel.loadPlayerDetails(

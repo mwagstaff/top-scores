@@ -196,6 +196,7 @@ struct FantasyPublicAPIClient {
 enum FantasyPublicAPIError: LocalizedError {
     case invalidURL
     case invalidHTTPResponse
+    case authenticationRequired
     case badStatus(Int, operation: String, snippet: String)
     case decodeFailed(operation: String, underlying: Error)
     case gameUpdating(operation: String, message: String)
@@ -206,6 +207,8 @@ enum FantasyPublicAPIError: LocalizedError {
             return "Invalid Fantasy Premier League API URL."
         case .invalidHTTPResponse:
             return "Fantasy Premier League API returned an invalid HTTP response."
+        case .authenticationRequired:
+            return "Sign in to Fantasy Premier League to load your current team."
         case let .badStatus(statusCode, operation, snippet):
             if snippet.isEmpty {
                 return "Fantasy Premier League API request failed (\(operation), HTTP \(statusCode))."

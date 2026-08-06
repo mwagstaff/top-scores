@@ -79,6 +79,72 @@ test("parseMatchDateTimeMs treats match date/time as Europe/London wall-clock", 
   );
 });
 
+test("dedupeLiveActivityUsers keeps the latest owner of a shared push-to-start token", () => {
+  const users = [
+    {
+      deviceToken: "stale-device",
+      updatedAt: "2026-08-03T11:00:11.933Z",
+      preferences: {
+        competitionFilterEnabled: false,
+        englishPremierLeagueTeamsOnly: false,
+      },
+      liveActivity: {
+        pushToStartToken: "shared-token",
+        pushToStartTokenUpdatedAt: "2026-07-03T17:55:02.588Z",
+        lastStartAt: "2026-08-03T07:00:10.547Z",
+        pushToStartAttempts: 5,
+      },
+    },
+    {
+      deviceToken: "current-device",
+      updatedAt: "2026-08-02T18:26:52.356Z",
+      preferences: {
+        fixtureAllMajorMatchesEnabled: true,
+        competitionFilterEnabled: false,
+        englishPremierLeagueTeamsOnly: true,
+      },
+      liveActivity: {
+        pushToStartToken: "shared-token",
+        pushToStartTokenUpdatedAt: "2026-08-02T18:26:52.356Z",
+        lastStartAt: "2026-07-24T07:31:16.450Z",
+        pushToStartAttempts: 0,
+      },
+    },
+  ];
+
+  const deduped = __testHooks.dedupeLiveActivityUsers(users);
+
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0].deviceToken, "current-device");
+  assert.equal(deduped[0].preferences.englishPremierLeagueTeamsOnly, true);
+  assert.equal(deduped[0].liveActivity.lastStartAt, "2026-08-03T07:00:10.547Z");
+  assert.equal(deduped[0].liveActivity.pushToStartAttempts, 5);
+});
+
+test("dedupeLiveActivityUsers keeps distinct physical targets", () => {
+  const users = [
+    {
+      deviceToken: "device-a",
+      liveActivity: {
+        pushToStartToken: "token-a",
+        pushToStartTokenUpdatedAt: "2026-08-02T18:00:00.000Z",
+      },
+    },
+    {
+      deviceToken: "device-b",
+      liveActivity: {
+        pushToStartToken: "token-b",
+        pushToStartTokenUpdatedAt: "2026-08-02T18:00:00.000Z",
+      },
+    },
+  ];
+
+  assert.deepEqual(
+    __testHooks.dedupeLiveActivityUsers(users).map((user) => user.deviceToken),
+    ["device-a", "device-b"]
+  );
+});
+
 test("parseMatchDateTimeMs is independent of the host timezone", () => {
   // The production server runs UTC while this suite typically runs in
   // Europe/London, so re-run the BST conversion in a UTC child process.

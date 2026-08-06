@@ -9,15 +9,17 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var isRefreshing = false
     @Published private(set) var data: FantasySquadDisplayData?
+    @Published private(set) var previousTeamData: FantasySquadDisplayData?
     @Published private(set) var rivalSquads: [FantasyRivalSquad] = []
     @Published private(set) var trackedLeagueStandings: [FantasyTrackedLeagueStanding] = []
     @Published private(set) var myProfile: FantasyEntryProfile?
     @Published private(set) var lastUpdated: Date?
-    @Published private(set) var assistantManagerPreview: FantasyAssistantManagerResponse?
     // Whether the Premier League season is currently active, per the server's daily
     // bsd_leagues check. Gates the bottom-nav FPL badge so it doesn't show outside
     // the season. Defaults to false until the server/cache confirms the season.
     @Published private(set) var isSeasonActive = false
+    @Published private(set) var requiresAuthentication = false
+    @Published private(set) var authenticatedEntryID: Int?
     @Published var errorMessage: String?
     /// Pre-computed context for MatchRow. Updated whenever squad data, expected points, or the
     /// bootstrap lookup changes. MatchRow observes this value rather than the whole FantasyViewModel,
@@ -27,6 +29,7 @@ final class FantasyViewModel: ObservableObject {
     private var matchRowContextVersion = 0
 
     private let fantasyPublicClient = FantasyPublicAPIClient()
+    private let fantasyAuthenticatedClient = FantasyAuthenticatedAPIClient()
     private var cachedBootstrapLookup: FantasyBootstrapLookup?
     private var cachedBootstrapFetchedAt: Date?
     private var cachedBootstrapBaseURL: String?
@@ -51,6 +54,7 @@ final class FantasyViewModel: ObservableObject {
     private var rivalRefreshTask: Task<Void, Never>?
     private var leagueRefreshTask: Task<Void, Never>?
     private var assistantManagerPrewarmTask: Task<Void, Never>?
+    private var detailedExpectedPointsTask: Task<Void, Never>?
     private let trackedLeaguePageWindowRadius = 1
     private let setupRivalPageWindowRadius = 1
     private let leagueStandingsPageSize = 50
@@ -61,12 +65,32 @@ final class FantasyViewModel: ObservableObject {
         return Self.containsGameUpdatingText(errorMessage)
     }
 
+    func playerProfileImageURL(for elementID: Int) -> URL? {
+        let code = cachedBootstrapLookup?.elements.first(where: { $0.id == elementID })?.playerCode
+        return FantasyPlayerProfileImageURL.make(fromPlayerCode: code)
+    }
+
     func refreshSeasonActiveStatus(apiBaseURL: String) async {
         guard let baseURL = URL(string: apiBaseURL) else {
             isSeasonActive = false
             return
         }
         await refreshSeasonActiveIfNeeded(serverClient: APIClient(baseURL: baseURL))
+    }
+
+    func refreshInBackground(
+        managerEntryID: String,
+        apiBaseURL: String,
+        rivalManagers: [FantasyRivalManager],
+        trackedLeagues: [FantasyTrackedLeague]
+    ) async {
+        guard !isLoading, !isRefreshing else { return }
+        await refresh(
+            managerEntryID: managerEntryID,
+            apiBaseURL: apiBaseURL,
+            rivalManagers: rivalManagers,
+            trackedLeagues: trackedLeagues
+        )
     }
 
     private struct FantasySquadSnapshot {
@@ -118,11 +142,13 @@ final class FantasyViewModel: ObservableObject {
         isLoading = false
         isRefreshing = false
         data = nil
+        previousTeamData = nil
         rivalSquads = []
         trackedLeagueStandings = []
         myProfile = nil
         lastUpdated = nil
-        assistantManagerPreview = nil
+        requiresAuthentication = false
+        authenticatedEntryID = nil
         errorMessage = nil
         cachedBootstrapLookup = nil
         cachedBootstrapFetchedAt = nil
@@ -146,10 +172,12 @@ final class FantasyViewModel: ObservableObject {
         leagueRefreshTask = nil
         assistantManagerPrewarmTask?.cancel()
         assistantManagerPrewarmTask = nil
+        detailedExpectedPointsTask?.cancel()
+        detailedExpectedPointsTask = nil
     }
 
     /// Rebuilds the pre-computed FantasyMatchRowContext published to MatchRow.
-    /// Must be called whenever data, assistantManagerPreview, or cachedBootstrapLookup changes.
+    /// Must be called whenever squad data or the bootstrap lookup changes.
     private func rebuildMatchRowContext() {
         matchRowContextVersion += 1
         let expectedPoints = buildExpectedPointsDictionary()
@@ -168,31 +196,16 @@ final class FantasyViewModel: ObservableObject {
 
     /// Builds the expected-points dictionary that was previously computed inline inside each MatchRow body.
     private func buildExpectedPointsDictionary() -> [Int: Int] {
-        guard let squad = data,
-              let section = currentSquadExpectedPointsSection
-        else { return [:] }
-
-        let starterExpectedPoints = Dictionary(
-            uniqueKeysWithValues: section.starters.map { ($0.elementID, $0.expectedPointsNextGameweek) }
+        guard let squad = data else { return [:] }
+        return Dictionary(
+            uniqueKeysWithValues: squad.allPlayers.compactMap { player in
+                guard player.hasRemainingFixtureThisGameweek,
+                      let expectedPoints = player.expectedPointsThisGameweek else {
+                    return nil
+                }
+                return (player.elementID, Int(expectedPoints.rounded()))
+            }
         )
-        let benchExpectedPoints = Dictionary(
-            uniqueKeysWithValues: section.bench.map { ($0.elementID, $0.expectedPointsNextGameweek) }
-        )
-
-        var result: [Int: Int] = [:]
-        for player in squad.starters {
-            guard player.hasRemainingFixtureThisGameweek,
-                  let pts = starterExpectedPoints[player.elementID]
-            else { continue }
-            result[player.elementID] = Int(pts.rounded())
-        }
-        for player in squad.bench {
-            guard player.hasRemainingFixtureThisGameweek,
-                  let pts = benchExpectedPoints[player.elementID]
-            else { continue }
-            result[player.elementID] = Int(pts.rounded())
-        }
-        return result
     }
 
     private func isFreshAssistantManagerResponse(_ response: FantasyAssistantManagerResponse?) -> Bool {
@@ -200,33 +213,8 @@ final class FantasyViewModel: ObservableObject {
         return response.ready && response.stale != true
     }
 
-    var currentSquadExpectedPointsSection: FantasyAssistantManagerResponse.ExpectedPointsSection? {
-        guard let squad = data,
-              let response = assistantManagerPreview,
-              isFreshAssistantManagerResponse(response),
-              squad.matchesAssistantExpectedPointsSection(
-                  response.expectedPoints,
-                  eventID: response.currentEventID
-              )
-        else {
-            return nil
-        }
-
-        return response.expectedPoints
-    }
-
     var currentSquadProjectedGameweekPoints: Double? {
-        guard let squad = data,
-              let section = currentSquadExpectedPointsSection
-        else {
-            return nil
-        }
-
-        return squad.projectedGameweekPoints(using: section)
-    }
-
-    var isCurrentSquadExpectedPointsLoading: Bool {
-        currentSquadExpectedPointsSection == nil
+        data?.detailedExpectedPointsThisGameweek
     }
 
     func isEligibleFantasyFixture(_ match: Match) -> Bool {
@@ -280,6 +268,7 @@ final class FantasyViewModel: ObservableObject {
         } else {
             isLoading = true
         }
+        requiresAuthentication = false
 
         defer {
             isLoading = false
@@ -291,76 +280,92 @@ final class FantasyViewModel: ObservableObject {
             let serverClient = APIClient(baseURL: baseURL)
             logPerf("refresh_start entry_id=\(entryID) rivals=\(rivalManagers.count) leagues=\(trackedLeagues.count)")
 
-            let currentGameweek = try await timed("current_gameweek") {
-                try await serverClient.fetchFantasyCurrentGameweek()
-            }
-
             let bootstrapBaseURLKey = baseURL.absoluteString
             async let bootstrapLookupTask = fetchBootstrapLookup(
                 serverClient: serverClient,
                 baseURLKey: bootstrapBaseURLKey
             )
-            async let myProfileTask = fetchMyProfile(entryID: entryID)
-            async let nextGameweekTask = fetchNextGameweekIfNeeded(
-                currentGameweek: currentGameweek,
-                serverClient: serverClient
-            )
             async let seasonFixturesTask = fetchSeasonFixtures()
             async let seasonActiveTask: Void = refreshSeasonActiveIfNeeded(serverClient: serverClient)
+            let currentTeamResult = try await timed("current_team entry_id=\(entryID)") {
+                try await fantasyAuthenticatedClient.fetchCurrentTeam(entryID: entryID)
+            }
+            let activeEntryID = currentTeamResult.entryID
+            async let myProfileTask = fetchMyProfile(entryID: activeEntryID)
 
-            let (bootstrapLookup, myProfile, nextGameweek, seasonFixtures, _) = try await (
+            let (bootstrapLookup, myProfile, seasonFixtures, _) = try await (
                 bootstrapLookupTask,
                 myProfileTask,
-                nextGameweekTask,
                 seasonFixturesTask,
                 seasonActiveTask
             )
             self.myProfile = myProfile
 
-            let preferredSquadGameweek = FantasySquadGameweekResolver.resolve(
-                currentGameweek: currentGameweek,
-                nextGameweek: nextGameweek,
-                events: bootstrapLookup.events
-            )
-            if preferredSquadGameweek.id != currentGameweek.id {
-                logPerf(
-                    "squad_gameweek_switched current=\(currentGameweek.id) squad=\(preferredSquadGameweek.id)"
-                )
-            }
-
-            let squadSnapshot = try await fetchSquadSnapshotWithFallback(
-                entryID: entryID,
-                preferredGameweek: preferredSquadGameweek,
-                fallbackGameweek: preferredSquadGameweek.id == currentGameweek.id ? nil : currentGameweek,
-                labelPrefix: "my"
-            )
-
+            let currentTeamGameweek = resolvedCurrentTeamGameweek(events: bootstrapLookup.events)
+            let currentTeamFixtures = seasonFixtures.filter { $0.event == currentTeamGameweek.id }
             data = await buildSquadDisplayData(
-                gameweek: squadSnapshot.gameweek,
-                picksResponse: squadSnapshot.picksResponse,
-                liveResponse: squadSnapshot.liveResponse,
-                fixtures: squadSnapshot.fixtures,
+                gameweek: currentTeamGameweek,
+                picksResponse: currentTeamResult.team.asPicksResponse(eventID: currentTeamGameweek.id),
+                liveResponse: FantasyEventLiveResponse(elements: []),
+                fixtures: currentTeamFixtures,
                 seasonFixtures: seasonFixtures,
                 bootstrap: bootstrapLookup
             )
             rebuildMatchRowContext()
+            detailedExpectedPointsTask?.cancel()
+            detailedExpectedPointsTask = Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                await self.populateDetailedExpectedPoints(
+                    gameweekID: currentTeamGameweek.id,
+                    apiBaseURL: apiBaseURL
+                )
+            }
+
+            let previousSnapshot: FantasySquadSnapshot?
+            if let previousGameweek = FantasyTeamGameweekResolver.previousTeamGameweek(
+                from: bootstrapLookup.events
+            ) {
+                do {
+                    let snapshot = try await fetchSquadSnapshot(
+                        entryID: activeEntryID,
+                        gameweek: previousGameweek,
+                        labelPrefix: "previous"
+                    )
+                    previousTeamData = await buildSquadDisplayData(
+                        gameweek: snapshot.gameweek,
+                        picksResponse: snapshot.picksResponse,
+                        liveResponse: snapshot.liveResponse,
+                        fixtures: snapshot.fixtures,
+                        seasonFixtures: seasonFixtures,
+                        bootstrap: bootstrapLookup
+                    )
+                    previousSnapshot = snapshot
+                } catch {
+                    logPerf("previous_team_unavailable error=\"\(error.localizedDescription)\"")
+                    previousTeamData = nil
+                    previousSnapshot = nil
+                }
+            } else {
+                previousTeamData = nil
+                previousSnapshot = nil
+            }
 
             let normalizedRivals = deduplicatedRivals(
                 rivalManagers: rivalManagers,
-                excludingEntryID: entryID
+                excludingEntryID: activeEntryID
             )
-            if normalizedRivals.isEmpty {
+            if normalizedRivals.isEmpty || previousSnapshot == nil {
                 rivalSquads = []
-            } else {
+            } else if let previousSnapshot {
                 let refreshToken = UUID()
                 rivalRefreshToken = refreshToken
                 rivalRefreshTask = Task(priority: .utility) { [weak self] in
                     guard let self else { return }
                     let refreshedRivals = await self.fetchRivalSquads(
                         rivals: normalizedRivals,
-                        gameweek: squadSnapshot.gameweek,
-                        liveResponse: squadSnapshot.liveResponse,
-                        fixtures: squadSnapshot.fixtures,
+                        gameweek: previousSnapshot.gameweek,
+                        liveResponse: previousSnapshot.liveResponse,
+                        fixtures: previousSnapshot.fixtures,
                         seasonFixtures: seasonFixtures,
                         bootstrapLookup: bootstrapLookup
                     )
@@ -384,7 +389,7 @@ final class FantasyViewModel: ObservableObject {
                     guard let self else { return }
                     let refreshedLeagues = await self.fetchTrackedLeagueStandings(
                         trackedLeagues: normalizedTrackedLeagues,
-                        managerEntryID: entryID,
+                        managerEntryID: activeEntryID,
                         managerProfile: myProfile
                     )
                     guard self.leagueRefreshToken == refreshToken else { return }
@@ -394,8 +399,10 @@ final class FantasyViewModel: ObservableObject {
             }
             lastUpdated = Date()
             errorMessage = nil
+            requiresAuthentication = false
+            authenticatedEntryID = activeEntryID
             let totalDurationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
-            logPerf("refresh_complete entry_id=\(entryID) rivals_loaded=\(rivalSquads.count) duration_ms=\(Int(totalDurationMs))")
+            logPerf("refresh_complete entry_id=\(activeEntryID) rivals_loaded=\(rivalSquads.count) duration_ms=\(Int(totalDurationMs))")
         } catch {
             if Self.isCancellationError(error) {
                 logPerf("refresh_cancelled entry_id=\(entryID)")
@@ -403,6 +410,10 @@ final class FantasyViewModel: ObservableObject {
             }
             let totalDurationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
             logPerf("refresh_failed entry_id=\(entryID) duration_ms=\(Int(totalDurationMs)) error=\"\(error.localizedDescription)\"")
+            if let fantasyError = error as? FantasyPublicAPIError,
+               case .authenticationRequired = fantasyError {
+                requiresAuthentication = true
+            }
             errorMessage = userFriendlyErrorMessage(for: error)
         }
     }
@@ -493,6 +504,51 @@ final class FantasyViewModel: ObservableObject {
         )
     }
 
+    private func populateDetailedExpectedPoints(
+        gameweekID: Int,
+        apiBaseURL: String
+    ) async {
+        guard let squad = data else { return }
+        let playerIDs = squad.allPlayers
+            .filter(\.hasRemainingFixtureThisGameweek)
+            .map(\.elementID)
+
+        guard !playerIDs.isEmpty else { return }
+
+        var expectedPointsByElementID: [Int: Double] = [:]
+        for elementID in playerIDs {
+            guard !Task.isCancelled else { return }
+            do {
+                let details = try await loadPlayerDetails(
+                    elementID: elementID,
+                    gameweekID: gameweekID,
+                    apiBaseURL: apiBaseURL
+                )
+                guard let fixtureIndex = details.upcomingFixtures.firstIndex(where: {
+                    !$0.isBlank && $0.gameweek == gameweekID
+                }) else {
+                    continue
+                }
+                let fixture = details.upcomingFixtures[fixtureIndex]
+                expectedPointsByElementID[elementID] = FantasyExpectedPointsEstimator.estimate(
+                    details: details,
+                    fixture: fixture,
+                    fixtureIndex: fixtureIndex
+                )
+            } catch {
+                logPerf("pitch_expected_points_unavailable element_id=\(elementID)")
+            }
+        }
+
+        guard !Task.isCancelled,
+              !expectedPointsByElementID.isEmpty,
+              data?.gameweekID == squad.gameweekID else {
+            return
+        }
+        data = squad.applyingExpectedPoints(expectedPointsByElementID)
+        rebuildMatchRowContext()
+    }
+
     func fetchTransferRecommendations(
         elementID: Int,
         gameweekID: Int,
@@ -530,7 +586,6 @@ final class FantasyViewModel: ObservableObject {
             forceRefresh: forceRefresh
         )
         if isFreshAssistantManagerResponse(response) {
-            assistantManagerPreview = response
             rebuildMatchRowContext()
         }
         return response
@@ -607,12 +662,24 @@ final class FantasyViewModel: ObservableObject {
         let serverClient = APIClient(baseURL: baseURL)
 
         do {
-            let response = try await timed("assistant_manager_sync entry_id=\(entryID)") {
+            var response = try await timed("assistant_manager_sync entry_id=\(entryID)") {
                 try await serverClient.syncFantasyAssistantManager(entryID: entryID)
             }
+
+            // A sync can legitimately return while the server is still warming its
+            // in-memory prediction cache. Poll the read endpoint briefly so the
+            // current-team summary resolves instead of leaving its xP spinner up
+            // until the next manual refresh.
+            for _ in 0..<5 where !isFreshAssistantManagerResponse(response) {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                response = try await timed("assistant_manager_poll entry_id=\(entryID)") {
+                    try await serverClient.fetchFantasyAssistantManager(entryID: entryID)
+                }
+            }
+
             if isFreshAssistantManagerResponse(response) {
                 cachedAssistantManagerResponses[cacheKey] = (payload: response, fetchedAt: Date())
-                assistantManagerPreview = response
                 rebuildMatchRowContext()
             } else {
                 cachedAssistantManagerResponses.removeValue(forKey: cacheKey)
@@ -685,21 +752,19 @@ final class FantasyViewModel: ObservableObject {
         return result
     }
 
-    private func fetchNextGameweekIfNeeded(
-        currentGameweek: FantasyGameweek,
-        serverClient: APIClient
-    ) async -> FantasyGameweek? {
-        guard currentGameweek.finished == true else {
-            return nil
+    private func resolvedCurrentTeamGameweek(events: [FantasyGameweek]) -> FantasyGameweek {
+        if let resolved = FantasyTeamGameweekResolver.currentTeamGameweek(from: events) {
+            return resolved
         }
 
-        do {
-            return try await timed("next_gameweek") {
-                try await serverClient.fetchFantasyNextGameweek()
-            }
-        } catch {
-            return nil
-        }
+        return FantasyGameweek(
+            id: 1,
+            name: "Gameweek 1",
+            isCurrent: false,
+            isNext: true,
+            finished: false,
+            deadlineTime: nil
+        )
     }
 
     private func fetchSquadSnapshot(
@@ -731,59 +796,6 @@ final class FantasyViewModel: ObservableObject {
             liveResponse: liveResponse,
             fixtures: fixtures
         )
-    }
-
-    private func fetchSquadSnapshotWithFallback(
-        entryID: Int,
-        preferredGameweek: FantasyGameweek,
-        fallbackGameweek: FantasyGameweek?,
-        labelPrefix: String
-    ) async throws -> FantasySquadSnapshot {
-        do {
-            return try await fetchSquadSnapshot(
-                entryID: entryID,
-                gameweek: preferredGameweek,
-                labelPrefix: labelPrefix
-            )
-        } catch {
-            guard shouldFallbackToCurrentGameweek(
-                after: error,
-                preferredGameweek: preferredGameweek,
-                fallbackGameweek: fallbackGameweek
-            ), let fallbackGameweek else {
-                throw error
-            }
-
-            logPerf(
-                "squad_gameweek_fallback entry_id=\(entryID) preferred=\(preferredGameweek.id) fallback=\(fallbackGameweek.id)"
-            )
-            return try await fetchSquadSnapshot(
-                entryID: entryID,
-                gameweek: fallbackGameweek,
-                labelPrefix: labelPrefix
-            )
-        }
-    }
-
-    private func shouldFallbackToCurrentGameweek(
-        after error: Error,
-        preferredGameweek: FantasyGameweek,
-        fallbackGameweek: FantasyGameweek?
-    ) -> Bool {
-        guard let fallbackGameweek, fallbackGameweek.id != preferredGameweek.id else {
-            return false
-        }
-        guard let fantasyError = error as? FantasyPublicAPIError else {
-            return false
-        }
-
-        if case let .badStatus(statusCode, operation, _) = fantasyError,
-           statusCode == 404,
-           operation == "fpl_picks" {
-            return true
-        }
-
-        return false
     }
 
     private func fetchRivalSquads(
@@ -1218,12 +1230,13 @@ final class FantasyViewModel: ObservableObject {
            let cachedBootstrapLookup,
            let cachedBootstrapFetchedAt,
            now.timeIntervalSince(cachedBootstrapFetchedAt) < bootstrapCacheTTL {
-            if Self.bootstrapLookupHasUsablePlayerCosts(cachedBootstrapLookup) {
+            if Self.bootstrapLookupHasUsablePlayerCosts(cachedBootstrapLookup),
+               Self.bootstrapLookupHasUsableExpectedPoints(cachedBootstrapLookup) {
                 let age = Int(now.timeIntervalSince(cachedBootstrapFetchedAt))
                 logPerf("bootstrap_lookup_cache_hit age_s=\(age)")
                 return cachedBootstrapLookup
             }
-            logPerf("bootstrap_lookup_cache_invalidated reason=missing_player_costs")
+            logPerf("bootstrap_lookup_cache_invalidated reason=missing_player_costs_or_expected_points")
             self.cachedBootstrapLookup = nil
             self.cachedBootstrapFetchedAt = nil
             rebuildMatchRowContext()
@@ -1232,8 +1245,9 @@ final class FantasyViewModel: ObservableObject {
         var lookup = try await timed("bootstrap_lookup_fetch") {
             try await serverClient.fetchFantasyBootstrapLookup()
         }
-        if !Self.bootstrapLookupHasUsablePlayerCosts(lookup) {
-            logPerf("bootstrap_lookup_missing_costs fallback=bootstrap_static")
+        if !Self.bootstrapLookupHasUsablePlayerCosts(lookup) ||
+            !Self.bootstrapLookupHasUsableExpectedPoints(lookup) {
+            logPerf("bootstrap_lookup_incomplete fallback=bootstrap_static")
             lookup = try await timed("bootstrap_static_fallback_fetch") {
                 try await fantasyPublicClient.fetchBootstrapStatic()
             }
@@ -1252,6 +1266,16 @@ final class FantasyViewModel: ObservableObject {
             }
             return false
         }
+    }
+
+    private static func bootstrapLookupHasUsableExpectedPoints(_ lookup: FantasyBootstrapLookup) -> Bool {
+        let hasCurrentProjection = lookup.elements.contains {
+            Double($0.expectedPointsThisGameweek ?? "") != nil
+        }
+        let hasNextProjection = lookup.elements.contains {
+            Double($0.expectedPointsNextGameweek ?? "") != nil
+        }
+        return hasCurrentProjection && hasNextProjection
     }
 
     private static func parseSeasonStatusCheckedAt(_ value: String?) -> Date? {

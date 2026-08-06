@@ -129,9 +129,7 @@ struct MatchDetailView: View {
     private var fantasySquadSections: [FantasyMatchTeamSquadSection] {
         guard preferences.showFantasyExpectedPoints,
               isEligibleFantasyFixture,
-              let squad = fantasyViewModel.data?.applyingExpectedPoints(
-                fantasyViewModel.currentSquadExpectedPointsSection
-              )
+              let squad = fantasyViewModel.data
         else {
             return []
         }
@@ -1698,8 +1696,7 @@ private struct FantasyMatchSquadBucketView: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(players) { player in
                     FantasyMatchSquadPlayerRow(
-                        name: playerDisplayName(player),
-                        expectedPoints: player.expectedPointsThisGameweek
+                        player: player
                     )
                 }
             }
@@ -1716,11 +1713,20 @@ private struct FantasyMatchSquadBucketView: View {
 }
 
 private struct FantasyMatchSquadPlayerRow: View {
-    let name: String
-    let expectedPoints: Int?
+    let player: FantasyDisplayPlayer
+
+    private var name: String {
+        let preferred = player.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return preferred.isEmpty ? player.displayName : preferred
+    }
+
+    private var expectedPoints: Double? {
+        player.expectedPointsThisGameweek
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
+            FantasyPlayerProfileImage(url: player.profileImageURL, size: 28)
             Text(name)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
@@ -1748,14 +1754,14 @@ private struct FantasyMatchSquadPlayerRow: View {
 
     private var expectedPointsLabel: String {
         if let expectedPoints {
-            return "xP \(expectedPoints)"
+            return String(format: "xP %.1f", expectedPoints)
         }
         return "xP -"
     }
 
     private var expectedPointsAccessibilityLabel: String {
         if let expectedPoints {
-            return "expected \(expectedPoints) points"
+            return String(format: "expected %.1f points", expectedPoints)
         }
         return "expected points unavailable"
     }

@@ -123,6 +123,8 @@ const {
   buildFantasyShortNameMappings,
 } = require("./team_identity");
 const fantasyScore = require("./fantasy_score");
+const { registerGoalGuesserRoutes } = require("./goal_guesser");
+const { registerGoalGuesserTestHarnessRoutes } = require("./goal_guesser_test_harness");
 
 function parseEnvBoolean(value, fallback = false) {
   if (value === undefined || value === null) return fallback;
@@ -738,6 +740,18 @@ const APP_METRICS_ACTIVE_DEVICE_WINDOW_MS = Number.isFinite(parsedAppMetricsActi
   ? Math.max(1, Math.floor(parsedAppMetricsActiveWindowHours)) * 60 * 60 * 1000
   : 30 * 24 * 60 * 60 * 1000;
 app.use(express.json({ limit: "64kb" }));
+
+const goalGuesserTestHarnessEnabled = process.env.NODE_ENV === "test" && parseEnvBoolean(process.env.GOAL_GUESSER_TEST_HARNESS_ENABLED, false);
+registerGoalGuesserRoutes(app, {
+  enabled: parseEnvBoolean(process.env.GOAL_GUESSER_ENABLED, false),
+  getCanonicalMatches: goalGuesserTestHarnessEnabled ? async () => [] : async () => getBsdMatchesForServing(),
+  disableRateLimits: goalGuesserTestHarnessEnabled,
+});
+registerGoalGuesserTestHarnessRoutes(app, {
+  enabled: goalGuesserTestHarnessEnabled,
+  key: process.env.GOAL_GUESSER_TEST_HARNESS_KEY,
+  databaseName: process.env.GOAL_GUESSER_TEST_DATABASE,
+});
 
 const appUsageMetrics = {
   apiRequestsTotal: 0,
@@ -4154,6 +4168,7 @@ function buildTransferRecommendation(
 
   return {
     element_id: parseFiniteNumber(element && element.id, 0),
+    player_code: parseFiniteNumber(element && element.code, 0) || null,
     web_name: String((element && element.web_name) || "").trim(),
     player_name: assistantPlayerName(element),
     team_id: teamID,
@@ -4166,6 +4181,10 @@ function buildTransferRecommendation(
     form,
     form_last5_proxy_points: roundTo(formLast5Proxy, 1),
     points_per_game: roundTo(pointsPerGame, 2),
+    selected_by_percent: roundTo(
+      parseFiniteNumber(element && element.selected_by_percent, 0),
+      1
+    ),
     ep_next: roundTo(parseFiniteNumber(element && element.ep_next, form), 2),
     total_points: totalPoints,
     event_points: eventPoints,
@@ -25402,12 +25421,24 @@ function fantasyBootstrapLookupPayload() {
         web_name: String((item && item.web_name) || "").trim(),
         first_name: String((item && item.first_name) || "").trim(),
         second_name: String((item && item.second_name) || "").trim(),
+        code: Number(item && item.code) || 0,
         team: Number(item && item.team) || 0,
         element_type: Number(item && item.element_type) || 0,
         photo: String((item && item.photo) || "").trim(),
         status: String((item && item.status) || "").trim(),
         news: String((item && item.news) || "").trim(),
         now_cost: Number(item && item.now_cost) || 0,
+        form: String((item && item.form) || "").trim(),
+        event_points: Number(item && item.event_points) || 0,
+        total_points: Number(item && item.total_points) || 0,
+        bonus: Number(item && item.bonus) || 0,
+        ict_index: String((item && item.ict_index) || "").trim(),
+        selected_by_percent: String((item && item.selected_by_percent) || "").trim(),
+        points_per_game: String((item && item.points_per_game) || "").trim(),
+        ep_this: String((item && item.ep_this) || "").trim(),
+        ep_next: String((item && item.ep_next) || "").trim(),
+        chance_of_playing_this_round: item && item.chance_of_playing_this_round,
+        chance_of_playing_next_round: item && item.chance_of_playing_next_round,
       }))
       .filter((item) => Number.isFinite(item.id) && item.id > 0)
     : [];
@@ -25419,6 +25450,10 @@ function fantasyBootstrapLookupPayload() {
         name: String((item && item.name) || "").trim(),
         short_name: String((item && item.short_name) || "").trim(),
         code: Number(item && item.code) || 0,
+        strength_attack_home: Number(item && item.strength_attack_home) || 0,
+        strength_attack_away: Number(item && item.strength_attack_away) || 0,
+        strength_defence_home: Number(item && item.strength_defence_home) || 0,
+        strength_defence_away: Number(item && item.strength_defence_away) || 0,
       }))
       .filter((item) => Number.isFinite(item.id) && item.id > 0)
     : [];
@@ -25449,6 +25484,7 @@ function fantasyBootstrapLookupPayload() {
 
   return {
     updated_at: fantasyBootstrapLastUpdated,
+    total_players: Number(payload.total_players) || null,
     elements,
     teams,
     element_types: elementTypes,
