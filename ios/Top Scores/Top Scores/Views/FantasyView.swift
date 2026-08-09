@@ -3,6 +3,7 @@ import os
 import UIKit
 import Combine
 import UniformTypeIdentifiers
+import ImageIO
 
 struct FantasyView: View {
     private static let currentInitialSetupVersion = 1
@@ -82,8 +83,8 @@ struct FantasyView: View {
     @State private var leagueNamePendingDeletion = ""
     @State private var rivalsScoreMode: RivalsScoreMode = .currentGameweek
     @State private var teamViewMode: FantasyTeamViewMode = .current
-    @State private var showUnlinkAccountConfirmation = false
     @State private var showFantasySignIn = false
+    @State private var shouldPresentFantasySignInAfterDisconnect = false
     @State private var fantasyPitchDetailMode: FantasyPitchPlayerDetailMode = .opponent
     @FocusState private var isRivalEntryInputFocused: Bool
     @State private var lastObservedClipboardChangeCount = UIPasteboard.general.changeCount
@@ -140,8 +141,8 @@ struct FantasyView: View {
                 addRivalSheet
             }
             .sheet(isPresented: $showFantasySignIn) {
-                FantasySignInView {
-                    triggerFantasyRefresh(force: true)
+                FantasySignInView { entryID in
+                    completeFantasySignIn(entryID)
                 }
             }
             .sheet(item: $selectedRivalSquad) { rival in
@@ -195,14 +196,6 @@ struct FantasyView: View {
                 } else {
                     Text("Remove \(leagueNamePendingDeletion) from your leagues?")
                 }
-            }
-            .alert("Disconnect Fantasy account?", isPresented: $showUnlinkAccountConfirmation) {
-                Button("Cancel", role: .cancel) {}
-                Button("Disconnect", role: .destructive) {
-                    unlinkFantasyAccountData()
-                }
-            } message: {
-                Text("This will remove your linked manager account, rivals, and Fantasy Premier League data from this device. You can always reconnect your account at any time.")
             }
             .sheet(item: $selectedPlayerSelection) { selection in
                 FantasyPlayerDetailsSheet(
@@ -280,6 +273,10 @@ struct FantasyView: View {
                 } else if !managerEntryID.isEmpty, initialSetupVersion < Self.currentInitialSetupVersion {
                     beginInitialSetup()
                 }
+                if shouldPresentFantasySignInAfterDisconnect, managerEntryID.isEmpty {
+                    shouldPresentFantasySignInAfterDisconnect = false
+                    showFantasySignIn = true
+                }
                 armSharedEntryPolling()
                 consumeSharedFantasyEntryURLIfNeeded()
                 beginScreenViewTiming()
@@ -316,7 +313,7 @@ struct FantasyView: View {
                 guard showAddRivalSheet, isFocused else { return }
                 autoPopulateAddSheetIDFromClipboard(forceRead: true)
             }
-            .onChange(of: managerEntryID) { _, newValue in
+            .onChange(of: managerEntryID) { previousValue, newValue in
                 syncManagerEntryIDToSharedDefaults()
                 if newValue.isEmpty {
                     pendingFantasyRefreshRequest = nil
@@ -329,6 +326,12 @@ struct FantasyView: View {
                     selectedSetupRivalEntryIDs = []
                     setupRivalSearchText = ""
                     isRunningInitialSetup = false
+                    if !previousValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        shouldPresentFantasySignInAfterDisconnect = !isSelected
+                        if isSelected {
+                            showFantasySignIn = true
+                        }
+                    }
                 } else {
                     managerValidationErrorMessage = nil
                     guard hasLoadedFantasyStorageState else { return }
@@ -565,9 +568,6 @@ struct FantasyView: View {
                                     detailMode: fantasyPitchDetailMode,
                                     showsPoints: false
                                 )
-                                if trackedLeagues.isEmpty {
-                                    leaguesNudgeSection
-                                }
                             }
                         case .previous:
                             if let data = fantasyViewModel.previousTeamData {
@@ -596,16 +596,14 @@ struct FantasyView: View {
                                 }
                                 rivalsSection
                                     .id(rivalsSectionScrollID)
-                                if trackedLeagues.isEmpty {
-                                    leaguesNudgeSection
-                                } else {
-                                    playerLeaguesSection
-                                    gameLeaguesSection
-                                }
                                 summaryStatsSection(data)
                             } else {
                                 noPreviousTeamCard
                             }
+                        }
+
+                        if !playerCreatedLeagues.isEmpty {
+                            yourLeaguesSection
                         }
                     } else if fantasyViewModel.isLoading {
                         VStack(spacing: 10) {
@@ -623,7 +621,6 @@ struct FantasyView: View {
                         errorCard(errorMessage)
                     }
 
-                    unlinkAccountCard
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
@@ -763,6 +760,132 @@ struct FantasyView: View {
         )
     }
 
+    private var playerCreatedLeagues: [FantasyEntryClassicLeague] {
+        (fantasyViewModel.myProfile?.leagues?.classic ?? [])
+            .filter(\.isPlayerCreated)
+    }
+
+    private var yourLeaguesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Your leagues")
+                    .font(.title3.weight(.bold))
+
+                Spacer(minLength: 12)
+
+                Button {
+                    openFantasyLeagues()
+                } label: {
+                    Label("View all on FPL", systemImage: "arrow.up.right.square")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .accessibilityHint("Opens your leagues in Fantasy Premier League")
+            }
+
+            HStack {
+                Text("League")
+                Spacer()
+                Text("Your rank")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 2)
+
+            VStack(spacing: 0) {
+                ForEach(Array(playerCreatedLeagues.enumerated()), id: \.element.id) { index, league in
+                    playerLeagueRow(league)
+
+                    if index < playerCreatedLeagues.count - 1 {
+                        Divider()
+                            .padding(.leading, 52)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.14), lineWidth: 1)
+        )
+    }
+
+    private func playerLeagueRow(_ league: FantasyEntryClassicLeague) -> some View {
+        let rank = league.resolvedEntryRank
+        let trend = leagueRankTrend(currentRank: rank, lastRank: league.resolvedEntryLastRank)
+
+        return HStack(spacing: 12) {
+            Text(leagueInitial(for: league))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.82))
+                )
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(league.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+
+                Text(leagueMemberCountText(league))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let rank {
+                HStack(spacing: 5) {
+                    Text("\(rank)")
+                        .font(.title3.monospacedDigit().weight(.bold))
+                    leagueTrendIcon(currentRank: rank, lastRank: league.resolvedEntryLastRank)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(leagueRankAccessibilityLabel(league, rank: rank, trend: trend))
+            } else {
+                Text("—")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Rank unavailable")
+            }
+        }
+        .padding(.vertical, 11)
+    }
+
+    private func leagueInitial(for league: FantasyEntryClassicLeague) -> String {
+        league.name.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init) ?? "L"
+    }
+
+    private func leagueMemberCountText(_ league: FantasyEntryClassicLeague) -> String {
+        guard let memberCount = league.resolvedMemberCount else { return "Private league" }
+        return "\(memberCount) \(memberCount == 1 ? "member" : "members")"
+    }
+
+    private func leagueRankAccessibilityLabel(
+        _ league: FantasyEntryClassicLeague,
+        rank: Int,
+        trend: LeagueRankTrend
+    ) -> String {
+        let movement: String
+        switch trend {
+        case .up:
+            movement = "up"
+        case .down:
+            movement = "down"
+        case .equal:
+            movement = "unchanged"
+        }
+        return "\(league.name), rank \(rank), \(movement)"
+    }
+
     private var leaguesNudgeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Leagues", systemImage: "trophy.fill")
@@ -788,14 +911,14 @@ struct FantasyView: View {
 
     private var setupSection: some View {
         Section("Connect your Fantasy Premier League account") {
-            instructionStep(number: 1, text: "Open Fantasy Premier League (link below) and sign in.")
-            instructionStep(number: 2, text: "Open your Points page, then tap Share and choose Top Scores.")
-            instructionStep(number: 3, text: "Return to Top Scores to complete setup.")
+            Text("Sign in on the official Fantasy Premier League page and Top Scores will identify your manager account automatically.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
 
             Button {
-                openFantasyWebsiteInBrowser()
+                showFantasySignIn = true
             } label: {
-                Label("Open Fantasy Premier League website", systemImage: "safari")
+                Label("Sign in to FPL", systemImage: "person.crop.circle.badge.checkmark")
             }
         }
     }
@@ -1002,25 +1125,6 @@ struct FantasyView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss message")
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-    }
-
-    private var unlinkAccountCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button(role: .destructive) {
-                showUnlinkAccountConfirmation = true
-            } label: {
-                // Center align
-                Label("Disconnect account", systemImage: "person.crop.circle.badge.xmark")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity, alignment: .center)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -3366,44 +3470,6 @@ struct FantasyView: View {
         triggerFantasyRefresh(force: true, trackedLeagues: updatedLeagues)
     }
 
-    private func unlinkFantasyAccountData() {
-        managerEntryID = ""
-        rivalManagers = []
-        rivalManagersJSON = "[]"
-        trackedLeagues = []
-        trackedLeaguesJSON = "[]"
-        selectedRivalSquad = nil
-        selectedLeagueStanding = nil
-        selectedPlayerSelection = nil
-        pendingRivalProfile = nil
-        pendingLeagueStanding = nil
-        rivalEntryInput = ""
-        managerEntryInput = ""
-        rivalValidationErrorMessage = nil
-        leagueValidationErrorMessage = nil
-        managerValidationErrorMessage = nil
-        showAddRivalSheet = false
-        showReviewShareSheet = false
-        shareRemovedEntryIDs = []
-        shareImportStatusMessage = nil
-        shareImportStatusIsError = false
-        pendingFantasyRefreshRequest = nil
-        initialSetupVersion = 0
-        initialSetupErrorMessage = nil
-        setupRivalCandidates = []
-        selectedSetupRivalEntryIDs = []
-        setupRivalSearchText = ""
-        isRunningInitialSetup = false
-        leagueIDLoadingDetails = []
-        managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
-
-        guard let defaults = UserDefaults(suiteName: AppGroupConfig.identifier) else { return }
-        defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryURLKey)
-        defaults.removeObject(forKey: AppGroupConfig.fantasySharedEntryUpdatedAtKey)
-        defaults.removeObject(forKey: AppGroupConfig.fantasyManagerEntryIDKey)
-        defaults.synchronize()
-    }
-
     private func openLeagueSummary(_ league: FantasyTrackedLeagueStanding) {
         if league.canOpenDetails {
             selectedLeagueStanding = league
@@ -3546,6 +3612,22 @@ struct FantasyView: View {
     private func openFantasyWebsiteInBrowser() {
         guard let url = URL(string: "https://fantasy.premierleague.com/") else { return }
         armSharedEntryPolling()
+        openURL(url)
+    }
+
+    private func completeFantasySignIn(_ entryID: Int?) {
+        if let entryID, entryID > 0 {
+            managerEntryID = String(entryID)
+            managerCaptureStatusMessage = "Successfully connected your account. Finalising setup..."
+            return
+        }
+
+        guard !managerEntryID.isEmpty else { return }
+        triggerFantasyRefresh(force: true)
+    }
+
+    private func openFantasyLeagues() {
+        guard let url = URL(string: "https://fantasy.premierleague.com/en/leagues") else { return }
         openURL(url)
     }
 
@@ -4010,12 +4092,26 @@ private struct FantasyPitchBackground: View {
 
 private enum FantasyPitchPlayerDetailMode {
     case opponent
-    case value
+    case price
+    case difficulty
+    case ownershipPercent
+    case ownershipCount
+    case form
+    case pointsPerMatch
+    case totalPoints
+    case averageMinutes
 
     var buttonLabel: String {
         switch self {
         case .opponent: return "Opposition"
-        case .value: return "Value"
+        case .price: return "Price"
+        case .difficulty: return "Difficulty"
+        case .ownershipPercent: return "Ownership %"
+        case .ownershipCount: return "Ownership #"
+        case .form: return "Form"
+        case .pointsPerMatch: return "Pts / match"
+        case .totalPoints: return "Total pts"
+        case .averageMinutes: return "Avg. mins"
         }
     }
 
@@ -4023,27 +4119,23 @@ private enum FantasyPitchPlayerDetailMode {
         switch self {
         case .opponent:
             return "figure.soccer"
-        case .value:
+        case .price:
             return "sterlingsign.circle.fill"
+        case .difficulty:
+            return "circle.hexagongrid.fill"
+        case .ownershipPercent, .ownershipCount:
+            return "person.2.fill"
+        case .form:
+            return "chart.line.uptrend.xyaxis"
+        case .pointsPerMatch, .totalPoints:
+            return "number.circle.fill"
+        case .averageMinutes:
+            return "clock.fill"
         }
     }
 
     var accessibilityLabel: String {
-        switch self {
-        case .opponent:
-            return "Showing opponents. Tap to show player values."
-        case .value:
-            return "Showing player values. Tap to show opponents."
-        }
-    }
-
-    mutating func toggle() {
-        switch self {
-        case .opponent:
-            self = .value
-        case .value:
-            self = .opponent
-        }
+        "Showing \(buttonLabel.lowercased())."
     }
 }
 
@@ -4095,8 +4187,16 @@ private struct FantasyPitchDetailToggleButton: View {
     @Binding var mode: FantasyPitchPlayerDetailMode
 
     var body: some View {
-        Button {
-            mode.toggle()
+        Menu {
+            Button("Opposition", systemImage: "figure.soccer") { mode = .opponent }
+            Button("Price", systemImage: "sterlingsign.circle.fill") { mode = .price }
+            Button("Difficulty", systemImage: "circle.hexagongrid.fill") { mode = .difficulty }
+            Button("Ownership %", systemImage: "person.2.fill") { mode = .ownershipPercent }
+            Button("Ownership #", systemImage: "person.2.fill") { mode = .ownershipCount }
+            Button("Form", systemImage: "chart.line.uptrend.xyaxis") { mode = .form }
+            Button("Pts / match", systemImage: "number.circle.fill") { mode = .pointsPerMatch }
+            Button("Total pts", systemImage: "number.circle.fill") { mode = .totalPoints }
+            Button("Avg. mins", systemImage: "clock.fill") { mode = .averageMinutes }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: mode.systemImageName)
@@ -4114,7 +4214,6 @@ private struct FantasyPitchDetailToggleButton: View {
             }
             .shadow(color: Color.black.opacity(0.22), radius: 5, x: 0, y: 2)
         }
-        .buttonStyle(.plain)
         .accessibilityLabel(mode.accessibilityLabel)
     }
 }
@@ -4216,8 +4315,24 @@ private struct FantasyPlayerCard: View {
         switch detailMode {
         case .opponent:
             return opponentDisplayText
-        case .value:
+        case .price:
             return String(format: "£%.1fm", player.nowCostMillions)
+        case .difficulty:
+            return ""
+        case .ownershipPercent:
+            guard let ownershipPercent = player.ownershipPercent else { return "-" }
+            return String(format: "%.1f%%", ownershipPercent)
+        case .ownershipCount:
+            return abbreviatedManagerCount(player.ownershipCount)
+        case .form:
+            return player.form ?? "-"
+        case .pointsPerMatch:
+            return player.hasStartedCurrentSeason ? (player.pointsPerMatch ?? "0.0") : "0.0"
+        case .totalPoints:
+            return player.hasStartedCurrentSeason ? (player.totalPoints.map(String.init) ?? "0") : "0"
+        case .averageMinutes:
+            guard player.hasStartedCurrentSeason, let averageMinutes = player.averageMinutes else { return "0.0" }
+            return String(format: "%.1f", averageMinutes)
         }
     }
 
@@ -4316,6 +4431,8 @@ private struct FantasyPlayerCard: View {
                             Capsule(style: .continuous)
                                 .fill(opponentDifficultyColor)
                         )
+                } else if detailMode == .difficulty {
+                    difficultyDots
                 } else {
                     Text(secondaryDisplayText)
                         .font(.system(size: 9.5, weight: .semibold, design: .rounded))
@@ -4401,6 +4518,41 @@ private struct FantasyPlayerCard: View {
             return Color.white.opacity(0.58)
         }
         return difficulty <= 3 ? Color.black.opacity(0.82) : Color.white
+    }
+
+    private var difficultyDots: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(player.nextFiveFixtureDifficulties.prefix(5).enumerated()), id: \.offset) { _, difficulty in
+                Circle()
+                    .fill(difficulty.map(fixtureDifficultyColor) ?? Color.white.opacity(0.18))
+                    .frame(width: 7, height: 7)
+            }
+            ForEach(0..<max(0, 5 - player.nextFiveFixtureDifficulties.count), id: \.self) { _ in
+                Circle()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: 7, height: 7)
+            }
+        }
+        .frame(height: 14)
+        .accessibilityLabel(difficultyDotsAccessibilityLabel)
+    }
+
+    private var difficultyDotsAccessibilityLabel: String {
+        let values = player.nextFiveFixtureDifficulties.prefix(5).map { difficulty in
+            difficulty.map { "difficulty \($0)" } ?? "difficulty unavailable"
+        }
+        return values.isEmpty ? "No upcoming fixture difficulties" : values.joined(separator: ", ")
+    }
+
+    private func abbreviatedManagerCount(_ count: Int?) -> String {
+        guard let count else { return "-" }
+        if count >= 1_000_000 {
+            return String(format: "%.2fM", Double(count) / 1_000_000)
+        }
+        if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000)
+        }
+        return String(count)
     }
 
     @ViewBuilder
@@ -5196,21 +5348,24 @@ struct FantasySelectedPlayerSelection: Identifiable {
 
 @MainActor
 private final class FantasyPlayerProfileImageLoader: ObservableObject {
-    private static let imageCache = NSCache<NSURL, UIImage>()
+    private static let imageCache = NSCache<NSString, UIImage>()
 
     @Published private(set) var image: UIImage?
 
     private var requestedURL: URL?
+    private var requestedMaximumPixelSize = 0
 
-    func load(url: URL?) async {
-        guard requestedURL != url || image == nil else { return }
+    func load(url: URL?, maximumPixelSize: Int) async {
+        guard requestedURL != url || requestedMaximumPixelSize != maximumPixelSize || image == nil else { return }
 
         requestedURL = url
+        requestedMaximumPixelSize = maximumPixelSize
         image = nil
 
         guard let url else { return }
 
-        if let cachedImage = Self.imageCache.object(forKey: url as NSURL) {
+        let cacheKey = Self.cacheKey(url: url, maximumPixelSize: maximumPixelSize)
+        if let cachedImage = Self.imageCache.object(forKey: cacheKey) {
             image = cachedImage
             return
         }
@@ -5232,10 +5387,13 @@ private final class FantasyPlayerProfileImageLoader: ObservableObject {
                     continue
                 }
 
-                guard let loadedImage = UIImage(data: data) else { return }
-                guard requestedURL == url else { return }
+                let loadedImage = await Task.detached(priority: .utility) {
+                    decodeFantasyPlayerProfileImage(data: data, maximumPixelSize: maximumPixelSize)
+                }.value
+                guard let loadedImage else { return }
+                guard requestedURL == url, requestedMaximumPixelSize == maximumPixelSize else { return }
 
-                Self.imageCache.setObject(loadedImage, forKey: url as NSURL)
+                Self.imageCache.setObject(loadedImage, forKey: cacheKey)
                 image = loadedImage
                 return
             } catch {
@@ -5263,6 +5421,10 @@ private final class FantasyPlayerProfileImageLoader: ObservableObject {
     private func retryDelay(for attempt: Int) -> UInt64 {
         attempt == 0 ? 350_000_000 : 900_000_000
     }
+
+    private static func cacheKey(url: URL, maximumPixelSize: Int) -> NSString {
+        "\(url.absoluteString)|\(maximumPixelSize)" as NSString
+    }
 }
 
 struct FantasyPlayerProfileImage: View {
@@ -5278,6 +5440,10 @@ struct FantasyPlayerProfileImage: View {
         self.height = height ?? size
     }
 
+    private var maximumPixelSize: Int {
+        Int((max(size, height) * 2).rounded(.up))
+    }
+
     var body: some View {
         ZStack {
             if let image = loader.image {
@@ -5289,8 +5455,11 @@ struct FantasyPlayerProfileImage: View {
             }
         }
         .frame(width: size, height: height)
-        .task(id: url) {
-            await loader.load(url: url)
+        .task(id: "\(url?.absoluteString ?? "")|\(maximumPixelSize)") {
+            await loader.load(
+                url: url,
+                maximumPixelSize: maximumPixelSize
+            )
         }
         .accessibilityHidden(true)
     }
@@ -5306,6 +5475,23 @@ struct FantasyPlayerProfileImage: View {
                 .padding(size * 0.22)
         }
     }
+}
+
+private nonisolated func decodeFantasyPlayerProfileImage(
+    data: Data,
+    maximumPixelSize: Int
+) -> UIImage? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+        kCGImageSourceShouldCacheImmediately: true,
+    ]
+    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        return nil
+    }
+    return UIImage(cgImage: image)
 }
 
 private struct FantasyScoreBreakdownSelection: Identifiable {
@@ -6214,6 +6400,13 @@ private struct FantasyAssistantManagerSheet: View {
             teamName: player.teamName,
             profileImageURL: fantasyViewModel.playerProfileImageURL(for: player.elementID),
             nowCostMillions: player.nowCostMillions,
+            hasStartedCurrentSeason: true,
+            ownershipPercent: nil,
+            ownershipCount: nil,
+            form: nil,
+            pointsPerMatch: nil,
+            totalPoints: nil,
+            averageMinutes: nil,
             rawPoints: player.rawPoints,
             appliedPoints: player.appliedPoints,
             displayPoints: player.pickPosition <= 11 ? player.appliedPoints : player.rawPoints,
@@ -6231,6 +6424,7 @@ private struct FantasyAssistantManagerSheet: View {
             minutesPlayed: player.minutesPlayed,
             upcomingOpponentDisplay: player.upcomingOpponentDisplay,
             fixtureDifficulty: nil,
+            nextFiveFixtureDifficulties: [],
             expectedPointsThisGameweek: player.expectedPointsNextGameweek,
             officialExpectedPointsNextGameweek: nil,
             goalsScored: player.goalsScored,

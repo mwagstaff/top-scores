@@ -981,6 +981,55 @@ test("filterCanonicalLiveActivityMatchesForUser keeps a match that kicked off ye
   );
 });
 
+test("filterCanonicalLiveActivityMatchesForUser uses the Fixtures category filter when provided", () => {
+  __testHooks.setLiveActivityFixtureCategoryFilter((_user, match) =>
+    match.league === "Premier League"
+  );
+  try {
+    const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+      [
+        {
+          date: "2026-08-07",
+          time: "19:45",
+          league: "EFL Cup",
+          home_team: "Wolverhampton Wanderers",
+          away_team: "Port Vale",
+          tv_channels: ["Sky Sports"],
+        },
+        {
+          date: "2026-08-07",
+          time: "20:00",
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Chelsea",
+          tv_channels: [],
+        },
+      ],
+      liveActivityUser(0, { englishPremierLeagueTeamsOnly: true }),
+      Date.parse("2026-08-07T08:00:00Z")
+    );
+
+    assert.deepEqual(
+      filtered.map((match) => `${match.home_team}|${match.away_team}`),
+      ["Arsenal|Chelsea"]
+    );
+    assert.equal(
+      __testHooks.isEligibleForLiveActivityByPreferences(
+        liveActivityUser(0, { englishPremierLeagueTeamsOnly: true }),
+        {
+          league: "EFL Cup",
+          home_team: "Wolverhampton Wanderers",
+          away_team: "Port Vale",
+          tv_channels: ["Sky Sports"],
+        }
+      ).eligible,
+      false
+    );
+  } finally {
+    __testHooks.setLiveActivityFixtureCategoryFilter(null);
+  }
+});
+
 test("buildLiveActivityPresentationForUser keeps major UEFA knockout fixtures when EPL-only is expanded", () => {
   const nowMs = Date.parse("2026-04-07T18:05:00Z");
 
@@ -6008,6 +6057,77 @@ test("evaluateUserNotificationDecision includes major international matches when
   assert.equal(decision.reason, "eligible");
 });
 
+test("evaluateUserNotificationDecision uses the Fixtures current-season category filter", () => {
+  __testHooks.setNotificationFixtureCategoryFilter((_user, match, context) => {
+    assert.equal(context.mode, "all_major");
+    return match.league === "Premier League";
+  });
+  try {
+    const decision = __testHooks.evaluateUserNotificationDecision(
+      {
+        apnsToken: "apns-token",
+        preferences: {
+          notificationsEnabled: true,
+          notificationDelayMinutes: 2,
+          notificationEventTypes: ["goal"],
+          notificationAllMajorMatchesEnabled: true,
+          notificationPremierLeagueTeamsOnly: true,
+        },
+      },
+      {
+        home_team: "West Ham United",
+        away_team: "Portsmouth",
+        league: "EFL Cup",
+        tv_channels: ["Sky Sports"],
+      },
+      { type: "goal" }
+    );
+
+    assert.deepStrictEqual(decision, {
+      shouldNotify: false,
+      reason: "all_major_matches_filter",
+      delayMinutes: 2,
+    });
+  } finally {
+    __testHooks.setNotificationFixtureCategoryFilter(null);
+  }
+});
+
+test("evaluateUserNotificationDecision uses the Fixtures current-season EPL filter for legacy preferences", () => {
+  __testHooks.setNotificationFixtureCategoryFilter((_user, match, context) => {
+    assert.equal(context.mode, "premier_league_only");
+    return match.league === "Premier League";
+  });
+  try {
+    const decision = __testHooks.evaluateUserNotificationDecision(
+      {
+        apnsToken: "apns-token",
+        preferences: {
+          notificationsEnabled: true,
+          notificationDelayMinutes: 0,
+          notificationEventTypes: ["goal"],
+          englishPremierLeagueTeamsOnly: true,
+        },
+      },
+      {
+        home_team: "Burnley",
+        away_team: "Notts County",
+        league: "EFL Cup",
+        tv_channels: [],
+      },
+      { type: "goal" }
+    );
+
+    assert.deepStrictEqual(decision, {
+      shouldNotify: false,
+      reason: "premier_league_team_filter",
+      delayMinutes: 0,
+    });
+  } finally {
+    __testHooks.setNotificationFixtureCategoryFilter(null);
+  }
+});
+
 test("evaluateUserNotificationDecision uses its own competition selection when All major matches is disabled", () => {
   const decision = __testHooks.evaluateUserNotificationDecision(
     {
@@ -6035,6 +6155,42 @@ test("evaluateUserNotificationDecision uses its own competition selection when A
     reason: "league_filtered_by_notification_preferences",
     delayMinutes: 0,
   });
+});
+
+test("evaluateUserNotificationDecision mirrors the Fixtures view when configured", () => {
+  __testHooks.setNotificationFixtureCategoryFilter((_user, match, context) => {
+    assert.equal(context.mode, "fixtures");
+    return match.league === "Premier League";
+  });
+  try {
+    const decision = __testHooks.evaluateUserNotificationDecision(
+      {
+        apnsToken: "apns-token",
+        preferences: {
+          notificationsEnabled: true,
+          notificationDelayMinutes: 0,
+          notificationEventTypes: ["goal"],
+          notificationMatchesFixturesEnabled: true,
+          fixtureAllMajorMatchesEnabled: true,
+        },
+      },
+      {
+        home_team: "France",
+        away_team: "Germany",
+        league: "FIFA World Cup 2026",
+        tv_channels: [],
+      },
+      { type: "goal" }
+    );
+
+    assert.deepStrictEqual(decision, {
+      shouldNotify: false,
+      reason: "fixture_category_filtered_out",
+      delayMinutes: 0,
+    });
+  } finally {
+    __testHooks.setNotificationFixtureCategoryFilter(null);
+  }
 });
 
 test("evaluateUserNotificationDecision treats confirmed VAR reversals as delayed goal notifications", () => {

@@ -46,6 +46,7 @@ struct FantasyPlayerDetailsSheet: View {
     @State private var selectedTab: DetailsTab = .overview
     @State private var recommendationRoute: RecommendationRoute?
     @State private var comparisonElementIDs: [Int] = []
+    @State private var recommendationNavigationStartedAt: Date?
 
     var body: some View {
         NavigationStack {
@@ -300,7 +301,9 @@ struct FantasyPlayerDetailsSheet: View {
 
     private var transferRecommendationsButton: some View {
         Button {
+            recommendationNavigationStartedAt = Date()
             recommendationRoute = .browse
+            loadTransferRecommendationsIfNeeded()
         } label: {
             Label("View transfer recommendations", systemImage: "arrow.left.arrow.right")
                 .font(.headline)
@@ -612,6 +615,7 @@ struct FantasyPlayerDetailsSheet: View {
 
                 Button {
                     recommendationRoute = .comparison
+                    loadTransferRecommendationsIfNeeded()
                 } label: {
                     Label("Choose comparison players", systemImage: "person.2.badge.plus")
                         .font(.subheadline.weight(.semibold))
@@ -734,24 +738,12 @@ struct FantasyPlayerDetailsSheet: View {
     private func transferRecommendationsScreen(selectionMode: Bool) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 12) {
-                    Button {
-                        recommendationRoute = nil
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.body.weight(.semibold))
-                            .frame(width: 42, height: 42)
-                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(selectionMode ? "Choose comparison players" : "Transfer recommendations")
-                            .font(.title2.weight(.bold))
-                        Text(selectionMode ? "Select up to three players" : "Recommended replacements for \(selection.player.displayName)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(selectionMode ? "Choose comparison players" : "Transfer recommendations")
+                        .font(.title2.weight(.bold))
+                    Text(selectionMode ? "Select up to three players" : "Recommended replacements for \(selection.player.displayName)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 if isLoadingTransferRecommendations {
@@ -765,12 +757,19 @@ struct FantasyPlayerDetailsSheet: View {
                     .padding(18)
                     .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 } else if let transferRecommendationsErrorMessage {
-                    Text(transferRecommendationsErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(transferRecommendationsErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Button("Try again") {
+                            loadTransferRecommendationsIfNeeded()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 } else if let transferRecommendations {
                     premiumRecommendationGroup(
                         title: "Similar value",
@@ -807,6 +806,12 @@ struct FantasyPlayerDetailsSheet: View {
             .padding(16)
         }
         .background(Color(red: 0.025, green: 0.035, blue: 0.031).ignoresSafeArea())
+        .onAppear {
+            guard let recommendationNavigationStartedAt else { return }
+            let durationMs = Int(Date().timeIntervalSince(recommendationNavigationStartedAt) * 1000)
+            print("[FantasyPerf] transfer_recommendations_screen_appeared duration_ms=\(durationMs)")
+            self.recommendationNavigationStartedAt = nil
+        }
     }
 
     private func premiumRecommendationGroup(
@@ -825,7 +830,7 @@ struct FantasyPlayerDetailsSheet: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         premiumRecommendationRow(item, selectionMode: selectionMode)
                         if index < items.count - 1 {
@@ -2265,6 +2270,14 @@ struct FantasyPlayerDetailsSheet: View {
         isLoadingTransferRecommendations = false
     }
 
+    private func loadTransferRecommendationsIfNeeded() {
+        guard transferRecommendations == nil, !isLoadingTransferRecommendations else { return }
+
+        Task {
+            await loadTransferRecommendations(elementID: selection.player.elementID)
+        }
+    }
+
     private func loadDetails() async {
         isLoading = true
         errorMessage = nil
@@ -2286,7 +2299,6 @@ struct FantasyPlayerDetailsSheet: View {
             )
             details = loaded
             isLoading = false
-            await loadTransferRecommendations(elementID: loaded.elementID)
             return
         } catch {
             details = nil

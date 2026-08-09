@@ -322,6 +322,7 @@ actor PreferencesSyncService {
                 "selectedNotificationLeagues": snapshot.selectedNotificationLeagues,
                 "selectedChannels": snapshot.selectedChannels,
                 "fixtureAllMajorMatchesEnabled": snapshot.fixtureAllMajorMatchesEnabled,
+                "notificationMatchesFixturesEnabled": snapshot.notificationMatchesFixturesEnabled,
                 "notificationAllMajorMatchesEnabled": snapshot.notificationAllMajorMatchesEnabled,
                 "competitionFilterEnabled": snapshot.usesFixtureCompetitionSelection,
                 "channelFilterEnabled": snapshot.channelFilterEnabled,

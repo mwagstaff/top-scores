@@ -103,6 +103,7 @@ struct MatchesView: View {
     @State private var toastMessage = ""
     @State private var predictionIndex = FixturePredictionStore.allPredictions()
     @State private var pendingPredictionDateKeys: Set<String> = []
+    @State private var attemptedPredictionDateKeys: Set<String> = []
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var searchFilterWorkItem: DispatchWorkItem?
     @State private var groupedSideEffectsTask: Task<Void, Never>?
@@ -316,6 +317,10 @@ struct MatchesView: View {
         }
         .onChange(of: viewState.groupedMatches) { _, days in
             refreshVisibleGroupedDays(from: days)
+            // A refreshed fixture payload may now have markets for a day that was
+            // previously unavailable. Keep retries tied to data refreshes, never
+            // to a row appearing again while the list is being scrolled.
+            attemptedPredictionDateKeys.removeAll()
             guard isSelected else { return }
             warmPredictionsForVisibleDays(days: days)
             scheduleGroupedSideEffects(for: days, immediate: false)
@@ -561,6 +566,7 @@ struct MatchesView: View {
         .disabled(match.isPostponed)
         .buttonStyle(.plain)
         .onAppear {
+            guard mode == .results else { return }
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             Task {
                 await matchesStore.prefetchIfNeeded(
@@ -568,11 +574,6 @@ struct MatchesView: View {
                     preferences: snapshot,
                     mode: mode
                 )
-            }
-            if mode == .fixtures {
-                // Safety net so a day that scrolled into view before the batch
-                // warm-up reached it still gets its predictions computed.
-                warmPredictionsForVisibleDays(days: [day])
             }
         }
         .listRowInsets(
@@ -621,7 +622,9 @@ struct MatchesView: View {
         let now = Date()
         var newlyQueued: [(dateKey: String, displayDate: String, matches: [Match])] = []
         for day in days {
-            guard !pendingPredictionDateKeys.contains(day.dateKey) else { continue }
+            guard !pendingPredictionDateKeys.contains(day.dateKey),
+                  !attemptedPredictionDateKeys.contains(day.dateKey)
+            else { continue }
             let matches = day.leagues.flatMap(\.matches)
             let needsPrediction = matches.contains { match in
                 guard let kickoff = match.dateTime, kickoff > now, !match.isPostponed else { return false }
@@ -637,7 +640,6 @@ struct MatchesView: View {
         let apiBaseURL = preferences.apiBaseURL
         let existingSnapshot = predictionIndex
         Task {
-            await PredictionsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
             for (dateKey, displayDate, matches) in newlyQueued {
                 guard !Task.isCancelled else { return }
                 let job = PredictionJob(dateKey: dateKey, displayDate: displayDate, matches: matches)
@@ -654,6 +656,7 @@ struct MatchesView: View {
                         }
                     }
                     pendingPredictionDateKeys.remove(dateKey)
+                    attemptedPredictionDateKeys.insert(dateKey)
                 }
             }
         }
@@ -1335,25 +1338,6 @@ private enum FixturePredictionGenerator {
                 let isInProgress = match.isInProgress
                 let markets = match.matchDetailsID.flatMap { marketsByEventID[$0] }
                     ?? marketsByTeamsAndDate[joinKey(home: matchHomeTeam, away: matchAwayTeam, date: matchDate)]
-
-                #if DEBUG
-                // TEMPORARY DEBUG — remove once BSD predictions are verified in the field.
-                if let markets {
-                    NSLog(
-                        "[FixturePredictionGenerator] %@ vs %@ matchedVia=%@ xgHome=%.2f xgAway=%.2f probHome=%.1f probDraw=%.1f probAway=%.1f",
-                        matchHomeTeam,
-                        matchAwayTeam,
-                        match.matchDetailsID.flatMap { marketsByEventID[$0] } != nil ? "eventID" : "teamsAndDate",
-                        markets.expectedGoals?.home ?? -1,
-                        markets.expectedGoals?.away ?? -1,
-                        markets.matchResult?.probHome ?? -1,
-                        markets.matchResult?.probDraw ?? -1,
-                        markets.matchResult?.probAway ?? -1
-                    )
-                } else {
-                    NSLog("[FixturePredictionGenerator] %@ vs %@ matchedVia=none (no BSD prediction found)", matchHomeTeam, matchAwayTeam)
-                }
-                #endif
 
                 if let frozen = existingPredictions[matchID], frozen.isPredicted {
                     group.addTask {

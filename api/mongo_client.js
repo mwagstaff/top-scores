@@ -18,6 +18,24 @@ let connecting = null;
 let indexesEnsured = false;
 let unavailableLogged = false;
 
+function runtimeRoleFromEntrypoint() {
+  const entrypoint = String(process.argv[1] || "").split(/[\\/]/).pop();
+  if (entrypoint === "server.js") return "api";
+  if (entrypoint === "scraper.js") return "scraper";
+  if (entrypoint === "match_monitor.js") return "monitor";
+  if (entrypoint === "bsd_poller.js") return "bsd";
+  return "worker";
+}
+
+function configuredMongoPoolSize() {
+  const explicit = Number(process.env.MONGODB_MAX_POOL_SIZE);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit);
+  const role = String(process.env.TOP_SCORES_RUNTIME_ROLE || runtimeRoleFromEntrypoint())
+    .trim()
+    .toLowerCase();
+  return { api: 10, scraper: 5, monitor: 5, bsd: 5 }[role] || 5;
+}
+
 function isMongoConfigured() {
   return Boolean(String(MONGODB_URI_TOP_SCORES || "").trim());
 }
@@ -119,6 +137,10 @@ async function ensureIndexes() {
     collection("bsd_events").createIndexes([
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
       { key: { league_id: 1, status: 1 }, name: "league_status" },
+      {
+        key: { league_id: 1, status: 1, "payload.season_id": 1 },
+        name: "league_status_season",
+      },
       { key: { event_date: 1 }, name: "event_date" },
     ]),
     collection("bsd_incidents").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
@@ -192,7 +214,7 @@ async function getDb() {
   if (!connecting) {
     connecting = (async () => {
       client = new MongoClient(MONGODB_URI_TOP_SCORES, {
-        maxPoolSize: 20,
+        maxPoolSize: configuredMongoPoolSize(),
         serverSelectionTimeoutMS: 5000,
       });
       await client.connect();
@@ -344,6 +366,26 @@ async function getOperationalDatasets(names = []) {
   return output;
 }
 
+async function getOperationalDatasetMetadata(names = []) {
+  const mongoDb = await getDb();
+  const normalizedNames = Array.isArray(names)
+    ? names.map((name) => normalizeRecordId(name)).filter(Boolean)
+    : [];
+  if (!mongoDb || normalizedNames.length === 0) return null;
+  const records = await collection("operational_datasets")
+    .find(
+      { _id: { $in: normalizedNames } },
+      { projection: { name: 1, updated_at: 1, source: 1, payload_hash: 1, payload_count: 1 } }
+    )
+    .toArray();
+  const output = {};
+  records.forEach((record) => {
+    const stripped = stripMongoId(record);
+    if (stripped && stripped.name) output[stripped.name] = stripped;
+  });
+  return output;
+}
+
 async function saveOperationalMatchDetailsRecords(recordsById, options = {}) {
   const mongoDb = await getDb();
   if (!mongoDb) return null;
@@ -421,6 +463,24 @@ async function getAllOperationalMatchDetails() {
     total: Object.keys(output).length,
     records: output,
   };
+}
+
+async function getOperationalMatchDetailsByDates(dates = []) {
+  const mongoDb = await getDb();
+  const normalizedDates = Array.isArray(dates)
+    ? [...new Set(dates.map((date) => String(date || "").trim()).filter(Boolean))]
+    : [];
+  if (!mongoDb || normalizedDates.length === 0) return {};
+  const records = await collection("matches")
+    .find({ date: { $in: normalizedDates } }, { projection: { payload: 1 } })
+    .toArray();
+  const output = {};
+  records.forEach((record) => {
+    if (!record || !record.payload) return;
+    const matchId = normalizeRecordId(record.payload.id || record._id).toLowerCase();
+    if (matchId) output[matchId] = record.payload;
+  });
+  return output;
 }
 
 async function getOperationalMatchDetailsSummary() {
@@ -985,6 +1045,10 @@ async function getMatchLineupCache(eventId) {
   return getTsdbCacheRecord("tsdb_match_lineups", eventId);
 }
 
+async function getMatchLineupCaches(eventIds = []) {
+  return getTsdbCacheRecords("tsdb_match_lineups", eventIds);
+}
+
 async function upsertMatchTimelineCache(eventId, payload, metadata = {}) {
   return upsertTsdbCacheRecord("tsdb_match_timelines", eventId, payload, metadata);
 }
@@ -1196,10 +1260,17 @@ async function upsertBsdRecords(collectionName, records = []) {
   return { upserted: result.upsertedCount, modified: result.modifiedCount };
 }
 
-async function getBsdRecords(collectionName, filter = {}) {
+async function getBsdRecords(collectionName, filter = {}, options = {}) {
   const mongoDb = await getDb();
   if (!mongoDb) return [];
-  return collection(collectionName).find(filter).toArray();
+  let cursor = collection(collectionName).find(filter, {
+    ...(options.projection ? { projection: options.projection } : {}),
+  });
+  if (options.sort) cursor = cursor.sort(options.sort);
+  if (Number.isFinite(Number(options.limit)) && Number(options.limit) > 0) {
+    cursor = cursor.limit(Math.floor(Number(options.limit)));
+  }
+  return cursor.toArray();
 }
 
 // Lightweight existence check across a whole bsd_ collection — projects only
@@ -1247,9 +1318,11 @@ module.exports = {
   saveOperationalDataset,
   getOperationalDataset,
   getOperationalDatasets,
+  getOperationalDatasetMetadata,
   saveOperationalMatchDetailsRecords,
   getOperationalMatchDetails,
   getAllOperationalMatchDetails,
+  getOperationalMatchDetailsByDates,
   getOperationalMatchDetailsSummary,
   deleteOperationalMatchDetailsRecords,
   saveOperationalMatchWriteLogEntries,
@@ -1268,6 +1341,7 @@ module.exports = {
   getAllTsdbLeagueTables,
   upsertMatchLineupCache,
   getMatchLineupCache,
+  getMatchLineupCaches,
   upsertMatchTimelineCache,
   getMatchTimelineCache,
   upsertTeamCache,
@@ -1285,6 +1359,8 @@ module.exports = {
   getBsdRecord,
   deleteBsdRecordsNotIn,
   __private: {
+    configuredMongoPoolSize,
+    runtimeRoleFromEntrypoint,
     hasBsdEventRoundName,
     shouldPreserveExistingBsdEventRoundName,
     bsdEventPayloadPreservingRoundNameExpression,

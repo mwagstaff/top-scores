@@ -998,6 +998,7 @@ let cachedMergedMatches = [];
 // ---------------------------------------------------------------------------
 const runtimeMatchSourceDefault = SERVER_CONFIG.matchDataSource;
 const BSD_MATCHES_CACHE_TTL_MS = Number(process.env.BSD_MATCHES_CACHE_TTL_MS || 15_000);
+const BSD_CURRENT_MATCHES_DATASET = "bsd_current_matches";
 let cachedBsdMatches = [];
 let cachedBsdMatchesUpdatedAt = null;
 let bsdMatchesCacheBuiltMs = 0;
@@ -1007,9 +1008,24 @@ async function refreshBsdMatchesCache() {
   if (bsdMatchesRefreshInFlight) return;
   bsdMatchesRefreshInFlight = true;
   try {
-    const matches = await projectBsdMatches();
+    const metadataByName = await getOperationalDatasetMetadata([BSD_CURRENT_MATCHES_DATASET]);
+    const sharedMetadata = metadataByName && metadataByName[BSD_CURRENT_MATCHES_DATASET];
+    if (
+      cachedBsdMatchesUpdatedAt &&
+      sharedMetadata &&
+      sharedMetadata.updated_at === cachedBsdMatchesUpdatedAt
+    ) {
+      bsdMatchesCacheBuiltMs = Date.now();
+      return;
+    }
+    const sharedProjection = await getOperationalDataset(BSD_CURRENT_MATCHES_DATASET);
+    const matches =
+      sharedProjection && Array.isArray(sharedProjection.payload)
+        ? sharedProjection.payload
+        : await projectBsdMatches();
     cachedBsdMatches = Array.isArray(matches) ? matches : [];
-    cachedBsdMatchesUpdatedAt = new Date().toISOString();
+    cachedBsdMatchesUpdatedAt =
+      (sharedProjection && sharedProjection.updated_at) || new Date().toISOString();
     bsdMatchesCacheBuiltMs = Date.now();
   } catch (error) {
     console.warn("[BSD] projection refresh failed:", error.message || error);
@@ -11193,18 +11209,37 @@ function buildMergedMatchDetailsCandidate(seedMatch, fetchedMatch, detailsUrl) {
   return combined;
 }
 
-function indexMatchDetailsFromMatches(matches, updatedAtIso = new Date().toISOString()) {
-  if (!Array.isArray(matches) || matches.length === 0) return 0;
-  let inserted = 0;
+function indexMatchDetailsChangesFromMatches(matches, updatedAtIso = new Date().toISOString()) {
+  const changedById = {};
+  const previousById = {};
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return { changedCount: 0, changedById, previousById };
+  }
   matches.forEach((match) => {
-    if (upsertMatchDetailsFromMatch(match, updatedAtIso)) {
-      inserted += 1;
-    }
+    const incoming = normalizeMatchDetailsPayload(match);
+    const matchId = incoming && incoming.id ? incoming.id : null;
+    const previous = matchId ? matchDetailsById.get(matchId) || null : null;
+    const indexedId = upsertMatchDetailsFromMatch(match, updatedAtIso);
+    if (!indexedId) return;
+    const next = matchDetailsById.get(indexedId) || null;
+    const unchanged =
+      previous &&
+      next &&
+      hashComparablePayload(canonicalMatchComparablePayload(previous)) ===
+        hashComparablePayload(canonicalMatchComparablePayload(next));
+    if (unchanged) return;
+    previousById[indexedId] = previous;
+    changedById[indexedId] = next;
   });
-  if (inserted > 0) {
+  const changedCount = Object.keys(changedById).length;
+  if (changedCount > 0) {
     matchDetailsLastUpdated = updatedAtIso;
   }
-  return inserted;
+  return { changedCount, changedById, previousById };
+}
+
+function indexMatchDetailsFromMatches(matches, updatedAtIso = new Date().toISOString()) {
+  return indexMatchDetailsChangesFromMatches(matches, updatedAtIso).changedCount;
 }
 
 function collectMatchDetailsSubsetByMatches(matches) {
@@ -12895,8 +12930,7 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
     [],
     preferredMatchesForMerge
   );
-  const previousById = Object.fromEntries(matchDetailsById);
-  indexMatchDetailsFromMatches(cachedMergedMatches);
+  const matchDetailChanges = indexMatchDetailsChangesFromMatches(cachedMergedMatches);
   invalidateUnmatchedTeamMetrics({ schedule: false });
 
   const updatedAt =
@@ -12907,12 +12941,12 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
       updated_at: updatedAt,
       source,
     }),
-    persistCanonicalMatchDetailsSubsetSafe(Object.fromEntries(matchDetailsById), {
-      replace: true,
+    persistCanonicalMatchDetailsSubsetSafe(matchDetailChanges.changedById, {
+      replace: false,
       updated_at: matchDetailsLastUpdated || updatedAt,
       source,
       reason: "merged_matches_rebuild",
-      previousById,
+      previousById: matchDetailChanges.previousById,
     }),
   ]);
   // Proactively warm the match-list response cache so the first request after
@@ -15442,10 +15476,11 @@ function teamMatchesPremierLeague(teamName, premierLeagueTeams) {
     return false;
   }
 
-  // If Premier League teams haven't loaded yet, fail open (allow all teams)
-  // to avoid filtering out all matches
+  // Category filters must fail closed while the current Premier League dataset
+  // is unavailable. Failing open makes every match appear eligible in the
+  // monitor, which diverges from Fixtures and can send unwanted notifications.
   if (!Array.isArray(premierLeagueTeams) || premierLeagueTeams.length === 0) {
-    return true;
+    return false;
   }
 
   const normalizedTeamName = String(teamName).trim();
@@ -15856,6 +15891,12 @@ async function persistOperationalDatasetSafe(name, payload, options = {}) {
   if (!name) return null;
   try {
     const result = await saveOperationalDataset(name, payload, options);
+    if (result && (result.payload_hash || Number.isFinite(result.payload_count))) {
+      operationalDatasetMetadataByName.set(name, {
+        payload_hash: result.payload_hash || null,
+        payload_count: Number.isFinite(result.payload_count) ? result.payload_count : null,
+      });
+    }
     recordRuntimeComponentSuccess(COMPONENT_OPERATIONAL_REDIS, {
       operation: "save_dataset",
       dataset: name,
@@ -15886,7 +15927,14 @@ async function persistOperationalDatasetSafe(name, payload, options = {}) {
 async function loadOperationalDatasetSafe(name) {
   if (!name) return null;
   try {
-    return await getOperationalDataset(name);
+    const record = await getOperationalDataset(name);
+    if (record && (record.payload_hash || Number.isFinite(record.payload_count))) {
+      operationalDatasetMetadataByName.set(name, {
+        payload_hash: record.payload_hash || null,
+        payload_count: Number.isFinite(record.payload_count) ? record.payload_count : null,
+      });
+    }
+    return record;
   } catch (error) {
     console.warn(
       `[OperationalState] Failed to load dataset ${name}:`,
@@ -16170,6 +16218,7 @@ async function hydrateOperationalStateFromRedis(options = {}) {
         OP_DATASET_TSDB_SCHEDULE_MATCHES,
         OP_DATASET_RECENT_MATCHES,
         OP_DATASET_MERGED_MATCHES,
+        OP_DATASET_PREMIER_LEAGUE_TEAMS,
         OP_DATASET_CACHE_STATE,
       ]
     : [
@@ -16192,6 +16241,7 @@ async function hydrateOperationalStateFromRedis(options = {}) {
   });
   try {
     const datasetRecords = await getOperationalDatasets(hydrateDatasets);
+    rememberOperationalDatasetMetadata(datasetRecords);
     const matchDetailsSnapshot = shouldHydrateMatchDetails
       ? await getAllOperationalMatchDetails()
       : null;
@@ -16347,6 +16397,8 @@ async function hydrateOperationalStateFromRedis(options = {}) {
         bbc_range_matches: cachedTsdbScheduleMatches.length,
         merged_matches: cachedMergedMatches.length,
         recent_matches: cachedRecentMatches.length,
+        premier_league_teams: cachedPremierLeagueTeams.length,
+        premier_league_teams_updated_at: eplLastUpdated,
         league_tables: cachedLeagueTables.length,
         club_elo_teams: cachedClubEloTeams.length,
         football_database_teams: cachedFootballDatabaseTeams.length,
@@ -16489,7 +16541,9 @@ function filterCacheStateDomainsForRuntimeRefresh(domains, options = {}) {
     return selectedDomains;
   }
 
-  return selectedDomains.filter((domain) => domain === "matches" || domain === "tsdb_live");
+  return selectedDomains.filter(
+    (domain) => domain === "matches" || domain === "tsdb_live" || domain === "teams"
+  );
 }
 
 async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
@@ -16583,6 +16637,7 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
 
   const fetchStartedAtMs = Date.now();
   await Promise.all(reloads);
+  Object.values(recordMap).forEach((records) => rememberOperationalDatasetMetadata(records));
   stageTimings.fetch_ms = Date.now() - fetchStartedAtMs;
 
   if (recordMap.matches) {
@@ -17248,6 +17303,19 @@ const ADMIN_OPERATIONAL_DATASET_NAMES = [
   OP_DATASET_TEAM_SHORT_NAMES,
   OP_DATASET_CACHE_STATE,
 ];
+const operationalDatasetMetadataByName = new Map();
+
+function rememberOperationalDatasetMetadata(records) {
+  Object.entries(records && typeof records === "object" ? records : {}).forEach(
+    ([name, record]) => {
+      if (!record || (!record.payload_hash && !Number.isFinite(record.payload_count))) return;
+      operationalDatasetMetadataByName.set(name, {
+        payload_hash: record.payload_hash || null,
+        payload_count: Number.isFinite(record.payload_count) ? record.payload_count : null,
+      });
+    }
+  );
+}
 
 function toOperationalAdminMatchPayload(payload) {
   if (!payload || typeof payload !== "object") return null;
@@ -18880,7 +18948,9 @@ function currentOperationalDatasetMemorySnapshot(name) {
 function currentOperationalMemoryDatasetSnapshots() {
   const output = {};
   ADMIN_OPERATIONAL_DATASET_NAMES.forEach((name) => {
-    output[name] = currentOperationalDatasetMemorySnapshot(name);
+    const snapshot = currentOperationalDatasetMemorySnapshot(name);
+    const metadata = operationalDatasetMetadataByName.get(name) || {};
+    output[name] = { ...snapshot, ...metadata };
   });
   return output;
 }
@@ -19177,6 +19247,50 @@ function buildComparableDatasetSide(payload, updatedAt, source, nowMs) {
 
 function buildDatasetReconciliationComponent(name, memorySnapshot, redisRecord, nowMs) {
   const startedAtMs = Date.now();
+  const memoryMetadataHash = memorySnapshot && memorySnapshot.payload_hash;
+  const redisMetadataHash = redisRecord && redisRecord.payload_hash;
+  const memoryMetadataCount = Number(memorySnapshot && memorySnapshot.payload_count) || 0;
+  const redisMetadataCount = Number(redisRecord && redisRecord.payload_count) || 0;
+  if (
+    memoryMetadataHash &&
+    redisMetadataHash &&
+    memoryMetadataHash === redisMetadataHash &&
+    memoryMetadataCount === redisMetadataCount
+  ) {
+    const memoryCount = memoryMetadataCount;
+    const redisCount = redisMetadataCount;
+    return {
+      name,
+      type: "dataset",
+      status: "in_sync",
+      healthy: true,
+      repair_recommended: false,
+      memory: {
+        source: memorySnapshot.source || "memory",
+        updated_at: memorySnapshot.updated_at || null,
+        age_seconds: ageSecondsFromIso(memorySnapshot.updated_at, nowMs),
+        has_payload: true,
+        count: memoryCount,
+        hash: memoryMetadataHash,
+      },
+      redis: {
+        source: redisRecord.source || "redis",
+        updated_at: redisRecord.updated_at || null,
+        age_seconds: ageSecondsFromIso(redisRecord.updated_at, nowMs),
+        has_payload: true,
+        count: redisCount,
+        hash: redisMetadataHash,
+      },
+      updated_at_delta_seconds: secondsDeltaBetweenIso(
+        memorySnapshot.updated_at,
+        redisRecord.updated_at
+      ),
+      count_delta: memoryCount - redisCount,
+      diff: null,
+      timings: { compare_ms: Date.now() - startedAtMs },
+      notes: ["Compared stored payload metadata; payload materialization was skipped."],
+    };
+  }
   const memoryPayload =
     Object.prototype.hasOwnProperty.call(memorySnapshot || {}, "payload")
       ? memorySnapshot.payload
@@ -19263,6 +19377,44 @@ function buildDatasetReconciliationComponent(name, memorySnapshot, redisRecord, 
     notes: freshnessConcern
       ? [`Redis side exceeds freshness warning threshold (${REDIS_RECONCILIATION_FRESHNESS_WARN_SECONDS}s).`]
       : [],
+  };
+}
+
+function buildMatchDetailsMetadataReconciliationComponent(memorySummary, redisSummary, nowMs) {
+  const memoryTotal = Number(memorySummary && memorySummary.total) || 0;
+  const redisTotal = Number(redisSummary && redisSummary.total) || 0;
+  const memoryUpdatedAt = memorySummary && memorySummary.updated_at ? memorySummary.updated_at : null;
+  const redisUpdatedAt = redisSummary && redisSummary.updated_at ? redisSummary.updated_at : null;
+  const status = memoryTotal === 0 && redisTotal === 0 ? "empty" : "in_sync";
+  return {
+    name: "match_details",
+    type: "match_details",
+    status,
+    healthy: true,
+    repair_recommended: false,
+    memory: {
+      source: "memory",
+      updated_at: memoryUpdatedAt,
+      age_seconds: ageSecondsFromIso(memoryUpdatedAt, nowMs),
+      has_payload: memoryTotal > 0,
+      count: memoryTotal,
+      total: memoryTotal,
+      hash: null,
+    },
+    redis: {
+      source: (redisSummary && redisSummary.source) || "redis",
+      updated_at: redisUpdatedAt,
+      age_seconds: ageSecondsFromIso(redisUpdatedAt, nowMs),
+      has_payload: redisTotal > 0,
+      count: redisTotal,
+      total: redisTotal,
+      hash: null,
+    },
+    updated_at_delta_seconds: secondsDeltaBetweenIso(memoryUpdatedAt, redisUpdatedAt),
+    count_delta: memoryTotal - redisTotal,
+    diff: null,
+    timings: { compare_ms: 0 },
+    notes: ["Compared count/latest-write metadata; match payload materialization was skipped."],
   };
 }
 
@@ -19405,12 +19557,54 @@ async function runRedisReconciliationCheck(options = {}) {
     const runStartedAtMs = Date.now();
     const nowMs = runStartedAtMs;
     try {
-      const [redisDatasets, redisMatchDetailsSnapshot] = await Promise.all([
-        getOperationalDatasets(ADMIN_OPERATIONAL_DATASET_NAMES),
-        getOperationalMatchDetailsSnapshotSafe(),
-      ]);
       const memoryDatasetSnapshots = currentOperationalMemoryDatasetSnapshots();
-      const memoryMatchDetailsSnapshot = currentOperationalMatchDetailsMemorySnapshot();
+      const memoryMatchDetailsSummary = {
+        updated_at: matchDetailsLastUpdated || null,
+        total: matchDetailsById.size,
+        source: "memory",
+      };
+      const [redisDatasetMetadata, redisMatchDetailsSummary] = await Promise.all([
+        getOperationalDatasetMetadata(ADMIN_OPERATIONAL_DATASET_NAMES),
+        getOperationalMatchDetailsSummary(),
+      ]);
+      const deepDatasetNames = ADMIN_OPERATIONAL_DATASET_NAMES.filter((name) => {
+        const memoryHash = memoryDatasetSnapshots[name] && memoryDatasetSnapshots[name].payload_hash;
+        const memoryCount = Number(
+          memoryDatasetSnapshots[name] && memoryDatasetSnapshots[name].payload_count
+        );
+        const redisMetadata = redisDatasetMetadata && redisDatasetMetadata[name];
+        return (
+          !memoryHash ||
+          !redisMetadata ||
+          memoryHash !== redisMetadata.payload_hash ||
+          memoryCount !== Number(redisMetadata.payload_count)
+        );
+      });
+      const deepRedisDatasets = deepDatasetNames.length > 0
+        ? await getOperationalDatasets(deepDatasetNames)
+        : {};
+      const redisDatasets = {};
+      ADMIN_OPERATIONAL_DATASET_NAMES.forEach((name) => {
+        redisDatasets[name] =
+          (deepRedisDatasets && deepRedisDatasets[name]) ||
+          (redisDatasetMetadata && redisDatasetMetadata[name]) ||
+          null;
+      });
+
+      const matchDetailsMetadataInSync = Boolean(
+        redisMatchDetailsSummary &&
+          memoryMatchDetailsSummary.total === Number(redisMatchDetailsSummary.total) &&
+          String(memoryMatchDetailsSummary.updated_at || "") ===
+            String(redisMatchDetailsSummary.updated_at || "")
+      );
+      let memoryMatchDetailsSnapshot = memoryMatchDetailsSummary;
+      let redisMatchDetailsSnapshot = redisMatchDetailsSummary;
+      if (!matchDetailsMetadataInSync) {
+        [memoryMatchDetailsSnapshot, redisMatchDetailsSnapshot] = await Promise.all([
+          Promise.resolve(currentOperationalMatchDetailsMemorySnapshot()),
+          getOperationalMatchDetailsSnapshotSafe(),
+        ]);
+      }
 
       const components = ADMIN_OPERATIONAL_DATASET_NAMES.map((name) =>
         buildDatasetReconciliationComponent(
@@ -19421,11 +19615,17 @@ async function runRedisReconciliationCheck(options = {}) {
         )
       );
       components.push(
-        buildMatchDetailsReconciliationComponent(
-          memoryMatchDetailsSnapshot,
-          redisMatchDetailsSnapshot,
-          nowMs
-        )
+        matchDetailsMetadataInSync
+          ? buildMatchDetailsMetadataReconciliationComponent(
+              memoryMatchDetailsSummary,
+              redisMatchDetailsSummary,
+              nowMs
+            )
+          : buildMatchDetailsReconciliationComponent(
+              memoryMatchDetailsSnapshot,
+              redisMatchDetailsSnapshot,
+              nowMs
+            )
       );
 
       for (const component of components) {
@@ -26331,6 +26531,7 @@ const {
   saveOperationalDataset,
   getOperationalDataset,
   getOperationalDatasets,
+  getOperationalDatasetMetadata,
   saveLiveActivityMatchTimelineSnapshots,
   saveOperationalMatchDetailsRecords,
   getOperationalMatchDetails,
@@ -27672,7 +27873,7 @@ function liveActivityPendingStartIsBlocking(liveActivityState, nowMs = Date.now(
 // so it needs the identical BSD source to avoid the same duplicate-ID freshness
 // race (TSDB copy briefly winning over the BSD copy with the live score).
 async function resolveCanonicalLiveActivityOperationalMatches() {
-  const bsdMatches = await getBsdMatchesForServing();
+  const bsdMatches = filterMatchesByCompetition(await getBsdMatchesForServing());
   const detailsRecords = {};
   bsdMatches.forEach((match) => {
     const id = match && match.id != null ? String(match.id) : null;
@@ -30570,6 +30771,11 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
           debug: {
             payloadMetrics,
             currentDateKey: londonDateKey(nowMs),
+            fixtureCategoryDataset: {
+              premierLeagueTeamCount: currentPremierLeagueTeamsDatasetSnapshot().items.length,
+              premierLeagueTeamsUpdatedAt: currentPremierLeagueTeamsDatasetSnapshot().updated_at,
+              premierLeagueTeams: currentPremierLeagueTeamsDatasetSnapshot().items,
+            },
             operationalMatchCount: Array.isArray(operationalMatches) ? operationalMatches.length : 0,
             monitoredEntryCount: Array.isArray(monitoredEntries) ? monitoredEntries.length : 0,
             filteredCanonicalMatchCount: Array.isArray(filteredCanonicalMatches)
@@ -32031,7 +32237,57 @@ matchMonitor.setLiveActivityMatchDetailsProvider(async () => {
   return detailsById;
 });
 if (typeof matchMonitor.setLiveActivityOperationalMatchesProvider === "function") {
-  matchMonitor.setLiveActivityOperationalMatchesProvider(() => getBsdMatchesForServing());
+  matchMonitor.setLiveActivityOperationalMatchesProvider(async () =>
+    filterMatchesByCompetition(await getBsdMatchesForServing())
+  );
+}
+if (typeof matchMonitor.setLiveActivityFixtureCategoryFilter === "function") {
+  matchMonitor.setLiveActivityFixtureCategoryFilter((user, match) => {
+    const preferences =
+      user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
+    const fixtureAllMajorMatchesEnabled =
+      typeof preferences.fixtureAllMajorMatchesEnabled === "boolean"
+        ? preferences.fixtureAllMajorMatchesEnabled
+        : !preferences.competitionFilterEnabled;
+
+    if (!fixtureAllMajorMatchesEnabled) return true;
+
+    return matchPassesCategoryFilters(match, {
+      eplOnly: preferences.englishPremierLeagueTeamsOnly === true,
+      majorUefa: preferences.majorUEFAClubGamesEnabled === true,
+      homeNations: preferences.homeNationsFilterEnabled === true,
+      majorTournaments: preferences.majorTournamentsFilterEnabled === true,
+      premierLeagueTeams: currentPremierLeagueTeamsDatasetSnapshot().items,
+    });
+  });
+}
+if (typeof matchMonitor.setNotificationFixtureCategoryFilter === "function") {
+  matchMonitor.setNotificationFixtureCategoryFilter((user, match, context = {}) => {
+    const preferences =
+      user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
+    if (context.mode === "fixtures") {
+      const fixtureAllMajorMatchesEnabled =
+        typeof preferences.fixtureAllMajorMatchesEnabled === "boolean"
+          ? preferences.fixtureAllMajorMatchesEnabled
+          : !preferences.competitionFilterEnabled;
+      if (!fixtureAllMajorMatchesEnabled) return true;
+      return matchPassesCategoryFilters(match, {
+        eplOnly: preferences.englishPremierLeagueTeamsOnly === true,
+        majorUefa: preferences.majorUEFAClubGamesEnabled === true,
+        homeNations: preferences.homeNationsFilterEnabled === true,
+        majorTournaments: preferences.majorTournamentsFilterEnabled === true,
+        premierLeagueTeams: currentPremierLeagueTeamsDatasetSnapshot().items,
+      });
+    }
+
+    return matchPassesCategoryFilters(match, {
+      eplOnly: true,
+      majorUefa: context.mode === "all_major",
+      homeNations: context.mode === "all_major",
+      majorTournaments: context.mode === "all_major",
+      premierLeagueTeams: currentPremierLeagueTeamsDatasetSnapshot().items,
+    });
+  });
 }
 if (typeof matchMonitor.setCanonicalMatchStateWriter === "function") {
   matchMonitor.setCanonicalMatchStateWriter((match, metadata = {}) =>

@@ -53,6 +53,11 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         return groups.contains { $0.rows.contains(where: \.live) }
     }
 
+    /// A table can be organised into groups, so check both top-level and group rows.
+    nonisolated var hasRows: Bool {
+        !rows.isEmpty || groups.contains { !$0.rows.isEmpty }
+    }
+
     enum CodingKeys: String, CodingKey {
         case leagueID = "league_id"
         case leagueName = "league_name"

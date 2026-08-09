@@ -767,6 +767,78 @@ async function loadCurrentSeasonByLeague() {
   return map;
 }
 
+function currentSeasonByLeagueFromDocs(leagues) {
+  const map = new Map();
+  (Array.isArray(leagues) ? leagues : []).forEach((doc) => {
+    const payload = doc && doc.payload ? doc.payload : {};
+    const leagueId = payload.id != null ? String(payload.id) : String((doc && doc._id) || "");
+    if (!leagueId) return;
+    const seasonId =
+      payload.current_season && payload.current_season.id != null
+        ? Number(payload.current_season.id)
+        : null;
+    map.set(leagueId, Number.isFinite(seasonId) ? seasonId : null);
+  });
+  return map;
+}
+
+function mongoIds(values) {
+  const output = [];
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const stringValue = String(value);
+    output.push(stringValue);
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) output.push(numericValue);
+  });
+  return [...new Set(output)];
+}
+
+function buildCurrentBsdEventsFilter(currentSeasonByLeague) {
+  const allowlistedIds = mongoIds(BSD_LEAGUE_ALLOWLIST);
+  const allowlist = new Set(BSD_LEAGUE_ALLOWLIST.map(String));
+  const finishedSeasonClauses = [];
+  currentSeasonByLeague.forEach((seasonId, leagueId) => {
+    if (!Number.isFinite(seasonId) || !allowlist.has(String(leagueId))) {
+      return;
+    }
+    finishedSeasonClauses.push({
+      $and: [
+        {
+          $or: [
+            { league_id: { $in: mongoIds([leagueId]) } },
+            { "payload.league_id": { $in: mongoIds([leagueId]) } },
+          ],
+        },
+        {
+          $or: [
+            { season_id: { $in: mongoIds([seasonId]) } },
+            { "payload.season_id": { $in: mongoIds([seasonId]) } },
+          ],
+        },
+      ],
+    });
+  });
+
+  return {
+    $and: [
+      {
+        $or: [
+          { league_id: { $in: allowlistedIds } },
+          { "payload.league_id": { $in: allowlistedIds } },
+        ],
+      },
+      {
+        $or: [
+          { status: { $nin: ["finished", null] } },
+          { status: null, "payload.status": { $ne: "finished" } },
+          { season_id: null, "payload.season_id": null },
+          ...finishedSeasonClauses,
+        ],
+      },
+    ],
+  };
+}
+
 // Event belongs to the current season (or is a live event without a season id).
 // Season scoping only matters for "finished" events — it exists to keep stale
 // results from past seasons out of the projection. Non-finished events (e.g.
@@ -785,14 +857,21 @@ function isCurrentSeasonEvent(event, currentSeasonByLeague) {
 
 // Projects all current-season bsd_events into canonical list matches.
 async function projectBsdMatches() {
-  const [events, currentSeasonByLeague, broadcasts, incidentsDocs] = await Promise.all([
-    getBsdRecords("bsd_events"),
-    loadCurrentSeasonByLeague(),
-    getBsdRecords("bsd_broadcasts"),
-    getBsdRecords("bsd_incidents"),
-  ]);
+  const leagues = await getBsdRecords("bsd_leagues");
+  const currentSeasonByLeague = currentSeasonByLeagueFromDocs(leagues);
+  const events = await getBsdRecords(
+    "bsd_events",
+    buildCurrentBsdEventsFilter(currentSeasonByLeague)
+  );
+  const eventIds = events.map((doc) => String(doc._id));
+  const [broadcasts, incidentsDocs] = eventIds.length > 0
+    ? await Promise.all([
+        getBsdRecords("bsd_broadcasts", { _id: { $in: eventIds } }),
+        getBsdRecords("bsd_incidents", { _id: { $in: eventIds } }),
+      ])
+    : [[], []];
   const leagueNameById = new Map();
-  (await getBsdRecords("bsd_leagues")).forEach((doc) => {
+  leagues.forEach((doc) => {
     const p = doc.payload || {};
     if (p.id != null && p.name) leagueNameById.set(String(p.id), String(p.name));
   });
@@ -940,6 +1019,8 @@ module.exports = {
     canonicalLeagueName,
     zonedKickoff,
     isCurrentSeasonEvent,
+    buildCurrentBsdEventsFilter,
+    currentSeasonByLeagueFromDocs,
     enrichBsdLineupPhotos,
     bsdPredictionFixtureToCanonical,
     bsdPredictionsPayloadToLeague,

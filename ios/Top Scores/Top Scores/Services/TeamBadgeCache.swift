@@ -41,6 +41,11 @@ final class TeamBadgeCache {
     private var cachedURLs: [String: URL] = [:]
     /// teamId → primary brand colour hex (TSDB strColour1), e.g. "#0000FF".
     private var primaryColorByTeamId: [String: String] = [:]
+    private let imageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 300
+        return cache
+    }()
     private var eTag: String?
     private var isRefreshing = false
     private let lock = NSLock()
@@ -70,19 +75,21 @@ final class TeamBadgeCache {
 
     /// Returns a locally-cached UIImage for the given team ID, or nil if not yet downloaded.
     func image(forTeamId teamId: String) -> UIImage? {
-        guard let url = localURL(forTeamId: teamId) else {
-            print("[TeamBadgeCache] image: no URL for teamId=\(teamId)")
+        guard let url = localURL(forTeamId: teamId) else { return nil }
+
+        let cacheKey = url.path as NSString
+        if let image = imageCache.object(forKey: cacheKey) {
+            return image
+        }
+
+        guard FileManager.default.fileExists(atPath: url.path),
+              let image = UIImage(contentsOfFile: url.path)
+        else {
             return nil
         }
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            print("[TeamBadgeCache] image: file missing teamId=\(teamId) path=\(url.path)")
-            return nil
-        }
-        let img = UIImage(contentsOfFile: url.path)
-        if img == nil {
-            print("[TeamBadgeCache] image: UIImage failed teamId=\(teamId) path=\(url.path)")
-        }
-        return img
+
+        imageCache.setObject(image, forKey: cacheKey)
+        return image
     }
 
     /// Call once at app startup (and optionally on background refresh). Fire-and-forget.

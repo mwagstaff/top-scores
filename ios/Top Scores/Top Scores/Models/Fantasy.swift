@@ -75,6 +75,8 @@ struct FantasyBootstrapElement: Codable, Hashable {
     let pointsPerGame: String?
     let eventPoints: Int?
     let totalPoints: Int?
+    let minutes: Int?
+    let starts: Int?
     let bonus: Int?
     let ictIndex: String?
     let selectedByPercent: String?
@@ -99,6 +101,8 @@ struct FantasyBootstrapElement: Codable, Hashable {
         case pointsPerGame = "points_per_game"
         case eventPoints = "event_points"
         case totalPoints = "total_points"
+        case minutes
+        case starts
         case bonus
         case ictIndex = "ict_index"
         case selectedByPercent = "selected_by_percent"
@@ -710,6 +714,15 @@ struct FantasyEntryClassicLeague: Codable, Hashable, Identifiable {
 
     var resolvedTotalPoints: Int? {
         summaryPhase?.total
+    }
+
+    var isPlayerCreated: Bool {
+        leagueType?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("x") == .orderedSame
+    }
+
+    var resolvedMemberCount: Int? {
+        rankCount ?? summaryPhase?.rankCount
     }
 }
 
@@ -1529,6 +1542,13 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
     let teamName: String
     let profileImageURL: URL?
     let nowCostMillions: Double
+    let hasStartedCurrentSeason: Bool
+    let ownershipPercent: Double?
+    let ownershipCount: Int?
+    let form: String?
+    let pointsPerMatch: String?
+    let totalPoints: Int?
+    let averageMinutes: Double?
     let rawPoints: Int
     let appliedPoints: Int
     let displayPoints: Int
@@ -1546,6 +1566,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
     let minutesPlayed: Int
     let upcomingOpponentDisplay: String?
     let fixtureDifficulty: Int?
+    let nextFiveFixtureDifficulties: [Int?]
     let expectedPointsThisGameweek: Double?
     let officialExpectedPointsNextGameweek: Double?
     let goalsScored: Int
@@ -1608,6 +1629,13 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
             teamName: teamName,
             profileImageURL: profileImageURL,
             nowCostMillions: nowCostMillions,
+            hasStartedCurrentSeason: hasStartedCurrentSeason,
+            ownershipPercent: ownershipPercent,
+            ownershipCount: ownershipCount,
+            form: form,
+            pointsPerMatch: pointsPerMatch,
+            totalPoints: totalPoints,
+            averageMinutes: averageMinutes,
             rawPoints: rawPoints,
             appliedPoints: appliedPoints,
             displayPoints: displayPoints,
@@ -1625,6 +1653,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
             minutesPlayed: minutesPlayed,
             upcomingOpponentDisplay: upcomingOpponentDisplay,
             fixtureDifficulty: fixtureDifficulty,
+            nextFiveFixtureDifficulties: nextFiveFixtureDifficulties,
             expectedPointsThisGameweek: expectedPointsThisGameweek,
             officialExpectedPointsNextGameweek: officialExpectedPointsNextGameweek,
             goalsScored: goalsScored,
@@ -2156,35 +2185,93 @@ enum FantasyExpectedPointsEstimator {
         let averageMinutes = recentRows.isEmpty
             ? 75.0
             : Double(recentMinutes) / Double(recentRows.count)
-        let chanceOfPlaying = resolvedChanceOfPlaying(details: details, fixture: fixture)
-        let expectedMinutes = min(max(averageMinutes * chanceOfPlaying, 0), 90)
-        let minutesRatio = expectedMinutes / 90.0
-
-        let recentFormProjection: Double
-        let attackingFormPer90: Double
+        let fallbackForm = max(0, (pointsPerMatch * 0.65) + (form * 0.35))
+        let hasObservedPlayerData = recentMinutes > 0 || fallbackForm > 0
+        let playerPointsPer90: Double
         if recentMinutes > 0 {
-            attackingFormPer90 = Double(recentPoints) / Double(recentMinutes) * 90.0
-            recentFormProjection = attackingFormPer90 * minutesRatio
+            playerPointsPer90 = Double(recentPoints) / Double(recentMinutes) * 90.0
         } else {
-            let fallbackForm = max(0, (pointsPerMatch * 0.65) + (form * 0.35))
-            attackingFormPer90 = fallbackForm
-            recentFormProjection = fallbackForm * minutesRatio
+            playerPointsPer90 = fallbackForm > 0
+                ? fallbackForm
+                : positionBaselinePointsPer90(details.positionType)
         }
 
-        let customProjection = minutesRatio *
-            positionMultiplier(details.positionType) *
-            fixtureDifficultyMultiplier(fixture.difficulty) *
-            max(0, attackingFormPer90) *
-            fixture.teamAttackingStrengthMultiplier *
-            fixture.opponentDefensiveWeaknessMultiplier
-
         let fplProjection = resolvedFPLProjection(details: details, fixture: fixture)
-            ?? customProjection
-        let displayed = (fplProjection * 0.70) +
-            (recentFormProjection * 0.20) +
-            (customProjection * 0.10)
+        let modelledPointsPer90: Double
+        if !hasObservedPlayerData,
+           fplProjection == nil,
+           let fplAnchor = fplAnchoredPointsPer90(
+               details: details,
+               averageMinutes: averageMinutes,
+               relativeTo: fixture
+           ) {
+            modelledPointsPer90 = fplAnchor
+        } else {
+            modelledPointsPer90 = playerPointsPer90
+        }
+        let modelledProjection = projectionMultiplier(
+            details: details,
+            fixture: fixture,
+            averageMinutes: averageMinutes
+        ) * max(0, modelledPointsPer90)
+
+        let displayed: Double
+        if let fplProjection {
+            displayed = (fplProjection * 0.70) + (modelledProjection * 0.30)
+        } else {
+            displayed = modelledProjection
+        }
         let horizonDecay = max(0.85, 1.0 - (Double(fixtureIndex) * 0.02))
         return (min(max(displayed * horizonDecay, 0.0), 20.0) * 10).rounded() / 10
+    }
+
+    private nonisolated static func fplAnchoredPointsPer90(
+        details: FantasyPlayerDetailsData,
+        averageMinutes: Double,
+        relativeTo fixture: FantasyPlayerDetailsData.UpcomingFixture
+    ) -> Double? {
+        let candidates = [
+            (details.fplCurrentGameweekID, details.fplExpectedPointsThisGameweek),
+            (details.fplNextGameweekID, details.fplExpectedPointsNextGameweek)
+        ].compactMap { gameweekID, expectedPoints -> (fixture: FantasyPlayerDetailsData.UpcomingFixture, expectedPoints: Double)? in
+            guard let gameweekID,
+                  let expectedPoints,
+                  expectedPoints > 0,
+                  let fixture = details.upcomingFixtures.first(where: {
+                      !$0.isBlank && $0.gameweek == gameweekID
+                  }) else {
+                return nil
+            }
+            return (fixture, expectedPoints)
+        }
+
+        guard let anchor = candidates.min(by: {
+            abs($0.fixture.gameweek - fixture.gameweek) < abs($1.fixture.gameweek - fixture.gameweek)
+        }) else {
+            return nil
+        }
+
+        let multiplier = projectionMultiplier(
+            details: details,
+            fixture: anchor.fixture,
+            averageMinutes: averageMinutes
+        )
+        guard multiplier > 0 else { return nil }
+        return anchor.expectedPoints / multiplier
+    }
+
+    private nonisolated static func projectionMultiplier(
+        details: FantasyPlayerDetailsData,
+        fixture: FantasyPlayerDetailsData.UpcomingFixture,
+        averageMinutes: Double
+    ) -> Double {
+        let chanceOfPlaying = resolvedChanceOfPlaying(details: details, fixture: fixture)
+        let expectedMinutes = min(max(averageMinutes * chanceOfPlaying, 0), 90)
+        return (expectedMinutes / 90.0) *
+            positionMultiplier(details.positionType) *
+            fixtureDifficultyMultiplier(fixture.difficulty) *
+            fixture.teamAttackingStrengthMultiplier *
+            fixture.opponentDefensiveWeaknessMultiplier
     }
 
     private nonisolated static func resolvedFPLProjection(
@@ -2219,6 +2306,15 @@ enum FantasyExpectedPointsEstimator {
         case .defender: return 0.96
         case .midfielder: return 1.05
         case .forward: return 1.08
+        }
+    }
+
+    private nonisolated static func positionBaselinePointsPer90(_ position: FantasyPositionType) -> Double {
+        switch position {
+        case .goalkeeper: return 3.2
+        case .defender: return 3.4
+        case .midfielder: return 3.8
+        case .forward: return 4.0
         }
     }
 
@@ -2849,6 +2945,38 @@ enum FantasySquadBuilder {
             return Array(fixturesByID.values)
         }()
 
+        let nextFiveFixtureDifficultiesByTeamID: [Int: [Int?]] = {
+            let upcomingFixtures = mergedSeasonFixtures
+                .filter { fixture in
+                    let hasStarted = fixture.started == true
+                    let isConfirmed = fixture.finished == true && fixture.finishedProvisional != true
+                    return !hasStarted && !isConfirmed
+                }
+                .sorted { lhs, rhs in
+                    let lhsEvent = lhs.event ?? Int.max
+                    let rhsEvent = rhs.event ?? Int.max
+                    if lhsEvent != rhsEvent { return lhsEvent < rhsEvent }
+                    let lhsKickoff = lhs.kickoffTime ?? ""
+                    let rhsKickoff = rhs.kickoffTime ?? ""
+                    if lhsKickoff != rhsKickoff { return lhsKickoff < rhsKickoff }
+                    return lhs.id < rhs.id
+                }
+
+            var difficulties: [Int: [Int?]] = [:]
+            for fixture in upcomingFixtures {
+                if (difficulties[fixture.teamH] ?? []).count < 5 {
+                    difficulties[fixture.teamH, default: []].append(fixture.difficulty(forTeamID: fixture.teamH))
+                }
+                if (difficulties[fixture.teamA] ?? []).count < 5 {
+                    difficulties[fixture.teamA, default: []].append(fixture.difficulty(forTeamID: fixture.teamA))
+                }
+            }
+            return difficulties
+        }()
+        let hasStartedCurrentSeason = mergedSeasonFixtures.contains {
+            $0.started == true || $0.finished == true || $0.finishedProvisional == true
+        }
+
         let squadTeamIDs = Set(
             picksResponse.picks.compactMap { pick in
                 elementByID[pick.element]?.team
@@ -3086,6 +3214,22 @@ enum FantasySquadBuilder {
                 teamName: teamName,
                 profileImageURL: FantasyPlayerProfileImageURL.make(fromPlayerCode: element?.playerCode),
                 nowCostMillions: Double(element?.nowCost ?? 0) / 10.0,
+                hasStartedCurrentSeason: hasStartedCurrentSeason,
+                ownershipPercent: element?.selectedByPercent.flatMap(Double.init),
+                ownershipCount: element?.selectedByPercent
+                    .flatMap(Double.init)
+                    .flatMap { percentage in
+                        bootstrap.totalPlayers.map { Int((percentage / 100.0 * Double($0)).rounded()) }
+                    },
+                form: element?.form,
+                pointsPerMatch: element?.pointsPerGame,
+                totalPoints: element?.totalPoints,
+                averageMinutes: {
+                    guard let minutes = element?.minutes, let starts = element?.starts, starts > 0 else {
+                        return nil
+                    }
+                    return Double(minutes) / Double(starts)
+                }(),
                 rawPoints: rawPoints,
                 appliedPoints: appliedPoints,
                 displayPoints: displayPoints,
@@ -3103,6 +3247,7 @@ enum FantasySquadBuilder {
                 minutesPlayed: minutesPlayed,
                 upcomingOpponentDisplay: selectedFixture?.label,
                 fixtureDifficulty: selectedFixture?.difficulty,
+                nextFiveFixtureDifficulties: nextFiveFixtureDifficultiesByTeamID[element?.team ?? -1] ?? [],
                 expectedPointsThisGameweek: nil,
                 officialExpectedPointsNextGameweek: element?.expectedPointsNextGameweek.flatMap { Double($0) },
                 goalsScored: goalsScored,

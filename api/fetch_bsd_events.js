@@ -30,6 +30,7 @@ function eventToRecord(event) {
     extra: {
       league_id: event.league_id != null ? event.league_id : null,
       status: event.status || null,
+      season_id: event.season_id != null ? event.season_id : null,
       event_date: event.event_date || null,
       home_team: event.home_team || null,
       away_team: event.away_team || null,

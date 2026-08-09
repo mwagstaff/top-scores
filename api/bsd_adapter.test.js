@@ -20,7 +20,21 @@ const {
   bsdPredictionFixtureToCanonical,
   bsdPredictionsPayloadToLeague,
   extractBsdPeriodSummary,
+  buildCurrentBsdEventsFilter,
+  currentSeasonByLeagueFromDocs,
 } = __private;
+
+test("current-season Mongo filter scopes BSD events before payloads are loaded", () => {
+  const seasons = currentSeasonByLeagueFromDocs([
+    { _id: "27", payload: { id: 27, current_season: { id: 2026 } } },
+  ]);
+  const filter = buildCurrentBsdEventsFilter(seasons);
+  const serialized = JSON.stringify(filter);
+  assert.match(serialized, /payload\.season_id/);
+  assert.match(serialized, /2026/);
+  assert.match(serialized, /finished/);
+  assert.match(serialized, /league_id/);
+});
 
 const HELPER_DIR = path.resolve(__dirname, "../.helper_files/bsd_api");
 function loadHelper(name) {

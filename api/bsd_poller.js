@@ -23,6 +23,7 @@
 
 const bsd = require("./bsd_client");
 const http = require("http");
+const crypto = require("crypto");
 const bsdHttpMetrics = require("./bsd_http_metrics");
 const { eventToRecord, ingestLeagueEvents, refreshAllEvents } = require("./fetch_bsd_events");
 const {
@@ -34,13 +35,18 @@ const {
 const { refreshAllBroadcasts } = require("./fetch_bsd_broadcasts");
 const { refreshAllPredictions } = require("./fetch_bsd_predictions");
 const { buildBsdTsdbMaps } = require("./bsd_player_map");
+const { projectBsdMatches } = require("./bsd_adapter");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const {
   upsertBsdRecords,
   upsertBsdRecord,
   getBsdRecord,
+  saveOperationalDataset,
+  getOperationalDatasetMetadata,
   closeMongoConnection,
 } = require("./mongo_client");
+
+const BSD_CURRENT_MATCHES_DATASET = "bsd_current_matches";
 
 const LIVE_POLL_MS = Number(process.env.BSD_LIVE_POLL_MS || 10_000);
 // With no match in progress, /events/live is only checked at this lighter
@@ -85,8 +91,58 @@ let standingsPollInFlight = false;
 let standingsDailyRefreshTimer = null;
 let metricsServer = null;
 let timers = [];
+let projectionRefreshInFlight = false;
+let projectionRefreshPending = false;
+let currentMatchesProjectionHash = null;
 
 bsd.setRequestObserver(bsdHttpMetrics.trackRequestMetric);
+
+async function refreshCurrentMatchesProjection(reason) {
+  if (projectionRefreshInFlight) {
+    projectionRefreshPending = true;
+    return;
+  }
+  projectionRefreshInFlight = true;
+  try {
+    do {
+      projectionRefreshPending = false;
+      const startedAt = Date.now();
+      const matches = await projectBsdMatches();
+      const payloadHash = crypto
+        .createHash("sha1")
+        .update(JSON.stringify(matches))
+        .digest("hex");
+      if (!currentMatchesProjectionHash) {
+        const existingMetadata = await getOperationalDatasetMetadata([
+          BSD_CURRENT_MATCHES_DATASET,
+        ]);
+        currentMatchesProjectionHash =
+          existingMetadata && existingMetadata[BSD_CURRENT_MATCHES_DATASET]
+            ? existingMetadata[BSD_CURRENT_MATCHES_DATASET].payload_hash || null
+            : null;
+      }
+      if (payloadHash === currentMatchesProjectionHash) {
+        continue;
+      }
+      await saveOperationalDataset({
+        name: BSD_CURRENT_MATCHES_DATASET,
+        updated_at: new Date().toISOString(),
+        source: `bsd_poller:${reason}`,
+        payload: matches,
+        payload_count: matches.length,
+        payload_hash: payloadHash,
+      });
+      currentMatchesProjectionHash = payloadHash;
+      console.log(
+        `[bsd-runtime] current match projection: ${matches.length} matches in ${Date.now() - startedAt}ms`
+      );
+    } while (projectionRefreshPending);
+  } catch (error) {
+    console.error(`[bsd-runtime] projection refresh failed: ${error.message || error}`);
+  } finally {
+    projectionRefreshInFlight = false;
+  }
+}
 
 // Mirrors server.js's millisecondsUntilNextLondonTime — duplicated rather than
 // shared because bsd_poller.js is a separate standalone process from the
@@ -176,6 +232,7 @@ async function pollLiveEvents() {
     }
 
     console.log(`[bsd-runtime] live events: ${events.length}`);
+    void refreshCurrentMatchesProjection("live_events");
   } catch (error) {
     console.error(`[bsd-runtime] live poll failed: ${error.message || error}`);
   } finally {
@@ -239,10 +296,27 @@ function scheduleStandingsDailyRefresh() {
 }
 
 function buildMetricsText() {
-  return bsdHttpMetrics.buildPrometheusMetricsText({
+  const base = bsdHttpMetrics.buildPrometheusMetricsText({
     runtime: "bsd_poller",
     service: "top-scores-bsd-poller",
   });
+  const memory = process.memoryUsage();
+  return `${base.trimEnd()}\n` + [
+    "# HELP top_scores_process_resident_memory_bytes Resident set size of the BSD poller process.",
+    "# TYPE top_scores_process_resident_memory_bytes gauge",
+    `top_scores_process_resident_memory_bytes ${memory.rss}`,
+    "# HELP top_scores_process_heap_bytes V8 heap usage and capacity of the BSD poller process.",
+    "# TYPE top_scores_process_heap_bytes gauge",
+    `top_scores_process_heap_bytes{kind=\"used\"} ${memory.heapUsed}`,
+    `top_scores_process_heap_bytes{kind=\"total\"} ${memory.heapTotal}`,
+    "# HELP top_scores_process_external_memory_bytes External memory held by the BSD poller process.",
+    "# TYPE top_scores_process_external_memory_bytes gauge",
+    `top_scores_process_external_memory_bytes ${memory.external}`,
+    "# HELP top_scores_process_uptime_seconds Uptime of the BSD poller process.",
+    "# TYPE top_scores_process_uptime_seconds gauge",
+    `top_scores_process_uptime_seconds ${process.uptime()}`,
+    "",
+  ].join("\n");
 }
 
 function startMetricsServer() {
@@ -309,6 +383,7 @@ async function pollIncidents() {
       }
     }
     console.log(`[bsd-runtime] incidents polled for ${ids.length} events`);
+    void refreshCurrentMatchesProjection("incidents");
   } finally {
     incidentsPollInFlight = false;
   }
@@ -366,6 +441,7 @@ async function refreshReference() {
   referenceRefreshInFlight = true;
   try {
     await refreshAllReference();
+    void refreshCurrentMatchesProjection("reference");
   } catch (error) {
     console.error(`[bsd-runtime] reference refresh failed: ${error.message || error}`);
   } finally {
@@ -380,6 +456,7 @@ async function refreshLeagues() {
   referenceRefreshInFlight = true;
   try {
     await ingestLeagues();
+    void refreshCurrentMatchesProjection("leagues");
   } catch (error) {
     console.error(`[bsd-runtime] leagues refresh failed: ${error.message || error}`);
   } finally {
@@ -404,6 +481,7 @@ async function reconEvents() {
       }
     }
     console.log(`[bsd-runtime] events recon complete for ${BSD_LEAGUE_ALLOWLIST.length} leagues`);
+    void refreshCurrentMatchesProjection("events_recon");
   } finally {
     eventsReconInFlight = false;
   }
@@ -414,6 +492,7 @@ async function refreshEvents() {
   eventsRefreshInFlight = true;
   try {
     await refreshAllEvents();
+    void refreshCurrentMatchesProjection("events_refresh");
   } catch (error) {
     console.error(`[bsd-runtime] events refresh failed: ${error.message || error}`);
   } finally {
@@ -426,6 +505,7 @@ async function refreshBroadcasts() {
   broadcastsRefreshInFlight = true;
   try {
     await refreshAllBroadcasts();
+    void refreshCurrentMatchesProjection("broadcasts");
   } catch (error) {
     console.error(`[bsd-runtime] broadcasts refresh failed: ${error.message || error}`);
   } finally {

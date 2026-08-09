@@ -11,6 +11,81 @@ import Testing
 
 struct Top_ScoresTests {
 
+    @Test func fantasyExpectedPoints_usesNearestFPLForecastToModelLaterFixtures() {
+        let gw1 = makeUpcomingFixture(gameweek: 1, difficulty: 2)
+        let gw2 = makeUpcomingFixture(gameweek: 2, difficulty: 4)
+        let details = makeFantasyPlayerDetails(
+            fplNextGameweekID: 1,
+            fplExpectedPointsNextGameweek: 4.0,
+            upcomingFixtures: [gw1, gw2]
+        )
+
+        let gw1Projection = FantasyExpectedPointsEstimator.estimate(
+            details: details,
+            fixture: gw1,
+            fixtureIndex: 0
+        )
+        let gw2Projection = FantasyExpectedPointsEstimator.estimate(
+            details: details,
+            fixture: gw2,
+            fixtureIndex: 1
+        )
+
+        #expect(gw1Projection == 3.7)
+        #expect(gw2Projection == 3.3)
+    }
+
+    @Test func fantasyExpectedPoints_usesPositionBaselineWithoutHistoryOrFPLForecast() {
+        let fixture = makeUpcomingFixture(gameweek: 3, difficulty: 3)
+        let details = makeFantasyPlayerDetails(upcomingFixtures: [fixture])
+
+        let projection = FantasyExpectedPointsEstimator.estimate(
+            details: details,
+            fixture: fixture,
+            fixtureIndex: 0
+        )
+
+        #expect(projection == 2.7)
+    }
+
+    @Test func fantasyClassicLeague_resolvesPlayerCreatedRankAndMemberCount() {
+        let league = FantasyEntryClassicLeague(
+            id: 101,
+            name: "Shirley Super League",
+            shortName: nil,
+            leagueType: "x",
+            rankCount: 18,
+            entryRank: 2,
+            entryLastRank: 4,
+            activePhases: []
+        )
+        let systemLeague = FantasyEntryClassicLeague(
+            id: 102,
+            name: "Overall",
+            shortName: nil,
+            leagueType: "s",
+            rankCount: nil,
+            entryRank: nil,
+            entryLastRank: nil,
+            activePhases: [
+                FantasyEntryLeagueActivePhase(
+                    phase: 1,
+                    rank: 10,
+                    lastRank: 8,
+                    total: 100,
+                    rankCount: 1_000
+                )
+            ]
+        )
+
+        #expect(league.isPlayerCreated)
+        #expect(league.resolvedEntryRank == 2)
+        #expect(league.resolvedMemberCount == 18)
+        #expect(!systemLeague.isPlayerCreated)
+        #expect(systemLeague.resolvedEntryRank == 10)
+        #expect(systemLeague.resolvedMemberCount == 1_000)
+    }
+
     @Test func fantasyPlayerProfileImageURL_usesBootstrapPlayerCode() {
         let url = FantasyPlayerProfileImageURL.make(fromPlayerCode: 141746)
 
@@ -2576,6 +2651,69 @@ struct Top_ScoresTests {
             assists: 0,
             yellowCards: 0,
             redCards: 0
+        )
+    }
+
+    private func makeUpcomingFixture(
+        gameweek: Int,
+        difficulty: Int
+    ) -> FantasyPlayerDetailsData.UpcomingFixture {
+        FantasyPlayerDetailsData.UpcomingFixture(
+            gameweek: gameweek,
+            opponentTeamID: 2,
+            opponentTeamName: "Opponent",
+            isHome: true,
+            difficulty: difficulty,
+            isBlank: false,
+            teamAttackingStrengthMultiplier: 1.0,
+            opponentDefensiveWeaknessMultiplier: 1.0
+        )
+    }
+
+    private func makeFantasyPlayerDetails(
+        fplCurrentGameweekID: Int? = nil,
+        fplNextGameweekID: Int? = nil,
+        fplExpectedPointsThisGameweek: Double? = nil,
+        fplExpectedPointsNextGameweek: Double? = nil,
+        upcomingFixtures: [FantasyPlayerDetailsData.UpcomingFixture]
+    ) -> FantasyPlayerDetailsData {
+        FantasyPlayerDetailsData(
+            elementID: 1,
+            playerName: "Test Defender",
+            teamName: "Arsenal",
+            profileImageURL: nil,
+            teamID: 1,
+            position: "Defender",
+            positionType: .defender,
+            fplCurrentGameweekID: fplCurrentGameweekID,
+            fplNextGameweekID: fplNextGameweekID,
+            fplExpectedPointsThisGameweek: fplExpectedPointsThisGameweek,
+            fplExpectedPointsNextGameweek: fplExpectedPointsNextGameweek,
+            chanceOfPlayingThisRound: 100,
+            chanceOfPlayingNextRound: 100,
+            ownershipPercent: 0,
+            totalManagers: nil,
+            seasonTotals: .init(
+                minutes: 0,
+                goals: 0,
+                assists: 0,
+                cleanSheets: 0,
+                goalsConceded: 0,
+                saves: 0,
+                bonus: 0,
+                penaltiesSaved: 0,
+                yellowCards: 0,
+                redCards: 0
+            ),
+            statusUpdates: [],
+            metrics: [
+                .init(title: "Form", value: "0.0"),
+                .init(title: "Pts / Match", value: "0.0")
+            ],
+            latestPointsBreakdown: [],
+            formItems: [],
+            upcomingFixtures: upcomingFixtures,
+            historyRows: []
         )
     }
 

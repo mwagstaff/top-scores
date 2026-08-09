@@ -67,7 +67,6 @@ final class LogoResolver {
             if let badge = TeamBadgeCache.shared.image(forTeamId: teamId) {
                 return badge
             }
-            print("[LogoResolver] badge miss teamId=\(teamId) team='\(teamName)'")
         }
         return image(for: teamName, alternateNames: alternateNames)
     }

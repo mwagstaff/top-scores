@@ -6,7 +6,13 @@ const assert = require("node:assert/strict");
 const {
   EVENT_STATUSES,
   hasUnknownOutsideTimelineCardIncident,
+  eventToRecord,
 } = require("./fetch_bsd_events");
+
+test("eventToRecord indexes season id for current-season Mongo queries", () => {
+  const record = eventToRecord({ id: 1, league_id: 27, season_id: 2026, status: "finished" });
+  assert.equal(record.extra.season_id, 2026);
+});
 
 test("EVENT_STATUSES includes started so active BSD matches can restore rich event metadata", () => {
   assert.deepEqual(EVENT_STATUSES, ["notstarted", "started", "finished"]);

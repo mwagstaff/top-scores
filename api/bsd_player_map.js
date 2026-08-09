@@ -25,10 +25,16 @@ const { playerNamesMatchScore } = require("./player_name_match");
 const { bsdEventToCanonicalMatch } = require("./bsd_adapter");
 const {
   getBsdRecords,
-  getMatchLineupCache,
-  getAllOperationalMatchDetails,
+  getMatchLineupCaches,
+  getOperationalDataset,
+  getOperationalMatchDetailsByDates,
+  saveOperationalDataset,
   upsertBsdRecords,
+  closeMongoConnection,
 } = require("./mongo_client");
+
+const PLAYER_MAP_STATE_DATASET = "bsd_player_map_state";
+const INITIAL_LOOKBACK_DAYS = Number(process.env.BSD_MAP_INITIAL_LOOKBACK_DAYS || 14);
 
 // A name match this strong at a DIFFERENT number means the squad numbers are
 // misaligned between the two sources — reject rather than risk a wrong face.
@@ -120,9 +126,8 @@ async function buildLeagueNameById() {
 }
 
 // composite-key -> TSDB match_details_id, from the operational `matches` store.
-async function buildCompositeToTsdbEventId() {
-  const details = await getAllOperationalMatchDetails();
-  const records = (details && details.records) || {};
+async function buildCompositeToTsdbEventId(dates) {
+  const records = await getOperationalMatchDetailsByDates(dates);
   const map = new Map();
   Object.entries(records).forEach(([id, payload]) => {
     const key = compositeKey(payload);
@@ -131,15 +136,62 @@ async function buildCompositeToTsdbEventId() {
   return map;
 }
 
-async function buildPlayerMap() {
-  const [bsdLineups, bsdEvents, leagueNameById, compositeToTsdb] = await Promise.all([
-    getBsdRecords("bsd_lineups"),
-    getBsdRecords("bsd_events"),
+async function playerMapWatermark(options = {}) {
+  if (options.full === true) return null;
+  const state = await getOperationalDataset(PLAYER_MAP_STATE_DATASET);
+  const stored = state && state.payload ? state.payload.last_lineup_updated_at : null;
+  if (stored) return String(stored);
+
+  const existingMap = await getBsdRecords(
+    "bsd_tsdb_player_map",
+    {},
+    { projection: { updated_at: 1 }, sort: { updated_at: -1 }, limit: 1 }
+  );
+  if (existingMap[0] && existingMap[0].updated_at) return String(existingMap[0].updated_at);
+
+  const lookbackMs = Math.max(1, INITIAL_LOOKBACK_DAYS) * 24 * 60 * 60 * 1000;
+  return new Date(Date.now() - lookbackMs).toISOString();
+}
+
+async function buildPlayerMap(options = {}) {
+  const queryStartedAt = new Date().toISOString();
+  const watermark = await playerMapWatermark(options);
+  const bsdLineups = await getBsdRecords(
+    "bsd_lineups",
+    watermark ? { updated_at: { $gt: watermark } } : {},
+    { sort: { updated_at: 1 } }
+  );
+  if (bsdLineups.length === 0) {
+    await saveOperationalDataset({
+      name: PLAYER_MAP_STATE_DATASET,
+      updated_at: queryStartedAt,
+      source: "bsd_player_map",
+      payload: { last_lineup_updated_at: queryStartedAt },
+    });
+    return { fixturesPaired: 0, mappingsTotal: 0, lineupsScanned: 0 };
+  }
+
+  const eventIds = bsdLineups.map((doc) => String(doc._id));
+  const [bsdEvents, leagueNameById] = await Promise.all([
+    getBsdRecords("bsd_events", { _id: { $in: eventIds } }),
     buildLeagueNameById(),
-    buildCompositeToTsdbEventId(),
   ]);
 
-  const eventById = new Map(bsdEvents.map((doc) => [String(doc._id), doc.payload]));
+  const canonicalByEventId = new Map();
+  const matchDates = new Set();
+  bsdEvents.forEach((doc) => {
+    const canonical = bsdEventToCanonicalMatch(doc.payload, { leagueNameById });
+    if (!canonical) return;
+    canonicalByEventId.set(String(doc._id), canonical);
+    if (canonical.date) matchDates.add(canonical.date);
+  });
+  const compositeToTsdb = await buildCompositeToTsdbEventId([...matchDates]);
+  const tsdbIdByEventId = new Map();
+  canonicalByEventId.forEach((canonical, eventId) => {
+    const tsdbId = compositeToTsdb.get(compositeKey(canonical));
+    if (tsdbId) tsdbIdByEventId.set(eventId, tsdbId);
+  });
+  const tsdbLineupsById = await getMatchLineupCaches([...tsdbIdByEventId.values()]);
 
   let fixturesPaired = 0;
   let mappingsTotal = 0;
@@ -147,15 +199,12 @@ async function buildPlayerMap() {
 
   for (const lineupDoc of bsdLineups) {
     const bsdEventId = String(lineupDoc._id);
-    const event = eventById.get(bsdEventId);
-    if (!event) continue;
-    const canonical = bsdEventToCanonicalMatch(event, { leagueNameById });
+    const canonical = canonicalByEventId.get(bsdEventId);
     if (!canonical) continue;
-    const tsdbEventId = compositeToTsdb.get(compositeKey(canonical));
+    const tsdbEventId = tsdbIdByEventId.get(bsdEventId);
     if (!tsdbEventId) continue;
 
-    // eslint-disable-next-line no-await-in-loop
-    const tsdbLineup = await getMatchLineupCache(tsdbEventId);
+    const tsdbLineup = tsdbLineupsById[String(tsdbEventId)] || null;
     const entries =
       tsdbLineup && tsdbLineup.payload && Array.isArray(tsdbLineup.payload.lookup)
         ? tsdbLineup.payload.lookup
@@ -173,8 +222,21 @@ async function buildPlayerMap() {
   if (allMappings.length > 0) {
     await upsertBsdRecords("bsd_tsdb_player_map", allMappings);
   }
-  console.log(`[bsd-map] player map: ${mappingsTotal} mappings across ${fixturesPaired} fixtures`);
-  return { fixturesPaired, mappingsTotal };
+  const newestLineupUpdatedAt = bsdLineups.reduce(
+    (latest, doc) => (doc.updated_at && (!latest || doc.updated_at > latest) ? doc.updated_at : latest),
+    watermark || null
+  );
+  await saveOperationalDataset({
+    name: PLAYER_MAP_STATE_DATASET,
+    updated_at: queryStartedAt,
+    source: "bsd_player_map",
+    payload: { last_lineup_updated_at: newestLineupUpdatedAt || queryStartedAt },
+  });
+  console.log(
+    `[bsd-map] player map: ${mappingsTotal} mappings across ${fixturesPaired} fixtures ` +
+      `(${bsdLineups.length} changed lineups)`
+  );
+  return { fixturesPaired, mappingsTotal, lineupsScanned: bsdLineups.length };
 }
 
 async function buildTeamMap() {
@@ -214,10 +276,19 @@ async function buildTeamMap() {
   return { teamsMapped: records.length };
 }
 
-async function buildBsdTsdbMaps() {
+async function buildBsdTsdbMaps(options = {}) {
   const team = await buildTeamMap();
-  const player = await buildPlayerMap();
+  const player = await buildPlayerMap(options);
   return { ...team, ...player };
+}
+
+if (require.main === module) {
+  buildBsdTsdbMaps({ full: process.argv.includes("--full") })
+    .catch((error) => {
+      console.error("[bsd-map] rebuild failed:", error.message || error);
+      process.exitCode = 1;
+    })
+    .finally(() => closeMongoConnection().catch(() => {}));
 }
 
 module.exports = {

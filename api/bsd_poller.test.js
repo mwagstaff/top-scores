@@ -55,4 +55,6 @@ test("buildMetricsText exposes BSD poller metrics", () => {
   assert.match(text, /top_scores_runtime_info\{[^}]*runtime="bsd_poller"[^}]*\}\s+1\b/);
   assert.match(text, /^# HELP top_scores_bsd_http_requests_total\b/m);
   assert.match(text, /^# HELP top_scores_bsd_http_timeouts_total\b/m);
+  assert.match(text, /^top_scores_process_resident_memory_bytes \d+$/m);
+  assert.match(text, /^top_scores_process_heap_bytes\{kind="used"\} \d+$/m);
 });

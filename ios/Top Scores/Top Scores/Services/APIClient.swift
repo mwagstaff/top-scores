@@ -388,13 +388,15 @@ struct APIClient {
             URLQueryItem(name: "budget_discount_fraction", value: String(budgetDiscountFraction)),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
-        let request = try buildRequest(
+        var request = try buildRequest(
             path: "fantasy/transfers/recommendations/\(elementID)",
             queryItems: queryItems
         )
+        request.timeoutInterval = 10
         let (data, http) = try await performRequest(
             request,
-            operation: "fantasy_transfer_recommendations"
+            operation: "fantasy_transfer_recommendations",
+            maxAttempts: 1
         )
         try validateSuccess(http, data: data, operation: "fantasy_transfer_recommendations")
         return try JSONDecoder().decode(FantasyTransferRecommendationsResponse.self, from: data)

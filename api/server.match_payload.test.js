@@ -1233,6 +1233,53 @@ test("matchPassesCategoryFilters uses union semantics across domestic and intern
   );
 });
 
+test("matchPassesCategoryFilters does not treat teams outside the current season as Premier League teams", () => {
+  const currentPremierLeagueTeams = ["Arsenal", "Coventry City"];
+
+  for (const match of [
+    baseMatch({
+      league: "Club Friendlies",
+      home_team: "Paris Saint-Germain",
+      away_team: "Manchester United",
+    }),
+    baseMatch({
+      league: "EFL Cup",
+      home_team: "West Ham United",
+      away_team: "Portsmouth",
+    }),
+    baseMatch({
+      league: "EFL Cup",
+      home_team: "Burnley",
+      away_team: "Notts County",
+    }),
+  ]) {
+    assert.equal(
+      matchPassesCategoryFilters(match, {
+        eplOnly: true,
+        premierLeagueTeams: currentPremierLeagueTeams,
+      }),
+      false
+    );
+  }
+});
+
+test("matchPassesCategoryFilters fails closed when the current Premier League dataset is unavailable", () => {
+  assert.equal(
+    matchPassesCategoryFilters(
+      baseMatch({
+        league: "Club Friendlies",
+        home_team: "Paris Saint-Germain",
+        away_team: "Manchester United",
+      }),
+      {
+        eplOnly: true,
+        premierLeagueTeams: [],
+      }
+    ),
+    false
+  );
+});
+
 test("mergeTsdbAndLiveMatches prefers BBC competition metadata for duplicate fixtures", () => {
   const merged = mergeTsdbAndLiveMatches(
     [

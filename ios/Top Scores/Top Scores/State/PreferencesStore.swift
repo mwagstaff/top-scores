@@ -52,6 +52,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let selectedNotificationLeagues: [String]
     let selectedChannels: [String]
     let fixtureAllMajorMatchesEnabled: Bool
+    let notificationMatchesFixturesEnabled: Bool
     let notificationAllMajorMatchesEnabled: Bool
     let competitionFilterEnabled: Bool
     let channelFilterEnabled: Bool
@@ -111,6 +112,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         selectedNotificationLeagues: [String] = PreferencesStore.defaultSelectedNotificationLeagues,
         selectedChannels: [String],
         fixtureAllMajorMatchesEnabled: Bool = PreferencesStore.defaultFixtureAllMajorMatchesEnabled,
+        notificationMatchesFixturesEnabled: Bool = PreferencesStore.defaultNotificationMatchesFixturesEnabled,
         notificationAllMajorMatchesEnabled: Bool = PreferencesStore.defaultNotificationAllMajorMatchesEnabled,
         competitionFilterEnabled: Bool = PreferencesStore.defaultCompetitionFilterEnabled,
         channelFilterEnabled: Bool = PreferencesStore.defaultChannelFilterEnabled,
@@ -145,6 +147,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.selectedNotificationLeagues = selectedNotificationLeagues
         self.selectedChannels = selectedChannels
         self.fixtureAllMajorMatchesEnabled = fixtureAllMajorMatchesEnabled
+        self.notificationMatchesFixturesEnabled = notificationMatchesFixturesEnabled
         self.notificationAllMajorMatchesEnabled = notificationAllMajorMatchesEnabled
         self.competitionFilterEnabled = competitionFilterEnabled
         self.channelFilterEnabled = channelFilterEnabled
@@ -181,6 +184,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case selectedNotificationLeagues
         case selectedChannels
         case fixtureAllMajorMatchesEnabled
+        case notificationMatchesFixturesEnabled
         case notificationAllMajorMatchesEnabled
         case competitionFilterEnabled
         case channelFilterEnabled
@@ -235,6 +239,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
                 homeNationsFilterEnabled &&
                 majorTournamentsFilterEnabled
             )
+        notificationMatchesFixturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationMatchesFixturesEnabled)
+            ?? PreferencesStore.defaultNotificationMatchesFixturesEnabled
         apiBaseURL = try container.decode(String.self, forKey: .apiBaseURL)
         refreshIntervalMinutes = try container.decode(Int.self, forKey: .refreshIntervalMinutes)
         showAllMatches = try container.decodeIfPresent(Bool.self, forKey: .showAllMatches) ?? false
@@ -279,6 +285,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         try container.encode(selectedNotificationLeagues, forKey: .selectedNotificationLeagues)
         try container.encode(selectedChannels, forKey: .selectedChannels)
         try container.encode(fixtureAllMajorMatchesEnabled, forKey: .fixtureAllMajorMatchesEnabled)
+        try container.encode(notificationMatchesFixturesEnabled, forKey: .notificationMatchesFixturesEnabled)
         try container.encode(notificationAllMajorMatchesEnabled, forKey: .notificationAllMajorMatchesEnabled)
         try container.encode(competitionFilterEnabled, forKey: .competitionFilterEnabled)
         try container.encode(channelFilterEnabled, forKey: .channelFilterEnabled)
@@ -315,6 +322,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         lhs.selectedNotificationLeagues == rhs.selectedNotificationLeagues &&
         lhs.selectedChannels == rhs.selectedChannels &&
         lhs.fixtureAllMajorMatchesEnabled == rhs.fixtureAllMajorMatchesEnabled &&
+        lhs.notificationMatchesFixturesEnabled == rhs.notificationMatchesFixturesEnabled &&
         lhs.notificationAllMajorMatchesEnabled == rhs.notificationAllMajorMatchesEnabled &&
         lhs.competitionFilterEnabled == rhs.competitionFilterEnabled &&
         lhs.channelFilterEnabled == rhs.channelFilterEnabled &&
@@ -359,6 +367,7 @@ final class PreferencesStore: ObservableObject {
     ]
     nonisolated static let defaultSelectedNotificationLeagues = defaultSelectedLeagues
     nonisolated static let defaultFixtureAllMajorMatchesEnabled = true
+    nonisolated static let defaultNotificationMatchesFixturesEnabled = true
     nonisolated static let defaultNotificationAllMajorMatchesEnabled = true
     nonisolated static let productionApiBaseURL = "https://api.skynolimit.dev/top-scores/api/v1"
     nonisolated static let developmentApiBaseURL = "http://Mikes-MacBook-Air.local:3011/api/v1"
@@ -411,6 +420,10 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var fixtureAllMajorMatchesEnabled: Bool {
+        didSet { persist() }
+    }
+
+    @Published var notificationMatchesFixturesEnabled: Bool {
         didSet { persist() }
     }
 
@@ -546,6 +559,8 @@ final class PreferencesStore: ObservableObject {
                 (userDefaults.object(forKey: Keys.homeNationsFilterEnabled) as? Bool ?? Self.defaultHomeNationsFilterEnabled) &&
                 (userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool ?? Self.defaultMajorTournamentsFilterEnabled)
             )
+        let notificationMatchesFixturesEnabled = userDefaults.object(forKey: Keys.notificationMatchesFixturesEnabled) as? Bool
+            ?? Self.defaultNotificationMatchesFixturesEnabled
         let notificationAllMajorMatchesEnabled = userDefaults.object(forKey: Keys.notificationAllMajorMatchesEnabled) as? Bool
             ?? (
                 (userDefaults.object(forKey: Keys.notificationPremierLeagueTeamsOnly) as? Bool ?? Self.defaultNotificationPremierLeagueTeamsOnly) &&
@@ -619,6 +634,7 @@ final class PreferencesStore: ObservableObject {
         self.selectedChannels = ChannelSelection.normalizedSelectedOptions(channels)
         self.competitionFilterEnabled = competitionFilterEnabled
         self.fixtureAllMajorMatchesEnabled = fixtureAllMajorMatchesEnabled
+        self.notificationMatchesFixturesEnabled = notificationMatchesFixturesEnabled
         self.notificationAllMajorMatchesEnabled = notificationAllMajorMatchesEnabled
         self.channelFilterEnabled = channelFilterEnabled
         self.englishPremierLeagueTeamsOnly = englishPremierLeagueTeamsOnly
@@ -662,6 +678,7 @@ final class PreferencesStore: ObservableObject {
             selectedNotificationLeagues: selectedNotificationLeagues,
             selectedChannels: selectedChannels,
             fixtureAllMajorMatchesEnabled: fixtureAllMajorMatchesEnabled,
+            notificationMatchesFixturesEnabled: notificationMatchesFixturesEnabled,
             notificationAllMajorMatchesEnabled: notificationAllMajorMatchesEnabled,
             competitionFilterEnabled: competitionFilterEnabled,
             channelFilterEnabled: channelFilterEnabled,
@@ -704,6 +721,7 @@ final class PreferencesStore: ObservableObject {
             selectedNotificationLeagues: selectedNotificationLeagues,
             selectedChannels: selectedChannels,
             fixtureAllMajorMatchesEnabled: false,
+            notificationMatchesFixturesEnabled: notificationMatchesFixturesEnabled,
             notificationAllMajorMatchesEnabled: notificationAllMajorMatchesEnabled,
             competitionFilterEnabled: false,
             channelFilterEnabled: false,
@@ -742,6 +760,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(selectedChannels, forKey: Keys.selectedChannels)
         userDefaults.set(competitionFilterEnabled, forKey: Keys.competitionFilterEnabled)
         userDefaults.set(fixtureAllMajorMatchesEnabled, forKey: Keys.fixtureAllMajorMatchesEnabled)
+        userDefaults.set(notificationMatchesFixturesEnabled, forKey: Keys.notificationMatchesFixturesEnabled)
         userDefaults.set(notificationAllMajorMatchesEnabled, forKey: Keys.notificationAllMajorMatchesEnabled)
         userDefaults.set(channelFilterEnabled, forKey: Keys.channelFilterEnabled)
         userDefaults.set(englishPremierLeagueTeamsOnly, forKey: Keys.englishPremierLeagueTeamsOnly)
@@ -799,6 +818,8 @@ final class PreferencesStore: ObservableObject {
                 (userDefaults.object(forKey: Keys.homeNationsFilterEnabled) as? Bool ?? Self.defaultHomeNationsFilterEnabled) &&
                 (userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool ?? Self.defaultMajorTournamentsFilterEnabled)
             )
+        let notificationMatchesFixturesEnabled = userDefaults.object(forKey: Keys.notificationMatchesFixturesEnabled) as? Bool
+            ?? Self.defaultNotificationMatchesFixturesEnabled
         let notificationAllMajorMatchesEnabled = userDefaults.object(forKey: Keys.notificationAllMajorMatchesEnabled) as? Bool
             ?? (
                 (userDefaults.object(forKey: Keys.notificationPremierLeagueTeamsOnly) as? Bool ?? Self.defaultNotificationPremierLeagueTeamsOnly) &&
@@ -870,6 +891,7 @@ final class PreferencesStore: ObservableObject {
             selectedNotificationLeagues: notificationLeagues,
             selectedChannels: ChannelSelection.normalizedSelectedOptions(channels),
             fixtureAllMajorMatchesEnabled: fixtureAllMajorMatchesEnabled,
+            notificationMatchesFixturesEnabled: notificationMatchesFixturesEnabled,
             notificationAllMajorMatchesEnabled: notificationAllMajorMatchesEnabled,
             competitionFilterEnabled: competitionFilterEnabled,
             channelFilterEnabled: channelFilterEnabled,
@@ -908,6 +930,7 @@ final class PreferencesStore: ObservableObject {
         static let selectedChannels = "preferences.selectedChannels"
         static let competitionFilterEnabled = "preferences.competitionFilterEnabled"
         static let fixtureAllMajorMatchesEnabled = "preferences.fixtureAllMajorMatchesEnabled"
+        static let notificationMatchesFixturesEnabled = "preferences.notificationMatchesFixturesEnabled"
         static let notificationAllMajorMatchesEnabled = "preferences.notificationAllMajorMatchesEnabled"
         static let channelFilterEnabled = "preferences.channelFilterEnabled"
         static let englishPremierLeagueTeamsOnly = "preferences.englishPremierLeagueTeamsOnly"

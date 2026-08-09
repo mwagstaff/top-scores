@@ -77,17 +77,24 @@ struct PreferencesView: View {
                         }
 
                         Section("Notifications") {
-                            Toggle("All major matches", isOn: notificationAllMajorMatchesBinding)
-                            Text("Use the same major-match coverage for push notifications, independently of Fixtures.")
+                            Toggle("Same as fixtures", isOn: notificationMatchesFixturesBinding)
+                            Text("Notify only for matches shown in your Fixtures view.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
 
-                            if !preferences.notificationAllMajorMatchesEnabled {
-                                competitionPicker(
-                                    search: $notificationLeagueSearch,
-                                    selectedLeagues: preferences.selectedNotificationLeagues,
-                                    selectionChanged: toggleNotificationLeague
-                                )
+                            if !preferences.notificationMatchesFixturesEnabled {
+                                Picker("Match coverage", selection: notificationAllMajorMatchesBinding) {
+                                    Text("All major matches").tag(true)
+                                    Text("Custom").tag(false)
+                                }
+
+                                if !preferences.notificationAllMajorMatchesEnabled {
+                                    competitionPicker(
+                                        search: $notificationLeagueSearch,
+                                        selectedLeagues: preferences.selectedNotificationLeagues,
+                                        selectionChanged: toggleNotificationLeague
+                                    )
+                                }
                             }
                         }
 
@@ -598,6 +605,16 @@ struct PreferencesView: View {
                 preferences.notificationHomeNationsFilterEnabled = enabled
                 preferences.notificationMajorTournamentsFilterEnabled = enabled
                 AppMetricsService.shared.fireActivity("pref_notifications_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
+            }
+        )
+    }
+
+    private var notificationMatchesFixturesBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.notificationMatchesFixturesEnabled },
+            set: { enabled in
+                preferences.notificationMatchesFixturesEnabled = enabled
+                AppMetricsService.shared.fireActivity("pref_notifications_same_as_fixtures_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
             }
         )
     }

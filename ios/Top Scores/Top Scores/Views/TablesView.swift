@@ -412,28 +412,40 @@ private struct LeagueTableCard: View {
             if league.hasLiveRows {
                 liveProvisionalNote
             }
-            VStack(spacing: 0) {
-                headingRow
-                tableSeparator(isThick: false)
-                ForEach(Array(displayGroups.enumerated()), id: \.element.id) { groupIndex, group in
-                    if let heading = groupHeading(for: group) {
-                        groupHeadingRow(heading)
-                    }
+            if league.hasRows {
+                VStack(spacing: 0) {
+                    headingRow
+                    tableSeparator(isThick: false)
+                    ForEach(Array(displayGroups.enumerated()), id: \.element.id) { groupIndex, group in
+                        if let heading = groupHeading(for: group) {
+                            groupHeadingRow(heading)
+                        }
 
-                    ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
-                        rowView(row)
-                        if index < group.rows.count - 1 {
-                            tableSeparator(isThick: isBenefitBoundary(in: group.rows, after: index))
+                        ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
+                            rowView(row)
+                            if index < group.rows.count - 1 {
+                                tableSeparator(isThick: isBenefitBoundary(in: group.rows, after: index))
+                            }
+                        }
+
+                        if groupIndex < displayGroups.count - 1 {
+                            tableSeparator(isThick: true)
                         }
                     }
-
-                    if groupIndex < displayGroups.count - 1 {
-                        tableSeparator(isThick: true)
-                    }
                 }
+                .background(.thinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else {
+                Text("This table will be populated once the season is underway.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 28)
+                    .background(.thinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-            .background(.thinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
     }
 

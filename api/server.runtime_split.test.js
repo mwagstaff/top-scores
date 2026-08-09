@@ -38,12 +38,12 @@ test("normalizeCacheStateDomains accepts teams tables and team short name aliase
   });
 });
 
-test("filterCacheStateDomainsForRuntimeRefresh avoids monitor match details churn", () => {
+test("filterCacheStateDomainsForRuntimeRefresh keeps the monitor's team dataset current without match-details churn", () => {
   assert.deepEqual(
     filterCacheStateDomainsForRuntimeRefresh(["matches", "match_details", "teams", "tsdb_live"], {
       runtimeRole: "monitor",
     }),
-    ["matches", "tsdb_live"]
+    ["matches", "teams", "tsdb_live"]
   );
   assert.deepEqual(
     filterCacheStateDomainsForRuntimeRefresh(["match_details"], {

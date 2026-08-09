@@ -151,6 +151,8 @@ let liveActivityTeamRatingRefreshPromise = null;
 let liveActivityPremierLeagueTeamLookup = null;
 let liveActivityMatchDetailsProvider = null;
 let liveActivityOperationalMatchesProvider = null;
+let liveActivityFixtureCategoryFilter = null;
+let notificationFixtureCategoryFilter = null;
 let canonicalMatchStateWriter = null;
 let liveActivityTeamShortNameLookup = buildLiveActivityTeamShortNameLookup(
   TEAM_SHORT_NAMES_PAYLOAD
@@ -2066,6 +2068,14 @@ function setLiveActivityOperationalMatchesProvider(provider) {
   liveActivityOperationalMatchesProvider = typeof provider === "function" ? provider : null;
 }
 
+function setLiveActivityFixtureCategoryFilter(filter) {
+  liveActivityFixtureCategoryFilter = typeof filter === "function" ? filter : null;
+}
+
+function setNotificationFixtureCategoryFilter(filter) {
+  notificationFixtureCategoryFilter = typeof filter === "function" ? filter : null;
+}
+
 function setCanonicalMatchStateWriter(writer) {
   canonicalMatchStateWriter = typeof writer === "function" ? writer : null;
 }
@@ -2781,8 +2791,24 @@ async function sendNotificationForEvent(matchId, match, event) {
 
     // Filter users who should receive this notification
     const interestedUsers = [];
+    const decisionReasons = {};
+    const eligibleRecipients = [];
     for (const user of notificationUsers) {
       const decision = evaluateUserNotificationDecision(user, match, event);
+      incrementReasonCounter(decisionReasons, decision.reason);
+      addMonitorDecisionDiagnostic({
+        decision_type: "notification_eligibility",
+        match_id: matchId,
+        event_type: event.type,
+        event_key: event.eventKey || null,
+        home_team: match.home_team || null,
+        away_team: match.away_team || null,
+        league: match.league || null,
+        user_device_short: shortDeviceToken(user.deviceToken),
+        eligible: decision.shouldNotify,
+        reason: decision.reason,
+        delay_minutes: decision.delayMinutes,
+      });
       logDecision("user_eligibility", {
         match_id: matchId,
         event_type: event.type,
@@ -2794,8 +2820,32 @@ async function sendNotificationForEvent(matchId, match, event) {
       });
       if (decision.shouldNotify) {
         interestedUsers.push(user);
+        eligibleRecipients.push({
+          user_device_short: shortDeviceToken(user.deviceToken),
+          delay_minutes: decision.delayMinutes,
+          notification_all_major_matches_enabled:
+            user.preferences && user.preferences.notificationAllMajorMatchesEnabled === true,
+          notification_premier_league_teams_only:
+            user.preferences && user.preferences.notificationPremierLeagueTeamsOnly === true,
+        });
       }
     }
+
+    console.info(
+      "[MatchMonitor][NotificationEligibility]",
+      JSON.stringify({
+        match_id: matchId,
+        event_type: event.type,
+        event_key: event.eventKey || null,
+        home_team: match.home_team || null,
+        away_team: match.away_team || null,
+        league: match.league || null,
+        users_total: allUsers.length,
+        users_deduped: notificationUsers.length,
+        decision_reasons: decisionReasons,
+        eligible_recipients: eligibleRecipients,
+      })
+    );
 
     logDecision("event_dispatch_summary", {
       match_id: matchId,
@@ -2865,10 +2915,13 @@ function evaluateUserNotificationDecision(user, match, event) {
     }
   }
 
-  // Check channel filter (only applies to fixtures, but we'll use it for consistency)
+  // Channel choices are part of the Fixtures view, so use the same matching
+  // semantics when notification coverage follows Fixtures.
   if (prefs.channelFilterEnabled && prefs.selectedChannels && prefs.selectedChannels.length > 0) {
     const matchChannels = match.tv_channels || [];
-    const hasMatchingChannel = matchChannels.some((ch) => prefs.selectedChannels.includes(ch));
+    const hasMatchingChannel = matchChannels.some((channel) =>
+      prefs.selectedChannels.some((selection) => channelMatchesSelection(channel, selection))
+    );
     if (matchChannels.length > 0 && !hasMatchingChannel) {
       return {
         shouldNotify: false,
@@ -2876,6 +2929,35 @@ function evaluateUserNotificationDecision(user, match, event) {
         delayMinutes,
       };
     }
+  }
+
+  if (prefs.notificationMatchesFixturesEnabled === true) {
+    if (
+      prefs.competitionFilterEnabled &&
+      Array.isArray(prefs.selectedLeagues) &&
+      prefs.selectedLeagues.length > 0 &&
+      !liveActivityPreferenceLeagueMatchesSelectedLeagues(prefs.selectedLeagues, match.league)
+    ) {
+      return {
+        shouldNotify: false,
+        reason: "league_filtered_by_fixtures_preferences",
+        delayMinutes,
+      };
+    }
+
+    if (notificationFixtureCategoryFilter && !notificationFixtureCategoryFilter(user, match, { mode: "fixtures" })) {
+      return {
+        shouldNotify: false,
+        reason: "fixture_category_filtered_out",
+        delayMinutes,
+      };
+    }
+
+    return {
+      shouldNotify: true,
+      reason: "eligible",
+      delayMinutes,
+    };
   }
 
   const notificationAllMajorMatchesEnabled = prefs.notificationAllMajorMatchesEnabled;
@@ -2894,14 +2976,13 @@ function evaluateUserNotificationDecision(user, match, event) {
       };
     }
   } else if (notificationAllMajorMatchesEnabled === true) {
-    const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
-    const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
-    const isMajorMatch =
-      homeInPremierLeague ||
-      awayInPremierLeague ||
-      matchIsMajorGameOfInterest(match) ||
-      matchIncludesHomeNation(match) ||
-      matchIsMajorTournament(match);
+    const isMajorMatch = notificationFixtureCategoryFilter
+      ? notificationFixtureCategoryFilter(user, match, { mode: "all_major" })
+      : isEnglishPremierLeagueTeam(match && match.home_team) ||
+        isEnglishPremierLeagueTeam(match && match.away_team) ||
+        matchIsMajorGameOfInterest(match) ||
+        matchIncludesHomeNation(match) ||
+        matchIsMajorTournament(match);
     if (!isMajorMatch) {
       return {
         shouldNotify: false,
@@ -2927,9 +3008,11 @@ function evaluateUserNotificationDecision(user, match, event) {
     ? prefs.notificationPremierLeagueTeamsOnly
     : prefs.englishPremierLeagueTeamsOnly;
   if (notificationAllMajorMatchesEnabled !== true && notifEplOnly) {
-    const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
-    const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
-    if (!homeInPremierLeague && !awayInPremierLeague) {
+    const includesPremierLeagueTeam = notificationFixtureCategoryFilter
+      ? notificationFixtureCategoryFilter(user, match, { mode: "premier_league_only" })
+      : isEnglishPremierLeagueTeam(match && match.home_team) ||
+        isEnglishPremierLeagueTeam(match && match.away_team);
+    if (!includesPremierLeagueTeam) {
       return {
         shouldNotify: false,
         reason: "premier_league_team_filter",
@@ -4047,6 +4130,18 @@ function canonicalLiveActivityChannelsForMatch(match) {
   return channels;
 }
 
+function filterCanonicalLiveActivityCandidateMatches(matches, nowMs = Date.now()) {
+  const todayDateKey = currentLondonDateKey(nowMs);
+  return (Array.isArray(matches) ? matches : [])
+    .filter((match) => match && typeof match === "object")
+    .filter(
+      (match) =>
+        isLiveActivityMatchOnDateKey(match, todayDateKey) ||
+        isLiveMatchStatus(match && match.score_status)
+    )
+    .filter((match) => !isPostponedMatchStatus(match && match.score_status));
+}
+
 function liveActivityChannelsHaveLogo(channels) {
   return canonicalLiveActivityTvLogoKeys(channels).length > 0;
 }
@@ -4075,20 +4170,8 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
   const englishPremierLeagueTeamsOnly = prefs.englishPremierLeagueTeamsOnly === true;
   const majorUEFAClubGamesEnabled = prefs.majorUEFAClubGamesEnabled === true;
-  const todayDateKey = currentLondonDateKey(nowMs);
 
-  return (Array.isArray(matches) ? matches : [])
-    .filter((match) => match && typeof match === "object")
-    // A match that kicked off yesterday and is still in progress (crossing
-    // midnight) must keep showing — the date-key match alone would otherwise
-    // drop it the moment "today" rolls over. BSD reliably reports full time,
-    // so a match never stays stuck live.
-    .filter(
-      (match) =>
-        isLiveActivityMatchOnDateKey(match, todayDateKey) ||
-        isLiveMatchStatus(match && match.score_status)
-    )
-    .filter((match) => !isPostponedMatchStatus(match && match.score_status))
+  return filterCanonicalLiveActivityCandidateMatches(matches, nowMs)
     .filter((match) => {
       if (
         prefs.competitionFilterEnabled &&
@@ -4128,6 +4211,9 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
     })
     .filter(Boolean)
     .filter((match) => {
+      if (liveActivityFixtureCategoryFilter) {
+        return liveActivityFixtureCategoryFilter(user, match);
+      }
       if (!englishPremierLeagueTeamsOnly) return true;
       if (
         isEnglishPremierLeagueTeam(match && match.home_team) ||
@@ -4527,7 +4613,14 @@ function isEligibleForLiveActivityByPreferences(user, match) {
     }
   }
 
-  if (prefs.englishPremierLeagueTeamsOnly) {
+  if (liveActivityFixtureCategoryFilter && !liveActivityFixtureCategoryFilter(user, match)) {
+    return {
+      eligible: false,
+      reason: "fixture_category_filtered_out",
+    };
+  }
+
+  if (!liveActivityFixtureCategoryFilter && prefs.englishPremierLeagueTeamsOnly) {
     const homeInPremierLeague = isEnglishPremierLeagueTeam(match && match.home_team);
     const awayInPremierLeague = isEnglishPremierLeagueTeam(match && match.away_team);
     if (
@@ -6031,7 +6124,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const shouldDisplay = Boolean(presentation && presentation.mode && presentation.matches.length > 0);
   const trigger = String(options && options.trigger ? options.trigger : "");
 
-  console.log(
+  monitorVerboseLog(
     `[MatchMonitor] Live Activity evaluation ${JSON.stringify({
       user_device_short: shortDeviceToken(user && user.deviceToken),
       trigger: trigger || null,
@@ -6106,7 +6199,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       });
     }
     if (!activityPushToken) {
-      console.log(
+      monitorVerboseLog(
         `[MatchMonitor] Live Activity decision ${JSON.stringify({
           user_device_short: shortDeviceToken(user && user.deviceToken),
           trigger: trigger || null,
@@ -6222,7 +6315,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     !hasImminentUpcomingMatch
   ) {
     if (!activityPushToken) {
-      console.log(
+      monitorVerboseLog(
         `[MatchMonitor] Live Activity decision ${JSON.stringify({
           user_device_short: shortDeviceToken(user && user.deviceToken),
           trigger: trigger || null,
@@ -6511,7 +6604,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   // Skip push-to-start here to avoid a race between the two creation paths that would
   // produce duplicate activities (one of which enforceSingleActiveActivity would then end).
   if (trigger === "app_foreground") {
-    console.log(
+    monitorVerboseLog(
       `[MatchMonitor] Live Activity decision ${JSON.stringify({
         user_device_short: shortDeviceToken(user && user.deviceToken),
         trigger,
@@ -6574,7 +6667,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   }
 
   if (!pushToStartToken) {
-    console.log(
+    monitorVerboseLog(
       `[MatchMonitor] Live Activity decision ${JSON.stringify({
         user_device_short: shortDeviceToken(user && user.deviceToken),
         trigger: trigger || null,
@@ -7032,6 +7125,10 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
     const monitoredEntries = monitoredMatchStatesSnapshot(nowMs);
     const detailsRecords = await resolveLiveActivityMatchDetailsRecords(options);
     const operationalMatches = await resolveLiveActivityOperationalMatches(detailsRecords, options);
+    const candidateOperationalMatches = filterCanonicalLiveActivityCandidateMatches(
+      operationalMatches,
+      nowMs
+    );
     const users = await getAllUserPreferences();
     if (!Array.isArray(users) || users.length === 0) return;
 
@@ -7058,7 +7155,7 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
       : uniqueUsers;
     const candidateMatchIds = collectLiveActivityTimelineCandidateMatchIds(
       monitoredEntries,
-      operationalMatches
+      candidateOperationalMatches
     );
     const delayedSnapshotsByDelay = new Map();
     const distinctDelayMinutes = Array.from(
@@ -7102,7 +7199,12 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
       );
       if (!hasStartToken && !hasActivityToken) continue;
 
-      const entries = buildLiveActivityEntriesForUser(user, monitoredEntries, operationalMatches, nowMs);
+      const entries = buildLiveActivityEntriesForUser(
+        user,
+        monitoredEntries,
+        candidateOperationalMatches,
+        nowMs
+      );
       const userDelayMinutes = liveActivityDelayMinutesFromPreferences(
         user && user.preferences && typeof user.preferences === "object" ? user.preferences : {}
       );
@@ -7871,6 +7973,8 @@ module.exports = {
   initialize,
   setLiveActivityMatchDetailsProvider,
   setLiveActivityOperationalMatchesProvider,
+  setLiveActivityFixtureCategoryFilter,
+  setNotificationFixtureCategoryFilter,
   setCanonicalMatchStateWriter,
   startMonitoring,
   stopMonitoring,
@@ -7926,6 +8030,8 @@ module.exports = {
     monitoredMatchStatesSnapshot,
     evaluateUserNotificationDecision,
     filterCanonicalLiveActivityMatchesForUser,
+    setLiveActivityFixtureCategoryFilter,
+    setNotificationFixtureCategoryFilter,
     matchIsMajorGameOfInterest,
     matchIsMajorUefaClubKnockoutFixture,
     isEligibleForLiveActivityByPreferences,

@@ -2048,6 +2048,15 @@ async function saveOperationalDataset(name, payload, options = {}) {
       name: String(name || "").trim(),
       updated_at: options.updated_at || new Date().toISOString(),
       source: options.source || null,
+      payload_count: Array.isArray(payload)
+        ? payload.length
+        : payload && typeof payload === "object"
+          ? Object.keys(payload).length
+          : 0,
+      payload_hash: crypto
+        .createHash("sha1")
+        .update(JSON.stringify(payload) ?? "null")
+        .digest("hex"),
       payload,
     };
     const serializedRecord = JSON.stringify(record);
@@ -2067,6 +2076,29 @@ async function saveOperationalDataset(name, payload, options = {}) {
     console.error(`[Redis] Error saving operational dataset ${name}:`, error);
     throw error;
   }
+}
+
+async function getOperationalDatasetMetadata(names = []) {
+  const requestedNames = Array.isArray(names)
+    ? names.map((name) => String(name || "").trim()).filter(Boolean)
+    : [];
+  if (requestedNames.length === 0) return {};
+  const mongoMetadata = await mongoStore.getOperationalDatasetMetadata(requestedNames);
+  if (mongoMetadata) return mongoMetadata;
+  const records = await getOperationalDatasets(requestedNames);
+  const output = {};
+  requestedNames.forEach((name) => {
+    const record = records && records[name];
+    if (!record) return;
+    output[name] = {
+      name,
+      updated_at: record.updated_at || null,
+      source: record.source || null,
+      payload_count: record.payload_count,
+      payload_hash: record.payload_hash || null,
+    };
+  });
+  return output;
 }
 
 async function getOperationalDataset(name) {
@@ -3391,6 +3423,10 @@ module.exports = {
   saveOperationalDataset: _withMetrics("save_operational_dataset", saveOperationalDataset),
   getOperationalDataset: _withMetrics("get_operational_dataset", getOperationalDataset),
   getOperationalDatasets: _withMetrics("get_operational_datasets", getOperationalDatasets),
+  getOperationalDatasetMetadata: _withMetrics(
+    "get_operational_dataset_metadata",
+    getOperationalDatasetMetadata
+  ),
   saveOperationalMatchDetailsRecords: _withMetrics("save_match_details", saveOperationalMatchDetailsRecords),
   getOperationalMatchDetails: _withMetrics("get_match_details", getOperationalMatchDetails),
   getAllOperationalMatchDetails: _withMetrics("get_all_match_details", getAllOperationalMatchDetails),
