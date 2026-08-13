@@ -6,6 +6,10 @@ const MAJOR_UEFA_CLUB_COMPETITIONS = new Set([
   "uefa conference league",
 ]);
 
+const ALWAYS_MAJOR_UEFA_CLUB_COMPETITIONS = new Set([
+  "uefa super cup",
+]);
+
 function normalizeMajorGameText(value) {
   return String(value || "")
     .normalize("NFKD")
@@ -53,6 +57,13 @@ function matchIsMajorUefaClubKnockoutFixture(match) {
 
   const normalizedLeague = normalizeCompetition(match.league);
   const descriptor = majorGameDescriptor(match);
+  const isAlwaysMajorUefaCompetition = Array.from(ALWAYS_MAJOR_UEFA_CLUB_COMPETITIONS).some(
+    (competition) => normalizedLeague === competition || normalizedLeague.startsWith(`${competition} `)
+  );
+  if (isAlwaysMajorUefaCompetition) {
+    return true;
+  }
+
   const isMajorUefaCompetition = Array.from(MAJOR_UEFA_CLUB_COMPETITIONS).some(
     (competition) => normalizedLeague === competition || normalizedLeague.startsWith(`${competition} `)
   );

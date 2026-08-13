@@ -260,6 +260,7 @@ export const defaultPreferences: Preferences = {
     "UEFA Champions League",
     "UEFA Conference League",
     "UEFA Europa League",
+    "UEFA Super Cup",
   ],
   selectedChannels: ["Amazon (all)", "BBC (all)", "ITV (all)", "Sky (all)", "TNT (all)"],
   competitionFilterEnabled: false,

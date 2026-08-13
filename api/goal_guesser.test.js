@@ -60,6 +60,8 @@ test("names are normalized and bounded", () => {
   assert.equal(__private.normalizeName("  Mike   W  "), "Mike W");
   assert.equal(__private.normalizeName(""), null);
   assert.equal(__private.normalizeLeagueName("A".repeat(41)), null);
+  assert.equal(__private.normalizeTeamName("  Wagstaff   Wanderers  "), "Wagstaff Wanderers");
+  assert.equal(__private.normalizeTeamName("A".repeat(41)), null);
 });
 
 test("email identities are normalized without accepting malformed addresses", () => {
@@ -150,4 +152,100 @@ test("a pick week locks every scorecard row at its first scheduled kickoff", () 
   const nowMs = Date.parse("2026-08-21T18:31:00.000Z");
   assert.equal(locks.get("2026-08-21"), Date.parse(fixtures[0].kickoff_at));
   assert.equal(__private.fixtureResponse(fixtures[1], null, nowMs, locks.get("2026-08-21") <= nowMs).locked, true);
+});
+
+test("league cards replace a pick score instead of stacking with its Power Pick", () => {
+  const exactPower = { points: 24, base_points: 12, power_pick: true, score_tier: "exact" };
+  assert.equal(__private.cardPointsForPick(exactPower, { type: "triple_threat" }), 36);
+  assert.equal(__private.cardPointsForPick(exactPower, { type: "exacta" }), 22);
+  assert.equal(__private.cardPointsForPick(exactPower, { type: "all_or_nothing" }), 24);
+  assert.equal(__private.cardPointsForPick({ points: 3, base_points: 3, score_tier: "result" }, { type: "all_or_nothing" }), 0);
+  assert.equal(__private.cardPointsForPick({ points: 5, base_points: 5, score_tier: "result_and_team_score" }, { type: "wildcard" }), 10);
+});
+
+test("monthly championships group every fixture in a calendar month", () => {
+  const fixtures = [
+    { pick_week_id: "2026-08-21", kickoff_at: "2026-08-21T19:00:00.000Z" },
+    { pick_week_id: "2026-08-28", kickoff_at: "2026-08-28T19:00:00.000Z" },
+    { pick_week_id: "2026-09-04", kickoff_at: "2026-09-04T19:00:00.000Z" },
+  ];
+  assert.deepEqual(__private.monthlyChampionships(fixtures).map((month) => [month.id, month.weeks.length]), [["month-2026-08", 2], ["month-2026-09", 1]]);
+});
+
+test("Momentum requires two recent scores above the player's own baseline", () => {
+  const fixtures = Array.from({ length: 6 }, (_, index) => ({ _id: `f${index}`, pick_week_id: `week-${index}`, kickoff_at: `2026-09-${String(index + 1).padStart(2, "0")}T12:00:00.000Z`, result_revision: "final" }));
+  const fixtureById = new Map(fixtures.map((fixture) => [fixture._id, fixture]));
+  const picks = [8, 10, 12, 10, 19, 20].map((points, index) => ({ player_id: "player", fixture_id: `f${index}`, points }));
+  const momentum = __private.momentumForMembership({ player_id: "player", scoring_from: "2026-01-01T00:00:00.000Z" }, picks, fixtureById, __private.completedWeeks(fixtures));
+  assert.deepEqual(momentum, { player_id: "player", baseline: 10, latest: 20, streak: 2, eligible: true });
+});
+
+test("rival duels pair neighbours and never award a winner for a tie", () => {
+  const rows = [{ player_id: "a", name: "A" }, { player_id: "b", name: "B" }, { player_id: "c", name: "C" }];
+  const duels = __private.rivalDuels(rows, new Map([["a", 12], ["b", 12], ["c", 20]]), "week");
+  assert.equal(duels.length, 1);
+  assert.equal(duels[0].winner_player_id, null);
+});
+
+test("gameplay summary exposes weekly rank, badges, and movement around the viewer", () => {
+  const memberships = ["a", "b", "c", "d"].map((player_id) => ({ player_id, scoring_from: "2026-01-01T00:00:00.000Z" }));
+  const names = new Map([["a", "Alex"], ["b", "Billie"], ["c", "Casey"], ["d", "Drew"]]);
+  const fixtures = [
+    { _id: "w1", pick_week_id: "2026-08-21", kickoff_at: "2026-08-21T19:00:00.000Z", result_revision: "final" },
+    { _id: "w2", pick_week_id: "2026-08-28", kickoff_at: "2026-08-28T19:00:00.000Z", result_revision: "final" },
+  ];
+  const picks = [
+    ["a", "w1", 10, "result"], ["b", "w1", 5, "result_and_team_score"], ["c", "w1", 1, "team_score"], ["d", "w1", 0, "none"],
+    ["a", "w2", 0, "none"], ["b", "w2", 12, "exact"], ["c", "w2", 3, "result"], ["d", "w2", 0, "none"],
+  ].map(([player_id, fixture_id, points, score_tier]) => ({ player_id, fixture_id, points, base_points: points, score_tier }));
+  const summary = __private.gameplaySummary({ memberships, names, picks, fixtures, cards: [], viewerId: "b" });
+  assert.deepEqual(summary.viewer, { player_id: "b", total_points: 17, exact_scores: 1, position: 1, previous_position: 2, movement: 1, player_count: 4, last_week_id: "2026-08-28", last_week_points: 12 });
+  assert.equal(summary.table_snapshot.find((row) => row.player_id === "b").movement, 1);
+  assert.deepEqual(summary.weekly_performance.at(-1).badges.map((badge) => badge.label), ["Best in class!", "Top 3!", "Exact score"]);
+});
+
+test("fixture responses expose the card-adjusted points awarded for a result", () => {
+  const response = __private.fixtureResponse(
+    { _id: "fixture", kickoff_at: "2026-08-21T19:00:00.000Z" },
+    { home_score: 2, away_score: 1, points: 12, base_points: 12, score_tier: "exact", updated_at: "now" },
+    Date.parse("2026-08-22T00:00:00.000Z"),
+    true,
+    { type: "triple_threat" }
+  );
+  assert.equal(response.pick.awarded_points, 36);
+  assert.equal(response.pick.applied_card_type, "triple_threat");
+});
+
+test("admin access requires an allowlisted verified email", () => {
+  __private.configureAdminEmails(" mike.wagstaff@gmail.com,second@example.com ");
+  assert.equal(__private.isAdminPlayer({ email: "MIKE.WAGSTAFF@gmail.com", email_verified: true }), true);
+  assert.equal(__private.isAdminPlayer({ email: "mike.wagstaff@gmail.com", email_verified: false }), false);
+  assert.equal(__private.isAdminPlayer({ email: "someone@example.com", email_verified: true }), false);
+  __private.configureAdminEmails(undefined);
+});
+
+test("admin middleware rejects direct API access from non-admin players", () => {
+  __private.configureAdminEmails("mike.wagstaff@gmail.com");
+  let status = 0;
+  let message = null;
+  let nextCalled = false;
+  const response = { status(value) { status = value; return this; }, json(value) { message = value; return this; } };
+  __private.requireAdmin({ goalGuesser: { player: { email: "member@example.com", email_verified: true } } }, response, () => { nextCalled = true; });
+  assert.equal(status, 403);
+  assert.deepEqual(message, { error: "Goal Guesser administrator access required" });
+  assert.equal(nextCalled, false);
+  __private.requireAdmin({ goalGuesser: { player: { email: "mike.wagstaff@gmail.com", email_verified: true } } }, response, () => { nextCalled = true; });
+  assert.equal(nextCalled, true);
+  __private.configureAdminEmails(undefined);
+});
+
+test("fixture scope queries keep simulated and live seasons separate", () => {
+  assert.deepEqual(__private.fixtureScopeQuery("simulation-1", { pick_week_id: "week-1" }), { competition: "Premier League", simulation_id: "simulation-1", pick_week_id: "week-1" });
+  assert.deepEqual(__private.fixtureScopeQuery(null), { competition: "Premier League", simulation_id: { $exists: false } });
+});
+
+test("team logo references resolve membership overrides before player defaults", () => {
+  assert.equal(__private.resolvedTeamLogoReference({ team_logo_asset_id: "player-logo" }, { team_logo_asset_id: "league-logo" }).asset_id, "league-logo");
+  assert.equal(__private.resolvedTeamLogoReference({ team_logo_asset_id: "player-logo" }, {}).asset_id, "player-logo");
+  assert.equal(__private.resolvedTeamLogoReference({}, {}), null);
 });

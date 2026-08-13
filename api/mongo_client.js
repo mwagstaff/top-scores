@@ -170,6 +170,7 @@ async function ensureIndexes() {
     collection("gg_leagues").createIndexes([
       { key: { join_code: 1 }, name: "joinCode_unique", unique: true },
       { key: { owner_player_id: 1, archived: 1 }, name: "owner_archived" },
+      { key: { simulation_id: 1 }, name: "simulation", sparse: true },
     ]),
     collection("gg_memberships").createIndexes([
       { key: { league_id: 1, player_id: 1 }, name: "league_player_unique", unique: true },
@@ -183,11 +184,33 @@ async function ensureIndexes() {
       { key: { contest_id: 1, kickoff_at: 1 }, name: "contest_kickoff" },
       { key: { contest_id: 1, pick_week_id: 1 }, name: "contest_pickWeek" },
       { key: { status: 1, result_revision: 1 }, name: "status_revision" },
+      { key: { simulation_id: 1, pick_week_id: 1 }, name: "simulation_pickWeek", sparse: true },
     ]),
-    collection("gg_picks").createIndexes([
-      { key: { player_id: 1, fixture_id: 1 }, name: "player_fixture_unique", unique: true },
-      { key: { player_id: 1, pick_week_id: 1 }, name: "player_week_power_unique", unique: true, partialFilterExpression: { power_pick: true } },
-      { key: { fixture_id: 1 }, name: "fixture" },
+    collection("gg_picks")
+      .dropIndex("player_week_power_unique")
+      .catch(() => {})
+      .then(() => collection("gg_picks").createIndexes([
+        { key: { player_id: 1, fixture_id: 1 }, name: "player_fixture_unique", unique: true },
+        { key: { player_id: 1, contest_id: 1, pick_week_id: 1 }, name: "player_contest_week_power_unique", unique: true, partialFilterExpression: { power_pick: true } },
+        { key: { fixture_id: 1 }, name: "fixture" },
+      ])),
+    collection("gg_simulation_runs").createIndexes([
+      { key: { league_id: 1 }, name: "league_unique", unique: true },
+      { key: { status: 1, updated_at: -1 }, name: "status_updated" },
+    ]),
+    collection("gg_wildcards").createIndexes([
+      { key: { card_key: 1 }, name: "cardKey_unique", unique: true },
+      { key: { league_id: 1, player_id: 1, status: 1 }, name: "league_player_status" },
+    ]),
+    collection("gg_admin_audit_events").createIndexes([
+      { key: { simulation_id: 1, created_at: -1 }, name: "simulation_created" },
+      { key: { actor_player_id: 1, created_at: -1 }, name: "actor_created" },
+    ]),
+    collection("gg_image_assets").createIndexes([
+      { key: { target_player_id: 1, created_at: -1 }, name: "target_created" },
+      { key: { league_id: 1, created_at: -1 }, name: "league_created", sparse: true },
+      { key: { moderation_status: 1, created_at: 1 }, name: "moderation_created" },
+      { key: { moderation_email_status: 1, created_at: 1 }, name: "moderation_email_created" },
     ]),
   ]);
 

@@ -739,7 +739,10 @@ const parsedAppMetricsActiveWindowHours = Number(
 const APP_METRICS_ACTIVE_DEVICE_WINDOW_MS = Number.isFinite(parsedAppMetricsActiveWindowHours)
   ? Math.max(1, Math.floor(parsedAppMetricsActiveWindowHours)) * 60 * 60 * 1000
   : 30 * 24 * 60 * 60 * 1000;
-app.use(express.json({ limit: "64kb" }));
+app.use((req, res, next) => {
+  if (/^\/api\/v1\/goal-guesser\/(?:me|leagues\/[^/]+\/members\/[^/]+)\/team-logo\/?$/.test(req.path) && req.method === "PUT") return next();
+  return express.json({ limit: "64kb" })(req, res, next);
+});
 
 const goalGuesserTestHarnessEnabled = process.env.NODE_ENV === "test" && parseEnvBoolean(process.env.GOAL_GUESSER_TEST_HARNESS_ENABLED, false);
 registerGoalGuesserRoutes(app, {

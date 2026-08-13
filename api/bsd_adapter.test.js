@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { bsdEventToCanonicalMatch, __private } = require("./bsd_adapter");
+const { DEFAULT_BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const {
   mapBsdStatus,
   parseBsdIncidents,
@@ -40,6 +41,10 @@ const HELPER_DIR = path.resolve(__dirname, "../.helper_files/bsd_api");
 function loadHelper(name) {
   return JSON.parse(fs.readFileSync(path.join(HELPER_DIR, name), "utf8"));
 }
+
+test("default BSD league allowlist includes UEFA Super Cup", () => {
+  assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("90"));
+});
 
 // ---------------------------------------------------------------------------
 // Status mapping
@@ -238,6 +243,20 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
   assert.equal(m.time, "20:00");
   const compositeId = `${m.date}|${m.time}|${m.league}|${m.home_team}|${m.away_team}`;
   assert.equal(compositeId, "2026-06-21|20:00|FIFA World Cup 2026|Cape Verde|Uruguay");
+});
+
+test("bsdEventToCanonicalMatch: maps BSD league 90 to UEFA Super Cup", () => {
+  const match = bsdEventToCanonicalMatch({
+    id: 9001,
+    league_id: 90,
+    league_name: "UEFA Super Cup 2026",
+    home_team: "Paris Saint-Germain",
+    away_team: "Tottenham Hotspur",
+    status: "notstarted",
+    event_date: "2026-08-12T19:00:00Z",
+  });
+
+  assert.equal(match.league, "UEFA Super Cup");
 });
 
 test("bsdEventToCanonicalMatch: surfaces BSD last_updated as updated_at", () => {

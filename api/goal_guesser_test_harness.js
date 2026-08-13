@@ -10,6 +10,10 @@ const GG_COLLECTIONS = [
   "gg_sessions",
   "gg_memberships",
   "gg_picks",
+  "gg_league_cards",
+  "gg_wildcards",
+  "gg_admin_audit_events",
+  "gg_simulation_runs",
   "gg_leagues",
   "gg_fixtures",
   "gg_contests",
@@ -139,10 +143,11 @@ async function scoreFixture(db, fixture) {
   const scoredAt = new Date().toISOString();
   await db.collection("gg_picks").bulkWrite(picks.map((pick) => {
     const score = scorePrediction(pick.home_score, pick.away_score, fixture.home_score, fixture.away_score, pick.power_pick);
+    const baseScore = scorePrediction(pick.home_score, pick.away_score, fixture.home_score, fixture.away_score, false);
     return {
       updateOne: {
         filter: { _id: pick._id },
-        update: { $set: { points: score.points, score_tier: score.tier, scored_result_revision: fixture.result_revision, scored_at: scoredAt } },
+        update: { $set: { points: score.points, base_points: baseScore.points, score_tier: score.tier, scored_result_revision: fixture.result_revision, scored_at: scoredAt } },
       },
     };
   }), { ordered: false });

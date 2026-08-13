@@ -46,6 +46,7 @@ const BSD_LEAGUE_NAME_MAP = {
   "41": "Copa del Rey",
   "7": "UEFA Champions League",
   "8": "UEFA Europa League",
+  "90": "UEFA Super Cup",
   "64": "UEFA Nations League",
   "31": "International Friendly",
   "58": "World Cup Qualifying UEFA",

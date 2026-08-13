@@ -363,7 +363,8 @@ final class PreferencesStore: ObservableObject {
         "FIFA World Cup Qualifying - European",
         "UEFA Champions League",
         "UEFA Conference League",
-        "UEFA Europa League"
+        "UEFA Europa League",
+        "UEFA Super Cup"
     ]
     nonisolated static let defaultSelectedNotificationLeagues = defaultSelectedLeagues
     nonisolated static let defaultFixtureAllMajorMatchesEnabled = true

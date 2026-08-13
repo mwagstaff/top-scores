@@ -1163,6 +1163,15 @@ test("matchIsMajorGameOfInterest includes promotion play-offs and configured der
   assert.equal(
     matchIsMajorGameOfInterest(
       baseMatch({
+        league: "UEFA Super Cup",
+      })
+    ),
+    true
+  );
+
+  assert.equal(
+    matchIsMajorGameOfInterest(
+      baseMatch({
         league: "Championship",
         league_subcategory: "Promotion Play-offs - Semi-finals",
         home_team: "Middlesbrough",
