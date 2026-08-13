@@ -67,9 +67,9 @@ test("_retryAfterMs parses retry-after seconds", () => {
 // URL building
 // ---------------------------------------------------------------------------
 
-test("_buildUrl appends query params and skips empty values", () => {
+test("_buildUrl uses BSD's trailing-slash canonical URL and skips empty query values", () => {
   const url = _buildUrl("/events", { league_id: 27, status: "finished", offset: 0, page: null });
-  assert.ok(url.startsWith("https://sports.bzzoiro.com/api/v2/events?"));
+  assert.ok(url.startsWith("https://sports.bzzoiro.com/api/v2/events/?"));
   assert.ok(url.includes("league_id=27"));
   assert.ok(url.includes("status=finished"));
   assert.ok(url.includes("offset=0"));

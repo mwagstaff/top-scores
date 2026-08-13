@@ -310,7 +310,12 @@ async function _fetchWithRetry(url, options = {}) {
 // ---------------------------------------------------------------------------
 
 function _buildUrl(path, query = {}) {
-  const url = new URL(`${BSD_BASE_URL}${path}`);
+  // BSD canonicalises API paths with a trailing slash. Avoiding its 301
+  // redirect prevents every logical API request from becoming two billable
+  // upstream calls and keeps our request metric aligned with BSD usage.
+  const rawPath = String(path || "/");
+  const canonicalPath = rawPath.endsWith("/") ? rawPath : `${rawPath}/`;
+  const url = new URL(`${BSD_BASE_URL}${canonicalPath}`);
   Object.entries(query).forEach(([key, value]) => {
     if (value === undefined || value === null || value === "") return;
     url.searchParams.set(key, String(value));

@@ -17,9 +17,44 @@
   },
   "panels": [
     {
+      "type": "timeseries",
+      "title": "BSD API Calls per Day (Fixed Last 7 Days)",
+      "description": "Counts every observed BSD upstream HTTP attempt, including errors and retries. This panel always uses its own fixed seven-day window, independent of the dashboard time picker. The final bar is the current partial day.",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 7 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "bars", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 80, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 6000 },
+              { "color": "red", "value": 7500 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[1d]))",
+          "legendFormat": "BSD API calls",
+          "interval": "24h"
+        }
+      ],
+      "timeFrom": "7d",
+      "interval": "24h",
+      "maxDataPoints": 7
+    },
+    {
       "type": "stat",
       "title": "Good Request Rate",
-      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "gridPos": { "x": 0, "y": 7, "w": 6, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -48,7 +83,7 @@
     {
       "type": "stat",
       "title": "Bad Request Rate",
-      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "gridPos": { "x": 6, "y": 7, "w": 6, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -81,7 +116,7 @@
     {
       "type": "stat",
       "title": "Error Rate",
-      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "gridPos": { "x": 12, "y": 7, "w": 6, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -114,7 +149,7 @@
     {
       "type": "stat",
       "title": "P95 Latency",
-      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "gridPos": { "x": 18, "y": 7, "w": 6, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -147,7 +182,7 @@
     {
       "type": "timeseries",
       "title": "Good Requests (1xx-3xx) - req/sec",
-      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 11, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -169,7 +204,7 @@
     {
       "type": "timeseries",
       "title": "Good Requests by Status Code - req/sec",
-      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 11, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -191,7 +226,7 @@
     {
       "type": "timeseries",
       "title": "Bad Requests (4xx-5xx + error) - req/sec",
-      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 19, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -213,7 +248,7 @@
     {
       "type": "timeseries",
       "title": "Bad Requests by Status Code - req/sec",
-      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 19, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -235,7 +270,7 @@
     {
       "type": "timeseries",
       "title": "Timeout Requests - req/sec",
-      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 27, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -266,7 +301,7 @@
     {
       "type": "timeseries",
       "title": "Timeout Rate (% of BSD Requests)",
-      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 27, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -296,7 +331,7 @@
     {
       "type": "table",
       "title": "Top Timeout URLs by Query String",
-      "gridPos": { "x": 0, "y": 28, "w": 24, "h": 8 },
+      "gridPos": { "x": 0, "y": 35, "w": 24, "h": 8 },
       "targets": [
         {
           "expr": "sort_desc(top_scores_bsd_http_timeout_url_requests{job=\"top-scores\",source=~\"bsd_.*\"})",
@@ -319,7 +354,7 @@
     {
       "type": "table",
       "title": "Top URLs by Query String and Status",
-      "gridPos": { "x": 0, "y": 36, "w": 24, "h": 10 },
+      "gridPos": { "x": 0, "y": 43, "w": 24, "h": 10 },
       "targets": [
         {
           "expr": "sort_desc(top_scores_bsd_http_top_url_requests{job=\"top-scores\",source=~\"bsd_.*\"})",
@@ -342,7 +377,7 @@
     {
       "type": "timeseries",
       "title": "P95 Latency (All BSD Requests)",
-      "gridPos": { "x": 0, "y": 46, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 53, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -364,7 +399,7 @@
     {
       "type": "timeseries",
       "title": "Error Rate (% of BSD Requests)",
-      "gridPos": { "x": 12, "y": 46, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 53, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -394,7 +429,7 @@
     {
       "type": "table",
       "title": "Slow BSD URLs by p95 Latency",
-      "gridPos": { "x": 0, "y": 54, "w": 12, "h": 10 },
+      "gridPos": { "x": 0, "y": 61, "w": 12, "h": 10 },
       "fieldConfig": {
         "defaults": { "unit": "none" },
         "overrides": [
@@ -425,7 +460,7 @@
     {
       "type": "table",
       "title": "Slow BSD URLs by Max Latency",
-      "gridPos": { "x": 12, "y": 54, "w": 12, "h": 10 },
+      "gridPos": { "x": 12, "y": 61, "w": 12, "h": 10 },
       "fieldConfig": {
         "defaults": { "unit": "none" },
         "overrides": [
