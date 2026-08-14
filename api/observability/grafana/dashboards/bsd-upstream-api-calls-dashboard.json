@@ -7,7 +7,7 @@
     "upstream",
     "api"
   ],
-  "timezone": "browser",
+  "timezone": "Europe/London",
   "schemaVersion": 38,
   "version": 1,
   "refresh": "10s",
@@ -17,13 +17,16 @@
   },
   "panels": [
     {
-      "type": "bargauge",
-      "title": "BSD API Calls per 24 Hours (Fixed Last 7 Days)",
-      "description": "Seven explicit, non-overlapping 24-hour windows, independent of the dashboard time picker. Counts every observed BSD upstream HTTP attempt, including errors and retries.",
+      "type": "barchart",
+      "title": "BSD API Calls per Day (London, Fixed Last 7 Days)",
+      "description": "Europe/London calendar-day totals, including today so far. Fixed to the latest seven London dates regardless of the dashboard time picker. Counts every observed BSD upstream HTTP attempt, including errors and retries.",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 7 },
+      "timeFrom": "6d/d",
+      "hideTimeOverride": true,
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "color": { "mode": "thresholds" },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -36,62 +39,95 @@
         "overrides": []
       },
       "options": {
-        "displayMode": "gradient",
+        "barRadius": 0,
+        "barWidth": 0.9,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
         "orientation": "horizontal",
-        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
-        "showUnfilled": true,
-        "sizing": "auto",
-        "valueMode": "color"
+        "showValue": "always",
+        "stacking": "none",
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": { "hideZeros": false, "mode": "single", "sort": "none" },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 144h))",
-          "legendFormat": "2026-08-07",
-          "instant": true,
-          "range": false
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[30m]))",
+          "legendFormat": "BSD API calls",
+          "instant": false,
+          "range": true,
+          "interval": "30m"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "seriesToRows",
+          "options": {}
         },
         {
-          "refId": "B",
-          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 120h))",
-          "legendFormat": "2026-08-08",
-          "instant": true,
-          "range": false
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": { "matcher": { "id": "byName", "options": "Time" } },
+              "operator": "-",
+              "right": { "fixed": "1" }
+            },
+            "alias": "Bucket time",
+            "replaceFields": false
+          }
         },
         {
-          "refId": "C",
-          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 96h))",
-          "legendFormat": "2026-08-09",
-          "instant": true,
-          "range": false
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              { "targetField": "Bucket time", "destinationType": "time" }
+            ]
+          }
         },
         {
-          "refId": "D",
-          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 72h))",
-          "legendFormat": "2026-08-10",
-          "instant": true,
-          "range": false
+          "id": "formatTime",
+          "options": {
+            "timeField": "Bucket time",
+            "outputFormat": "YYYY-MM-DD",
+            "timezone": "Europe/London"
+          }
         },
         {
-          "refId": "E",
-          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 48h))",
-          "legendFormat": "2026-08-11",
-          "instant": true,
-          "range": false
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "Bucket time": { "aggregations": [], "operation": "groupby" },
+              "Value": { "aggregations": ["sum"], "operation": "aggregate" }
+            }
+          }
         },
         {
-          "refId": "F",
-          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 24h))",
-          "legendFormat": "2026-08-12",
-          "instant": true,
-          "range": false
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [{ "field": "Bucket time", "desc": false }]
+          }
         },
         {
-          "refId": "G",
-          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h]))",
-          "legendFormat": "2026-08-13",
-          "instant": true,
-          "range": false
+          "id": "limit",
+          "options": { "limitField": -7 }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "includeByName": {},
+            "indexByName": { "Bucket time": 0, "Value (sum)": 1 },
+            "renameByName": { "Value (sum)": "BSD API calls" }
+          }
         }
       ]
     },
