@@ -5,13 +5,25 @@ const assert = require("node:assert/strict");
 
 const { __private } = require("./epl_season_status");
 
-const { eventSeasonStatus, parseEventDateMs } = __private;
+const { eventSeasonStatus, parseEventDateMs, premierLeagueBoundaryQueries } = __private;
 
 test("parseEventDateMs parses BSD event timestamps", () => {
   assert.equal(
     new Date(parseEventDateMs("2026-05-24T15:00:00+00:00")).toISOString(),
     "2026-05-24T15:00:00.000Z"
   );
+});
+
+test("premierLeagueBoundaryQueries requests only the nearest Mongo boundaries", () => {
+  const queries = premierLeagueBoundaryQueries(Date.parse("2026-08-14T12:00:00Z"));
+
+  assert.deepEqual(queries.lastFinished.filter, {
+    league_id: { $in: [1, "1"] },
+    status: "finished",
+    event_date: { $lte: "2026-08-14T12:00:00.000Z" },
+  });
+  assert.deepEqual(queries.lastFinished.options, { sort: { event_date: -1 }, limit: 1 });
+  assert.deepEqual(queries.nextNotStarted.options, { sort: { event_date: 1 }, limit: 1 });
 });
 
 test("eventSeasonStatus is active when latest finished and next notstarted share season_id", () => {

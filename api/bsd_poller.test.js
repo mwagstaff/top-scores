@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const { __private } = require("./bsd_poller");
 const {
   computeLiveLeagueIds,
+  filterAllowlistedLiveEvents,
   diffSettledLeagueIds,
   millisecondsUntilNextLondonTime,
   buildMetricsText,
@@ -25,6 +26,17 @@ test("computeLiveLeagueIds: keeps only allowlisted league ids, deduped", () => {
 test("computeLiveLeagueIds: handles empty/non-array input", () => {
   assert.equal(computeLiveLeagueIds([], ["27"]).size, 0);
   assert.equal(computeLiveLeagueIds(null, ["27"]).size, 0);
+});
+
+test("filterAllowlistedLiveEvents: excludes global events outside configured leagues", () => {
+  const events = [
+    { id: 1, league_id: 27 },
+    { id: 2, league_id: "1" },
+    { id: 3, league_id: 999 },
+    { id: null, league_id: 27 },
+  ];
+  assert.deepEqual(filterAllowlistedLiveEvents(events, ["27", "1"]), events.slice(0, 2));
+  assert.deepEqual(filterAllowlistedLiveEvents(null, ["27"]), []);
 });
 
 test("diffSettledLeagueIds: returns leagues that dropped out of the live set", () => {

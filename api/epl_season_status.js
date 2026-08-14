@@ -5,7 +5,6 @@
 // League event with the next not-started Premier League event. Different
 // season_id values mean we are between seasons, so FPL chrome should be hidden.
 
-const bsd = require("./bsd_client");
 const { getBsdRecords } = require("./mongo_client");
 
 const PREMIER_LEAGUE_BSD_ID = "1";
@@ -25,29 +24,39 @@ function parseEventDateMs(value) {
 }
 
 async function computeEplSeasonActive(nowMs) {
-  return eventSeasonStatus(await fetchPremierLeagueSeasonEvents(), nowMs).active;
+  return eventSeasonStatus(await fetchPremierLeagueSeasonBoundaryEvents(nowMs), nowMs).active;
 }
 
-async function fetchPremierLeagueSeasonEvents() {
-  try {
-    const [finished, notStarted] = await Promise.all([
-      bsd.getEvents(
-        { leagueId: PREMIER_LEAGUE_BSD_ID, status: "finished" },
-        { initiator: "epl_season_status" }
-      ),
-      bsd.getEvents(
-        { leagueId: PREMIER_LEAGUE_BSD_ID, status: "notstarted" },
-        { initiator: "epl_season_status" }
-      ),
-    ]);
-    return [...finished, ...notStarted];
-  } catch (error) {
-    console.warn(`[EplSeasonStatus] BSD events API failed; falling back to Mongo: ${error.message || error}`);
-    return getBsdRecords("bsd_events", {
-      league_id: { $in: [Number(PREMIER_LEAGUE_BSD_ID), PREMIER_LEAGUE_BSD_ID] },
-      status: { $in: ["finished", "notstarted"] },
-    });
-  }
+function premierLeagueBoundaryQueries(nowMs) {
+  const leagueIds = [Number(PREMIER_LEAGUE_BSD_ID), PREMIER_LEAGUE_BSD_ID];
+  const nowIso = new Date(nowMs).toISOString();
+  return {
+    lastFinished: {
+      filter: {
+        league_id: { $in: leagueIds },
+        status: "finished",
+        event_date: { $lte: nowIso },
+      },
+      options: { sort: { event_date: -1 }, limit: 1 },
+    },
+    nextNotStarted: {
+      filter: {
+        league_id: { $in: leagueIds },
+        status: "notstarted",
+        event_date: { $gt: nowIso },
+      },
+      options: { sort: { event_date: 1 }, limit: 1 },
+    },
+  };
+}
+
+async function fetchPremierLeagueSeasonBoundaryEvents(nowMs = Date.now()) {
+  const queries = premierLeagueBoundaryQueries(nowMs);
+  const [finished, notStarted] = await Promise.all([
+    getBsdRecords("bsd_events", queries.lastFinished.filter, queries.lastFinished.options),
+    getBsdRecords("bsd_events", queries.nextNotStarted.filter, queries.nextNotStarted.options),
+  ]);
+  return [...finished, ...notStarted];
 }
 
 function eventPayload(doc) {
@@ -116,7 +125,10 @@ async function refreshEplSeasonActive(nowMs = Date.now()) {
   if (refreshInFlight) return cachedActive;
   refreshInFlight = true;
   try {
-    const status = eventSeasonStatus(await fetchPremierLeagueSeasonEvents(), nowMs);
+    const status = eventSeasonStatus(
+      await fetchPremierLeagueSeasonBoundaryEvents(nowMs),
+      nowMs
+    );
     cachedActive = status.active;
     cachedCheckedAtMs = nowMs;
   } catch (error) {
@@ -147,5 +159,7 @@ module.exports = {
     parseEventDateMs,
     eventSeasonStatus,
     computeEplSeasonActive,
+    premierLeagueBoundaryQueries,
+    fetchPremierLeagueSeasonBoundaryEvents,
   },
 };

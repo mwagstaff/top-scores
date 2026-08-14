@@ -138,6 +138,10 @@ async function ensureIndexes() {
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
       { key: { league_id: 1, status: 1 }, name: "league_status" },
       {
+        key: { league_id: 1, status: 1, event_date: 1 },
+        name: "league_status_event_date",
+      },
+      {
         key: { league_id: 1, status: 1, "payload.season_id": 1 },
         name: "league_status_season",
       },

@@ -4,7 +4,7 @@
 
 // ---------------------------------------------------------------------------
 // Ingest BSD events (matches) into Mongo for the allowlisted leagues:
-//   - notstarted + started + finished events -> bsd_events
+//   - notstarted + finished events         -> bsd_events
 //   - incidents/lineups for played     -> bsd_incidents, bsd_lineups
 //   - referenced teams                 -> bsd_teams
 //
@@ -21,7 +21,26 @@ const {
   closeMongoConnection,
 } = require("./mongo_client");
 
-const EVENT_STATUSES = ["notstarted", "started", "finished"];
+// `started` is historical in BSD (it includes events that started long ago),
+// not a synonym for currently live. Live matches come from /events/live, so
+// bulk ingestion only needs upcoming and finished lists.
+const EVENT_STATUSES = ["notstarted", "finished"];
+
+function positiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const INCREMENTAL_UPCOMING_MAX_PAGES = Math.floor(
+  positiveNumber(process.env.BSD_EVENTS_INCREMENTAL_UPCOMING_MAX_PAGES, 5)
+);
+const INCREMENTAL_FINISHED_MAX_PAGES = Math.floor(
+  positiveNumber(process.env.BSD_EVENTS_INCREMENTAL_FINISHED_MAX_PAGES, 1)
+);
+const INCREMENTAL_FINISHED_DAYS = positiveNumber(
+  process.env.BSD_EVENTS_INCREMENTAL_FINISHED_DAYS,
+  7
+);
 
 function eventToRecord(event) {
   return {
@@ -61,22 +80,66 @@ function hasUnknownOutsideTimelineCardIncident(doc) {
   });
 }
 
-async function ingestLeagueEvents(leagueId) {
+function isRecentFinishedEvent(event, nowMs = Date.now()) {
+  if (!event || String(event.status || "").toLowerCase() !== "finished") return false;
+  const eventDateMs = Date.parse(event.event_date || "");
+  if (!Number.isFinite(eventDateMs)) return false;
+  const windowMs = Math.max(0, INCREMENTAL_FINISHED_DAYS) * 24 * 60 * 60 * 1000;
+  return eventDateMs >= nowMs - windowMs;
+}
+
+function selectIncrementalEvents(events, nowMs = Date.now()) {
+  const source = Array.isArray(events) ? events : [];
+  const retained = source.filter((event) => {
+    const status = String(event && event.status ? event.status : "").toLowerCase();
+    return status === "notstarted" || isRecentFinishedEvent(event, nowMs);
+  });
+  const newestFinished = source
+    .filter((event) => {
+      const status = String(event && event.status ? event.status : "").toLowerCase();
+      return status === "finished" && Number.isFinite(Date.parse(event.event_date || ""));
+    })
+    .sort((a, b) => Date.parse(b.event_date) - Date.parse(a.event_date))[0];
+  if (newestFinished && !retained.includes(newestFinished)) retained.push(newestFinished);
+  return retained;
+}
+
+async function ingestLeagueEvents(leagueId, options = {}) {
+  const statuses = Array.isArray(options.statuses) ? options.statuses : EVENT_STATUSES;
+  const maxPagesByStatus = options.maxPagesByStatus || {};
+  const filterEvents = typeof options.filterEvents === "function" ? options.filterEvents : null;
   const collected = [];
-  for (const status of EVENT_STATUSES) {
+  for (const status of statuses) {
+    const maxPages = Number(maxPagesByStatus[status]);
     // eslint-disable-next-line no-await-in-loop
     const events = await bsd.getEvents(
       { leagueId, status },
-      { initiator: "fetch_bsd_events" }
+      {
+        initiator: "fetch_bsd_events",
+        ...(Number.isFinite(maxPages) && maxPages > 0 ? { maxPages } : {}),
+      }
     );
-    collected.push(...events);
-    console.log(`[bsd] league ${leagueId} status=${status}: ${events.length} events`);
+    const retained = filterEvents ? filterEvents(events, status) : events;
+    collected.push(...retained);
+    console.log(
+      `[bsd] league ${leagueId} status=${status}: ${events.length} fetched, ${retained.length} retained`
+    );
   }
   const records = collected
     .filter((event) => event && event.id != null)
     .map(eventToRecord);
   await upsertBsdRecords("bsd_events", records);
   return collected;
+}
+
+async function ingestLeagueIncrementalEvents(leagueId, nowMs = Date.now()) {
+  return ingestLeagueEvents(leagueId, {
+    maxPagesByStatus: {
+      notstarted: INCREMENTAL_UPCOMING_MAX_PAGES,
+      finished: INCREMENTAL_FINISHED_MAX_PAGES,
+    },
+    filterEvents: (events) => selectIncrementalEvents(events, nowMs),
+  });
 }
 
 async function hydrateDetail(event) {
@@ -119,18 +182,7 @@ async function hydrateTeams(teamIds) {
   console.log(`[bsd] teams hydrated: ${records.length}/${teamIds.length}`);
 }
 
-// Full events refresh: notstarted/started/finished lists + incidents/lineups for
-// played matches + referenced teams, across every allowlisted league. Shared
-// by the CLI entry point and the bsd runtime's periodic refresh.
-async function refreshAllEvents() {
-  console.log(`[bsd] events ingest, allowlist: ${BSD_LEAGUE_ALLOWLIST.join(", ")}`);
-  const allEvents = [];
-  for (const leagueId of BSD_LEAGUE_ALLOWLIST) {
-    // eslint-disable-next-line no-await-in-loop
-    const events = await ingestLeagueEvents(leagueId);
-    allEvents.push(...events);
-  }
-
+async function hydrateMissingDetails(allEvents) {
   // Incidents/lineups for a played match rarely change once captured, so skip
   // events already hydrated rather than re-fetching the entire history every
   // run. Exception: early BSD payloads used "Unknown" for some manager cards
@@ -151,15 +203,54 @@ async function refreshAllEvents() {
     // eslint-disable-next-line no-await-in-loop
     await hydrateDetail(event);
   }
+}
 
+async function hydrateMissingTeams(allEvents) {
+  const hydratedTeamIds = new Set((await getBsdRecordIds("bsd_teams")).map(String));
   const teamIds = new Set();
   allEvents.forEach((event) => {
-    if (event.home_team_id != null) teamIds.add(event.home_team_id);
-    if (event.away_team_id != null) teamIds.add(event.away_team_id);
+    if (event.home_team_id != null && !hydratedTeamIds.has(String(event.home_team_id))) {
+      teamIds.add(event.home_team_id);
+    }
+    if (event.away_team_id != null && !hydratedTeamIds.has(String(event.away_team_id))) {
+      teamIds.add(event.away_team_id);
+    }
   });
   await hydrateTeams([...teamIds]);
+}
+
+// Explicit full-history backfill. The long-running poller intentionally uses
+// refreshIncrementalEvents instead.
+async function refreshAllEvents() {
+  console.log(`[bsd] events ingest, allowlist: ${BSD_LEAGUE_ALLOWLIST.join(", ")}`);
+  const allEvents = [];
+  for (const leagueId of BSD_LEAGUE_ALLOWLIST) {
+    // eslint-disable-next-line no-await-in-loop
+    const events = await ingestLeagueEvents(leagueId);
+    allEvents.push(...events);
+  }
+
+  await hydrateMissingDetails(allEvents);
+  await hydrateMissingTeams(allEvents);
 
   console.log("[bsd] events ingest complete");
+  return allEvents;
+}
+
+// Automatic runtime refresh: bounded to upcoming fixtures and the newest page
+// of recently finished matches. Full history is intentionally reserved for
+// the explicit CLI backfill above.
+async function refreshIncrementalEvents() {
+  console.log(`[bsd] incremental events ingest, allowlist: ${BSD_LEAGUE_ALLOWLIST.join(", ")}`);
+  const allEvents = [];
+  for (const leagueId of BSD_LEAGUE_ALLOWLIST) {
+    // eslint-disable-next-line no-await-in-loop
+    const events = await ingestLeagueIncrementalEvents(leagueId);
+    allEvents.push(...events);
+  }
+  await hydrateMissingDetails(allEvents);
+  await hydrateMissingTeams(allEvents);
+  console.log(`[bsd] incremental events ingest complete: ${allEvents.length} events`);
   return allEvents;
 }
 
@@ -177,11 +268,20 @@ if (require.main === module) {
 
 module.exports = {
   ingestLeagueEvents,
+  ingestLeagueIncrementalEvents,
   hydrateDetail,
   hydrateTeams,
+  hydrateMissingDetails,
+  hydrateMissingTeams,
   isPlayed,
   hasUnknownOutsideTimelineCardIncident,
   eventToRecord,
   refreshAllEvents,
+  refreshIncrementalEvents,
   EVENT_STATUSES,
+  INCREMENTAL_UPCOMING_MAX_PAGES,
+  INCREMENTAL_FINISHED_MAX_PAGES,
+  INCREMENTAL_FINISHED_DAYS,
+  isRecentFinishedEvent,
+  selectIncrementalEvents,
 };

@@ -348,9 +348,11 @@ async function _collectPages(fetchPage, { pageLimit = BSD_PAGE_LIMIT, maxPages =
 // Pages a `{ count, next, previous, results: [...] }` list endpoint, sending
 // `limit=200` and walking `offset`. Returns the concatenated `results` array.
 async function _requestAllPages(path, options = {}) {
-  const baseQuery = { ...(options.query || {}), limit: BSD_PAGE_LIMIT };
-  return _collectPages((offset) =>
-    _request(path, { ...options, query: { ...baseQuery, offset } })
+  const { maxPages = BSD_MAX_PAGES, ...requestOptions } = options;
+  const baseQuery = { ...(requestOptions.query || {}), limit: BSD_PAGE_LIMIT };
+  return _collectPages(
+    (offset) => _request(path, { ...requestOptions, query: { ...baseQuery, offset } }),
+    { pageLimit: BSD_PAGE_LIMIT, maxPages }
   );
 }
 

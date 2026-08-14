@@ -17,14 +17,13 @@
   },
   "panels": [
     {
-      "type": "timeseries",
-      "title": "BSD API Calls per Day (Fixed Last 7 Days)",
-      "description": "Counts every observed BSD upstream HTTP attempt, including errors and retries. This panel always uses its own fixed seven-day window, independent of the dashboard time picker. The final bar is the current partial day.",
+      "type": "bargauge",
+      "title": "BSD API Calls per 24 Hours (Fixed Last 7 Days)",
+      "description": "Seven explicit, non-overlapping 24-hour windows, independent of the dashboard time picker. Counts every observed BSD upstream HTTP attempt, including errors and retries.",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 7 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": { "drawStyle": "bars", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 80, "showPoints": "never" },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -37,19 +36,64 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
-        "tooltip": { "mode": "single", "sort": "none" }
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
       },
       "targets": [
         {
-          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[1d]))",
-          "legendFormat": "BSD API calls",
-          "interval": "24h"
+          "refId": "A",
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 144h))",
+          "legendFormat": "2026-08-07",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 120h))",
+          "legendFormat": "2026-08-08",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 96h))",
+          "legendFormat": "2026-08-09",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "D",
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 72h))",
+          "legendFormat": "2026-08-10",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "E",
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 48h))",
+          "legendFormat": "2026-08-11",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "F",
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h] offset 24h))",
+          "legendFormat": "2026-08-12",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "G",
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[24h]))",
+          "legendFormat": "2026-08-13",
+          "instant": true,
+          "range": false
         }
-      ],
-      "timeFrom": "7d",
-      "interval": "24h",
-      "maxDataPoints": 7
+      ]
     },
     {
       "type": "stat",

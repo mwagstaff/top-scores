@@ -108,6 +108,17 @@ test("_collectPages tolerates a missing results array", async () => {
   assert.deepEqual(all, []);
 });
 
+test("_collectPages honours a per-call page cap", async () => {
+  const seenOffsets = [];
+  const fetchPage = async (offset) => {
+    seenOffsets.push(offset);
+    return { next: "more", results: Array.from({ length: BSD_PAGE_LIMIT }, (_, i) => i) };
+  };
+  const all = await _collectPages(fetchPage, { maxPages: 2 });
+  assert.equal(all.length, BSD_PAGE_LIMIT * 2);
+  assert.deepEqual(seenOffsets, [0, BSD_PAGE_LIMIT]);
+});
+
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
