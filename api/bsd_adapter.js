@@ -55,6 +55,22 @@ const BSD_LEAGUE_NAME_MAP = {
   "63": "World Cup Qualifying OFC",
 };
 
+// BSD's standings endpoint can omit teams until they have played their first
+// match of a new season. For domestic round-robin leagues, complete the table
+// roster from BSD fixtures for the exact same league + season. Keep this list
+// explicit so knockout competitions with an empty standings payload are not
+// projected as fake league tables.
+const BSD_FIXTURE_SEEDED_STANDINGS_TEAM_COUNTS = new Map([
+  ["1", 20],  // Premier League
+  ["12", 24], // Championship
+  ["13", 12], // Scottish Premiership
+  ["5", 18],  // Bundesliga
+  ["4", 20],  // Serie A
+  ["6", 18],  // Ligue 1
+  ["3", 20],  // La Liga
+  ["10", 18], // Dutch Eredivisie
+]);
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -506,11 +522,71 @@ function bsdStandingsRowToCanonical(row) {
   };
 }
 
+function bsdStandingsRowSort(left, right) {
+  return (
+    right.points - left.points ||
+    right.goal_difference - left.goal_difference ||
+    right.goals_for - left.goals_for ||
+    left.team.localeCompare(right.team)
+  );
+}
+
+function completeBsdStandingsRowsFromEvents(rows, events, { leagueId, seasonId } = {}) {
+  const normalizedLeagueId = leagueId != null ? String(leagueId) : null;
+  if (
+    !normalizedLeagueId ||
+    !BSD_FIXTURE_SEEDED_STANDINGS_TEAM_COUNTS.has(normalizedLeagueId)
+  ) {
+    return rows;
+  }
+
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  const completed = sourceRows.map((row) => ({ ...row }));
+  const teamKeys = new Set(
+    completed.map((row) => String(row.team || "").trim().toLowerCase()).filter(Boolean)
+  );
+
+  (Array.isArray(events) ? events : []).forEach((event) => {
+    if (!event || String(event.league_id) !== normalizedLeagueId) return;
+    if (seasonId != null && String(event.season_id) !== String(seasonId)) return;
+
+    [event.home_team, event.away_team].forEach((rawTeam) => {
+      if (isPlaceholderTeam(rawTeam)) return;
+      const team = canonicalTeamName(rawTeam);
+      const key = String(team || "").trim().toLowerCase();
+      if (!key || teamKeys.has(key)) return;
+      teamKeys.add(key);
+      completed.push({
+        position: 0,
+        team,
+        played: 0,
+        won: 0,
+        drawn: 0,
+        lost: 0,
+        goals_for: 0,
+        goals_against: 0,
+        goal_difference: 0,
+        points: 0,
+        form: [],
+        rank_status: null,
+      });
+    });
+  });
+
+  if (completed.length === sourceRows.length) return rows;
+  return completed
+    .sort(bsdStandingsRowSort)
+    .map((row, index) => ({ ...row, position: index + 1 }));
+}
+
 // Projects one bsd_standings payload (the raw /leagues/:id/standings response)
 // into the canonical league-table shape shared with the TSDB pipeline.
 // `leagueId`/`updatedAt` come from the Mongo doc wrapper; `leagueNameById`
 // resolves a human league name when BSD_LEAGUE_NAME_MAP has no entry.
-function bsdStandingsPayloadToTable(payload, { leagueId, updatedAt, leagueNameById } = {}) {
+function bsdStandingsPayloadToTable(
+  payload,
+  { leagueId, updatedAt, leagueNameById, events = [] } = {}
+) {
   if (!payload) return null;
   const id = String(leagueId != null ? leagueId : payload.league_id);
   if (!id) return null;
@@ -537,6 +613,10 @@ function bsdStandingsPayloadToTable(payload, { leagueId, updatedAt, leagueNameBy
       }));
   } else if (Array.isArray(payload.standings)) {
     rows = payload.standings.map(bsdStandingsRowToCanonical);
+    rows = completeBsdStandingsRowsFromEvents(rows, events, {
+      leagueId: id,
+      seasonId: payload.season && payload.season.id,
+    });
   } else {
     return null;
   }
@@ -554,12 +634,76 @@ function bsdStandingsPayloadToTable(payload, { leagueId, updatedAt, leagueNameBy
   };
 }
 
+function buildBsdStandingsEventsFilter(standingsDocs) {
+  const clauses = [];
+  (Array.isArray(standingsDocs) ? standingsDocs : []).forEach((doc) => {
+    const leagueId = doc && doc._id != null ? String(doc._id) : null;
+    const payload = doc && doc.payload;
+    const seasonId = payload && payload.season && payload.season.id;
+    const expectedTeamCount = BSD_FIXTURE_SEEDED_STANDINGS_TEAM_COUNTS.get(leagueId);
+    const standingsCount = Array.isArray(payload && payload.standings)
+      ? payload.standings.length
+      : 0;
+    if (
+      !leagueId ||
+      seasonId == null ||
+      !expectedTeamCount ||
+      standingsCount >= expectedTeamCount
+    ) {
+      return;
+    }
+    clauses.push({
+      $and: [
+        {
+          $or: [
+            { league_id: { $in: mongoIds([leagueId]) } },
+            { "payload.league_id": { $in: mongoIds([leagueId]) } },
+          ],
+        },
+        {
+          $or: [
+            { season_id: { $in: mongoIds([seasonId]) } },
+            { "payload.season_id": { $in: mongoIds([seasonId]) } },
+          ],
+        },
+      ],
+    });
+  });
+  return clauses.length > 0 ? { $or: clauses } : null;
+}
+
+function bsdStandingsEventFromDoc(doc) {
+  const payload = doc && doc.payload ? doc.payload : {};
+  return {
+    league_id: doc && doc.league_id != null ? doc.league_id : payload.league_id,
+    season_id: doc && doc.season_id != null ? doc.season_id : payload.season_id,
+    home_team: doc && doc.home_team ? doc.home_team : payload.home_team,
+    away_team: doc && doc.away_team ? doc.away_team : payload.away_team,
+  };
+}
+
 // Projects every allowlisted bsd_standings doc into the canonical table list.
 async function projectBsdStandings() {
   const [standingsDocs, leagues] = await Promise.all([
     getBsdRecords("bsd_standings"),
     getBsdRecords("bsd_leagues"),
   ]);
+  const eventsFilter = buildBsdStandingsEventsFilter(standingsDocs);
+  const eventDocs = eventsFilter
+    ? await getBsdRecords("bsd_events", eventsFilter, {
+        projection: {
+          league_id: 1,
+          season_id: 1,
+          home_team: 1,
+          away_team: 1,
+          "payload.league_id": 1,
+          "payload.season_id": 1,
+          "payload.home_team": 1,
+          "payload.away_team": 1,
+        },
+      })
+    : [];
+  const standingsEvents = eventDocs.map(bsdStandingsEventFromDoc);
   const leagueNameById = new Map();
   leagues.forEach((doc) => {
     const p = doc.payload || {};
@@ -575,6 +719,7 @@ async function projectBsdStandings() {
       leagueId,
       updatedAt: doc.updated_at,
       leagueNameById,
+      events: standingsEvents,
     });
     if (table) out.push(table);
   });
@@ -1017,6 +1162,9 @@ module.exports = {
     parseBsdFormString,
     bsdStandingsRowToCanonical,
     bsdStandingsPayloadToTable,
+    completeBsdStandingsRowsFromEvents,
+    buildBsdStandingsEventsFilter,
+    bsdStandingsEventFromDoc,
     canonicalLeagueName,
     zonedKickoff,
     isCurrentSeasonEvent,

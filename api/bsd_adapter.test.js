@@ -18,6 +18,9 @@ const {
   enrichBsdLineupPhotos,
   parseBsdFormString,
   bsdStandingsPayloadToTable,
+  completeBsdStandingsRowsFromEvents,
+  buildBsdStandingsEventsFilter,
+  bsdStandingsEventFromDoc,
   bsdPredictionFixtureToCanonical,
   bsdPredictionsPayloadToLeague,
   extractBsdPeriodSummary,
@@ -574,6 +577,171 @@ test("bsdStandingsPayloadToTable: falls back to leagueNameById, then the raw id,
 test("bsdStandingsPayloadToTable: returns null for missing/malformed payload", () => {
   assert.equal(bsdStandingsPayloadToTable(null, { leagueId: "1" }), null);
   assert.equal(bsdStandingsPayloadToTable({ league_id: 1, grouped: false }, { leagueId: "1" }), null);
+});
+
+test("bsdStandingsPayloadToTable: completes a new Championship table from same-season BSD fixtures", () => {
+  const payload = {
+    league_id: 12,
+    season: { id: 1111, name: "Championship 26/27" },
+    grouped: false,
+    standings: [
+      {
+        position: 1,
+        team_name: "Blackburn Rovers",
+        played: 1,
+        won: 0,
+        drawn: 1,
+        lost: 0,
+        gf: 2,
+        ga: 2,
+        gd: 0,
+        pts: 1,
+      },
+      {
+        position: 2,
+        team_name: "Wolverhampton",
+        played: 1,
+        won: 0,
+        drawn: 1,
+        lost: 0,
+        gf: 2,
+        ga: 2,
+        gd: 0,
+        pts: 1,
+      },
+    ],
+  };
+  const events = [
+    {
+      league_id: 12,
+      season_id: 1111,
+      home_team: "Blackburn Rovers",
+      away_team: "Wolverhampton",
+    },
+    {
+      league_id: 12,
+      season_id: 1111,
+      home_team: "Birmingham City",
+      away_team: "West Ham United",
+    },
+    {
+      league_id: 12,
+      season_id: 999,
+      home_team: "Old Season FC",
+      away_team: "Another Old Team",
+    },
+    {
+      league_id: 1,
+      season_id: 1111,
+      home_team: "Wrong League FC",
+      away_team: "Another Wrong Team",
+    },
+  ];
+
+  const table = bsdStandingsPayloadToTable(payload, { leagueId: "12", events });
+
+  assert.equal(table.rows.length, 4);
+  assert.deepEqual(
+    table.rows.map((row) => [row.position, row.team, row.played, row.points]),
+    [
+      [1, "Blackburn Rovers", 1, 1],
+      [2, "Wolverhampton Wanderers", 1, 1],
+      [3, "Birmingham City", 0, 0],
+      [4, "West Ham United", 0, 0],
+    ]
+  );
+});
+
+test("completeBsdStandingsRowsFromEvents: unplayed teams rank above a played team with a loss", () => {
+  const rows = [
+    {
+      position: 1,
+      team: "Defeated FC",
+      played: 1,
+      won: 0,
+      drawn: 0,
+      lost: 1,
+      goals_for: 0,
+      goals_against: 2,
+      goal_difference: -2,
+      points: 0,
+      form: ["L"],
+      rank_status: null,
+    },
+  ];
+  const events = [
+    {
+      league_id: 12,
+      season_id: 1111,
+      home_team: "Defeated FC",
+      away_team: "Unplayed FC",
+    },
+  ];
+
+  const completed = completeBsdStandingsRowsFromEvents(rows, events, {
+    leagueId: "12",
+    seasonId: 1111,
+  });
+
+  assert.deepEqual(
+    completed.map((row) => [row.position, row.team]),
+    [
+      [1, "Unplayed FC"],
+      [2, "Defeated FC"],
+    ]
+  );
+});
+
+test("completeBsdStandingsRowsFromEvents: does not manufacture a table for a knockout cup", () => {
+  const rows = [];
+  const events = [
+    { league_id: 40, season_id: 1112, home_team: "Team A", away_team: "Team B" },
+  ];
+
+  assert.equal(
+    completeBsdStandingsRowsFromEvents(rows, events, { leagueId: "40", seasonId: 1112 }),
+    rows
+  );
+});
+
+test("BSD standings event helpers query and unwrap exact league-season fixture teams", () => {
+  const standingsDocs = [
+    {
+      _id: "12",
+      payload: { season: { id: 1111 } },
+    },
+    {
+      _id: "40",
+      payload: { season: { id: 1112 } },
+    },
+    {
+      _id: "1",
+      payload: { season: { id: 1113 }, standings: Array.from({ length: 20 }) },
+    },
+  ];
+  const filter = buildBsdStandingsEventsFilter(standingsDocs);
+  assert.equal(filter.$or.length, 1);
+
+  assert.deepEqual(
+    bsdStandingsEventFromDoc({
+      league_id: 12,
+      season_id: 1111,
+      home_team: "Blackburn Rovers",
+      away_team: "Wolverhampton",
+      payload: {
+        league_id: 999,
+        season_id: 999,
+        home_team: "Stale Home",
+        away_team: "Stale Away",
+      },
+    }),
+    {
+      league_id: 12,
+      season_id: 1111,
+      home_team: "Blackburn Rovers",
+      away_team: "Wolverhampton",
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

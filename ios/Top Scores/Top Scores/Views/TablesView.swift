@@ -15,6 +15,7 @@ struct TablesView: View {
     @State private var isVisible = false
     @State private var scrollTargetRowID: String?
     @State private var highlightedRowID: String?
+    @State private var showsStats = false
     @ObservedObject private var navigationCoordinator = TablesNavigationCoordinator.shared
 
     // While the Tables screen is visible, refresh on a live cadence so
@@ -157,33 +158,15 @@ struct TablesView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollViewReader { scrollProxy in
-                    ScrollView {
-                        VStack(spacing: 14) {
-                            competitionPicker
-                            if let league = selectedLeague {
-                                LeagueTableHero(league: league)
-                                LeagueTableCard(league: league, highlightedRowID: highlightedRowID)
-                                    .id("\(league.id)-\(shortNameRefreshVersion)")
-                            }
+                VStack(spacing: 0) {
+                    competitionCarousel
+                    TabView(selection: $selectedLeagueID) {
+                        ForEach(sortedLeagues) { league in
+                            leaguePage(league)
+                                .tag(league.leagueID)
                         }
-                        .padding(.horizontal)
-                        .padding(.vertical, 12)
                     }
-                    .refreshable {
-                        let refreshStart = Date()
-                        await loadTables(force: true)
-                        let durationMs = Int(Date().timeIntervalSince(refreshStart) * 1000)
-                        AppMetricsService.shared.fireActivity("manual_refresh", screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
-                    }
-                    .safeAreaPadding(.bottom, 80)
-                    .onChange(of: scrollTargetRowID) { _, newValue in
-                        guard let newValue else { return }
-                        withAnimation {
-                            scrollProxy.scrollTo(newValue, anchor: .center)
-                        }
-                        scrollTargetRowID = nil
-                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
                 }
             }
         }
@@ -223,24 +206,101 @@ struct TablesView: View {
         }
     }
 
-    private var selectedLeague: LeagueTable? {
-        sortedLeagues.first { $0.leagueID == selectedLeagueID } ?? sortedLeagues.first
-    }
-
-    private var competitionPicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Picker("Competition", selection: $selectedLeagueID) {
-                ForEach(sortedLeagues) { league in
-                    Text(league.leagueName).tag(league.leagueID)
+    private var competitionCarousel: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 8) {
+                    ForEach(sortedLeagues) { league in
+                        Button {
+                            withAnimation(.snappy) {
+                                selectedLeagueID = league.leagueID
+                            }
+                        } label: {
+                            Text(league.leagueName)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .foregroundStyle(
+                                    selectedLeagueID == league.leagueID
+                                        ? Color.white
+                                        : Color.primary
+                                )
+                                .background(
+                                    selectedLeagueID == league.leagueID
+                                        ? Color.accentColor
+                                        : Color(.secondarySystemBackground),
+                                    in: Capsule()
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .id(league.leagueID)
+                        .accessibilityAddTraits(
+                            selectedLeagueID == league.leagueID ? .isSelected : []
+                        )
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            }
+            .frame(height: 56)
+            .background(.ultraThinMaterial)
+            .onAppear {
+                proxy.scrollTo(selectedLeagueID, anchor: .center)
+            }
+            .onChange(of: selectedLeagueID) { _, newValue in
+                withAnimation(.snappy) {
+                    proxy.scrollTo(newValue, anchor: .center)
                 }
             }
-            .pickerStyle(.menu)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(.thinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
+    }
+
+    private func leaguePage(_ league: LeagueTable) -> some View {
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                VStack(spacing: 14) {
+                    statsToggle
+                    LeagueTableCard(
+                        league: league,
+                        showsStats: showsStats,
+                        highlightedRowID: highlightedRowID
+                    )
+                    .id("\(league.id)-\(shortNameRefreshVersion)")
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 12)
+            }
+            .refreshable {
+                let refreshStart = Date()
+                await loadTables(force: true)
+                let durationMs = Int(Date().timeIntervalSince(refreshStart) * 1000)
+                AppMetricsService.shared.fireActivity("manual_refresh", screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
+            }
+            .safeAreaPadding(.bottom, 80)
+            .onChange(of: scrollTargetRowID) { _, newValue in
+                guard league.leagueID == selectedLeagueID, let newValue else { return }
+                withAnimation {
+                    scrollProxy.scrollTo(newValue, anchor: .center)
+                }
+                scrollTargetRowID = nil
+            }
+        }
+    }
+
+    private var statsToggle: some View {
+        HStack(spacing: 12) {
+            Text("Team")
+                .font(.subheadline.weight(.semibold))
+            Spacer(minLength: 0)
+            Toggle("Stats view", isOn: $showsStats)
+                .font(.subheadline)
+                .fixedSize()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     // Small, unobtrusive pinned bar (sits between the header and the scroll
@@ -402,10 +462,8 @@ struct TablesView: View {
 
 private struct LeagueTableCard: View {
     let league: LeagueTable
+    let showsStats: Bool
     var highlightedRowID: String?
-
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var expandedRows: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -481,20 +539,37 @@ private struct LeagueTableCard: View {
     }
 
     private var headingRow: some View {
-        HStack(spacing: 6) {
-            Text("")
-                .frame(width: 40, alignment: .trailing)
-            Text("")
-                .frame(width: 24)
-            Text("Team")
-                .frame(maxWidth: .infinity, alignment: .leading)
-            shortHeading("P", width: 30)
-            shortHeading("GD", width: 34)
-            shortHeading("Pts", width: 38)
-            Color.clear
-                .frame(width: 16)
+        Group {
+            if showsStats {
+                HStack(spacing: 0) {
+                    statsHeading("#", width: 30, alignment: .leading)
+                    Color.clear.frame(width: 8)
+                    Color.clear.frame(width: 24)
+                    statsHeading("P", width: 24)
+                    statsHeading("W", width: 24)
+                    statsHeading("D", width: 24)
+                    statsHeading("L", width: 24)
+                    statsHeading("GF", width: 27)
+                    statsHeading("GA", width: 27)
+                    statsHeading("GD", width: 27)
+                    statsHeading("Pts", width: 30)
+                    statsHeading("Form", width: 55)
+                }
+            } else {
+                HStack(spacing: 6) {
+                    Text("")
+                        .frame(width: 40, alignment: .trailing)
+                    Text("")
+                        .frame(width: 24)
+                    Text("Team")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    shortHeading("P", width: 30)
+                    shortHeading("GD", width: 34)
+                    shortHeading("Pts", width: 38)
+                }
+            }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, showsStats ? 8 : 10)
         .padding(.vertical, 10)
         .foregroundStyle(.secondary)
     }
@@ -510,10 +585,26 @@ private struct LeagueTableCard: View {
     }
 
     private func rowView(_ row: LeagueTableRow) -> some View {
-        VStack(spacing: 0) {
-            Button {
-                toggleExpansion(for: row.id)
-            } label: {
+        Group {
+            if showsStats {
+                HStack(spacing: 0) {
+                    compactPositionCell(row)
+                    Color.clear.frame(width: 8)
+                    TableTeamLogo(name: row.team)
+                        .frame(width: 24)
+                    statsCell(row.played, width: 24)
+                    statsCell(row.won, width: 24)
+                    statsCell(row.drawn, width: 24)
+                    statsCell(row.lost, width: 24)
+                    statsCell(row.goalsFor, width: 27)
+                    statsCell(row.goalsAgainst, width: 27)
+                    statsCell(row.goalDifference, width: 27, signed: true)
+                    statsCell(row.points, width: 30, weight: .semibold)
+                    compactForm(row.form)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+            } else {
                 HStack(spacing: 6) {
                     positionCell(row)
                     TableTeamLogo(name: row.team)
@@ -524,65 +615,16 @@ private struct LeagueTableCard: View {
                     cell(String(row.played), width: 30)
                     subtleCell(signedNumber(row.goalDifference), width: 34)
                     cell(String(row.points), width: 38, weight: .semibold)
-                    Image(systemName: expandedRows.contains(row.id) ? "chevron.up" : "chevron.down")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 16)
-                        .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
-                .background(HighlightedTableRowBackground(isActive: highlightedRowID == row.id))
-                .background(LiveTableRowBackground(isActive: row.live))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if expandedRows.contains(row.id) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Stats")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 8) {
-                        ExpandedStatTile(title: statTitle("won"), value: String(row.won))
-                        ExpandedStatTile(title: statTitle("drawn"), value: String(row.drawn))
-                        ExpandedStatTile(title: statTitle("lost"), value: String(row.lost))
-                        ExpandedStatTile(title: statTitle("goals_for"), value: String(row.goalsFor))
-                        ExpandedStatTile(title: statTitle("goals_against"), value: String(row.goalsAgainst))
-                    }
-
-                    Text("Recent Form")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
-                    let formEntries = formItems(row.form)
-                    if formEntries.isEmpty {
-                        Text("No recent form available")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        HStack(spacing: 8) {
-                            ForEach(formEntries.indices, id: \.self) { index in
-                                FormResultTile(
-                                    result: compactLabels ? formEntries[index].shortLabel : formEntries[index].label,
-                                    symbol: formEntries[index].symbol
-                                )
-                            }
-                            Spacer(minLength: 0)
-                        }
-                    }
-
-                    if let rankStatus = row.rankStatus, !rankStatus.isEmpty {
-                        Text(rankStatus)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
             }
         }
+        .background(HighlightedTableRowBackground(isActive: highlightedRowID == row.id))
+        .background(LiveTableRowBackground(isActive: row.live))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(row.team)
+        .accessibilityValue(accessibilityStats(for: row))
         .id(row.id)
     }
 
@@ -621,6 +663,18 @@ private struct LeagueTableCard: View {
             .frame(width: width, alignment: .trailing)
     }
 
+    private func statsHeading(
+        _ text: String,
+        width: CGFloat,
+        alignment: Alignment = .center
+    ) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(width: width, alignment: alignment)
+    }
+
     private func cell(_ text: String, width: CGFloat, weight: Font.Weight = .regular) -> some View {
         Text(text)
             .font(.body.monospacedDigit().weight(weight))
@@ -638,6 +692,74 @@ private struct LeagueTableCard: View {
                 .lineLimit(1)
         }
         .frame(width: 40, alignment: .trailing)
+    }
+
+    private func compactPositionCell(_ row: LeagueTableRow) -> some View {
+        HStack(spacing: 1) {
+            trendIcon(for: row)
+            Text(String(row.position))
+                .font(.caption.monospacedDigit())
+                .lineLimit(1)
+        }
+        .frame(width: 30, alignment: .leading)
+    }
+
+    private func statsCell(
+        _ value: Int,
+        width: CGFloat,
+        signed: Bool = false,
+        weight: Font.Weight = .regular
+    ) -> some View {
+        Text(signed ? signedNumber(value) : String(value))
+            .font(.caption.monospacedDigit().weight(weight))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(width: width, alignment: .center)
+    }
+
+    private func compactForm(_ form: [String]) -> some View {
+        let results = Array(form.prefix(5))
+        return HStack(spacing: 1) {
+            ForEach(0..<5, id: \.self) { index in
+                if index < results.count {
+                    formSymbol(results[index])
+                } else {
+                    Image(systemName: "minus")
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .font(.system(size: 8, weight: .bold))
+        .frame(width: 55)
+        .accessibilityLabel(formAccessibilityLabel(results))
+    }
+
+    private func formSymbol(_ result: String) -> some View {
+        let normalized = result.uppercased()
+        return Image(
+            systemName: normalized == "W"
+                ? "checkmark.circle.fill"
+                : normalized == "L" ? "xmark.circle.fill" : "minus.circle.fill"
+        )
+        .foregroundStyle(
+            normalized == "W" ? Color.green : normalized == "L" ? Color.red : Color.secondary
+        )
+    }
+
+    private func formAccessibilityLabel(_ form: [String]) -> String {
+        guard !form.isEmpty else { return "No recent form" }
+        let results = form.map { result in
+            switch result.uppercased() {
+            case "W": return "win"
+            case "L": return "loss"
+            default: return "draw"
+            }
+        }
+        return "Recent form: \(results.joined(separator: ", "))"
+    }
+
+    private func accessibilityStats(for row: LeagueTableRow) -> String {
+        "Position \(row.position), played \(row.played), won \(row.won), drawn \(row.drawn), lost \(row.lost), goals for \(row.goalsFor), goals against \(row.goalsAgainst), goal difference \(signedNumber(row.goalDifference)), \(row.points) points. \(formAccessibilityLabel(Array(row.form.prefix(5))))"
     }
 
     @ViewBuilder
@@ -668,45 +790,6 @@ private struct LeagueTableCard: View {
             .frame(width: width, alignment: .trailing)
     }
 
-    private var compactLabels: Bool {
-        horizontalSizeClass == .compact
-    }
-
-    private func statTitle(_ key: String) -> String {
-        if compactLabels {
-            switch key {
-            case "won": return "W"
-            case "drawn": return "D"
-            case "lost": return "L"
-            case "goals_for": return "GF"
-            case "goals_against": return "GA"
-            default: return key
-            }
-        }
-
-        switch key {
-        case "won": return "Won"
-        case "drawn": return "Drawn"
-        case "lost": return "Lost"
-        case "goals_for": return "Goals For"
-        case "goals_against": return "Goals Against"
-        default: return key
-        }
-    }
-
-    private func formItems(_ form: [String]) -> [(label: String, shortLabel: String, symbol: String)] {
-        Array(form.suffix(5)).map { code in
-            switch code.uppercased() {
-            case "W":
-                return ("Win", "W", "✅")
-            case "L":
-                return ("Loss", "L", "❌")
-            default:
-                return ("Draw", "D", "➖")
-            }
-        }
-    }
-
     private func signedNumber(_ value: Int) -> String {
         if value > 0 {
             return "+\(value)"
@@ -714,78 +797,9 @@ private struct LeagueTableCard: View {
         return String(value)
     }
 
-    private func toggleExpansion(for rowID: String) {
-        if expandedRows.contains(rowID) {
-            expandedRows.remove(rowID)
-        } else {
-            expandedRows.insert(rowID)
-        }
-    }
-
     private func displayTeamName(for row: LeagueTableRow) -> String {
         let canonicalName = TeamIdentityStore.shared.canonicalName(for: row.team)
         return FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: canonicalName)
-    }
-}
-
-private struct LeagueTableHero: View {
-    let league: LeagueTable
-
-    private var visibleStageName: String? {
-        let stage = String(league.stageName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !stage.isEmpty, stage.caseInsensitiveCompare("Regular Season") != .orderedSame else {
-            return nil
-        }
-        return stage
-    }
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 16) {
-            ZStack {
-                if league.leagueName.localizedCaseInsensitiveContains("Premier League") {
-                    Image("FantasyPremierLeagueLionTab")
-                        .resizable()
-                        .scaledToFit()
-                        .padding(9)
-                } else {
-                    Image(systemName: "trophy.fill")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-            }
-            .frame(width: 58, height: 58)
-            .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(league.leagueName)
-                    .font(.title2.bold())
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.82)
-
-                if let visibleStageName {
-                    Text(visibleStageName)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.76))
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(18)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(red: 0.21, green: 0.02, blue: 0.38),
-                    Color(red: 0.35, green: 0.03, blue: 0.42),
-                    Color(red: 0.08, green: 0.02, blue: 0.20)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: Color.black.opacity(0.12), radius: 18, x: 0, y: 10)
     }
 }
 
@@ -826,53 +840,6 @@ private struct HighlightedTableRowBackground: View {
             )
             .onAppear { pulsing = isActive }
             .onChange(of: isActive) { _, newValue in pulsing = newValue }
-    }
-}
-
-private struct ExpandedStatTile: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .center, spacing: 2) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            Text(value)
-                .font(.headline.monospacedDigit())
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
-    }
-}
-
-private struct FormResultTile: View {
-    let result: String
-    let symbol: String
-
-    var body: some View {
-        VStack(spacing: 3) {
-            Text(symbol)
-                .font(.body)
-            Text(result)
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
     }
 }
 
