@@ -1317,6 +1317,8 @@ let leagueTablesLastUpdated = null;
 let leagueTablesUpdating = false;
 let cachedClubEloTeams = [];
 let clubEloLastUpdated = null;
+let cachedFixtureViewFilterContext = null;
+let cachedFixtureViewFilterContextVersion = null;
 let clubEloUpdating = false;
 let clubEloLastSuccessAt = null;
 let clubEloLastFailureAt = null;
@@ -1962,6 +1964,8 @@ function normalizeCompetitionFilterName(name) {
     "carabao cup": "english league cup",
     "efl league one": "league one",
     "efl league two": "league two",
+    "dfl supercup": "german super cup",
+    "dfl-supercup": "german super cup",
     "uefa europa conference league": "uefa conference league",
     // SportsDB uses the plural form; our config uses singular.
     "international friendlies": "international friendly",
@@ -2289,6 +2293,23 @@ function isAllowedNormalizedMatchRecord(normalizedMatch, options = {}) {
 
 function filterMatchesByCompetition(matches, options = {}) {
   return matches.filter((match) => isAllowedCompetitionMatch(match, options));
+}
+
+// BSD does not currently expose every tracked one-off competition. Keep BSD
+// authoritative while supplementing only the explicitly unsupported schedules
+// that are already collected from TheSportsDB.
+const BSD_TSDB_SUPPLEMENT_COMPETITION_IDS = new Set(["german-super-cup"]);
+
+function filterBsdTsdbScheduleSupplements(matches) {
+  const catalog = competitionCatalogLookup();
+  return (Array.isArray(matches) ? matches : []).filter((match) => {
+    const competition = catalog.get(
+      normalizeCompetitionFilterName(match && match.league)
+    );
+    return Boolean(
+      competition && BSD_TSDB_SUPPLEMENT_COMPETITION_IDS.has(competition.id)
+    );
+  });
 }
 
 function matchDetailsLeagueName(payload, fallbackLeague = null) {
@@ -15697,6 +15718,203 @@ function matchPassesCategoryFilters(match, options = {}) {
   return predicates.some((predicate) => predicate(match));
 }
 
+const FIXTURE_VIEW_TEAM_ALIASES = Object.freeze({
+  "real-madrid": ["Real Madrid"],
+  barcelona: ["Barcelona", "FC Barcelona"],
+  celtic: ["Celtic", "Celtic FC"],
+  rangers: ["Rangers", "Rangers FC"],
+  "bayern-munich": ["Bayern Munich", "Bayern München", "FC Bayern München"],
+  "borussia-dortmund": ["Borussia Dortmund", "Dortmund", "BVB"],
+  inter: ["Inter", "Inter Milan", "Internazionale", "Internazionale Milano", "FC Internazionale Milano"],
+  "ac-milan": ["AC Milan", "Milan", "AC Milan 1899"],
+  juventus: ["Juventus", "Juventus FC"],
+  "paris-saint-germain": ["Paris Saint-Germain", "Paris St Germain", "Paris SG", "PSG"],
+  marseille: ["Marseille", "Olympique Marseille", "Olympique de Marseille", "OM"],
+});
+
+const FIXTURE_VIEW_RIVALRIES = Object.freeze({
+  "el-clasico": ["barcelona", "real-madrid"],
+  "old-firm": ["celtic", "rangers"],
+  "der-klassiker": ["bayern-munich", "borussia-dortmund"],
+  "derby-della-madonnina": ["inter", "ac-milan"],
+  "le-classique": ["paris-saint-germain", "marseille"],
+});
+
+const UEFA_CLUB_COMPETITION_IDS = new Set([
+  "uefa-champions-league",
+  "uefa-europa-league",
+  "uefa-conference-league",
+  "uefa-super-cup",
+]);
+const FIXTURE_VIEW_UEFA_TEAM_RULE_IDS = new Set([
+  "rule:top-uefa-clubs",
+  "rule:premier-league-teams",
+]);
+const TOP_UEFA_CLUB_ELO_RANK_CUTOFF = 40;
+const TOP_UEFA_CLUB_ELO_FALLBACK_SCORE = 1700;
+
+function fixtureViewTeamMatches(teamName, teamID, manualMappings = null) {
+  const aliases = FIXTURE_VIEW_TEAM_ALIASES[teamID] || [];
+  return aliases.some((alias) =>
+    teamMatchesSelectionAliasAware(teamName, alias, manualMappings)
+  );
+}
+
+function fixtureViewRivalryMatches(match, rivalryID, manualMappings = null) {
+  const teams = FIXTURE_VIEW_RIVALRIES[rivalryID];
+  if (!match || !teams) return false;
+  const [firstTeamID, secondTeamID] = teams;
+  return (
+    fixtureViewTeamMatches(match.home_team, firstTeamID, manualMappings) &&
+    fixtureViewTeamMatches(match.away_team, secondTeamID, manualMappings)
+  ) || (
+    fixtureViewTeamMatches(match.home_team, secondTeamID, manualMappings) &&
+    fixtureViewTeamMatches(match.away_team, firstTeamID, manualMappings)
+  );
+}
+
+function clubEloRowIsTopTeam(row) {
+  if (!row || typeof row !== "object") return false;
+  const rank = Number(row.Rank ?? row.rank);
+  if (Number.isFinite(rank) && rank > 0) return rank <= TOP_UEFA_CLUB_ELO_RANK_CUTOFF;
+  const elo = Number(row.Elo ?? row.elo);
+  return Number.isFinite(elo) && elo >= TOP_UEFA_CLUB_ELO_FALLBACK_SCORE;
+}
+
+function buildFixtureViewFilterContext(options = {}) {
+  const manualMappings = options.manualMappings || loadClubEloManualMappings();
+  const clubEloTeams = Array.isArray(options.clubEloTeams)
+    ? options.clubEloTeams
+    : cachedClubEloTeams;
+  const premierLeagueTeams = Array.isArray(options.premierLeagueTeams)
+    ? options.premierLeagueTeams
+    : currentPremierLeagueTeamsDatasetSnapshot().items;
+  const clubEloIndex = buildClubEloCandidateIndex(clubEloTeams);
+  const topClubByNormalizedName = new Map();
+  return {
+    competitionCatalog: competitionCatalogLookup(),
+    manualMappings,
+    isPremierLeagueTeam:
+      options.isPremierLeagueTeam ||
+      ((teamName) => teamMatchesPremierLeague(teamName, premierLeagueTeams)),
+    isTopClub: options.isTopClub || ((teamName) => {
+      const normalizedName = normalizeFilterTeamName(teamName);
+      if (topClubByNormalizedName.has(normalizedName)) {
+        return topClubByNormalizedName.get(normalizedName);
+      }
+      const match = findBestClubEloMatch(
+        teamName,
+        clubEloTeams,
+        clubEloIndex,
+        manualMappings
+      );
+      const isTopClub = Boolean(match && match.accepted && clubEloRowIsTopTeam(match.team));
+      topClubByNormalizedName.set(normalizedName, isTopClub);
+      return isTopClub;
+    }),
+  };
+}
+
+function currentFixtureViewFilterContext() {
+  const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
+  const version = [
+    clubEloLastUpdated || "unknown",
+    cachedClubEloTeams.length,
+    premierLeagueDataset.updated_at || "unknown",
+    premierLeagueDataset.items.length,
+  ].join(":");
+  if (cachedFixtureViewFilterContext && cachedFixtureViewFilterContextVersion === version) {
+    return cachedFixtureViewFilterContext;
+  }
+  cachedFixtureViewFilterContext = buildFixtureViewFilterContext({
+    premierLeagueTeams: premierLeagueDataset.items,
+  });
+  cachedFixtureViewFilterContextVersion = version;
+  return cachedFixtureViewFilterContext;
+}
+
+function fixtureViewOptionIDsForPreferences(preferences = {}) {
+  if (preferences.showAllMatches === true) return [];
+  const usesFavourites = preferences.fixtureAllMajorMatchesEnabled === true;
+  const optionIDs = usesFavourites
+    ? preferences.favouriteFixtureViewOptionIDs
+    : preferences.selectedFixtureViewOptionIDs;
+  return Array.isArray(optionIDs) ? optionIDs : null;
+}
+
+function matchPassesFixtureViewOptions(match, optionIDs, context = {}) {
+  const normalizedOptionIDs = Array.isArray(optionIDs)
+    ? optionIDs.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  if (normalizedOptionIDs.length === 0 || normalizedOptionIDs.includes("scope:all")) {
+    return true;
+  }
+
+  const catalog = context.competitionCatalog || competitionCatalogLookup();
+  const competition = catalog.get(normalizeCompetitionFilterName(match && match.league));
+  const competitionID = competition ? competition.id : null;
+  const manualMappings = context.manualMappings || null;
+  const teamRuleIDs = normalizedOptionIDs.filter((optionID) =>
+    FIXTURE_VIEW_UEFA_TEAM_RULE_IDS.has(optionID)
+  );
+  const normalOptionIDs = normalizedOptionIDs.filter((optionID) =>
+    !FIXTURE_VIEW_UEFA_TEAM_RULE_IDS.has(optionID)
+  );
+  const matchesNormalOption = (optionID) => {
+    if (optionID.startsWith("competition:")) {
+      return competitionID === optionID.slice("competition:".length);
+    }
+    if (optionID.startsWith("team:")) {
+      const teamID = optionID.slice("team:".length);
+      return fixtureViewTeamMatches(match.home_team, teamID, manualMappings) ||
+        fixtureViewTeamMatches(match.away_team, teamID, manualMappings);
+    }
+    if (optionID.startsWith("rivalry:")) {
+      return fixtureViewRivalryMatches(
+        match,
+        optionID.slice("rivalry:".length),
+        manualMappings
+      );
+    }
+    return false;
+  };
+
+  if (!UEFA_CLUB_COMPETITION_IDS.has(competitionID) || teamRuleIDs.length === 0) {
+    return normalOptionIDs.some(matchesNormalOption);
+  }
+
+  const selectedUefaCompetitionIDs = new Set(
+    normalOptionIDs
+      .filter((optionID) => optionID.startsWith("competition:"))
+      .map((optionID) => optionID.slice("competition:".length))
+      .filter((id) => UEFA_CLUB_COMPETITION_IDS.has(id))
+  );
+  const explicitNonCompetitionMatch = normalOptionIDs
+    .filter((optionID) => !optionID.startsWith("competition:"))
+    .some(matchesNormalOption);
+  const passesTeamRule = teamRuleIDs.some((optionID) => {
+    if (optionID === "rule:top-uefa-clubs") {
+      const isTopClub = typeof context.isTopClub === "function" ? context.isTopClub : () => false;
+      return isTopClub(match.home_team) || isTopClub(match.away_team);
+    }
+    if (optionID === "rule:premier-league-teams") {
+      const isPremierLeagueTeam =
+        typeof context.isPremierLeagueTeam === "function"
+          ? context.isPremierLeagueTeam
+          : () => false;
+      return isPremierLeagueTeam(match.home_team) || isPremierLeagueTeam(match.away_team);
+    }
+    return false;
+  });
+
+  if (selectedUefaCompetitionIDs.size > 0) {
+    return explicitNonCompetitionMatch || (
+      selectedUefaCompetitionIDs.has(competitionID) && passesTeamRule
+    );
+  }
+  return explicitNonCompetitionMatch || passesTeamRule;
+}
+
 function teamMatchesSelectionAliasAware(teamName, selection, manualMappings = null) {
   const lhs = String(teamName || "").trim();
   const rhs = String(selection || "").trim();
@@ -18498,6 +18716,10 @@ function buildMatchQueryResponseCacheKey(options = {}) {
     major_uefa: Boolean(options.majorUefa),
     home_nations: Boolean(options.homeNations),
     major_tournaments: Boolean(options.majorTournaments),
+    fixture_view_options: Array.isArray(options.fixtureViewOptions)
+      ? options.fixtureViewOptions.slice().sort()
+      : [],
+    club_elo_updated_at: options.clubEloUpdatedAt || null,
     premier_league_updated_at: options.premierLeagueUpdatedAt || null,
   });
 }
@@ -24253,17 +24475,20 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
           source: "memory",
         }
       : await getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, []);
-    // BSD's projection already includes notstarted + finished fixtures, so it
-    // needs no separate range feed.
-    const bbcRangeDataset = useBsdSource
-      ? { items: [], updated_at: null, source: "bsd" }
-      : cachedTsdbScheduleMatches.length > 0
+    const tsdbScheduleDataset = cachedTsdbScheduleMatches.length > 0
       ? {
           items: filterMatchesByCompetition(cachedTsdbScheduleMatches),
           updated_at: tsdbScheduleLastUpdated || null,
           source: "memory",
         }
       : await getOperationalArrayDataset(OP_DATASET_TSDB_SCHEDULE_MATCHES, []);
+    const bbcRangeDataset = useBsdSource
+      ? {
+          items: filterBsdTsdbScheduleSupplements(tsdbScheduleDataset.items),
+          updated_at: tsdbScheduleDataset.updated_at,
+          source: "tsdb_supplement",
+        }
+      : tsdbScheduleDataset;
     const redisMatchDetailsSnapshot = memoryMatchDetailsSnapshot || useBsdSource
       ? null
       : await getOperationalMatchDetailsSnapshotSafe();
@@ -24312,6 +24537,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     const leagues = normalizeListParam(req.query.league).map(normalizeLeagueName);
     const teams = normalizeListParam(req.query.team);
     const channels = normalizeListParam(req.query.channel);
+    const fixtureViewOptions = normalizeListParam(req.query.view_option);
     const manualMappings = loadClubEloManualMappings();
     const filterMode = req.query.filter_mode ? String(req.query.filter_mode) : "union";
     const listMode = normalizeMatchesListMode(req.query.mode);
@@ -24357,6 +24583,8 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
         majorUefa,
         homeNations,
         majorTournaments,
+        fixtureViewOptions,
+        clubEloUpdatedAt: clubEloLastUpdated,
         premierLeagueUpdatedAt: premierLeagueDataset.updated_at,
       })
       : null;
@@ -24365,6 +24593,9 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
 
     if (!payload) {
       stageStartedAtMs = Date.now();
+      const fixtureViewContext = fixtureViewOptions.length > 0
+        ? currentFixtureViewFilterContext()
+        : null;
       let filtered = (await getCachedCanonicalPublicMatchListPayloads(canonicalListOptions))
         .filter((match) =>
           matchesFilters(match, {
@@ -24380,7 +24611,10 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
         .filter((match) => {
           const matchId = String(match && match.match_details_id ? match.match_details_id : "").toLowerCase();
           return !matchId || !deletedMatchIdSet.has(matchId);
-        });
+        })
+        .filter((match) =>
+          matchPassesFixtureViewOptions(match, fixtureViewOptions, fixtureViewContext)
+        );
       timings.base_filter_ms = Date.now() - stageStartedAtMs;
 
       if (eplOnly || majorUefa || homeNations || majorTournaments) {
@@ -24417,7 +24651,11 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
                   testMatch.away_team.toLowerCase().includes(team.toLowerCase())
               );
 
-            if (matchesLeagueFilter && matchesTeamFilter) {
+            if (
+              matchesLeagueFilter &&
+              matchesTeamFilter &&
+              matchPassesFixtureViewOptions(testMatch, fixtureViewOptions, fixtureViewContext)
+            ) {
               filtered.push(testMatch);
             }
           }
@@ -24543,15 +24781,20 @@ app.get(`${API_PREFIX}/matches/calendar`, async (req, res) => {
           source: "memory",
         }
       : await getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, []);
-    const bbcRangeDataset = useBsdSource
-      ? { items: [], updated_at: null, source: "bsd" }
-      : cachedTsdbScheduleMatches.length > 0
+    const tsdbScheduleDataset = cachedTsdbScheduleMatches.length > 0
       ? {
           items: filterMatchesByCompetition(cachedTsdbScheduleMatches),
           updated_at: tsdbScheduleLastUpdated || null,
           source: "memory",
         }
       : await getOperationalArrayDataset(OP_DATASET_TSDB_SCHEDULE_MATCHES, []);
+    const bbcRangeDataset = useBsdSource
+      ? {
+          items: filterBsdTsdbScheduleSupplements(tsdbScheduleDataset.items),
+          updated_at: tsdbScheduleDataset.updated_at,
+          source: "tsdb_supplement",
+        }
+      : tsdbScheduleDataset;
     const redisMatchDetailsSnapshot = memoryMatchDetailsSnapshot || useBsdSource
       ? null
       : await getOperationalMatchDetailsSnapshotSafe();
@@ -24597,8 +24840,12 @@ app.get(`${API_PREFIX}/matches/calendar`, async (req, res) => {
       bbcRangeDataset,
     };
     const channels = normalizeListParam(req.query.channel);
+    const fixtureViewOptions = normalizeListParam(req.query.view_option);
     const includePostponed = isTruthyParam(req.query.include_postponed);
     const manualMappings = loadClubEloManualMappings();
+    const fixtureViewContext = fixtureViewOptions.length > 0
+      ? currentFixtureViewFilterContext()
+      : null;
     const deletedMatchIdSet = cachedDeletedMatchIds;
     const displayTimeZone = requestedMatchTimeZone(req.query.time_zone);
     const publicMatches = await getCachedCanonicalPublicMatchListPayloads(canonicalListOptions);
@@ -24618,7 +24865,10 @@ app.get(`${API_PREFIX}/matches/calendar`, async (req, res) => {
       .filter((match) => {
         const matchId = String(match && match.match_details_id ? match.match_details_id : "").toLowerCase();
         return !matchId || !deletedMatchIdSet.has(matchId);
-      });
+      })
+      .filter((match) =>
+        matchPassesFixtureViewOptions(match, fixtureViewOptions, fixtureViewContext)
+      );
     const localized = localizeMatchPayloads(filtered, displayTimeZone);
     const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
     const days = buildFixtureCalendar(localized, {
@@ -24628,6 +24878,7 @@ app.get(`${API_PREFIX}/matches/calendar`, async (req, res) => {
 
     res.json({
       days,
+      selection_applied: fixtureViewOptions.length > 0,
       updated_at: latestUpdated || null,
       source: canonicalSource,
     });
@@ -32495,6 +32746,15 @@ if (typeof matchMonitor.setLiveActivityFixtureCategoryFilter === "function") {
   matchMonitor.setLiveActivityFixtureCategoryFilter((user, match) => {
     const preferences =
       user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
+    const fixtureViewOptionIDs = fixtureViewOptionIDsForPreferences(preferences);
+    if (fixtureViewOptionIDs) {
+      return matchPassesFixtureViewOptions(
+        match,
+        fixtureViewOptionIDs,
+        currentFixtureViewFilterContext()
+      );
+    }
+
     const fixtureAllMajorMatchesEnabled =
       typeof preferences.fixtureAllMajorMatchesEnabled === "boolean"
         ? preferences.fixtureAllMajorMatchesEnabled
@@ -32516,6 +32776,14 @@ if (typeof matchMonitor.setNotificationFixtureCategoryFilter === "function") {
     const preferences =
       user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
     if (context.mode === "fixtures") {
+      const fixtureViewOptionIDs = fixtureViewOptionIDsForPreferences(preferences);
+      if (fixtureViewOptionIDs) {
+        return matchPassesFixtureViewOptions(
+          match,
+          fixtureViewOptionIDs,
+          currentFixtureViewFilterContext()
+        );
+      }
       const fixtureAllMajorMatchesEnabled =
         typeof preferences.fixtureAllMajorMatchesEnabled === "boolean"
           ? preferences.fixtureAllMajorMatchesEnabled
@@ -33197,6 +33465,7 @@ module.exports = {
     collectTeamShortNameScrapeCandidates,
     filterCacheStateDomainsForRuntimeRefresh,
     normalizeCompetitionFilterName,
+    filterBsdTsdbScheduleSupplements,
     normalizeMatchesListMode,
     isAllowedCompetition,
     isAllowedMatchDetailsPayload,
@@ -33208,6 +33477,9 @@ module.exports = {
     matchIsMajorTournament,
     matchIsMajorUefaClubKnockoutFixture,
     matchPassesCategoryFilters,
+    clubEloRowIsTopTeam,
+    buildFixtureViewFilterContext,
+    matchPassesFixtureViewOptions,
     isListPayloadVisibleForMode,
     mergeClubEloFixtureMetadata,
     matchDetailsIdFromUrl,

@@ -12,6 +12,7 @@ struct FixtureBrowseCachePayload: Codable, Sendable {
     let contextKey: String
     var competitions: [CompetitionCatalogEntry]
     var calendarDays: [FixtureCalendarDay]
+    var calendarSelectionApplied: Bool?
     var calendarFetchedAt: Date?
     var buckets: [String: FixtureBrowseBucket]
 }
@@ -37,9 +38,14 @@ nonisolated enum FixtureBrowseSelectionResolver {
     static func availableDays(
         calendarDays: [FixtureCalendarDay],
         topMatchesOnly: Bool,
-        selectedCompetitionIDs: Set<String>
+        selectedCompetitionIDs: Set<String>,
+        selectionApplied: Bool = false,
+        showAllMatches: Bool = false
     ) -> [FixtureCalendarDay] {
         calendarDays.filter { day in
+            if selectionApplied || showAllMatches {
+                return day.matchCount > 0
+            }
             if topMatchesOnly {
                 return day.topMatchCount > 0
             }
@@ -51,13 +57,17 @@ nonisolated enum FixtureBrowseSelectionResolver {
         from days: [FixtureCalendarDay],
         todayKey: String,
         topMatchesOnly: Bool,
-        selectedCompetitionIDs: Set<String>
+        selectedCompetitionIDs: Set<String>,
+        selectionApplied: Bool = false,
+        showAllMatches: Bool = false
     ) -> String? {
         upcomingDateKey(
             from: days,
             todayKey: todayKey,
             topMatchesOnly: topMatchesOnly,
-            selectedCompetitionIDs: selectedCompetitionIDs
+            selectedCompetitionIDs: selectedCompetitionIDs,
+            selectionApplied: selectionApplied,
+            showAllMatches: showAllMatches
         ) ?? days.last?.date
     }
 
@@ -65,11 +75,14 @@ nonisolated enum FixtureBrowseSelectionResolver {
         from days: [FixtureCalendarDay],
         todayKey: String,
         topMatchesOnly: Bool,
-        selectedCompetitionIDs: Set<String>
+        selectedCompetitionIDs: Set<String>,
+        selectionApplied: Bool = false,
+        showAllMatches: Bool = false
     ) -> String? {
         days.first { day in
             guard day.date >= todayKey else { return false }
             if day.date > todayKey { return true }
+            if selectionApplied || showAllMatches { return day.hasUnfinished }
             if topMatchesOnly { return day.topMatchesHaveUnfinished }
             return day.competitions.contains {
                 selectedCompetitionIDs.contains($0.id) && $0.hasUnfinished
@@ -104,15 +117,49 @@ nonisolated enum FixtureBrowseSelectionResolver {
         return days[targetIndex].date
     }
 
+    static func swipeDateOffset(
+        translationWidth: CGFloat,
+        translationHeight: CGFloat,
+        predictedEndTranslationWidth: CGFloat,
+        containerWidth: CGFloat
+    ) -> Int? {
+        let horizontalDistance = abs(translationWidth)
+        let verticalDistance = abs(translationHeight)
+        guard horizontalDistance > verticalDistance * 1.15 else { return nil }
+
+        let distanceThreshold = max(52, min(containerWidth * 0.22, 88))
+        let projectedThreshold = max(72, containerWidth * 0.35)
+        let projectionContinuesDirection = translationWidth * predictedEndTranslationWidth > 0
+        let crossesDistanceThreshold = horizontalDistance >= distanceThreshold
+        let crossesProjectedThreshold = projectionContinuesDirection &&
+            abs(predictedEndTranslationWidth) >= projectedThreshold
+        guard crossesDistanceThreshold || crossesProjectedThreshold else { return nil }
+
+        return translationWidth < 0 ? 1 : -1
+    }
+
     static func filterMatches(
         _ matches: [Match],
         topMatchesOnly: Bool,
         selectedCompetitionIDs: Set<String>,
         competitions: [CompetitionCatalogEntry],
+        fixtureViewOptionIDs: Set<String> = [],
+        showAllMatches: Bool = false,
         includePostponed: Bool
     ) -> [Match] {
         let competitionFiltered: [Match]
-        if topMatchesOnly {
+        if showAllMatches {
+            competitionFiltered = matches
+        } else if !fixtureViewOptionIDs.isEmpty {
+            let lookup = competitionLookup(competitions)
+            competitionFiltered = matches.filter { match in
+                matchesFixtureViewOption(
+                    match,
+                    optionIDs: fixtureViewOptionIDs,
+                    competitionLookup: lookup
+                )
+            }
+        } else if topMatchesOnly {
             competitionFiltered = matches
         } else {
             let lookup = competitionLookup(competitions)
@@ -142,6 +189,134 @@ nonisolated enum FixtureBrowseSelectionResolver {
         }
         return lookup
     }
+
+    private static let fixtureTeamAliases: [String: Set<String>] = [
+        "real-madrid": ["Real Madrid"],
+        "barcelona": ["Barcelona", "FC Barcelona"],
+        "celtic": ["Celtic", "Celtic FC"],
+        "rangers": ["Rangers", "Rangers FC"],
+        "bayern-munich": ["Bayern Munich", "Bayern München", "FC Bayern München"],
+        "borussia-dortmund": ["Borussia Dortmund", "Dortmund", "BVB"],
+        "inter": ["Inter", "Inter Milan", "Internazionale", "Internazionale Milano", "FC Internazionale Milano"],
+        "ac-milan": ["AC Milan", "Milan", "AC Milan 1899"],
+        "juventus": ["Juventus", "Juventus FC"],
+        "paris-saint-germain": ["Paris Saint-Germain", "Paris St Germain", "Paris SG", "PSG"],
+        "marseille": ["Marseille", "Olympique Marseille", "Olympique de Marseille", "OM"],
+    ].mapValues { Set($0.map(normalizedKey)) }
+
+    private static let fixtureRivalries: [String: (String, String)] = [
+        "el-clasico": ("barcelona", "real-madrid"),
+        "old-firm": ("celtic", "rangers"),
+        "der-klassiker": ("bayern-munich", "borussia-dortmund"),
+        "derby-della-madonnina": ("inter", "ac-milan"),
+        "le-classique": ("paris-saint-germain", "marseille"),
+    ]
+
+    // The API applies the authoritative Elo-based rule. These aliases keep the
+    // picker useful while talking to an older server that ignores view_option.
+    private static let fallbackTopUEFAClubs: Set<String> = Set([
+        "Arsenal", "Aston Villa", "Chelsea", "Liverpool", "Manchester City",
+        "Manchester United", "Newcastle United", "Tottenham Hotspur",
+        "Real Madrid", "Barcelona", "Atletico Madrid", "Atlético Madrid",
+        "Bayern Munich", "Bayern München", "Borussia Dortmund", "Bayer Leverkusen",
+        "Inter", "Inter Milan", "AC Milan", "Juventus", "Napoli",
+        "Paris Saint-Germain", "Paris St Germain", "Marseille",
+        "Ajax", "PSV Eindhoven", "Feyenoord", "Benfica", "Porto", "Sporting CP",
+    ].map(normalizedKey))
+
+    private static func matchesFixtureViewOption(
+        _ match: Match,
+        optionIDs: Set<String>,
+        competitionLookup: [String: String]
+    ) -> Bool {
+        let competitionID = competitionLookup[normalizedKey(match.league)]
+        let teamRuleIDs = optionIDs.intersection(
+            FixtureViewOptionID.mutuallyExclusiveUEFATeamRules
+        )
+        let normalOptionIDs = optionIDs.subtracting(teamRuleIDs)
+        guard let competitionID,
+              FixtureViewOptionID.uefaClubCompetitionStableIDs.contains(competitionID),
+              !teamRuleIDs.isEmpty else {
+            return normalOptionIDs.contains {
+                matchesNonRuleFixtureViewOption(
+                    match,
+                    optionID: $0,
+                    competitionID: competitionID
+                )
+            }
+        }
+
+        let selectedUEFACompetitionIDs = Set(
+            normalOptionIDs
+                .compactMap(FixtureViewOptionID.competitionStableID)
+                .filter(FixtureViewOptionID.uefaClubCompetitionStableIDs.contains)
+        )
+        let explicitNonCompetitionMatch = normalOptionIDs.contains { optionID in
+            guard FixtureViewOptionID.competitionStableID(from: optionID) == nil else {
+                return false
+            }
+            return matchesNonRuleFixtureViewOption(
+                match,
+                optionID: optionID,
+                competitionID: competitionID
+            )
+        }
+        let passesTeamRule = teamRuleIDs.contains {
+            matchesUEFATeamRule(match, optionID: $0)
+        }
+
+        if !selectedUEFACompetitionIDs.isEmpty {
+            return explicitNonCompetitionMatch || (
+                selectedUEFACompetitionIDs.contains(competitionID) && passesTeamRule
+            )
+        }
+        return explicitNonCompetitionMatch || passesTeamRule
+    }
+
+    private static func matchesNonRuleFixtureViewOption(
+        _ match: Match,
+        optionID: String,
+        competitionID: String?
+    ) -> Bool {
+        if optionID == FixtureViewOptionID.all { return true }
+        if let selectedCompetitionID = FixtureViewOptionID.competitionStableID(from: optionID) {
+            return competitionID == selectedCompetitionID
+        }
+        if optionID.hasPrefix("team:") {
+            let teamID = String(optionID.dropFirst("team:".count))
+            return fixtureTeamMatches(match.homeTeam, teamID: teamID) ||
+                fixtureTeamMatches(match.awayTeam, teamID: teamID)
+        }
+        if optionID.hasPrefix("rivalry:") {
+            let rivalryID = String(optionID.dropFirst("rivalry:".count))
+            guard let (firstTeamID, secondTeamID) = fixtureRivalries[rivalryID] else {
+                return false
+            }
+            return (
+                fixtureTeamMatches(match.homeTeam, teamID: firstTeamID) &&
+                fixtureTeamMatches(match.awayTeam, teamID: secondTeamID)
+            ) || (
+                fixtureTeamMatches(match.homeTeam, teamID: secondTeamID) &&
+                fixtureTeamMatches(match.awayTeam, teamID: firstTeamID)
+            )
+        }
+        return false
+    }
+
+    private static func matchesUEFATeamRule(_ match: Match, optionID: String) -> Bool {
+        if optionID == FixtureViewOptionID.topUEFAClubs {
+            return fallbackTopUEFAClubs.contains(normalizedKey(match.homeTeam)) ||
+                fallbackTopUEFAClubs.contains(normalizedKey(match.awayTeam))
+        }
+        if optionID == FixtureViewOptionID.premierLeagueTeams {
+            return MatchesStore.matchIncludesPremierLeagueTeam(match)
+        }
+        return false
+    }
+
+    private static func fixtureTeamMatches(_ teamName: String, teamID: String) -> Bool {
+        fixtureTeamAliases[teamID]?.contains(normalizedKey(teamName)) == true
+    }
 }
 
 @MainActor
@@ -149,6 +324,7 @@ final class FixtureBrowserStore: ObservableObject {
     @Published private(set) var competitions: [CompetitionCatalogEntry] = []
     @Published private(set) var availableDays: [FixtureCalendarDay] = []
     @Published private(set) var visibleMatches: [Match] = []
+    @Published private(set) var cachedMatchesByDate: [String: [Match]] = [:]
     @Published private(set) var selectedDateKey: String?
     @Published private(set) var isLoadingSelectedDate = false
     @Published private(set) var hasLoadedCalendar = false
@@ -186,6 +362,7 @@ final class FixtureBrowserStore: ObservableObject {
             contextKey = nextContextKey
             cachePayload = Self.loadCache(matching: nextContextKey)
             competitions = cachePayload?.competitions ?? []
+            cachedMatchesByDate = [:]
             hasLoadedCalendar = !(cachePayload?.calendarDays.isEmpty ?? true)
             CompetitionBadgeCache.shared.warmIfNeeded(entries: competitions)
         }
@@ -204,8 +381,16 @@ final class FixtureBrowserStore: ObservableObject {
             return
         }
         selectedDateKey = dateKey
-        visibleMatches = []
+        visibleMatches = cachedMatchesByDate[dateKey] ?? []
         loadSelectedDateIfNeeded(force: false)
+    }
+
+    func adjacentDateKey(offset: Int) -> String? {
+        FixtureBrowseSelectionResolver.adjacentDateKey(
+            in: availableDays,
+            from: selectedDateKey,
+            offset: offset
+        )
     }
 
     var nextMatchDateKey: String? {
@@ -218,7 +403,9 @@ final class FixtureBrowserStore: ObservableObject {
             from: availableDays,
             todayKey: Self.dateFormatter.string(from: Date()),
             topMatchesOnly: snapshot.fixtureAllMajorMatchesEnabled,
-            selectedCompetitionIDs: selectedIDs
+            selectedCompetitionIDs: selectedIDs,
+            selectionApplied: cachePayload?.calendarSelectionApplied == true,
+            showAllMatches: snapshot.fixtureViewShowsAll
         )
     }
 
@@ -235,11 +422,7 @@ final class FixtureBrowserStore: ObservableObject {
     }
 
     func selectAdjacentDate(offset: Int) {
-        guard let targetDateKey = FixtureBrowseSelectionResolver.adjacentDateKey(
-            in: availableDays,
-            from: selectedDateKey,
-            offset: offset
-        ) else { return }
+        guard let targetDateKey = adjacentDateKey(offset: offset) else { return }
         selectDate(targetDateKey)
     }
 
@@ -271,6 +454,7 @@ final class FixtureBrowserStore: ObservableObject {
                     contextKey: Self.contextKey(for: snapshot),
                     competitions: catalog.competitions,
                     calendarDays: calendar.days,
+                    calendarSelectionApplied: calendar.selectionApplied,
                     calendarFetchedAt: Date(),
                     buckets: existingBuckets
                 )
@@ -298,9 +482,12 @@ final class FixtureBrowserStore: ObservableObject {
         let days = FixtureBrowseSelectionResolver.availableDays(
             calendarDays: cachePayload?.calendarDays ?? [],
             topMatchesOnly: snapshot.fixtureAllMajorMatchesEnabled,
-            selectedCompetitionIDs: selectedIDs
+            selectedCompetitionIDs: selectedIDs,
+            selectionApplied: cachePayload?.calendarSelectionApplied == true,
+            showAllMatches: snapshot.fixtureViewShowsAll
         )
         availableDays = days
+        rebuildCachedMatchesByDate()
 
         if keepCurrentDate,
            let selectedDateKey,
@@ -313,7 +500,9 @@ final class FixtureBrowserStore: ObservableObject {
             from: days,
             todayKey: Self.dateFormatter.string(from: Date()),
             topMatchesOnly: snapshot.fixtureAllMajorMatchesEnabled,
-            selectedCompetitionIDs: selectedIDs
+            selectedCompetitionIDs: selectedIDs,
+            selectionApplied: cachePayload?.calendarSelectionApplied == true,
+            showAllMatches: snapshot.fixtureViewShowsAll
         )
         visibleMatches = []
         applyCachedBucketIfAvailable()
@@ -397,17 +586,8 @@ final class FixtureBrowserStore: ObservableObject {
         topMatchesOnly: Bool
     ) -> Bool {
         guard let snapshot else { return false }
-        let selectedIDs = FixtureBrowseSelectionResolver.selectedCompetitionIDs(
-            selectedLeagues: snapshot.selectedLeagues,
-            competitions: competitions
-        )
-        visibleMatches = FixtureBrowseSelectionResolver.filterMatches(
-            bucket.matches,
-            topMatchesOnly: topMatchesOnly,
-            selectedCompetitionIDs: selectedIDs,
-            competitions: competitions,
-            includePostponed: snapshot.showPostponedGames
-        )
+        visibleMatches = filteredMatches(in: bucket, snapshot: snapshot, topMatchesOnly: topMatchesOnly)
+        cachedMatchesByDate[dateKey] = visibleMatches
         lastUpdated = bucket.lastUpdated ?? bucket.fetchedAt
         isLoadingSelectedDate = false
         guard visibleMatches.isEmpty, selectedDateKey == dateKey else { return false }
@@ -419,7 +599,10 @@ final class FixtureBrowserStore: ObservableObject {
         guard let removedIndex = availableDays.firstIndex(where: { $0.date == dateKey }) else {
             return
         }
+        let removedSelectedDate = selectedDateKey == dateKey
         availableDays.remove(at: removedIndex)
+        cachedMatchesByDate.removeValue(forKey: dateKey)
+        guard removedSelectedDate else { return }
         guard !availableDays.isEmpty else {
             selectedDateKey = nil
             visibleMatches = []
@@ -474,6 +657,18 @@ final class FixtureBrowserStore: ObservableObject {
                     lastUpdated: response.lastUpdated
                 )
                 store(bucket: bucket, for: key)
+                if targetTopMatchesOnly == snapshot.fixtureAllMajorMatchesEnabled {
+                    let filtered = filteredMatches(
+                        in: bucket,
+                        snapshot: snapshot,
+                        topMatchesOnly: targetTopMatchesOnly
+                    )
+                    if filtered.isEmpty {
+                        removeUnavailableDate(targetDate)
+                    } else {
+                        cachedMatchesByDate[targetDate] = filtered
+                    }
+                }
             }
             if prefetchRequestID == requestID {
                 persistCache()
@@ -494,6 +689,49 @@ final class FixtureBrowserStore: ObservableObject {
             oldestKeys.forEach { payload.buckets.removeValue(forKey: $0) }
         }
         cachePayload = payload
+    }
+
+    private func rebuildCachedMatchesByDate() {
+        guard let snapshot, let payload = cachePayload else {
+            cachedMatchesByDate = [:]
+            return
+        }
+        let topMatchesOnly = snapshot.fixtureAllMajorMatchesEnabled
+        let availableDateKeys = Set(availableDays.map(\.date))
+        var rebuilt: [String: [Match]] = [:]
+        for dateKey in availableDateKeys {
+            let key = Self.bucketKey(dateKey: dateKey, topMatchesOnly: topMatchesOnly)
+            guard let bucket = payload.buckets[key] else { continue }
+            let filtered = filteredMatches(
+                in: bucket,
+                snapshot: snapshot,
+                topMatchesOnly: topMatchesOnly
+            )
+            if !filtered.isEmpty {
+                rebuilt[dateKey] = filtered
+            }
+        }
+        cachedMatchesByDate = rebuilt
+    }
+
+    private func filteredMatches(
+        in bucket: FixtureBrowseBucket,
+        snapshot: PreferencesSnapshot,
+        topMatchesOnly: Bool
+    ) -> [Match] {
+        let selectedIDs = FixtureBrowseSelectionResolver.selectedCompetitionIDs(
+            selectedLeagues: snapshot.selectedLeagues,
+            competitions: competitions
+        )
+        return FixtureBrowseSelectionResolver.filterMatches(
+            bucket.matches,
+            topMatchesOnly: topMatchesOnly,
+            selectedCompetitionIDs: selectedIDs,
+            competitions: competitions,
+            fixtureViewOptionIDs: Set(snapshot.effectiveFixtureViewOptionIDs),
+            showAllMatches: snapshot.fixtureViewShowsAll,
+            includePostponed: snapshot.showPostponedGames
+        )
     }
 
     private func persistCache() {
@@ -528,6 +766,8 @@ final class FixtureBrowserStore: ObservableObject {
                 ? ChannelSelection.normalizedSelectedOptions(snapshot.selectedChannels).joined(separator: "|")
                 : "",
             snapshot.showPostponedGames ? "include-postponed" : "hide-postponed",
+            snapshot.fixtureAllMajorMatchesEnabled ? "favourites" : (snapshot.fixtureViewShowsAll ? "all" : "custom"),
+            snapshot.effectiveFixtureViewOptionIDs.sorted().joined(separator: "|"),
         ].joined(separator: ";")
     }
 

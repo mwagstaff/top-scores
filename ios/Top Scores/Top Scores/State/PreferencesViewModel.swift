@@ -4,6 +4,7 @@ import Combine
 @MainActor
 final class PreferencesViewModel: ObservableObject {
     @Published private(set) var availableLeagues: [String] = []
+    @Published private(set) var competitionCatalog: [CompetitionCatalogEntry] = []
     @Published private(set) var availableChannels: [String] = []
     @Published var isLoadingLeagues = false
     @Published var isLoadingChannels = false
@@ -20,13 +21,17 @@ final class PreferencesViewModel: ObservableObject {
         isLoadingChannels = true
 
         do {
-            async let leagues = APIClient(baseURL: url).fetchCompetitions()
+            async let catalog = APIClient(baseURL: url).fetchCompetitionCatalog()
             async let channels = APIClient(baseURL: url).fetchChannels()
-            let (loadedLeagues, loadedChannels) = try await (leagues, channels)
-            availableLeagues = loadedLeagues.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            let (loadedCatalog, loadedChannels) = try await (catalog, channels)
+            competitionCatalog = loadedCatalog.competitions
+            availableLeagues = loadedCatalog.competitions.map(\.name).sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            }
             availableChannels = loadedChannels.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         } catch {
             availableLeagues = []
+            competitionCatalog = []
             availableChannels = []
             errorMessage = "Unable to load competitions or channels from the API."
         }

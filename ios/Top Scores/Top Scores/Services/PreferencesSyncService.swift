@@ -319,6 +319,8 @@ actor PreferencesSyncService {
             "fantasy": fantasyState,
             "preferences": [
                 "selectedLeagues": snapshot.selectedLeagues,
+                "selectedFixtureViewOptionIDs": snapshot.selectedFixtureViewOptionIDs,
+                "favouriteFixtureViewOptionIDs": snapshot.favouriteFixtureViewOptionIDs,
                 "selectedNotificationLeagues": snapshot.selectedNotificationLeagues,
                 "selectedChannels": snapshot.selectedChannels,
                 "fixtureAllMajorMatchesEnabled": snapshot.fixtureAllMajorMatchesEnabled,
@@ -488,6 +490,11 @@ actor PreferencesSyncService {
             let legacyShowFantasyMatchPills = preferences["showFantasyMatchPills"] as? Bool ?? PreferencesStore.defaultShowFantasyMatchPills
             let snapshot = PreferencesSnapshot(
                 selectedLeagues: preferences["selectedLeagues"] as? [String] ?? PreferencesStore.defaultSelectedLeagues,
+                selectedFixtureViewOptionIDs: preferences["selectedFixtureViewOptionIDs"] as? [String]
+                    ?? (preferences["selectedLeagues"] as? [String] ?? PreferencesStore.defaultSelectedLeagues)
+                        .map(FixtureViewOptionID.legacyCompetition),
+                favouriteFixtureViewOptionIDs: preferences["favouriteFixtureViewOptionIDs"] as? [String]
+                    ?? PreferencesStore.defaultFavouriteFixtureViewOptionIDs,
                 selectedNotificationLeagues: preferences["selectedNotificationLeagues"] as? [String]
                     ?? preferences["selectedLeagues"] as? [String]
                     ?? PreferencesStore.defaultSelectedNotificationLeagues,

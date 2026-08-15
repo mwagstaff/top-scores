@@ -165,7 +165,11 @@ struct APIClient {
         queryItems.append(URLQueryItem(name: "page", value: String(max(1, page))))
         queryItems.append(URLQueryItem(name: "page_size", value: String(max(1, pageSize))))
         queryItems.append(URLQueryItem(name: "time_zone", value: TimeZone.current.identifier))
-        if includePreferenceFilters && preferences.usesFixtureCompetitionSelection {
+        if includePreferenceFilters && mode == .fixtures {
+            preferences.effectiveFixtureViewOptionIDs.forEach {
+                queryItems.append(URLQueryItem(name: "view_option", value: $0))
+            }
+        } else if includePreferenceFilters && preferences.usesFixtureCompetitionSelection {
             preferences.selectedLeagues.forEach { queryItems.append(URLQueryItem(name: "league", value: $0)) }
         }
         if includePreferenceFilters && mode == .fixtures && preferences.channelFilterEnabled {
@@ -173,16 +177,16 @@ struct APIClient {
                 queryItems.append(URLQueryItem(name: "channel", value: $0))
             }
         }
-        if includePreferenceFilters && preferences.effectiveEnglishPremierLeagueTeamsOnly {
+        if includePreferenceFilters && mode != .fixtures && preferences.effectiveEnglishPremierLeagueTeamsOnly {
             queryItems.append(URLQueryItem(name: "epl_only", value: "true"))
         }
-        if includePreferenceFilters && preferences.effectiveMajorUEFAClubGamesEnabled {
+        if includePreferenceFilters && mode != .fixtures && preferences.effectiveMajorUEFAClubGamesEnabled {
             queryItems.append(URLQueryItem(name: "major_uefa", value: "true"))
         }
-        if includePreferenceFilters && preferences.effectiveHomeNationsFilterEnabled {
+        if includePreferenceFilters && mode != .fixtures && preferences.effectiveHomeNationsFilterEnabled {
             queryItems.append(URLQueryItem(name: "home_nations", value: "true"))
         }
-        if includePreferenceFilters && preferences.effectiveMajorTournamentsFilterEnabled {
+        if includePreferenceFilters && mode != .fixtures && preferences.effectiveMajorTournamentsFilterEnabled {
             queryItems.append(URLQueryItem(name: "major_tournaments", value: "true"))
         }
         return queryItems
@@ -272,11 +276,8 @@ struct APIClient {
             URLQueryItem(name: "page_size", value: String(max(1, pageSize))),
             URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
         ]
-        if topMatchesOnly {
-            queryItems.append(URLQueryItem(name: "epl_only", value: "true"))
-            queryItems.append(URLQueryItem(name: "major_uefa", value: "true"))
-            queryItems.append(URLQueryItem(name: "home_nations", value: "true"))
-            queryItems.append(URLQueryItem(name: "major_tournaments", value: "true"))
+        preferences.effectiveFixtureViewOptionIDs.forEach {
+            queryItems.append(URLQueryItem(name: "view_option", value: $0))
         }
         if preferences.channelFilterEnabled {
             ChannelSelection.apiQueryValues(from: preferences.selectedChannels).forEach {
@@ -310,6 +311,9 @@ struct APIClient {
         }
         if preferences.showPostponedGames {
             queryItems.append(URLQueryItem(name: "include_postponed", value: "true"))
+        }
+        preferences.effectiveFixtureViewOptionIDs.forEach {
+            queryItems.append(URLQueryItem(name: "view_option", value: $0))
         }
 
         let request = try buildRequest(path: "matches/calendar", queryItems: queryItems)
@@ -1152,11 +1156,13 @@ struct FixtureCalendarDay: Codable, Hashable, Identifiable, Sendable {
 
 struct FixtureCalendarResponse: Codable, Hashable, Sendable {
     let days: [FixtureCalendarDay]
+    let selectionApplied: Bool?
     let updatedAt: String?
     let source: String?
 
     enum CodingKeys: String, CodingKey {
         case days
+        case selectionApplied = "selection_applied"
         case updatedAt = "updated_at"
         case source
     }

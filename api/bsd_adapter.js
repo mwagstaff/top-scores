@@ -928,6 +928,55 @@ function currentSeasonByLeagueFromDocs(leagues) {
   return map;
 }
 
+function normalizedSeasonDate(value) {
+  const match = String(value || "").trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+}
+
+function nextUtcDateKey(dateKey) {
+  const parsed = Date.parse(`${dateKey}T00:00:00Z`);
+  if (!Number.isFinite(parsed)) return null;
+  return new Date(parsed + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function currentSeasonContextByLeagueFromDocs(leagues) {
+  const map = new Map();
+  (Array.isArray(leagues) ? leagues : []).forEach((doc) => {
+    const payload = doc && doc.payload ? doc.payload : {};
+    const leagueId = payload.id != null ? String(payload.id) : String((doc && doc._id) || "");
+    if (!leagueId) return;
+    const season = payload.current_season || {};
+    const seasonId = season.id != null ? Number(season.id) : null;
+    const startDate = normalizedSeasonDate(season.start_date);
+    const endDate = normalizedSeasonDate(season.end_date);
+    map.set(leagueId, {
+      seasonId: Number.isFinite(seasonId) ? seasonId : null,
+      startDate,
+      endDateExclusive: endDate ? nextUtcDateKey(endDate) : null,
+    });
+  });
+  return map;
+}
+
+function currentSeasonId(context) {
+  if (context && typeof context === "object") {
+    if (context.seasonId == null) return null;
+    const value = Number(context.seasonId);
+    return Number.isFinite(value) ? value : null;
+  }
+  if (context == null) return null;
+  const value = Number(context);
+  return Number.isFinite(value) ? value : null;
+}
+
+function currentSeasonDateRange(context) {
+  if (!context || typeof context !== "object") return null;
+  const startDate = normalizedSeasonDate(context.startDate);
+  const endDateExclusive = normalizedSeasonDate(context.endDateExclusive);
+  if (!startDate || !endDateExclusive || startDate >= endDateExclusive) return null;
+  return { startDate, endDateExclusive };
+}
+
 function mongoIds(values) {
   const output = [];
   (Array.isArray(values) ? values : []).forEach((value) => {
@@ -943,9 +992,28 @@ function buildCurrentBsdEventsFilter(currentSeasonByLeague) {
   const allowlistedIds = mongoIds(BSD_LEAGUE_ALLOWLIST);
   const allowlist = new Set(BSD_LEAGUE_ALLOWLIST.map(String));
   const finishedSeasonClauses = [];
-  currentSeasonByLeague.forEach((seasonId, leagueId) => {
-    if (!Number.isFinite(seasonId) || !allowlist.has(String(leagueId))) {
+  currentSeasonByLeague.forEach((seasonContext, leagueId) => {
+    const seasonId = currentSeasonId(seasonContext);
+    const dateRange = currentSeasonDateRange(seasonContext);
+    if ((seasonId == null && !dateRange) || !allowlist.has(String(leagueId))) {
       return;
+    }
+    const currentSeasonSelectors = [];
+    if (seasonId != null) {
+      currentSeasonSelectors.push(
+        { season_id: { $in: mongoIds([seasonId]) } },
+        { "payload.season_id": { $in: mongoIds([seasonId]) } }
+      );
+    }
+    if (dateRange) {
+      const range = {
+        $gte: dateRange.startDate,
+        $lt: dateRange.endDateExclusive,
+      };
+      currentSeasonSelectors.push(
+        { event_date: range },
+        { "payload.event_date": range }
+      );
     }
     finishedSeasonClauses.push({
       $and: [
@@ -955,12 +1023,7 @@ function buildCurrentBsdEventsFilter(currentSeasonByLeague) {
             { "payload.league_id": { $in: mongoIds([leagueId]) } },
           ],
         },
-        {
-          $or: [
-            { season_id: { $in: mongoIds([seasonId]) } },
-            { "payload.season_id": { $in: mongoIds([seasonId]) } },
-          ],
-        },
+        { $or: currentSeasonSelectors },
       ],
     });
   });
@@ -998,13 +1061,23 @@ function isCurrentSeasonEvent(event, currentSeasonByLeague) {
   const leagueId = event.league_id != null ? String(event.league_id) : null;
   const current = leagueId ? currentSeasonByLeague.get(leagueId) : null;
   if (current == null) return true; // no season info — don't exclude
-  return Number(event.season_id) === current;
+  const seasonId = currentSeasonId(current);
+  const dateRange = currentSeasonDateRange(current);
+  if (seasonId == null && !dateRange) return true;
+  if (seasonId != null && Number(event.season_id) === seasonId) return true;
+  const eventDate = normalizedSeasonDate(event.event_date);
+  return Boolean(
+    dateRange &&
+    eventDate &&
+    eventDate >= dateRange.startDate &&
+    eventDate < dateRange.endDateExclusive
+  );
 }
 
 // Projects all current-season bsd_events into canonical list matches.
 async function projectBsdMatches() {
   const leagues = await getBsdRecords("bsd_leagues");
-  const currentSeasonByLeague = currentSeasonByLeagueFromDocs(leagues);
+  const currentSeasonByLeague = currentSeasonContextByLeagueFromDocs(leagues);
   const events = await getBsdRecords(
     "bsd_events",
     buildCurrentBsdEventsFilter(currentSeasonByLeague)
@@ -1170,6 +1243,7 @@ module.exports = {
     isCurrentSeasonEvent,
     buildCurrentBsdEventsFilter,
     currentSeasonByLeagueFromDocs,
+    currentSeasonContextByLeagueFromDocs,
     enrichBsdLineupPhotos,
     bsdPredictionFixtureToCanonical,
     bsdPredictionsPayloadToLeague,

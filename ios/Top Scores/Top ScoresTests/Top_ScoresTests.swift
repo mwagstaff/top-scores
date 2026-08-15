@@ -541,6 +541,151 @@ struct Top_ScoresTests {
         #expect(included.map(\.id) == [postponed.id])
     }
 
+    @Test func fixtureBrowserSelection_showAllDoesNotReusePreviousCompetitionFilter() {
+        let competitions = [
+            CompetitionCatalogEntry(
+                id: "premier-league",
+                name: "Premier League",
+                aliases: [],
+                weight: 100,
+                region: "england",
+                logoURL: nil
+            ),
+            CompetitionCatalogEntry(
+                id: "la-liga",
+                name: "La Liga",
+                aliases: ["Spanish La Liga"],
+                weight: 50,
+                region: "spain",
+                logoURL: nil
+            ),
+        ]
+        let premierLeagueMatch = Match(
+            date: "2026-08-22",
+            time: "15:00",
+            homeTeam: "Arsenal",
+            awayTeam: "Chelsea",
+            league: "Premier League",
+            tvChannels: []
+        )
+        let laLigaMatch = Match(
+            date: "2026-08-22",
+            time: "20:00",
+            homeTeam: "Barcelona",
+            awayTeam: "Valencia",
+            league: "La Liga",
+            tvChannels: []
+        )
+
+        let filtered = FixtureBrowseSelectionResolver.filterMatches(
+            [premierLeagueMatch, laLigaMatch],
+            topMatchesOnly: false,
+            selectedCompetitionIDs: ["la-liga"],
+            competitions: competitions,
+            showAllMatches: true,
+            includePostponed: false
+        )
+
+        #expect(filtered.map(\.id) == [premierLeagueMatch.id, laLigaMatch.id])
+    }
+
+    @Test func fixtureBrowserSelection_matchesDerKlassikerOutsideBundesliga() {
+        let fixture = Match(
+            date: "2026-08-22",
+            time: "19:30",
+            homeTeam: "Borussia Dortmund",
+            awayTeam: "Bayern Munich",
+            league: "German Super Cup",
+            tvChannels: []
+        )
+
+        let filtered = FixtureBrowseSelectionResolver.filterMatches(
+            [fixture],
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            competitions: [],
+            fixtureViewOptionIDs: [FixtureViewOptionID.rivalry("der-klassiker")],
+            includePostponed: false
+        )
+
+        #expect(filtered.map(\.id) == [fixture.id])
+    }
+
+    @Test func fixtureViewOptions_uefaTeamRulesAreMutuallyExclusiveAndOptional() {
+        let competitions: Set<String> = [
+            FixtureViewOptionID.competition("uefa-champions-league"),
+        ]
+        let topTeams = FixtureViewOptionID.toggling(
+            FixtureViewOptionID.topUEFAClubs,
+            in: competitions
+        )
+        let premierLeagueTeams = FixtureViewOptionID.toggling(
+            FixtureViewOptionID.premierLeagueTeams,
+            in: topTeams
+        )
+        let allTeams = FixtureViewOptionID.toggling(
+            FixtureViewOptionID.premierLeagueTeams,
+            in: premierLeagueTeams
+        )
+
+        #expect(topTeams.contains(FixtureViewOptionID.topUEFAClubs))
+        #expect(!premierLeagueTeams.contains(FixtureViewOptionID.topUEFAClubs))
+        #expect(premierLeagueTeams.contains(FixtureViewOptionID.premierLeagueTeams))
+        #expect(allTeams == competitions)
+        #expect(FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs == Set([
+            FixtureViewOptionID.competition("premier-league"),
+            FixtureViewOptionID.competition("uefa-champions-league"),
+            FixtureViewOptionID.competition("uefa-europa-league"),
+            FixtureViewOptionID.competition("uefa-conference-league"),
+            FixtureViewOptionID.competition("uefa-super-cup"),
+            FixtureViewOptionID.premierLeagueTeams,
+        ]))
+    }
+
+    @Test func fixtureBrowserSelection_premierLeagueTeamsRuleFiltersSelectedUEFACompetitions() {
+        let competitions = [
+            CompetitionCatalogEntry(
+                id: "uefa-champions-league",
+                name: "UEFA Champions League",
+                aliases: [],
+                weight: 90,
+                region: "europe",
+                logoURL: nil
+            ),
+        ]
+        let arsenal = Match(
+            date: "2026-09-15",
+            time: "20:00",
+            homeTeam: "Arsenal",
+            awayTeam: "Paris Saint-Germain",
+            league: "UEFA Champions League",
+            tvChannels: []
+        )
+        let realMadrid = Match(
+            date: "2026-09-15",
+            time: "20:00",
+            homeTeam: "Real Madrid",
+            awayTeam: "Paris Saint-Germain",
+            league: "UEFA Champions League",
+            tvChannels: []
+        )
+        let options: Set<String> = [
+            FixtureViewOptionID.competition("uefa-champions-league"),
+            FixtureViewOptionID.premierLeagueTeams,
+        ]
+
+        let filtered = FixtureBrowseSelectionResolver.filterMatches(
+            [arsenal, realMadrid],
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            competitions: competitions,
+            fixtureViewOptionIDs: options,
+            includePostponed: false
+        )
+
+        #expect(filtered.map(\.id) == [arsenal.id])
+    }
+
     @Test func fixtureBrowserSelection_resolvesSwipeAndNextMatchNavigation() {
         let days = [
             FixtureCalendarDay(
@@ -607,6 +752,41 @@ struct Top_ScoresTests {
                 todayKey: "2026-08-15",
                 topMatchesOnly: true,
                 selectedCompetitionIDs: []
+            ) == nil
+        )
+    }
+
+    @Test func fixtureBrowserSelection_commitsIntentionalHorizontalDateSwipes() {
+        #expect(
+            FixtureBrowseSelectionResolver.swipeDateOffset(
+                translationWidth: -90,
+                translationHeight: 12,
+                predictedEndTranslationWidth: -120,
+                containerWidth: 390
+            ) == 1
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.swipeDateOffset(
+                translationWidth: 38,
+                translationHeight: 8,
+                predictedEndTranslationWidth: 180,
+                containerWidth: 390
+            ) == -1
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.swipeDateOffset(
+                translationWidth: 40,
+                translationHeight: 8,
+                predictedEndTranslationWidth: 50,
+                containerWidth: 390
+            ) == nil
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.swipeDateOffset(
+                translationWidth: 95,
+                translationHeight: 90,
+                predictedEndTranslationWidth: 170,
+                containerWidth: 390
             ) == nil
         )
     }

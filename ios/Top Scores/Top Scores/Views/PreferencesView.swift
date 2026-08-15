@@ -3,6 +3,27 @@ import SwiftUI
 import UIKit
 #endif
 
+private enum FixturePreferenceMode: String, CaseIterable, Identifiable {
+    case favourites
+    case all
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .favourites: return "Favourites"
+        case .all: return "All"
+        case .custom: return "Custom"
+        }
+    }
+}
+
+private struct ProfileFixtureRegion: Identifiable {
+    let id: String
+    let name: String
+}
+
 struct PreferencesView: View {
     var embeddedInNavigation: Bool = false
     var showsOnlyAdvancedSettings: Bool = false
@@ -62,16 +83,19 @@ struct PreferencesView: View {
 
                     if !showsOnlyAdvancedSettings {
                         Section("Fixtures") {
-                            Toggle("Favourites", isOn: fixtureAllMajorMatchesBinding)
-                            Text("Premier League teams, major club games, home nations, and major international tournaments.")
+                            Picker("Fixture view", selection: fixturePreferenceModeBinding) {
+                                ForEach(FixturePreferenceMode.allCases) { mode in
+                                    Text(mode.title).tag(mode)
+                                }
+                            }
+
+                            Text(fixturePreferenceModeDescription)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
 
-                            if !preferences.fixtureAllMajorMatchesEnabled {
-                                competitionPicker(
-                                    search: $leagueSearch,
-                                    selectedLeagues: preferences.selectedLeagues,
-                                    selectionChanged: toggleFixtureLeague
+                            if fixturePreferenceModeBinding.wrappedValue != .all {
+                                fixtureViewOptionPicker(
+                                    editingFavourites: fixturePreferenceModeBinding.wrappedValue == .favourites
                                 )
                             }
                         }
@@ -256,6 +280,7 @@ struct PreferencesView: View {
                     Section {
                         Button("Clear selections", role: .destructive) {
                             preferences.selectedLeagues = []
+                            preferences.selectedFixtureViewOptionIDs = []
                             preferences.selectedNotificationLeagues = []
                             preferences.selectedChannels = []
                         }
@@ -430,6 +455,65 @@ struct PreferencesView: View {
         }
     }
 
+    @ViewBuilder
+    private func fixtureViewOptionPicker(editingFavourites: Bool) -> some View {
+        TextField("Search competitions", text: $leagueSearch)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+        if viewModel.isLoadingLeagues {
+            ProgressView("Loading competitions")
+        } else {
+            ForEach(profileFixtureRegions, id: \.id) { region in
+                let specialOptions = FixtureViewSpecialOption.options(in: region.id)
+                    .filter { fixtureOptionMatchesSearch($0.title) || fixtureOptionMatchesSearch($0.subtitle) }
+                let competitions = filteredFixtureCompetitions(in: region.id)
+                if !specialOptions.isEmpty || !competitions.isEmpty {
+                    DisclosureGroup(region.name) {
+                        ForEach(specialOptions) { option in
+                            FixturePreferenceOptionRow(
+                                title: option.title,
+                                subtitle: option.subtitle,
+                                isSelected: fixtureViewOptionIsSelected(
+                                    option.id,
+                                    editingFavourites: editingFavourites
+                                ),
+                                action: {
+                                    toggleFixtureViewOption(
+                                        option.id,
+                                        editingFavourites: editingFavourites
+                                    )
+                                }
+                            )
+                        }
+
+                        if !specialOptions.isEmpty && !competitions.isEmpty {
+                            Divider()
+                        }
+
+                        ForEach(competitions, id: \.stableID) { competition in
+                            let optionID = FixtureViewOptionID.competition(competition.stableID)
+                            FixturePreferenceOptionRow(
+                                title: competition.name,
+                                subtitle: "Competition",
+                                isSelected: fixtureViewOptionIsSelected(
+                                    optionID,
+                                    editingFavourites: editingFavourites
+                                ),
+                                action: {
+                                    toggleFixtureViewOption(
+                                        optionID,
+                                        editingFavourites: editingFavourites
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #if DEBUG
     private var debugTimestampFormatter: DateFormatter {
         let formatter = DateFormatter()
@@ -580,19 +664,34 @@ struct PreferencesView: View {
         )
     }
 
-    private var fixtureAllMajorMatchesBinding: Binding<Bool> {
+    private var fixturePreferenceModeBinding: Binding<FixturePreferenceMode> {
         Binding(
-            get: { preferences.fixtureAllMajorMatchesEnabled },
-            set: { enabled in
-                preferences.fixtureAllMajorMatchesEnabled = enabled
-                preferences.competitionFilterEnabled = !enabled
-                preferences.englishPremierLeagueTeamsOnly = enabled
-                preferences.majorUEFAClubGamesEnabled = enabled
-                preferences.homeNationsFilterEnabled = enabled
-                preferences.majorTournamentsFilterEnabled = enabled
+            get: {
+                if preferences.showAllMatches { return .all }
+                return preferences.fixtureAllMajorMatchesEnabled ? .favourites : .custom
+            },
+            set: { mode in
+                preferences.fixtureAllMajorMatchesEnabled = mode == .favourites
+                preferences.showAllMatches = mode == .all
+                preferences.competitionFilterEnabled = mode == .custom
+                if mode == .custom, preferences.selectedFixtureViewOptionIDs.isEmpty {
+                    preferences.selectedFixtureViewOptionIDs = preferences.favouriteFixtureViewOptionIDs
+                        .filter { $0 != FixtureViewOptionID.all }
+                }
                 AppMetricsService.shared.fireActivity("pref_fixtures_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
             }
         )
+    }
+
+    private var fixturePreferenceModeDescription: String {
+        switch fixturePreferenceModeBinding.wrappedValue {
+        case .favourites:
+            return "Edit the saved leagues, teams and rivalry fixtures shown in Favourites."
+        case .all:
+            return "Show fixtures from every available competition."
+        case .custom:
+            return "Choose a temporary mix of leagues, teams and rivalry fixtures."
+        }
     }
 
     private var notificationAllMajorMatchesBinding: Binding<Bool> {
@@ -697,19 +796,71 @@ struct PreferencesView: View {
         return leagues.filter { $0.localizedCaseInsensitiveContains(trimmed) }
     }
 
+    private var profileFixtureRegions: [ProfileFixtureRegion] {
+        [
+            .init(id: "england", name: "England"),
+            .init(id: "scotland", name: "Scotland"),
+            .init(id: "germany", name: "Germany"),
+            .init(id: "spain", name: "Spain"),
+            .init(id: "italy", name: "Italy"),
+            .init(id: "france", name: "France"),
+            .init(id: "europe", name: "Europe"),
+            .init(id: "world", name: "World"),
+        ]
+    }
+
+    private func fixtureOptionMatchesSearch(_ value: String) -> Bool {
+        let trimmed = leagueSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || value.localizedCaseInsensitiveContains(trimmed)
+    }
+
+    private func filteredFixtureCompetitions(in regionID: String) -> [CompetitionCatalogEntry] {
+        viewModel.competitionCatalog
+            .filter { ($0.region ?? "").lowercased() == regionID && fixtureOptionMatchesSearch($0.name) }
+            .sorted { left, right in
+                if left.weight != right.weight { return left.weight > right.weight }
+                return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
+            }
+    }
+
+    private func fixtureViewOptionIsSelected(
+        _ optionID: String,
+        editingFavourites: Bool
+    ) -> Bool {
+        let optionIDs = editingFavourites
+            ? preferences.favouriteFixtureViewOptionIDs
+            : preferences.selectedFixtureViewOptionIDs
+        return optionIDs.contains(optionID)
+    }
+
+    private func toggleFixtureViewOption(
+        _ optionID: String,
+        editingFavourites: Bool
+    ) {
+        let optionIDs = Set(
+            editingFavourites
+                ? preferences.favouriteFixtureViewOptionIDs
+                : preferences.selectedFixtureViewOptionIDs
+        )
+        let updatedOptionIDs = FixtureViewOptionID.toggling(optionID, in: optionIDs)
+        guard !updatedOptionIDs.isEmpty else { return }
+
+        if editingFavourites {
+            preferences.favouriteFixtureViewOptionIDs = updatedOptionIDs.sorted()
+        } else {
+            preferences.selectedFixtureViewOptionIDs = updatedOptionIDs.sorted()
+            let competitionIDs = Set(updatedOptionIDs.compactMap(FixtureViewOptionID.competitionStableID))
+            preferences.selectedLeagues = viewModel.competitionCatalog
+                .filter { competitionIDs.contains($0.stableID) }
+                .map(\.name)
+                .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        }
+    }
+
     private var filteredChannels: [String] {
         let trimmed = channelSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return viewModel.availableChannels }
         return viewModel.availableChannels.filter { $0.localizedCaseInsensitiveContains(trimmed) }
-    }
-
-    private func toggleFixtureLeague(_ league: String) {
-        if let index = preferences.selectedLeagues.firstIndex(of: league) {
-            preferences.selectedLeagues.remove(at: index)
-        } else {
-            preferences.selectedLeagues.append(league)
-            preferences.selectedLeagues.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-        }
     }
 
     private func toggleNotificationLeague(_ league: String) {
@@ -801,6 +952,45 @@ struct PreferencesView: View {
         )
     }
     #endif
+}
+
+private struct FixturePreferenceOptionRow: View {
+    let title: String
+    let subtitle: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(isSelected ? Color.accentColor : Color.clear)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .stroke(isSelected ? Color.accentColor : Color.secondary, lineWidth: 1.25)
+                    }
+                    .overlay {
+                        if isSelected {
+                            Image(systemName: "checkmark")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .frame(width: 20, height: 20)
+                    .accessibilityHidden(true)
+            }
+        }
+        .accessibilityLabel(title)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+    }
 }
 
 private struct MultiSelectRow: View {

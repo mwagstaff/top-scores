@@ -26,6 +26,7 @@ const {
   extractBsdPeriodSummary,
   buildCurrentBsdEventsFilter,
   currentSeasonByLeagueFromDocs,
+  currentSeasonContextByLeagueFromDocs,
 } = __private;
 
 test("current-season Mongo filter scopes BSD events before payloads are loaded", () => {
@@ -465,6 +466,17 @@ test("isCurrentSeasonEvent: keeps current + live (no season), drops historical f
   assert.equal(isCurrentSeasonEvent({ ...finished, season_id: 188 }, seasonByLeague), true);
   assert.equal(isCurrentSeasonEvent({ ...finished, season_id: 189 }, seasonByLeague), false);
   assert.equal(isCurrentSeasonEvent({ ...finished, season_id: null }, seasonByLeague), true);
+
+  const unavailableSeason = currentSeasonContextByLeagueFromDocs([
+    { _id: "90", payload: { id: 90, current_season: null } },
+  ]);
+  assert.equal(
+    isCurrentSeasonEvent(
+      { league_id: 90, status: "finished", season_id: 1899, event_date: "2026-08-12" },
+      unavailableSeason
+    ),
+    true
+  );
 });
 
 test("isCurrentSeasonEvent: never excludes non-finished events, even from a stale season_id", () => {
@@ -479,6 +491,41 @@ test("isCurrentSeasonEvent: never excludes non-finished events, even from a stal
     isCurrentSeasonEvent({ league_id: 1, season_id: 1058, status: "inprogress" }, seasonByLeague),
     true
   );
+});
+
+test("current-season projection accepts a finished event with an inconsistent BSD season id when its date is in range", () => {
+  const seasons = currentSeasonContextByLeagueFromDocs([
+    {
+      _id: "90",
+      payload: {
+        id: 90,
+        current_season: {
+          id: 1880,
+          start_date: "2026-07-01",
+          end_date: "2027-06-30",
+        },
+      },
+    },
+  ]);
+  const superCupFinal = {
+    league_id: 90,
+    season_id: 1899,
+    status: "finished",
+    event_date: "2026-08-12T19:00:00+00:00",
+  };
+
+  assert.equal(isCurrentSeasonEvent(superCupFinal, seasons), true);
+  assert.equal(
+    isCurrentSeasonEvent(
+      { ...superCupFinal, event_date: "2025-08-13T19:00:00+00:00" },
+      seasons
+    ),
+    false
+  );
+
+  const serializedFilter = JSON.stringify(buildCurrentBsdEventsFilter(seasons));
+  assert.match(serializedFilter, /2026-07-01/);
+  assert.match(serializedFilter, /2027-07-01/);
 });
 
 // ---------------------------------------------------------------------------

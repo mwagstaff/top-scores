@@ -2932,7 +2932,11 @@ function evaluateUserNotificationDecision(user, match, event) {
   }
 
   if (prefs.notificationMatchesFixturesEnabled === true) {
+    const hasFixtureViewOptionSelection =
+      Array.isArray(prefs.selectedFixtureViewOptionIDs) ||
+      Array.isArray(prefs.favouriteFixtureViewOptionIDs);
     if (
+      !hasFixtureViewOptionSelection &&
       prefs.competitionFilterEnabled &&
       Array.isArray(prefs.selectedLeagues) &&
       prefs.selectedLeagues.length > 0 &&
@@ -4168,12 +4172,16 @@ function preferredLiveActivityChannels(primaryMatch, fallbackMatch) {
 
 function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.now()) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
+  const hasFixtureViewOptionSelection =
+    Array.isArray(prefs.selectedFixtureViewOptionIDs) ||
+    Array.isArray(prefs.favouriteFixtureViewOptionIDs);
   const englishPremierLeagueTeamsOnly = prefs.englishPremierLeagueTeamsOnly === true;
   const majorUEFAClubGamesEnabled = prefs.majorUEFAClubGamesEnabled === true;
 
   return filterCanonicalLiveActivityCandidateMatches(matches, nowMs)
     .filter((match) => {
       if (
+        !hasFixtureViewOptionSelection &&
         prefs.competitionFilterEnabled &&
         Array.isArray(prefs.selectedLeagues) &&
         prefs.selectedLeagues.length > 0
@@ -4584,6 +4592,9 @@ function compareUpcomingLiveActivityMatches(lhs, rhs) {
 
 function isEligibleForLiveActivityByPreferences(user, match) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
+  const hasFixtureViewOptionSelection =
+    Array.isArray(prefs.selectedFixtureViewOptionIDs) ||
+    Array.isArray(prefs.favouriteFixtureViewOptionIDs);
   if (!match || typeof match !== "object") {
     return {
       eligible: false,
@@ -4591,7 +4602,12 @@ function isEligibleForLiveActivityByPreferences(user, match) {
     };
   }
 
-  if (prefs.competitionFilterEnabled && Array.isArray(prefs.selectedLeagues) && prefs.selectedLeagues.length > 0) {
+  if (
+    !hasFixtureViewOptionSelection &&
+    prefs.competitionFilterEnabled &&
+    Array.isArray(prefs.selectedLeagues) &&
+    prefs.selectedLeagues.length > 0
+  ) {
     if (!liveActivityPreferenceLeagueMatchesSelectedLeagues(prefs.selectedLeagues, match.league)) {
       return {
         eligible: false,

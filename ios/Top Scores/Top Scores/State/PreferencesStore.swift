@@ -47,8 +47,114 @@ enum FixturesViewDensity: String, Codable, Sendable {
     }
 }
 
+nonisolated enum FixtureViewOptionID {
+    static let all = "scope:all"
+    static let topUEFAClubs = "rule:top-uefa-clubs"
+    static let premierLeagueTeams = "rule:premier-league-teams"
+    static let uefaClubCompetitionStableIDs: Set<String> = [
+        "uefa-champions-league",
+        "uefa-europa-league",
+        "uefa-conference-league",
+        "uefa-super-cup",
+    ]
+    static let mutuallyExclusiveUEFATeamRules: Set<String> = [
+        topUEFAClubs,
+        premierLeagueTeams,
+    ]
+    static let premierLeagueMatchesPresetOptionIDs: Set<String> = Set(
+        [competition("premier-league"), premierLeagueTeams] +
+        uefaClubCompetitionStableIDs.map(competition)
+    )
+
+    static func competition(_ stableID: String) -> String {
+        "competition:\(stableID)"
+    }
+
+    static func team(_ stableID: String) -> String {
+        "team:\(stableID)"
+    }
+
+    static func rivalry(_ stableID: String) -> String {
+        "rivalry:\(stableID)"
+    }
+
+    static func competitionStableID(from optionID: String) -> String? {
+        guard optionID.hasPrefix("competition:") else { return nil }
+        return String(optionID.dropFirst("competition:".count))
+    }
+
+    static func toggling(_ optionID: String, in optionIDs: Set<String>) -> Set<String> {
+        var updated = optionIDs
+        updated.remove(all)
+        if updated.contains(optionID) {
+            updated.remove(optionID)
+        } else {
+            if mutuallyExclusiveUEFATeamRules.contains(optionID) {
+                updated.subtract(mutuallyExclusiveUEFATeamRules)
+            }
+            updated.insert(optionID)
+        }
+        return updated
+    }
+
+    static func legacyCompetition(_ name: String) -> String {
+        let normalizedName = name
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: "-")
+        let stableID: String
+        switch normalizedName {
+        case "english-premier-league": stableID = "premier-league"
+        case "english-fa-cup": stableID = "fa-cup"
+        case "efl-cup", "carabao-cup": stableID = "english-league-cup"
+        case "spanish-la-liga": stableID = "la-liga"
+        case "german-bundesliga": stableID = "bundesliga"
+        case "italian-serie-a": stableID = "serie-a"
+        case "french-ligue-1": stableID = "ligue-1"
+        default: stableID = normalizedName
+        }
+        return competition(stableID)
+    }
+}
+
+nonisolated struct FixtureViewSpecialOption: Identifiable, Hashable, Sendable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let regionID: String
+    let logoTeamNames: [String]
+    let systemImage: String?
+
+    static let all: [FixtureViewSpecialOption] = [
+        .init(id: FixtureViewOptionID.rivalry("el-clasico"), title: "El Clásico", subtitle: "Barcelona vs Real Madrid", regionID: "spain", logoTeamNames: ["Barcelona", "Real Madrid"], systemImage: nil),
+        .init(id: FixtureViewOptionID.team("real-madrid"), title: "Real Madrid", subtitle: "All Real Madrid matches", regionID: "spain", logoTeamNames: ["Real Madrid"], systemImage: nil),
+        .init(id: FixtureViewOptionID.team("barcelona"), title: "Barcelona", subtitle: "All Barcelona matches", regionID: "spain", logoTeamNames: ["Barcelona"], systemImage: nil),
+        .init(id: FixtureViewOptionID.rivalry("old-firm"), title: "Old Firm", subtitle: "Celtic vs Rangers", regionID: "scotland", logoTeamNames: ["Celtic", "Rangers"], systemImage: nil),
+        .init(id: FixtureViewOptionID.team("celtic"), title: "Celtic", subtitle: "All Celtic matches", regionID: "scotland", logoTeamNames: ["Celtic"], systemImage: nil),
+        .init(id: FixtureViewOptionID.team("rangers"), title: "Rangers", subtitle: "All Rangers matches", regionID: "scotland", logoTeamNames: ["Rangers"], systemImage: nil),
+        .init(id: FixtureViewOptionID.rivalry("der-klassiker"), title: "Der Klassiker", subtitle: "Bayern Munich vs Borussia Dortmund", regionID: "germany", logoTeamNames: ["Bayern Munich", "Borussia Dortmund"], systemImage: nil),
+        .init(id: FixtureViewOptionID.team("bayern-munich"), title: "Bayern Munich", subtitle: "All Bayern Munich matches", regionID: "germany", logoTeamNames: ["Bayern Munich"], systemImage: nil),
+        .init(id: FixtureViewOptionID.team("borussia-dortmund"), title: "Borussia Dortmund", subtitle: "All Dortmund matches", regionID: "germany", logoTeamNames: ["Borussia Dortmund"], systemImage: nil),
+        .init(id: FixtureViewOptionID.rivalry("derby-della-madonnina"), title: "Derby della Madonnina", subtitle: "Inter vs AC Milan", regionID: "italy", logoTeamNames: ["Inter Milan", "AC Milan"], systemImage: nil),
+        .init(id: FixtureViewOptionID.team("inter"), title: "Inter", subtitle: "All Inter matches", regionID: "italy", logoTeamNames: ["Inter Milan"], systemImage: nil),
+        .init(id: FixtureViewOptionID.team("ac-milan"), title: "AC Milan", subtitle: "All AC Milan matches", regionID: "italy", logoTeamNames: ["AC Milan"], systemImage: nil),
+        .init(id: FixtureViewOptionID.team("juventus"), title: "Juventus", subtitle: "All Juventus matches", regionID: "italy", logoTeamNames: ["Juventus"], systemImage: nil),
+        .init(id: FixtureViewOptionID.rivalry("le-classique"), title: "Le Classique", subtitle: "Paris Saint-Germain vs Marseille", regionID: "france", logoTeamNames: ["Paris Saint-Germain", "Marseille"], systemImage: nil),
+        .init(id: FixtureViewOptionID.topUEFAClubs, title: "Top teams only", subtitle: "Major clubs in UEFA club competitions", regionID: "europe", logoTeamNames: [], systemImage: "chart.line.uptrend.xyaxis"),
+        .init(id: FixtureViewOptionID.premierLeagueTeams, title: "Premier League teams only", subtitle: "Premier League clubs in UEFA competitions", regionID: "europe", logoTeamNames: [], systemImage: nil)
+    ]
+
+    static func options(in regionID: String) -> [FixtureViewSpecialOption] {
+        all.filter { $0.regionID == regionID }
+    }
+}
+
 struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let selectedLeagues: [String]
+    let selectedFixtureViewOptionIDs: [String]
+    let favouriteFixtureViewOptionIDs: [String]
     let selectedNotificationLeagues: [String]
     let selectedChannels: [String]
     let fixtureAllMajorMatchesEnabled: Bool
@@ -88,7 +194,22 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     }
 
     nonisolated var usesFixtureCompetitionSelection: Bool {
-        !fixtureAllMajorMatchesEnabled
+        !fixtureAllMajorMatchesEnabled && !showAllMatches
+    }
+
+    nonisolated var effectiveFixtureViewOptionIDs: [String] {
+        if showAllMatches { return [] }
+        let optionIDs = fixtureAllMajorMatchesEnabled
+            ? favouriteFixtureViewOptionIDs
+            : selectedFixtureViewOptionIDs
+        return optionIDs.contains(FixtureViewOptionID.all) ? [] : optionIDs
+    }
+
+    nonisolated var fixtureViewShowsAll: Bool {
+        showAllMatches || (
+            fixtureAllMajorMatchesEnabled &&
+            favouriteFixtureViewOptionIDs.contains(FixtureViewOptionID.all)
+        )
     }
 
     nonisolated var effectiveEnglishPremierLeagueTeamsOnly: Bool {
@@ -109,6 +230,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
 
     nonisolated init(
         selectedLeagues: [String],
+        selectedFixtureViewOptionIDs: [String] = PreferencesStore.defaultFavouriteFixtureViewOptionIDs,
+        favouriteFixtureViewOptionIDs: [String] = PreferencesStore.defaultFavouriteFixtureViewOptionIDs,
         selectedNotificationLeagues: [String] = PreferencesStore.defaultSelectedNotificationLeagues,
         selectedChannels: [String],
         fixtureAllMajorMatchesEnabled: Bool = PreferencesStore.defaultFixtureAllMajorMatchesEnabled,
@@ -144,6 +267,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showPostponedGames: Bool = PreferencesStore.defaultShowPostponedGames
     ) {
         self.selectedLeagues = selectedLeagues
+        self.selectedFixtureViewOptionIDs = selectedFixtureViewOptionIDs
+        self.favouriteFixtureViewOptionIDs = favouriteFixtureViewOptionIDs
         self.selectedNotificationLeagues = selectedNotificationLeagues
         self.selectedChannels = selectedChannels
         self.fixtureAllMajorMatchesEnabled = fixtureAllMajorMatchesEnabled
@@ -181,6 +306,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case selectedLeagues
+        case selectedFixtureViewOptionIDs
+        case favouriteFixtureViewOptionIDs
         case selectedNotificationLeagues
         case selectedChannels
         case fixtureAllMajorMatchesEnabled
@@ -223,6 +350,10 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         selectedLeagues = try container.decode([String].self, forKey: .selectedLeagues)
+        selectedFixtureViewOptionIDs = try container.decodeIfPresent([String].self, forKey: .selectedFixtureViewOptionIDs)
+            ?? selectedLeagues.map(FixtureViewOptionID.legacyCompetition)
+        favouriteFixtureViewOptionIDs = try container.decodeIfPresent([String].self, forKey: .favouriteFixtureViewOptionIDs)
+            ?? PreferencesStore.defaultFavouriteFixtureViewOptionIDs
         selectedNotificationLeagues = try container.decodeIfPresent([String].self, forKey: .selectedNotificationLeagues)
             ?? selectedLeagues
         selectedChannels = try container.decode([String].self, forKey: .selectedChannels)
@@ -282,6 +413,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     nonisolated func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(selectedLeagues, forKey: .selectedLeagues)
+        try container.encode(selectedFixtureViewOptionIDs, forKey: .selectedFixtureViewOptionIDs)
+        try container.encode(favouriteFixtureViewOptionIDs, forKey: .favouriteFixtureViewOptionIDs)
         try container.encode(selectedNotificationLeagues, forKey: .selectedNotificationLeagues)
         try container.encode(selectedChannels, forKey: .selectedChannels)
         try container.encode(fixtureAllMajorMatchesEnabled, forKey: .fixtureAllMajorMatchesEnabled)
@@ -319,6 +452,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
 
     nonisolated static func == (lhs: PreferencesSnapshot, rhs: PreferencesSnapshot) -> Bool {
         lhs.selectedLeagues == rhs.selectedLeagues &&
+        lhs.selectedFixtureViewOptionIDs == rhs.selectedFixtureViewOptionIDs &&
+        lhs.favouriteFixtureViewOptionIDs == rhs.favouriteFixtureViewOptionIDs &&
         lhs.selectedNotificationLeagues == rhs.selectedNotificationLeagues &&
         lhs.selectedChannels == rhs.selectedChannels &&
         lhs.fixtureAllMajorMatchesEnabled == rhs.fixtureAllMajorMatchesEnabled &&
@@ -359,6 +494,24 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
 final class PreferencesStore: ObservableObject {
     nonisolated static let defaultSelectedLeagues = [
         "Premier League",
+        "FA Cup",
+        "UEFA Nations League"
+    ]
+    nonisolated static let defaultFavouriteFixtureViewOptionIDs = [
+        FixtureViewOptionID.competition("premier-league"),
+        FixtureViewOptionID.competition("fa-cup"),
+        FixtureViewOptionID.rivalry("der-klassiker"),
+        FixtureViewOptionID.team("bayern-munich"),
+        FixtureViewOptionID.rivalry("el-clasico"),
+        FixtureViewOptionID.team("barcelona"),
+        FixtureViewOptionID.team("real-madrid"),
+        FixtureViewOptionID.rivalry("derby-della-madonnina"),
+        FixtureViewOptionID.rivalry("le-classique"),
+        FixtureViewOptionID.topUEFAClubs,
+        FixtureViewOptionID.competition("uefa-nations-league")
+    ]
+    nonisolated static let defaultSelectedNotificationLeagues = [
+        "Premier League",
         "FIFA World Cup 2026",
         "FIFA World Cup Qualifying - European",
         "UEFA Champions League",
@@ -366,7 +519,6 @@ final class PreferencesStore: ObservableObject {
         "UEFA Europa League",
         "UEFA Super Cup"
     ]
-    nonisolated static let defaultSelectedNotificationLeagues = defaultSelectedLeagues
     nonisolated static let defaultFixtureAllMajorMatchesEnabled = true
     nonisolated static let defaultNotificationMatchesFixturesEnabled = true
     nonisolated static let defaultNotificationAllMajorMatchesEnabled = true
@@ -405,6 +557,14 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultShowPredictedScores = false
 
     @Published var selectedLeagues: [String] {
+        didSet { persist() }
+    }
+
+    @Published var selectedFixtureViewOptionIDs: [String] {
+        didSet { persist() }
+    }
+
+    @Published var favouriteFixtureViewOptionIDs: [String] {
         didSet { persist() }
     }
 
@@ -549,6 +709,10 @@ final class PreferencesStore: ObservableObject {
 
     init(userDefaults: UserDefaults = .standard) {
         let leagues = userDefaults.stringArray(forKey: Keys.selectedLeagues) ?? Self.defaultSelectedLeagues
+        let selectedFixtureViewOptionIDs = userDefaults.stringArray(forKey: Keys.selectedFixtureViewOptionIDs)
+            ?? leagues.map(FixtureViewOptionID.legacyCompetition)
+        let favouriteFixtureViewOptionIDs = userDefaults.stringArray(forKey: Keys.favouriteFixtureViewOptionIDs)
+            ?? Self.defaultFavouriteFixtureViewOptionIDs
         let notificationLeagues = userDefaults.stringArray(forKey: Keys.selectedNotificationLeagues) ?? leagues
         let channels = userDefaults.stringArray(forKey: Keys.selectedChannels) ?? Self.defaultSelectedChannels
         let competitionFilterEnabled = userDefaults.object(forKey: Keys.competitionFilterEnabled) as? Bool
@@ -631,6 +795,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultShowPredictedScores
 
         self.selectedLeagues = leagues
+        self.selectedFixtureViewOptionIDs = selectedFixtureViewOptionIDs
+        self.favouriteFixtureViewOptionIDs = favouriteFixtureViewOptionIDs
         self.selectedNotificationLeagues = notificationLeagues
         self.selectedChannels = ChannelSelection.normalizedSelectedOptions(channels)
         self.competitionFilterEnabled = competitionFilterEnabled
@@ -676,6 +842,8 @@ final class PreferencesStore: ObservableObject {
     var snapshot: PreferencesSnapshot {
         PreferencesSnapshot(
             selectedLeagues: selectedLeagues,
+            selectedFixtureViewOptionIDs: selectedFixtureViewOptionIDs,
+            favouriteFixtureViewOptionIDs: favouriteFixtureViewOptionIDs,
             selectedNotificationLeagues: selectedNotificationLeagues,
             selectedChannels: selectedChannels,
             fixtureAllMajorMatchesEnabled: fixtureAllMajorMatchesEnabled,
@@ -719,6 +887,8 @@ final class PreferencesStore: ObservableObject {
     var unfilteredSnapshot: PreferencesSnapshot {
         PreferencesSnapshot(
             selectedLeagues: selectedLeagues,
+            selectedFixtureViewOptionIDs: selectedFixtureViewOptionIDs,
+            favouriteFixtureViewOptionIDs: favouriteFixtureViewOptionIDs,
             selectedNotificationLeagues: selectedNotificationLeagues,
             selectedChannels: selectedChannels,
             fixtureAllMajorMatchesEnabled: false,
@@ -757,6 +927,8 @@ final class PreferencesStore: ObservableObject {
 
     func persist(userDefaults: UserDefaults = .standard) {
         userDefaults.set(selectedLeagues, forKey: Keys.selectedLeagues)
+        userDefaults.set(selectedFixtureViewOptionIDs, forKey: Keys.selectedFixtureViewOptionIDs)
+        userDefaults.set(favouriteFixtureViewOptionIDs, forKey: Keys.favouriteFixtureViewOptionIDs)
         userDefaults.set(selectedNotificationLeagues, forKey: Keys.selectedNotificationLeagues)
         userDefaults.set(selectedChannels, forKey: Keys.selectedChannels)
         userDefaults.set(competitionFilterEnabled, forKey: Keys.competitionFilterEnabled)
@@ -808,6 +980,10 @@ final class PreferencesStore: ObservableObject {
 
     static func loadSnapshot(userDefaults: UserDefaults = .standard) -> PreferencesSnapshot {
         let leagues = userDefaults.stringArray(forKey: Keys.selectedLeagues) ?? Self.defaultSelectedLeagues
+        let selectedFixtureViewOptionIDs = userDefaults.stringArray(forKey: Keys.selectedFixtureViewOptionIDs)
+            ?? leagues.map(FixtureViewOptionID.legacyCompetition)
+        let favouriteFixtureViewOptionIDs = userDefaults.stringArray(forKey: Keys.favouriteFixtureViewOptionIDs)
+            ?? Self.defaultFavouriteFixtureViewOptionIDs
         let notificationLeagues = userDefaults.stringArray(forKey: Keys.selectedNotificationLeagues) ?? leagues
         let channels = userDefaults.stringArray(forKey: Keys.selectedChannels) ?? Self.defaultSelectedChannels
         let competitionFilterEnabled = userDefaults.object(forKey: Keys.competitionFilterEnabled) as? Bool
@@ -889,6 +1065,8 @@ final class PreferencesStore: ObservableObject {
 
         return PreferencesSnapshot(
             selectedLeagues: leagues,
+            selectedFixtureViewOptionIDs: selectedFixtureViewOptionIDs,
+            favouriteFixtureViewOptionIDs: favouriteFixtureViewOptionIDs,
             selectedNotificationLeagues: notificationLeagues,
             selectedChannels: ChannelSelection.normalizedSelectedOptions(channels),
             fixtureAllMajorMatchesEnabled: fixtureAllMajorMatchesEnabled,
@@ -927,6 +1105,8 @@ final class PreferencesStore: ObservableObject {
 
     private enum Keys {
         static let selectedLeagues = "preferences.selectedLeagues"
+        static let selectedFixtureViewOptionIDs = "preferences.selectedFixtureViewOptionIDs"
+        static let favouriteFixtureViewOptionIDs = "preferences.favouriteFixtureViewOptionIDs"
         static let selectedNotificationLeagues = "preferences.selectedNotificationLeagues"
         static let selectedChannels = "preferences.selectedChannels"
         static let competitionFilterEnabled = "preferences.competitionFilterEnabled"

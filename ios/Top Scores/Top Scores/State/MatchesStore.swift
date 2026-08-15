@@ -427,10 +427,7 @@ private enum MatchGroupingEngine {
     }
 
     private nonisolated static func matchIncludesPremierLeagueTeam(_ match: Match) -> Bool {
-        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
-        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
-        return !homeKeys.isDisjoint(with: MatchesStore.premierLeagueTeamKeys) ||
-            !awayKeys.isDisjoint(with: MatchesStore.premierLeagueTeamKeys)
+        MatchesStore.matchIncludesPremierLeagueTeam(match)
     }
 
     private nonisolated static func sortMatchesWithinLeague(
@@ -721,6 +718,7 @@ final class MatchesStore: ObservableObject {
         [
             "competition=\(snapshot.competitionFilterEnabled)",
             "leagues=\(snapshot.selectedLeagues.sorted().joined(separator: "|"))",
+            "fixture_options=\(snapshot.effectiveFixtureViewOptionIDs.sorted().joined(separator: "|"))",
             "channels=\(snapshot.channelFilterEnabled):\(snapshot.selectedChannels.sorted().joined(separator: "|"))",
             "epl=\(snapshot.effectiveEnglishPremierLeagueTeamsOnly)",
             "major_uefa=\(snapshot.effectiveMajorUEFAClubGamesEnabled)",
@@ -2228,6 +2226,13 @@ final class MatchesStore: ObservableObject {
         if !key.isEmpty {
             partialResult.insert(key)
         }
+    }
+
+    nonisolated static func matchIncludesPremierLeagueTeam(_ match: Match) -> Bool {
+        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
+        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
+        return !homeKeys.isDisjoint(with: premierLeagueTeamKeys) ||
+            !awayKeys.isDisjoint(with: premierLeagueTeamKeys)
     }
 
     nonisolated static func filterMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
