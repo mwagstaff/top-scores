@@ -19,6 +19,7 @@ const {
 const {
   SERVER_CONFIG,
   DEFAULT_COMPETITION_WEIGHTS,
+  DEFAULT_COMPETITION_METADATA,
   COMPETITION_WEIGHTS_UPDATED_AT,
   TEAM_RANKING_SOURCE_MERGED,
   TEAM_RANKING_SOURCE_CLUBELO,
@@ -1959,6 +1960,8 @@ function normalizeCompetitionFilterName(name) {
   const aliases = {
     "efl cup": "english league cup",
     "carabao cup": "english league cup",
+    "efl league one": "league one",
+    "efl league two": "league two",
     "uefa europa conference league": "uefa conference league",
     // SportsDB uses the plural form; our config uses singular.
     "international friendlies": "international friendly",
@@ -13151,16 +13154,139 @@ function buildLeagueList(matches) {
 }
 
 function buildCompetitionCatalog() {
-  return Object.entries(DEFAULT_COMPETITION_WEIGHTS || {})
-    .map(([name, weight]) => ({
+  const metadataByKey = new Map(
+    Object.entries(DEFAULT_COMPETITION_METADATA || {}).map(([name, metadata]) => [
+      normalizeCompetitionFilterName(name),
+      { name, ...(metadata || {}) },
+    ])
+  );
+  const catalogByKey = new Map();
+
+  Object.entries(DEFAULT_COMPETITION_WEIGHTS || {}).forEach(([rawName, rawWeight]) => {
+    const weight = Number(rawWeight);
+    const key = normalizeCompetitionFilterName(rawName);
+    if (!key || !Number.isFinite(weight)) return;
+
+    const metadata = metadataByKey.get(key) || {};
+    const name = String(metadata.name || normalizeLeagueName(rawName) || rawName).trim();
+    const aliases = new Set(
+      [
+        ...(Array.isArray(metadata.aliases) ? metadata.aliases : []),
+        rawName,
+      ]
+        .map((alias) => String(alias || "").trim())
+        .filter((alias) => alias && compareInsensitive(alias, name) !== 0)
+    );
+    const existing = catalogByKey.get(key);
+    if (existing) {
+      existing.weight = Math.max(existing.weight, weight);
+      aliases.forEach((alias) => existing.aliases.add(alias));
+      return;
+    }
+
+    catalogByKey.set(key, {
+      id: String(metadata.id || key.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")),
       name,
-      weight: Number(weight),
+      aliases,
+      weight,
+      region: metadata.region ? String(metadata.region) : null,
+      logo_url: metadata.logo_url ? String(metadata.logo_url) : null,
+    });
+  });
+
+  return Array.from(catalogByKey.values())
+    .map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      aliases: Array.from(entry.aliases).sort(compareInsensitive),
+      weight: entry.weight,
+      region: entry.region,
+      logo_url: entry.logo_url,
     }))
-    .filter((entry) => entry.name && Number.isFinite(entry.weight))
     .sort((left, right) => {
       if (left.weight !== right.weight) return right.weight - left.weight;
       return compareInsensitive(left.name, right.name);
     });
+}
+
+function competitionCatalogLookup() {
+  const lookup = new Map();
+  buildCompetitionCatalog().forEach((entry) => {
+    [entry.name, ...(entry.aliases || [])].forEach((name) => {
+      const key = normalizeCompetitionFilterName(name);
+      if (key) lookup.set(key, entry);
+    });
+  });
+  return lookup;
+}
+
+function buildFixtureCalendar(matches, options = {}) {
+  const catalog = competitionCatalogLookup();
+  const premierLeagueTeams = Array.isArray(options.premierLeagueTeams)
+    ? options.premierLeagueTeams
+    : [];
+  const includePostponed = Boolean(options.includePostponed);
+  const days = new Map();
+
+  (Array.isArray(matches) ? matches : []).forEach((match) => {
+    if (!match || !match.date || !match.league) return;
+    const matchStatus =
+      resolveMatchScoreStatus(match) || match.score_status || match.match_time || null;
+    if (!includePostponed && isPostponedMatchStatus(matchStatus)) return;
+    const competition = catalog.get(normalizeCompetitionFilterName(match.league));
+    if (!competition) return;
+
+    const date = String(match.date);
+    let day = days.get(date);
+    if (!day) {
+      day = {
+        date,
+        match_count: 0,
+        top_match_count: 0,
+        has_unfinished: false,
+        top_matches_have_unfinished: false,
+        competitions: new Map(),
+      };
+      days.set(date, day);
+    }
+
+    const isUnfinished = isListPayloadVisibleForMode(match, "fixtures");
+    const isTopMatch = matchPassesCategoryFilters(match, {
+      eplOnly: true,
+      majorUefa: true,
+      homeNations: true,
+      majorTournaments: true,
+      premierLeagueTeams,
+    });
+    day.match_count += 1;
+    day.has_unfinished = day.has_unfinished || isUnfinished;
+    if (isTopMatch) {
+      day.top_match_count += 1;
+      day.top_matches_have_unfinished = day.top_matches_have_unfinished || isUnfinished;
+    }
+
+    const current = day.competitions.get(competition.id) || {
+      id: competition.id,
+      match_count: 0,
+      has_unfinished: false,
+    };
+    current.match_count += 1;
+    current.has_unfinished = current.has_unfinished || isUnfinished;
+    day.competitions.set(competition.id, current);
+  });
+
+  return Array.from(days.values())
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .map((day) => ({
+      date: day.date,
+      match_count: day.match_count,
+      top_match_count: day.top_match_count,
+      has_unfinished: day.has_unfinished,
+      top_matches_have_unfinished: day.top_matches_have_unfinished,
+      competitions: Array.from(day.competitions.values()).sort((left, right) =>
+        left.id.localeCompare(right.id)
+      ),
+    }));
 }
 
 function buildCompetitionListFromConfig() {
@@ -24390,6 +24516,127 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
   }
 });
 
+app.get(`${API_PREFIX}/matches/calendar`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    const range = parseRequiredDateRange(req.query);
+    if (range.error) {
+      res.status(400).json({ error: range.error });
+      return;
+    }
+
+    const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
+    res.set("X-Match-Source", matchSource);
+    const useBsdSource = matchSource === "bsd";
+    const bsdMatchesForServing = useBsdSource ? await getBsdMatchesForServing() : null;
+    const memoryMatchDetailsSnapshot = useBsdSource ? null : currentMatchDetailsLookupSnapshot();
+    const mergedDataset = useBsdSource
+      ? {
+          items: filterMatchesByCompetition(bsdMatchesForServing || []),
+          updated_at: cachedBsdMatchesUpdatedAt,
+          source: "bsd",
+        }
+      : cachedMergedMatches.length > 0
+      ? {
+          items: filterMatchesByCompetition(cachedMergedMatches),
+          updated_at: tsdbScheduleLastUpdated || tsdbLiveLastUpdated || null,
+          source: "memory",
+        }
+      : await getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, []);
+    const bbcRangeDataset = useBsdSource
+      ? { items: [], updated_at: null, source: "bsd" }
+      : cachedTsdbScheduleMatches.length > 0
+      ? {
+          items: filterMatchesByCompetition(cachedTsdbScheduleMatches),
+          updated_at: tsdbScheduleLastUpdated || null,
+          source: "memory",
+        }
+      : await getOperationalArrayDataset(OP_DATASET_TSDB_SCHEDULE_MATCHES, []);
+    const redisMatchDetailsSnapshot = memoryMatchDetailsSnapshot || useBsdSource
+      ? null
+      : await getOperationalMatchDetailsSnapshotSafe();
+    const canonicalLookup = useBsdSource
+      ? {}
+      : memoryMatchDetailsSnapshot
+      ? memoryMatchDetailsSnapshot.lookup
+      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.records
+        ? redisMatchDetailsSnapshot.records
+        : {};
+    const canonicalUpdatedAt = useBsdSource
+      ? cachedBsdMatchesUpdatedAt
+      : memoryMatchDetailsSnapshot
+      ? memoryMatchDetailsSnapshot.updated_at || matchDetailsLastUpdated || null
+      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.updated_at
+        ? redisMatchDetailsSnapshot.updated_at
+        : null;
+    const canonicalSource = useBsdSource
+      ? "bsd"
+      : memoryMatchDetailsSnapshot
+      ? memoryMatchDetailsSnapshot.source || "memory"
+      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.source
+        ? redisMatchDetailsSnapshot.source
+        : "unknown";
+    const latestUpdated = newestIsoTimestamp([
+      canonicalUpdatedAt,
+      mergedDataset.updated_at,
+      bbcRangeDataset.updated_at,
+    ]);
+    setLastModifiedHeaders(res, latestUpdated);
+    res.set("X-Operational-Source", canonicalSource);
+    if (isNotModifiedRequest(req, latestUpdated)) {
+      res.status(304).end();
+      return;
+    }
+
+    const canonicalListOptions = {
+      source: matchSource,
+      matchDetailsLookup: canonicalLookup,
+      matchDetailsUpdatedAt: canonicalUpdatedAt,
+      matchDetailsCount: matchDetailsLookupSize(canonicalLookup),
+      mergedDataset,
+      bbcRangeDataset,
+    };
+    const channels = normalizeListParam(req.query.channel);
+    const includePostponed = isTruthyParam(req.query.include_postponed);
+    const manualMappings = loadClubEloManualMappings();
+    const deletedMatchIdSet = cachedDeletedMatchIds;
+    const displayTimeZone = requestedMatchTimeZone(req.query.time_zone);
+    const publicMatches = await getCachedCanonicalPublicMatchListPayloads(canonicalListOptions);
+    const testMatches = testMatchState.getAllMatches();
+    const filtered = [...publicMatches, ...testMatches]
+      .filter((match) =>
+        matchesFilters(match, {
+          leagues: [],
+          teams: [],
+          channels,
+          filterMode: "intersection",
+          dateFrom: range.start,
+          dateTo: range.end,
+          manualMappings,
+        })
+      )
+      .filter((match) => {
+        const matchId = String(match && match.match_details_id ? match.match_details_id : "").toLowerCase();
+        return !matchId || !deletedMatchIdSet.has(matchId);
+      });
+    const localized = localizeMatchPayloads(filtered, displayTimeZone);
+    const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
+    const days = buildFixtureCalendar(localized, {
+      premierLeagueTeams: premierLeagueDataset.items,
+      includePostponed,
+    });
+
+    res.json({
+      days,
+      updated_at: latestUpdated || null,
+      source: canonicalSource,
+    });
+  } catch (error) {
+    console.warn("Failed to serve /matches/calendar:", error.message || error);
+    res.status(500).json({ error: "Failed to serve match calendar" });
+  }
+});
+
 app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
   setCacheOnlyHeaders(res);
   await ensureTeamShortNamesCacheReady();
@@ -32898,6 +33145,7 @@ module.exports = {
   __private: {
     buildCompetitionCatalog,
     buildCompetitionWeightsPayload,
+    buildFixtureCalendar,
     toMatchListPayload,
     dedupeMatchListPayloads,
     toMonitorCandidateFromDetailsPayload,

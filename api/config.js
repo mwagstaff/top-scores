@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 const COMPETITION_WEIGHTS_PATH = path.resolve(__dirname, "./competition_weights.json");
+const COMPETITION_METADATA_PATH = path.resolve(__dirname, "./competition_metadata.json");
 
 function loadCompetitionWeightsConfig() {
   try {
@@ -26,10 +27,23 @@ function loadCompetitionWeightsConfig() {
 }
 
 const DEFAULT_COMPETITION_WEIGHTS = loadCompetitionWeightsConfig();
+const DEFAULT_COMPETITION_METADATA = (() => {
+  try {
+    const raw = fs.readFileSync(COMPETITION_METADATA_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    console.error("[config] Failed to load competition metadata config:", error);
+    return {};
+  }
+})();
 const DEFAULT_COMPETITION_ALLOWLIST = Object.keys(DEFAULT_COMPETITION_WEIGHTS);
 const COMPETITION_WEIGHTS_UPDATED_AT = (() => {
   try {
-    return fs.statSync(COMPETITION_WEIGHTS_PATH).mtime.toISOString();
+    const updatedAt = [COMPETITION_WEIGHTS_PATH, COMPETITION_METADATA_PATH]
+      .map((configPath) => fs.statSync(configPath).mtime)
+      .sort((left, right) => right.getTime() - left.getTime())[0];
+    return updatedAt.toISOString();
   } catch (_error) {
     return null;
   }
@@ -118,7 +132,9 @@ const SERVER_CONFIG = {
 
 module.exports = {
   COMPETITION_WEIGHTS_PATH,
+  COMPETITION_METADATA_PATH,
   DEFAULT_COMPETITION_WEIGHTS,
+  DEFAULT_COMPETITION_METADATA,
   COMPETITION_WEIGHTS_UPDATED_AT,
   DEFAULT_COMPETITION_ALLOWLIST,
   TEAM_RANKING_SOURCE_MERGED,

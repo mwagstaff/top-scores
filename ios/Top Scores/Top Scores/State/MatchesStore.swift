@@ -565,6 +565,18 @@ final class MatchesStore: ObservableObject {
         mode == .fixtures ? fixturesViewState : resultsViewState
     }
 
+    func groupFixtureBrowseMatches(
+        _ matches: [Match],
+        preferences: PreferencesSnapshot
+    ) -> [MatchDay] {
+        MatchGroupingEngine.groupMatches(
+            matches,
+            sortOrder: preferences.matchGroupSortOrder,
+            ratingLookup: teamRatingLookup,
+            premierLeagueMatchesFirst: preferences.premierLeagueMatchesFirst
+        )
+    }
+
     private struct ModeState {
         var matches: [Match] = []
         var unfilteredMatches: [Match] = []

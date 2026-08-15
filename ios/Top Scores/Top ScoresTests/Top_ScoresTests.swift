@@ -349,6 +349,268 @@ struct Top_ScoresTests {
         #expect(!names.contains("major_tournaments"))
     }
 
+    @Test func fixtureBrowserSelection_resolvesCompetitionAliases() {
+        let competitions = [
+            CompetitionCatalogEntry(
+                id: "la-liga",
+                name: "La Liga",
+                aliases: ["Spanish La Liga"],
+                weight: 47,
+                region: "spain",
+                logoURL: nil
+            ),
+        ]
+
+        let selected = FixtureBrowseSelectionResolver.selectedCompetitionIDs(
+            selectedLeagues: ["Spanish La Liga"],
+            competitions: competitions
+        )
+
+        #expect(selected == ["la-liga"])
+    }
+
+    @Test func fixtureBrowserSelection_showsOnlyDatesForSelectedCompetitions() {
+        let days = [
+            FixtureCalendarDay(
+                date: "2026-08-15",
+                matchCount: 2,
+                topMatchCount: 1,
+                hasUnfinished: false,
+                topMatchesHaveUnfinished: false,
+                competitions: [
+                    FixtureCalendarCompetition(id: "premier-league", matchCount: 2, hasUnfinished: false),
+                ]
+            ),
+            FixtureCalendarDay(
+                date: "2026-08-22",
+                matchCount: 3,
+                topMatchCount: 2,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: [
+                    FixtureCalendarCompetition(id: "bundesliga", matchCount: 3, hasUnfinished: true),
+                ]
+            ),
+        ]
+
+        let available = FixtureBrowseSelectionResolver.availableDays(
+            calendarDays: days,
+            topMatchesOnly: false,
+            selectedCompetitionIDs: ["bundesliga"]
+        )
+
+        #expect(available.map(\.date) == ["2026-08-22"])
+    }
+
+    @Test func fixtureBrowserSelection_defaultsToNextUnfinishedSelectedDate() {
+        let days = [
+            FixtureCalendarDay(
+                date: "2026-08-15",
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: false,
+                topMatchesHaveUnfinished: false,
+                competitions: [
+                    FixtureCalendarCompetition(id: "bundesliga", matchCount: 1, hasUnfinished: false),
+                ]
+            ),
+            FixtureCalendarDay(
+                date: "2026-08-22",
+                matchCount: 2,
+                topMatchCount: 2,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: [
+                    FixtureCalendarCompetition(id: "bundesliga", matchCount: 2, hasUnfinished: true),
+                ]
+            ),
+        ]
+
+        let selectedDate = FixtureBrowseSelectionResolver.defaultDateKey(
+            from: days,
+            todayKey: "2026-08-15",
+            topMatchesOnly: false,
+            selectedCompetitionIDs: ["bundesliga"]
+        )
+
+        #expect(selectedDate == "2026-08-22")
+    }
+
+    @Test func fixtureBrowserSelection_mapsFavouriteCompetitionsFromPreferenceDefaults() {
+        let competitions = [
+            CompetitionCatalogEntry(
+                id: "premier-league",
+                name: "Premier League",
+                aliases: [],
+                weight: 50,
+                region: "england",
+                logoURL: nil
+            ),
+            CompetitionCatalogEntry(
+                id: "uefa-champions-league",
+                name: "UEFA Champions League",
+                aliases: ["Champions League"],
+                weight: 49,
+                region: "europe",
+                logoURL: nil
+            ),
+            CompetitionCatalogEntry(
+                id: "la-liga",
+                name: "La Liga",
+                aliases: [],
+                weight: 47,
+                region: "spain",
+                logoURL: nil
+            ),
+        ]
+
+        let favouriteIDs = FixtureBrowseSelectionResolver.selectedCompetitionIDs(
+            selectedLeagues: PreferencesStore.defaultSelectedLeagues,
+            competitions: competitions
+        )
+
+        #expect(favouriteIDs == ["premier-league", "uefa-champions-league"])
+    }
+
+    @Test func fixtureBrowserSelection_resetsToImmediateUpcomingDateAfterAddingCompetition() {
+        let days = [
+            FixtureCalendarDay(
+                date: "2026-08-14",
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: false,
+                topMatchesHaveUnfinished: false,
+                competitions: [
+                    FixtureCalendarCompetition(id: "premier-league", matchCount: 1, hasUnfinished: false),
+                ]
+            ),
+            FixtureCalendarDay(
+                date: "2026-08-15",
+                matchCount: 2,
+                topMatchCount: 0,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: false,
+                competitions: [
+                    FixtureCalendarCompetition(id: "la-liga", matchCount: 2, hasUnfinished: true),
+                ]
+            ),
+        ]
+        let selectedIDs: Set<String> = ["premier-league", "la-liga"]
+        let available = FixtureBrowseSelectionResolver.availableDays(
+            calendarDays: days,
+            topMatchesOnly: false,
+            selectedCompetitionIDs: selectedIDs
+        )
+
+        let selectedDate = FixtureBrowseSelectionResolver.defaultDateKey(
+            from: available,
+            todayKey: "2026-08-15",
+            topMatchesOnly: false,
+            selectedCompetitionIDs: selectedIDs
+        )
+
+        #expect(selectedDate == "2026-08-15")
+    }
+
+    @Test func fixtureBrowserSelection_excludesPostponedMatchesWhenPreferenceIsOff() {
+        let postponed = makeMatch(
+            date: "2026-02-07",
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "POSTPONED"
+        )
+
+        let hidden = FixtureBrowseSelectionResolver.filterMatches(
+            [postponed],
+            topMatchesOnly: true,
+            selectedCompetitionIDs: [],
+            competitions: [],
+            includePostponed: false
+        )
+        let included = FixtureBrowseSelectionResolver.filterMatches(
+            [postponed],
+            topMatchesOnly: true,
+            selectedCompetitionIDs: [],
+            competitions: [],
+            includePostponed: true
+        )
+
+        #expect(hidden.isEmpty)
+        #expect(included.map(\.id) == [postponed.id])
+    }
+
+    @Test func fixtureBrowserSelection_resolvesSwipeAndNextMatchNavigation() {
+        let days = [
+            FixtureCalendarDay(
+                date: "2026-08-14",
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: false,
+                topMatchesHaveUnfinished: false,
+                competitions: []
+            ),
+            FixtureCalendarDay(
+                date: "2026-08-15",
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            ),
+            FixtureCalendarDay(
+                date: "2026-08-16",
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            ),
+        ]
+
+        #expect(
+            FixtureBrowseSelectionResolver.adjacentDateKey(
+                in: days,
+                from: "2026-08-15",
+                offset: -1
+            ) == "2026-08-14"
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.adjacentDateKey(
+                in: days,
+                from: "2026-08-15",
+                offset: 1
+            ) == "2026-08-16"
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.dateJumpDirection(
+                from: "2026-08-14",
+                to: "2026-08-15"
+            ) == .later
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.dateJumpDirection(
+                from: "2026-08-16",
+                to: "2026-08-15"
+            ) == .earlier
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.dateJumpDirection(
+                from: "2026-08-15",
+                to: "2026-08-15"
+            ) == nil
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.upcomingDateKey(
+                from: Array(days.prefix(1)),
+                todayKey: "2026-08-15",
+                topMatchesOnly: true,
+                selectedCompetitionIDs: []
+            ) == nil
+        )
+    }
+
     @Test func appIconBadgeManager_countsOnlyTodayUnfinishedFixtures() async throws {
         let today = formattedDate(offsetDays: 0)
         let yesterday = formattedDate(offsetDays: -1)

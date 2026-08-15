@@ -253,6 +253,71 @@ struct APIClient {
         )
     }
 
+    func fetchFixtureBrowseMatches(
+        on date: String,
+        preferences: PreferencesSnapshot,
+        topMatchesOnly: Bool,
+        pageSize: Int = 2000
+    ) async throws -> MatchResponse {
+        let trimmedDate = date.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedDate.isEmpty else {
+            return MatchResponse(matches: [], lastUpdated: nil, isNotModified: false)
+        }
+
+        var queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "start", value: trimmedDate),
+            URLQueryItem(name: "end", value: trimmedDate),
+            URLQueryItem(name: "sort", value: "asc"),
+            URLQueryItem(name: "filter_mode", value: "intersection"),
+            URLQueryItem(name: "page_size", value: String(max(1, pageSize))),
+            URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
+        ]
+        if topMatchesOnly {
+            queryItems.append(URLQueryItem(name: "epl_only", value: "true"))
+            queryItems.append(URLQueryItem(name: "major_uefa", value: "true"))
+            queryItems.append(URLQueryItem(name: "home_nations", value: "true"))
+            queryItems.append(URLQueryItem(name: "major_tournaments", value: "true"))
+        }
+        if preferences.channelFilterEnabled {
+            ChannelSelection.apiQueryValues(from: preferences.selectedChannels).forEach {
+                queryItems.append(URLQueryItem(name: "channel", value: $0))
+            }
+        }
+
+        let request = try buildRequest(path: "matches", queryItems: queryItems)
+        let (data, http) = try await performRequest(request, operation: "fixture_browse_matches")
+        try validateSuccess(http, data: data, operation: "fixture_browse_matches")
+        let decoded = try decodeMatches(from: data, operation: "fixture_browse_matches")
+        return MatchResponse(
+            matches: try await hydrateMatchStates(decoded),
+            lastUpdated: Self.lastUpdated(from: http),
+            isNotModified: false
+        )
+    }
+
+    func fetchFixtureCalendar(preferences: PreferencesSnapshot) async throws -> FixtureCalendarResponse {
+        let today = Calendar.current.startOfDay(for: Date())
+        let start = Calendar.current.date(byAdding: .year, value: -1, to: today) ?? today
+        var queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "start", value: Self.dateFormatter.string(from: start)),
+            URLQueryItem(name: "end", value: Self.openEndedFixtureEndDate),
+            URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
+        ]
+        if preferences.channelFilterEnabled {
+            ChannelSelection.apiQueryValues(from: preferences.selectedChannels).forEach {
+                queryItems.append(URLQueryItem(name: "channel", value: $0))
+            }
+        }
+        if preferences.showPostponedGames {
+            queryItems.append(URLQueryItem(name: "include_postponed", value: "true"))
+        }
+
+        let request = try buildRequest(path: "matches/calendar", queryItems: queryItems)
+        let (data, http) = try await performRequest(request, operation: "fixture_calendar")
+        try validateSuccess(http, data: data, operation: "fixture_calendar")
+        return try JSONDecoder().decode(FixtureCalendarResponse.self, from: data)
+    }
+
     func fetchCompetitions() async throws -> [String] {
         do {
             let catalog = try await fetchCompetitionCatalog()
@@ -1011,8 +1076,34 @@ struct MatchResponse {
 }
 
 struct CompetitionCatalogEntry: Codable, Hashable, Sendable {
+    let id: String?
     let name: String
+    let aliases: [String]?
     let weight: Double
+    let region: String?
+    let logoURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case aliases
+        case weight
+        case region
+        case logoURL = "logo_url"
+    }
+
+    nonisolated var stableID: String {
+        if let id, !id.isEmpty { return id }
+        return name
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: "-")
+    }
+
+    nonisolated var allNames: [String] {
+        [name] + (aliases ?? [])
+    }
 }
 
 struct CompetitionCatalogResponse: Codable, Hashable, Sendable {
@@ -1022,6 +1113,50 @@ struct CompetitionCatalogResponse: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case competitions
+        case updatedAt = "updated_at"
+        case source
+    }
+}
+
+struct FixtureCalendarCompetition: Codable, Hashable, Sendable {
+    let id: String
+    let matchCount: Int
+    let hasUnfinished: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case matchCount = "match_count"
+        case hasUnfinished = "has_unfinished"
+    }
+}
+
+struct FixtureCalendarDay: Codable, Hashable, Identifiable, Sendable {
+    let date: String
+    let matchCount: Int
+    let topMatchCount: Int
+    let hasUnfinished: Bool
+    let topMatchesHaveUnfinished: Bool
+    let competitions: [FixtureCalendarCompetition]
+
+    var id: String { date }
+
+    enum CodingKeys: String, CodingKey {
+        case date
+        case matchCount = "match_count"
+        case topMatchCount = "top_match_count"
+        case hasUnfinished = "has_unfinished"
+        case topMatchesHaveUnfinished = "top_matches_have_unfinished"
+        case competitions
+    }
+}
+
+struct FixtureCalendarResponse: Codable, Hashable, Sendable {
+    let days: [FixtureCalendarDay]
+    let updatedAt: String?
+    let source: String?
+
+    enum CodingKeys: String, CodingKey {
+        case days
         case updatedAt = "updated_at"
         case source
     }

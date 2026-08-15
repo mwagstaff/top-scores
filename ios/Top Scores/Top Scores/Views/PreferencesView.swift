@@ -62,7 +62,7 @@ struct PreferencesView: View {
 
                     if !showsOnlyAdvancedSettings {
                         Section("Fixtures") {
-                            Toggle("All major matches", isOn: fixtureAllMajorMatchesBinding)
+                            Toggle("Favourites", isOn: fixtureAllMajorMatchesBinding)
                             Text("Premier League teams, major club games, home nations, and major international tournaments.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -84,7 +84,7 @@ struct PreferencesView: View {
 
                             if !preferences.notificationMatchesFixturesEnabled {
                                 Picker("Match coverage", selection: notificationAllMajorMatchesBinding) {
-                                    Text("All major matches").tag(true)
+                                    Text("Favourites").tag(true)
                                     Text("Custom").tag(false)
                                 }
 

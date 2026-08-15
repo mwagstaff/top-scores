@@ -518,7 +518,7 @@ struct MatchRow: View {
             case .standard:
                 baseSize = 22
             case .compactFixture:
-                baseSize = 20
+                baseSize = 24
             }
         }
         return baseSize * teamLogoScale
