@@ -6,9 +6,12 @@ const assert = require("node:assert/strict");
 const {
   EVENT_STATUSES,
   INCREMENTAL_FINISHED_DAYS,
+  RECENT_FINISHED_DETAIL_WINDOW_MS,
+  RECENT_FINISHED_DETAIL_REFRESH_MS,
   hasUnknownOutsideTimelineCardIncident,
   eventToRecord,
   isRecentFinishedEvent,
+  needsRecentFinishedDetailRefresh,
   selectIncrementalEvents,
 } = require("./fetch_bsd_events");
 
@@ -44,6 +47,35 @@ test("selectIncrementalEvents preserves the newest finished event outside the re
   ];
 
   assert.deepEqual(selectIncrementalEvents(events, nowMs), [events[1]]);
+});
+
+test("needsRecentFinishedDetailRefresh revisits recent results after the settle interval", () => {
+  const nowMs = Date.parse("2026-08-15T18:00:00Z");
+  const recentEvent = {
+    status: "finished",
+    event_date: new Date(nowMs - RECENT_FINISHED_DETAIL_WINDOW_MS + 1_000).toISOString(),
+  };
+  const staleIncidentDoc = {
+    updated_at: new Date(nowMs - RECENT_FINISHED_DETAIL_REFRESH_MS - 1_000).toISOString(),
+  };
+  const freshIncidentDoc = {
+    updated_at: new Date(nowMs - RECENT_FINISHED_DETAIL_REFRESH_MS + 1_000).toISOString(),
+  };
+
+  assert.equal(needsRecentFinishedDetailRefresh(recentEvent, staleIncidentDoc, nowMs), true);
+  assert.equal(needsRecentFinishedDetailRefresh(recentEvent, freshIncidentDoc, nowMs), false);
+  assert.equal(
+    needsRecentFinishedDetailRefresh(
+      { status: "finished", event_date: new Date(nowMs - RECENT_FINISHED_DETAIL_WINDOW_MS - 1).toISOString() },
+      staleIncidentDoc,
+      nowMs
+    ),
+    false
+  );
+  assert.equal(
+    needsRecentFinishedDetailRefresh({ ...recentEvent, status: "notstarted" }, staleIncidentDoc, nowMs),
+    false
+  );
 });
 
 test("hasUnknownOutsideTimelineCardIncident detects stale manager card payloads", () => {

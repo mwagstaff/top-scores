@@ -41,6 +41,14 @@ const INCREMENTAL_FINISHED_DAYS = positiveNumber(
   process.env.BSD_EVENTS_INCREMENTAL_FINISHED_DAYS,
   7
 );
+const RECENT_FINISHED_DETAIL_WINDOW_MS = positiveNumber(
+  process.env.BSD_RECENT_FINISHED_DETAIL_WINDOW_MS,
+  4 * 60 * 60 * 1000
+);
+const RECENT_FINISHED_DETAIL_REFRESH_MS = positiveNumber(
+  process.env.BSD_RECENT_FINISHED_DETAIL_REFRESH_MS,
+  15 * 60 * 1000
+);
 
 function eventToRecord(event) {
   return {
@@ -86,6 +94,23 @@ function isRecentFinishedEvent(event, nowMs = Date.now()) {
   if (!Number.isFinite(eventDateMs)) return false;
   const windowMs = Math.max(0, INCREMENTAL_FINISHED_DAYS) * 24 * 60 * 60 * 1000;
   return eventDateMs >= nowMs - windowMs;
+}
+
+function needsRecentFinishedDetailRefresh(event, incidentDoc, nowMs = Date.now()) {
+  if (!event || String(event.status || "").toLowerCase() !== "finished") return false;
+  const eventDateMs = Date.parse(event.event_date || "");
+  if (
+    !Number.isFinite(eventDateMs) ||
+    eventDateMs > nowMs ||
+    nowMs - eventDateMs > RECENT_FINISHED_DETAIL_WINDOW_MS
+  ) {
+    return false;
+  }
+  const lastRefreshMs = Date.parse((incidentDoc && incidentDoc.updated_at) || "");
+  return (
+    !Number.isFinite(lastRefreshMs) ||
+    nowMs - lastRefreshMs >= RECENT_FINISHED_DETAIL_REFRESH_MS
+  );
 }
 
 function selectIncrementalEvents(events, nowMs = Date.now()) {
@@ -182,21 +207,30 @@ async function hydrateTeams(teamIds) {
   console.log(`[bsd] teams hydrated: ${records.length}/${teamIds.length}`);
 }
 
-async function hydrateMissingDetails(allEvents) {
+async function hydrateMissingDetails(allEvents, nowMs = Date.now()) {
   // Incidents/lineups for a played match rarely change once captured, so skip
   // events already hydrated rather than re-fetching the entire history every
-  // run. Exception: early BSD payloads used "Unknown" for some manager cards
-  // outside the normal timeline; rehydrate those so the now-populated player
-  // name can surface in Match Events.
-  const hydratedIds = new Set((await getBsdRecordIds("bsd_incidents")).map(String));
+  // run. Recently finished matches are deliberately revisited so a restart
+  // cannot lose the post-match settlement passes. Early BSD payloads with an
+  // "Unknown" manager card are also refreshed.
+  const incidentDocs = await getBsdRecords("bsd_incidents");
+  const hydratedIds = new Set(incidentDocs.map((doc) => String(doc._id)));
+  const incidentDocsById = new Map(incidentDocs.map((doc) => [String(doc._id), doc]));
   const staleIncidentIds = new Set(
-    (await getBsdRecords("bsd_incidents"))
+    incidentDocs
       .filter(hasUnknownOutsideTimelineCardIncident)
       .map((doc) => String(doc._id))
   );
   const toHydrate = allEvents
     .filter(isPlayed)
-    .filter((event) => !hydratedIds.has(String(event.id)) || staleIncidentIds.has(String(event.id)))
+    .filter((event) => {
+      const id = String(event.id);
+      return (
+        !hydratedIds.has(id) ||
+        staleIncidentIds.has(id) ||
+        needsRecentFinishedDetailRefresh(event, incidentDocsById.get(id), nowMs)
+      );
+    })
     .sort((a, b) => Date.parse(b.event_date || 0) - Date.parse(a.event_date || 0));
   console.log(`[bsd] hydrating incidents/lineups for ${toHydrate.length} played events (skipping ${allEvents.filter(isPlayed).length - toHydrate.length} already hydrated, stale=${staleIncidentIds.size})`);
   for (const event of toHydrate) {
@@ -282,6 +316,9 @@ module.exports = {
   INCREMENTAL_UPCOMING_MAX_PAGES,
   INCREMENTAL_FINISHED_MAX_PAGES,
   INCREMENTAL_FINISHED_DAYS,
+  RECENT_FINISHED_DETAIL_WINDOW_MS,
+  RECENT_FINISHED_DETAIL_REFRESH_MS,
   isRecentFinishedEvent,
+  needsRecentFinishedDetailRefresh,
   selectIncrementalEvents,
 };

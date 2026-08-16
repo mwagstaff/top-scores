@@ -17411,6 +17411,17 @@ function getMatchDetailsStatePayload(payload) {
   return statePayload;
 }
 
+function getMatchDetailsSummaryPayload(payload) {
+  const statePayload = getMatchDetailsStatePayload(payload);
+  if (!statePayload) return null;
+  const {
+    team_lineups: _teamLineups,
+    tv_channels: _tvChannels,
+    ...summaryPayload
+  } = statePayload;
+  return summaryPayload;
+}
+
 function transformBbcLiveMatchWithDetails(match, detailsPayload) {
   if (!match || typeof match !== "object") return match;
   if (!detailsPayload || typeof detailsPayload !== "object") return { ...match };
@@ -24923,12 +24934,15 @@ app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
   const lookup = await getOperationalMatchDetailsBatchSafe(uniqueIds);
   res.set("X-Operational-Source", lookup.source || "unknown");
 
+  const summaryOnly = isTruthyParam(req.query.summary_only);
   const payload = uniqueIds
     .map((matchId) => {
       const detailsPayload = lookup.payloadsById.get(matchId) || null;
       if (!detailsPayload) return null;
       scheduleMatchDetailsBackfill(detailsPayload, { trigger: "batch_states" });
-      return getMatchDetailsStatePayload(detailsPayload);
+      return summaryOnly
+        ? getMatchDetailsSummaryPayload(detailsPayload)
+        : getMatchDetailsStatePayload(detailsPayload);
     })
     .filter(Boolean);
   const displayTimeZone = requestedMatchTimeZone(req.query.time_zone);
@@ -33421,6 +33435,7 @@ module.exports = {
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
     getMatchDetailsStatePayload,
+    getMatchDetailsSummaryPayload,
     mergePreferredOperationalMatchDetailsSnapshots,
     toOperationalAdminMatchPayload,
     normalizeAdminRedisMatchIds,

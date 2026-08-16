@@ -8,7 +8,7 @@ enum MatchesViewMode: String, Sendable {
     var title: String {
         switch self {
         case .fixtures:
-            return "Fixtures"
+            return "Scores"
         case .results:
             return "Results"
         }
@@ -17,7 +17,7 @@ enum MatchesViewMode: String, Sendable {
     var headingIconName: String {
         switch self {
         case .fixtures:
-            return "calendar"
+            return "soccerball"
         case .results:
             return "clock.arrow.circlepath"
         }
@@ -29,24 +29,6 @@ enum MatchesViewMode: String, Sendable {
             return "Loading fixtures"
         case .results:
             return "Loading results"
-        }
-    }
-
-    var loadingServerText: String {
-        switch self {
-        case .fixtures:
-            return "Loading fixtures from server"
-        case .results:
-            return "Loading results from server"
-        }
-    }
-
-    var loadingServerSubtitle: String {
-        switch self {
-        case .fixtures:
-            return "Fetching latest fixture data..."
-        case .results:
-            return "Fetching latest results data..."
         }
     }
 
@@ -100,6 +82,7 @@ struct MatchesView: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -124,10 +107,10 @@ struct MatchesView: View {
     @State private var visibleGroupedDaysSource: [MatchDay] = []
     @State private var fixtureBrowseGroupedDays: [MatchDay] = []
     @State private var fixtureBrowsePageGroupedDays: [String: [MatchDay]] = [:]
-    @State private var fixtureDateDragOffset: CGFloat = 0
-    @State private var fixtureDateDragAxis: FixtureDateDragAxis?
-    @State private var fixtureDateTransitionTask: Task<Void, Never>?
+    @State private var fixtureBrowsePageSourceMatchesByDate: [String: [Match]] = [:]
     @State private var expandedFixtureRegionID: String?
+    @State private var fixturePickerDraftOptionIDs: Set<String>?
+    @State private var fixturePickerBaselineOptionIDs: Set<String>?
     @State private var isFixtureFavouritesMenuExpanded = false
 
     init(mode: MatchesViewMode, isSelected: Bool = true, store: MatchesStore) {
@@ -141,11 +124,6 @@ struct MatchesView: View {
     private static let searchDebounceNanoseconds: UInt64 = 250_000_000
     private static let searchFilterQueue = DispatchQueue(label: "TopScores.match-search", qos: .userInitiated)
     private static let fixtureDockContentClearance: CGFloat = 80
-
-    private enum FixtureDateDragAxis {
-        case horizontal
-        case vertical
-    }
 
     private struct CompactFixturesSpacingProfile {
         let dayHeaderTopFirst: CGFloat
@@ -284,10 +262,9 @@ struct MatchesView: View {
     @ViewBuilder
     private var activeMatchesContent: some View {
         Group {
-            if displayedMatchDays.isEmpty &&
-                (usesFixtureBrowser ? fixtureBrowser.isLoadingSelectedDate : viewState.isLoading) {
-                ServerLoadingStateView(mode: mode)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if displayedMatchDays.isEmpty && !isSearchFilteringActive &&
+                isMatchesUpdating {
+                nativeMatchesLoadingState
             } else if displayedMatchDays.isEmpty {
                 emptyState
             } else {
@@ -298,22 +275,21 @@ struct MatchesView: View {
     }
 
     private func fixtureDatePagedContent(containerWidth: CGFloat) -> some View {
-        ZStack {
-            if let adjacentDateKey = draggedFixtureDateKey {
-                fixtureDatePage(for: adjacentDateKey)
-                    .offset(x: fixtureIncomingPageOffset(containerWidth: containerWidth))
-                    .accessibilityHidden(true)
-                    .allowsHitTesting(false)
-            }
-
+        FixtureDatePagingContainer(
+            containerWidth: containerWidth,
+            currentDateKey: fixtureBrowser.selectedDateKey,
+            previousDateKey: fixtureBrowser.adjacentDateKey(offset: -1),
+            nextDateKey: fixtureBrowser.adjacentDateKey(offset: 1),
+            isSwipeEnabled: expandedFixtureRegionID == nil &&
+                !isFixtureFavouritesMenuExpanded &&
+                !isSearchVisible,
+            reduceMotion: accessibilityReduceMotion,
+            onSelect: fixtureBrowser.selectDate
+        ) {
             activeMatchesContent
-                .offset(x: fixtureDateDragOffset)
+        } adjacentContent: { dateKey in
+            fixtureDatePage(for: dateKey)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color(.systemBackground))
-        .clipped()
-        .contentShape(Rectangle())
-        .simultaneousGesture(fixtureDateSwipeGesture(containerWidth: containerWidth))
     }
 
     @ViewBuilder
@@ -321,8 +297,7 @@ struct MatchesView: View {
         if let days = fixtureBrowsePageGroupedDays[dateKey], !days.isEmpty {
             matchesListContent(days: days)
         } else {
-            ServerLoadingStateView(mode: mode)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            nativeMatchesLoadingState
         }
     }
 
@@ -331,7 +306,7 @@ struct MatchesView: View {
             navigationStackContent
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if mode == .fixtures {
+            if mode == .fixtures && navigationMatch == nil {
                 fixtureCompetitionDock
             }
         }
@@ -344,6 +319,10 @@ struct MatchesView: View {
         .onChange(of: isSelected) { _, selected in
             matchesStore.setModeVisibility(mode, isVisible: selected)
             guard selected else {
+                if mode == .fixtures {
+                    fixtureBrowser.setAutoRefreshEnabled(false)
+                    matchesStore.setFixtureBrowserLiveRefreshActive(false)
+                }
                 isSearchFieldFocused = false
                 didRunActivationForVisibleCycle = false
                 screenOpenedAt = nil
@@ -354,13 +333,17 @@ struct MatchesView: View {
             runActivationIfNeeded(logEvent: "isSelected")
             beginScreenViewTiming()
         }
+        .onChange(of: scenePhase) { _, phase in
+            handleScenePhaseChange(phase)
+        }
         .onChange(of: viewState.isLoading) { _, isLoading in
             guard !isLoading else { return }
             sendTimedScreenView()
         }
         .onChange(of: preferences.snapshot) { _, _ in
             guard isSelected else { return }
-            resetFixtureDateTransition()
+            fixtureBrowsePageSourceMatchesByDate = [:]
+            fixtureBrowsePageGroupedDays = [:]
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             NSLog("[MatchesView] snapshot_change mode=%@ showAllMatches=%d epl_pref=%d effective_snapshot=%@",
                   mode.rawValue, showAllMatches, preferences.englishPremierLeagueTeamsOnly, debugSnapshotSummary(snapshot))
@@ -426,16 +409,31 @@ struct MatchesView: View {
         .onChange(of: searchText) { _, newValue in
             scheduleDebouncedSearch(for: newValue)
         }
-        .onDisappear {
-            matchesStore.setModeVisibility(mode, isVisible: false)
-            expandedFixtureRegionID = nil
-            isFixtureFavouritesMenuExpanded = false
-            isSearchFieldFocused = false
-            searchDebounceTask?.cancel()
-            searchFilterWorkItem?.cancel()
-            groupedSideEffectsTask?.cancel()
-            resetFixtureDateTransition()
+        .onDisappear(perform: handleScreenDisappear)
+    }
+
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        guard mode == .fixtures, isSelected else { return }
+        fixtureBrowser.setAutoRefreshEnabled(
+            phase == .active,
+            refreshImmediately: phase == .active
+        )
+    }
+
+    private func handleScreenDisappear() {
+        matchesStore.setModeVisibility(mode, isVisible: false)
+        if mode == .fixtures {
+            fixtureBrowser.setAutoRefreshEnabled(false)
+            matchesStore.setFixtureBrowserLiveRefreshActive(false)
         }
+        expandedFixtureRegionID = nil
+        fixturePickerDraftOptionIDs = nil
+        fixturePickerBaselineOptionIDs = nil
+        isFixtureFavouritesMenuExpanded = false
+        isSearchFieldFocused = false
+        searchDebounceTask?.cancel()
+        searchFilterWorkItem?.cancel()
+        groupedSideEffectsTask?.cancel()
     }
 
     private func beginScreenViewTiming() {
@@ -498,16 +496,15 @@ struct MatchesView: View {
         .refreshable {
             let refreshStart = Date()
             if mode == .fixtures {
-                fixtureBrowser.refresh()
+                await fixtureBrowser.refresh()
+            } else {
+                let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
+                await matchesStore.refresh(
+                    preferences: snapshot,
+                    mode: mode,
+                    force: true
+                )
             }
-            let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-            matchesStore.queueRefresh(
-                preferences: snapshot,
-                mode: mode,
-                reason: "pull_to_refresh",
-                force: true
-            )
-            await Task.yield()
             let durationMs = Int(Date().timeIntervalSince(refreshStart) * 1000)
             AppMetricsService.shared.fireActivity("manual_refresh", screen: mode.rawValue, durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
         }
@@ -794,6 +791,25 @@ struct MatchesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var isMatchesUpdating: Bool {
+        mode == .fixtures
+            ? (fixtureBrowser.isLoadingSelectedDate || viewState.isLoading)
+            : viewState.isLoading
+    }
+
+    private var nativeMatchesLoadingState: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.regular)
+            Text(mode.loadingText)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(mode.loadingText)
+    }
+
     private var headerView: some View {
         TopLevelScreenHeader(screenTitle: mode.title) {
             Image(systemName: mode.headingIconName)
@@ -881,7 +897,7 @@ struct MatchesView: View {
             }
 
             if fixtureBrowser.errorMessage != nil || viewState.errorMessage != nil ||
-                (sourceGroupedDays.isEmpty && (fixtureBrowser.isLoadingSelectedDate || viewState.isLoading)) ||
+                (!sourceGroupedDays.isEmpty && isMatchesUpdating) ||
                 fixtureBrowser.lastUpdated != nil || viewState.lastUpdated != nil {
                 VStack(alignment: .leading, spacing: 6) {
                     if let error = mode == .fixtures
@@ -892,15 +908,11 @@ struct MatchesView: View {
                             .foregroundStyle(.red)
                     }
 
-                    // Only show the loading indicator when there is no data yet (initial load).
-                    // When cached/fresh data is already visible a background refresh should not
-                    // disrupt the layout or replace the "Updated" timestamp with a spinner.
-                    if sourceGroupedDays.isEmpty &&
-                        (mode == .fixtures ? fixtureBrowser.isLoadingSelectedDate : viewState.isLoading) {
+                    if !sourceGroupedDays.isEmpty && isMatchesUpdating {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text(mode.loadingServerText)
+                            Text(mode.refreshProgressText)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -951,7 +963,6 @@ struct MatchesView: View {
                                 ForEach(fixtureBrowser.availableDays) { day in
                                     let selected = fixtureBrowser.selectedDateKey == day.date
                                     Button {
-                                        resetFixtureDateTransition()
                                         fixtureBrowser.selectDate(day.date)
                                     } label: {
                                         FixtureDateCarouselTile(
@@ -1021,120 +1032,11 @@ struct MatchesView: View {
         .background(Color(.systemBackground).opacity(0.82))
     }
 
-    private func fixtureDateSwipeGesture(containerWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { value in
-                guard canBeginFixtureDateSwipe else { return }
-
-                if fixtureDateDragAxis == nil {
-                    let horizontalDistance = abs(value.translation.width)
-                    let verticalDistance = abs(value.translation.height)
-                    guard max(horizontalDistance, verticalDistance) >= 10 else { return }
-                    fixtureDateDragAxis = horizontalDistance > verticalDistance
-                        ? .horizontal
-                        : .vertical
-                }
-
-                guard fixtureDateDragAxis == .horizontal else { return }
-                let direction = value.translation.width < 0 ? 1 : -1
-                let hasAdjacentDate = fixtureBrowser.adjacentDateKey(offset: direction) != nil
-                let motionScale: CGFloat = accessibilityReduceMotion ? 0.22 : 1
-                fixtureDateDragOffset = value.translation.width * motionScale * (hasAdjacentDate ? 1 : 0.18)
-            }
-            .onEnded { value in
-                defer { fixtureDateDragAxis = nil }
-                guard canBeginFixtureDateSwipe,
-                      fixtureDateDragAxis == .horizontal,
-                      let direction = FixtureBrowseSelectionResolver.swipeDateOffset(
-                        translationWidth: value.translation.width,
-                        translationHeight: value.translation.height,
-                        predictedEndTranslationWidth: value.predictedEndTranslation.width,
-                        containerWidth: containerWidth
-                      ),
-                      let targetDateKey = fixtureBrowser.adjacentDateKey(offset: direction) else {
-                    cancelFixtureDateSwipe()
-                    return
-                }
-                completeFixtureDateSwipe(
-                    to: targetDateKey,
-                    direction: direction,
-                    containerWidth: containerWidth
-                )
-            }
-    }
-
-    private var canBeginFixtureDateSwipe: Bool {
-        mode == .fixtures &&
-        expandedFixtureRegionID == nil &&
-        !isFixtureFavouritesMenuExpanded &&
-        !isSearchVisible &&
-        fixtureDateTransitionTask == nil
-    }
-
-    private var draggedFixtureDateKey: String? {
-        guard fixtureDateDragOffset != 0 else { return nil }
-        return fixtureBrowser.adjacentDateKey(offset: fixtureDateDragOffset < 0 ? 1 : -1)
-    }
-
-    private func fixtureIncomingPageOffset(containerWidth: CGFloat) -> CGFloat {
-        guard fixtureDateDragOffset != 0 else { return 0 }
-        return (fixtureDateDragOffset < 0 ? containerWidth : -containerWidth) + fixtureDateDragOffset
-    }
-
-    private func cancelFixtureDateSwipe() {
-        withAnimation(.easeOut(duration: accessibilityReduceMotion ? 0.08 : 0.18)) {
-            fixtureDateDragOffset = 0
-        }
-    }
-
-    private func completeFixtureDateSwipe(
-        to targetDateKey: String,
-        direction: Int,
-        containerWidth: CGFloat
-    ) {
-        UISelectionFeedbackGenerator().selectionChanged()
-        guard !accessibilityReduceMotion else {
-            fixtureDateDragOffset = 0
-            fixtureBrowser.selectDate(targetDateKey)
-            return
-        }
-
-        let destinationOffset = direction > 0 ? -containerWidth : containerWidth
-        withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.24)) {
-            fixtureDateDragOffset = destinationOffset
-        }
-
-        fixtureDateTransitionTask?.cancel()
-        fixtureDateTransitionTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(240))
-            guard !Task.isCancelled else { return }
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                fixtureBrowser.selectDate(targetDateKey)
-                fixtureDateDragOffset = 0
-            }
-            fixtureDateTransitionTask = nil
-        }
-    }
-
-    private func resetFixtureDateTransition() {
-        fixtureDateTransitionTask?.cancel()
-        fixtureDateTransitionTask = nil
-        fixtureDateDragAxis = nil
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            fixtureDateDragOffset = 0
-        }
-    }
-
     private func fixtureNextMatchButton(
         direction: FixtureBrowseSelectionResolver.DateJumpDirection,
         targetDateKey: String
     ) -> some View {
         Button {
-            resetFixtureDateTransition()
             fixtureBrowser.selectNextMatchDate()
         } label: {
             HStack(spacing: 3) {
@@ -1204,6 +1106,8 @@ struct MatchesView: View {
         HStack(spacing: 6) {
             Button {
                 isSearchFieldFocused = false
+                fixturePickerDraftOptionIDs = nil
+                fixturePickerBaselineOptionIDs = nil
                 withAnimation(.easeOut(duration: 0.2)) {
                     expandedFixtureRegionID = nil
                     isFixtureFavouritesMenuExpanded.toggle()
@@ -1248,12 +1152,7 @@ struct MatchesView: View {
                             let selectedCount = selectedCompetitionCount(in: region)
                             Button {
                                 isSearchFieldFocused = false
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    isFixtureFavouritesMenuExpanded = false
-                                    expandedFixtureRegionID = expandedFixtureRegionID == region.id
-                                        ? nil
-                                        : region.id
-                                }
+                                toggleFixtureCompetitionPicker(for: region.id)
                             } label: {
                                 FixtureRegionDockButton(
                                     systemSymbol: nil,
@@ -1456,9 +1355,7 @@ struct MatchesView: View {
                 }
                 Spacer()
                 Button {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        expandedFixtureRegionID = nil
-                    }
+                    dismissFixtureCompetitionPicker()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.subheadline.weight(.semibold))
@@ -1476,9 +1373,9 @@ struct MatchesView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(specialOptions) { option in
-                        let selected = isFixtureViewOptionSelected(option.id)
+                        let selected = isFixturePickerOptionSelected(option.id)
                         Button {
-                            toggleFixtureViewOption(option.id)
+                            toggleFixturePickerOption(option.id)
                         } label: {
                             HStack(spacing: 12) {
                                 FixtureViewSpecialOptionIcon(option: option, size: 32)
@@ -1513,9 +1410,10 @@ struct MatchesView: View {
                     }
 
                     ForEach(competitions, id: \.stableID) { competition in
-                        let selected = isFixtureCompetitionSelected(competition)
+                        let optionID = FixtureViewOptionID.competition(competition.stableID)
+                        let selected = isFixturePickerOptionSelected(optionID)
                         Button {
-                            toggleFixtureCompetition(competition)
+                            toggleFixturePickerOption(optionID)
                         } label: {
                             HStack(spacing: 12) {
                                 CompetitionBadgeImage(
@@ -1549,9 +1447,7 @@ struct MatchesView: View {
             Divider()
 
             Button {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    expandedFixtureRegionID = nil
-                }
+                commitFixtureCompetitionPicker()
             } label: {
                 Text("Done")
                     .font(.subheadline.weight(.semibold))
@@ -1622,6 +1518,10 @@ struct MatchesView: View {
         preferences.snapshot.fixtureViewShowsAll || effectiveFixtureViewOptionIDs.contains(optionID)
     }
 
+    private func isFixturePickerOptionSelected(_ optionID: String) -> Bool {
+        fixturePickerDraftOptionIDs?.contains(optionID) ?? isFixtureViewOptionSelected(optionID)
+    }
+
     private var effectiveFixtureViewOptionIDs: Set<String> {
         if preferences.showAllMatches {
             return []
@@ -1638,7 +1538,67 @@ struct MatchesView: View {
         ).map(FixtureViewOptionID.competition))
     }
 
+    private var fixturePickerInitialOptionIDs: Set<String> {
+        guard preferences.snapshot.fixtureViewShowsAll else {
+            return effectiveFixtureViewOptionIDs
+        }
+        return Set(fixtureBrowser.competitions.map {
+            FixtureViewOptionID.competition($0.stableID)
+        })
+    }
+
+    private func toggleFixtureCompetitionPicker(for regionID: String) {
+        guard expandedFixtureRegionID != regionID else {
+            dismissFixtureCompetitionPicker()
+            return
+        }
+
+        let initialOptionIDs = fixturePickerInitialOptionIDs
+        fixturePickerDraftOptionIDs = initialOptionIDs
+        fixturePickerBaselineOptionIDs = initialOptionIDs
+        withAnimation(.easeOut(duration: 0.2)) {
+            isFixtureFavouritesMenuExpanded = false
+            expandedFixtureRegionID = regionID
+        }
+    }
+
+    private func dismissFixtureCompetitionPicker() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            expandedFixtureRegionID = nil
+        }
+    }
+
+    private func toggleFixturePickerOption(_ optionID: String) {
+        let currentOptionIDs = fixturePickerDraftOptionIDs ?? fixturePickerInitialOptionIDs
+        fixturePickerDraftOptionIDs = FixtureViewOptionID.toggling(
+            optionID,
+            in: currentOptionIDs
+        )
+    }
+
+    private func commitFixtureCompetitionPicker() {
+        let selectedIDs = fixturePickerDraftOptionIDs ?? fixturePickerInitialOptionIDs
+        let baselineOptionIDs = fixturePickerBaselineOptionIDs ?? fixturePickerInitialOptionIDs
+        let hasChanges = selectedIDs != baselineOptionIDs
+        dismissFixtureCompetitionPicker()
+        guard hasChanges else { return }
+
+        guard !selectedIDs.isEmpty else {
+            selectFavourites()
+            return
+        }
+
+        applyCustomFixtureView(selectedIDs)
+        AppMetricsService.shared.fireActivity(
+            "fixture_competition_changed",
+            screen: mode.rawValue,
+            apiBaseURL: preferences.apiBaseURL
+        )
+    }
+
     private func selectFavourites() {
+        fixturePickerDraftOptionIDs = nil
+        fixturePickerBaselineOptionIDs = nil
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
@@ -1662,6 +1622,8 @@ struct MatchesView: View {
     }
 
     private func selectAllFixtureCompetitions() {
+        fixturePickerDraftOptionIDs = nil
+        fixturePickerBaselineOptionIDs = nil
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
@@ -1711,30 +1673,9 @@ struct MatchesView: View {
         )
     }
 
-    private func toggleFixtureCompetition(_ competition: CompetitionCatalogEntry) {
-        toggleFixtureViewOption(FixtureViewOptionID.competition(competition.stableID))
-    }
-
-    private func toggleFixtureViewOption(_ optionID: String) {
-        let selectedIDs = FixtureViewOptionID.toggling(
-            optionID,
-            in: effectiveFixtureViewOptionIDs
-        )
-
-        guard !selectedIDs.isEmpty else {
-            selectFavourites()
-            return
-        }
-
-        applyCustomFixtureView(selectedIDs)
-        AppMetricsService.shared.fireActivity(
-            "fixture_competition_changed",
-            screen: mode.rawValue,
-            apiBaseURL: preferences.apiBaseURL
-        )
-    }
-
     private func selectPremierLeagueMatches() {
+        fixturePickerDraftOptionIDs = nil
+        fixturePickerBaselineOptionIDs = nil
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
@@ -1821,42 +1762,80 @@ struct MatchesView: View {
 
     private func rebuildFixtureBrowseGrouping() {
         guard mode == .fixtures else { return }
-        fixtureBrowseGroupedDays = matchesStore.groupFixtureBrowseMatches(
-            fixtureBrowser.visibleMatches,
-            preferences: preferences.snapshot
+        let pageGroupings = rebuildFixtureBrowsePageGroupings(
+            from: fixtureBrowser.cachedMatchesByDate
         )
-        rebuildFixtureBrowsePageGroupings(from: fixtureBrowser.cachedMatchesByDate)
-        refreshVisibleGroupedDays(from: sourceGroupedDays, force: true)
-        attemptedPredictionDateKeys.removeAll()
-        warmPredictionsForVisibleDays(days: fixtureBrowseGroupedDays)
-        scheduleGroupedSideEffects(for: fixtureBrowseGroupedDays, immediate: false)
+        let groupedDays = fixtureBrowser.selectedDateKey
+            .flatMap { pageGroupings[$0] }
+            ?? matchesStore.groupFixtureBrowseMatches(
+                fixtureBrowser.visibleMatches,
+                preferences: preferences.snapshot
+            )
+        let groupingChanged = groupedDays != fixtureBrowseGroupedDays
+        if groupingChanged {
+            fixtureBrowseGroupedDays = groupedDays
+        }
+        refreshVisibleGroupedDays(from: groupedDays)
+        guard groupingChanged else { return }
+        warmPredictionsForVisibleDays(days: groupedDays)
+        scheduleGroupedSideEffects(for: groupedDays, immediate: false)
     }
 
-    private func rebuildFixtureBrowsePageGroupings(from matchesByDate: [String: [Match]]) {
-        guard mode == .fixtures else { return }
-        var groupedByDate: [String: [MatchDay]] = [:]
-        groupedByDate.reserveCapacity(matchesByDate.count)
-        for (dateKey, matches) in matchesByDate where !matches.isEmpty {
+    @discardableResult
+    private func rebuildFixtureBrowsePageGroupings(
+        from matchesByDate: [String: [Match]]
+    ) -> [String: [MatchDay]] {
+        guard mode == .fixtures else { return fixtureBrowsePageGroupedDays }
+        guard matchesByDate != fixtureBrowsePageSourceMatchesByDate else {
+            return fixtureBrowsePageGroupedDays
+        }
+
+        var groupedByDate = fixtureBrowsePageGroupedDays
+        for removedDateKey in fixtureBrowsePageSourceMatchesByDate.keys
+            where matchesByDate[removedDateKey] == nil {
+            groupedByDate.removeValue(forKey: removedDateKey)
+        }
+
+        for (dateKey, matches) in matchesByDate {
+            guard fixtureBrowsePageSourceMatchesByDate[dateKey] != matches else { continue }
+            guard !matches.isEmpty else {
+                groupedByDate.removeValue(forKey: dateKey)
+                continue
+            }
             let groupedDays = matchesStore.groupFixtureBrowseMatches(
                 matches,
                 preferences: preferences.snapshot
             )
-            if !groupedDays.isEmpty {
+            if groupedDays.isEmpty {
+                groupedByDate.removeValue(forKey: dateKey)
+            } else {
                 groupedByDate[dateKey] = groupedDays
             }
         }
-        fixtureBrowsePageGroupedDays = groupedByDate
+
+        fixtureBrowsePageSourceMatchesByDate = matchesByDate
+        if groupedByDate != fixtureBrowsePageGroupedDays {
+            fixtureBrowsePageGroupedDays = groupedByDate
+        }
+        return groupedByDate
     }
 
     private func runActivationIfNeeded(logEvent: String) {
         guard !didRunActivationForVisibleCycle else { return }
         didRunActivationForVisibleCycle = true
         matchesStore.setModeVisibility(mode, isVisible: true)
+        if mode == .fixtures {
+            matchesStore.setFixtureBrowserLiveRefreshActive(true)
+        }
         let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
         NSLog("[MatchesView] %@ mode=%@ selected=%d snapshot=%@", logEvent, mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
         matchesStore.configure(with: snapshot, mode: mode)
         if mode == .fixtures {
             fixtureBrowser.configure(preferences: preferences.snapshot)
+            fixtureBrowser.setAutoRefreshEnabled(
+                scenePhase == .active,
+                refreshImmediately: scenePhase == .active
+            )
             rebuildFixtureBrowseGrouping()
         }
         let days = sourceGroupedDays
@@ -2225,6 +2204,176 @@ private struct CompetitionBadgeImage: View {
     }
 }
 
+/// Owns high-frequency drag state so a swipe doesn't invalidate the entire fixtures screen.
+private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent: View>: View {
+    let containerWidth: CGFloat
+    let currentDateKey: String?
+    let previousDateKey: String?
+    let nextDateKey: String?
+    let isSwipeEnabled: Bool
+    let reduceMotion: Bool
+    let onSelect: (String) -> Void
+    private let currentContent: CurrentContent
+    private let adjacentContent: (String) -> AdjacentContent
+
+    @State private var dragOffset: CGFloat = 0
+    @State private var dragAxis: DragAxis?
+    @State private var transitionTask: Task<Void, Never>?
+
+    private enum DragAxis {
+        case horizontal
+        case vertical
+    }
+
+    init(
+        containerWidth: CGFloat,
+        currentDateKey: String?,
+        previousDateKey: String?,
+        nextDateKey: String?,
+        isSwipeEnabled: Bool,
+        reduceMotion: Bool,
+        onSelect: @escaping (String) -> Void,
+        @ViewBuilder currentContent: () -> CurrentContent,
+        @ViewBuilder adjacentContent: @escaping (String) -> AdjacentContent
+    ) {
+        self.containerWidth = containerWidth
+        self.currentDateKey = currentDateKey
+        self.previousDateKey = previousDateKey
+        self.nextDateKey = nextDateKey
+        self.isSwipeEnabled = isSwipeEnabled
+        self.reduceMotion = reduceMotion
+        self.onSelect = onSelect
+        self.currentContent = currentContent()
+        self.adjacentContent = adjacentContent
+    }
+
+    var body: some View {
+        ZStack {
+            if let adjacentDateKey {
+                adjacentContent(adjacentDateKey)
+                    .offset(x: incomingPageOffset)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+            }
+
+            currentContent
+                .offset(x: dragOffset)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.systemBackground))
+        .clipped()
+        .contentShape(Rectangle())
+        .simultaneousGesture(swipeGesture)
+        .onChange(of: currentDateKey) { _, _ in
+            resetTransition()
+        }
+        .onChange(of: isSwipeEnabled) { _, enabled in
+            if !enabled {
+                resetTransition()
+            }
+        }
+        .onDisappear {
+            transitionTask?.cancel()
+        }
+    }
+
+    private var canBeginSwipe: Bool {
+        isSwipeEnabled && transitionTask == nil
+    }
+
+    private var adjacentDateKey: String? {
+        guard dragOffset != 0 else { return nil }
+        return dragOffset < 0 ? nextDateKey : previousDateKey
+    }
+
+    private var incomingPageOffset: CGFloat {
+        guard dragOffset != 0 else { return 0 }
+        return (dragOffset < 0 ? containerWidth : -containerWidth) + dragOffset
+    }
+
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                guard canBeginSwipe else { return }
+
+                if dragAxis == nil {
+                    let horizontalDistance = abs(value.translation.width)
+                    let verticalDistance = abs(value.translation.height)
+                    guard max(horizontalDistance, verticalDistance) >= 10 else { return }
+                    dragAxis = horizontalDistance > verticalDistance ? .horizontal : .vertical
+                }
+
+                guard dragAxis == .horizontal else { return }
+                let hasAdjacentDate = value.translation.width < 0
+                    ? nextDateKey != nil
+                    : previousDateKey != nil
+                let motionScale: CGFloat = reduceMotion ? 0.22 : 1
+                dragOffset = value.translation.width * motionScale * (hasAdjacentDate ? 1 : 0.18)
+            }
+            .onEnded { value in
+                defer { dragAxis = nil }
+                guard canBeginSwipe,
+                      dragAxis == .horizontal,
+                      let direction = FixtureBrowseSelectionResolver.swipeDateOffset(
+                        translationWidth: value.translation.width,
+                        translationHeight: value.translation.height,
+                        predictedEndTranslationWidth: value.predictedEndTranslation.width,
+                        containerWidth: containerWidth
+                      ),
+                      let targetDateKey = direction > 0 ? nextDateKey : previousDateKey else {
+                    cancelSwipe()
+                    return
+                }
+                completeSwipe(to: targetDateKey, direction: direction)
+            }
+    }
+
+    private func cancelSwipe() {
+        withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.16)) {
+            dragOffset = 0
+        }
+    }
+
+    private func completeSwipe(to targetDateKey: String, direction: Int) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        guard !reduceMotion else {
+            dragOffset = 0
+            onSelect(targetDateKey)
+            return
+        }
+
+        let destinationOffset = direction > 0 ? -containerWidth : containerWidth
+        withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.2)) {
+            dragOffset = destinationOffset
+        }
+
+        transitionTask?.cancel()
+        transitionTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                onSelect(targetDateKey)
+                dragOffset = 0
+            }
+            await Task.yield()
+            transitionTask = nil
+        }
+    }
+
+    private func resetTransition() {
+        transitionTask?.cancel()
+        transitionTask = nil
+        dragAxis = nil
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            dragOffset = 0
+        }
+    }
+}
+
 private struct FixtureDateCarouselTile: View {
     let dateKey: String
     let matchCount: Int
@@ -2238,17 +2387,33 @@ private struct FixtureDateCarouselTile: View {
         date.map { Self.accessibilityFormatter.string(from: $0) } ?? dateKey
     }
 
+    private var isToday: Bool {
+        date.map { Calendar.autoupdatingCurrent.isDateInToday($0) } ?? false
+    }
+
     var body: some View {
         VStack(spacing: 2) {
-            Text(date.map { Self.weekdayFormatter.string(from: $0) } ?? "–")
+            Text(isToday ? "Today" : (date.map { Self.weekdayFormatter.string(from: $0) } ?? "–"))
                 .font(.caption2.weight(.semibold))
                 .textCase(.uppercase)
             Text(date.map { Self.dayFormatter.string(from: $0) } ?? dateKey)
                 .font(.subheadline.weight(isSelected ? .semibold : .medium))
                 .monospacedDigit()
         }
-        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+        .foregroundStyle(isSelected || isToday ? Color.accentColor : Color.secondary)
         .frame(width: 76, height: 50)
+        .background {
+            if isToday {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.accentColor.opacity(isSelected ? 0.18 : 0.1))
+            }
+        }
+        .overlay {
+            if isToday {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.accentColor.opacity(isSelected ? 0.8 : 0.5), lineWidth: 1)
+            }
+        }
         .overlay(alignment: .bottom) {
             Capsule()
                 .fill(isSelected ? Color.accentColor : Color.clear)
@@ -2257,7 +2422,11 @@ private struct FixtureDateCarouselTile: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDate)
-        .accessibilityValue("\(matchCount) \(matchCount == 1 ? "match" : "matches")\(isSelected ? ", selected" : "")")
+        .accessibilityValue(
+            "\(matchCount) \(matchCount == 1 ? "match" : "matches")" +
+            (isToday ? ", today" : "") +
+            (isSelected ? ", selected" : "")
+        )
     }
 
     private static let inputFormatter: DateFormatter = {
@@ -2832,126 +3001,6 @@ private enum MarketsScorePredictor {
         let total = home + draw + away
         guard total > 0 else { return (0.33, 0.34, 0.33) }
         return (home / total, draw / total, away / total)
-    }
-}
-
-private struct ServerLoadingStateView: View {
-    let mode: MatchesViewMode
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var animateSpinner = false
-
-    var body: some View {
-        VStack(spacing: 18) {
-            LiquidServerSpinner(isAnimating: animateSpinner && !reduceMotion)
-
-            VStack(spacing: 5) {
-                Text(mode.loadingServerText)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-
-                Text(mode.loadingServerSubtitle)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-            }
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 22)
-        .background {
-            loadingBackground
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.24), radius: 26, x: 0, y: 18)
-        .padding(.horizontal, 32)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(mode.loadingServerText)
-        .onAppear {
-            animateSpinner = true
-        }
-        .onDisappear {
-            animateSpinner = false
-        }
-    }
-
-    @ViewBuilder
-    private var loadingBackground: some View {
-        let shape = RoundedRectangle(cornerRadius: 30, style: .continuous)
-        if #available(iOS 26.0, *) {
-            shape
-                .fill(.clear)
-                .glassEffect(.regular, in: shape)
-        } else {
-            shape
-                .fill(.ultraThinMaterial)
-        }
-    }
-}
-
-private struct LiquidServerSpinner: View {
-    let isAnimating: Bool
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color.accentColor.opacity(0.24),
-                            Color.accentColor.opacity(0.04),
-                            .clear,
-                        ],
-                        center: .center,
-                        startRadius: 2,
-                        endRadius: 46
-                    )
-                )
-                .frame(width: 82, height: 82)
-
-            Circle()
-                .stroke(.white.opacity(0.16), lineWidth: 1)
-                .frame(width: 68, height: 68)
-
-            Circle()
-                .trim(from: 0.08, to: 0.76)
-                .stroke(
-                    AngularGradient(
-                        colors: [
-                            Color.accentColor.opacity(0.15),
-                            Color.accentColor,
-                            .white.opacity(0.92),
-                            Color.accentColor.opacity(0.18),
-                        ],
-                        center: .center
-                    ),
-                    style: StrokeStyle(lineWidth: 5, lineCap: .round)
-                )
-                .frame(width: 58, height: 58)
-                .rotationEffect(.degrees(isAnimating ? 360 : 0))
-                .animation(.linear(duration: 1.15).repeatForever(autoreverses: false), value: isAnimating)
-
-            Circle()
-                .trim(from: 0.0, to: 0.32)
-                .stroke(
-                    .white.opacity(0.72),
-                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                )
-                .frame(width: 42, height: 42)
-                .rotationEffect(.degrees(isAnimating ? -360 : 0))
-                .animation(.linear(duration: 1.65).repeatForever(autoreverses: false), value: isAnimating)
-
-            Image(systemName: "arrow.down.to.line.compact")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(.white, Color.accentColor)
-                .symbolRenderingMode(.palette)
-                .shadow(color: Color.accentColor.opacity(0.55), radius: 10, x: 0, y: 0)
-        }
-        .frame(width: 92, height: 92)
     }
 }
 

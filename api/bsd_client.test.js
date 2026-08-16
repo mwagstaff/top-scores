@@ -12,13 +12,19 @@ const {
 
 const {
   _acquireToken,
+  _createRateLimiter,
+  _refillTokens,
+  _acquireRequestSlot,
+  _releaseRequestSlot,
   _isRetryableError,
   _retryAfterMs,
   _buildUrl,
   _collectPages,
   RATE_LIMIT_MAX_TOKENS,
+  RATE_LIMIT_BURST_TOKENS,
   RATE_LIMIT_REFILL_INTERVAL_MS,
   BSD_PAGE_LIMIT,
+  BSD_MAX_CONCURRENT_REQUESTS,
 } = __private;
 
 // ---------------------------------------------------------------------------
@@ -31,7 +37,11 @@ test("getRateLimitState returns expected shape", () => {
   assert.ok(typeof state.maxTokens === "number");
   assert.ok(typeof state.queueDepth === "number");
   assert.ok(typeof state.msUntilRefill === "number");
+  assert.ok(typeof state.activeRequests === "number");
+  assert.ok(typeof state.requestQueueDepth === "number");
   assert.equal(state.maxTokens, RATE_LIMIT_MAX_TOKENS);
+  assert.equal(state.burstTokens, RATE_LIMIT_BURST_TOKENS);
+  assert.equal(state.maxConcurrentRequests, BSD_MAX_CONCURRENT_REQUESTS);
 });
 
 test("_acquireToken decrements the token count by 1", async () => {
@@ -43,6 +53,35 @@ test("_acquireToken decrements the token count by 1", async () => {
 
 test("RATE_LIMIT_REFILL_INTERVAL_MS is 60 seconds", () => {
   assert.equal(RATE_LIMIT_REFILL_INTERVAL_MS, 60_000);
+});
+
+test("rate limiter refills smoothly throughout the minute", () => {
+  const limiter = _createRateLimiter(60, 1_000);
+  limiter.tokens = 0;
+  _refillTokens(limiter, 1_500);
+  assert.equal(limiter.tokens, 0.5);
+  _refillTokens(limiter, 31_000);
+  assert.equal(limiter.tokens, 30);
+  _refillTokens(limiter, 91_000);
+  assert.equal(limiter.tokens, 60);
+});
+
+test("request concurrency hands released slots to queued callers", async () => {
+  const state = { active: 0, max: 2, waitQueue: [] };
+  await _acquireRequestSlot(state);
+  await _acquireRequestSlot(state);
+  let thirdAcquired = false;
+  const third = _acquireRequestSlot(state).then(() => { thirdAcquired = true; });
+  await Promise.resolve();
+  assert.equal(thirdAcquired, false);
+  assert.equal(state.waitQueue.length, 1);
+  _releaseRequestSlot(state);
+  await third;
+  assert.equal(thirdAcquired, true);
+  assert.equal(state.active, 2);
+  _releaseRequestSlot(state);
+  _releaseRequestSlot(state);
+  assert.equal(state.active, 0);
 });
 
 // ---------------------------------------------------------------------------

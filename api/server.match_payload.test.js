@@ -10,6 +10,7 @@ const {
     buildMonitorCandidatesForDate,
     buildFallbackMatchDetailsPayload,
     getMatchDetailsStatePayload,
+    getMatchDetailsSummaryPayload,
     mergePreferredOperationalMatchDetailsSnapshots,
     toOperationalAdminMatchPayload,
     normalizeAdminRedisMatchIds,
@@ -634,6 +635,30 @@ test("getMatchDetailsStatePayload normalizes settled penalty shootouts back to a
   assert.equal(payload.home_score, 2);
   assert.equal(payload.away_score, 2);
   assert.equal(payload.penalty_result, "Leeds United win 4 - 2 on penalties");
+});
+
+test("getMatchDetailsSummaryPayload omits heavyweight fixture detail fields", () => {
+  const payload = getMatchDetailsSummaryPayload({
+    ...detailsPayload({
+      date: "2099-08-15",
+      time: "20:00",
+      home_score: 2,
+      away_score: 1,
+      score_status: "84'",
+    }),
+    team_lineups: {
+      home: { starting_lineup: [{ name: "Home player" }] },
+      away: { starting_lineup: [{ name: "Away player" }] },
+    },
+    tv_channels: [{ name: "Example Sports" }],
+  });
+
+  assert.equal(payload.home_score, 2);
+  assert.equal(payload.away_score, 1);
+  assert.equal(payload.score_status, "84");
+  assert.equal(payload.in_progress, true);
+  assert.equal(payload.team_lineups, undefined);
+  assert.equal(payload.tv_channels, undefined);
 });
 
 test("mergeMatchDetailsPayload normalizes settled penalty shootouts back to a draw scoreline", () => {

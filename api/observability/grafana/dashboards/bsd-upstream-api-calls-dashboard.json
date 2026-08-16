@@ -19,7 +19,7 @@
     {
       "type": "barchart",
       "title": "BSD API Calls per Day (London, Fixed Last 7 Days)",
-      "description": "Europe/London calendar-day totals, including today so far. Fixed to the latest seven London dates regardless of the dashboard time picker. Counts every observed BSD upstream HTTP attempt, including errors and retries.",
+      "description": "Europe/London calendar-day totals, including today so far. Fixed to the latest seven London dates regardless of the dashboard time picker. BSD unlimited plan: this is a volume trend, not a quota gauge.",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 7 },
       "timeFrom": "6d/d",
       "hideTimeOverride": true,
@@ -29,11 +29,7 @@
           "color": { "mode": "thresholds" },
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 6000 },
-              { "color": "red", "value": 7500 }
-            ]
+            "steps": [{ "color": "green", "value": null }]
           }
         },
         "overrides": []
@@ -134,7 +130,7 @@
     {
       "type": "stat",
       "title": "Good Request Rate",
-      "gridPos": { "x": 0, "y": 7, "w": 6, "h": 4 },
+      "gridPos": { "x": 0, "y": 7, "w": 4, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -163,7 +159,7 @@
     {
       "type": "stat",
       "title": "Bad Request Rate",
-      "gridPos": { "x": 6, "y": 7, "w": 6, "h": 4 },
+      "gridPos": { "x": 4, "y": 7, "w": 4, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -196,7 +192,7 @@
     {
       "type": "stat",
       "title": "Error Rate",
-      "gridPos": { "x": 12, "y": 7, "w": 6, "h": 4 },
+      "gridPos": { "x": 8, "y": 7, "w": 4, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -229,7 +225,7 @@
     {
       "type": "stat",
       "title": "P95 Latency",
-      "gridPos": { "x": 18, "y": 7, "w": 6, "h": 4 },
+      "gridPos": { "x": 12, "y": 7, "w": 4, "h": 4 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -256,6 +252,74 @@
         {
           "expr": "histogram_quantile(0.95, sum(rate(top_scores_bsd_http_request_duration_seconds_bucket{job=\"top-scores\",source=~\"bsd_.*\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Request Queue",
+      "description": "Requests waiting for a rate-limit token or HTTP concurrency slot.",
+      "gridPos": { "x": 16, "y": 7, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "sum(top_scores_bsd_rate_limiter_queue_depth{job=\"top-scores\"}) + sum(top_scores_bsd_request_queue_depth{job=\"top-scores\"})",
+          "legendFormat": "queued"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Live Data Age",
+      "description": "Seconds since the least-recent successful live-events or incidents poll.",
+      "gridPos": { "x": 20, "y": 7, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 15 },
+              { "color": "red", "value": 30 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "expr": "time() - min(top_scores_bsd_poll_last_success_timestamp_seconds{job=\"top-scores\",poll=~\"live_events|incidents\"})",
+          "legendFormat": "poll age"
         }
       ]
     },

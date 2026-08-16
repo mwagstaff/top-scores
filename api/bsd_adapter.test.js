@@ -46,8 +46,10 @@ function loadHelper(name) {
   return JSON.parse(fs.readFileSync(path.join(HELPER_DIR, name), "utf8"));
 }
 
-test("default BSD league allowlist includes UEFA Super Cup", () => {
-  assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("90"));
+test("default BSD league allowlist includes required competitions", () => {
+  assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("90"), "UEFA Super Cup");
+  assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("86"), "League One");
+  assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("87"), "League Two");
 });
 
 // ---------------------------------------------------------------------------
@@ -261,6 +263,19 @@ test("bsdEventToCanonicalMatch: maps BSD league 90 to UEFA Super Cup", () => {
   });
 
   assert.equal(match.league, "UEFA Super Cup");
+});
+
+test("bsdEventToCanonicalMatch: maps EFL League One and League Two to catalog names", () => {
+  const event = {
+    id: 8601,
+    home_team: "Notts County",
+    away_team: "Leicester City",
+    status: "notstarted",
+    event_date: "2026-08-15T14:00:00Z",
+  };
+
+  assert.equal(bsdEventToCanonicalMatch({ ...event, league_id: 86 }).league, "League One");
+  assert.equal(bsdEventToCanonicalMatch({ ...event, id: 8701, league_id: 87 }).league, "League Two");
 });
 
 test("bsdEventToCanonicalMatch: surfaces BSD last_updated as updated_at", () => {
@@ -748,6 +763,24 @@ test("completeBsdStandingsRowsFromEvents: does not manufacture a table for a kno
   assert.equal(
     completeBsdStandingsRowsFromEvents(rows, events, { leagueId: "40", seasonId: 1112 }),
     rows
+  );
+});
+
+test("completeBsdStandingsRowsFromEvents: seeds EFL league tables from fixtures", () => {
+  const events = [
+    { league_id: 86, season_id: 2026, home_team: "Notts County", away_team: "Leicester City" },
+    { league_id: 87, season_id: 2026, home_team: "Bristol Rovers", away_team: "Walsall" },
+  ];
+
+  assert.deepEqual(
+    completeBsdStandingsRowsFromEvents([], events, { leagueId: "86", seasonId: 2026 })
+      .map((row) => row.team),
+    ["Leicester City", "Notts County"]
+  );
+  assert.deepEqual(
+    completeBsdStandingsRowsFromEvents([], events, { leagueId: "87", seasonId: 2026 })
+      .map((row) => row.team),
+    ["Bristol Rovers", "Walsall"]
   );
 });
 

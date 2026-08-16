@@ -7,12 +7,13 @@
 // multi-cadence pattern — no HTTP port, just timed jobs):
 //
 //   - leagues refresh                                   every 12h  (+ on start)
-//   - bounded current/recent events refresh              every 1h (+ on start)
-//   - live poll (/events/live)                          every 10s while a match
-//     is in progress, dropping to a once-a-minute recon between matches
-//   - incidents poll for in-progress events              every 30s
-//   - lineups poll for in-progress events not yet confirmed every 30s
-//   - standings (tables): live poll while an allowlisted league has a match
+//   - bounded current/recent events refresh             every 15m (+ on start)
+//   - live poll (/events/live)                           every 5s while a match
+//     is in progress, dropping to a 30s recon between matches
+//   - incidents poll for in-progress events             every 10s
+//   - lineups poll for live and soon-to-start events on an adaptive cadence
+//   - post-match event/incidents/lineups reconciliation at 0m, 2m and 15m
+//   - standings (tables): 30s poll while an allowlisted league has a match
 //     in progress, a one-off settle-flush the moment it stops, otherwise once
 //     daily at midnight London time (+ on start)
 //
@@ -42,7 +43,7 @@ const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const {
   upsertBsdRecords,
   upsertBsdRecord,
-  getBsdRecord,
+  getBsdRecords,
   saveOperationalDataset,
   getOperationalDatasetMetadata,
   closeMongoConnection,
@@ -50,22 +51,40 @@ const {
 
 const BSD_CURRENT_MATCHES_DATASET = "bsd_current_matches";
 
-const LIVE_POLL_MS = Number(process.env.BSD_LIVE_POLL_MS || 10_000);
+const LIVE_POLL_MS = Number(process.env.BSD_LIVE_POLL_MS || 5_000);
 // With no match in progress, /events/live is only checked at this lighter
 // recon cadence; the full LIVE_POLL_MS cadence resumes once a match appears.
-const LIVE_IDLE_POLL_MS = Number(process.env.BSD_LIVE_IDLE_POLL_MS || 60_000);
-const INCIDENTS_POLL_MS = Number(process.env.BSD_INCIDENTS_POLL_MS || 30_000);
+const LIVE_IDLE_POLL_MS = Number(process.env.BSD_LIVE_IDLE_POLL_MS || 30_000);
+const INCIDENTS_POLL_MS = Number(process.env.BSD_INCIDENTS_POLL_MS || 10_000);
 const LINEUPS_POLL_MS = Number(process.env.BSD_LINEUPS_POLL_MS || 30_000);
 const REFERENCE_REFRESH_MS = Number(process.env.BSD_REFERENCE_REFRESH_MS || 12 * 60 * 60 * 1000);
-const EVENTS_REFRESH_MS = Number(process.env.BSD_EVENTS_REFRESH_MS || 60 * 60 * 1000);
-// TV broadcasts change rarely — a daily snapshot is plenty.
-const BROADCASTS_REFRESH_MS = Number(process.env.BSD_BROADCASTS_REFRESH_MS || 24 * 60 * 60 * 1000);
-// Predictions are recomputed upstream infrequently — a daily snapshot is plenty.
-const PREDICTIONS_REFRESH_MS = Number(process.env.BSD_PREDICTIONS_REFRESH_MS || 24 * 60 * 60 * 1000);
+const EVENTS_REFRESH_MS = Number(process.env.BSD_EVENTS_REFRESH_MS || 15 * 60 * 1000);
+const BROADCASTS_REFRESH_MS = Number(process.env.BSD_BROADCASTS_REFRESH_MS || 6 * 60 * 60 * 1000);
+const PREDICTIONS_REFRESH_MS = Number(process.env.BSD_PREDICTIONS_REFRESH_MS || 6 * 60 * 60 * 1000);
 // BSD<->TSDB player/team id map: rebuilt periodically as line-ups appear.
 const MAP_REFRESH_MS = Number(process.env.BSD_MAP_REFRESH_MS || 5 * 60 * 1000);
 // Standings (tables): poll cadence while an allowlisted league has a live match.
-const STANDINGS_LIVE_POLL_MS = Number(process.env.BSD_STANDINGS_LIVE_POLL_MS || 60_000);
+const STANDINGS_LIVE_POLL_MS = Number(process.env.BSD_STANDINGS_LIVE_POLL_MS || 30_000);
+const DETAIL_FETCH_CONCURRENCY = Math.max(
+  1,
+  Math.floor(Number(process.env.BSD_DETAIL_FETCH_CONCURRENCY) || 8)
+);
+const PREMATCH_LINEUP_WINDOW_MS = Number(
+  process.env.BSD_PREMATCH_LINEUP_WINDOW_MS || 2 * 60 * 60 * 1000
+);
+const PREMATCH_LINEUP_CLOSE_WINDOW_MS = Number(
+  process.env.BSD_PREMATCH_LINEUP_CLOSE_WINDOW_MS || 45 * 60 * 1000
+);
+const PREMATCH_LINEUP_EARLY_POLL_MS = Number(
+  process.env.BSD_PREMATCH_LINEUP_EARLY_POLL_MS || 5 * 60 * 1000
+);
+const PREMATCH_LINEUP_CLOSE_POLL_MS = Number(
+  process.env.BSD_PREMATCH_LINEUP_CLOSE_POLL_MS || 60_000
+);
+const SETTLEMENT_DELAYS_MS = String(process.env.BSD_SETTLEMENT_DELAYS_MS || "0,120000,900000")
+  .split(",")
+  .map((value) => Number(value))
+  .filter((value) => Number.isFinite(value) && value >= 0);
 const BSD_METRICS_PORT = Number(process.env.BSD_METRICS_PORT || 3016);
 // Standings daily refresh target time (London), used once no league is live.
 const STANDINGS_DAILY_HOUR_UK = Number(process.env.BSD_STANDINGS_DAILY_HOUR_UK ?? 0);
@@ -91,8 +110,41 @@ let timers = [];
 let projectionRefreshInFlight = false;
 let projectionRefreshPending = false;
 let currentMatchesProjectionHash = null;
+let liveEventsPayloadHash = null;
+const incidentPayloadHashes = new Map();
+const settlementTimers = new Map();
+const lastSuccessfulPollAt = new Map();
 
 bsd.setRequestObserver(bsdHttpMetrics.trackRequestMetric);
+
+function markPollSuccess(name) {
+  lastSuccessfulPollAt.set(name, Date.now());
+}
+
+function hashPayload(payload) {
+  return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex");
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const source = Array.isArray(items) ? items : [];
+  if (source.length === 0) return [];
+  const results = new Array(source.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(
+    source.length,
+    Math.max(1, Math.floor(Number(concurrency) || 1))
+  );
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < source.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      // eslint-disable-next-line no-await-in-loop
+      results[index] = await worker(source[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 async function refreshCurrentMatchesProjection(reason) {
   if (projectionRefreshInFlight) {
@@ -105,10 +157,7 @@ async function refreshCurrentMatchesProjection(reason) {
       projectionRefreshPending = false;
       const startedAt = Date.now();
       const matches = await projectBsdMatches();
-      const payloadHash = crypto
-        .createHash("sha1")
-        .update(JSON.stringify(matches))
-        .digest("hex");
+      const payloadHash = hashPayload(matches);
       if (!currentMatchesProjectionHash) {
         const existingMetadata = await getOperationalDatasetMetadata([
           BSD_CURRENT_MATCHES_DATASET,
@@ -211,6 +260,11 @@ function diffSettledLeagueIds(previousLiveIds, nextLiveIds) {
   return [...previousLiveIds].filter((id) => !nextLiveIds.has(id));
 }
 
+function diffSettledEventIds(previousLiveIds, nextLiveIds) {
+  const next = new Set((nextLiveIds || []).map(String));
+  return (previousLiveIds || []).filter((id) => !next.has(String(id)));
+}
+
 async function pollLiveEvents() {
   if (livePollInFlight) return;
   // Downtime tier: nothing was live on the last check, so only recon at the
@@ -223,10 +277,15 @@ async function pollLiveEvents() {
     const data = await bsd.getLiveEvents({ initiator: "bsd_runtime" });
     const events = Array.isArray(data && data.events) ? data.events : [];
     const allowlistedEvents = filterAllowlistedLiveEvents(events, BSD_LEAGUE_ALLOWLIST);
-    liveEventIds = allowlistedEvents.map((event) => event.id);
-    if (allowlistedEvents.length > 0) {
+    const nextLiveEventIds = allowlistedEvents.map((event) => event.id);
+    const settledEventIds = diffSettledEventIds(liveEventIds, nextLiveEventIds);
+    liveEventIds = nextLiveEventIds;
+    const nextLiveEventsPayloadHash = hashPayload(allowlistedEvents);
+    const liveEventsChanged = nextLiveEventsPayloadHash !== liveEventsPayloadHash;
+    if (liveEventsChanged && allowlistedEvents.length > 0) {
       await upsertBsdRecords("bsd_events", allowlistedEvents.map(eventToRecord));
     }
+    liveEventsPayloadHash = nextLiveEventsPayloadHash;
 
     const nextLiveLeagueIds = computeLiveLeagueIds(events, BSD_LEAGUE_ALLOWLIST);
     const settledLeagueIds = diffSettledLeagueIds(liveLeagueIds, nextLiveLeagueIds);
@@ -234,11 +293,16 @@ async function pollLiveEvents() {
     if (settledLeagueIds.length > 0) {
       void flushSettledStandings(settledLeagueIds);
     }
+    if (settledEventIds.length > 0) {
+      settledEventIds.forEach((id) => incidentPayloadHashes.delete(String(id)));
+      scheduleSettledEventReconciliation(settledEventIds);
+    }
 
     console.log(
       `[bsd-runtime] live events: ${allowlistedEvents.length} allowlisted/${events.length} global`
     );
-    void refreshCurrentMatchesProjection("live_events");
+    markPollSuccess("live_events");
+    if (liveEventsChanged) void refreshCurrentMatchesProjection("live_events");
   } catch (error) {
     console.error(`[bsd-runtime] live poll failed: ${error.message || error}`);
   } finally {
@@ -249,14 +313,82 @@ async function pollLiveEvents() {
 // One final standings fetch for a league the moment its last live match ends,
 // so the table reflects the result without waiting for the daily refresh.
 async function flushSettledStandings(leagueIds) {
-  for (const leagueId of leagueIds) {
+  await mapWithConcurrency(leagueIds, DETAIL_FETCH_CONCURRENCY, async (leagueId) => {
     try {
-      // eslint-disable-next-line no-await-in-loop
       await ingestStandings(leagueId);
     } catch (error) {
       console.error(`[bsd-runtime] settled standings league ${leagueId} failed: ${error.message || error}`);
     }
+  });
+}
+
+async function reconcileSettledEvent(eventId) {
+  const options = { initiator: "bsd_runtime", trigger: "post_match_settlement" };
+  const [eventResult, incidentsResult, lineupsResult] = await Promise.allSettled([
+    bsd.getEvent(eventId, options),
+    bsd.getIncidents(eventId, options),
+    bsd.getLineups(eventId, options),
+  ]);
+
+  if (eventResult.status === "fulfilled" && eventResult.value) {
+    await upsertBsdRecords("bsd_events", [eventToRecord(eventResult.value)]);
+  } else if (eventResult.status === "rejected") {
+    console.error(
+      `[bsd-runtime] settled event ${eventId} detail failed: ${eventResult.reason.message || eventResult.reason}`
+    );
   }
+
+  if (incidentsResult.status === "fulfilled") {
+    const incidents = incidentsResult.value;
+    await upsertBsdRecord("bsd_incidents", eventId, incidents, {
+      event_id: incidents && incidents.event_id != null ? incidents.event_id : eventId,
+    });
+  } else {
+    console.error(
+      `[bsd-runtime] settled event ${eventId} incidents failed: ${incidentsResult.reason.message || incidentsResult.reason}`
+    );
+  }
+
+  if (lineupsResult.status === "fulfilled") {
+    const lineups = lineupsResult.value;
+    await upsertBsdRecord("bsd_lineups", eventId, lineups, {
+      event_id: lineups && lineups.event_id != null ? lineups.event_id : eventId,
+      lineup_status: (lineups && lineups.lineup_status) || null,
+    });
+  } else {
+    console.error(
+      `[bsd-runtime] settled event ${eventId} lineups failed: ${lineupsResult.reason.message || lineupsResult.reason}`
+    );
+  }
+}
+
+async function reconcileSettledEvents(eventIds, reason) {
+  await mapWithConcurrency(eventIds, DETAIL_FETCH_CONCURRENCY, async (eventId) => {
+    try {
+      await reconcileSettledEvent(eventId);
+    } catch (error) {
+      console.error(`[bsd-runtime] settled event ${eventId} reconciliation failed: ${error.message || error}`);
+    }
+  });
+  markPollSuccess("settlement");
+  void refreshCurrentMatchesProjection(`settlement_${reason}`);
+}
+
+function scheduleSettledEventReconciliation(eventIds) {
+  const ids = [...new Set((eventIds || []).map(String).filter(Boolean))];
+  if (ids.length === 0) return;
+  SETTLEMENT_DELAYS_MS.forEach((delayMs) => {
+    if (delayMs === 0) {
+      void reconcileSettledEvents(ids, "immediate");
+      return;
+    }
+    const timer = setTimeout(() => {
+      settlementTimers.delete(timer);
+      void reconcileSettledEvents(ids, `${delayMs}ms`);
+    }, delayMs);
+    settlementTimers.set(timer, timer);
+    if (timer && typeof timer.unref === "function") timer.unref();
+  });
 }
 
 // Standings for every league currently flagged live — the "poll every minute
@@ -266,14 +398,14 @@ async function pollLiveStandings() {
   standingsPollInFlight = true;
   const leagueIds = [...liveLeagueIds];
   try {
-    for (const leagueId of leagueIds) {
+    await mapWithConcurrency(leagueIds, DETAIL_FETCH_CONCURRENCY, async (leagueId) => {
       try {
-        // eslint-disable-next-line no-await-in-loop
         await ingestStandings(leagueId);
       } catch (error) {
         console.error(`[bsd-runtime] live standings league ${leagueId} failed: ${error.message || error}`);
       }
-    }
+    });
+    markPollSuccess("standings");
   } finally {
     standingsPollInFlight = false;
   }
@@ -289,6 +421,7 @@ function scheduleStandingsDailyRefresh() {
     standingsDailyRefreshTimer = null;
     try {
       await refreshAllStandings();
+      markPollSuccess("standings");
       console.log("[bsd-runtime] daily standings refresh complete");
     } catch (error) {
       console.error(`[bsd-runtime] daily standings refresh failed: ${error.message || error}`);
@@ -307,7 +440,35 @@ function buildMetricsText() {
     service: "top-scores-bsd-poller",
   });
   const memory = process.memoryUsage();
+  const rateLimit = bsd.getRateLimitState();
+  const freshnessLines = [];
+  [...lastSuccessfulPollAt.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .forEach(([poll, timestampMs]) => {
+      freshnessLines.push(
+        `top_scores_bsd_poll_last_success_timestamp_seconds{poll="${poll}"} ${timestampMs / 1000}`
+      );
+    });
   return `${base.trimEnd()}\n` + [
+    "# HELP top_scores_bsd_live_events Current number of allowlisted live events.",
+    "# TYPE top_scores_bsd_live_events gauge",
+    `top_scores_bsd_live_events ${liveEventIds.length}`,
+    "# HELP top_scores_bsd_rate_limiter_tokens Currently available BSD request tokens.",
+    "# TYPE top_scores_bsd_rate_limiter_tokens gauge",
+    `top_scores_bsd_rate_limiter_tokens ${rateLimit.tokens}`,
+    "# HELP top_scores_bsd_rate_limiter_queue_depth Requests waiting for a BSD rate-limit token.",
+    "# TYPE top_scores_bsd_rate_limiter_queue_depth gauge",
+    `top_scores_bsd_rate_limiter_queue_depth ${rateLimit.queueDepth}`,
+    "# HELP top_scores_bsd_request_concurrency Current and maximum concurrent BSD HTTP requests.",
+    "# TYPE top_scores_bsd_request_concurrency gauge",
+    `top_scores_bsd_request_concurrency{kind="active"} ${rateLimit.activeRequests}`,
+    `top_scores_bsd_request_concurrency{kind="max"} ${rateLimit.maxConcurrentRequests}`,
+    "# HELP top_scores_bsd_request_queue_depth Requests waiting for a BSD HTTP concurrency slot.",
+    "# TYPE top_scores_bsd_request_queue_depth gauge",
+    `top_scores_bsd_request_queue_depth ${rateLimit.requestQueueDepth}`,
+    "# HELP top_scores_bsd_poll_last_success_timestamp_seconds Unix timestamp of the latest successful poll cycle.",
+    "# TYPE top_scores_bsd_poll_last_success_timestamp_seconds gauge",
+    ...freshnessLines,
     "# HELP top_scores_process_resident_memory_bytes Resident set size of the BSD poller process.",
     "# TYPE top_scores_process_resident_memory_bytes gauge",
     `top_scores_process_resident_memory_bytes ${memory.rss}`,
@@ -372,47 +533,132 @@ function closeMetricsServer() {
 }
 
 async function pollIncidents() {
-  if (incidentsPollInFlight || liveEventIds.length === 0) return;
+  if (incidentsPollInFlight) return;
+  if (liveEventIds.length === 0) {
+    markPollSuccess("incidents");
+    return;
+  }
   incidentsPollInFlight = true;
   const ids = [...liveEventIds];
   try {
-    for (const id of ids) {
+    let changedCount = 0;
+    await mapWithConcurrency(ids, DETAIL_FETCH_CONCURRENCY, async (id) => {
       try {
-        // eslint-disable-next-line no-await-in-loop
         const incidents = await bsd.getIncidents(id, { initiator: "bsd_runtime" });
-        // eslint-disable-next-line no-await-in-loop
+        const nextHash = hashPayload(incidents);
+        if (incidentPayloadHashes.get(String(id)) === nextHash) return;
         await upsertBsdRecord("bsd_incidents", id, incidents, {
           event_id: incidents && incidents.event_id != null ? incidents.event_id : id,
         });
+        incidentPayloadHashes.set(String(id), nextHash);
+        changedCount += 1;
       } catch (error) {
         console.error(`[bsd-runtime] incidents event ${id} failed: ${error.message || error}`);
       }
-    }
-    console.log(`[bsd-runtime] incidents polled for ${ids.length} events`);
-    void refreshCurrentMatchesProjection("incidents");
+    });
+    console.log(
+      `[bsd-runtime] incidents polled for ${ids.length} events (${changedCount} changed)`
+    );
+    markPollSuccess("incidents");
+    if (changedCount > 0) void refreshCurrentMatchesProjection("incidents");
   } finally {
     incidentsPollInFlight = false;
   }
 }
 
-// Lineups for live events are only otherwise picked up by the hourly events
-// refresh, which leaves a gap for matches that kick off (or whose lineups are
-// published) in between cycles. Poll lineups for live events here too, but
-// skip any already confirmed — lineups rarely change once settled, so this
-// keeps the extra API calls bounded to events still awaiting confirmation.
+function selectPrematchLineupEventIds(
+  events,
+  lineupDocs,
+  currentLiveIds,
+  nowMs = Date.now(),
+  options = {}
+) {
+  const windowMs = Number(options.windowMs ?? PREMATCH_LINEUP_WINDOW_MS);
+  const closeWindowMs = Number(options.closeWindowMs ?? PREMATCH_LINEUP_CLOSE_WINDOW_MS);
+  const earlyPollMs = Number(options.earlyPollMs ?? PREMATCH_LINEUP_EARLY_POLL_MS);
+  const closePollMs = Number(options.closePollMs ?? PREMATCH_LINEUP_CLOSE_POLL_MS);
+  const liveIds = new Set((currentLiveIds || []).map(String));
+  const lineupsById = new Map(
+    (lineupDocs || []).map((doc) => [String(doc && doc._id), doc])
+  );
+
+  return (events || [])
+    .filter((event) => {
+      if (!event || event._id == null) return false;
+      const id = String(event._id);
+      if (liveIds.has(id)) return false;
+      const status = String(event.status || (event.payload && event.payload.status) || "").toLowerCase();
+      if (status !== "notstarted") return false;
+      const kickoffMs = Date.parse(
+        event.event_date || (event.payload && event.payload.event_date) || ""
+      );
+      const untilKickoffMs = kickoffMs - nowMs;
+      if (!Number.isFinite(kickoffMs) || untilKickoffMs < 0 || untilKickoffMs > windowMs) {
+        return false;
+      }
+
+      const lineupDoc = lineupsById.get(id);
+      const lineupStatus = String(
+        (lineupDoc && lineupDoc.lineup_status) ||
+          (lineupDoc && lineupDoc.payload && lineupDoc.payload.lineup_status) ||
+          ""
+      ).toLowerCase();
+      if (lineupStatus === "confirmed") return false;
+
+      const lastPollMs = Date.parse((lineupDoc && lineupDoc.updated_at) || "");
+      if (!Number.isFinite(lastPollMs)) return true;
+      const cadenceMs = untilKickoffMs <= closeWindowMs ? closePollMs : earlyPollMs;
+      return nowMs - lastPollMs >= cadenceMs;
+    })
+    .map((event) => String(event._id));
+}
+
+async function loadLineupPollCandidates(nowMs = Date.now()) {
+  const liveIds = [...new Set(liveEventIds.map(String))];
+  const startIso = new Date(nowMs).toISOString();
+  const endIso = new Date(nowMs + PREMATCH_LINEUP_WINDOW_MS).toISOString();
+  const upcomingEvents = await getBsdRecords(
+    "bsd_events",
+    {
+      status: "notstarted",
+      event_date: { $gte: startIso, $lte: endIso },
+    },
+    {
+      projection: { _id: 1, status: 1, event_date: 1, payload: 1 },
+      sort: { event_date: 1 },
+    }
+  );
+  const candidateIds = [...new Set([...liveIds, ...upcomingEvents.map((event) => String(event._id))])];
+  const lineupDocs = candidateIds.length > 0
+    ? await getBsdRecords("bsd_lineups", { _id: { $in: candidateIds } })
+    : [];
+  const lineupsById = new Map(lineupDocs.map((doc) => [String(doc._id), doc]));
+  const unconfirmedLiveIds = liveIds.filter((id) => {
+    const doc = lineupsById.get(id);
+    return String(
+      (doc && doc.lineup_status) || (doc && doc.payload && doc.payload.lineup_status) || ""
+    ).toLowerCase() !== "confirmed";
+  });
+  const prematchIds = selectPrematchLineupEventIds(
+    upcomingEvents,
+    lineupDocs,
+    liveIds,
+    nowMs
+  );
+  return [...new Set([...unconfirmedLiveIds, ...prematchIds])];
+}
+
+// Poll lineups for live matches and upcoming matches inside the pre-match
+// window. The candidate selector slows down outside the final 45 minutes and
+// stops as soon as BSD reports a confirmed lineup.
 async function pollLineups() {
-  if (lineupsPollInFlight || liveEventIds.length === 0) return;
+  if (lineupsPollInFlight) return;
   lineupsPollInFlight = true;
-  const ids = [...liveEventIds];
   try {
-    for (const id of ids) {
+    const ids = await loadLineupPollCandidates();
+    await mapWithConcurrency(ids, DETAIL_FETCH_CONCURRENCY, async (id) => {
       try {
-        // eslint-disable-next-line no-await-in-loop
-        const existing = await getBsdRecord("bsd_lineups", id);
-        if (existing && existing.lineup_status === "confirmed") continue;
-        // eslint-disable-next-line no-await-in-loop
         const lineups = await bsd.getLineups(id, { initiator: "bsd_runtime" });
-        // eslint-disable-next-line no-await-in-loop
         await upsertBsdRecord("bsd_lineups", id, lineups, {
           event_id: lineups && lineups.event_id != null ? lineups.event_id : id,
           lineup_status: (lineups && lineups.lineup_status) || null,
@@ -420,8 +666,9 @@ async function pollLineups() {
       } catch (error) {
         console.error(`[bsd-runtime] lineups event ${id} failed: ${error.message || error}`);
       }
-    }
-    console.log(`[bsd-runtime] lineups polled for ${ids.length} events`);
+    });
+    if (ids.length > 0) console.log(`[bsd-runtime] lineups polled for ${ids.length} events`);
+    markPollSuccess("lineups");
   } finally {
     lineupsPollInFlight = false;
   }
@@ -447,6 +694,7 @@ async function refreshReference() {
   referenceRefreshInFlight = true;
   try {
     await refreshAllReference();
+    markPollSuccess("reference");
     void refreshCurrentMatchesProjection("reference");
   } catch (error) {
     console.error(`[bsd-runtime] reference refresh failed: ${error.message || error}`);
@@ -462,6 +710,7 @@ async function refreshLeagues() {
   referenceRefreshInFlight = true;
   try {
     await ingestLeagues();
+    markPollSuccess("leagues");
     void refreshCurrentMatchesProjection("leagues");
   } catch (error) {
     console.error(`[bsd-runtime] leagues refresh failed: ${error.message || error}`);
@@ -475,6 +724,7 @@ async function refreshEvents() {
   eventsRefreshInFlight = true;
   try {
     await refreshIncrementalEvents();
+    markPollSuccess("events");
     void refreshCurrentMatchesProjection("events_refresh");
   } catch (error) {
     console.error(`[bsd-runtime] events refresh failed: ${error.message || error}`);
@@ -488,6 +738,7 @@ async function refreshBroadcasts() {
   broadcastsRefreshInFlight = true;
   try {
     await refreshAllBroadcasts();
+    markPollSuccess("broadcasts");
     void refreshCurrentMatchesProjection("broadcasts");
   } catch (error) {
     console.error(`[bsd-runtime] broadcasts refresh failed: ${error.message || error}`);
@@ -501,6 +752,7 @@ async function refreshPredictions() {
   predictionsRefreshInFlight = true;
   try {
     await refreshAllPredictions();
+    markPollSuccess("predictions");
   } catch (error) {
     console.error(`[bsd-runtime] predictions refresh failed: ${error.message || error}`);
   } finally {
@@ -525,6 +777,7 @@ function start() {
   refreshBroadcasts();
   refreshPredictions();
   pollLiveEvents();
+  pollLineups();
   refreshMaps();
   scheduleStandingsDailyRefresh();
 
@@ -547,6 +800,8 @@ async function stop(signal) {
     clearTimeout(standingsDailyRefreshTimer);
     standingsDailyRefreshTimer = null;
   }
+  settlementTimers.forEach((timer) => clearTimeout(timer));
+  settlementTimers.clear();
   try {
     await closeMetricsServer();
     await closeMongoConnection();
@@ -568,6 +823,9 @@ module.exports = {
   pollLineups,
   pollLiveStandings,
   flushSettledStandings,
+  reconcileSettledEvent,
+  reconcileSettledEvents,
+  scheduleSettledEventReconciliation,
   scheduleStandingsDailyRefresh,
   refreshReference,
   refreshLeagues,
@@ -583,6 +841,9 @@ module.exports = {
     computeLiveLeagueIds,
     filterAllowlistedLiveEvents,
     diffSettledLeagueIds,
+    diffSettledEventIds,
+    mapWithConcurrency,
+    selectPrematchLineupEventIds,
     millisecondsUntilNextLondonTime,
     buildMetricsText,
   },

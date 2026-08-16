@@ -25,10 +25,21 @@ const BSD_RETRY_BASE_DELAY_MS = Number(process.env.BSD_RETRY_BASE_DELAY_MS || 50
 const BSD_RETRY_MAX_DELAY_MS = Number(process.env.BSD_RETRY_MAX_DELAY_MS || 30_000);
 const BSD_RETRY_JITTER_MS = Number(process.env.BSD_RETRY_JITTER_MS || 250);
 
-// Conservative default token budget (req/min). Override via env if the upstream
-// allowance is known to be higher. Refilled once per minute.
-const RATE_LIMIT_MAX_TOKENS = Number(process.env.BSD_RATE_LIMIT_MAX_TOKENS || 60);
+// Unlimited accounts are not constrained by a daily request allowance, but a
+// smooth per-minute budget still protects BSD and this process from bursts.
+const RATE_LIMIT_MAX_TOKENS = Math.max(
+  1,
+  Number(process.env.BSD_RATE_LIMIT_MAX_TOKENS) || 300
+);
+const RATE_LIMIT_BURST_TOKENS = Math.max(
+  1,
+  Number(process.env.BSD_RATE_LIMIT_BURST_TOKENS) || 30
+);
 const RATE_LIMIT_REFILL_INTERVAL_MS = 60_000;
+const BSD_MAX_CONCURRENT_REQUESTS = Math.max(
+  1,
+  Math.floor(Number(process.env.BSD_MAX_CONCURRENT_REQUESTS) || 8)
+);
 
 function _sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
@@ -86,25 +97,30 @@ function _retryAfterMs(headers = {}) {
 // Token-bucket rate limiter
 // ---------------------------------------------------------------------------
 
-function _createRateLimiter(maxTokens) {
+function _createRateLimiter(maxTokens, nowMs = Date.now(), refillTokensPerMinute = maxTokens) {
   return {
     tokens: maxTokens,
     maxTokens,
-    lastRefillMs: Date.now(),
+    refillTokensPerMinute,
+    lastRefillMs: nowMs,
     waitQueue: [],
+    refillTimer: null,
   };
 }
 
-const _rateLimiter = _createRateLimiter(RATE_LIMIT_MAX_TOKENS);
+const _rateLimiter = _createRateLimiter(
+  RATE_LIMIT_BURST_TOKENS,
+  Date.now(),
+  RATE_LIMIT_MAX_TOKENS
+);
 
-function _refillTokens(limiter) {
-  const now = Date.now();
+function _refillTokens(limiter, nowMs = Date.now()) {
+  const now = Math.max(limiter.lastRefillMs, Number(nowMs) || Date.now());
   const elapsed = now - limiter.lastRefillMs;
-  if (elapsed >= RATE_LIMIT_REFILL_INTERVAL_MS) {
-    limiter.tokens = limiter.maxTokens;
-    limiter.lastRefillMs = now;
-    _drainQueue(limiter);
-  }
+  if (elapsed <= 0) return;
+  const tokensPerMs = limiter.refillTokensPerMinute / RATE_LIMIT_REFILL_INTERVAL_MS;
+  limiter.tokens = Math.min(limiter.maxTokens, limiter.tokens + elapsed * tokensPerMs);
+  limiter.lastRefillMs = now;
 }
 
 function _drainQueue(limiter) {
@@ -115,32 +131,82 @@ function _drainQueue(limiter) {
   }
 }
 
+function _scheduleTokenDrain(limiter) {
+  if (limiter.refillTimer || limiter.waitQueue.length === 0) return;
+  _refillTokens(limiter);
+  _drainQueue(limiter);
+  if (limiter.waitQueue.length === 0) return;
+
+  const nextCost = limiter.waitQueue[0].cost;
+  const missingTokens = Math.max(0, nextCost - limiter.tokens);
+  const delayMs = Math.max(
+    1,
+    Math.ceil((missingTokens * RATE_LIMIT_REFILL_INTERVAL_MS) / limiter.refillTokensPerMinute)
+  );
+  limiter.refillTimer = setTimeout(() => {
+    limiter.refillTimer = null;
+    _refillTokens(limiter);
+    _drainQueue(limiter);
+    _scheduleTokenDrain(limiter);
+  }, delayMs);
+}
+
 function _acquireToken(cost = 1, limiter = _rateLimiter) {
   _refillTokens(limiter);
-  if (limiter.tokens >= cost) {
+  _drainQueue(limiter);
+  if (limiter.waitQueue.length === 0 && limiter.tokens >= cost) {
     limiter.tokens -= cost;
     return Promise.resolve();
   }
   return new Promise((resolve) => {
     limiter.waitQueue.push({ resolve, cost });
-    if (limiter.waitQueue.length === 1) {
-      const msUntilRefill = RATE_LIMIT_REFILL_INTERVAL_MS - (Date.now() - limiter.lastRefillMs);
-      setTimeout(() => {
-        limiter.tokens = limiter.maxTokens;
-        limiter.lastRefillMs = Date.now();
-        _drainQueue(limiter);
-      }, Math.max(0, msUntilRefill));
-    }
+    _scheduleTokenDrain(limiter);
   });
+}
+
+const _requestConcurrency = {
+  active: 0,
+  max: BSD_MAX_CONCURRENT_REQUESTS,
+  waitQueue: [],
+};
+
+function _acquireRequestSlot(state = _requestConcurrency) {
+  if (state.active < state.max) {
+    state.active += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => state.waitQueue.push(resolve));
+}
+
+function _releaseRequestSlot(state = _requestConcurrency) {
+  if (state.waitQueue.length > 0) {
+    const resolve = state.waitQueue.shift();
+    resolve();
+    return;
+  }
+  state.active = Math.max(0, state.active - 1);
 }
 
 function _rateLimitState(limiter) {
   _refillTokens(limiter);
   return {
     tokens: limiter.tokens,
-    maxTokens: limiter.maxTokens,
+    maxTokens: limiter.refillTokensPerMinute,
+    burstTokens: limiter.maxTokens,
     queueDepth: limiter.waitQueue.length,
-    msUntilRefill: Math.max(0, RATE_LIMIT_REFILL_INTERVAL_MS - (Date.now() - limiter.lastRefillMs)),
+    msUntilRefill:
+      limiter.tokens >= 1
+        ? 0
+        : Math.max(
+            0,
+            Math.ceil(
+              ((1 - limiter.tokens) * RATE_LIMIT_REFILL_INTERVAL_MS) /
+                limiter.refillTokensPerMinute
+            )
+          ),
+    activeRequests: _requestConcurrency.active,
+    maxConcurrentRequests: _requestConcurrency.max,
+    requestQueueDepth: _requestConcurrency.waitQueue.length,
   };
 }
 
@@ -288,7 +354,13 @@ async function _fetchWithRetry(url, options = {}) {
       // eslint-disable-next-line no-await-in-loop
       await _acquireToken();
       // eslint-disable-next-line no-await-in-loop
-      return await _fetchJson(url, options);
+      await _acquireRequestSlot();
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        return await _fetchJson(url, options);
+      } finally {
+        _releaseRequestSlot();
+      }
     } catch (error) {
       lastError = error;
       if (attempt >= maxAttempts || !_isRetryableError(error)) {
@@ -503,9 +575,16 @@ module.exports = {
     _collectPages,
     _requestAllPages,
     _fetchWithRetry,
+    _createRateLimiter,
+    _refillTokens,
+    _acquireRequestSlot,
+    _releaseRequestSlot,
     _rateLimiter,
+    _requestConcurrency,
     RATE_LIMIT_MAX_TOKENS,
+    RATE_LIMIT_BURST_TOKENS,
     RATE_LIMIT_REFILL_INTERVAL_MS,
+    BSD_MAX_CONCURRENT_REQUESTS,
     BSD_PAGE_LIMIT,
   },
 };

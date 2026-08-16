@@ -257,6 +257,53 @@ struct APIClient {
         )
     }
 
+    func fetchTeamResults(
+        teamName: String,
+        limit: Int = 20,
+        now: Date = Date()
+    ) async throws -> MatchResponse {
+        guard let normalizedTeamName = Self.normalizedTeamNames([teamName]).first else {
+            return MatchResponse(matches: [], lastUpdated: nil, isNotModified: false)
+        }
+
+        let queryItems = Self.teamResultsQueryItems(
+            teamName: normalizedTeamName,
+            limit: limit,
+            now: now
+        )
+        let request = try buildRequest(path: "matches", queryItems: queryItems)
+        let (data, http) = try await performRequest(request, operation: "team_results")
+        try validateSuccess(http, data: data, operation: "team_results")
+
+        return MatchResponse(
+            matches: Array(try decodeMatches(from: data, operation: "team_results").prefix(max(1, limit))),
+            lastUpdated: Self.lastUpdated(from: http),
+            isNotModified: false
+        )
+    }
+
+    static func teamResultsQueryItems(
+        teamName: String,
+        limit: Int = 20,
+        now: Date = Date()
+    ) -> [URLQueryItem] {
+        let trimmedTeamName = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let startDate = resultHistoryStartDate(from: now)
+        let pageSize = min(max(1, limit), 200)
+
+        return [
+            URLQueryItem(name: "start", value: dateFormatter.string(from: startDate)),
+            URLQueryItem(name: "end", value: dateFormatter.string(from: now)),
+            URLQueryItem(name: "team", value: trimmedTeamName),
+            URLQueryItem(name: "mode", value: MatchesViewMode.results.rawValue),
+            URLQueryItem(name: "sort", value: MatchesViewMode.results.sortOrder),
+            URLQueryItem(name: "filter_mode", value: "intersection"),
+            URLQueryItem(name: "page", value: "1"),
+            URLQueryItem(name: "page_size", value: String(pageSize)),
+            URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
+        ]
+    }
+
     func fetchFixtureBrowseMatches(
         on date: String,
         preferences: PreferencesSnapshot,
@@ -534,7 +581,10 @@ struct APIClient {
         return try JSONDecoder().decode(PlayerDetails.self, from: data)
     }
 
-    func fetchMatchStates(matchIDs: [String]) async throws -> [String: MatchDetailsPayload] {
+    func fetchMatchStates(
+        matchIDs: [String],
+        summaryOnly: Bool = false
+    ) async throws -> [String: MatchDetailsPayload] {
         let normalizedIDs = Array(
             Set(matchIDs.compactMap { Self.normalizedMatchDetailsID($0) })
         ).sorted()
@@ -547,10 +597,11 @@ struct APIClient {
             let endIndex = min(startIndex + Self.matchStatesBatchLimit, normalizedIDs.count)
             let batch = Array(normalizedIDs[startIndex..<endIndex])
 
-            var request = try buildRequest(
-                path: "matches/states",
-                queryItems: [URLQueryItem(name: "time_zone", value: TimeZone.current.identifier)]
-            )
+            var queryItems = [URLQueryItem(name: "time_zone", value: TimeZone.current.identifier)]
+            if summaryOnly {
+                queryItems.append(URLQueryItem(name: "summary_only", value: "true"))
+            }
+            var request = try buildRequest(path: "matches/states", queryItems: queryItems)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(MatchStatesRequestBody(ids: batch))

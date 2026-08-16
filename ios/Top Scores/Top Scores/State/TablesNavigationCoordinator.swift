@@ -16,19 +16,21 @@ final class TablesNavigationCoordinator: ObservableObject {
 
     @Published private(set) var pendingTarget: Target?
 
-    // The tab the user was on when they tapped a league position chip, so
-    // TablesView can offer a small "Back to match" affordance. ContentView
+    // The tab the user was on when they requested a highlighted table row, so
+    // TablesView can offer a small contextual return affordance. ContentView
     // stashes this (before switching tabs) and consumes it again when the
     // user taps that affordance.
     @Published private(set) var returnTabIndex: Int?
-    // Incremented when the user taps "Back to match" — ContentView observes
+    @Published private(set) var returnTitle = "Back to match"
+    // Incremented when the user taps the return affordance — ContentView observes
     // this (rather than returnTabIndex directly) so it fires even if the
     // return tab index is unchanged from last time.
     @Published private(set) var returnRequestToken: Int = 0
 
     private init() {}
 
-    func navigate(leagueID: String, teamName: String) {
+    func navigate(leagueID: String, teamName: String, returnTitle: String = "Back to match") {
+        self.returnTitle = returnTitle
         pendingTarget = Target(leagueID: leagueID, teamName: teamName)
     }
 
@@ -42,11 +44,14 @@ final class TablesNavigationCoordinator: ObservableObject {
     }
 
     func consumeReturnTabIndex() -> Int? {
-        defer { returnTabIndex = nil }
+        defer {
+            returnTabIndex = nil
+            returnTitle = "Back to match"
+        }
         return returnTabIndex
     }
 
-    func requestReturnToMatch() {
+    func requestReturn() {
         returnRequestToken += 1
     }
 }

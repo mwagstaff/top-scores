@@ -167,7 +167,7 @@ struct MatchVarEvent: Codable, Hashable, Sendable {
 }
 
 struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
-    let number: Int
+    let number: Int?
     let name: String
     let idPlayer: String?
     let positionCategory: String?
@@ -183,7 +183,8 @@ struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
             return idPlayer
         }
 
-        return "\(number)|\(normalizedNameKey)"
+        let numberKey = number.map { String($0) } ?? "unknown"
+        return "\(numberKey)|\(normalizedNameKey)"
     }
 
     var normalizedNameKey: String {
@@ -191,7 +192,7 @@ struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
     }
 
     init(
-        number: Int,
+        number: Int?,
         name: String,
         idPlayer: String? = nil,
         positionCategory: String?,
@@ -515,6 +516,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let homeShortName: String?
     let awayShortName: String?
     let league: String
+    let leagueId: String?
     let leagueSubcategory: String?
     let competitionWeight: Double?
     let detailsURL: String?
@@ -552,6 +554,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         homeShortName: String? = nil,
         awayShortName: String? = nil,
         league: String,
+        leagueId: String? = nil,
         leagueSubcategory: String? = nil,
         competitionWeight: Double? = nil,
         detailsURL: String? = nil,
@@ -588,6 +591,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.homeShortName = homeShortName
         self.awayShortName = awayShortName
         self.league = league
+        self.leagueId = leagueId
         self.leagueSubcategory = leagueSubcategory
         self.competitionWeight = competitionWeight
         self.detailsURL = detailsURL
@@ -821,6 +825,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             homeShortName: homeShortName,
             awayShortName: awayShortName,
             league: league,
+            leagueId: leagueId,
             leagueSubcategory: leagueSubcategory,
             competitionWeight: competitionWeight,
             detailsURL: detailsURL,
@@ -861,6 +866,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             homeShortName: homeShortName,
             awayShortName: awayShortName,
             league: league,
+            leagueId: leagueId,
             leagueSubcategory: leagueSubcategory,
             competitionWeight: competitionWeight,
             detailsURL: detailsURL,
@@ -901,6 +907,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
         awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
         league = try container.decode(String.self, forKey: .league)
+        leagueId = try container.decodeIfPresent(String.self, forKey: .leagueId)
         leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
         competitionWeight = try container.decodeIfPresent(Double.self, forKey: .competitionWeight)
         detailsURL = try container.decodeIfPresent(String.self, forKey: .detailsURL)
@@ -942,6 +949,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case homeShortName = "home_short_name"
         case awayShortName = "away_short_name"
         case league
+        case leagueId = "league_id"
         case leagueSubcategory = "league_subcategory"
         case competitionWeight = "competition_weight"
         case detailsURL = "details_url"
@@ -981,6 +989,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(homeShortName, forKey: .homeShortName)
         try container.encodeIfPresent(awayShortName, forKey: .awayShortName)
         try container.encode(league, forKey: .league)
+        try container.encodeIfPresent(leagueId, forKey: .leagueId)
         try container.encodeIfPresent(leagueSubcategory, forKey: .leagueSubcategory)
         try container.encodeIfPresent(competitionWeight, forKey: .competitionWeight)
         try container.encodeIfPresent(detailsURL, forKey: .detailsURL)
@@ -1017,6 +1026,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         lhs.homeShortName == rhs.homeShortName &&
         lhs.awayShortName == rhs.awayShortName &&
         lhs.league == rhs.league &&
+        lhs.leagueId == rhs.leagueId &&
         lhs.leagueSubcategory == rhs.leagueSubcategory &&
         lhs.competitionWeight == rhs.competitionWeight &&
         lhs.detailsURL == rhs.detailsURL &&
@@ -1084,6 +1094,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             homeShortName: details.homeShortName ?? homeShortName,
             awayShortName: details.awayShortName ?? awayShortName,
             league: details.league ?? league,
+            leagueId: leagueId,
             leagueSubcategory: leagueSubcategory,
             competitionWeight: competitionWeight,
             detailsURL: details.detailsURL ?? detailsURL,
@@ -1109,6 +1120,50 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             awayVarEvents: details.awayVarEvents,
             teamLineups: details.teamLineups ?? teamLineups,
             penaltyResult: details.penaltyResult ?? penaltyResult,
+            isTestMatch: isTestMatch
+        )
+    }
+
+    func withLiveState(_ details: MatchDetailsPayload) -> Match {
+        let refreshed = withDetails(details)
+        guard refreshed != self else { return self }
+
+        return Match(
+            date: refreshed.date,
+            time: refreshed.time,
+            homeTeam: refreshed.homeTeam,
+            awayTeam: refreshed.awayTeam,
+            homeTeamId: refreshed.homeTeamId,
+            awayTeamId: refreshed.awayTeamId,
+            homeShortName: refreshed.homeShortName,
+            awayShortName: refreshed.awayShortName,
+            league: refreshed.league,
+            leagueId: refreshed.leagueId,
+            leagueSubcategory: refreshed.leagueSubcategory,
+            competitionWeight: refreshed.competitionWeight,
+            detailsURL: refreshed.detailsURL,
+            matchDetailsID: refreshed.matchDetailsID,
+            hasBbcSource: refreshed.hasBbcSourceValue,
+            tvChannels: refreshed.tvChannels,
+            homeScore: refreshed.homeScore,
+            awayScore: refreshed.awayScore,
+            aggregateHomeScore: refreshed.aggregateHomeScore,
+            aggregateAwayScore: refreshed.aggregateAwayScore,
+            firstLegHomeScore: refreshed.firstLegHomeScore,
+            firstLegAwayScore: refreshed.firstLegAwayScore,
+            scoreStatus: refreshed.scoreStatus,
+            homeGoalScorers: homeGoalScorers,
+            awayGoalScorers: awayGoalScorers,
+            homeAssists: homeAssists,
+            awayAssists: awayAssists,
+            homeYellowCards: homeYellowCards,
+            awayYellowCards: awayYellowCards,
+            homeRedCards: homeRedCards,
+            awayRedCards: awayRedCards,
+            homeVarEvents: homeVarEvents,
+            awayVarEvents: awayVarEvents,
+            teamLineups: teamLineups,
+            penaltyResult: refreshed.penaltyResult,
             isTestMatch: isTestMatch
         )
     }

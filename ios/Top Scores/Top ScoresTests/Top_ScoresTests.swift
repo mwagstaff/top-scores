@@ -369,6 +369,64 @@ struct Top_ScoresTests {
         #expect(selected == ["la-liga"])
     }
 
+    @Test func fixtureBrowserAutoRefresh_usesLiveAndPendingTodayCadences() {
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.timeZone = .current
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        timeFormatter.timeZone = .current
+        timeFormatter.dateFormat = "HH:mm"
+        let now = Date()
+        let today = dateFormatter.string(from: now)
+        let currentTime = timeFormatter.string(from: now)
+
+        let live = makeMatch(
+            date: today,
+            time: currentTime,
+            homeScore: 1,
+            awayScore: 0,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "84"
+        )
+        let upcoming = makeMatch(
+            date: today,
+            time: currentTime,
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: nil
+        )
+        let finished = makeMatch(
+            date: today,
+            time: currentTime,
+            homeScore: 2,
+            awayScore: 0,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "FT"
+        )
+
+        #expect(FixtureBrowseAutoRefreshPolicy.intervalSeconds(
+            selectedDateKey: today,
+            todayKey: today,
+            matches: [live]
+        ) == FixtureBrowseAutoRefreshPolicy.liveIntervalSeconds)
+        #expect(FixtureBrowseAutoRefreshPolicy.intervalSeconds(
+            selectedDateKey: today,
+            todayKey: today,
+            matches: [upcoming]
+        ) == FixtureBrowseAutoRefreshPolicy.pendingTodayIntervalSeconds)
+        #expect(FixtureBrowseAutoRefreshPolicy.intervalSeconds(
+            selectedDateKey: today,
+            todayKey: today,
+            matches: [finished]
+        ) == nil)
+    }
+
     @Test func fixtureBrowserSelection_showsOnlyDatesForSelectedCompetitions() {
         let days = [
             FixtureCalendarDay(
@@ -899,6 +957,37 @@ struct Top_ScoresTests {
         #expect(match.displayLeague == "FIFA World Cup 2026: Final")
     }
 
+    @Test func matchDetailsDecodesSubstitutionPlayersWithoutShirtNumbers() throws {
+        let data = Data("""
+        {
+          "id": "213528",
+          "home_goal_scorers": [
+            { "player": "J. Guridi", "goal_times": ["52'"] }
+          ],
+          "team_lineups": {
+            "home": {
+              "starting_lineup": [],
+              "substitutes": [],
+              "substitutions": [
+                {
+                  "minute": "46'",
+                  "player_off": { "number": null, "name": "I. Romero" },
+                  "player_on": { "number": null, "name": "R. Ure" }
+                }
+              ]
+            }
+          }
+        }
+        """.utf8)
+
+        let details = try JSONDecoder().decode(MatchDetailsPayload.self, from: data)
+        let substitution = try #require(details.teamLineups?.home?.substitutions.first)
+
+        #expect(details.homeGoalScorers.first?.player == "J. Guridi")
+        #expect(substitution.playerOff.number == nil)
+        #expect(substitution.playerOn.number == nil)
+    }
+
     @Test func withDetails_preservesFinishedStatusWhenDetailsRegressToLiveMinute() async throws {
         let match = makeMatch(
             homeScore: 2,
@@ -929,6 +1018,45 @@ struct Top_ScoresTests {
         )
 
         #expect(updated.scoreStatus == "HT")
+    }
+
+    @Test func withLiveState_updatesScoreWithoutDiscardingExistingIncidents() throws {
+        let scorer = MatchGoalScorer(player: "A. Forward", goalTimes: ["12'"])
+        let match = Match(
+            date: "2026-02-24",
+            time: "17:45",
+            homeTeam: "Atletico Madrid",
+            awayTeam: "Club Brugge",
+            league: "UEFA Champions League",
+            matchDetailsID: "c8r1zve354lt",
+            tvChannels: [],
+            homeScore: 1,
+            awayScore: 0,
+            scoreStatus: "75",
+            homeGoalScorers: [scorer]
+        )
+        let data = Data("""
+        {
+          "id": "c8r1zve354lt",
+          "date": "2026-02-24",
+          "time": "17:45",
+          "league": "UEFA Champions League",
+          "home_team": "Atletico Madrid",
+          "away_team": "Club Brugge",
+          "home_score": 2,
+          "away_score": 0,
+          "score_status": "84",
+          "in_progress": true
+        }
+        """.utf8)
+        let state = try JSONDecoder().decode(MatchDetailsPayload.self, from: data)
+
+        let updated = match.withLiveState(state)
+
+        #expect(updated.homeScore == 2)
+        #expect(updated.awayScore == 0)
+        #expect(updated.scoreStatus == "84")
+        #expect(updated.homeGoalScorers == [scorer])
     }
 
     @Test func compactFixtureLayout_keepsKickoffOnTrailingEdgeForUpcomingMatchWithUnknownStatus() async throws {

@@ -874,7 +874,7 @@ private struct MatchDetailScoreboardHero: View {
             }
 
             HStack(alignment: .center, spacing: 14) {
-                teamColumn(
+                teamLink(
                     name: match.displayHomeTeam,
                     fullName: match.homeTeam,
                     teamId: match.homeTeamId,
@@ -898,7 +898,7 @@ private struct MatchDetailScoreboardHero: View {
                 }
                 .frame(maxWidth: 134)
 
-                teamColumn(
+                teamLink(
                     name: match.displayAwayTeam,
                     fullName: match.awayTeam,
                     teamId: match.awayTeamId,
@@ -931,6 +931,38 @@ private struct MatchDetailScoreboardHero: View {
         .shadow(color: Color.black.opacity(0.18), radius: 22, x: 0, y: 12)
     }
 
+    private func teamLink(
+        name: String,
+        fullName: String,
+        teamId: String? = nil,
+        alternateNames: [String]
+    ) -> some View {
+        NavigationLink {
+            TeamDetailsView(
+                context: TeamDetailsContext(
+                    teamID: teamId,
+                    teamName: fullName,
+                    displayName: name,
+                    alternateNames: alternateNames,
+                    originatingLeagueID: match.leagueId,
+                    originatingLeagueName: match.league,
+                    originatingMatch: match
+                )
+            )
+        } label: {
+            teamColumn(
+                name: name,
+                fullName: fullName,
+                teamId: teamId,
+                alternateNames: alternateNames
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(fullName)
+        .accessibilityHint("View team details")
+    }
+
     private func teamColumn(name: String, fullName: String, teamId: String? = nil, alternateNames: [String]) -> some View {
         VStack(spacing: 10) {
             Group {
@@ -954,6 +986,13 @@ private struct MatchDetailScoreboardHero: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .minimumScaleFactor(0.72)
+
+            HStack(spacing: 4) {
+                Text("Team details")
+                Image(systemName: "chevron.right")
+            }
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.72))
         }
         .frame(maxWidth: .infinity)
     }
@@ -2145,7 +2184,12 @@ private struct MatchLineupHalfView: View {
                 if leftScore != rightScore {
                     return leftScore < rightScore
                 }
-                return left.number < right.number
+                let leftNumber = left.number ?? Int.max
+                let rightNumber = right.number ?? Int.max
+                if leftNumber != rightNumber {
+                    return leftNumber < rightNumber
+                }
+                return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
             }
     }
 
@@ -2439,7 +2483,12 @@ private struct MatchLineupSubstitutesTable: View {
 
     private var rows: [MatchLineupSubstituteRow] {
         lineup.substitutes.map { substitute in
-            let substitution = lineup.substitutions.first { $0.playerOn.number == substitute.number }
+            let substitution = lineup.substitutions.first {
+                guard let playerOnNumber = $0.playerOn.number,
+                      let substituteNumber = substitute.number
+                else { return false }
+                return playerOnNumber == substituteNumber
+            }
             return MatchLineupSubstituteRow(
                 player: substitute,
                 substitution: substitution,
@@ -2461,7 +2510,7 @@ private struct MatchLineupSubstitutesTable: View {
             VStack(spacing: 0) {
                 ForEach(rows) { row in
                     HStack(alignment: .top, spacing: 8) {
-                        Text("\(row.player.number)")
+                        Text(row.player.number.map { String($0) } ?? "–")
                             .font(.system(size: 11, weight: .black, design: .rounded))
                             .foregroundStyle(Color.white.opacity(0.96))
                             .frame(width: 18, alignment: .leading)
@@ -3069,7 +3118,8 @@ private struct MatchLineupEventLookup {
             return nameMatch
         }
 
-        let numberMatches = substitutions.filter { $0.playerOff.number == player.number }
+        guard let playerNumber = player.number else { return nil }
+        let numberMatches = substitutions.filter { $0.playerOff.number == playerNumber }
         return numberMatches.count == 1 ? numberMatches[0] : nil
     }
 }

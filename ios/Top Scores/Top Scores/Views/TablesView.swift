@@ -50,7 +50,7 @@ struct TablesView: View {
                 VStack(spacing: 0) {
                     headerView
                     if navigationCoordinator.returnTabIndex != nil {
-                        backToMatchButton
+                        backToOriginButton
                     }
                     contentView
                 }
@@ -305,15 +305,15 @@ struct TablesView: View {
 
     // Small, unobtrusive pinned bar (sits between the header and the scroll
     // content, so it never scrolls away) offering a quick way back to the
-    // match detail screen the user arrived from via a league position chip.
-    private var backToMatchButton: some View {
+    // screen that initiated the highlighted-table navigation.
+    private var backToOriginButton: some View {
         Button {
-            navigationCoordinator.requestReturnToMatch()
+            navigationCoordinator.requestReturn()
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.left")
                     .font(.caption.weight(.semibold))
-                Text("Back to match")
+                Text(navigationCoordinator.returnTitle)
                     .font(.subheadline.weight(.medium))
                 Spacer(minLength: 0)
             }

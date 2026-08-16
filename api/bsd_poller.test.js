@@ -8,6 +8,9 @@ const {
   computeLiveLeagueIds,
   filterAllowlistedLiveEvents,
   diffSettledLeagueIds,
+  diffSettledEventIds,
+  mapWithConcurrency,
+  selectPrematchLineupEventIds,
   millisecondsUntilNextLondonTime,
   buildMetricsText,
 } = __private;
@@ -50,6 +53,55 @@ test("diffSettledLeagueIds: empty when nothing settled or nothing was live", () 
   assert.deepEqual(diffSettledLeagueIds(new Set(["27"]), new Set(["27"])), []);
 });
 
+test("diffSettledEventIds: returns events that disappeared from the live list", () => {
+  assert.deepEqual(diffSettledEventIds([101, "102", 103], ["101", 103]), ["102"]);
+  assert.deepEqual(diffSettledEventIds([], [101]), []);
+});
+
+test("mapWithConcurrency preserves result order and bounds active workers", async () => {
+  let active = 0;
+  let maxActive = 0;
+  const results = await mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, value % 2));
+    active -= 1;
+    return value * 10;
+  });
+  assert.deepEqual(results, [10, 20, 30, 40, 50]);
+  assert.equal(maxActive, 2);
+});
+
+test("selectPrematchLineupEventIds applies adaptive cadence and skips confirmed/live events", () => {
+  const nowMs = Date.parse("2026-08-15T12:00:00Z");
+  const events = [
+    { _id: "early-due", status: "notstarted", event_date: "2026-08-15T13:30:00Z" },
+    { _id: "early-fresh", status: "notstarted", event_date: "2026-08-15T13:30:00Z" },
+    { _id: "close-due", status: "notstarted", event_date: "2026-08-15T12:30:00Z" },
+    { _id: "confirmed", status: "notstarted", event_date: "2026-08-15T12:20:00Z" },
+    { _id: "already-live", status: "notstarted", event_date: "2026-08-15T12:10:00Z" },
+    { _id: "too-far", status: "notstarted", event_date: "2026-08-15T15:00:00Z" },
+  ];
+  const lineupDocs = [
+    { _id: "early-fresh", updated_at: "2026-08-15T11:58:00Z" },
+    { _id: "close-due", updated_at: "2026-08-15T11:58:00Z" },
+    { _id: "confirmed", lineup_status: "confirmed", updated_at: "2026-08-15T11:00:00Z" },
+  ];
+  const ids = selectPrematchLineupEventIds(
+    events,
+    lineupDocs,
+    ["already-live"],
+    nowMs,
+    {
+      windowMs: 2 * 60 * 60 * 1000,
+      closeWindowMs: 45 * 60 * 1000,
+      earlyPollMs: 5 * 60 * 1000,
+      closePollMs: 60 * 1000,
+    }
+  );
+  assert.deepEqual(ids, ["early-due", "close-due"]);
+});
+
 test("millisecondsUntilNextLondonTime: returns a positive delay within 24h", () => {
   const delayMs = millisecondsUntilNextLondonTime(0, 15);
   assert.ok(delayMs > 0);
@@ -67,6 +119,9 @@ test("buildMetricsText exposes BSD poller metrics", () => {
   assert.match(text, /top_scores_runtime_info\{[^}]*runtime="bsd_poller"[^}]*\}\s+1\b/);
   assert.match(text, /^# HELP top_scores_bsd_http_requests_total\b/m);
   assert.match(text, /^# HELP top_scores_bsd_http_timeouts_total\b/m);
+  assert.match(text, /^top_scores_bsd_live_events \d+$/m);
+  assert.match(text, /^top_scores_bsd_rate_limiter_queue_depth \d+$/m);
+  assert.match(text, /^top_scores_bsd_request_concurrency\{kind="max"\} \d+$/m);
   assert.match(text, /^top_scores_process_resident_memory_bytes \d+$/m);
   assert.match(text, /^top_scores_process_heap_bytes\{kind="used"\} \d+$/m);
 });

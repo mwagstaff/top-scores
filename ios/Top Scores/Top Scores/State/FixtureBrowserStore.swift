@@ -17,6 +17,23 @@ struct FixtureBrowseCachePayload: Codable, Sendable {
     var buckets: [String: FixtureBrowseBucket]
 }
 
+private actor FixtureBrowseCacheWriter {
+    static let shared = FixtureBrowseCacheWriter()
+
+    private var latestWriteRequest = UInt64.zero
+
+    func write(
+        _ payload: FixtureBrowseCachePayload,
+        to cacheURL: URL,
+        requestedAt: UInt64
+    ) {
+        guard requestedAt >= latestWriteRequest else { return }
+        latestWriteRequest = requestedAt
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        try? data.write(to: cacheURL, options: .atomic)
+    }
+}
+
 nonisolated enum FixtureBrowseSelectionResolver {
     enum DateJumpDirection: Equatable, Sendable {
         case earlier
@@ -319,6 +336,43 @@ nonisolated enum FixtureBrowseSelectionResolver {
     }
 }
 
+nonisolated enum FixtureBrowseAutoRefreshPolicy {
+    static let liveIntervalSeconds = 15
+    static let pendingTodayIntervalSeconds = 60
+    static let preMatchStateWindow: TimeInterval = 30 * 60
+    static let postKickoffStateWindow: TimeInterval = 6 * 60 * 60
+
+    static func intervalSeconds(
+        selectedDateKey: String?,
+        todayKey: String,
+        matches: [Match]
+    ) -> Int? {
+        guard !matches.isEmpty else { return nil }
+        if matches.contains(where: \.isInProgress) {
+            return liveIntervalSeconds
+        }
+        guard selectedDateKey == todayKey,
+              matches.contains(where: { !$0.isFinished && !$0.isPostponed }) else {
+            return nil
+        }
+        return pendingTodayIntervalSeconds
+    }
+
+    static func stateRefreshMatches(in matches: [Match], now: Date = Date()) -> [Match] {
+        matches.filter { match in
+            guard match.matchDetailsID != nil else { return false }
+            if match.isInProgress { return true }
+            guard !match.isFinished,
+                  !match.isPostponed,
+                  let kickoff = match.dateTime else {
+                return false
+            }
+            return kickoff.timeIntervalSince(now) <= preMatchStateWindow &&
+                now.timeIntervalSince(kickoff) <= postKickoffStateWindow
+        }
+    }
+}
+
 @MainActor
 final class FixtureBrowserStore: ObservableObject {
     @Published private(set) var competitions: [CompetitionCatalogEntry] = []
@@ -339,6 +393,9 @@ final class FixtureBrowserStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var selectedDateTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
+    private var autoRefreshTask: Task<Void, Never>?
+    private var autoRefreshTaskID = UUID()
+    private var isAutoRefreshEnabled = false
     private var refreshRequestID = UUID()
     private var selectedDateRequestID = UUID()
     private var prefetchRequestID = UUID()
@@ -356,6 +413,7 @@ final class FixtureBrowserStore: ObservableObject {
             refreshTask?.cancel()
             selectedDateTask?.cancel()
             prefetchTask?.cancel()
+            isLoadingSelectedDate = false
             refreshRequestID = UUID()
             selectedDateRequestID = UUID()
             prefetchRequestID = UUID()
@@ -381,7 +439,10 @@ final class FixtureBrowserStore: ObservableObject {
             return
         }
         selectedDateKey = dateKey
-        visibleMatches = cachedMatchesByDate[dateKey] ?? []
+        let cachedMatches = cachedMatchesByDate[dateKey] ?? []
+        if visibleMatches != cachedMatches {
+            visibleMatches = cachedMatches
+        }
         loadSelectedDateIfNeeded(force: false)
     }
 
@@ -426,9 +487,28 @@ final class FixtureBrowserStore: ObservableObject {
         selectDate(targetDateKey)
     }
 
-    func refresh() {
+    func refresh() async {
         refreshCatalogAndCalendar(force: true)
         loadSelectedDateIfNeeded(force: true)
+        let catalogTask = refreshTask
+        let dateTask = selectedDateTask
+        await catalogTask?.value
+        await dateTask?.value
+        await selectedDateTask?.value
+    }
+
+    func setAutoRefreshEnabled(_ enabled: Bool, refreshImmediately: Bool = false) {
+        let changed = isAutoRefreshEnabled != enabled
+        isAutoRefreshEnabled = enabled
+        guard enabled else {
+            autoRefreshTask?.cancel()
+            autoRefreshTask = nil
+            autoRefreshTaskID = UUID()
+            return
+        }
+        if changed || refreshImmediately || autoRefreshTask == nil {
+            startAutoRefreshLoop(refreshImmediately: refreshImmediately)
+        }
     }
 
     private func refreshCatalogAndCalendar(force: Bool) {
@@ -486,7 +566,9 @@ final class FixtureBrowserStore: ObservableObject {
             selectionApplied: cachePayload?.calendarSelectionApplied == true,
             showAllMatches: snapshot.fixtureViewShowsAll
         )
-        availableDays = days
+        if availableDays != days {
+            availableDays = days
+        }
         rebuildCachedMatchesByDate()
 
         if keepCurrentDate,
@@ -512,6 +594,7 @@ final class FixtureBrowserStore: ObservableObject {
         guard let snapshot,
               let baseURL = URL(string: snapshot.apiBaseURL),
               let dateKey = selectedDateKey else {
+            isLoadingSelectedDate = false
             return
         }
         let topMatchesOnly = snapshot.fixtureAllMajorMatchesEnabled
@@ -530,7 +613,7 @@ final class FixtureBrowserStore: ObservableObject {
         selectedDateTask?.cancel()
         let requestID = UUID()
         selectedDateRequestID = requestID
-        isLoadingSelectedDate = visibleMatches.isEmpty
+        isLoadingSelectedDate = true
         selectedDateTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -586,13 +669,128 @@ final class FixtureBrowserStore: ObservableObject {
         topMatchesOnly: Bool
     ) -> Bool {
         guard let snapshot else { return false }
-        visibleMatches = filteredMatches(in: bucket, snapshot: snapshot, topMatchesOnly: topMatchesOnly)
-        cachedMatchesByDate[dateKey] = visibleMatches
-        lastUpdated = bucket.lastUpdated ?? bucket.fetchedAt
-        isLoadingSelectedDate = false
-        guard visibleMatches.isEmpty, selectedDateKey == dateKey else { return false }
+        let filtered = filteredMatches(in: bucket, snapshot: snapshot, topMatchesOnly: topMatchesOnly)
+        if visibleMatches != filtered {
+            visibleMatches = filtered
+        }
+        if cachedMatchesByDate[dateKey] != filtered {
+            cachedMatchesByDate[dateKey] = filtered
+        }
+        let updatedAt = bucket.lastUpdated ?? bucket.fetchedAt
+        if lastUpdated != updatedAt {
+            lastUpdated = updatedAt
+        }
+        if isLoadingSelectedDate {
+            isLoadingSelectedDate = false
+        }
+        if isAutoRefreshEnabled, autoRefreshTask == nil {
+            startAutoRefreshLoop(refreshImmediately: false)
+        }
+        guard filtered.isEmpty, selectedDateKey == dateKey else { return false }
         removeUnavailableDate(dateKey)
         return true
+    }
+
+    private func startAutoRefreshLoop(refreshImmediately: Bool) {
+        autoRefreshTask?.cancel()
+        let taskID = UUID()
+        autoRefreshTaskID = taskID
+        autoRefreshTask = Task { [weak self] in
+            var shouldRefresh = refreshImmediately
+            defer {
+                if let self, self.autoRefreshTaskID == taskID {
+                    self.autoRefreshTask = nil
+                }
+            }
+
+            while !Task.isCancelled {
+                guard let self, self.isAutoRefreshEnabled else { return }
+                if self.selectedDateTask != nil || self.visibleMatches.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    continue
+                }
+
+                guard let intervalSeconds = FixtureBrowseAutoRefreshPolicy.intervalSeconds(
+                    selectedDateKey: self.selectedDateKey,
+                    todayKey: Self.dateFormatter.string(from: Date()),
+                    matches: self.visibleMatches
+                ) else {
+                    return
+                }
+
+                if shouldRefresh {
+                    await self.refreshSelectedDateStates()
+                    shouldRefresh = false
+                    continue
+                }
+
+                do {
+                    try await Task.sleep(for: .seconds(intervalSeconds))
+                } catch {
+                    return
+                }
+                shouldRefresh = true
+            }
+        }
+    }
+
+    private func refreshSelectedDateStates() async {
+        guard isAutoRefreshEnabled,
+              let snapshot,
+              let baseURL = URL(string: snapshot.apiBaseURL),
+              let dateKey = selectedDateKey else {
+            return
+        }
+        let topMatchesOnly = snapshot.fixtureAllMajorMatchesEnabled
+        let bucketKey = Self.bucketKey(dateKey: dateKey, topMatchesOnly: topMatchesOnly)
+        guard let bucket = cachePayload?.buckets[bucketKey] else { return }
+
+        let refreshMatches = FixtureBrowseAutoRefreshPolicy.stateRefreshMatches(
+            in: visibleMatches
+        )
+        let matchIDs = refreshMatches.compactMap(\.matchDetailsID)
+        guard !matchIDs.isEmpty else { return }
+
+        do {
+            let statesByID = try await APIClient(baseURL: baseURL).fetchMatchStates(
+                matchIDs: matchIDs,
+                summaryOnly: true
+            )
+            guard !Task.isCancelled,
+                  isAutoRefreshEnabled,
+                  selectedDateKey == dateKey,
+                  self.snapshot?.fixtureAllMajorMatchesEnabled == topMatchesOnly,
+                  !statesByID.isEmpty else {
+                return
+            }
+
+            let refreshedMatches = bucket.matches.map { match in
+                guard let matchDetailsID = match.matchDetailsID,
+                      let state = statesByID[matchDetailsID] else {
+                    return match
+                }
+                return match.withLiveState(state)
+            }
+            let matchesChanged = refreshedMatches != bucket.matches
+            let refreshedBucket = FixtureBrowseBucket(
+                matches: refreshedMatches,
+                fetchedAt: Date(),
+                lastUpdated: Date()
+            )
+            store(bucket: refreshedBucket, for: bucketKey)
+            _ = publish(
+                bucket: refreshedBucket,
+                dateKey: dateKey,
+                topMatchesOnly: topMatchesOnly
+            )
+            if matchesChanged {
+                persistCache()
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            NSLog("[FixtureBrowserStore] live state refresh failed: %@", String(describing: error))
+        }
     }
 
     private func removeUnavailableDate(_ dateKey: String) {
@@ -665,7 +863,7 @@ final class FixtureBrowserStore: ObservableObject {
                     )
                     if filtered.isEmpty {
                         removeUnavailableDate(targetDate)
-                    } else {
+                    } else if cachedMatchesByDate[targetDate] != filtered {
                         cachedMatchesByDate[targetDate] = filtered
                     }
                 }
@@ -693,7 +891,9 @@ final class FixtureBrowserStore: ObservableObject {
 
     private func rebuildCachedMatchesByDate() {
         guard let snapshot, let payload = cachePayload else {
-            cachedMatchesByDate = [:]
+            if !cachedMatchesByDate.isEmpty {
+                cachedMatchesByDate = [:]
+            }
             return
         }
         let topMatchesOnly = snapshot.fixtureAllMajorMatchesEnabled
@@ -711,7 +911,9 @@ final class FixtureBrowserStore: ObservableObject {
                 rebuilt[dateKey] = filtered
             }
         }
-        cachedMatchesByDate = rebuilt
+        if cachedMatchesByDate != rebuilt {
+            cachedMatchesByDate = rebuilt
+        }
     }
 
     private func filteredMatches(
@@ -736,10 +938,14 @@ final class FixtureBrowserStore: ObservableObject {
 
     private func persistCache() {
         guard let payload = cachePayload else { return }
-        guard let data = try? JSONEncoder().encode(payload) else { return }
         let cacheURL = Self.cacheURL
+        let requestedAt = DispatchTime.now().uptimeNanoseconds
         Task.detached(priority: .utility) {
-            try? data.write(to: cacheURL, options: .atomic)
+            await FixtureBrowseCacheWriter.shared.write(
+                payload,
+                to: cacheURL,
+                requestedAt: requestedAt
+            )
         }
     }
 

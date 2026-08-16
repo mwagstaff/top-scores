@@ -19,26 +19,21 @@ struct ContentView: View {
     @State private var fantasyTabShouldPulse = false
     @ObservedObject private var tablesNavigationCoordinator = TablesNavigationCoordinator.shared
 
-    private static let tablesTabIndex = 2
+    private static let tablesTabIndex = 1
 
     var body: some View {
         TabView(selection: $selectedTab) {
             MatchesView(mode: .fixtures, isSelected: selectedTab == 0, store: matchesStore)
                 .tabItem {
-                    Label("Fixtures", systemImage: "calendar")
+                    Label("Scores", systemImage: "soccerball")
                 }
                 .tag(0)
-            MatchesView(mode: .results, isSelected: selectedTab == 1, store: matchesStore)
-                .tabItem {
-                    Label("Results", systemImage: "clock.arrow.circlepath")
-                }
-                .tag(1)
             TablesView()
                 .tabItem {
                     Label("Tables", systemImage: "tablecells")
                 }
-                .tag(2)
-            FantasyView(isSelected: selectedTab == 3)
+                .tag(1)
+            FantasyView(isSelected: selectedTab == 2)
                 .tabItem {
                     Label {
                         Text("FPL")
@@ -55,12 +50,12 @@ struct ContentView: View {
                     }
                 }
                 .badge(fantasyTabBadge)
-                .tag(3)
+                .tag(2)
             ProfileView()
                 .tabItem {
                     Label("Profile", systemImage: "person.crop.circle")
                 }
-                .tag(4)
+                .tag(3)
         }
         .background(Color(.systemBackground))
         .onChange(of: tablesNavigationCoordinator.pendingTarget) { _, newValue in
@@ -144,12 +139,12 @@ private struct ContentLifecycleCoordinator: View {
                 }
             }
             .onChange(of: preferences.snapshot) { _, _ in
-                guard selectedTab != 0, selectedTab != 1 else { return }
+                guard selectedTab != 0 else { return }
                 let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
                 matchesStore.prepareForPreferencesChange(snapshot, publishVisibleState: false)
             }
             .onChange(of: preferences.showAllMatches) { _, newValue in
-                guard selectedTab != 0, selectedTab != 1 else { return }
+                guard selectedTab != 0 else { return }
                 let snapshot = newValue ? preferences.unfilteredSnapshot : preferences.snapshot
                 matchesStore.prepareForPreferencesChange(snapshot, publishVisibleState: false)
             }

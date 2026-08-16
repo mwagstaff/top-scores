@@ -32,6 +32,8 @@ const BSD_LEAGUE_NAME_MAP = {
   "27": "FIFA World Cup 2026",
   "1": "Premier League",
   "12": "Championship",
+  "86": "League One",
+  "87": "League Two",
   "13": "Scottish Premiership",
   "5": "Bundesliga",
   "4": "Serie A",
@@ -63,6 +65,8 @@ const BSD_LEAGUE_NAME_MAP = {
 const BSD_FIXTURE_SEEDED_STANDINGS_TEAM_COUNTS = new Map([
   ["1", 20],  // Premier League
   ["12", 24], // Championship
+  ["86", 24], // League One
+  ["87", 24], // League Two
   ["13", 12], // Scottish Premiership
   ["5", 18],  // Bundesliga
   ["4", 20],  // Serie A

@@ -566,7 +566,9 @@ final class MatchesStore: ObservableObject {
         _ matches: [Match],
         preferences: PreferencesSnapshot
     ) -> [MatchDay] {
-        MatchGroupingEngine.groupMatches(
+        let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowseGrouping")
+        defer { PerformanceSignposter.matches.endInterval("FixtureBrowseGrouping", signpost) }
+        return MatchGroupingEngine.groupMatches(
             matches,
             sortOrder: preferences.matchGroupSortOrder,
             ratingLookup: teamRatingLookup,
@@ -591,6 +593,7 @@ final class MatchesStore: ObservableObject {
     }
 
     private var refreshTimer: Timer?
+    private var fixtureBrowserOwnsLiveRefresh = false
     private var currentSnapshot: PreferencesSnapshot?
     private var activeMode: MatchesViewMode = .fixtures
     private var visibleModes: Set<MatchesViewMode> = []
@@ -788,6 +791,14 @@ final class MatchesStore: ObservableObject {
         }
     }
 
+    func setFixtureBrowserLiveRefreshActive(_ isActive: Bool) {
+        guard fixtureBrowserOwnsLiveRefresh != isActive else { return }
+        fixtureBrowserOwnsLiveRefresh = isActive
+        if let snapshot = currentSnapshot {
+            updateRefreshTimer(using: snapshot, matches: combinedLoadedMatches())
+        }
+    }
+
     func refresh(preferences: PreferencesSnapshot) async {
         await refresh(preferences: preferences, mode: activeMode)
     }
@@ -803,7 +814,9 @@ final class MatchesStore: ObservableObject {
 
     func refreshOnForeground(preferences: PreferencesSnapshot) {
         let snapshot = resolvedSnapshot(for: preferences)
-        startRefreshTask(preferences: snapshot, mode: activeMode, reason: "foreground")
+        if activeMode != .fixtures || !fixtureBrowserOwnsLiveRefresh {
+            startRefreshTask(preferences: snapshot, mode: activeMode, reason: "foreground")
+        }
         if activeMode != .results {
             startRefreshTask(preferences: snapshot, mode: .results, reason: "foreground_results_prefetch")
         }
@@ -2029,6 +2042,9 @@ final class MatchesStore: ObservableObject {
 
     private func effectiveRefreshInterval(for snapshot: PreferencesSnapshot, matches: [Match]) -> TimeInterval {
         let configuredInterval = TimeInterval(max(1, snapshot.refreshIntervalMinutes) * 60)
+        if activeMode == .fixtures, fixtureBrowserOwnsLiveRefresh {
+            return configuredInterval
+        }
         guard matches.contains(where: \.isInProgress) else { return configuredInterval }
         return min(configuredInterval, liveRefreshInterval)
     }
@@ -2044,7 +2060,9 @@ final class MatchesStore: ObservableObject {
         let timer = Timer(timeInterval: boundedInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let snapshot = self.currentSnapshot else { return }
-                await self.refresh(preferences: snapshot, mode: self.activeMode)
+                if self.activeMode != .fixtures || !self.fixtureBrowserOwnsLiveRefresh {
+                    await self.refresh(preferences: snapshot, mode: self.activeMode)
+                }
                 if self.activeMode != .results {
                     await self.refresh(preferences: snapshot, mode: .results)
                 }
