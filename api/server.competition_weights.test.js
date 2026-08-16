@@ -128,6 +128,48 @@ test("fixture-view filters support competitions, teams and exact rivalry pairing
   assert.equal(matchPassesFixtureViewOptions(klassiker, ["rivalry:der-klassiker"]), true);
 });
 
+test("fixture-view filters support arbitrary catalogue teams outside their competition", () => {
+  const context = {
+    teamCatalogByID: new Map([
+      [
+        "norwich-city",
+        {
+          id: "norwich-city",
+          name: "Norwich City",
+          aliases: ["Norwich"],
+          source_team_ids: ["501"],
+        },
+      ],
+    ]),
+  };
+  const watfordCupMatch = {
+    league: "FA Cup",
+    home_team: "Watford",
+    away_team: "Arsenal",
+  };
+  const norwichCupMatch = {
+    league: "FA Cup",
+    home_team: "Norwich",
+    home_team_id: "501",
+    away_team: "Chelsea",
+  };
+  const unrelatedChampionshipMatch = {
+    league: "Championship",
+    home_team: "Coventry City",
+    away_team: "Stoke City",
+  };
+
+  assert.equal(matchPassesFixtureViewOptions(watfordCupMatch, ["team:watford"]), true);
+  assert.equal(
+    matchPassesFixtureViewOptions(norwichCupMatch, ["team:norwich-city"], context),
+    true
+  );
+  assert.equal(
+    matchPassesFixtureViewOptions(unrelatedChampionshipMatch, ["team:watford"]),
+    false
+  );
+});
+
 test("BSD schedules are supplemented only with explicitly unsupported TSDB competitions", () => {
   const matches = [
     {

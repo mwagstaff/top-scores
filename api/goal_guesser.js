@@ -656,6 +656,18 @@ async function sendPlunkEmail({ to, subject, body, idempotencyKey }) {
   return true;
 }
 
+function testEmailMessage(requestedAt = new Date()) {
+  const sentAt = new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(requestedAt);
+  return {
+    subject: "Goal Guesser delivery check",
+    body: `<h1>Goal Guesser delivery check</h1><p>This is a test message requested from the Goal Guesser admin area.</p><p>If you can read this, Goal Guesser can deliver account and matchday notifications to this address.</p><p>Sent ${escapeHtml(sentAt)} UTC.</p>`,
+  };
+}
+
 function makeSession(playerId) {
   const id = crypto.randomUUID();
   const secret = randomSecret();
@@ -1876,6 +1888,28 @@ function registerGoalGuesserRoutes(app, options = {}) {
     return res.json({ moderation_status: "rejected" });
   }));
 
+  app.post(`${PREFIX}/admin/email/test`, authenticate, requireAdmin, async (req, res) => {
+    const player = req.goalGuesser.player;
+    const recipient = normalizeEmail(player.email);
+    if (!recipient) return res.status(400).json({ error: "Your verified admin email address is unavailable" });
+    if (rateLimitsEnabled && !allowRate(`admin-email-test:${player._id}`, 5, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: "Wait a few minutes before sending another test email" });
+    }
+    const message = testEmailMessage();
+    try {
+      const delivered = await sendPlunkEmail({
+        to: recipient,
+        ...message,
+        idempotencyKey: `goal-guesser-admin-email-test-${player._id}-${crypto.randomUUID()}`,
+      });
+      if (!delivered) return res.status(503).json({ error: "Goal Guesser email delivery is not configured" });
+      return res.status(202).json({ message: `Test email sent to ${recipient}.`, sent_to: recipient });
+    } catch (error) {
+      console.warn(JSON.stringify({ event: "goal_guesser_admin_test_email_failed", player_id: player._id, message: error.message }));
+      return res.status(502).json({ error: "The test email could not be sent. Try again shortly." });
+    }
+  });
+
   app.get(`${PREFIX}/admin/leagues`, authenticate, requireAdmin, async (req, res) => {
     const db = req.goalGuesser.db;
     const leagues = await db.collection("gg_leagues").find({}).sort({ created_at: -1 }).toArray();
@@ -2123,6 +2157,7 @@ module.exports = {
     liveFixtureQuery,
     fixtureScopeQuery,
     sendPlunkEmail,
+    testEmailMessage,
     teamLogoReference,
     resolvedTeamLogoReference,
     publicLeagueMember,

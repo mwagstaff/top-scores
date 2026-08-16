@@ -2966,18 +2966,37 @@ function evaluateUserNotificationDecision(user, match, event) {
 
   const notificationAllMajorMatchesEnabled = prefs.notificationAllMajorMatchesEnabled;
   if (notificationAllMajorMatchesEnabled === false) {
-    const selectedLeagues = Array.isArray(prefs.selectedNotificationLeagues)
-      ? prefs.selectedNotificationLeagues
-      : [];
-    if (
-      selectedLeagues.length === 0 ||
-      !liveActivityPreferenceLeagueMatchesSelectedLeagues(selectedLeagues, match.league)
-    ) {
-      return {
-        shouldNotify: false,
-        reason: "league_filtered_by_notification_preferences",
-        delayMinutes,
-      };
+    const notificationViewOptionIDs = Array.isArray(prefs.selectedNotificationViewOptionIDs)
+      ? prefs.selectedNotificationViewOptionIDs
+      : null;
+    if (notificationViewOptionIDs) {
+      const matchesNotificationSelection = notificationFixtureCategoryFilter
+        ? notificationFixtureCategoryFilter(user, match, {
+          mode: "notification_custom",
+          optionIDs: notificationViewOptionIDs,
+        })
+        : false;
+      if (!matchesNotificationSelection) {
+        return {
+          shouldNotify: false,
+          reason: "notification_view_filtered_out",
+          delayMinutes,
+        };
+      }
+    } else {
+      const selectedLeagues = Array.isArray(prefs.selectedNotificationLeagues)
+        ? prefs.selectedNotificationLeagues
+        : [];
+      if (
+        selectedLeagues.length === 0 ||
+        !liveActivityPreferenceLeagueMatchesSelectedLeagues(selectedLeagues, match.league)
+      ) {
+        return {
+          shouldNotify: false,
+          reason: "league_filtered_by_notification_preferences",
+          delayMinutes,
+        };
+      }
     }
   } else if (notificationAllMajorMatchesEnabled === true) {
     const isMajorMatch = notificationFixtureCategoryFilter

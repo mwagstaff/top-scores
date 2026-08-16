@@ -6157,6 +6157,44 @@ test("evaluateUserNotificationDecision uses its own competition selection when A
   });
 });
 
+test("evaluateUserNotificationDecision uses custom competition and team view options", () => {
+  __testHooks.setNotificationFixtureCategoryFilter((_user, match, context) => {
+    assert.equal(context.mode, "notification_custom");
+    assert.deepEqual(context.optionIDs, ["competition:fa-cup", "team:watford"]);
+    return match.home_team === "Watford";
+  });
+  try {
+    const decision = __testHooks.evaluateUserNotificationDecision(
+      {
+        apnsToken: "apns-token",
+        preferences: {
+          notificationsEnabled: true,
+          notificationDelayMinutes: 0,
+          notificationEventTypes: ["goal"],
+          notificationMatchesFixturesEnabled: false,
+          notificationAllMajorMatchesEnabled: false,
+          selectedNotificationViewOptionIDs: ["competition:fa-cup", "team:watford"],
+        },
+      },
+      {
+        home_team: "Watford",
+        away_team: "Norwich City",
+        league: "Championship",
+        tv_channels: [],
+      },
+      { type: "goal" }
+    );
+
+    assert.deepStrictEqual(decision, {
+      shouldNotify: true,
+      reason: "eligible",
+      delayMinutes: 0,
+    });
+  } finally {
+    __testHooks.setNotificationFixtureCategoryFilter(null);
+  }
+});
+
 test("evaluateUserNotificationDecision mirrors the Fixtures view when configured", () => {
   __testHooks.setNotificationFixtureCategoryFilter((_user, match, context) => {
     assert.equal(context.mode, "fixtures");

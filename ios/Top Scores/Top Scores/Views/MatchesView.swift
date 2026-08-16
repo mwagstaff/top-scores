@@ -78,6 +78,9 @@ struct MatchesView: View {
     @State private var fixturePickerDraftOptionIDs: Set<String>?
     @State private var fixturePickerBaselineOptionIDs: Set<String>?
     @State private var isFixtureFavouritesMenuExpanded = false
+    @State private var isFixtureViewSettingsExpanded = false
+    @State private var isTeamPickerPresented = false
+    @State private var teamPickerDraftTeamIDs: Set<String> = []
 
     init(mode: MatchesViewMode, isSelected: Bool = true, store: MatchesStore) {
         self.mode = mode
@@ -221,7 +224,8 @@ struct MatchesView: View {
             previousDateKey: fixtureBrowser.adjacentDateKey(offset: -1),
             nextDateKey: fixtureBrowser.adjacentDateKey(offset: 1),
             isSwipeEnabled: expandedFixtureRegionID == nil &&
-                !isFixtureFavouritesMenuExpanded,
+                !isFixtureFavouritesMenuExpanded &&
+                !isFixtureViewSettingsExpanded,
             reduceMotion: accessibilityReduceMotion,
             onSelect: fixtureBrowser.selectDate
         ) {
@@ -250,6 +254,18 @@ struct MatchesView: View {
             if mode == .fixtures && navigationMatch == nil {
                 fixtureCompetitionDock
             }
+        }
+        .sheet(isPresented: $isTeamPickerPresented) {
+            NavigationStack {
+                TeamSelectionView(
+                    apiBaseURL: preferences.apiBaseURL,
+                    selectedTeamIDs: $teamPickerDraftTeamIDs,
+                    onCancel: { isTeamPickerPresented = false },
+                    onDone: commitTeamPicker
+                )
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .onAppear {
             refreshVisibleGroupedDays(from: sourceGroupedDays)
@@ -394,6 +410,8 @@ struct MatchesView: View {
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
         isFixtureFavouritesMenuExpanded = false
+        isFixtureViewSettingsExpanded = false
+        isTeamPickerPresented = false
         groupedSideEffectsTask?.cancel()
     }
 
@@ -944,7 +962,13 @@ struct MatchesView: View {
             .padding(.top, 6)
             .padding(.bottom, 8)
             .overlay(alignment: .bottom) {
-                if isFixtureFavouritesMenuExpanded {
+                if isFixtureViewSettingsExpanded {
+                    fixtureViewSettingsPanel
+                        .padding(.horizontal, 12)
+                        .offset(y: -70)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(2)
+                } else if isFixtureFavouritesMenuExpanded {
                     fixtureFavouritesPanel
                         .padding(.horizontal, 12)
                         .offset(y: -70)
@@ -960,6 +984,7 @@ struct MatchesView: View {
             }
             .animation(.easeOut(duration: 0.2), value: expandedFixtureRegionID)
             .animation(.easeOut(duration: 0.2), value: isFixtureFavouritesMenuExpanded)
+            .animation(.easeOut(duration: 0.2), value: isFixtureViewSettingsExpanded)
             .zIndex(20)
     }
 
@@ -970,6 +995,7 @@ struct MatchesView: View {
                 fixturePickerBaselineOptionIDs = nil
                 withAnimation(.easeOut(duration: 0.2)) {
                     expandedFixtureRegionID = nil
+                    isFixtureViewSettingsExpanded = false
                     isFixtureFavouritesMenuExpanded.toggle()
                 }
             } label: {
@@ -984,12 +1010,11 @@ struct MatchesView: View {
                 )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("View options")
+            .accessibilityLabel("Match filters")
             .accessibilityValue(fixtureViewOptionsAccessibilityValue)
-            .accessibilityHint("Shows fixture view options")
+            .accessibilityHint("Choose which matches to show")
 
-            Divider()
-                .frame(height: 28)
+            fixtureDockSeparator
 
             if fixtureBrowser.competitions.isEmpty {
                 HStack(spacing: 8) {
@@ -1029,6 +1054,41 @@ struct MatchesView: View {
                             )
                             .accessibilityHint("Shows \(region.name) competitions")
                         }
+
+                        fixtureDockSeparator
+
+                        Button(action: presentTeamPicker) {
+                            FixtureRegionDockButton(
+                                systemSymbol: "shield.fill",
+                                regionID: nil,
+                                isSelected: selectedFixtureTeamIDs.count > 0,
+                                isExpanded: isTeamPickerPresented,
+                                systemSymbolSize: 30,
+                                systemSymbolTint: Color(red: 0.18, green: 0.55, blue: 0.88)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Teams")
+                        .accessibilityValue(
+                            selectedFixtureTeamIDs.isEmpty
+                                ? "No teams selected"
+                                : "\(selectedFixtureTeamIDs.count) teams selected"
+                        )
+                        .accessibilityHint("Choose individual teams to include")
+
+                        fixtureDockSeparator
+
+                        Button(action: toggleFixtureViewSettings) {
+                            FixtureRegionDockButton(
+                                systemSymbol: "gearshape.fill",
+                                regionID: nil,
+                                isSelected: false,
+                                isExpanded: isFixtureViewSettingsExpanded
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("View settings")
+                        .accessibilityHint("Adjust predictions or save the current view")
                     }
                 }
                 .scrollIndicators(.hidden)
@@ -1053,9 +1113,9 @@ struct MatchesView: View {
                     .frame(width: 36, height: 36)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("View options")
+                    Text("Match filters")
                         .font(.headline)
-                    Text("Choose which fixtures to show")
+                    Text("Choose which matches to show")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1071,18 +1131,16 @@ struct MatchesView: View {
                         .background(Color(.tertiarySystemFill), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Close view options")
+                .accessibilityLabel("Close match filters")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
 
             Divider()
 
-            fixturePredictionsActionRow
-            Divider().padding(.leading, 58)
             fixtureFavouritesActionRow(
                 title: "Show favourites",
-                subtitle: "Use your saved competition view",
+                subtitle: "Use your saved match view",
                 icon: .system("star.fill"),
                 isSelected: preferences.fixtureAllMajorMatchesEnabled,
                 action: selectFavourites
@@ -1103,10 +1161,55 @@ struct MatchesView: View {
                 isSelected: isPremierLeagueMatchesPresetSelected,
                 action: selectPremierLeagueMatches
             )
+        }
+        .frame(maxWidth: 420)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color(.separator).opacity(0.55), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 24, y: 10)
+    }
+
+    private var fixtureViewSettingsPanel: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 36, height: 36)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("View settings")
+                        .font(.headline)
+                    Text("Adjust and save this match view")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        isFixtureViewSettingsExpanded = false
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Color(.tertiarySystemFill), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close view settings")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            fixturePredictionsActionRow
             Divider().padding(.leading, 58)
             fixtureFavouritesActionRow(
                 title: "Save current view as favourites",
-                subtitle: "Replace your saved competition view",
+                subtitle: "Replace your saved match view",
                 icon: .system("square.and.arrow.down"),
                 isSelected: false,
                 action: saveCurrentFixtureViewAsFavourites
@@ -1119,6 +1222,14 @@ struct MatchesView: View {
                 .stroke(Color(.separator).opacity(0.55), lineWidth: 0.5)
         }
         .shadow(color: .black.opacity(0.28), radius: 24, y: 10)
+    }
+
+    private var fixtureDockSeparator: some View {
+        Rectangle()
+            .fill(Color(.separator).opacity(0.7))
+            .frame(width: 0.5, height: 28)
+            .padding(.horizontal, 2)
+            .accessibilityHidden(true)
     }
 
     private var fixturePredictionsActionRow: some View {
@@ -1453,8 +1564,51 @@ struct MatchesView: View {
         fixturePickerBaselineOptionIDs = initialOptionIDs
         withAnimation(.easeOut(duration: 0.2)) {
             isFixtureFavouritesMenuExpanded = false
+            isFixtureViewSettingsExpanded = false
             expandedFixtureRegionID = regionID
         }
+    }
+
+    private func toggleFixtureViewSettings() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            expandedFixtureRegionID = nil
+            isFixtureFavouritesMenuExpanded = false
+            isFixtureViewSettingsExpanded.toggle()
+        }
+    }
+
+    private var selectedFixtureTeamIDs: Set<String> {
+        Set(effectiveFixtureViewOptionIDs.compactMap(FixtureViewOptionID.teamStableID))
+    }
+
+    private func presentTeamPicker() {
+        teamPickerDraftTeamIDs = selectedFixtureTeamIDs
+        withAnimation(.easeOut(duration: 0.2)) {
+            expandedFixtureRegionID = nil
+            isFixtureFavouritesMenuExpanded = false
+            isFixtureViewSettingsExpanded = false
+        }
+        isTeamPickerPresented = true
+    }
+
+    private func commitTeamPicker() {
+        let nonTeamOptionIDs = effectiveFixtureViewOptionIDs.filter {
+            FixtureViewOptionID.teamStableID(from: $0) == nil
+        }
+        let updatedOptionIDs = nonTeamOptionIDs.union(
+            teamPickerDraftTeamIDs.map(FixtureViewOptionID.team)
+        )
+        isTeamPickerPresented = false
+        guard !updatedOptionIDs.isEmpty else {
+            selectFavourites()
+            return
+        }
+        applyCustomFixtureView(updatedOptionIDs)
+        AppMetricsService.shared.fireActivity(
+            "fixture_teams_changed",
+            screen: mode.rawValue,
+            apiBaseURL: preferences.apiBaseURL
+        )
     }
 
     private func dismissFixtureCompetitionPicker() {
@@ -1497,6 +1651,7 @@ struct MatchesView: View {
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
+            isFixtureViewSettingsExpanded = false
         }
         preferences.fixtureAllMajorMatchesEnabled = true
         preferences.competitionFilterEnabled = false
@@ -1522,6 +1677,7 @@ struct MatchesView: View {
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
+            isFixtureViewSettingsExpanded = false
         }
         preferences.fixtureAllMajorMatchesEnabled = false
         preferences.competitionFilterEnabled = false
@@ -1554,6 +1710,7 @@ struct MatchesView: View {
         preferences.favouriteFixtureViewOptionIDs = optionIDs
         withAnimation(.easeOut(duration: 0.2)) {
             isFixtureFavouritesMenuExpanded = false
+            isFixtureViewSettingsExpanded = false
         }
         toastMessage = "Current view saved as favourites"
         withAnimation { showToast = true }
@@ -1574,6 +1731,7 @@ struct MatchesView: View {
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
+            isFixtureViewSettingsExpanded = false
         }
         applyCustomFixtureView(FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs)
         AppMetricsService.shared.fireActivity(
@@ -1826,6 +1984,8 @@ private struct FixtureRegionDockButton: View {
     let isSelected: Bool
     let isExpanded: Bool
     var showsFantasyPremierLeagueIcon = false
+    var systemSymbolSize: CGFloat = 22
+    var systemSymbolTint: Color?
 
     var body: some View {
         ZStack {
@@ -1837,8 +1997,10 @@ private struct FixtureRegionDockButton: View {
                     .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
             } else if let systemSymbol {
                 Image(systemName: systemSymbol)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                    .font(.system(size: systemSymbolSize, weight: .semibold))
+                    .foregroundStyle(
+                        isSelected ? Color.accentColor : systemSymbolTint ?? Color.primary
+                    )
             } else if let regionID {
                 FixtureRegionFlagIcon(regionID: regionID, size: 30)
                     .padding(2)

@@ -115,6 +115,18 @@ struct PreferencesView: View {
                                         selectedLeagues: preferences.selectedNotificationLeagues,
                                         selectionChanged: toggleNotificationLeague
                                     )
+
+                                    NavigationLink {
+                                        TeamSelectionView(
+                                            apiBaseURL: preferences.apiBaseURL,
+                                            selectedTeamIDs: notificationTeamSelectionBinding
+                                        )
+                                    } label: {
+                                        LabeledContent("Teams") {
+                                            Text(notificationTeamSelectionCountText)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -279,6 +291,7 @@ struct PreferencesView: View {
                             preferences.selectedLeagues = []
                             preferences.selectedFixtureViewOptionIDs = []
                             preferences.selectedNotificationLeagues = []
+                            preferences.selectedNotificationViewOptionIDs = []
                             preferences.selectedChannels = []
                         }
                     }
@@ -854,12 +867,42 @@ struct PreferencesView: View {
     }
 
     private func toggleNotificationLeague(_ league: String) {
+        let optionID = viewModel.competitionCatalog
+            .first { $0.allNames.contains(where: { $0.localizedCaseInsensitiveCompare(league) == .orderedSame }) }
+            .map { FixtureViewOptionID.competition($0.stableID) }
+            ?? FixtureViewOptionID.legacyCompetition(league)
         if let index = preferences.selectedNotificationLeagues.firstIndex(of: league) {
             preferences.selectedNotificationLeagues.remove(at: index)
+            preferences.selectedNotificationViewOptionIDs.removeAll { $0 == optionID }
         } else {
             preferences.selectedNotificationLeagues.append(league)
             preferences.selectedNotificationLeagues.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            if !preferences.selectedNotificationViewOptionIDs.contains(optionID) {
+                preferences.selectedNotificationViewOptionIDs.append(optionID)
+                preferences.selectedNotificationViewOptionIDs.sort()
+            }
         }
+    }
+
+    private var notificationTeamSelectionBinding: Binding<Set<String>> {
+        Binding(
+            get: {
+                Set(preferences.selectedNotificationViewOptionIDs.compactMap(FixtureViewOptionID.teamStableID))
+            },
+            set: { teamIDs in
+                let nonTeamIDs = preferences.selectedNotificationViewOptionIDs.filter {
+                    FixtureViewOptionID.teamStableID(from: $0) == nil
+                }
+                preferences.selectedNotificationViewOptionIDs = (
+                    nonTeamIDs + teamIDs.map(FixtureViewOptionID.team)
+                ).sorted()
+            }
+        )
+    }
+
+    private var notificationTeamSelectionCountText: String {
+        let count = notificationTeamSelectionBinding.wrappedValue.count
+        return count == 1 ? "1 selected" : "\(count) selected"
     }
 
     private func toggleChannel(_ channel: String) {

@@ -322,6 +322,7 @@ actor PreferencesSyncService {
                 "selectedFixtureViewOptionIDs": snapshot.selectedFixtureViewOptionIDs,
                 "favouriteFixtureViewOptionIDs": snapshot.favouriteFixtureViewOptionIDs,
                 "selectedNotificationLeagues": snapshot.selectedNotificationLeagues,
+                "selectedNotificationViewOptionIDs": snapshot.selectedNotificationViewOptionIDs,
                 "selectedChannels": snapshot.selectedChannels,
                 "fixtureAllMajorMatchesEnabled": snapshot.fixtureAllMajorMatchesEnabled,
                 "notificationMatchesFixturesEnabled": snapshot.notificationMatchesFixturesEnabled,
@@ -498,6 +499,11 @@ actor PreferencesSyncService {
                 selectedNotificationLeagues: preferences["selectedNotificationLeagues"] as? [String]
                     ?? preferences["selectedLeagues"] as? [String]
                     ?? PreferencesStore.defaultSelectedNotificationLeagues,
+                selectedNotificationViewOptionIDs: preferences["selectedNotificationViewOptionIDs"] as? [String]
+                    ?? (preferences["selectedNotificationLeagues"] as? [String]
+                        ?? preferences["selectedLeagues"] as? [String]
+                        ?? PreferencesStore.defaultSelectedNotificationLeagues)
+                        .map(FixtureViewOptionID.legacyCompetition),
                 selectedChannels: preferences["selectedChannels"] as? [String] ?? PreferencesStore.defaultSelectedChannels,
                 fixtureAllMajorMatchesEnabled: preferences["fixtureAllMajorMatchesEnabled"] as? Bool
                     ?? (
@@ -506,6 +512,8 @@ actor PreferencesSyncService {
                         (preferences["homeNationsFilterEnabled"] as? Bool ?? PreferencesStore.defaultHomeNationsFilterEnabled) &&
                         (preferences["majorTournamentsFilterEnabled"] as? Bool ?? PreferencesStore.defaultMajorTournamentsFilterEnabled)
                     ),
+                notificationMatchesFixturesEnabled: preferences["notificationMatchesFixturesEnabled"] as? Bool
+                    ?? PreferencesStore.defaultNotificationMatchesFixturesEnabled,
                 notificationAllMajorMatchesEnabled: preferences["notificationAllMajorMatchesEnabled"] as? Bool
                     ?? (
                         (preferences["notificationPremierLeagueTeamsOnly"] as? Bool ?? PreferencesStore.defaultNotificationPremierLeagueTeamsOnly) &&

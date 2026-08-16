@@ -165,7 +165,9 @@ struct APIClient {
         queryItems.append(URLQueryItem(name: "page", value: String(max(1, page))))
         queryItems.append(URLQueryItem(name: "page_size", value: String(max(1, pageSize))))
         queryItems.append(URLQueryItem(name: "time_zone", value: TimeZone.current.identifier))
-        if includePreferenceFilters && mode == .fixtures {
+        let usesFixtureViewOptions = includePreferenceFilters &&
+            !preferences.effectiveFixtureViewOptionIDs.isEmpty
+        if usesFixtureViewOptions {
             preferences.effectiveFixtureViewOptionIDs.forEach {
                 queryItems.append(URLQueryItem(name: "view_option", value: $0))
             }
@@ -177,16 +179,20 @@ struct APIClient {
                 queryItems.append(URLQueryItem(name: "channel", value: $0))
             }
         }
-        if includePreferenceFilters && mode != .fixtures && preferences.effectiveEnglishPremierLeagueTeamsOnly {
+        if includePreferenceFilters && !usesFixtureViewOptions &&
+            mode != .fixtures && preferences.effectiveEnglishPremierLeagueTeamsOnly {
             queryItems.append(URLQueryItem(name: "epl_only", value: "true"))
         }
-        if includePreferenceFilters && mode != .fixtures && preferences.effectiveMajorUEFAClubGamesEnabled {
+        if includePreferenceFilters && !usesFixtureViewOptions &&
+            mode != .fixtures && preferences.effectiveMajorUEFAClubGamesEnabled {
             queryItems.append(URLQueryItem(name: "major_uefa", value: "true"))
         }
-        if includePreferenceFilters && mode != .fixtures && preferences.effectiveHomeNationsFilterEnabled {
+        if includePreferenceFilters && !usesFixtureViewOptions &&
+            mode != .fixtures && preferences.effectiveHomeNationsFilterEnabled {
             queryItems.append(URLQueryItem(name: "home_nations", value: "true"))
         }
-        if includePreferenceFilters && mode != .fixtures && preferences.effectiveMajorTournamentsFilterEnabled {
+        if includePreferenceFilters && !usesFixtureViewOptions &&
+            mode != .fixtures && preferences.effectiveMajorTournamentsFilterEnabled {
             queryItems.append(URLQueryItem(name: "major_tournaments", value: "true"))
         }
         return queryItems
@@ -386,6 +392,34 @@ struct APIClient {
         let (data, http) = try await performRequest(request, operation: "competition_catalog")
         try validateSuccess(http, data: data, operation: "competition_catalog")
         return try JSONDecoder().decode(CompetitionCatalogResponse.self, from: data)
+    }
+
+    func fetchTeamCatalog(
+        query: String? = nil,
+        competitionID: String? = nil,
+        ids: [String] = [],
+        limit: Int = 50,
+        offset: Int = 0
+    ) async throws -> TeamCatalogResponse {
+        var queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "limit", value: String(min(max(1, limit), 200))),
+            URLQueryItem(name: "offset", value: String(max(0, offset))),
+        ]
+        if let query = query?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty {
+            queryItems.append(URLQueryItem(name: "q", value: query))
+        }
+        if let competitionID = competitionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !competitionID.isEmpty {
+            queryItems.append(URLQueryItem(name: "competition_id", value: competitionID))
+        }
+        ids.forEach { id in
+            queryItems.append(URLQueryItem(name: "id", value: id))
+        }
+
+        let request = try buildRequest(path: "teams/catalog", queryItems: queryItems)
+        let (data, http) = try await performRequest(request, operation: "team_catalog")
+        try validateSuccess(http, data: data, operation: "team_catalog")
+        return try JSONDecoder().decode(TeamCatalogResponse.self, from: data)
     }
 
     func fetchCacheState() async throws -> CacheGenerationSnapshot {
@@ -1168,6 +1202,46 @@ struct CompetitionCatalogResponse: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case competitions
+        case updatedAt = "updated_at"
+        case source
+    }
+}
+
+struct TeamCatalogEntry: Codable, Hashable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let aliases: [String]
+    let competitionIDs: [String]
+    let competitionNames: [String]
+    let sourceTeamIDs: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case aliases
+        case competitionIDs = "competition_ids"
+        case competitionNames = "competition_names"
+        case sourceTeamIDs = "source_team_ids"
+    }
+}
+
+struct TeamCatalogResponse: Codable, Hashable, Sendable {
+    let teams: [TeamCatalogEntry]
+    let count: Int
+    let totalCount: Int
+    let offset: Int
+    let limit: Int
+    let hasMore: Bool
+    let updatedAt: String?
+    let source: String?
+
+    enum CodingKeys: String, CodingKey {
+        case teams
+        case count
+        case totalCount = "total_count"
+        case offset
+        case limit
+        case hasMore = "has_more"
         case updatedAt = "updated_at"
         case source
     }

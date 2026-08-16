@@ -123,6 +123,11 @@ const {
   canonicalTeamName,
   buildFantasyShortNameMappings,
 } = require("./team_identity");
+const {
+  buildTeamCatalog,
+  buildTeamCatalogIndex,
+  filterTeamCatalog,
+} = require("./team_catalog");
 const fantasyScore = require("./fantasy_score");
 const { registerGoalGuesserRoutes } = require("./goal_guesser");
 const { registerGoalGuesserTestHarnessRoutes } = require("./goal_guesser_test_harness");
@@ -1007,6 +1012,9 @@ let cachedBsdMatches = [];
 let cachedBsdMatchesUpdatedAt = null;
 let bsdMatchesCacheBuiltMs = 0;
 let bsdMatchesRefreshInFlight = false;
+let cachedTeamCatalog = [];
+let cachedTeamCatalogIndex = new Map();
+let cachedTeamCatalogVersion = null;
 
 async function refreshBsdMatchesCache() {
   if (bsdMatchesRefreshInFlight) return;
@@ -1048,6 +1056,30 @@ async function getBsdMatchesForServing() {
     void refreshBsdMatchesCache();
   }
   return cachedBsdMatches;
+}
+
+function currentTeamCatalogSnapshot() {
+  const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
+  const version = [
+    cachedBsdMatchesUpdatedAt || "unknown",
+    cachedBsdMatches.length,
+    premierLeagueDataset.updated_at || "unknown",
+    premierLeagueDataset.items.length,
+  ].join(":");
+  if (cachedTeamCatalogVersion !== version) {
+    cachedTeamCatalog = buildTeamCatalog(cachedBsdMatches, buildCompetitionCatalog(), {
+      authoritativeCompetitionTeams: {
+        "premier-league": premierLeagueDataset.items,
+      },
+    });
+    cachedTeamCatalogIndex = buildTeamCatalogIndex(cachedTeamCatalog);
+    cachedTeamCatalogVersion = version;
+  }
+  return {
+    teams: cachedTeamCatalog,
+    byID: cachedTeamCatalogIndex,
+    updatedAt: cachedBsdMatchesUpdatedAt,
+  };
 }
 
 // BSD league tables (standings). The bsd_poller process keeps bsd_standings
@@ -15753,23 +15785,49 @@ const FIXTURE_VIEW_UEFA_TEAM_RULE_IDS = new Set([
 const TOP_UEFA_CLUB_ELO_RANK_CUTOFF = 40;
 const TOP_UEFA_CLUB_ELO_FALLBACK_SCORE = 1700;
 
-function fixtureViewTeamMatches(teamName, teamID, manualMappings = null) {
-  const aliases = FIXTURE_VIEW_TEAM_ALIASES[teamID] || [];
-  return aliases.some((alias) =>
-    teamMatchesSelectionAliasAware(teamName, alias, manualMappings)
-  );
+function fixtureViewTeamMatches(
+  teamName,
+  teamID,
+  manualMappings = null,
+  teamCatalogByID = null,
+  sourceTeamID = null
+) {
+  const catalogEntry = teamCatalogByID instanceof Map ? teamCatalogByID.get(teamID) : null;
+  if (
+    catalogEntry &&
+    sourceTeamID !== undefined &&
+    sourceTeamID !== null &&
+    Array.isArray(catalogEntry.source_team_ids) &&
+    catalogEntry.source_team_ids.includes(String(sourceTeamID))
+  ) {
+    return true;
+  }
+
+  const aliases = catalogEntry
+    ? [catalogEntry.name, ...(Array.isArray(catalogEntry.aliases) ? catalogEntry.aliases : [])]
+    : FIXTURE_VIEW_TEAM_ALIASES[teamID] || [];
+  if (
+    aliases.some((alias) =>
+      teamMatchesSelectionAliasAware(teamName, alias, manualMappings)
+    )
+  ) {
+    return true;
+  }
+
+  const teamKey = normalizeTeamIdentityName(canonicalTeamName(teamName)).replace(/[^a-z0-9]+/g, "-");
+  return Boolean(teamKey && teamKey === String(teamID || "").trim().toLowerCase());
 }
 
-function fixtureViewRivalryMatches(match, rivalryID, manualMappings = null) {
+function fixtureViewRivalryMatches(match, rivalryID, manualMappings = null, teamCatalogByID = null) {
   const teams = FIXTURE_VIEW_RIVALRIES[rivalryID];
   if (!match || !teams) return false;
   const [firstTeamID, secondTeamID] = teams;
   return (
-    fixtureViewTeamMatches(match.home_team, firstTeamID, manualMappings) &&
-    fixtureViewTeamMatches(match.away_team, secondTeamID, manualMappings)
+    fixtureViewTeamMatches(match.home_team, firstTeamID, manualMappings, teamCatalogByID, match.home_team_id) &&
+    fixtureViewTeamMatches(match.away_team, secondTeamID, manualMappings, teamCatalogByID, match.away_team_id)
   ) || (
-    fixtureViewTeamMatches(match.home_team, secondTeamID, manualMappings) &&
-    fixtureViewTeamMatches(match.away_team, firstTeamID, manualMappings)
+    fixtureViewTeamMatches(match.home_team, secondTeamID, manualMappings, teamCatalogByID, match.home_team_id) &&
+    fixtureViewTeamMatches(match.away_team, firstTeamID, manualMappings, teamCatalogByID, match.away_team_id)
   );
 }
 
@@ -15791,8 +15849,10 @@ function buildFixtureViewFilterContext(options = {}) {
     : currentPremierLeagueTeamsDatasetSnapshot().items;
   const clubEloIndex = buildClubEloCandidateIndex(clubEloTeams);
   const topClubByNormalizedName = new Map();
+  const teamCatalogSnapshot = options.teamCatalogSnapshot || currentTeamCatalogSnapshot();
   return {
     competitionCatalog: competitionCatalogLookup(),
+    teamCatalogByID: teamCatalogSnapshot.byID,
     manualMappings,
     isPremierLeagueTeam:
       options.isPremierLeagueTeam ||
@@ -15817,17 +15877,20 @@ function buildFixtureViewFilterContext(options = {}) {
 
 function currentFixtureViewFilterContext() {
   const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
+  const teamCatalogSnapshot = currentTeamCatalogSnapshot();
   const version = [
     clubEloLastUpdated || "unknown",
     cachedClubEloTeams.length,
     premierLeagueDataset.updated_at || "unknown",
     premierLeagueDataset.items.length,
+    cachedTeamCatalogVersion || "unknown",
   ].join(":");
   if (cachedFixtureViewFilterContext && cachedFixtureViewFilterContextVersion === version) {
     return cachedFixtureViewFilterContext;
   }
   cachedFixtureViewFilterContext = buildFixtureViewFilterContext({
     premierLeagueTeams: premierLeagueDataset.items,
+    teamCatalogSnapshot,
   });
   cachedFixtureViewFilterContextVersion = version;
   return cachedFixtureViewFilterContext;
@@ -15854,6 +15917,7 @@ function matchPassesFixtureViewOptions(match, optionIDs, context = {}) {
   const competition = catalog.get(normalizeCompetitionFilterName(match && match.league));
   const competitionID = competition ? competition.id : null;
   const manualMappings = context.manualMappings || null;
+  const teamCatalogByID = context.teamCatalogByID || null;
   const teamRuleIDs = normalizedOptionIDs.filter((optionID) =>
     FIXTURE_VIEW_UEFA_TEAM_RULE_IDS.has(optionID)
   );
@@ -15866,14 +15930,26 @@ function matchPassesFixtureViewOptions(match, optionIDs, context = {}) {
     }
     if (optionID.startsWith("team:")) {
       const teamID = optionID.slice("team:".length);
-      return fixtureViewTeamMatches(match.home_team, teamID, manualMappings) ||
-        fixtureViewTeamMatches(match.away_team, teamID, manualMappings);
+      return fixtureViewTeamMatches(
+        match.home_team,
+        teamID,
+        manualMappings,
+        teamCatalogByID,
+        match.home_team_id
+      ) || fixtureViewTeamMatches(
+        match.away_team,
+        teamID,
+        manualMappings,
+        teamCatalogByID,
+        match.away_team_id
+      );
     }
     if (optionID.startsWith("rivalry:")) {
       return fixtureViewRivalryMatches(
         match,
         optionID.slice("rivalry:".length),
-        manualMappings
+        manualMappings,
+        teamCatalogByID
       );
     }
     return false;
@@ -25279,6 +25355,55 @@ app.get(`${API_PREFIX}/competitions/weights`, async (_req, res) => {
   res.json(buildCompetitionWeightsPayload());
 });
 
+app.get(`${API_PREFIX}/teams/catalog`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    await getBsdMatchesForServing();
+    const snapshot = currentTeamCatalogSnapshot();
+    const query = String(req.query.q || "").replace(/\s+/g, " ").trim();
+    if (query && query.length < 2) {
+      res.status(400).json({ error: "Team search requires at least 2 characters." });
+      return;
+    }
+
+    const competitionID = String(req.query.competition_id || "").trim();
+    if (
+      competitionID &&
+      !buildCompetitionCatalog().some((competition) => competition.id === competitionID)
+    ) {
+      res.status(400).json({ error: "Unknown competition_id." });
+      return;
+    }
+
+    const ids = normalizeListParam(req.query.id);
+    const limit = parsePositiveInt(req.query.limit, 50, 1, 200);
+    const parsedOffset = Number.parseInt(String(req.query.offset || "0"), 10);
+    const offset = Number.isFinite(parsedOffset) ? Math.max(0, parsedOffset) : 0;
+    const filtered = filterTeamCatalog(snapshot.teams, {
+      query,
+      competitionID,
+      ids,
+    });
+    const teams = filtered.slice(offset, offset + limit);
+
+    setLastModifiedHeaders(res, snapshot.updatedAt);
+    res.set("X-Operational-Source", "bsd_match_projection");
+    res.status(200).json({
+      teams,
+      count: teams.length,
+      total_count: filtered.length,
+      offset,
+      limit,
+      has_more: offset + teams.length < filtered.length,
+      updated_at: snapshot.updatedAt || null,
+      source: "bsd_match_projection",
+    });
+  } catch (error) {
+    console.warn("Failed to serve /teams/catalog:", error.message || error);
+    res.status(500).json({ error: "Failed to load team catalogue." });
+  }
+});
+
 app.get(`${API_PREFIX}/players/:playerId`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const playerId = String(req.params.playerId || "").trim();
@@ -32810,6 +32935,14 @@ if (typeof matchMonitor.setNotificationFixtureCategoryFilter === "function") {
         majorTournaments: preferences.majorTournamentsFilterEnabled === true,
         premierLeagueTeams: currentPremierLeagueTeamsDatasetSnapshot().items,
       });
+    }
+
+    if (context.mode === "notification_custom") {
+      return matchPassesFixtureViewOptions(
+        match,
+        Array.isArray(context.optionIDs) ? context.optionIDs : [],
+        currentFixtureViewFilterContext()
+      );
     }
 
     return matchPassesCategoryFilters(match, {

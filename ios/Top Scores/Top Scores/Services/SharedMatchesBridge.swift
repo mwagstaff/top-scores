@@ -30,58 +30,88 @@ enum AppGroupConfig {
     nonisolated static let liveActivityDiagnosticsFileName = "live-activity-diagnostics.log"
 }
 
+struct WidgetSharedMatchTransfer: Codable, Equatable, Sendable {
+    let date: String
+    let time: String
+    let homeTeam: String
+    let awayTeam: String
+    let homeTeamId: String?
+    let awayTeamId: String?
+    let homeShortName: String?
+    let awayShortName: String?
+    let league: String
+    let leagueSubcategory: String?
+    let competitionWeight: Double?
+    let matchDetailsIDValue: String?
+    let tvChannels: [String]
+    let homeScore: Int?
+    let awayScore: Int?
+    let aggregateHomeScore: Int?
+    let aggregateAwayScore: Int?
+    let firstLegHomeScore: Int?
+    let firstLegAwayScore: Int?
+    let scoreStatus: String?
+    let penaltyResult: String?
+
+    nonisolated init(_ match: Match) {
+        date = match.date
+        time = match.time
+        homeTeam = match.homeTeam
+        awayTeam = match.awayTeam
+        homeTeamId = match.homeTeamId
+        awayTeamId = match.awayTeamId
+        homeShortName = match.homeShortName
+        awayShortName = match.awayShortName
+        league = match.league
+        leagueSubcategory = match.leagueSubcategory
+        competitionWeight = match.competitionWeight
+        matchDetailsIDValue = match.matchDetailsID
+        tvChannels = match.tvChannels.map(\.name)
+        homeScore = match.homeScore
+        awayScore = match.awayScore
+        aggregateHomeScore = match.aggregateHomeScore
+        aggregateAwayScore = match.aggregateAwayScore
+        firstLegHomeScore = match.firstLegHomeScore
+        firstLegAwayScore = match.firstLegAwayScore
+        scoreStatus = match.scoreStatus
+        penaltyResult = match.penaltyResult
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case date
+        case time
+        case homeTeam = "home_team"
+        case awayTeam = "away_team"
+        case homeTeamId = "home_team_id"
+        case awayTeamId = "away_team_id"
+        case homeShortName = "home_short_name"
+        case awayShortName = "away_short_name"
+        case league
+        case leagueSubcategory = "league_subcategory"
+        case competitionWeight = "competition_weight"
+        case matchDetailsIDValue = "match_details_id"
+        case tvChannels = "tv_channels"
+        case homeScore = "home_score"
+        case awayScore = "away_score"
+        case aggregateHomeScore = "aggregate_home_score"
+        case aggregateAwayScore = "aggregate_away_score"
+        case firstLegHomeScore = "first_leg_home_score"
+        case firstLegAwayScore = "first_leg_away_score"
+        case scoreStatus = "score_status"
+        case penaltyResult = "penalty_result"
+    }
+}
+
 struct SharedMatchesPayload: Codable, Equatable, Sendable {
     let snapshot: PreferencesSnapshot
-    let matches: [Match]
-    let unfilteredMatches: [Match]
+    let matches: [WidgetSharedMatchTransfer]
     let lastUpdated: Date?
     let generatedAt: Date
 
     nonisolated static func == (lhs: SharedMatchesPayload, rhs: SharedMatchesPayload) -> Bool {
         lhs.snapshot == rhs.snapshot &&
         lhs.matches == rhs.matches &&
-        lhs.unfilteredMatches == rhs.unfilteredMatches &&
         lhs.lastUpdated == rhs.lastUpdated
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case snapshot
-        case matches
-        case unfilteredMatches
-        case lastUpdated
-        case generatedAt
-    }
-
-    nonisolated init(
-        snapshot: PreferencesSnapshot,
-        matches: [Match],
-        unfilteredMatches: [Match],
-        lastUpdated: Date?,
-        generatedAt: Date
-    ) {
-        self.snapshot = snapshot
-        self.matches = matches
-        self.unfilteredMatches = unfilteredMatches
-        self.lastUpdated = lastUpdated
-        self.generatedAt = generatedAt
-    }
-
-    nonisolated init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        snapshot = try container.decode(PreferencesSnapshot.self, forKey: .snapshot)
-        matches = try container.decode([Match].self, forKey: .matches)
-        unfilteredMatches = try container.decode([Match].self, forKey: .unfilteredMatches)
-        lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated)
-        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
-    }
-
-    nonisolated func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(snapshot, forKey: .snapshot)
-        try container.encode(matches, forKey: .matches)
-        try container.encode(unfilteredMatches, forKey: .unfilteredMatches)
-        try container.encodeIfPresent(lastUpdated, forKey: .lastUpdated)
-        try container.encode(generatedAt, forKey: .generatedAt)
     }
 }
 
@@ -126,6 +156,26 @@ private struct WatchSharedMatchTransfer: Codable, Sendable {
         competitionWeight = match.competitionWeight
         matchDetailsIDValue = match.matchDetailsID
         tvChannels = match.tvChannels.map(\.name)
+        homeScore = match.homeScore
+        awayScore = match.awayScore
+        scoreStatus = match.scoreStatus
+        penaltyResult = match.penaltyResult
+    }
+
+    init(_ match: WidgetSharedMatchTransfer) {
+        date = match.date
+        time = match.time
+        homeTeam = match.homeTeam
+        awayTeam = match.awayTeam
+        homeTeamId = match.homeTeamId
+        awayTeamId = match.awayTeamId
+        homeShortName = match.homeShortName
+        awayShortName = match.awayShortName
+        league = match.league
+        leagueSubcategory = match.leagueSubcategory
+        competitionWeight = match.competitionWeight
+        matchDetailsIDValue = match.matchDetailsIDValue
+        tvChannels = match.tvChannels
         homeScore = match.homeScore
         awayScore = match.awayScore
         scoreStatus = match.scoreStatus
@@ -209,6 +259,7 @@ enum SharedMatchesBridge {
     // Throttles widget reloads / watch transfers during rapid live-match updates
     // (e.g. goals/incidents), where the underlying payload can change every refresh tick.
     private static let minSyncInterval: TimeInterval = 30
+    nonisolated static let widgetFixtureLimit = 80
     private static let watchFixtureLimit = 80
     private static let watchFixtureHistoryDays = 7
     private static let watchResultHistoryDays = 7
@@ -217,11 +268,11 @@ enum SharedMatchesBridge {
 
     nonisolated static func saveAndSync(matches: [Match], unfilteredMatches: [Match], lastUpdated: Date?, snapshot: PreferencesSnapshot) {
         let generatedAt = Date()
-        let payload = SharedMatchesPayload(
-            snapshot: snapshot,
+        let payload = makeWidgetPayload(
             matches: matches,
             unfilteredMatches: unfilteredMatches,
             lastUpdated: lastUpdated,
+            snapshot: snapshot,
             generatedAt: generatedAt
         )
         let encoder = JSONEncoder()
@@ -258,6 +309,35 @@ enum SharedMatchesBridge {
             PhoneWatchSyncService.shared.activate()
             PhoneWatchSyncService.shared.sendLatestPayload(loadWatchTransferData() ?? data)
         }
+    }
+
+    nonisolated static func makeWidgetPayload(
+        matches: [Match],
+        unfilteredMatches: [Match],
+        lastUpdated: Date?,
+        snapshot: PreferencesSnapshot,
+        generatedAt: Date
+    ) -> SharedMatchesPayload {
+        let sourceMatches = snapshot.showAllMatches && !unfilteredMatches.isEmpty
+            ? unfilteredMatches
+            : matches
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: generatedAt)
+        let compactMatches = sourceMatches
+            .filter { match in
+                guard !match.isFinished, let date = match.dateOnly else { return false }
+                return calendar.startOfDay(for: date) >= today
+            }
+            .sorted(by: ascendingMatchDate)
+            .prefix(widgetFixtureLimit)
+            .map(WidgetSharedMatchTransfer.init)
+
+        return SharedMatchesPayload(
+            snapshot: snapshot,
+            matches: compactMatches,
+            lastUpdated: lastUpdated,
+            generatedAt: generatedAt
+        )
     }
 
     nonisolated static func loadRawData() -> Data? {
@@ -344,16 +424,14 @@ enum SharedMatchesBridge {
         guard let payload = loadPayload() else { return nil }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = makeWatchTransferData(
-            matches: payload.matches,
-            unfilteredMatches: payload.unfilteredMatches,
-            lastUpdated: payload.lastUpdated,
+        let watchPayload = WatchSharedMatchesTransferPayload(
             snapshot: payload.snapshot,
-            generatedAt: payload.generatedAt,
-            encoder: encoder
-        ) else {
-            return nil
-        }
+            matches: payload.matches.map(WatchSharedMatchTransfer.init),
+            unfilteredMatches: [],
+            lastUpdated: payload.lastUpdated,
+            generatedAt: payload.generatedAt
+        )
+        guard let data = try? encoder.encode(watchPayload) else { return nil }
         saveWatchTransferData(data)
         return data
     }

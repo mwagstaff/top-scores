@@ -332,7 +332,13 @@ nonisolated enum FixtureBrowseSelectionResolver {
     }
 
     private static func fixtureTeamMatches(_ teamName: String, teamID: String) -> Bool {
-        fixtureTeamAliases[teamID]?.contains(normalizedKey(teamName)) == true
+        if fixtureTeamAliases[teamID]?.contains(normalizedKey(teamName)) == true {
+            return true
+        }
+
+        let selectedKey = TeamIdentityStore.normalizedKey(teamID)
+        guard !selectedKey.isEmpty else { return false }
+        return TeamIdentityStore.shared.normalizedKeys(for: teamName).contains(selectedKey)
     }
 }
 

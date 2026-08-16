@@ -350,6 +350,42 @@ struct Top_ScoresTests {
         #expect(!names.contains("major_tournaments"))
     }
 
+    @Test func matchesPageQueryItems_applyTeamSelectionsToResultsWithoutLegacyCategoryIntersection() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: ["Premier League"],
+            favouriteFixtureViewOptionIDs: [
+                FixtureViewOptionID.competition("premier-league"),
+                FixtureViewOptionID.team("watford"),
+                FixtureViewOptionID.team("norwich-city"),
+            ],
+            selectedChannels: [],
+            fixtureAllMajorMatchesEnabled: true,
+            englishPremierLeagueTeamsOnly: true,
+            majorUEFAClubGamesEnabled: true,
+            homeNationsFilterEnabled: true,
+            majorTournamentsFilterEnabled: true,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+
+        let queryItems = APIClient.matchesPageQueryItems(
+            preferences: snapshot,
+            mode: .results,
+            page: 1,
+            dateRangeQueryItems: []
+        )
+        let viewOptions = queryItems
+            .filter { $0.name == "view_option" }
+            .compactMap(\.value)
+
+        #expect(viewOptions.contains(FixtureViewOptionID.team("watford")))
+        #expect(viewOptions.contains(FixtureViewOptionID.team("norwich-city")))
+        #expect(!queryItems.contains { $0.name == "epl_only" })
+        #expect(!queryItems.contains { $0.name == "major_uefa" })
+        #expect(!queryItems.contains { $0.name == "home_nations" })
+        #expect(!queryItems.contains { $0.name == "major_tournaments" })
+    }
+
     @Test func fixtureBrowserSelection_resolvesCompetitionAliases() {
         let competitions = [
             CompetitionCatalogEntry(
@@ -668,6 +704,47 @@ struct Top_ScoresTests {
         )
 
         #expect(filtered.map(\.id) == [fixture.id])
+    }
+
+    @Test func fixtureBrowserSelection_includesArbitraryTeamsWithoutTheirCompetition() {
+        let watford = Match(
+            date: "2026-08-22",
+            time: "15:00",
+            homeTeam: "Watford",
+            awayTeam: "Arsenal",
+            league: "FA Cup",
+            tvChannels: []
+        )
+        let norwich = Match(
+            date: "2026-08-22",
+            time: "15:00",
+            homeTeam: "Norwich City",
+            awayTeam: "Chelsea",
+            league: "EFL Cup",
+            tvChannels: []
+        )
+        let unrelated = Match(
+            date: "2026-08-22",
+            time: "15:00",
+            homeTeam: "Coventry City",
+            awayTeam: "Stoke City",
+            league: "Championship",
+            tvChannels: []
+        )
+
+        let filtered = FixtureBrowseSelectionResolver.filterMatches(
+            [watford, norwich, unrelated],
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            competitions: [],
+            fixtureViewOptionIDs: [
+                FixtureViewOptionID.team("watford"),
+                FixtureViewOptionID.team("norwich-city"),
+            ],
+            includePostponed: false
+        )
+
+        #expect(filtered.map(\.id) == [watford.id, norwich.id])
     }
 
     @Test func fixtureViewOptions_uefaTeamRulesAreMutuallyExclusiveAndOptional() {

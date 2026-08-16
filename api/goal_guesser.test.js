@@ -104,6 +104,14 @@ test("Plunk login email uses the server-side key and an idempotency key", async 
   }
 });
 
+test("admin test email is a simple transactional delivery check", () => {
+  const message = __private.testEmailMessage(new Date("2026-08-16T14:30:00.000Z"));
+  assert.equal(message.subject, "Goal Guesser delivery check");
+  assert.match(message.body, /requested from the Goal Guesser admin area/);
+  assert.match(message.body, /16 Aug 2026, 14:30 UTC/);
+  assert.doesNotMatch(message.body, /href=|https?:\/\/|unsubscribe|limited time|act now/i);
+});
+
 test("fixture filtering accepts only the canonical Premier League label", () => {
   assert.equal(__private.isPremierLeagueMatch({ league: "Premier League" }), true);
   assert.equal(__private.isPremierLeagueMatch({ league: "Championship" }), false);

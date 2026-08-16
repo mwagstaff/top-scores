@@ -24,6 +24,19 @@ struct ProfileView: View {
                     }
 
                     NavigationLink {
+                        TeamSelectionView(
+                            apiBaseURL: preferences.apiBaseURL,
+                            selectedTeamIDs: fixtureTeamSelectionBinding
+                        )
+                    } label: {
+                        profileRow(
+                            title: "Teams",
+                            subtitle: fixtureTeamSelectionSubtitle,
+                            systemImage: "person.3.fill"
+                        )
+                    }
+
+                    NavigationLink {
                         FantasyAccountSettingsView(signOut: signOutOfFantasyAccount)
                     } label: {
                         profileRow(
@@ -72,6 +85,52 @@ struct ProfileView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 4)
+    }
+
+    private var fixtureTeamSelectionBinding: Binding<Set<String>> {
+        Binding(
+            get: {
+                let optionIDs = preferences.fixtureAllMajorMatchesEnabled
+                    ? preferences.favouriteFixtureViewOptionIDs
+                    : preferences.selectedFixtureViewOptionIDs
+                return Set(optionIDs.compactMap(FixtureViewOptionID.teamStableID))
+            },
+            set: { teamIDs in
+                if preferences.fixtureAllMajorMatchesEnabled {
+                    let nonTeamIDs = preferences.favouriteFixtureViewOptionIDs.filter {
+                        FixtureViewOptionID.teamStableID(from: $0) == nil
+                    }
+                    preferences.favouriteFixtureViewOptionIDs = (
+                        nonTeamIDs + teamIDs.map(FixtureViewOptionID.team)
+                    ).sorted()
+                    return
+                }
+
+                let nonTeamIDs = preferences.showAllMatches
+                    ? []
+                    : preferences.selectedFixtureViewOptionIDs.filter {
+                        FixtureViewOptionID.teamStableID(from: $0) == nil
+                    }
+                preferences.selectedFixtureViewOptionIDs = (
+                    nonTeamIDs + teamIDs.map(FixtureViewOptionID.team)
+                ).sorted()
+                if !teamIDs.isEmpty {
+                    preferences.fixtureAllMajorMatchesEnabled = false
+                    preferences.competitionFilterEnabled = true
+                    preferences.showAllMatches = false
+                }
+            }
+        )
+    }
+
+    private var fixtureTeamSelectionSubtitle: String {
+        let count = fixtureTeamSelectionBinding.wrappedValue.count
+        if count == 0 {
+            return "Add individual teams alongside your selected competitions."
+        }
+        return count == 1
+            ? "1 team included in your Scores view."
+            : "\(count) teams included in your Scores view."
     }
 
     private func signOutOfFantasyAccount() {

@@ -285,14 +285,12 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
 private struct WidgetSharedMatchesPayload: Codable {
     let snapshot: WidgetPreferencesSnapshot
     let matches: [WidgetMatch]
-    let unfilteredMatches: [WidgetMatch]
     let lastUpdated: Date?
     let generatedAt: Date
 
     enum CodingKeys: String, CodingKey {
         case snapshot
         case matches
-        case unfilteredMatches
         case lastUpdated
         case generatedAt
     }
@@ -301,7 +299,6 @@ private struct WidgetSharedMatchesPayload: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         snapshot = try container.decode(WidgetPreferencesSnapshot.self, forKey: .snapshot)
         matches = try container.decodeIfPresent([WidgetMatch].self, forKey: .matches) ?? []
-        unfilteredMatches = try container.decodeIfPresent([WidgetMatch].self, forKey: .unfilteredMatches) ?? []
         lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated)
         generatedAt = try container.decode(Date.self, forKey: .generatedAt)
     }
@@ -787,17 +784,8 @@ private enum WidgetMatchPipeline {
     static func groupedDays(from payload: WidgetSharedMatchesPayload?) -> [WidgetMatchDay] {
         guard let payload else { return [] }
 
-        // The phone app payload is already filtered by the current preference snapshot.
-        // Re-filtering inside the widget can diverge from what the app is showing.
-        let sourceMatches: [WidgetMatch]
-        if payload.snapshot.showAllMatches, !payload.unfilteredMatches.isEmpty {
-            sourceMatches = payload.unfilteredMatches
-        } else {
-            sourceMatches = payload.matches
-        }
-
-        // Widgets are fixtures-first surfaces; keep today onwards to match the app's Fixtures view.
-        let upcomingFixtures = filterFixtures(sourceMatches)
+        // The phone writes a compact fixtures-only payload for the current preference snapshot.
+        let upcomingFixtures = filterFixtures(payload.matches)
         let sorted = sortedMatches(upcomingFixtures)
         return groupMatches(sorted, premierLeagueMatchesFirst: payload.snapshot.premierLeagueMatchesFirst)
     }
@@ -990,7 +978,7 @@ private struct TopScoresWidgetProvider: TimelineProvider {
         let payload = WidgetMatchDataLoader.loadPayload()
         if let payload {
             let firstDate = payload.matches.first?.date ?? "none"
-            NSLog("[Widget] payload loaded: matches=\(payload.matches.count) unfiltered=\(payload.unfilteredMatches.count) firstDate=\(firstDate) lastUpdated=\(payload.lastUpdated?.description ?? "nil")")
+            NSLog("[Widget] payload loaded: matches=\(payload.matches.count) firstDate=\(firstDate) lastUpdated=\(payload.lastUpdated?.description ?? "nil")")
         } else {
             NSLog("[Widget] payload missing (shared-matches.json not available)")
         }
