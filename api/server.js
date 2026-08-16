@@ -11723,6 +11723,15 @@ function normalizeMatchRecord(match) {
   if (homeTeamId) record.home_team_id = homeTeamId;
   if (awayTeamId) record.away_team_id = awayTeamId;
 
+  const venueId = String(match.venue_id || "").trim() || null;
+  const kickoffAt = String(match.kickoff_at || "").trim() || null;
+  const lightContext = String(match.light_context || "").trim().toLowerCase();
+  if (venueId) record.venue_id = venueId;
+  if (kickoffAt && Number.isFinite(Date.parse(kickoffAt))) record.kickoff_at = kickoffAt;
+  if (lightContext === "day" || lightContext === "night") {
+    record.light_context = lightContext;
+  }
+
   if (match.has_tsdb_source === true) {
     record.has_tsdb_source = true;
   }
@@ -12013,6 +12022,9 @@ function toMatchListPayload(match, options = {}) {
   }
   if (normalized.home_team_id) payload.home_team_id = normalized.home_team_id;
   if (normalized.away_team_id) payload.away_team_id = normalized.away_team_id;
+  if (normalized.venue_id) payload.venue_id = normalized.venue_id;
+  if (normalized.kickoff_at) payload.kickoff_at = normalized.kickoff_at;
+  if (normalized.light_context) payload.light_context = normalized.light_context;
 
   let detailsPayload = null;
   const resolveCompatibleLookupEntry = (candidateId) => {

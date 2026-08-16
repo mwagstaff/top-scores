@@ -1,0 +1,262 @@
+league: premier-league
+name: Premier League
+season: 2026/27
+membership_source: https://www.premierleague.com/en/news/4673099/the-202627-premier-league-season-officially-starts/
+results_per_query: 30
+
+filters:
+  min_width: 1600
+  min_height: 900
+  min_aspect_ratio: 1.3
+  preferred_aspect_ratio:
+    min: 1.5
+    max: 2.4
+  min_score: 7.0
+  perceptual_hash_distance: 6
+
+retention:
+  day: 30
+  night: 30
+  twilight: 15
+  unknown: 10
+
+stadiums:
+  - club: Arsenal
+    stadium: Emirates Stadium
+    slug: emirates-stadium
+    aliases: [Arsenal Stadium, Ashburton Grove]
+    search_terms:
+      - Emirates Stadium Arsenal
+      - Emirates Stadium interior
+      - Emirates Stadium pitch
+      - Emirates Stadium daytime
+      - Emirates Stadium night
+      - Emirates Stadium floodlights
+
+  - club: Aston Villa
+    stadium: Villa Park
+    slug: villa-park
+    aliases: [Aston Villa Stadium]
+    search_terms:
+      - Villa Park Aston Villa
+      - Villa Park stadium interior
+      - Villa Park pitch
+      - Villa Park daytime
+      - Villa Park night
+      - Villa Park floodlights
+
+  - club: AFC Bournemouth
+    stadium: Vitality Stadium
+    slug: vitality-stadium
+    aliases: [Dean Court, Bournemouth Stadium]
+    search_terms:
+      - Vitality Stadium Bournemouth
+      - Dean Court Bournemouth stadium
+      - Vitality Stadium interior
+      - Vitality Stadium pitch
+      - Vitality Stadium daytime
+      - Vitality Stadium night
+
+  - club: Brentford
+    stadium: Gtech Community Stadium
+    slug: gtech-community-stadium
+    aliases: [Brentford Community Stadium]
+    search_terms:
+      - Gtech Community Stadium Brentford
+      - Brentford Community Stadium
+      - Gtech Community Stadium interior
+      - Gtech Community Stadium pitch
+      - Gtech Community Stadium daytime
+      - Gtech Community Stadium night
+
+  - club: Brighton & Hove Albion
+    stadium: American Express Stadium
+    slug: american-express-stadium
+    aliases: [Amex Stadium, Falmer Stadium]
+    search_terms:
+      - American Express Stadium Brighton
+      - Amex Stadium Brighton
+      - Falmer Stadium Brighton
+      - Amex Stadium interior pitch
+      - Amex Stadium daytime
+      - Amex Stadium night floodlights
+
+  - club: Chelsea
+    stadium: Stamford Bridge
+    slug: stamford-bridge
+    aliases: [Chelsea Stadium]
+    search_terms:
+      - Stamford Bridge Chelsea
+      - Stamford Bridge stadium interior
+      - Stamford Bridge pitch
+      - Stamford Bridge daytime
+      - Stamford Bridge night
+      - Stamford Bridge floodlights
+
+  - club: Coventry City
+    stadium: Coventry Building Society Arena
+    slug: coventry-building-society-arena
+    aliases: [CBS Arena, Ricoh Arena, City of Coventry Stadium]
+    search_terms:
+      - Coventry Building Society Arena
+      - CBS Arena Coventry City
+      - Ricoh Arena Coventry stadium
+      - Coventry Building Society Arena interior
+      - Coventry Building Society Arena pitch
+      - Coventry Building Society Arena night
+
+  - club: Crystal Palace
+    stadium: Selhurst Park
+    slug: selhurst-park
+    aliases: [Crystal Palace Stadium]
+    search_terms:
+      - Selhurst Park Crystal Palace
+      - Selhurst Park stadium interior
+      - Selhurst Park pitch
+      - Selhurst Park daytime
+      - Selhurst Park night
+      - Selhurst Park floodlights
+
+  - club: Everton
+    stadium: Hill Dickinson Stadium
+    slug: hill-dickinson-stadium
+    aliases: [Everton Stadium, Bramley-Moore Dock Stadium, Bramley-Moore Dock]
+    search_terms:
+      - Hill Dickinson Stadium Everton
+      - Everton Stadium Bramley-Moore Dock
+      - Bramley-Moore Dock Stadium interior
+      - Hill Dickinson Stadium pitch
+      - Everton Stadium daytime
+      - Everton Stadium night floodlights
+
+  - club: Fulham
+    stadium: Craven Cottage
+    slug: craven-cottage
+    aliases: [Fulham Stadium]
+    search_terms:
+      - Craven Cottage Fulham
+      - Craven Cottage stadium interior
+      - Craven Cottage pitch
+      - Craven Cottage daytime
+      - Craven Cottage night
+      - Craven Cottage floodlights
+
+  - club: Hull City
+    stadium: MKM Stadium
+    slug: mkm-stadium
+    aliases: [KCOM Stadium, KC Stadium, Kingston Communications Stadium]
+    search_terms:
+      - MKM Stadium Hull City
+      - KCOM Stadium Hull
+      - KC Stadium Hull City
+      - MKM Stadium interior
+      - MKM Stadium pitch
+      - MKM Stadium night floodlights
+
+  - club: Ipswich Town
+    stadium: Portman Road
+    slug: portman-road
+    aliases: [Ipswich Town Stadium]
+    search_terms:
+      - Portman Road Ipswich Town
+      - Portman Road stadium interior
+      - Portman Road pitch
+      - Portman Road daytime
+      - Portman Road night
+      - Portman Road floodlights
+
+  - club: Leeds United
+    stadium: Elland Road
+    slug: elland-road
+    aliases: [Leeds United Stadium]
+    search_terms:
+      - Elland Road Leeds United
+      - Elland Road stadium interior
+      - Elland Road pitch
+      - Elland Road daytime
+      - Elland Road night
+      - Elland Road floodlights
+
+  - club: Liverpool
+    stadium: Anfield
+    slug: anfield
+    aliases: [Liverpool Stadium]
+    search_terms:
+      - Anfield Liverpool stadium
+      - Anfield stadium interior
+      - Anfield pitch
+      - Anfield daytime
+      - Anfield night
+      - Anfield floodlights
+
+  - club: Manchester City
+    stadium: Etihad Stadium
+    slug: etihad-stadium
+    aliases: [City of Manchester Stadium, Eastlands]
+    search_terms:
+      - Etihad Stadium Manchester City
+      - City of Manchester Stadium
+      - Etihad Stadium interior
+      - Etihad Stadium pitch
+      - Etihad Stadium daytime
+      - Etihad Stadium night floodlights
+
+  - club: Manchester United
+    stadium: Old Trafford
+    slug: old-trafford
+    aliases: [Manchester United Stadium, Theatre of Dreams]
+    search_terms:
+      - Old Trafford Manchester United
+      - Old Trafford stadium interior
+      - Old Trafford pitch
+      - Old Trafford daytime
+      - Old Trafford night
+      - Old Trafford floodlights
+
+  - club: Newcastle United
+    stadium: St James' Park
+    slug: st-james-park
+    aliases: [St. James' Park, Newcastle United Stadium]
+    search_terms:
+      - St James Park Newcastle United
+      - St. James' Park stadium interior
+      - St James Park pitch Newcastle
+      - St James Park daytime Newcastle
+      - St James Park night Newcastle
+      - St James Park floodlights Newcastle
+
+  - club: Nottingham Forest
+    stadium: The City Ground
+    slug: city-ground
+    aliases: [City Ground, Nottingham Forest Stadium]
+    search_terms:
+      - City Ground Nottingham Forest
+      - The City Ground stadium interior
+      - City Ground pitch Nottingham
+      - City Ground daytime Nottingham
+      - City Ground night Nottingham
+      - City Ground floodlights Nottingham
+
+  - club: Sunderland
+    stadium: Stadium of Light
+    slug: stadium-of-light
+    aliases: [Sunderland Stadium]
+    search_terms:
+      - Stadium of Light Sunderland
+      - Sunderland Stadium of Light interior
+      - Stadium of Light pitch Sunderland
+      - Stadium of Light daytime Sunderland
+      - Stadium of Light night Sunderland
+      - Stadium of Light floodlights Sunderland
+
+  - club: Tottenham Hotspur
+    stadium: Tottenham Hotspur Stadium
+    slug: tottenham-hotspur-stadium
+    aliases: [Spurs Stadium, New White Hart Lane]
+    search_terms:
+      - Tottenham Hotspur Stadium
+      - Spurs stadium interior
+      - Tottenham Hotspur Stadium pitch
+      - Tottenham Hotspur Stadium daytime
+      - Tottenham Hotspur Stadium night
+      - Tottenham Hotspur Stadium floodlights

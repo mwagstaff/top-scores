@@ -465,6 +465,14 @@ function getTeam(id, options = {}) {
   });
 }
 
+function getVenue(id, options = {}) {
+  return _request(`/venues/${encodeURIComponent(id)}`, {
+    source: "bsd_venue",
+    reason: "venue_lookup",
+    ...options,
+  });
+}
+
 // Events (matches) for a league filtered by status (notstarted | finished | ...).
 // Paginated. Returns the flat results array.
 function getEvents({ leagueId, status } = {}, options = {}) {
@@ -556,6 +564,7 @@ module.exports = {
   getLeague,
   getStandings,
   getTeam,
+  getVenue,
   getEvents,
   getBroadcasts,
   getLiveEvents,

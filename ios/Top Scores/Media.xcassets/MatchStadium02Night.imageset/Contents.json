@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "MatchStadium02Night.jpg",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

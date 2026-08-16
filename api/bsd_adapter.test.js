@@ -27,7 +27,16 @@ const {
   buildCurrentBsdEventsFilter,
   currentSeasonByLeagueFromDocs,
   currentSeasonContextByLeagueFromDocs,
+  bsdKickoffLightContext,
 } = __private;
+
+test("bsdKickoffLightContext classifies the exact venue solar state", () => {
+  const gillette = { latitude: 42.0909, longitude: -71.2643 };
+  assert.equal(bsdKickoffLightContext("2026-06-19T22:00:00Z", gillette), "day");
+  assert.equal(bsdKickoffLightContext("2026-06-19T03:00:00Z", gillette), "night");
+  assert.equal(bsdKickoffLightContext("invalid", gillette), null);
+  assert.equal(bsdKickoffLightContext("2026-06-19T22:00:00Z", null), null);
+});
 
 test("current-season Mongo filter scopes BSD events before payloads are loaded", () => {
   const seasons = currentSeasonByLeagueFromDocs([
@@ -234,8 +243,11 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
     status: "finished",
     period: "FT",
     event_date: "2026-06-21T19:00:00Z",
+    venue_id: 273,
   };
-  const m = bsdEventToCanonicalMatch(event);
+  const m = bsdEventToCanonicalMatch(event, {
+    venuesById: new Map([["273", { latitude: 42.0909, longitude: -71.2643 }]]),
+  });
   assert.equal(m.home_team, "Cape Verde"); // alias-normalised to TSDB spelling
   assert.equal(m.away_team, "Uruguay");
   assert.equal(m.league, "FIFA World Cup 2026"); // matches what TSDB emits
@@ -244,6 +256,9 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
   assert.equal(m.away_score, 2);
   assert.equal(m.match_details_id, "8325");
   assert.equal(m.has_bsd_source, true);
+  assert.equal(m.venue_id, "273");
+  assert.equal(m.kickoff_at, "2026-06-21T19:00:00.000Z");
+  assert.equal(m.light_context, "day");
   // 19:00Z in June → 20:00 Europe/London (BST), so the composite id matches TSDB.
   assert.equal(m.date, "2026-06-21");
   assert.equal(m.time, "20:00");

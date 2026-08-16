@@ -231,6 +231,20 @@ test("toMatchListPayload preserves explicit BBC-source flag without requiring ma
   assert.equal(payload.match_details_id, undefined);
 });
 
+test("toMatchListPayload preserves venue kickoff and light context metadata", () => {
+  const payload = toMatchListPayload(
+    baseMatch({
+      venue_id: "273",
+      kickoff_at: "2026-06-19T22:00:00.000Z",
+      light_context: "day",
+    })
+  );
+
+  assert.equal(payload.venue_id, "273");
+  assert.equal(payload.kickoff_at, "2026-06-19T22:00:00.000Z");
+  assert.equal(payload.light_context, "day");
+});
+
 test("toMatchListPayload includes server-controlled competition weight", () => {
   const payload = toMatchListPayload(baseMatch({ league: "FIFA World Cup" }));
 

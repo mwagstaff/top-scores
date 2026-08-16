@@ -22,6 +22,7 @@ const { utcDateTimeToZonedDateTime } = require("./match_time");
 const { __private: tsdbPrivate } = require("./fetch_tsdb_matches");
 const { getBsdRecords } = require("./mongo_client");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
+const SunCalc = require("suncalc");
 
 const assignFormationGridPositions = tsdbPrivate.assignFormationGridPositions;
 
@@ -465,6 +466,37 @@ function zonedKickoff(eventDate) {
   return utcDateTimeToZonedDateTime(iso.slice(0, 10), iso.slice(11, 16));
 }
 
+function bsdVenueCoordinates(venue) {
+  if (!venue || typeof venue !== "object") return null;
+  const latitude = Number(venue && venue.latitude);
+  const longitude = Number(venue && venue.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+  return { latitude, longitude };
+}
+
+// SunCalc returns the solar altitude in radians at the exact instant. The
+// standard sunrise/sunset threshold is -0.833° (upper limb plus atmospheric
+// refraction), keeping this independent of server/device time zones while also
+// handling polar day/night without special date arithmetic.
+function bsdKickoffLightContext(eventDate, venue) {
+  const kickoff = new Date(String(eventDate || ""));
+  if (!Number.isFinite(kickoff.getTime())) return null;
+  const coordinates = bsdVenueCoordinates(venue);
+  if (!coordinates) return null;
+  const position = SunCalc.getPosition(kickoff, coordinates.latitude, coordinates.longitude);
+  const sunsetAltitudeRadians = -0.833 * (Math.PI / 180);
+  return Number.isFinite(position.altitude) && position.altitude >= sunsetAltitudeRadians
+    ? "day"
+    : "night";
+}
+
+function fallbackKickoffLightContext(kickoff) {
+  const hour = Number(String(kickoff && kickoff.time ? kickoff.time : "").split(":")[0]);
+  if (!Number.isFinite(hour)) return "night";
+  return hour >= 6 && hour < 18 ? "day" : "night";
+}
+
 function toNumber(value) {
   return value !== null && value !== undefined && value !== "" ? Number(value) : null;
 }
@@ -743,6 +775,10 @@ function bsdEventToCanonicalMatch(event, options = {}) {
   const home_team = isPlaceholderTeam(homeRaw) ? "TBC" : canonicalTeamName(homeRaw) || homeRaw;
   const away_team = isPlaceholderTeam(awayRaw) ? "TBC" : canonicalTeamName(awayRaw) || awayRaw;
   const kickoff = zonedKickoff(event.event_date);
+  const venueId = event.venue_id != null ? String(event.venue_id) : null;
+  const venue = venueId && options.venuesById ? options.venuesById.get(venueId) : null;
+  const lightContext = bsdKickoffLightContext(event.event_date, venue)
+    || fallbackKickoffLightContext(kickoff);
   const league = canonicalLeagueName(event, options.leagueNameById);
   const leagueSubcategory = event.round_name ? String(event.round_name).trim() : null;
   const id = event.id != null ? String(event.id) : null;
@@ -785,6 +821,11 @@ function bsdEventToCanonicalMatch(event, options = {}) {
     away_team,
     home_team_id: event.home_team_id != null ? String(event.home_team_id) : null,
     away_team_id: event.away_team_id != null ? String(event.away_team_id) : null,
+    venue_id: venueId,
+    kickoff_at: Number.isFinite(Date.parse(String(event.event_date || "")))
+      ? new Date(event.event_date).toISOString()
+      : null,
+    light_context: lightContext,
     home_score: normalTimeScore ? normalTimeScore.home : finalHomeScore,
     away_score: normalTimeScore ? normalTimeScore.away : finalAwayScore,
     aggregate_home_score: null,
@@ -1087,12 +1128,19 @@ async function projectBsdMatches() {
     buildCurrentBsdEventsFilter(currentSeasonByLeague)
   );
   const eventIds = events.map((doc) => String(doc._id));
-  const [broadcasts, incidentsDocs] = eventIds.length > 0
+  const venueIds = [...new Set(events
+    .map((doc) => doc && doc.payload && doc.payload.venue_id)
+    .filter((id) => id != null)
+    .map(String))];
+  const [broadcasts, incidentsDocs, venueDocs] = eventIds.length > 0
     ? await Promise.all([
         getBsdRecords("bsd_broadcasts", { _id: { $in: eventIds } }),
         getBsdRecords("bsd_incidents", { _id: { $in: eventIds } }),
+        venueIds.length > 0
+          ? getBsdRecords("bsd_venues", { _id: { $in: venueIds } })
+          : Promise.resolve([]),
       ])
-    : [[], []];
+    : [[], [], []];
   const leagueNameById = new Map();
   leagues.forEach((doc) => {
     const p = doc.payload || {};
@@ -1113,6 +1161,9 @@ async function projectBsdMatches() {
     const eventId = doc && doc._id != null ? String(doc._id) : null;
     if (eventId) incidentsByEventId.set(eventId, doc.payload || null);
   });
+  const venuesById = new Map(
+    venueDocs.map((doc) => [String(doc._id), doc.payload || null])
+  );
 
   // The live poller ingests every live league, not just the allowlist, so
   // restrict the projection to allowlisted leagues — otherwise live-only
@@ -1130,6 +1181,7 @@ async function projectBsdMatches() {
       leagueNameById,
       channelsByEventId,
       incidentsPayload: eventId ? incidentsByEventId.get(eventId) : null,
+      venuesById,
     });
     if (match) out.push(match);
   });
@@ -1194,14 +1246,19 @@ async function enrichBsdLineupPhotos(match) {
 async function projectBsdMatchDetails(eventId, options = {}) {
   const id = String(eventId || "").trim();
   if (!id) return null;
-  const [eventDoc, incidentsDoc, lineupsDoc, broadcastsDoc, leagues] = await Promise.all([
-    options.eventDoc || getBsdRecords("bsd_events", { _id: id }).then((r) => r[0] || null),
+  const eventDoc = options.eventDoc
+    || await getBsdRecords("bsd_events", { _id: id }).then((r) => r[0] || null);
+  if (!eventDoc || !eventDoc.payload) return null;
+  const venueId = eventDoc.payload.venue_id != null ? String(eventDoc.payload.venue_id) : null;
+  const [incidentsDoc, lineupsDoc, broadcastsDoc, venueDoc, leagues] = await Promise.all([
     options.incidentsDoc || getBsdRecords("bsd_incidents", { _id: id }).then((r) => r[0] || null),
     options.lineupsDoc || getBsdRecords("bsd_lineups", { _id: id }).then((r) => r[0] || null),
     options.broadcastsDoc || getBsdRecords("bsd_broadcasts", { _id: id }).then((r) => r[0] || null),
+    options.venueDoc || (venueId
+      ? getBsdRecords("bsd_venues", { _id: venueId }).then((r) => r[0] || null)
+      : Promise.resolve(null)),
     getBsdRecords("bsd_leagues"),
   ]);
-  if (!eventDoc || !eventDoc.payload) return null;
   const leagueNameById = new Map();
   leagues.forEach((doc) => {
     const p = doc.payload || {};
@@ -1213,6 +1270,9 @@ async function projectBsdMatchDetails(eventId, options = {}) {
     lineupsPayload: lineupsDoc ? lineupsDoc.payload : null,
     broadcastsPayload: broadcastsDoc ? broadcastsDoc.payload : null,
     leagueNameById,
+    venuesById: venueId && venueDoc
+      ? new Map([[venueId, venueDoc.payload || null]])
+      : new Map(),
   });
   return enrichBsdLineupPhotos(match);
 }
@@ -1244,6 +1304,9 @@ module.exports = {
     bsdStandingsEventFromDoc,
     canonicalLeagueName,
     zonedKickoff,
+    bsdVenueCoordinates,
+    bsdKickoffLightContext,
+    fallbackKickoffLightContext,
     isCurrentSeasonEvent,
     buildCurrentBsdEventsFilter,
     currentSeasonByLeagueFromDocs,

@@ -18,6 +18,9 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
 - [`web`](web)
   - Web frontend and static assets.
   - Includes source under [`src`](/Users/mwagstaff/dev/top-scores/web/src), public assets, scripts, and built output.
+- [`tools/stadium-images`](tools/stadium-images)
+  - Licence-aware, resumable stadium photography collector.
+  - Uses season-labelled league configuration and generates app manifests plus image attributions.
 
 ## Key Components
 

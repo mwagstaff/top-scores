@@ -7,6 +7,7 @@
 //   - notstarted + finished events         -> bsd_events
 //   - incidents/lineups for played     -> bsd_incidents, bsd_lineups
 //   - referenced teams                 -> bsd_teams
+//   - referenced venues                -> bsd_venues
 //
 // Run: BSD_API_KEY=... MONGODB_URI_TOP_SCORES=... node api/fetch_bsd_events.js
 // ---------------------------------------------------------------------------
@@ -63,6 +64,7 @@ function eventToRecord(event) {
       away_team: event.away_team || null,
       home_team_id: event.home_team_id != null ? event.home_team_id : null,
       away_team_id: event.away_team_id != null ? event.away_team_id : null,
+      venue_id: event.venue_id != null ? event.venue_id : null,
     },
   };
 }
@@ -207,6 +209,31 @@ async function hydrateTeams(teamIds) {
   console.log(`[bsd] teams hydrated: ${records.length}/${teamIds.length}`);
 }
 
+async function hydrateVenues(venueIds) {
+  const records = [];
+  for (const venueId of venueIds) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const venue = await bsd.getVenue(venueId, { initiator: "fetch_bsd_events" });
+      records.push({
+        id: venueId,
+        payload: venue,
+        extra: {
+          name: (venue && venue.name) || null,
+          city: (venue && venue.city) || null,
+          country_code: (venue && venue.country_code) || null,
+          latitude: venue && venue.latitude != null ? venue.latitude : null,
+          longitude: venue && venue.longitude != null ? venue.longitude : null,
+        },
+      });
+    } catch (error) {
+      console.error(`[bsd] venue ${venueId} failed: ${error.message || error}`);
+    }
+  }
+  if (records.length > 0) await upsertBsdRecords("bsd_venues", records);
+  console.log(`[bsd] venues hydrated: ${records.length}/${venueIds.length}`);
+}
+
 async function hydrateMissingDetails(allEvents, nowMs = Date.now()) {
   // Incidents/lineups for a played match rarely change once captured, so skip
   // events already hydrated rather than re-fetching the entire history every
@@ -253,6 +280,17 @@ async function hydrateMissingTeams(allEvents) {
   await hydrateTeams([...teamIds]);
 }
 
+async function hydrateMissingVenues(allEvents) {
+  const hydratedVenueIds = new Set((await getBsdRecordIds("bsd_venues")).map(String));
+  const venueIds = new Set();
+  allEvents.forEach((event) => {
+    if (event.venue_id != null && !hydratedVenueIds.has(String(event.venue_id))) {
+      venueIds.add(event.venue_id);
+    }
+  });
+  await hydrateVenues([...venueIds]);
+}
+
 // Explicit full-history backfill. The long-running poller intentionally uses
 // refreshIncrementalEvents instead.
 async function refreshAllEvents() {
@@ -266,6 +304,7 @@ async function refreshAllEvents() {
 
   await hydrateMissingDetails(allEvents);
   await hydrateMissingTeams(allEvents);
+  await hydrateMissingVenues(allEvents);
 
   console.log("[bsd] events ingest complete");
   return allEvents;
@@ -284,6 +323,7 @@ async function refreshIncrementalEvents() {
   }
   await hydrateMissingDetails(allEvents);
   await hydrateMissingTeams(allEvents);
+  await hydrateMissingVenues(allEvents);
   console.log(`[bsd] incremental events ingest complete: ${allEvents.length} events`);
   return allEvents;
 }
@@ -305,8 +345,10 @@ module.exports = {
   ingestLeagueIncrementalEvents,
   hydrateDetail,
   hydrateTeams,
+  hydrateVenues,
   hydrateMissingDetails,
   hydrateMissingTeams,
+  hydrateMissingVenues,
   isPlayed,
   hasUnknownOutsideTimelineCardIncident,
   eventToRecord,

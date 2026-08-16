@@ -282,3 +282,13 @@ chatgpt_config.yaml
 ############################################
 
 _temp
+
+###############
+# Python tools
+###############
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+/tools/stadium-images/output/

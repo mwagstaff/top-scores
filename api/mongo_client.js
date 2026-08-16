@@ -134,6 +134,7 @@ async function ensureIndexes() {
     collection("bsd_leagues").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_standings").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_teams").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_venues").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_events").createIndexes([
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
       { key: { league_id: 1, status: 1 }, name: "league_status" },

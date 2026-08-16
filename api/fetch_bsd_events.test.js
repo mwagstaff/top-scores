@@ -15,9 +15,16 @@ const {
   selectIncrementalEvents,
 } = require("./fetch_bsd_events");
 
-test("eventToRecord indexes season id for current-season Mongo queries", () => {
-  const record = eventToRecord({ id: 1, league_id: 27, season_id: 2026, status: "finished" });
+test("eventToRecord indexes season and venue ids for current-season Mongo queries", () => {
+  const record = eventToRecord({
+    id: 1,
+    league_id: 27,
+    season_id: 2026,
+    venue_id: 273,
+    status: "finished",
+  });
   assert.equal(record.extra.season_id, 2026);
+  assert.equal(record.extra.venue_id, 273);
 });
 
 test("EVENT_STATUSES excludes historical started results; live events use /events/live", () => {
