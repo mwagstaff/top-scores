@@ -28,7 +28,7 @@ struct AboutView: View {
         Group {
             if embeddedInNavigation {
                 content
-                    .navigationTitle("About")
+                    .navigationTitle("Profile: About")
                     .navigationBarTitleDisplayMode(.inline)
             } else {
                 NavigationStack {

@@ -117,7 +117,18 @@ struct FantasyView: View {
                     }
                 }
             }
+            .navigationTitle(fplNavigationTitle)
+            .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    private var fplNavigationTitle: String {
+        guard let teamName = fantasyViewModel.myProfile?.name
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !teamName.isEmpty else {
+            return "FPL"
+        }
+        return "FPL: \(teamName)"
     }
 
     private var modalPresentationView: some View {

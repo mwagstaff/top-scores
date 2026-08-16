@@ -221,7 +221,8 @@ struct MatchDetailView: View {
                     PredictionStripView(
                         match: activeMatch,
                         predictionDisplay: predictionDisplay,
-                        isLargePresentation: true
+                        isLargePresentation: true,
+                        showsProbabilities: true
                     )
                     .padding(.horizontal)
                 }
@@ -878,7 +879,11 @@ private struct MatchDetailScoreboardHero: View {
                     name: match.displayHomeTeam,
                     fullName: match.homeTeam,
                     teamId: match.homeTeamId,
-                    alternateNames: [match.homeShortName].compactMap { $0 }
+                    alternateNames: [match.homeShortName].compactMap { $0 },
+                    goalSummaries: goalSummaries(
+                        scorers: match.homeGoalScorers,
+                        assists: match.homeAssists
+                    )
                 )
 
                 VStack(spacing: 8) {
@@ -902,7 +907,11 @@ private struct MatchDetailScoreboardHero: View {
                     name: match.displayAwayTeam,
                     fullName: match.awayTeam,
                     teamId: match.awayTeamId,
-                    alternateNames: [match.awayShortName].compactMap { $0 }
+                    alternateNames: [match.awayShortName].compactMap { $0 },
+                    goalSummaries: goalSummaries(
+                        scorers: match.awayGoalScorers,
+                        assists: match.awayAssists
+                    )
                 )
             }
         }
@@ -935,7 +944,8 @@ private struct MatchDetailScoreboardHero: View {
         name: String,
         fullName: String,
         teamId: String? = nil,
-        alternateNames: [String]
+        alternateNames: [String],
+        goalSummaries: [MatchScoreboardGoalSummary]
     ) -> some View {
         NavigationLink {
             TeamDetailsView(
@@ -954,16 +964,23 @@ private struct MatchDetailScoreboardHero: View {
                 name: name,
                 fullName: fullName,
                 teamId: teamId,
-                alternateNames: alternateNames
+                alternateNames: alternateNames,
+                goalSummaries: goalSummaries
             )
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(fullName)
+        .accessibilityLabel(teamAccessibilityLabel(fullName: fullName, goalSummaries: goalSummaries))
         .accessibilityHint("View team details")
     }
 
-    private func teamColumn(name: String, fullName: String, teamId: String? = nil, alternateNames: [String]) -> some View {
+    private func teamColumn(
+        name: String,
+        fullName: String,
+        teamId: String? = nil,
+        alternateNames: [String],
+        goalSummaries: [MatchScoreboardGoalSummary]
+    ) -> some View {
         VStack(spacing: 10) {
             Group {
                 if let image = LogoResolver.shared.image(for: fullName, teamId: teamId, alternateNames: alternateNames) {
@@ -993,8 +1010,122 @@ private struct MatchDetailScoreboardHero: View {
             }
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.white.opacity(0.72))
+
+            if !goalSummaries.isEmpty {
+                VStack(spacing: 3) {
+                    ForEach(goalSummaries) { summary in
+                        Text(summary.text)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func goalSummaries(
+        scorers: [MatchGoalScorer],
+        assists: [MatchAssistProvider]
+    ) -> [MatchScoreboardGoalSummary] {
+        guard match.isInProgress || match.isFinished else { return [] }
+        return MatchScoreboardGoalSummary.make(scorers: scorers, assists: assists)
+    }
+
+    private func teamAccessibilityLabel(
+        fullName: String,
+        goalSummaries: [MatchScoreboardGoalSummary]
+    ) -> String {
+        guard !goalSummaries.isEmpty else { return fullName }
+        return "\(fullName). Goals: \(goalSummaries.map(\.accessibilityText).joined(separator: ", "))"
+    }
+}
+
+private struct MatchScoreboardGoalSummary: Identifiable {
+    let id: String
+    let minute: String
+    let scorer: String
+    let assister: String?
+    let sortOrder: Int
+
+    var text: String {
+        "\(minute) \(scorer)" + (assister.map { " (\($0))" } ?? "")
+    }
+
+    var accessibilityText: String {
+        let base = "\(minute.replacingOccurrences(of: "'", with: " minutes")) \(scorer)"
+        return base + (assister.map { ", assisted by \($0)" } ?? "")
+    }
+
+    static func make(
+        scorers: [MatchGoalScorer],
+        assists: [MatchAssistProvider]
+    ) -> [MatchScoreboardGoalSummary] {
+        let assistLookup = assists.reduce(into: [String: String]()) { lookup, assist in
+            for minute in assist.assistTimes {
+                lookup[minuteKey(minute)] = lastName(assist.player)
+            }
+        }
+        var summaries: [MatchScoreboardGoalSummary] = []
+
+        for (scorerIndex, scorer) in scorers.enumerated() {
+            let scorerName = lastName(scorer.player)
+            for (minuteIndex, minute) in scorer.goalTimes.enumerated() {
+                summaries.append(
+                    MatchScoreboardGoalSummary(
+                        id: "goal-\(scorerIndex)-\(minuteIndex)-\(minute)",
+                        minute: displayMinute(minute),
+                        scorer: scorerName,
+                        assister: assistLookup[minuteKey(minute)],
+                        sortOrder: minuteSortOrder(minute)
+                    )
+                )
+            }
+            for (minuteIndex, minute) in scorer.ownGoalTimes.enumerated() {
+                summaries.append(
+                    MatchScoreboardGoalSummary(
+                        id: "own-goal-\(scorerIndex)-\(minuteIndex)-\(minute)",
+                        minute: displayMinute(minute),
+                        scorer: "\(scorerName) (OG)",
+                        assister: nil,
+                        sortOrder: minuteSortOrder(minute)
+                    )
+                )
+            }
+        }
+
+        return summaries.sorted { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder {
+                return lhs.sortOrder < rhs.sortOrder
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private static func lastName(_ fullName: String) -> String {
+        let trimmed = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? trimmed
+    }
+
+    private static func displayMinute(_ rawMinute: String) -> String {
+        let minute = minuteKey(rawMinute)
+        return minute.isEmpty ? "-" : "\(minute)'"
+    }
+
+    private static func minuteKey(_ rawMinute: String) -> String {
+        rawMinute
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix { $0.isNumber || $0 == "+" }
+            .description
+    }
+
+    private static func minuteSortOrder(_ rawMinute: String) -> Int {
+        let parts = minuteKey(rawMinute).split(separator: "+", maxSplits: 1).compactMap { Int($0) }
+        guard let minute = parts.first else { return Int.max }
+        return (minute * 100) + (parts.count > 1 ? parts[1] : 0)
     }
 }
 

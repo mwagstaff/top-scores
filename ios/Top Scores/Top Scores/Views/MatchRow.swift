@@ -247,7 +247,6 @@ struct MatchRow: View {
 
             if predictionDisplay != .hidden {
                 PredictionStripView(match: match, predictionDisplay: predictionDisplay)
-                    .padding(.leading, logoSize + compactFixtureHorizontalSpacing)
             }
         }
         .padding(cardPadding)
@@ -887,52 +886,84 @@ struct MatchRow: View {
     }
 }
 
-/// A predicted-score chip plus a home/draw/away probability bar, shown as a strip
-/// beneath a fixture row (or a match's scoreboard hero). Indigo while the match is
-/// still to be decided; green once finished and the prediction matched the final
-/// score; muted once finished and it missed — the probabilities themselves are the
-/// frozen pre-match snapshot and never change.
+/// A predicted-score chip shown beneath a fixture row (or with a home/draw/away
+/// probability breakdown on a match's scoreboard). Indigo while the match is still
+/// to be decided; green once finished and the prediction matched the final score;
+/// muted once finished and it missed.
 struct PredictionStripView: View {
     let match: Match
     let predictionDisplay: FixturePredictionDisplayState
     var isLargePresentation: Bool = false
+    var showsProbabilities: Bool = false
+
+    @State private var isShowingProbabilityInfo = false
 
     var body: some View {
-        switch predictionDisplay {
-        case .hidden:
-            EmptyView()
-        case .pending:
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.mini)
-                Text("Calculating prediction…")
-                    .font(labelFont)
-                    .foregroundStyle(.secondary)
-            }
-        case .available(let homeGoals, let awayGoals, let homeWinProbability, let drawProbability, let awayWinProbability):
-            HStack(spacing: isLargePresentation ? 10 : 8) {
-                scoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
-                PredictionProbabilityBar(
-                    homeWinProbability: homeWinProbability,
-                    drawProbability: drawProbability,
-                    awayWinProbability: awayWinProbability
-                )
-                .frame(height: isLargePresentation ? 5 : 4)
-                PredictionProbabilityLabel(
-                    homeWinProbability: homeWinProbability,
-                    drawProbability: drawProbability,
-                    awayWinProbability: awayWinProbability,
-                    font: labelFont
-                )
+        Group {
+            switch predictionDisplay {
+            case .hidden:
+                EmptyView()
+            case .pending:
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Calculating prediction…")
+                        .font(labelFont)
+                        .foregroundStyle(.secondary)
+                }
+            case .available(let homeGoals, let awayGoals, let homeWinProbability, let drawProbability, let awayWinProbability):
+                if showsProbabilities {
+                    HStack(spacing: isLargePresentation ? 10 : 8) {
+                        scoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
+                        PredictionProbabilityBar(
+                            homeWinProbability: homeWinProbability,
+                            drawProbability: drawProbability,
+                            awayWinProbability: awayWinProbability
+                        )
+                        .frame(height: isLargePresentation ? 5 : 4)
+                        PredictionProbabilityLabel(
+                            homeWinProbability: homeWinProbability,
+                            drawProbability: drawProbability,
+                            awayWinProbability: awayWinProbability,
+                            font: labelFont
+                        )
+                        probabilityInfoButton
+                    }
+                } else {
+                    scoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
+                }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .alert("Chances of victory", isPresented: $isShowingProbabilityInfo) {
+            Button("OK") {}
+        } message: {
+            Text(
+                "The coloured bars and H/D/A values show the model's estimated chance of a home win, draw or away win. They are probabilities, not betting odds or guaranteed outcomes."
+            )
+        }
+    }
+
+    private var probabilityInfoButton: some View {
+        Button {
+            isShowingProbabilityInfo = true
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: isLargePresentation ? 15 : 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("About chances of victory")
+        .accessibilityHint("Explains the prediction probabilities")
     }
 
     private func scoreChip(homeGoals: Int, awayGoals: Int) -> some View {
         HStack(spacing: 3) {
             Image(systemName: isResolved ? (wasCorrect ? "checkmark.seal.fill" : "sparkles") : "sparkles")
                 .font(.system(size: isLargePresentation ? 9 : 8, weight: .bold))
-            Text("\(homeGoals)–\(awayGoals)")
+            Text("Predicted: \(homeGoals)–\(awayGoals)")
                 .font(scoreFont)
                 .monospacedDigit()
         }

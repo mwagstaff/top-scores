@@ -47,6 +47,8 @@ struct TablesView: View {
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
                 .background(Color(.systemBackground))
             }
+            .navigationTitle(tablesNavigationTitle)
+            .navigationBarTitleDisplayMode(.inline)
         }
         .onAppear {
             isVisible = true
@@ -91,6 +93,17 @@ struct TablesView: View {
         .onChange(of: leagues) { _, _ in
             consumePendingNavigationIfNeeded()
         }
+    }
+
+    private var tablesNavigationTitle: String {
+        guard let leagueName = leagues
+            .first(where: { $0.leagueID == selectedLeagueID })?
+            .leagueName
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !leagueName.isEmpty else {
+            return "Tables"
+        }
+        return "Tables: \(leagueName)"
     }
 
     // Applies a cross-tab navigation request from MatchDetailView (selects the

@@ -23,6 +23,7 @@ struct MatchTeamLeaguePositionsLink: View {
             if !entries.isEmpty {
                 GlassEffectContainer(spacing: 10) {
                     HStack(spacing: 10) {
+                        Spacer(minLength: 0)
                         ForEach(entries) { entry in
                             LeaguePositionChip(entry: entry, leagueName: match.league)
                         }

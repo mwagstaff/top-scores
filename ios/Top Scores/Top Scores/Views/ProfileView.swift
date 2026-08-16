@@ -44,6 +44,8 @@ struct ProfileView: View {
                     }
                 }
             }
+            .navigationTitle("Profile")
+            .navigationBarTitleDisplayMode(.inline)
         }
         .onAppear {
             let openedAt = Date()
@@ -119,7 +121,8 @@ private struct FantasyAccountSettingsView: View {
                 }
             }
         }
-        .navigationTitle("FPL")
+        .navigationTitle("Profile: FPL")
+        .navigationBarTitleDisplayMode(.inline)
         .alert("Sign out of FPL?", isPresented: $showSignOutConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Sign out", role: .destructive, action: signOut)

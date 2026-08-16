@@ -244,6 +244,8 @@ struct MatchesView: View {
     var body: some View {
         NavigationStack {
             navigationStackContent
+                .navigationTitle(scoresNavigationTitle)
+                .navigationBarTitleDisplayMode(.inline)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if mode == .fixtures && navigationMatch == nil {
@@ -346,6 +348,33 @@ struct MatchesView: View {
             predictionIndex = FixturePredictionStore.allPredictions()
         }
         .onDisappear(perform: handleScreenDisappear)
+    }
+
+    private var scoresNavigationTitle: String {
+        guard let selectedDateKey = fixtureBrowser.selectedDateKey,
+              let dateLabel = Self.friendlyFixtureDateLabel(selectedDateKey) else {
+            return "Scores"
+        }
+
+        let matches = fixtureBrowser.cachedMatchesByDate[selectedDateKey] ?? []
+        return "\(Self.navigationTitlePrefix(for: matches)): \(dateLabel)"
+    }
+
+    private static func navigationTitlePrefix(for matches: [Match], now: Date = Date()) -> String {
+        guard !matches.isEmpty else { return "Scores" }
+        if matches.allSatisfy({ $0.isFinished }) {
+            return "Results"
+        }
+
+        let hasKickedOff = matches.contains { match in
+            guard !match.isPostponed else { return false }
+            if match.isInProgress || match.isFinished || match.hasScore {
+                return true
+            }
+            guard let kickoff = match.dateTime else { return false }
+            return kickoff <= now
+        }
+        return hasKickedOff ? "Scores" : "Fixtures"
     }
 
     private func handleScenePhaseChange(_ phase: ScenePhase) {
@@ -876,14 +905,40 @@ struct MatchesView: View {
     }
 
     private func fixtureJumpDateLabel(_ dateKey: String) -> String {
+        Self.friendlyFixtureDateLabel(dateKey) ?? dateKey
+    }
+
+    private static func friendlyFixtureDateLabel(_ dateKey: String) -> String? {
         let parts = dateKey.split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3,
               let date = Calendar.current.date(
                 from: DateComponents(year: parts[0], month: parts[1], day: parts[2])
               ) else {
-            return dateKey
+            return nil
         }
-        return date.formatted(.dateTime.weekday(.wide).day().month(.wide))
+
+        let day = Calendar.current.component(.day, from: date)
+        let formattedDate = date.formatted(
+            .dateTime
+                .weekday(.wide)
+                .month(.wide)
+                .day()
+                .locale(Locale(identifier: "en_US"))
+        )
+        return "\(formattedDate)\(ordinalSuffix(for: day))"
+    }
+
+    private static func ordinalSuffix(for day: Int) -> String {
+        if 11...13 ~= day % 100 {
+            return "th"
+        }
+
+        switch day % 10 {
+        case 1: return "st"
+        case 2: return "nd"
+        case 3: return "rd"
+        default: return "th"
+        }
     }
 
     private var fixtureCompetitionDock: some View {

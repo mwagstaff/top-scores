@@ -47,7 +47,7 @@ struct PreferencesView: View {
         Group {
             if embeddedInNavigation {
                 content
-                    .navigationTitle(showsOnlyAdvancedSettings ? "Advanced" : "Preferences")
+                    .navigationTitle(showsOnlyAdvancedSettings ? "Profile: Advanced" : "Profile: Preferences")
                     .navigationBarTitleDisplayMode(.inline)
             } else {
                 NavigationStack {
