@@ -68,7 +68,6 @@ struct MatchRowPreferences: Equatable {
 
 struct MatchRow: View {
     let match: Match
-    var highlightToday: Bool = false
     var showTeamEvents: Bool = false
     var showLeague: Bool = false
     var showBroadcastDetails: Bool = true
@@ -194,7 +193,6 @@ struct MatchRow: View {
             MatchCardChrome(
                 cornerRadius: cardCornerRadius,
                 isLive: match.isInProgress,
-                highlightToday: highlightToday,
                 isFinal: match.isFinalRound
             )
         )
@@ -217,23 +215,32 @@ struct MatchRow: View {
                     size: logoSize
                 )
 
-                Text(match.displayHomeTeam)
-                    .font(teamNameFont)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .layoutPriority(1)
+                VStack(spacing: compactFixtureContentRowSpacing) {
+                    HStack(alignment: .firstTextBaseline, spacing: compactFixtureHorizontalSpacing) {
+                        Text(match.displayHomeTeam)
+                            .font(teamNameFont)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .layoutPriority(1)
 
-                compactFixtureCenterContent
+                        compactFixtureCenterContent
 
-                Text(match.displayAwayTeam)
-                    .font(teamNameFont)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(1)
+                        Text(match.displayAwayTeam)
+                            .font(teamNameFont)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .layoutPriority(1)
+                    }
+
+                    if shouldShowCompactFixtureSecondRow {
+                        compactFixtureSecondRow
+                    }
+                }
+                .frame(maxWidth: .infinity)
 
                 TeamLogo(
                     name: match.awayTeam,
@@ -241,12 +248,6 @@ struct MatchRow: View {
                     alternateNames: [match.awayShortName].compactMap { $0 },
                     size: logoSize
                 )
-
-                compactFixtureTrailingAccessory
-            }
-
-            if predictionDisplay != .hidden {
-                PredictionStripView(match: match, predictionDisplay: predictionDisplay)
             }
         }
         .padding(cardPadding)
@@ -255,7 +256,6 @@ struct MatchRow: View {
             MatchCardChrome(
                 cornerRadius: cardCornerRadius,
                 isLive: match.isInProgress,
-                highlightToday: highlightToday,
                 isFinal: match.isFinalRound
             )
         )
@@ -539,10 +539,6 @@ struct MatchRow: View {
         isLargePresentation ? 18 : 14
     }
 
-    private var primaryBroadcastLogo: UIImage? {
-        TvLogoResolver.shared.images(for: localeFilteredChannels(match.tvChannels).map(\.name)).first
-    }
-
     private var compactBroadcastLogoHeight: CGFloat {
         isLargePresentation ? 16 : 13
     }
@@ -551,279 +547,78 @@ struct MatchRow: View {
         isLargePresentation ? 26 : 22
     }
 
-    private var compactAccessorySlotWidth: CGFloat {
-        20
-    }
-
     private var compactAccessorySlotHeight: CGFloat {
         20
     }
 
-    private var compactBroadcastAccessorySlot: some View {
-        ZStack {
+    private var compactFixtureCenterContent: some View {
+        VStack(spacing: 4) {
+            scoreAndStatusRow
+
             if let compactPrimaryBroadcastLogo {
                 Image(uiImage: compactPrimaryBroadcastLogo)
                     .resizable()
                     .scaledToFit()
                     .frame(width: compactBroadcastLogoWidth, height: compactBroadcastLogoHeight)
-                    .opacity(compactBroadcastLogoOpacity)
-                    .layoutPriority(2)
                     .fixedSize()
                     .accessibilityHidden(true)
-            }
-        }
-        .frame(
-            width: compactPrimaryBroadcastLogo == nil ? 0 : compactAccessorySlotWidth,
-            height: compactAccessorySlotHeight,
-            alignment: .center
-        )
-    }
-
-    @ViewBuilder
-    private var compactFixtureCenterContent: some View {
-        if shouldPlaceCompactKickoffInTrailingAccessory {
-            if match.isPostponed {
-                compactPostponedCenterAccessory
-            } else if match.isInProgress {
-                compactInProgressCenterAccessory
-            } else if match.isFinished {
-                compactFinishedCenterAccessory
-            } else {
-                compactUpcomingCenterAccessory
-            }
-        } else {
-            scoreAndStatusRow
-        }
-    }
-
-    @ViewBuilder
-    private var compactFixtureTrailingAccessory: some View {
-        if shouldPlaceCompactKickoffInTrailingAccessory {
-            compactStatusAccessorySlot
-        } else {
-            compactBroadcastAccessorySlot
-        }
-    }
-
-    private var compactUpcomingCenterAccessory: some View {
-        HStack(spacing: 4) {
-            if let aggregateHomeBracketText {
-                Text(aggregateHomeBracketText)
-                    .font(aggregateBracketFont)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .fixedSize()
-            }
-
-            compactCenteredBroadcastAccessory
-
-            if let aggregateAwayBracketText {
-                Text(aggregateAwayBracketText)
-                    .font(aggregateBracketFont)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .fixedSize()
             }
         }
         .fixedSize(horizontal: true, vertical: false)
     }
 
-    private var compactCenteredBroadcastAccessory: some View {
-        ZStack {
-            if let compactPrimaryBroadcastLogo {
-                Image(uiImage: compactPrimaryBroadcastLogo)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: compactBroadcastLogoWidth, height: compactBroadcastLogoHeight)
-                    .opacity(compactBroadcastLogoOpacity)
-                    .layoutPriority(2)
-                    .fixedSize()
-                    .accessibilityHidden(true)
-            } else {
-                Text("vs")
-                    .font(compactCenterPlaceholderFont)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary.opacity(0.7))
-                    .textCase(.lowercase)
-                    .fixedSize()
-            }
-        }
-        .frame(minWidth: compactBroadcastLogoWidth, minHeight: compactAccessorySlotHeight, alignment: .center)
-    }
-
-    private var compactBroadcastLogoOpacity: Double {
-        match.isFinished ? 0.4 : 1.0
-    }
-
-    private var compactStatusAccessorySlot: some View {
-        Group {
-            if match.isInProgress {
-                MatchTimeStatusView(
-                    text: centerStatusText,
-                    isLive: true,
-                    isFinal: match.isFinalRound,
-                    isLargePresentation: false
-                )
-                .fixedSize(horizontal: true, vertical: false)
-            } else {
-                Text(compactTrailingAccessoryText)
-                    .font(compactKickoffAccessoryFont)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+    @ViewBuilder
+    private var compactFixtureSecondRow: some View {
+        HStack(spacing: 8) {
+            if predictionDisplay != .hidden {
+                PredictionStripView(match: match, predictionDisplay: predictionDisplay)
                     .fixedSize(horizontal: true, vertical: false)
             }
+
+            if predictionDisplay != .hidden, compactPrimaryBroadcastChannel != nil {
+                Text("•")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+
+            if let compactPrimaryBroadcastChannel {
+                HStack(spacing: 5) {
+                    Image(systemName: "tv")
+                        .accessibilityHidden(true)
+
+                    Text(compactPrimaryBroadcastChannel.name)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .minimumScaleFactor(0.75)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Watch on \(compactPrimaryBroadcastChannel.name)")
+            }
         }
-        .frame(width: compactStatusAccessoryWidth, alignment: compactStatusAccessoryAlignment)
-        .frame(height: compactAccessorySlotHeight, alignment: compactStatusAccessoryAlignment)
-        .layoutPriority(2)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(minHeight: compactAccessorySlotHeight)
     }
 
-    private var compactInProgressCenterAccessory: some View {
-        HStack(spacing: 8) {
-            if let aggregateHomeBracketText {
-                Text(aggregateHomeBracketText)
-                    .font(aggregateBracketFont)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .fixedSize()
-            }
-
-            if let homeScoreText {
-                Text(homeScoreText)
-                    .font(scoreFont)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                    .frame(minWidth: 14, alignment: .trailing)
-            }
-
-            compactCenteredBroadcastAccessory
-
-            if let awayScoreText {
-                Text(awayScoreText)
-                    .font(scoreFont)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                    .frame(minWidth: 14, alignment: .leading)
-            }
-
-            if let aggregateAwayBracketText {
-                Text(aggregateAwayBracketText)
-                    .font(aggregateBracketFont)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .fixedSize()
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
+    private var shouldShowCompactFixtureSecondRow: Bool {
+        predictionDisplay != .hidden || compactPrimaryBroadcastChannel != nil
     }
 
-    private var compactFinishedCenterAccessory: some View {
-        HStack(spacing: 8) {
-            if let aggregateHomeBracketText {
-                Text(aggregateHomeBracketText)
-                    .font(aggregateBracketFont)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .fixedSize()
-            }
-
-            if let homeScoreText {
-                Text(homeScoreText)
-                    .font(scoreFont)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                    .frame(minWidth: 14, alignment: .trailing)
-            }
-
-            Text("-")
-                .font(compactCenterScoreSeparatorFont)
-                .fontWeight(.medium)
-                .foregroundStyle(.secondary.opacity(0.65))
-                .fixedSize()
-
-            if let awayScoreText {
-                Text(awayScoreText)
-                    .font(scoreFont)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                    .frame(minWidth: 14, alignment: .leading)
-            }
-
-            if let aggregateAwayBracketText {
-                Text(aggregateAwayBracketText)
-                    .font(aggregateBracketFont)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .fixedSize()
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var compactPostponedCenterAccessory: some View {
-        HStack(spacing: 8) {
-            if let homeScoreText {
-                Text(homeScoreText)
-                    .font(scoreFont)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                    .frame(minWidth: 14, alignment: .trailing)
-            }
-
-            compactCenteredBroadcastAccessory
-
-            if let awayScoreText {
-                Text(awayScoreText)
-                    .font(scoreFont)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                    .frame(minWidth: 14, alignment: .leading)
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var compactTrailingAccessoryText: String {
-        if match.isFinished {
-            return match.displayScoreStatus ?? match.time
-        }
-        return match.time
+    private var compactPrimaryBroadcastChannel: TvChannel? {
+        guard Self.shouldShowCompactBroadcastLogo(for: match) else { return nil }
+        guard rowPreferences.showCompactFixtureTvLogo else { return nil }
+        return localeFilteredChannels(match.tvChannels).first
     }
 
     private var compactPrimaryBroadcastLogo: UIImage? {
-        guard rowPreferences.showCompactFixtureTvLogo else { return nil }
-        guard !localeFilteredChannels(match.tvChannels).isEmpty else { return nil }
-        return primaryBroadcastLogo
+        guard let compactPrimaryBroadcastChannel else { return nil }
+        return TvLogoResolver.shared.image(for: compactPrimaryBroadcastChannel.name)
     }
 
-    static func shouldPlaceCompactKickoffInTrailingAccessory(
-        match: Match,
-        hasCompactBroadcastLogo: Bool
-    ) -> Bool {
-        let _ = hasCompactBroadcastLogo
-        if match.isPostponed || match.isFinished || match.isInProgress {
-            return true
-        }
-
-        // Keep compact fixture rows stable even when kickoff metadata is incomplete
-        // or the upstream status token is unknown. Upcoming no-score matches should
-        // still reserve the center slot for TV branding and the trailing slot for kickoff.
-        return !match.hasScore
-    }
-
-    private var shouldPlaceCompactKickoffInTrailingAccessory: Bool {
-        Self.shouldPlaceCompactKickoffInTrailingAccessory(
-            match: match,
-            hasCompactBroadcastLogo: compactPrimaryBroadcastLogo != nil
-        )
+    static func shouldShowCompactBroadcastLogo(for match: Match) -> Bool {
+        !match.isFinished
     }
 
     private var compactFixtureVerticalSpacing: CGFloat {
@@ -831,27 +626,11 @@ struct MatchRow: View {
     }
 
     private var compactFixtureHorizontalSpacing: CGFloat {
-        6
+        12
     }
 
-    private var compactStatusAccessoryWidth: CGFloat {
-        62
-    }
-
-    private var compactStatusAccessoryAlignment: Alignment {
-        match.isFinished ? .center : .trailing
-    }
-
-    private var compactCenterPlaceholderFont: Font {
-        .caption2
-    }
-
-    private var compactCenterScoreSeparatorFont: Font {
-        .caption
-    }
-
-    private var compactKickoffAccessoryFont: Font {
-        .caption
+    private var compactFixtureContentRowSpacing: CGFloat {
+        8
     }
 
     private var homeTeamEvents: [MatchTeamTimelineEvent] {
@@ -939,7 +718,7 @@ struct PredictionStripView: View {
             Button("OK") {}
         } message: {
             Text(
-                "The coloured bars and H/D/A values show the model's estimated chance of a home win, draw or away win. They are probabilities, not betting odds or guaranteed outcomes."
+                "The purple, grey and teal bars show the model's estimated chances of a home win, draw and away win. A higher H/D/A percentage means that outcome is considered more likely. These are probabilities, not betting odds or guarantees."
             )
         }
     }
@@ -951,7 +730,7 @@ struct PredictionStripView: View {
             Image(systemName: "info.circle")
                 .font(.system(size: isLargePresentation ? 15 : 13, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1641,12 +1420,10 @@ extension Color {
 
 /// Card background + border for a match row. In-progress matches get an elegant
 /// green glow (border + soft outer glow + faint inner tint); Final-round matches
-/// get the same treatment in gold, static when not live; today's non-live,
-/// non-final matches keep their existing subtle border; everything else stays plain.
+/// get the same treatment in gold, static when not live; everything else stays plain.
 private struct MatchCardChrome: ViewModifier {
     let cornerRadius: CGFloat
     let isLive: Bool
-    let highlightToday: Bool
     var isFinal: Bool = false
 
     private var tintColor: Color {
@@ -1681,9 +1458,6 @@ private struct MatchCardChrome: ViewModifier {
     private var borderColor: Color {
         if showsHighlight {
             return tintColor.opacity(0.85)
-        }
-        if highlightToday {
-            return Color(.systemYellow).opacity(0.35)
         }
         return .clear
     }

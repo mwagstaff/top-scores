@@ -139,7 +139,7 @@ struct PreferencesView: View {
                             .foregroundStyle(.secondary)
 
                         Toggle("TV channel logo", isOn: showCompactFixtureTvLogoBinding)
-                        Text("Shows the primary TV channel logo on the right side of fixture rows.")
+                        Text("Shows the primary TV channel beneath the match time and alongside the prediction.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 

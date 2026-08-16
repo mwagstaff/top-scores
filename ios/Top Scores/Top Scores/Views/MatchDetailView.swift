@@ -8,7 +8,6 @@ struct MatchDetailView: View {
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
 
     let match: Match
-    var highlightToday: Bool = false
     var showFantasyBadge: Bool = true
     var predictionDisplay: FixturePredictionDisplayState = .hidden
 

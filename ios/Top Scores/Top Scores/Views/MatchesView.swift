@@ -194,7 +194,6 @@ struct MatchesView: View {
         .navigationDestination(item: $navigationMatch) { nav in
             MatchDetailView(
                 match: nav.match,
-                highlightToday: nav.highlightToday,
                 showFantasyBadge: nav.showFantasyBadge,
                 predictionDisplay: nav.predictionDisplay
             )
@@ -615,7 +614,6 @@ struct MatchesView: View {
         Button {
             navigationMatch = MatchNavigation(
                 match: match,
-                highlightToday: day.isToday,
                 showFantasyBadge: mode == .fixtures,
                 predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
             )
@@ -624,7 +622,6 @@ struct MatchesView: View {
                 MatchesListRowLabel(
                     match: match,
                     isFixtureMode: mode == .fixtures,
-                    highlightToday: day.isToday,
                     rowPreferences: matchRowPreferences,
                     fantasyContext: fantasyViewModel.matchRowContext,
                     predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
@@ -2224,7 +2221,6 @@ private struct FixtureDateCarouselTile: View {
 private struct MatchesListRowLabel: View, Equatable {
     let match: Match
     let isFixtureMode: Bool
-    let highlightToday: Bool
     let rowPreferences: MatchRowPreferences
     let fantasyContext: FantasyMatchRowContext
     let predictionDisplay: FixturePredictionDisplayState
@@ -2232,11 +2228,10 @@ private struct MatchesListRowLabel: View, Equatable {
     var body: some View {
         MatchRow(
             match: match,
-            highlightToday: highlightToday,
             showLeague: false,
             showFantasyBadge: isFixtureMode,
             showFantasyPlayerContributions: isFixtureMode,
-            teamLogoScale: 1.1,
+            teamLogoScale: 1.518,
             showsFinishedInlineAggregateBrackets: true,
             layoutStyle: .compactFixture,
             fantasyContext: fantasyContext,
@@ -2248,7 +2243,6 @@ private struct MatchesListRowLabel: View, Equatable {
 
 private struct MatchNavigation: Identifiable, Hashable, Sendable {
     let match: Match
-    let highlightToday: Bool
     let showFantasyBadge: Bool
     let predictionDisplay: FixturePredictionDisplayState
     var id: String { match.id }

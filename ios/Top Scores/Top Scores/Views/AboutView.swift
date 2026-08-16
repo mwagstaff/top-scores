@@ -708,7 +708,6 @@ struct AboutView: View {
                         } label: {
                             MatchRow(
                                 match: harnessMatch.match,
-                                highlightToday: false,
                                 showLeague: false,
                                 fantasyContext: fantasyViewModel.matchRowContext,
                                 rowPreferences: matchRowPreferences

@@ -1060,7 +1060,7 @@ struct Top_ScoresTests {
         #expect(updated.homeGoalScorers == [scorer])
     }
 
-    @Test func compactFixtureLayout_keepsKickoffOnTrailingEdgeForUpcomingMatchWithUnknownStatus() async throws {
+    @Test func compactFixtureLayout_allowsBroadcastLogoForUpcomingMatchWithUnknownStatus() async throws {
         let match = makeMatch(
             date: "",
             time: "14:30",
@@ -1072,14 +1072,11 @@ struct Top_ScoresTests {
         )
 
         #expect(
-            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
-                match: match,
-                hasCompactBroadcastLogo: false
-            )
+            MatchRow.shouldShowCompactBroadcastLogo(for: match)
         )
     }
 
-    @Test func compactFixtureLayout_keepsKickoffOnTrailingEdgeForUpcomingMatchWithoutScores() async throws {
+    @Test func compactFixtureLayout_allowsBroadcastLogoForUpcomingMatchWithoutScores() async throws {
         let match = makeMatch(
             date: formattedDate(offsetDays: 1),
             time: "18:30",
@@ -1091,10 +1088,7 @@ struct Top_ScoresTests {
         )
 
         #expect(
-            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
-                match: match,
-                hasCompactBroadcastLogo: true
-            )
+            MatchRow.shouldShowCompactBroadcastLogo(for: match)
         )
     }
 
@@ -1693,7 +1687,7 @@ struct Top_ScoresTests {
         #expect(updated.aggregateSummaryText == "Agg: 1-2")
     }
 
-    @Test func compactFixtureKickoff_movesToTrailingAccessoryWhenAggregateBracketsShow() async throws {
+    @Test func compactFixtureBroadcast_allowsLogoWhenAggregateBracketsShow() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),
             time: "20:00",
@@ -1710,14 +1704,11 @@ struct Top_ScoresTests {
         )
 
         #expect(
-            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
-                match: match,
-                hasCompactBroadcastLogo: true
-            )
+            MatchRow.shouldShowCompactBroadcastLogo(for: match)
         )
     }
 
-    @Test func compactFixtureKickoff_movesToTrailingAccessoryForStandardPreKickoffFixtures() async throws {
+    @Test func compactFixtureBroadcast_allowsLogoForStandardPreKickoffFixtures() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),
             time: "20:00",
@@ -1734,14 +1725,11 @@ struct Top_ScoresTests {
         )
 
         #expect(
-            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
-                match: match,
-                hasCompactBroadcastLogo: true
-            )
+            MatchRow.shouldShowCompactBroadcastLogo(for: match)
         )
     }
 
-    @Test func compactFixtureKickoff_movesToTrailingAccessoryWhenNoBroadcastLogoExists() async throws {
+    @Test func compactFixtureBroadcast_allowsLogoForUnfinishedMatchWithoutChannels() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),
             time: "15:00",
@@ -1757,14 +1745,11 @@ struct Top_ScoresTests {
         )
 
         #expect(
-            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
-                match: match,
-                hasCompactBroadcastLogo: false
-            )
+            MatchRow.shouldShowCompactBroadcastLogo(for: match)
         )
     }
 
-    @Test func compactFixtureKickoff_movesToTrailingAccessoryForPostponedFixtures() async throws {
+    @Test func compactFixtureBroadcast_allowsLogoForPostponedFixtures() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),
             time: "14:00",
@@ -1780,14 +1765,11 @@ struct Top_ScoresTests {
         )
 
         #expect(
-            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
-                match: match,
-                hasCompactBroadcastLogo: true
-            )
+            MatchRow.shouldShowCompactBroadcastLogo(for: match)
         )
     }
 
-    @Test func compactFixtureKickoff_movesToTrailingAccessoryForFullTimeFixtures() async throws {
+    @Test func compactFixtureBroadcast_hidesLogoForFullTimeFixtures() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),
             time: "19:45",
@@ -1802,15 +1784,10 @@ struct Top_ScoresTests {
             scoreStatus: "FT"
         )
 
-        #expect(
-            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
-                match: match,
-                hasCompactBroadcastLogo: true
-            )
-        )
+        #expect(!MatchRow.shouldShowCompactBroadcastLogo(for: match))
     }
 
-    @Test func compactFixtureKickoff_movesToTrailingAccessoryForAfterExtraTimeFixtures() async throws {
+    @Test func compactFixtureBroadcast_hidesLogoForAfterExtraTimeFixtures() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),
             time: "20:00",
@@ -1825,15 +1802,10 @@ struct Top_ScoresTests {
             scoreStatus: "AET"
         )
 
-        #expect(
-            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
-                match: match,
-                hasCompactBroadcastLogo: true
-            )
-        )
+        #expect(!MatchRow.shouldShowCompactBroadcastLogo(for: match))
     }
 
-    @Test func compactFixtureKickoff_movesToTrailingAccessoryForLiveFixtures() async throws {
+    @Test func compactFixtureBroadcast_allowsLogoForLiveFixtures() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),
             time: "12:30",
@@ -1849,10 +1821,7 @@ struct Top_ScoresTests {
         )
 
         #expect(
-            MatchRow.shouldPlaceCompactKickoffInTrailingAccessory(
-                match: match,
-                hasCompactBroadcastLogo: true
-            )
+            MatchRow.shouldShowCompactBroadcastLogo(for: match)
         )
     }
 
