@@ -75,9 +75,6 @@ struct PreferencesView: View {
 
     private var content: some View {
         VStack(spacing: 0) {
-            if !embeddedInNavigation {
-                headerView
-            }
             VStack(spacing: 0) {
                 Form {
 
@@ -419,13 +416,6 @@ struct PreferencesView: View {
                 .background(Color(.systemGroupedBackground))
             }
             .background(Color(.systemGroupedBackground))
-        }
-    }
-
-    private var headerView: some View {
-        TopLevelScreenHeader(screenTitle: "Preferences") {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 24, weight: .semibold))
         }
     }
 

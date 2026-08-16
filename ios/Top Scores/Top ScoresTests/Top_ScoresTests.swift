@@ -135,6 +135,7 @@ struct Top_ScoresTests {
         #expect(!store.showFantasyExpectedPoints)
         #expect(!store.showFantasyRealTimePoints)
         #expect(!store.showsFantasyDataInFixtures)
+        #expect(store.showPredictedScores)
         #expect(!store.channelFilterEnabled)
     }
 

@@ -8,7 +8,6 @@ struct TablesView: View {
     @State private var selectedLeagueID: String
     @State private var isLoading: Bool
     @State private var errorMessage: String?
-    @State private var lastUpdated: Date?
     @State private var hasLoaded = false
     @State private var shortNameRefreshVersion = 0
     @State private var screenOpenedAt: Date?
@@ -25,13 +24,6 @@ struct TablesView: View {
 
     private static let apiBaseURLDefaultsKey = "preferences.apiBaseURL"
 
-    private let refreshFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
-
     init() {
         let apiBaseURL = UserDefaults.standard.string(forKey: Self.apiBaseURLDefaultsKey)
             ?? PreferencesStore.defaultApiBaseURL
@@ -41,14 +33,12 @@ struct TablesView: View {
         _leagues = State(initialValue: initialLeagues)
         _selectedLeagueID = State(initialValue: Self.defaultLeagueID(from: initialLeagues))
         _isLoading = State(initialValue: initialLeagues.isEmpty)
-        _lastUpdated = State(initialValue: cachedResponse?.lastUpdated)
     }
 
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
                 VStack(spacing: 0) {
-                    headerView
                     if navigationCoordinator.returnTabIndex != nil {
                         backToOriginButton
                     }
@@ -150,9 +140,9 @@ struct TablesView: View {
                         .foregroundStyle(.secondary)
                     Text("No tables to show")
                         .font(.title3)
-                    Text("League tables will appear here once available.")
+                    Text(errorMessage ?? "League tables will appear here once available.")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(errorMessage == nil ? Color.secondary : Color.red)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
                 }
@@ -325,31 +315,6 @@ struct TablesView: View {
         .background(.thinMaterial)
     }
 
-    private var headerView: some View {
-        TopLevelScreenHeader(screenTitle: "Tables") {
-            Image(systemName: "tablecells")
-                .font(.system(size: 24, weight: .semibold))
-        } detail: {
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            } else if isLoading {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Refreshing tables")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            } else if let lastUpdated {
-                Text("Updated \(refreshFormatter.string(from: lastUpdated))")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private func loadTables(force: Bool) async {
         let apiBaseURL = preferences.apiBaseURL
         await MainActor.run {
@@ -420,7 +385,6 @@ struct TablesView: View {
             guard clearWhenMissing else { return }
             leagues = []
             selectedLeagueID = Self.defaultLeagueID(from: [])
-            lastUpdated = nil
             return
         }
 
@@ -433,7 +397,6 @@ struct TablesView: View {
             from: response.leagues,
             currentSelection: selectedLeagueID
         )
-        lastUpdated = response.lastUpdated
     }
 
     private func resolvedLeagueID(from leagues: [LeagueTable], currentSelection: String) -> String {

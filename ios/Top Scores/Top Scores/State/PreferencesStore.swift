@@ -554,7 +554,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultShowFantasyMatchPills = false
     nonisolated static let defaultPremierLeagueMatchesFirst = true
     nonisolated static let defaultShowPostponedGames = false
-    nonisolated static let defaultShowPredictedScores = false
+    nonisolated static let defaultShowPredictedScores = true
 
     @Published var selectedLeagues: [String] {
         didSet { persist() }

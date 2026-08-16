@@ -44,7 +44,6 @@ struct ProfileView: View {
                     }
                 }
             }
-            .navigationTitle("Profile")
         }
         .onAppear {
             let openedAt = Date()

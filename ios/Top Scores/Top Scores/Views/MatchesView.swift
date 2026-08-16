@@ -5,24 +5,6 @@ enum MatchesViewMode: String, Sendable {
     case fixtures
     case results
 
-    var title: String {
-        switch self {
-        case .fixtures:
-            return "Scores"
-        case .results:
-            return "Results"
-        }
-    }
-
-    var headingIconName: String {
-        switch self {
-        case .fixtures:
-            return "soccerball"
-        case .results:
-            return "clock.arrow.circlepath"
-        }
-    }
-
     var loadingText: String {
         switch self {
         case .fixtures:
@@ -59,14 +41,6 @@ enum MatchesViewMode: String, Sendable {
         }
     }
 
-    var refreshProgressText: String {
-        switch self {
-        case .fixtures:
-            return "Refreshing fixtures"
-        case .results:
-            return "Refreshing results"
-        }
-    }
 }
 
 struct MatchesView: View {
@@ -89,15 +63,7 @@ struct MatchesView: View {
     @State private var predictionIndex = FixturePredictionStore.allPredictions()
     @State private var pendingPredictionDateKeys: Set<String> = []
     @State private var attemptedPredictionDateKeys: Set<String> = []
-    @State private var searchDebounceTask: Task<Void, Never>?
-    @State private var searchFilterWorkItem: DispatchWorkItem?
     @State private var groupedSideEffectsTask: Task<Void, Never>?
-    @State private var isSearchVisible = false
-    @State private var isSearchFieldFocused = false
-    @State private var searchText = ""
-    @State private var debouncedSearchText = ""
-    @State private var filteredMatchDays: [MatchDay] = []
-    @State private var indexedMatchDays: [IndexedMatchDay] = []
     @State private var reportedMissingLogoNames: Set<String> = []
     @State private var didRunActivationForVisibleCycle = false
     @State private var navigationMatch: MatchNavigation?
@@ -120,9 +86,6 @@ struct MatchesView: View {
         self.viewState = store.viewState(for: mode)
     }
 
-    private static let minimumSearchCharacters = 3
-    private static let searchDebounceNanoseconds: UInt64 = 250_000_000
-    private static let searchFilterQueue = DispatchQueue(label: "TopScores.match-search", qos: .userInitiated)
     private static let fixtureDockContentClearance: CGFloat = 80
 
     private struct CompactFixturesSpacingProfile {
@@ -166,18 +129,6 @@ struct MatchesView: View {
         .headline
     }
 
-    private var normalizedDebouncedQuery: String {
-        Self.normalizedSearchText(debouncedSearchText)
-    }
-
-    private var normalizedLiveQuery: String {
-        Self.normalizedSearchText(searchText)
-    }
-
-    private var isSearchFilteringActive: Bool {
-        normalizedDebouncedQuery.count >= Self.minimumSearchCharacters
-    }
-
     private var usesFixtureBrowser: Bool {
         mode == .fixtures && fixtureBrowser.hasLoadedCalendar
     }
@@ -187,10 +138,6 @@ struct MatchesView: View {
     }
 
     private var displayedMatchDays: [MatchDay] {
-        if isSearchFilteringActive {
-            guard !preferences.showPostponedGames else { return filteredMatchDays }
-            return Self.filteringPostponed(filteredMatchDays)
-        }
         // Postponed filtering over the full dataset is cached in visibleGroupedDays
         // so it doesn't run on every body evaluation.
         return visibleGroupedDays
@@ -222,17 +169,12 @@ struct MatchesView: View {
         }
     }
 
-    private let refreshFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
-
     private var navigationStackContent: some View {
         GeometryReader { proxy in
             VStack(spacing: 0) {
-                headerView
+                if mode == .fixtures {
+                    fixtureDateBrowserControl
+                }
                 if usesFixtureBrowser {
                     fixtureDatePagedContent(containerWidth: proxy.size.width)
                 } else {
@@ -262,8 +204,7 @@ struct MatchesView: View {
     @ViewBuilder
     private var activeMatchesContent: some View {
         Group {
-            if displayedMatchDays.isEmpty && !isSearchFilteringActive &&
-                isMatchesUpdating {
+            if displayedMatchDays.isEmpty && isMatchesUpdating {
                 nativeMatchesLoadingState
             } else if displayedMatchDays.isEmpty {
                 emptyState
@@ -281,8 +222,7 @@ struct MatchesView: View {
             previousDateKey: fixtureBrowser.adjacentDateKey(offset: -1),
             nextDateKey: fixtureBrowser.adjacentDateKey(offset: 1),
             isSwipeEnabled: expandedFixtureRegionID == nil &&
-                !isFixtureFavouritesMenuExpanded &&
-                !isSearchVisible,
+                !isFixtureFavouritesMenuExpanded,
             reduceMotion: accessibilityReduceMotion,
             onSelect: fixtureBrowser.selectDate
         ) {
@@ -323,7 +263,6 @@ struct MatchesView: View {
                     fixtureBrowser.setAutoRefreshEnabled(false)
                     matchesStore.setFixtureBrowserLiveRefreshActive(false)
                 }
-                isSearchFieldFocused = false
                 didRunActivationForVisibleCycle = false
                 screenOpenedAt = nil
                 screenViewSentForActivation = false
@@ -406,9 +345,6 @@ struct MatchesView: View {
             guard isSelected else { return }
             predictionIndex = FixturePredictionStore.allPredictions()
         }
-        .onChange(of: searchText) { _, newValue in
-            scheduleDebouncedSearch(for: newValue)
-        }
         .onDisappear(perform: handleScreenDisappear)
     }
 
@@ -430,9 +366,6 @@ struct MatchesView: View {
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
         isFixtureFavouritesMenuExpanded = false
-        isSearchFieldFocused = false
-        searchDebounceTask?.cancel()
-        searchFilterWorkItem?.cancel()
         groupedSideEffectsTask?.cancel()
     }
 
@@ -780,9 +713,9 @@ struct MatchesView: View {
             Image(systemName: "tv")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text(isSearchFilteringActive ? "No matches found" : mode.emptyStateTitle)
+            Text(mode.emptyStateTitle)
                 .font(.title3)
-            Text(isSearchFilteringActive ? "Try a different search term." : mode.emptyStateSubtitle)
+            Text(mode.emptyStateSubtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -808,130 +741,6 @@ struct MatchesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(mode.loadingText)
-    }
-
-    private var headerView: some View {
-        TopLevelScreenHeader(screenTitle: mode.title) {
-            Image(systemName: mode.headingIconName)
-                .font(.system(size: 24, weight: .semibold))
-        } accessory: {
-            HStack(spacing: 8) {
-                // EPL / All-competitions filter toggle
-                if mode == .results {
-                    Button {
-                        let enabling = !preferences.englishPremierLeagueTeamsOnly
-                        NSLog("[MatchesView] epl_toggle mode=%@ enabling=%d showAllMatches=%d", mode.rawValue, enabling, preferences.showAllMatches)
-                        preferences.englishPremierLeagueTeamsOnly = enabling
-                        if enabling && preferences.showAllMatches {
-                            // showAllMatches forces unfilteredSnapshot, overriding all filters.
-                            // Clear it so the actual snapshot (including EPL filter) is used.
-                            preferences.showAllMatches = false
-                        }
-                    } label: {
-                        FantasyLionIconView(size: 28)
-                            .foregroundStyle(preferences.englishPremierLeagueTeamsOnly ? Color.accentColor : Color.primary)
-                            .padding(8)
-                            .background(Circle().fill(
-                                preferences.englishPremierLeagueTeamsOnly
-                                    ? AnyShapeStyle(Color.accentColor.opacity(0.15))
-                                    : AnyShapeStyle(.ultraThinMaterial)
-                            ))
-                    }
-                    .accessibilityLabel(preferences.englishPremierLeagueTeamsOnly ? "Premier League teams only – tap for all competitions" : "All competitions – tap for Premier League teams only")
-                }
-
-                // Predicted scores toggle
-                Button {
-                    preferences.showPredictedScores.toggle()
-                    if preferences.showPredictedScores {
-                        warmPredictionsForVisibleDays(days: sourceGroupedDays)
-                    }
-                } label: {
-                    Image(systemName: preferences.showPredictedScores ? "sparkles.rectangle.stack.fill" : "sparkles")
-                        .font(.title3)
-                        .padding(10)
-                        .background(Circle().fill(
-                            preferences.showPredictedScores
-                                ? AnyShapeStyle(Color.accentColor.opacity(0.15))
-                                : AnyShapeStyle(.ultraThinMaterial)
-                        ))
-                        .foregroundStyle(preferences.showPredictedScores ? Color.accentColor : Color.primary)
-                }
-                .accessibilityLabel(preferences.showPredictedScores ? "Hide predicted scores" : "Show predicted scores")
-
-                // Search toggle
-                Button {
-                    if isSearchVisible {
-                        hideSearchAndClear()
-                    } else {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isSearchVisible = true
-                        }
-                        isSearchFieldFocused = true
-                        rebuildSearchIndex(from: sourceGroupedDays)
-                        AppMetricsService.shared.fireActivity("search_activated", screen: mode.rawValue, apiBaseURL: preferences.apiBaseURL)
-                    }
-                } label: {
-                    Image(systemName: isSearchVisible ? "magnifyingglass.circle.fill" : "magnifyingglass")
-                        .font(.title3)
-                        .padding(10)
-                        .background(Circle().fill(.ultraThinMaterial))
-                }
-                .accessibilityLabel(isSearchVisible ? "Hide search and clear text" : "Show match search")
-            }
-        } detail: {
-            if isSearchVisible {
-                MatchSearchBar(
-                    text: $searchText,
-                    isFocused: $isSearchFieldFocused,
-                    placeholder: "Search teams, leagues or channels"
-                )
-                    .frame(height: 44)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-
-                if !normalizedLiveQuery.isEmpty, normalizedLiveQuery.count < Self.minimumSearchCharacters {
-                    Text("Type at least \(Self.minimumSearchCharacters) characters to search.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if fixtureBrowser.errorMessage != nil || viewState.errorMessage != nil ||
-                (!sourceGroupedDays.isEmpty && isMatchesUpdating) ||
-                fixtureBrowser.lastUpdated != nil || viewState.lastUpdated != nil {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let error = mode == .fixtures
-                        ? (fixtureBrowser.errorMessage ?? viewState.errorMessage)
-                        : viewState.errorMessage {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    }
-
-                    if !sourceGroupedDays.isEmpty && isMatchesUpdating {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text(mode.refreshProgressText)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if let lastUpdated = mode == .fixtures
-                        ? (fixtureBrowser.lastUpdated ?? viewState.lastUpdated)
-                        : viewState.lastUpdated {
-                        let cachedSuffix = viewState.isUsingCache ? " (cached)" : ""
-                        Text("Updated \(refreshFormatter.string(from: lastUpdated))\(cachedSuffix)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            if mode == .fixtures {
-                fixtureDateBrowserControl
-                    .padding(.horizontal, -16)
-            }
-        }
     }
 
     private var fixtureDateBrowserControl: some View {
@@ -1105,7 +914,6 @@ struct MatchesView: View {
     private var fixtureCompetitionRail: some View {
         HStack(spacing: 6) {
             Button {
-                isSearchFieldFocused = false
                 fixturePickerDraftOptionIDs = nil
                 fixturePickerBaselineOptionIDs = nil
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -1151,7 +959,6 @@ struct MatchesView: View {
                         ForEach(availableFixtureRegions) { region in
                             let selectedCount = selectedCompetitionCount(in: region)
                             Button {
-                                isSearchFieldFocused = false
                                 toggleFixtureCompetitionPicker(for: region.id)
                             } label: {
                                 FixtureRegionDockButton(
@@ -1219,6 +1026,8 @@ struct MatchesView: View {
 
             Divider()
 
+            fixturePredictionsActionRow
+            Divider().padding(.leading, 58)
             fixtureFavouritesActionRow(
                 title: "Show favourites",
                 subtitle: "Use your saved competition view",
@@ -1258,6 +1067,40 @@ struct MatchesView: View {
                 .stroke(Color(.separator).opacity(0.55), lineWidth: 0.5)
         }
         .shadow(color: .black.opacity(0.28), radius: 24, y: 10)
+    }
+
+    private var fixturePredictionsActionRow: some View {
+        Button {
+            preferences.showPredictedScores.toggle()
+            if preferences.showPredictedScores {
+                warmPredictionsForVisibleDays(days: sourceGroupedDays)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 32, height: 32)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Show predictions")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text("Display AI score predictions")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                FixturePickerCheckbox(isSelected: preferences.showPredictedScores)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 58)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show predictions")
+        .accessibilityValue(preferences.showPredictedScores ? "Checked" : "Not checked")
+        .accessibilityHint("Displays AI score predictions for matches")
     }
 
     private var fixtureViewOptionsSymbol: String {
@@ -1715,38 +1558,6 @@ struct MatchesView: View {
         day.matchCount
     }
 
-    private func hideSearchAndClear() {
-        searchDebounceTask?.cancel()
-        searchDebounceTask = nil
-        searchFilterWorkItem?.cancel()
-        searchFilterWorkItem = nil
-        searchText = ""
-        debouncedSearchText = ""
-        filteredMatchDays = []
-        isSearchFieldFocused = false
-        withAnimation(.easeInOut(duration: 0.2)) {
-            isSearchVisible = false
-        }
-    }
-
-    private func scheduleDebouncedSearch(for rawText: String) {
-        searchDebounceTask?.cancel()
-        searchFilterWorkItem?.cancel()
-        let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            debouncedSearchText = ""
-            filteredMatchDays = []
-            return
-        }
-
-        searchDebounceTask = Task {
-            try? await Task.sleep(nanoseconds: Self.searchDebounceNanoseconds)
-            guard !Task.isCancelled else { return }
-            debouncedSearchText = trimmed
-            applySearchFilter()
-        }
-    }
-
     private func scheduleGroupedSideEffects(for days: [MatchDay], immediate: Bool) {
         groupedSideEffectsTask?.cancel()
         groupedSideEffectsTask = Task {
@@ -1754,7 +1565,6 @@ struct MatchesView: View {
                 try? await Task.sleep(nanoseconds: groupedSideEffectsDelayNanos)
             }
             guard !Task.isCancelled else { return }
-            rebuildSearchIndex(from: days)
             ensureFantasySquadLoadedIfNeeded()
             reportMissingTeamLogosIfNeeded(days: days)
         }
@@ -1842,112 +1652,6 @@ struct MatchesView: View {
         predictionIndex = FixturePredictionStore.allPredictions()
         warmPredictionsForVisibleDays(days: days)
         scheduleGroupedSideEffects(for: days, immediate: false)
-    }
-
-    private func rebuildSearchIndex(from days: [MatchDay]) {
-        guard isSearchVisible || isSearchFilteringActive else {
-            indexedMatchDays = []
-            filteredMatchDays = []
-            return
-        }
-
-        indexedMatchDays = days.map { day in
-            let indexedLeagues = day.leagues.map { league in
-                let indexedMatches = league.matches.map { match in
-                    IndexedMatch(
-                        match: match,
-                        searchText: Self.normalizedSearchText(
-                            [
-                                match.homeTeam,
-                                match.awayTeam,
-                                match.displayLeague,
-                                match.time,
-                                match.tvChannels.map(\.name).joined(separator: " ")
-                            ].joined(separator: " ")
-                        )
-                    )
-                }
-                return IndexedMatchLeague(id: league.id, league: league.league, matches: indexedMatches)
-            }
-            return IndexedMatchDay(
-                id: day.id,
-                dateKey: day.dateKey,
-                displayDate: day.displayDate,
-                isToday: day.isToday,
-                isTomorrow: day.isTomorrow,
-                leagues: indexedLeagues
-            )
-        }
-
-        applySearchFilter()
-    }
-
-    private func applySearchFilter() {
-        let query = normalizedDebouncedQuery
-        guard query.count >= Self.minimumSearchCharacters else {
-            searchFilterWorkItem?.cancel()
-            searchFilterWorkItem = nil
-            filteredMatchDays = []
-            return
-        }
-
-        searchFilterWorkItem?.cancel()
-        let scheduledQuery = query
-        let indexedDays = indexedMatchDays
-        let workItem = DispatchWorkItem {
-            let result = Self.filterDays(indexedDays, query: scheduledQuery)
-            DispatchQueue.main.async {
-                guard scheduledQuery == self.normalizedDebouncedQuery else { return }
-                self.filteredMatchDays = result
-            }
-        }
-        searchFilterWorkItem = workItem
-        Self.searchFilterQueue.async(execute: workItem)
-    }
-
-    private static func normalizedSearchText(_ value: String) -> String {
-        value
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-    }
-
-    private static func filterDays(_ indexedDays: [IndexedMatchDay], query: String) -> [MatchDay] {
-        var result: [MatchDay] = []
-        result.reserveCapacity(indexedDays.count)
-
-        for day in indexedDays {
-            var dayLeagues: [MatchLeague] = []
-            dayLeagues.reserveCapacity(day.leagues.count)
-
-            for league in day.leagues {
-                var leagueMatches: [Match] = []
-                leagueMatches.reserveCapacity(league.matches.count)
-
-                for indexedMatch in league.matches where indexedMatch.searchText.contains(query) {
-                    leagueMatches.append(indexedMatch.match)
-                }
-
-                if !leagueMatches.isEmpty {
-                    dayLeagues.append(MatchLeague(id: league.id, league: league.league, matches: leagueMatches))
-                }
-            }
-
-            if !dayLeagues.isEmpty {
-                result.append(
-                    MatchDay(
-                        id: day.id,
-                        dateKey: day.dateKey,
-                        displayDate: day.displayDate,
-                        isToday: day.isToday,
-                        isTomorrow: day.isTomorrow,
-                        leagues: dayLeagues
-                    )
-                )
-            }
-        }
-
-        return result
     }
 
     private func reportMissingTeamLogosIfNeeded(days: [MatchDay]) {
@@ -2460,100 +2164,6 @@ private struct FixtureDateCarouselTile: View {
         formatter.dateStyle = .full
         return formatter
     }()
-}
-
-private struct IndexedMatchDay {
-    let id: String
-    let dateKey: String
-    let displayDate: String
-    let isToday: Bool
-    let isTomorrow: Bool
-    let leagues: [IndexedMatchLeague]
-}
-
-private struct IndexedMatchLeague {
-    let id: String
-    let league: String
-    let matches: [IndexedMatch]
-}
-
-private struct IndexedMatch {
-    let match: Match
-    let searchText: String
-}
-
-private struct MatchSearchBar: UIViewRepresentable {
-    @Binding var text: String
-    @Binding var isFocused: Bool
-    let placeholder: String
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, isFocused: $isFocused)
-    }
-
-    func makeUIView(context: Context) -> UISearchBar {
-        let searchBar = UISearchBar(frame: .zero)
-        searchBar.searchBarStyle = .minimal
-        searchBar.placeholder = placeholder
-        searchBar.autocapitalizationType = .none
-        searchBar.autocorrectionType = .no
-        searchBar.returnKeyType = .search
-        searchBar.delegate = context.coordinator
-        return searchBar
-    }
-
-    func updateUIView(_ searchBar: UISearchBar, context: Context) {
-        if searchBar.text != text {
-            searchBar.text = text
-        }
-        context.coordinator.updateFocus(for: searchBar, shouldFocus: isFocused)
-    }
-
-    final class Coordinator: NSObject, UISearchBarDelegate {
-        private var text: Binding<String>
-        private var isFocused: Binding<Bool>
-
-        init(text: Binding<String>, isFocused: Binding<Bool>) {
-            self.text = text
-            self.isFocused = isFocused
-        }
-
-        func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
-            text.wrappedValue = searchText
-        }
-
-        func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) {
-            if !isFocused.wrappedValue {
-                isFocused.wrappedValue = true
-            }
-        }
-
-        func searchBarTextDidEndEditing(_ searchBar: UISearchBar) {
-            if isFocused.wrappedValue {
-                isFocused.wrappedValue = false
-            }
-        }
-
-        func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
-            isFocused.wrappedValue = false
-        }
-
-        func updateFocus(for searchBar: UISearchBar, shouldFocus: Bool) {
-            if shouldFocus {
-                guard !searchBar.isFirstResponder else { return }
-                guard searchBar.window != nil else {
-                    DispatchQueue.main.async { [weak searchBar] in
-                        guard let searchBar else { return }
-                        self.updateFocus(for: searchBar, shouldFocus: shouldFocus)
-                    }
-                    return
-                }
-                searchBar.becomeFirstResponder()
-            } else if searchBar.isFirstResponder {
-                searchBar.resignFirstResponder()
-            }
-        }
-    }
 }
 
 private struct MatchesListRowLabel: View, Equatable {

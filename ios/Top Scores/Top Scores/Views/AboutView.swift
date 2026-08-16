@@ -45,9 +45,6 @@ struct AboutView: View {
 
     private var content: some View {
         VStack(spacing: 0) {
-            if !embeddedInNavigation {
-                headerView
-            }
             VStack(spacing: 0) {
                 List {
                     Section("Version") {
@@ -202,13 +199,6 @@ struct AboutView: View {
             await refreshDiagnostics()
         }
         #endif
-    }
-
-    private var headerView: some View {
-        TopLevelScreenHeader(screenTitle: "About") {
-            Image(systemName: "info.circle")
-                .font(.system(size: 24, weight: .semibold))
-        }
     }
 
     private var appVersion: String {
