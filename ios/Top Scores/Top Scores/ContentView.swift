@@ -17,13 +17,19 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var fantasyTabBadge: String?
     @State private var fantasyTabShouldPulse = false
+    @StateObject private var fixturesCoordinator = FixturesViewCoordinator()
     @ObservedObject private var tablesNavigationCoordinator = TablesNavigationCoordinator.shared
 
     private static let tablesTabIndex = 1
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            MatchesView(mode: .fixtures, isSelected: selectedTab == 0, store: matchesStore)
+            MatchesView(
+                mode: .fixtures,
+                isSelected: selectedTab == 0,
+                store: matchesStore,
+                fixturesCoordinator: fixturesCoordinator
+            )
                 .tabItem {
                     Label("Scores", systemImage: "soccerball")
                 }
@@ -56,6 +62,38 @@ struct ContentView: View {
                     Label("Profile", systemImage: "person.crop.circle")
                 }
                 .tag(3)
+        }
+        .tabViewBottomAccessory(
+            isEnabled: selectedTab == 0 && fixturesCoordinator.isDockEnabled
+        ) {
+            FixtureCompetitionDockView(coordinator: fixturesCoordinator)
+        }
+        .overlayPreferenceValue(FixtureCompetitionDockBoundsPreferenceKey.self) { dockBounds in
+            if selectedTab == 0,
+               fixturesCoordinator.isDockEnabled,
+               fixturesCoordinator.hasExpandedPanel,
+               let dockBounds {
+                GeometryReader { proxy in
+                    let dockFrame = proxy[dockBounds]
+                    let bottomPadding = max(0, proxy.size.height - dockFrame.minY + 2)
+
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        FixtureCompetitionDockView(
+                            coordinator: fixturesCoordinator,
+                            content: .panel
+                        )
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, bottomPadding)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $fixturesCoordinator.isTeamPickerPresented) {
+            FixtureCompetitionDockView(
+                coordinator: fixturesCoordinator,
+                content: .teamPicker
+            )
         }
         .background(Color(.systemBackground))
         .onChange(of: tablesNavigationCoordinator.pendingTarget) { _, newValue in

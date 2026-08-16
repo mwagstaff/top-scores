@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UIKit
 
@@ -43,6 +44,74 @@ enum MatchesViewMode: String, Sendable {
 
 }
 
+struct FixtureCompetitionDockBoundsPreferenceKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>?
+
+    static func reduce(
+        value: inout Anchor<CGRect>?,
+        nextValue: () -> Anchor<CGRect>?
+    ) {
+        value = nextValue() ?? value
+    }
+}
+
+@MainActor
+final class FixturesViewCoordinator: ObservableObject {
+    let browser = FixtureBrowserStore()
+
+    @Published var expandedFixtureRegionID: String?
+    @Published var fixturePickerDraftOptionIDs: Set<String>?
+    @Published var fixturePickerBaselineOptionIDs: Set<String>?
+    @Published var isFixtureFavouritesMenuExpanded = false
+    @Published var isFixtureViewSettingsExpanded = false
+    @Published var isTeamPickerPresented = false
+    @Published var teamPickerDraftTeamIDs: Set<String> = []
+    @Published var isDockEnabled = true
+    @Published private(set) var toastMessage: String?
+    @Published private(set) var predictionWarmRequestToken = 0
+
+    private var toastTask: Task<Void, Never>?
+
+    var isDateSwipeEnabled: Bool {
+        expandedFixtureRegionID == nil &&
+        !isFixtureFavouritesMenuExpanded &&
+        !isFixtureViewSettingsExpanded
+    }
+
+    var hasExpandedPanel: Bool {
+        expandedFixtureRegionID != nil ||
+        isFixtureFavouritesMenuExpanded ||
+        isFixtureViewSettingsExpanded
+    }
+
+    func resetPresentation() {
+        expandedFixtureRegionID = nil
+        fixturePickerDraftOptionIDs = nil
+        fixturePickerBaselineOptionIDs = nil
+        isFixtureFavouritesMenuExpanded = false
+        isFixtureViewSettingsExpanded = false
+        isTeamPickerPresented = false
+    }
+
+    func requestPredictionWarm() {
+        predictionWarmRequestToken &+= 1
+    }
+
+    func showToast(_ message: String) {
+        toastTask?.cancel()
+        withAnimation {
+            toastMessage = message
+        }
+        toastTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation {
+                self?.toastMessage = nil
+            }
+        }
+    }
+}
+
 struct MatchesView: View {
     let mode: MatchesViewMode
     var isSelected: Bool = true
@@ -51,15 +120,14 @@ struct MatchesView: View {
     // re-renders. Store access is for method calls (configure/refresh/etc).
     private let matchesStore: MatchesStore
     @ObservedObject private var viewState: MatchesModeViewState
-    @StateObject private var fixtureBrowser = FixtureBrowserStore()
+    @ObservedObject private var fixturesCoordinator: FixturesViewCoordinator
+    @ObservedObject private var fixtureBrowser: FixtureBrowserStore
 
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
-    @State private var showToast = false
-    @State private var toastMessage = ""
     @State private var predictionIndex = FixturePredictionStore.allPredictions()
     @State private var pendingPredictionDateKeys: Set<String> = []
     @State private var attemptedPredictionDateKeys: Set<String> = []
@@ -74,19 +142,18 @@ struct MatchesView: View {
     @State private var fixtureBrowseGroupedDays: [MatchDay] = []
     @State private var fixtureBrowsePageGroupedDays: [String: [MatchDay]] = [:]
     @State private var fixtureBrowsePageSourceMatchesByDate: [String: [Match]] = [:]
-    @State private var expandedFixtureRegionID: String?
-    @State private var fixturePickerDraftOptionIDs: Set<String>?
-    @State private var fixturePickerBaselineOptionIDs: Set<String>?
-    @State private var isFixtureFavouritesMenuExpanded = false
-    @State private var isFixtureViewSettingsExpanded = false
-    @State private var isTeamPickerPresented = false
-    @State private var teamPickerDraftTeamIDs: Set<String> = []
-
-    init(mode: MatchesViewMode, isSelected: Bool = true, store: MatchesStore) {
+    init(
+        mode: MatchesViewMode,
+        isSelected: Bool = true,
+        store: MatchesStore,
+        fixturesCoordinator: FixturesViewCoordinator
+    ) {
         self.mode = mode
         self.isSelected = isSelected
         self.matchesStore = store
         self.viewState = store.viewState(for: mode)
+        self.fixturesCoordinator = fixturesCoordinator
+        self.fixtureBrowser = fixturesCoordinator.browser
     }
 
     private static let fixtureDockContentClearance: CGFloat = 80
@@ -187,7 +254,7 @@ struct MatchesView: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .background(Color(.systemBackground))
             .overlay(alignment: .top) {
-                if showToast {
+                if let toastMessage = fixturesCoordinator.toastMessage {
                     ToastView(message: toastMessage)
                         .padding(.top, 8)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -223,9 +290,7 @@ struct MatchesView: View {
             currentDateKey: fixtureBrowser.selectedDateKey,
             previousDateKey: fixtureBrowser.adjacentDateKey(offset: -1),
             nextDateKey: fixtureBrowser.adjacentDateKey(offset: 1),
-            isSwipeEnabled: expandedFixtureRegionID == nil &&
-                !isFixtureFavouritesMenuExpanded &&
-                !isFixtureViewSettingsExpanded,
+            isSwipeEnabled: fixturesCoordinator.isDateSwipeEnabled,
             reduceMotion: accessibilityReduceMotion,
             onSelect: fixtureBrowser.selectDate
         ) {
@@ -250,24 +315,8 @@ struct MatchesView: View {
                 .navigationTitle(scoresNavigationTitle)
                 .navigationBarTitleDisplayMode(.inline)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if mode == .fixtures && navigationMatch == nil {
-                fixtureCompetitionDock
-            }
-        }
-        .sheet(isPresented: $isTeamPickerPresented) {
-            NavigationStack {
-                TeamSelectionView(
-                    apiBaseURL: preferences.apiBaseURL,
-                    selectedTeamIDs: $teamPickerDraftTeamIDs,
-                    onCancel: { isTeamPickerPresented = false },
-                    onDone: commitTeamPicker
-                )
-            }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
         .onAppear {
+            fixturesCoordinator.isDockEnabled = navigationMatch == nil
             refreshVisibleGroupedDays(from: sourceGroupedDays)
             guard isSelected else { return }
             runActivationIfNeeded(logEvent: "onAppear")
@@ -292,6 +341,16 @@ struct MatchesView: View {
         .onChange(of: scenePhase) { _, phase in
             handleScenePhaseChange(phase)
         }
+        .onChange(of: navigationMatch) { _, match in
+            fixturesCoordinator.isDockEnabled = match == nil
+            if match != nil {
+                fixturesCoordinator.resetPresentation()
+            }
+        }
+        .onChange(of: fixturesCoordinator.predictionWarmRequestToken) { _, _ in
+            guard mode == .fixtures else { return }
+            warmPredictionsForVisibleDays(days: sourceGroupedDays)
+        }
         .onChange(of: viewState.isLoading) { _, isLoading in
             guard !isLoading else { return }
             sendTimedScreenView()
@@ -314,16 +373,9 @@ struct MatchesView: View {
             let snapshot = newValue ? preferences.unfilteredSnapshot : preferences.snapshot
             NSLog("[MatchesView] showAllMatches_change mode=%@ value=%d snapshot=%@", mode.rawValue, newValue, debugSnapshotSummary(snapshot))
             matchesStore.configure(with: snapshot, mode: mode)
-            toastMessage = newValue ? "Viewing all matches (unfiltered)" : "Viewing preferred matches only"
-            withAnimation {
-                showToast = true
-            }
-            Task {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                withAnimation {
-                    showToast = false
-                }
-            }
+            fixturesCoordinator.showToast(
+                newValue ? "Viewing all matches (unfiltered)" : "Viewing preferred matches only"
+            )
         }
         .onChange(of: viewState.groupedMatches) { _, days in
             if !usesFixtureBrowser {
@@ -406,12 +458,7 @@ struct MatchesView: View {
             fixtureBrowser.setAutoRefreshEnabled(false)
             matchesStore.setFixtureBrowserLiveRefreshActive(false)
         }
-        expandedFixtureRegionID = nil
-        fixturePickerDraftOptionIDs = nil
-        fixturePickerBaselineOptionIDs = nil
-        isFixtureFavouritesMenuExpanded = false
-        isFixtureViewSettingsExpanded = false
-        isTeamPickerPresented = false
+        fixturesCoordinator.resetPresentation()
         groupedSideEffectsTask?.cancel()
     }
 
@@ -955,37 +1002,111 @@ struct MatchesView: View {
         default: return "th"
         }
     }
+}
+
+struct FixtureCompetitionDockView: View {
+    enum Content {
+        case rail
+        case panel
+        case teamPicker
+    }
+
+    @ObservedObject private var coordinator: FixturesViewCoordinator
+    @ObservedObject private var fixtureBrowser: FixtureBrowserStore
+    @EnvironmentObject private var preferences: PreferencesStore
+    private let content: Content
+
+    init(coordinator: FixturesViewCoordinator, content: Content = .rail) {
+        self.coordinator = coordinator
+        self.fixtureBrowser = coordinator.browser
+        self.content = content
+    }
+
+    @ViewBuilder
+    var body: some View {
+        switch content {
+        case .rail:
+            fixtureCompetitionDock
+                .anchorPreference(
+                    key: FixtureCompetitionDockBoundsPreferenceKey.self,
+                    value: .bounds
+                ) { bounds in
+                    bounds
+                }
+        case .panel:
+            fixtureCompetitionOverlayPanel
+        case .teamPicker:
+            NavigationStack {
+                TeamSelectionView(
+                    apiBaseURL: preferences.apiBaseURL,
+                    selectedTeamIDs: $coordinator.teamPickerDraftTeamIDs,
+                    onCancel: { coordinator.isTeamPickerPresented = false },
+                    onDone: commitTeamPicker
+                )
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+    }
+
+    private var expandedFixtureRegionID: String? {
+        get { coordinator.expandedFixtureRegionID }
+        nonmutating set { coordinator.expandedFixtureRegionID = newValue }
+    }
+
+    private var fixturePickerDraftOptionIDs: Set<String>? {
+        get { coordinator.fixturePickerDraftOptionIDs }
+        nonmutating set { coordinator.fixturePickerDraftOptionIDs = newValue }
+    }
+
+    private var fixturePickerBaselineOptionIDs: Set<String>? {
+        get { coordinator.fixturePickerBaselineOptionIDs }
+        nonmutating set { coordinator.fixturePickerBaselineOptionIDs = newValue }
+    }
+
+    private var isFixtureFavouritesMenuExpanded: Bool {
+        get { coordinator.isFixtureFavouritesMenuExpanded }
+        nonmutating set { coordinator.isFixtureFavouritesMenuExpanded = newValue }
+    }
+
+    private var isFixtureViewSettingsExpanded: Bool {
+        get { coordinator.isFixtureViewSettingsExpanded }
+        nonmutating set { coordinator.isFixtureViewSettingsExpanded = newValue }
+    }
+
+    private var isTeamPickerPresented: Bool {
+        get { coordinator.isTeamPickerPresented }
+        nonmutating set { coordinator.isTeamPickerPresented = newValue }
+    }
+
+    private var teamPickerDraftTeamIDs: Set<String> {
+        get { coordinator.teamPickerDraftTeamIDs }
+        nonmutating set { coordinator.teamPickerDraftTeamIDs = newValue }
+    }
 
     private var fixtureCompetitionDock: some View {
         fixtureCompetitionRail
             .padding(.horizontal, 12)
             .padding(.top, 6)
             .padding(.bottom, 8)
-            .overlay(alignment: .bottom) {
-                if isFixtureViewSettingsExpanded {
-                    fixtureViewSettingsPanel
-                        .padding(.horizontal, 12)
-                        .offset(y: -70)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .zIndex(2)
-                } else if isFixtureFavouritesMenuExpanded {
-                    fixtureFavouritesPanel
-                        .padding(.horizontal, 12)
-                        .offset(y: -70)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .zIndex(2)
-                } else if let region = expandedFixtureRegion {
-                    fixtureCompetitionPanel(for: region)
-                        .padding(.horizontal, 12)
-                        .offset(y: -70)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .zIndex(2)
-                }
-            }
             .animation(.easeOut(duration: 0.2), value: expandedFixtureRegionID)
             .animation(.easeOut(duration: 0.2), value: isFixtureFavouritesMenuExpanded)
             .animation(.easeOut(duration: 0.2), value: isFixtureViewSettingsExpanded)
             .zIndex(20)
+    }
+
+    @ViewBuilder
+    private var fixtureCompetitionOverlayPanel: some View {
+        if isFixtureViewSettingsExpanded {
+            fixtureViewSettingsPanel
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if isFixtureFavouritesMenuExpanded {
+            fixtureFavouritesPanel
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if let region = expandedFixtureRegion {
+            fixtureCompetitionPanel(for: region)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 
     private var fixtureCompetitionRail: some View {
@@ -1096,12 +1217,6 @@ struct MatchesView: View {
         }
         .padding(6)
         .frame(height: 58)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color(.separator).opacity(0.45), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
     }
 
     private var fixtureFavouritesPanel: some View {
@@ -1236,7 +1351,7 @@ struct MatchesView: View {
         Button {
             preferences.showPredictedScores.toggle()
             if preferences.showPredictedScores {
-                warmPredictionsForVisibleDays(days: sourceGroupedDays)
+                coordinator.requestPredictionWarm()
             }
         } label: {
             HStack(spacing: 12) {
@@ -1606,7 +1721,7 @@ struct MatchesView: View {
         applyCustomFixtureView(updatedOptionIDs)
         AppMetricsService.shared.fireActivity(
             "fixture_teams_changed",
-            screen: mode.rawValue,
+            screen: MatchesViewMode.fixtures.rawValue,
             apiBaseURL: preferences.apiBaseURL
         )
     }
@@ -1640,7 +1755,7 @@ struct MatchesView: View {
         applyCustomFixtureView(selectedIDs)
         AppMetricsService.shared.fireActivity(
             "fixture_competition_changed",
-            screen: mode.rawValue,
+            screen: MatchesViewMode.fixtures.rawValue,
             apiBaseURL: preferences.apiBaseURL
         )
     }
@@ -1666,7 +1781,7 @@ struct MatchesView: View {
         )
         AppMetricsService.shared.fireActivity(
             "fixture_competition_favourites",
-            screen: mode.rawValue,
+            screen: MatchesViewMode.fixtures.rawValue,
             apiBaseURL: preferences.apiBaseURL
         )
     }
@@ -1692,7 +1807,7 @@ struct MatchesView: View {
         )
         AppMetricsService.shared.fireActivity(
             "fixture_competition_all",
-            screen: mode.rawValue,
+            screen: MatchesViewMode.fixtures.rawValue,
             apiBaseURL: preferences.apiBaseURL
         )
     }
@@ -1712,15 +1827,10 @@ struct MatchesView: View {
             isFixtureFavouritesMenuExpanded = false
             isFixtureViewSettingsExpanded = false
         }
-        toastMessage = "Current view saved as favourites"
-        withAnimation { showToast = true }
-        Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            withAnimation { showToast = false }
-        }
+        coordinator.showToast("Current view saved as favourites")
         AppMetricsService.shared.fireActivity(
             "fixture_competition_favourites_saved",
-            screen: mode.rawValue,
+            screen: MatchesViewMode.fixtures.rawValue,
             apiBaseURL: preferences.apiBaseURL
         )
     }
@@ -1736,7 +1846,7 @@ struct MatchesView: View {
         applyCustomFixtureView(FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs)
         AppMetricsService.shared.fireActivity(
             "fixture_premier_league_matches_preset",
-            screen: mode.rawValue,
+            screen: MatchesViewMode.fixtures.rawValue,
             apiBaseURL: preferences.apiBaseURL
         )
     }
@@ -1763,6 +1873,9 @@ struct MatchesView: View {
             resetSelectedDate: true
         )
     }
+}
+
+private extension MatchesView {
 
     private func fixtureMatchCount(for day: FixtureCalendarDay) -> Int {
         day.matchCount
@@ -2845,7 +2958,12 @@ private struct ToastView: View {
 
 #Preview {
     let store = MatchesStore()
-    return MatchesView(mode: .fixtures, store: store)
+    let fixturesCoordinator = FixturesViewCoordinator()
+    return MatchesView(
+        mode: .fixtures,
+        store: store,
+        fixturesCoordinator: fixturesCoordinator
+    )
         .environmentObject(PreferencesStore())
         .environmentObject(store)
         .environmentObject(FantasyViewModel())

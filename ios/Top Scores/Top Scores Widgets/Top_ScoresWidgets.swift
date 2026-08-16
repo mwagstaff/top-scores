@@ -1783,16 +1783,18 @@ private final class WidgetTeamLogoResolver {
     private func loadAssetCatalogLogos() {
         var loadedNames = Set<String>()
         for bundle in bundles {
-            guard let manifestURL = bundle.url(forResource: "team_logo_assets", withExtension: "json"),
-                  let data = try? Data(contentsOf: manifestURL),
-                  let assetNames = try? JSONDecoder().decode([String].self, from: data) else {
-                continue
-            }
+            for manifestName in ["team_logo_assets", "live_activity_team_logo_assets"] {
+                guard let manifestURL = bundle.url(forResource: manifestName, withExtension: "json"),
+                      let data = try? Data(contentsOf: manifestURL),
+                      let assetNames = try? JSONDecoder().decode([String].self, from: data) else {
+                    continue
+                }
 
-            for name in assetNames {
-                let key = name.lowercased()
-                guard loadedNames.insert(key).inserted else { continue }
-                registerAssetName(name)
+                for name in assetNames {
+                    let key = name.lowercased()
+                    guard loadedNames.insert(key).inserted else { continue }
+                    registerAssetName(name)
+                }
             }
         }
     }
@@ -2272,7 +2274,6 @@ private enum WidgetLogoAssetVariant {
             return [
                 "\(baseName) Live Activity",
                 "\(baseName)LiveActivity",
-                baseName,
             ]
         }
     }
@@ -2855,6 +2856,10 @@ private struct TopScoresLiveActivityWidget: Widget {
 
 @available(iOSApplicationExtension 16.1, *)
 private enum LiveActivityTvLogoAsset {
+    static func liveActivityAssetName(for key: String?) -> String? {
+        assetName(for: key).map { "\($0) Live Activity" }
+    }
+
     static func assetName(for key: String?) -> String? {
         switch normalized(key) {
         case "amazon":
@@ -2901,7 +2906,7 @@ private struct LiveActivityPrecomputedTvLogo: View {
 
     var body: some View {
         Group {
-            if let assetName = LiveActivityTvLogoAsset.assetName(for: logoKey) {
+            if let assetName = LiveActivityTvLogoAsset.liveActivityAssetName(for: logoKey) {
                 Image(assetName)
                     .resizable()
                     .renderingMode(.original)
@@ -2948,13 +2953,8 @@ private struct LiveActivityPrecomputedTeamLogo: View {
 
     private var assetName: String? {
         let trimmedLogoKey = logoKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let primaryName = trimmedLogoKey.isEmpty ? teamName : trimmedLogoKey
-        let alternateNames = trimmedLogoKey == teamName ? [] : [teamName]
-        return WidgetTeamLogoResolver.shared.assetName(
-            for: primaryName,
-            alternateNames: alternateNames,
-            allowsFallback: false
-        )
+        guard !trimmedLogoKey.isEmpty else { return nil }
+        return "\(trimmedLogoKey) Live Activity"
     }
 }
 
@@ -3242,7 +3242,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
 
             if let fantasyScoreText {
                 HStack(spacing: 4) {
-                    Image("FantasyPremierLeagueLion")
+                    Image("FantasyPremierLeagueLion Live Activity")
                         .resizable()
                         .renderingMode(.original)
                         .scaledToFit()
@@ -3588,7 +3588,7 @@ private struct TopScoresLiveActivityLockScreenView: View {
                     Spacer(minLength: 0)
                     if let fantasyScoreText {
                         HStack(spacing: 3) {
-                            Image("FantasyPremierLeagueLion")
+                            Image("FantasyPremierLeagueLion Live Activity")
                                 .resizable()
                                 .scaledToFit()
                                 .frame(width: 12, height: 12)
