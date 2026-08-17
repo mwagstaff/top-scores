@@ -66,6 +66,11 @@ struct MatchRowPreferences: Equatable {
     }
 }
 
+struct MatchRowTeamSummary: Equatable, Sendable {
+    let position: Int
+    let form: [String]
+}
+
 struct MatchRow: View {
     let match: Match
     var showTeamEvents: Bool = false
@@ -82,6 +87,9 @@ struct MatchRow: View {
     var fantasyContext: FantasyMatchRowContext = .empty
     var rowPreferences: MatchRowPreferences = .disabledFantasy
     var predictionDisplay: FixturePredictionDisplayState = .hidden
+    var homeTeamSummary: MatchRowTeamSummary? = nil
+    var awayTeamSummary: MatchRowTeamSummary? = nil
+    var enablesTeamDetailsNavigation: Bool = false
     var body: some View {
         matchCard
             .opacity(match.isPostponed ? 0.5 : 1.0)
@@ -117,23 +125,11 @@ struct MatchRow: View {
                     )
 
                     HStack(alignment: .center, spacing: 8) {
-                        Text(match.displayHomeTeam)
-                            .font(teamNameFont)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .layoutPriority(1)
+                        teamNameLabel(isHome: true)
 
                         scoreAndStatusRow
 
-                        Text(match.displayAwayTeam)
-                            .font(teamNameFont)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .layoutPriority(1)
+                        teamNameLabel(isHome: false)
                     }
                     .frame(maxWidth: .infinity)
 
@@ -217,23 +213,11 @@ struct MatchRow: View {
 
                 VStack(spacing: compactFixtureContentRowSpacing) {
                     HStack(alignment: .firstTextBaseline, spacing: compactFixtureHorizontalSpacing) {
-                        Text(match.displayHomeTeam)
-                            .font(teamNameFont)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .layoutPriority(1)
+                        teamNameLabel(isHome: true)
 
                         compactFixtureCenterContent
 
-                        Text(match.displayAwayTeam)
-                            .font(teamNameFont)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .layoutPriority(1)
+                        teamNameLabel(isHome: false)
                     }
 
                     if shouldShowCompactFixtureSecondRow {
@@ -266,6 +250,88 @@ struct MatchRow: View {
             return "P"
         }
         return match.homeScore.map(String.init)
+    }
+
+    @ViewBuilder
+    private func teamNameLabel(isHome: Bool) -> some View {
+        if enablesTeamDetailsNavigation {
+            NavigationLink(value: teamDetailsContext(isHome: isHome)) {
+                teamNameContent(isHome: isHome)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("View team details")
+        } else {
+            teamNameContent(isHome: isHome)
+        }
+    }
+
+    private func teamNameContent(isHome: Bool) -> some View {
+        let displayName = isHome ? match.displayHomeTeam : match.displayAwayTeam
+        let summary = isHome ? homeTeamSummary : awayTeamSummary
+        let horizontalAlignment: HorizontalAlignment = isHome ? .trailing : .leading
+        let frameAlignment: Alignment = isHome ? .trailing : .leading
+
+        return VStack(alignment: horizontalAlignment, spacing: 3) {
+            Text(displayName)
+                .font(teamNameFont)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            if let summary {
+                Text(Self.ordinal(summary.position))
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Color.accentColor)
+
+                if !summary.form.isEmpty {
+                    HStack(spacing: 2) {
+                        ForEach(Array(summary.form.prefix(5).enumerated()), id: \.offset) { _, result in
+                            MatchRowFormBadge(result: result)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: frameAlignment)
+        .layoutPriority(1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(teamAccessibilityLabel(isHome: isHome, summary: summary))
+    }
+
+    private func teamDetailsContext(isHome: Bool) -> TeamDetailsContext {
+        let teamName = isHome ? match.homeTeam : match.awayTeam
+        let displayName = isHome ? match.displayHomeTeam : match.displayAwayTeam
+        let teamID = isHome ? match.homeTeamId : match.awayTeamId
+        let shortName = isHome ? match.homeShortName : match.awayShortName
+        return TeamDetailsContext(
+            teamID: teamID,
+            teamName: teamName,
+            displayName: displayName,
+            alternateNames: [shortName].compactMap { $0 },
+            originatingLeagueID: match.leagueId,
+            originatingLeagueName: match.league,
+            originatingMatch: match
+        )
+    }
+
+    private func teamAccessibilityLabel(isHome: Bool, summary: MatchRowTeamSummary?) -> String {
+        let teamName = isHome ? match.homeTeam : match.awayTeam
+        guard let summary else { return teamName }
+        let form = summary.form.prefix(5).joined(separator: ", ")
+        return form.isEmpty
+            ? "\(teamName), \(Self.ordinal(summary.position))"
+            : "\(teamName), \(Self.ordinal(summary.position)), form \(form)"
+    }
+
+    private static func ordinal(_ value: Int) -> String {
+        let remainder100 = value % 100
+        if remainder100 >= 11 && remainder100 <= 13 { return "\(value)th" }
+        switch value % 10 {
+        case 1: return "\(value)st"
+        case 2: return "\(value)nd"
+        case 3: return "\(value)rd"
+        default: return "\(value)th"
+        }
     }
 
     private var awayScoreText: String? {
@@ -2003,6 +2069,31 @@ private struct TvLogoRow: View {
                 }
             }
         }
+    }
+}
+
+private struct MatchRowFormBadge: View {
+    let result: String
+
+    private var normalizedResult: String {
+        String(result.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().prefix(1))
+    }
+
+    private var color: Color {
+        switch normalizedResult {
+        case "W": return .green
+        case "D": return .gray
+        case "L": return .red
+        default: return .secondary
+        }
+    }
+
+    var body: some View {
+        Text(normalizedResult.isEmpty ? "–" : normalizedResult)
+            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: 13, height: 13)
+            .background(color, in: Circle())
     }
 }
 

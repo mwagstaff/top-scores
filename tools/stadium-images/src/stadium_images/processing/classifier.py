@@ -15,8 +15,17 @@ class ImageClassifier(Protocol):
 
 
 class HeuristicImageClassifier:
-    night_keywords = ("night", "nighttime", "floodlight", "after dark")
-    twilight_keywords = ("twilight", "dusk", "sunset", "evening", "blue hour")
+    night_keywords = (
+        "night",
+        "nighttime",
+        "floodlight",
+        "after dark",
+        "twilight",
+        "dusk",
+        "sunset",
+        "evening",
+        "blue hour",
+    )
     day_keywords = ("daytime", "daylight", "sunny", "sunshine", "afternoon")
 
     def classify(
@@ -35,8 +44,6 @@ class HeuristicImageClassifier:
                 and luminance >= 0.43
             ):
                 confidence = 0.92
-            elif label == "twilight" and 0.18 <= luminance <= 0.55:
-                confidence = 0.88
             return ClassificationResult(
                 time_of_day=label,
                 confidence=confidence,
@@ -68,26 +75,17 @@ class HeuristicImageClassifier:
                     ),
                 )
 
-        if luminance < 0.20:
-            return ClassificationResult(
-                "night", 0.78, (f"low average luminance: {luminance:.2f}",)
-            )
         if luminance < 0.36:
             return ClassificationResult(
-                "twilight", 0.58, (f"mid-low average luminance: {luminance:.2f}",)
-            )
-        if luminance >= 0.48:
-            return ClassificationResult(
-                "day", 0.72, (f"high average luminance: {luminance:.2f}",)
+                "night", 0.68, (f"low average luminance: {luminance:.2f}",)
             )
         return ClassificationResult(
-            "unknown", 0.35, (f"ambiguous average luminance: {luminance:.2f}",)
+            "day", 0.62, (f"day-range average luminance: {luminance:.2f}",)
         )
 
     def _classify_keywords(self, text: str) -> tuple[str, str] | None:
         for label, keywords in (
             ("night", self.night_keywords),
-            ("twilight", self.twilight_keywords),
             ("day", self.day_keywords),
         ):
             for keyword in keywords:

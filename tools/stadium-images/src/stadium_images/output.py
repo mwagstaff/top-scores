@@ -7,9 +7,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .database import StateDatabase
-from .models import ImageRecord, League, Stadium
+from .models import ImageRecord, League, Stadium, team_slug
 
-CATEGORIES = ("day", "night", "twilight", "unknown")
+CATEGORIES = ("day", "night")
 
 
 def record_sort_key(record: ImageRecord) -> tuple[float, int, int, str]:
@@ -59,7 +59,9 @@ class OutputWriter:
             self.database.list_images(league.slug, stadium.slug),
             key=record_sort_key,
         )
-        stadium_dir = self.output_dir / league.slug / stadium.slug
+        stadium_dir = self.output_dir / league.slug / stadium.team_slug
+        for legacy_category in ("twilight", "unknown"):
+            shutil.rmtree(stadium_dir / legacy_category, ignore_errors=True)
         ranked_paths: dict[str, str] = {}
         for category in CATEGORIES:
             category_dir = stadium_dir / category
@@ -102,16 +104,16 @@ class OutputWriter:
         assert isinstance(leagues, dict)
         grouped: dict[tuple[str, str, str], list[ImageRecord]] = defaultdict(list)
         for record in records:
-            grouped[(record.league, record.stadium_slug, record.time_of_day)].append(
+            grouped[(record.league, team_slug(record.club), record.time_of_day)].append(
                 record
             )
-        for (league, stadium_slug, category), category_records in sorted(
+        for (league, club_slug, category), category_records in sorted(
             grouped.items()
         ):
             league_manifest = leagues.setdefault(league, {"stadiums": {}})
             stadiums = league_manifest["stadiums"]
             stadium_manifest = stadiums.setdefault(
-                stadium_slug, {name: [] for name in CATEGORIES}
+                club_slug, {name: [] for name in CATEGORIES}
             )
             for rank, record in enumerate(
                 sorted(category_records, key=record_sort_key), start=1

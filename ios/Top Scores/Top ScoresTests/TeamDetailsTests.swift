@@ -24,6 +24,46 @@ struct TeamDetailsTests {
         #expect(values["view_option"] == nil)
     }
 
+    @Test func teamFixturesQueryTargetsOneTeamAndRequestsAllUpcomingMatches() {
+        let queryItems = APIClient.teamFixturesQueryItems(
+            teamName: "Sevilla",
+            limit: 500,
+            now: Date(timeIntervalSince1970: 1_786_752_000)
+        )
+        let values = Dictionary(uniqueKeysWithValues: queryItems.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+
+        #expect(values["team"] == "Sevilla")
+        #expect(values["mode"] == "fixtures")
+        #expect(values["sort"] == "asc")
+        #expect(values["end"] == "9999-12-31")
+        #expect(values["page"] == "1")
+        #expect(values["page_size"] == "200")
+        #expect(values["league"] == nil)
+        #expect(values["channel"] == nil)
+        #expect(values["view_option"] == nil)
+    }
+
+    @Test func bulkTeamResultsQueryTargetsVisibleOpponentsInTheCurrentSeason() {
+        let queryItems = APIClient.teamResultsQueryItems(
+            teamNames: ["Wrexham", "West Ham United", "Wrexham"],
+            startDate: makeDate(year: 2026, month: 7, day: 1),
+            limit: 500,
+            now: makeDate(year: 2026, month: 8, day: 17)
+        )
+        let values = Dictionary(uniqueKeysWithValues: queryItems.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+
+        #expect(values["team"] == "Wrexham,West Ham United")
+        #expect(values["start"] == "2026-07-01")
+        #expect(values["end"] == "2026-08-17")
+        #expect(values["mode"] == "results")
+        #expect(values["sort"] == "desc")
+        #expect(values["page_size"] == "200")
+    }
+
     @Test func standingResolverFallsBackToLeagueNameAcrossIDNamespaces() throws {
         let context = TeamDetailsContext(
             teamID: "282",
@@ -132,6 +172,77 @@ struct TeamDetailsTests {
         #expect(form == ["W"])
     }
 
+    @Test func matchRowsUseTheViewedTeamsResolvedFormInsteadOfTheStaleStandingForm() {
+        let resolvedForm = ["W", "W"]
+        let opponentForms = [
+            TeamDetailsMatchRowFormResolver.key(
+                for: "Wrexham",
+                leagueID: "4329",
+                leagueName: "Championship"
+            ): ["L"],
+        ]
+
+        #expect(TeamDetailsMatchRowFormResolver.form(
+            for: "Watford",
+            leagueID: "4329",
+            leagueName: "Championship",
+            viewedTeamName: "Watford",
+            viewedTeamForm: resolvedForm,
+            resolvedFormsByRequestKey: opponentForms
+        ) == resolvedForm)
+
+        #expect(TeamDetailsMatchRowFormResolver.form(
+            for: "Wrexham",
+            leagueID: "4329",
+            leagueName: "Championship",
+            viewedTeamName: "Watford",
+            viewedTeamForm: resolvedForm,
+            resolvedFormsByRequestKey: opponentForms
+        ) == ["L"])
+
+        #expect(TeamDetailsMatchRowFormResolver.form(
+            for: "West Ham United",
+            leagueID: "4329",
+            leagueName: "Championship",
+            viewedTeamName: "Watford",
+            viewedTeamForm: resolvedForm,
+            resolvedFormsByRequestKey: opponentForms
+        ).isEmpty)
+    }
+
+    @Test func opponentFormUsesOnlyActualCurrentSeasonResultsFromTheFixtureCompetition() {
+        let burnleyDraw = makeMatch(
+            id: "burnley-draw",
+            date: "2026-08-15",
+            homeTeam: "Burnley",
+            awayTeam: "West Ham United",
+            league: "Premier League",
+            leagueID: "4328",
+            homeScore: 1,
+            awayScore: 1
+        )
+        let cupWin = makeMatch(
+            id: "cup-win",
+            date: "2026-08-08",
+            homeTeam: "West Ham United",
+            awayTeam: "Opponent",
+            league: "EFL Cup",
+            leagueID: nil,
+            homeScore: 4,
+            awayScore: 0
+        )
+
+        let form = TeamDetailsFormResolver.recentForm(
+            teamName: "West Ham United",
+            leagueID: "4329",
+            leagueName: "Championship",
+            matches: [cupWin, burnleyDraw],
+            now: makeDate(year: 2026, month: 8, day: 17)
+        )
+
+        #expect(form == ["D"])
+    }
+
     @Test func unfinishedOriginatingMatchDoesNotAppearInPreviousMatches() {
         let current = makeMatch(
             id: "currentmatch",
@@ -159,6 +270,77 @@ struct TeamDetailsTests {
         )
 
         #expect(matches.map(\.matchDetailsID) == ["previousmatch"])
+    }
+
+    @Test func upcomingFixturesAreChronologicalAndExcludeFinishedMatches() {
+        let context = TeamDetailsContext(
+            teamID: "282",
+            teamName: "Sevilla",
+            displayName: "Sevilla",
+            alternateNames: [],
+            originatingLeagueID: "564",
+            originatingLeagueName: "La Liga",
+            originatingMatch: nil
+        )
+        let later = makeMatch(
+            id: "later",
+            date: "2099-08-20",
+            homeScore: nil,
+            awayScore: nil,
+            scoreStatus: nil
+        )
+        let next = makeMatch(
+            id: "next",
+            date: "2099-08-18",
+            homeScore: nil,
+            awayScore: nil,
+            scoreStatus: nil
+        )
+        let finished = makeMatch(id: "finished", date: "2099-08-17")
+
+        let fixtures = TeamDetailsMatchResolver.upcomingFixtures(
+            context: context,
+            from: [later, finished, next],
+            now: makeDate(year: 2099, month: 8, day: 17)
+        )
+
+        #expect(fixtures.map(\.matchDetailsID) == ["next", "later"])
+    }
+
+    @Test func matchListsShowTenByDefaultAndEverythingWhenExpanded() {
+        let matches = (1...12).map { index in
+            makeMatch(id: "match-\(index)", date: "2099-08-20")
+        }
+
+        #expect(TeamDetailsPagination.visibleMatches(matches, showsAll: false).count == 10)
+        #expect(TeamDetailsPagination.visibleMatches(matches, showsAll: true).count == 12)
+    }
+
+    @Test func matchStandingResolverIncludesPositionAndFormOnlyForTheMatchLeague() throws {
+        let premierLeagueRow = makeRow(position: 4, team: "Sevilla", played: 20, form: ["W", "D"])
+        let response = LeagueTablesResponse(
+            leagues: [makeTable(id: "564", name: "La Liga", rows: [premierLeagueRow])],
+            lastUpdated: nil
+        )
+
+        let standing = try #require(
+            TeamDetailsMatchStandingResolver.resolve(
+                teamName: "Sevilla",
+                leagueID: "564",
+                leagueName: "La Liga",
+                response: response
+            )
+        )
+        let cupStanding = TeamDetailsMatchStandingResolver.resolve(
+            teamName: "Sevilla",
+            leagueID: nil,
+            leagueName: "FA Cup",
+            response: response
+        )
+
+        #expect(standing.row.position == 4)
+        #expect(standing.row.form == ["W", "D"])
+        #expect(cupStanding == nil)
     }
 
     @Test func postponedMatchesAreExcludedFromPreviousMatches() {

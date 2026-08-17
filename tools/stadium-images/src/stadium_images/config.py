@@ -37,6 +37,7 @@ def load_league(slug: str, config_dir: Path = DEFAULT_CONFIG_DIR) -> League:
 
     stadiums: list[Stadium] = []
     seen_slugs: set[str] = set()
+    seen_team_slugs: set[str] = set()
     for index, item in enumerate(raw.get("stadiums", []), start=1):
         context = f"stadium #{index} in {path.name}"
         if not isinstance(item, dict):
@@ -53,17 +54,21 @@ def load_league(slug: str, config_dir: Path = DEFAULT_CONFIG_DIR) -> League:
         if not search_terms:
             raise ConfigError(f"At least one search term is required for {context}")
         coordinates = item.get("coordinates") or {}
-        stadiums.append(
-            Stadium(
-                club=str(_required(item, "club", context)),
-                name=str(_required(item, "stadium", context)),
-                slug=stadium_slug,
-                aliases=tuple(str(alias) for alias in item.get("aliases", [])),
-                search_terms=search_terms,
-                latitude=_optional_float(coordinates.get("latitude")),
-                longitude=_optional_float(coordinates.get("longitude")),
-            )
+        stadium = Stadium(
+            club=str(_required(item, "club", context)),
+            name=str(_required(item, "stadium", context)),
+            slug=stadium_slug,
+            aliases=tuple(str(alias) for alias in item.get("aliases", [])),
+            search_terms=search_terms,
+            latitude=_optional_float(coordinates.get("latitude")),
+            longitude=_optional_float(coordinates.get("longitude")),
         )
+        if stadium.team_slug in seen_team_slugs:
+            raise ConfigError(
+                f"Duplicate team slug {stadium.team_slug!r} in {path.name}"
+            )
+        seen_team_slugs.add(stadium.team_slug)
+        stadiums.append(stadium)
 
     if not stadiums:
         raise ConfigError(f"No stadiums configured in {path.name}")
@@ -87,10 +92,9 @@ def load_league(slug: str, config_dir: Path = DEFAULT_CONFIG_DIR) -> League:
             perceptual_hash_distance=int(filters.get("perceptual_hash_distance", 6)),
         ),
         retention=RetentionConfig(
+            total=int(retention.get("total", 20)),
             day=int(retention.get("day", 30)),
             night=int(retention.get("night", 30)),
-            twilight=int(retention.get("twilight", 15)),
-            unknown=int(retention.get("unknown", 10)),
         ),
         results_per_query=int(raw.get("results_per_query", 30)),
     )
@@ -105,6 +109,7 @@ def find_stadium(league: League, value: str) -> Stadium:
         in {
             stadium.name.casefold(),
             stadium.slug.casefold(),
+            stadium.team_slug.casefold(),
             stadium.club.casefold(),
             *(alias.casefold() for alias in stadium.aliases),
         }

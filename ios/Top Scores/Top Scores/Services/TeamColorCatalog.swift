@@ -8,6 +8,11 @@ struct TeamLineupNumberColors {
     let outline: Color?
 }
 
+struct TeamAccentColors {
+    let primary: Color
+    let secondary: Color
+}
+
 private struct TeamColorsCachePayload: Codable, Sendable {
     let fetchedAt: Date
     let catalog: TeamColorsCatalogResponse
@@ -110,6 +115,16 @@ final class TeamColorCatalog: ObservableObject {
             outline: foregroundHex.caseInsensitiveCompare(preferredForegroundHex) == .orderedSame
                 ? outlineColor(backgroundHex: backgroundHex, foregroundHex: foregroundHex)
                 : nil
+        )
+    }
+
+    func accentColors(for teamName: String) -> TeamAccentColors {
+        guard let entry = resolve(teamName) else {
+            return TeamAccentColors(primary: Color.accentColor, secondary: .white)
+        }
+        return TeamAccentColors(
+            primary: Color(hex: entry.primary) ?? Color.accentColor,
+            secondary: Color(hex: entry.secondary) ?? .white
         )
     }
 

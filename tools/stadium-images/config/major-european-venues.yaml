@@ -1,0 +1,296 @@
+league: major-european-venues
+name: Major European Club Venues
+season: 2026/27
+membership_source: https://www.uefa.com/uefachampionsleague/clubs/
+results_per_query: 8
+
+filters:
+  min_width: 1600
+  min_height: 900
+  min_aspect_ratio: 1.3
+  preferred_aspect_ratio:
+    min: 1.5
+    max: 2.4
+  min_score: 7.0
+  perceptual_hash_distance: 6
+
+retention:
+  total: 12
+  day: 12
+  night: 12
+
+stadiums:
+  - club: FC Barcelona
+    stadium: Spotify Camp Nou
+    slug: camp-nou
+    aliases: [Camp Nou, Nou Camp]
+    search_terms:
+      - Camp Nou Barcelona stadium
+      - Camp Nou interior pitch
+      - Camp Nou panorama
+      - Camp Nou daytime
+      - Camp Nou night floodlights
+
+  - club: Real Madrid
+    stadium: Santiago Bernabéu Stadium
+    slug: santiago-bernabeu
+    aliases: [Santiago Bernabéu, Estadio Santiago Bernabéu, Bernabeu Stadium]
+    search_terms:
+      - Santiago Bernabeu Real Madrid stadium
+      - Santiago Bernabeu interior pitch
+      - Santiago Bernabeu panorama
+      - Santiago Bernabeu daytime
+      - Santiago Bernabeu night floodlights
+
+  - club: Atlético de Madrid
+    stadium: Estadio Metropolitano
+    slug: estadio-metropolitano
+    aliases: [Metropolitano Stadium, Wanda Metropolitano, Riyadh Air Metropolitano]
+    search_terms:
+      - Estadio Metropolitano Atletico Madrid
+      - Wanda Metropolitano interior pitch
+      - Metropolitano Madrid panorama
+      - Estadio Metropolitano daytime
+      - Estadio Metropolitano night floodlights
+
+  - club: Bayern Munich
+    stadium: Allianz Arena
+    slug: allianz-arena
+    aliases: [FC Bayern Munich Stadium]
+    search_terms:
+      - Allianz Arena Bayern Munich
+      - Allianz Arena interior pitch
+      - Allianz Arena panorama
+      - Allianz Arena daytime
+      - Allianz Arena night floodlights
+
+  - club: Borussia Dortmund
+    stadium: Signal Iduna Park
+    slug: signal-iduna-park
+    aliases: [Westfalenstadion, BVB Stadion Dortmund]
+    search_terms:
+      - Signal Iduna Park Borussia Dortmund
+      - Westfalenstadion interior pitch
+      - BVB Stadion Dortmund panorama
+      - Signal Iduna Park daytime
+      - Signal Iduna Park night floodlights
+      - Westfalenstadion Dortmund
+      - 'incategory:"Westfalenstadion"'
+      - Leeres Westfalenstadion
+      - GER Dortmund Stadion Südtribüne
+      - Westfalenstadion panoramio Dortmund
+      - IMAG0206 Borussia Dortmund Stadium
+
+  - club: RB Leipzig
+    stadium: Red Bull Arena Leipzig
+    slug: red-bull-arena-leipzig
+    aliases: [Leipzig Stadium, Zentralstadion Leipzig]
+    search_terms:
+      - Red Bull Arena Leipzig football
+      - Leipzig Stadium interior pitch
+      - Zentralstadion Leipzig panorama
+      - Red Bull Arena Leipzig daytime
+      - Red Bull Arena Leipzig night floodlights
+      - 'incategory:"Red Bull Arena (Leipzig)"'
+
+  - club: VfB Stuttgart
+    stadium: MHPArena
+    slug: mhparena
+    aliases: [Mercedes-Benz Arena Stuttgart, Neckarstadion]
+    search_terms:
+      - MHPArena Stuttgart football
+      - Mercedes Benz Arena Stuttgart interior
+      - Neckarstadion Stuttgart pitch
+      - Stuttgart stadium daytime
+      - Stuttgart stadium night floodlights
+
+  - club: AC Milan / Inter
+    stadium: San Siro
+    slug: san-siro
+    aliases: [Stadio Giuseppe Meazza, Giuseppe Meazza Stadium]
+    search_terms:
+      - San Siro Milan stadium -Grandola -church
+      - Giuseppe Meazza Milan interior pitch -Grandola
+      - San Siro Milan panorama -Grandola
+      - San Siro Milan daytime -Grandola
+      - San Siro Milan night floodlights -Grandola
+      - Stadio Giuseppe Meazza Milano football -Grandola
+      - 'incategory:"Stadio Giuseppe Meazza" -Grandola'
+      - 'incategory:"Interior of Stadio Giuseppe Meazza"'
+      - 'incategory:"Panoramics of Stadio Giuseppe Meazza"'
+
+  - club: Juventus
+    stadium: Juventus Stadium
+    slug: juventus-stadium
+    aliases: [Allianz Stadium Turin, Juventus Arena]
+    search_terms:
+      - Juventus Stadium Turin
+      - Allianz Stadium Juventus interior pitch
+      - Juventus Stadium panorama
+      - Juventus Stadium daytime
+      - Juventus Stadium night floodlights
+
+  - club: AS Roma / Lazio
+    stadium: Stadio Olimpico
+    slug: stadio-olimpico
+    aliases: [Olympic Stadium Rome, Stadio Olimpico di Roma]
+    search_terms:
+      - Stadio Olimpico Rome football
+      - Stadio Olimpico Roma interior pitch
+      - Olympic Stadium Rome panorama
+      - Stadio Olimpico daytime
+      - Stadio Olimpico night floodlights
+
+  - club: Napoli
+    stadium: Stadio Diego Armando Maradona
+    slug: stadio-diego-armando-maradona
+    aliases: [Stadio San Paolo, San Paolo Stadium Naples]
+    search_terms:
+      - Stadio Diego Armando Maradona Napoli
+      - Stadio San Paolo Naples interior pitch
+      - Napoli stadium panorama
+      - Stadio Maradona daytime
+      - Stadio Maradona night floodlights
+
+  - club: Paris Saint-Germain
+    stadium: Parc des Princes
+    slug: parc-des-princes
+    aliases: [PSG Stadium]
+    search_terms:
+      - Parc des Princes Paris Saint Germain
+      - Parc des Princes interior pitch
+      - Parc des Princes panorama
+      - Parc des Princes daytime
+      - Parc des Princes night floodlights
+
+  - club: Olympique de Marseille
+    stadium: Stade Vélodrome
+    slug: stade-velodrome
+    aliases: [Orange Vélodrome, Stade Velodrome]
+    search_terms:
+      - Stade Velodrome Marseille football
+      - Orange Velodrome interior pitch
+      - Stade Velodrome panorama
+      - Stade Velodrome daytime
+      - Stade Velodrome night floodlights
+
+  - club: Olympique Lyonnais
+    stadium: Groupama Stadium
+    slug: groupama-stadium
+    aliases: [Parc Olympique Lyonnais, Stade des Lumières]
+    search_terms:
+      - Groupama Stadium Lyon football
+      - Parc Olympique Lyonnais interior pitch
+      - Groupama Stadium panorama
+      - Groupama Stadium daytime
+      - Groupama Stadium night floodlights
+
+  - club: Ajax
+    stadium: Johan Cruyff Arena
+    slug: johan-cruyff-arena
+    aliases: [Johan Cruijff ArenA, Amsterdam ArenA]
+    search_terms:
+      - Johan Cruyff Arena Ajax
+      - Johan Cruijff ArenA interior pitch
+      - Amsterdam Arena panorama
+      - Johan Cruyff Arena daytime
+      - Johan Cruyff Arena night floodlights
+
+  - club: Feyenoord
+    stadium: De Kuip
+    slug: de-kuip
+    aliases: [Stadion Feijenoord, Feyenoord Stadium]
+    search_terms:
+      - De Kuip Feyenoord
+      - Stadion Feijenoord interior pitch
+      - De Kuip panorama
+      - De Kuip daytime
+      - De Kuip night floodlights
+
+  - club: PSV Eindhoven
+    stadium: Philips Stadion
+    slug: philips-stadion
+    aliases: [Philips Stadium]
+    search_terms:
+      - Philips Stadion PSV Eindhoven
+      - Philips Stadium interior pitch
+      - Philips Stadion panorama
+      - Philips Stadion daytime
+      - Philips Stadion night floodlights
+
+  - club: Benfica
+    stadium: Estádio da Luz
+    slug: estadio-da-luz
+    aliases: [Estadio da Luz, Stadium of Light Lisbon]
+    search_terms:
+      - Estadio da Luz Benfica
+      - Estadio da Luz interior pitch
+      - Benfica stadium panorama
+      - Estadio da Luz daytime
+      - Estadio da Luz night floodlights
+
+  - club: FC Porto
+    stadium: Estádio do Dragão
+    slug: estadio-do-dragao
+    aliases: [Estadio do Dragao, Dragon Stadium Porto]
+    search_terms:
+      - Estadio do Dragao FC Porto
+      - Estadio do Dragao interior pitch
+      - Porto stadium panorama
+      - Estadio do Dragao daytime
+      - Estadio do Dragao night floodlights
+
+  - club: Sporting CP
+    stadium: Estádio José Alvalade
+    slug: estadio-jose-alvalade
+    aliases: [Estadio Jose Alvalade, José Alvalade Stadium]
+    search_terms:
+      - Estadio Jose Alvalade Sporting
+      - Jose Alvalade Stadium interior pitch
+      - Sporting Lisbon stadium panorama
+      - Estadio Jose Alvalade daytime
+      - Estadio Jose Alvalade night floodlights
+
+  - club: Celtic
+    stadium: Celtic Park
+    slug: celtic-park
+    aliases: [Parkhead, Paradise Glasgow]
+    search_terms:
+      - Celtic Park Glasgow stadium
+      - Celtic Park interior pitch
+      - Celtic Park panorama
+      - Celtic Park daytime
+      - Celtic Park night floodlights
+
+  - club: Rangers
+    stadium: Ibrox Stadium
+    slug: ibrox-stadium
+    aliases: [Ibrox Park, Rangers Stadium]
+    search_terms:
+      - Ibrox Stadium Rangers
+      - Ibrox interior pitch
+      - Ibrox Stadium panorama
+      - Ibrox daytime
+      - Ibrox night floodlights
+
+  - club: Galatasaray
+    stadium: Rams Park
+    slug: rams-park
+    aliases: [Ali Sami Yen Sports Complex, Türk Telekom Stadium, Nef Stadium]
+    search_terms:
+      - Rams Park Galatasaray
+      - Ali Sami Yen stadium interior pitch
+      - Turk Telekom Stadium panorama
+      - Galatasaray stadium daytime
+      - Galatasaray stadium night floodlights
+
+  - club: Beşiktaş
+    stadium: Beşiktaş Stadium
+    slug: besiktas-stadium
+    aliases: [Tüpraş Stadyumu, Vodafone Park, Beşiktaş Park]
+    search_terms:
+      - Besiktas Stadium Istanbul
+      - Vodafone Park interior pitch
+      - Besiktas Park panorama
+      - Besiktas Stadium daytime
+      - Besiktas Stadium night floodlights

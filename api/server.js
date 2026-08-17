@@ -9429,6 +9429,7 @@ function normalizePlayerDetailsPayload(value) {
 
 const TSDB_ENTITY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const TSDB_ENTITY_WARM_CONCURRENCY = 3;
+const playerPayloadRefreshes = new Map();
 
 function tsdbEntityCacheFresh(record, nowMs = Date.now()) {
   if (!record || typeof record !== "object") return false;
@@ -9436,14 +9437,80 @@ function tsdbEntityCacheFresh(record, nowMs = Date.now()) {
   return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < TSDB_ENTITY_CACHE_MAX_AGE_MS;
 }
 
-async function getCachedOrFetchPlayerPayload(playerId, options = {}) {
-  const nowMs = Date.now();
-  const cached = await getPlayerCache(playerId).catch(() => null);
-  if (!options.force && tsdbEntityCacheFresh(cached, nowMs)) {
-    const payload = normalizePlayerDetailsPayload(cached.payload);
-    if (payload) return { payload, source: "mongo_player_cache" };
+function normalizedLineupPlayerPosition(player) {
+  const category = String(player && player.position_category || "").trim().toLowerCase();
+  const categoryPositions = {
+    goalkeeper: "Goalkeeper",
+    defender: "Defender",
+    midfielder: "Midfielder",
+    attacker: "Forward",
+  };
+  if (categoryPositions[category]) return categoryPositions[category];
+
+  const value = String(
+    player && (player.position || player.position_short) || ""
+  ).trim();
+  const abbreviatedPositions = {
+    g: "Goalkeeper",
+    gk: "Goalkeeper",
+    d: "Defender",
+    df: "Defender",
+    m: "Midfielder",
+    mf: "Midfielder",
+    f: "Forward",
+    fw: "Forward",
+    a: "Forward",
+  };
+  return abbreviatedPositions[value.toLowerCase()] || value || null;
+}
+
+function playerDetailsPayloadFromMatchLineups(playerId, matches = matchDetailsById.values()) {
+  const normalizedId = String(playerId || "").trim();
+  if (!/^\d+$/.test(normalizedId)) return null;
+
+  let best = null;
+  for (const match of matches || []) {
+    if (!match || typeof match !== "object") continue;
+    const lineups = match.team_lineups;
+    if (!lineups) continue;
+
+    for (const [sideKey, teamField] of [["home", "home_team"], ["away", "away_team"]]) {
+      const side = lineups[sideKey];
+      if (!side) continue;
+      const players = [
+        ...(Array.isArray(side.starting_lineup) ? side.starting_lineup : []),
+        ...(Array.isArray(side.substitutes) ? side.substitutes : []),
+      ];
+      const player = players.find(
+        (candidate) => String(candidate && candidate.id_player || "").trim() === normalizedId
+      );
+      if (!player) continue;
+
+      const kickoffMs = kickoffTimestampMs(match);
+      if (best && best.kickoffMs > kickoffMs) continue;
+      best = {
+        kickoffMs,
+        payload: {
+          id: normalizedId,
+          name: String(player.name || "").trim(),
+          team: String(side.team || match[teamField] || "").trim() || null,
+          born: null,
+          description: null,
+          side: null,
+          position: normalizedLineupPlayerPosition(player),
+          birth_location: null,
+          cutout_url: String(player.cutout_url || "").trim() || null,
+          thumb_url: null,
+          render_url: null,
+        },
+      };
+    }
   }
 
+  return best && best.payload && best.payload.name ? best.payload : null;
+}
+
+async function fetchAndCachePlayerPayload(playerId, options = {}) {
   const response = await getPlayer(playerId, {
     initiator: options.initiator || "api",
     reason: options.reason || "player_details_request",
@@ -9454,12 +9521,56 @@ async function getCachedOrFetchPlayerPayload(playerId, options = {}) {
   const payload = normalizePlayerDetailsPayload(raw);
   if (!payload) return { payload: null, source: "tsdb_player" };
   await upsertPlayerCache(playerId, raw, {
-    next_refresh_at_ms: nowMs + TSDB_ENTITY_CACHE_MAX_AGE_MS,
+    next_refresh_at_ms: Date.now() + TSDB_ENTITY_CACHE_MAX_AGE_MS,
     source: "tsdb_player",
   }).catch((error) => {
     console.warn(`[API] Failed to cache player ${playerId}:`, error.message || error);
   });
   return { payload, source: "tsdb_player" };
+}
+
+function refreshPlayerPayload(playerId, options = {}) {
+  const existing = playerPayloadRefreshes.get(playerId);
+  if (existing) return existing;
+
+  let refreshPromise;
+  refreshPromise = fetchAndCachePlayerPayload(playerId, options).finally(() => {
+    if (playerPayloadRefreshes.get(playerId) === refreshPromise) {
+      playerPayloadRefreshes.delete(playerId);
+    }
+  });
+  playerPayloadRefreshes.set(playerId, refreshPromise);
+  return refreshPromise;
+}
+
+function refreshPlayerPayloadInBackground(playerId, options = {}) {
+  if (startupBackfillRunning) return;
+  void refreshPlayerPayload(playerId, options).catch((error) => {
+    console.warn(`[API] Background player refresh failed for ${playerId}:`, error.message || error);
+  });
+}
+
+async function getCachedOrFetchPlayerPayload(playerId, options = {}) {
+  const nowMs = Date.now();
+  const cached = await getPlayerCache(playerId).catch(() => null);
+  const cachedPayload = normalizePlayerDetailsPayload(cached && cached.payload);
+  if (!options.force && cachedPayload) {
+    if (tsdbEntityCacheFresh(cached, nowMs)) {
+      return { payload: cachedPayload, source: "mongo_player_cache" };
+    }
+    refreshPlayerPayloadInBackground(playerId, options);
+    return { payload: cachedPayload, source: "mongo_player_cache_stale" };
+  }
+
+  if (!options.force) {
+    const lineupPayload = playerDetailsPayloadFromMatchLineups(playerId);
+    if (lineupPayload) {
+      refreshPlayerPayloadInBackground(playerId, options);
+      return { payload: lineupPayload, source: "match_lineup_cache" };
+    }
+  }
+
+  return refreshPlayerPayload(playerId, options);
 }
 
 function collectLineupPlayers(value) {
@@ -25436,6 +25547,7 @@ app.get(`${API_PREFIX}/players/:playerId`, async (req, res) => {
       return;
     }
     res.set("X-Operational-Source", result.source);
+    res.set("X-Data-Source", result.source);
     res.json(payload);
   } catch (error) {
     console.warn(`[API] Failed to load player details for ${playerId}:`, error.message || error);
@@ -33606,6 +33718,8 @@ module.exports = {
     isMatchDetailsActive,
     normalizeMatchDetailsPayload,
     mergeMatchDetailsPayload,
+    normalizePlayerDetailsPayload,
+    playerDetailsPayloadFromMatchLineups,
     resolveStableMatchScoreStatus,
     withStableMatchDetailsState,
     pickPreferredMatchStatus,

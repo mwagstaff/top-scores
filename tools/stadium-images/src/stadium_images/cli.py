@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from collections import Counter
 from pathlib import Path
 
@@ -22,7 +23,14 @@ from .output import OutputWriter, duplicate_preference, record_sort_key
 from .processing.classifier import HeuristicImageClassifier
 from .processing.convert import create_hero_derivative
 from .processing.dedupe import perceptual_distance
-from .sources import PexelsSource, UnsplashSource, WikimediaSource
+from .processing.review import create_review_sheet
+from .sources import (
+    GeographSource,
+    OpenverseSource,
+    PexelsSource,
+    UnsplashSource,
+    WikimediaSource,
+)
 
 app = typer.Typer(
     name="stadium-images",
@@ -39,7 +47,8 @@ def collect(
         None, help="Stadium, club, alias, or slug to collect."
     ),
     sources: str = typer.Option(
-        "wikimedia,unsplash,pexels", help="Comma-separated providers."
+        "wikimedia,geograph,openverse,unsplash,pexels",
+        help="Comma-separated providers.",
     ),
     min_score: float | None = typer.Option(
         None, min=0.0, max=10.0, help="Override minimum score."
@@ -66,6 +75,8 @@ def collect(
         with StateDatabase(output / ".state.sqlite3") as database, HTTPClient() as http:
             providers = {
                 "wikimedia": WikimediaSource(http),
+                "geograph": GeographSource(http),
+                "openverse": OpenverseSource(http),
                 "unsplash": UnsplashSource(http),
                 "pexels": PexelsSource(http),
             }
@@ -184,7 +195,7 @@ def process(
     with StateDatabase(output / ".state.sqlite3") as database:
         for selected in stadiums:
             records = database.list_images(league_config.slug, selected.slug)
-            for category in ("day", "night", "twilight", "unknown"):
+            for category in ("day", "night"):
                 category_records = sorted(
                     (record for record in records if record.time_of_day == category),
                     key=record_sort_key,
@@ -194,7 +205,7 @@ def process(
                     destination = (
                         output
                         / league_config.slug
-                        / selected.slug
+                        / selected.team_slug
                         / "processed"
                         / category
                         / f"{rank:03d}_hero_{width}x{height}.webp"
@@ -214,7 +225,7 @@ def report(
     """Show retained-image counts and score ranges."""
     league_config, stadiums = _selection(league, stadium, config_dir)
     table = Table(title=f"{league_config.name} {league_config.season} stadium images")
-    for column in ("Stadium", "Day", "Night", "Twilight", "Unknown", "Average", "Best"):
+    for column in ("Stadium", "Day", "Night", "Average", "Best"):
         table.add_column(column, justify="right" if column != "Stadium" else "left")
     with StateDatabase(output / ".state.sqlite3") as database:
         for selected in stadiums:
@@ -230,8 +241,6 @@ def report(
                 selected.name,
                 str(counts["day"]),
                 str(counts["night"]),
-                str(counts["twilight"]),
-                str(counts["unknown"]),
                 average,
                 best,
             )
@@ -244,9 +253,157 @@ def attributions(
 ) -> None:
     """Regenerate Markdown and JSON attribution files from retained metadata."""
     with StateDatabase(output / ".state.sqlite3") as database:
+        records = database.list_all_images()
+        for record in records:
+            database.save_image(record)
         OutputWriter(output, database).write_global_files()
-        count = len(database.list_all_images())
+        count = len(records)
     console.print(f"Wrote attribution records for {count} images")
+
+
+@app.command("migrate-output")
+def migrate_output(
+    config_dir: Path = typer.Option(DEFAULT_CONFIG_DIR, exists=True, file_okay=False),
+    output: Path = typer.Option(DEFAULT_OUTPUT_DIR, file_okay=False),
+) -> None:
+    """Move existing output to team directories and normalize to day/night."""
+    leagues = tuple(
+        load_league(path.stem, config_dir) for path in sorted(config_dir.glob("*.yaml"))
+    )
+    stadiums = {
+        (league.slug, stadium.slug): stadium
+        for league in leagues
+        for stadium in league.stadiums
+    }
+    classifier = HeuristicImageClassifier()
+    moved = 0
+    twilight_to_night = 0
+    unknown_classified = 0
+
+    with StateDatabase(output / ".state.sqlite3") as database:
+        records = database.list_all_images()
+        operations: list[tuple[ImageRecord, Stadium, Path, Path]] = []
+        missing: list[Path] = []
+        conflicts: list[Path] = []
+        for record in records:
+            selected = stadiums.get((record.league, record.stadium_slug))
+            if selected is None:
+                raise typer.BadParameter(
+                    f"No config entry for {record.league}/{record.stadium_slug}"
+                )
+            source = output / record.local_original_path
+            destination = (
+                output
+                / record.league
+                / selected.team_slug
+                / "original"
+                / source.name
+            )
+            if not source.exists():
+                missing.append(source)
+            if destination != source and destination.exists():
+                conflicts.append(destination)
+            operations.append((record, selected, source, destination))
+
+        if missing:
+            raise typer.BadParameter(f"Missing {len(missing)} retained originals")
+        if conflicts:
+            raise typer.BadParameter(f"Found {len(conflicts)} destination conflicts")
+
+        legacy_dirs: set[Path] = set()
+        for record, selected, source, destination in operations:
+            previous_category = str(record.time_of_day)
+            if previous_category == "twilight":
+                record.time_of_day = "night"
+                record.classification_reasons = (
+                    *record.classification_reasons,
+                    "twilight normalized to night",
+                )
+                twilight_to_night += 1
+            elif previous_category not in {"day", "night"}:
+                result = classifier.classify(source, _candidate_from_record(record))
+                record.time_of_day = result.time_of_day
+                record.classification_confidence = result.confidence
+                record.classification_reasons = result.reasons
+                unknown_classified += 1
+
+            if source != destination:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(destination)
+                record.local_original_path = destination.relative_to(output).as_posix()
+                moved += 1
+                legacy_dirs.add(output / record.league / selected.slug)
+            database.save_image(record)
+
+        for legacy_dir in sorted(legacy_dirs):
+            shutil.rmtree(legacy_dir, ignore_errors=True)
+
+        writer = OutputWriter(output, database)
+        for league in leagues:
+            for selected in league.stadiums:
+                writer.write_stadium(league, selected)
+        writer.write_global_files()
+
+    console.print(
+        f"Migrated {moved} originals; moved {twilight_to_night} twilight images "
+        f"to night and classified {unknown_classified} unknown images"
+    )
+
+
+@app.command("review-sheet")
+def review_sheet(
+    league: str = typer.Option("premier-league"),
+    picks: int = typer.Option(3, min=1, max=6, help="Top images per stadium."),
+    config_dir: Path = typer.Option(DEFAULT_CONFIG_DIR, exists=True, file_okay=False),
+    output: Path = typer.Option(DEFAULT_OUTPUT_DIR, file_okay=False),
+) -> None:
+    """Generate a labelled contact sheet for fast human review."""
+    league_config = load_league(league, config_dir)
+    destination = output / "review" / f"{league}.jpg"
+    with StateDatabase(output / ".state.sqlite3") as database:
+        count = create_review_sheet(
+            output,
+            database,
+            league_config,
+            destination,
+            picks_per_stadium=picks,
+        )
+    console.print(f"Wrote {count} review thumbnails to {destination}")
+
+
+@app.command()
+def reject(
+    image_ids: list[str] = typer.Argument(
+        ..., help="Stable retained-image IDs to reject after visual review."
+    ),
+    reason: str = typer.Option("human review", help="Reason stored in local state."),
+    config_dir: Path = typer.Option(DEFAULT_CONFIG_DIR, exists=True, file_okay=False),
+    output: Path = typer.Option(DEFAULT_OUTPUT_DIR, file_okay=False),
+) -> None:
+    """Persistently reject retained images selected during human review."""
+    with StateDatabase(output / ".state.sqlite3") as database:
+        records_by_id = {record.id: record for record in database.list_all_images()}
+        missing = [image_id for image_id in image_ids if image_id not in records_by_id]
+        if missing:
+            raise typer.BadParameter(f"Unknown retained image IDs: {', '.join(missing)}")
+        writer = OutputWriter(output, database)
+        touched: set[tuple[str, str]] = set()
+        for image_id in image_ids:
+            record = records_by_id[image_id]
+            database.set_manual_rejection(record, reason)
+            (output / record.local_original_path).unlink(missing_ok=True)
+            database.delete_image(record)
+            touched.add((record.league, record.stadium_slug))
+        for league_slug, stadium_slug in sorted(touched):
+            league_config = load_league(league_slug, config_dir)
+            selected = next(
+                stadium
+                for stadium in league_config.stadiums
+                if stadium.slug == stadium_slug
+            )
+            writer.write_stadium(league_config, selected)
+        writer.write_global_files()
+    console.print(f"Persistently rejected {len(image_ids)} images: {reason}")
 
 
 def _selection(
@@ -269,7 +426,13 @@ def _parse_sources(value: str) -> tuple[str, ...]:
             item.casefold().strip() for item in value.split(",") if item.strip()
         )
     )
-    unknown = set(sources) - {"wikimedia", "unsplash", "pexels"}
+    unknown = set(sources) - {
+        "wikimedia",
+        "geograph",
+        "openverse",
+        "unsplash",
+        "pexels",
+    }
     if unknown:
         raise ValueError(f"Unknown sources: {', '.join(sorted(unknown))}")
     if not sources:

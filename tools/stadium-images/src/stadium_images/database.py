@@ -54,6 +54,15 @@ class StateDatabase:
             );
             CREATE INDEX IF NOT EXISTS images_sha256
                 ON images (league, stadium_slug, sha256);
+            CREATE TABLE IF NOT EXISTS manual_rejections (
+                league TEXT NOT NULL,
+                stadium_slug TEXT NOT NULL,
+                source TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (league, stadium_slug, source, source_id)
+            );
             """
         )
         self.connection.commit()
@@ -171,5 +180,37 @@ class StateDatabase:
         self.connection.execute(
             "DELETE FROM images WHERE league = ? AND stadium_slug = ? AND image_id = ?",
             (record.league, record.stadium_slug, record.id),
+        )
+        self.connection.commit()
+
+    def is_manually_rejected(
+        self, league: str, stadium_slug: str, source: str, source_id: str
+    ) -> bool:
+        row = self.connection.execute(
+            """
+            SELECT 1 FROM manual_rejections
+            WHERE league = ? AND stadium_slug = ? AND source = ? AND source_id = ?
+            """,
+            (league, stadium_slug, source, source_id),
+        ).fetchone()
+        return row is not None
+
+    def set_manual_rejection(self, record: ImageRecord, reason: str) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO manual_rejections (
+                league, stadium_slug, source, source_id, reason, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (league, stadium_slug, source, source_id)
+            DO UPDATE SET reason = excluded.reason, updated_at = excluded.updated_at
+            """,
+            (
+                record.league,
+                record.stadium_slug,
+                record.source,
+                record.source_id,
+                reason,
+                datetime.now(UTC).isoformat(),
+            ),
         )
         self.connection.commit()

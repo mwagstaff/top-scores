@@ -1,5 +1,55 @@
+from stadium_images.sources.openverse import OpenverseSource
 from stadium_images.sources.pexels import PexelsSource
 from stadium_images.sources.unsplash import UnsplashSource
+
+
+def test_openverse_parsing_preserves_original_source_and_cc_attribution() -> None:
+    candidate = OpenverseSource._parse(
+        {
+            "id": "flickr-photo-123",
+            "title": "Villa Park panorama",
+            "creator": "Jane Smith",
+            "creator_url": "https://www.flickr.com/photos/jane/",
+            "source": "flickr",
+            "foreign_landing_url": "https://www.flickr.com/photos/jane/123/",
+            "url": "https://live.staticflickr.com/123/stadium_b.jpg",
+            "license": "by",
+            "license_version": "2.0",
+            "license_url": "https://creativecommons.org/licenses/by/2.0/",
+            "attribution": "Villa Park panorama by Jane Smith, CC BY 2.0",
+            "width": 3000,
+            "height": 1800,
+            "filetype": "jpg",
+            "tags": [{"name": "villa park"}, {"name": "stadium"}],
+        },
+        "Villa Park stadium",
+    )
+
+    assert candidate is not None
+    assert candidate.source == "openverse-flickr"
+    assert candidate.source_page == "https://www.flickr.com/photos/jane/123/"
+    assert candidate.license == "CC BY 2.0"
+    assert candidate.license_url == "https://creativecommons.org/licenses/by/2.0/"
+    assert candidate.download_url == "https://live.staticflickr.com/123/stadium_b.jpg"
+
+
+def test_openverse_rejects_non_commercial_creative_commons_licenses() -> None:
+    candidate = OpenverseSource._parse(
+        {
+            "id": "photo-456",
+            "source": "flickr",
+            "foreign_landing_url": "https://www.flickr.com/photos/jane/456/",
+            "url": "https://live.staticflickr.com/456/stadium.jpg",
+            "license": "by-nc",
+            "license_url": "https://creativecommons.org/licenses/by-nc/2.0/",
+            "width": 3000,
+            "height": 1800,
+            "filetype": "jpg",
+        },
+        "stadium",
+    )
+
+    assert candidate is None
 
 
 def test_unsplash_parsing_preserves_tracking_and_attribution_links() -> None:

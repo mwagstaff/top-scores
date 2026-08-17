@@ -839,6 +839,18 @@ private struct MatchDetailScoreboardHero: View {
     let match: Match
     let kickoffText: String
     let predictionDisplay: FixturePredictionDisplayState
+    @State private var artworkSelectionSeed: UInt32
+
+    init(
+        match: Match,
+        kickoffText: String,
+        predictionDisplay: FixturePredictionDisplayState
+    ) {
+        self.match = match
+        self.kickoffText = kickoffText
+        self.predictionDisplay = predictionDisplay
+        _artworkSelectionSeed = State(initialValue: UInt32.random(in: .min ... .max))
+    }
 
     private var centerText: String {
         if let scoreLine = match.scoreLine {
@@ -950,9 +962,17 @@ private struct MatchDetailScoreboardHero: View {
         .padding(.vertical, 24)
         .background(
             ZStack {
-                Image(MatchStadiumArtworkResolver.shared.assetName(for: match))
+                Image(
+                    MatchStadiumArtworkResolver.shared.assetName(
+                        for: match,
+                        selectionSeed: artworkSelectionSeed
+                    )
+                )
                     .resizable()
                     .scaledToFill()
+                    .scaleEffect(1.04)
+                    .blur(radius: 3, opaque: true)
+                    .accessibilityHidden(true)
 
                 LinearGradient(
                     colors: [
@@ -1024,12 +1044,19 @@ private struct MatchDetailScoreboardHero: View {
             .frame(width: 72, height: 72)
             .shadow(color: .black.opacity(0.36), radius: 6, x: 0, y: 3)
 
-            Text(name)
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.72)
+            HStack(spacing: 5) {
+                Text(name)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.72)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .accessibilityHidden(true)
+            }
 
         }
         .frame(maxWidth: .infinity)
@@ -3254,6 +3281,7 @@ private struct PlayerDetailsSheet: View {
 
     @State private var details: PlayerDetails?
     @State private var errorMessage: String?
+    @State private var isLoadingDetails = false
 
     private var imageURL: URL? {
         let candidates: [String?] = [
@@ -3284,18 +3312,25 @@ private struct PlayerDetailsSheet: View {
                 VStack(spacing: 14) {
                     hero
 
-                    if details == nil && errorMessage == nil {
-                        ProgressView("Loading player details")
+                    if isLoadingDetails {
+                        ProgressView("Loading more player details")
                             .frame(maxWidth: .infinity, minHeight: 80)
                     }
 
                     if let errorMessage {
-                        Text(errorMessage)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(16)
-                            .background(cardBackground)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(errorMessage)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+
+                            Button("Try Again") {
+                                Task { await loadDetails() }
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .background(cardBackground)
                     }
 
                     if let details {
@@ -3447,12 +3482,19 @@ private struct PlayerDetailsSheet: View {
     }
 
     private func loadDetails() async {
+        if details == nil {
+            details = fallbackDetails
+        }
+        errorMessage = nil
+        isLoadingDetails = true
+        defer { isLoadingDetails = false }
+
         guard let playerID = player.idPlayer else {
-            errorMessage = "Player details unavailable."
+            errorMessage = "Some player information is temporarily unavailable."
             return
         }
         guard let baseURL = URL(string: apiBaseURL) else {
-            errorMessage = "Player details unavailable."
+            errorMessage = "Some player information is temporarily unavailable."
             return
         }
 
@@ -3460,8 +3502,38 @@ private struct PlayerDetailsSheet: View {
             let client = APIClient(baseURL: baseURL)
             details = try await client.fetchPlayerDetails(playerId: playerID)
             errorMessage = nil
+        } catch is CancellationError {
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            return
         } catch {
-            errorMessage = "Player details unavailable."
+            errorMessage = "Some player information is temporarily unavailable."
+        }
+    }
+
+    private var fallbackDetails: PlayerDetails {
+        return PlayerDetails(
+            id: player.idPlayer ?? player.id,
+            name: player.name,
+            team: nil,
+            born: nil,
+            description: nil,
+            side: nil,
+            position: fallbackPosition,
+            birthLocation: nil,
+            cutoutURL: player.cutoutURL,
+            thumbURL: nil,
+            renderURL: nil
+        )
+    }
+
+    private var fallbackPosition: String? {
+        switch player.positionCategory?.lowercased() {
+        case "goalkeeper": return "Goalkeeper"
+        case "defender": return "Defender"
+        case "midfielder": return "Midfielder"
+        case "attacker": return "Forward"
+        default: return player.position ?? player.positionShort
         }
     }
 

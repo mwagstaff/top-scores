@@ -39,6 +39,8 @@ final class TeamBadgeCache {
 
     /// badge_url → local file URL (computed once from the badge URL basename).
     private var cachedURLs: [String: URL] = [:]
+    /// Normalized team name → local file URL. This bridges provider-specific team IDs.
+    private var cachedURLsByTeamName: [String: URL] = [:]
     /// teamId → primary brand colour hex (TSDB strColour1), e.g. "#0000FF".
     private var primaryColorByTeamId: [String: String] = [:]
     private let imageCache: NSCache<NSString, UIImage> = {
@@ -77,6 +79,24 @@ final class TeamBadgeCache {
     func image(forTeamId teamId: String) -> UIImage? {
         guard let url = localURL(forTeamId: teamId) else { return nil }
 
+        return image(at: url)
+    }
+
+    /// Returns a locally-cached badge using canonical names when the caller's
+    /// team ID comes from a different provider namespace.
+    func image(forTeamName teamName: String, alternateNames: [String] = []) -> UIImage? {
+        let candidates = [teamName] + alternateNames + TeamIdentityStore.shared.names(for: teamName)
+        let keys = candidates.map(TeamIdentityStore.normalizedKey).filter { !$0.isEmpty }
+
+        lock.lock()
+        let url = keys.lazy.compactMap { self.cachedURLsByTeamName[$0] }.first
+        lock.unlock()
+
+        guard let url else { return nil }
+        return image(at: url)
+    }
+
+    private func image(at url: URL) -> UIImage? {
         let cacheKey = url.path as NSString
         if let image = imageCache.object(forKey: cacheKey) {
             return image
@@ -178,7 +198,11 @@ final class TeamBadgeCache {
                 guard !entry.badge_url.isEmpty else { continue }
                 let badgeUrlString = entry.badge_url
                 group.addTask {
-                    await self.downloadIfNeeded(teamId: teamId, badgeUrlString: badgeUrlString)
+                    await self.downloadIfNeeded(
+                        teamId: teamId,
+                        teamName: entry.name,
+                        badgeUrlString: badgeUrlString
+                    )
                 }
             }
         }
@@ -197,6 +221,13 @@ final class TeamBadgeCache {
         let manifestURL = dir.appendingPathComponent("manifest.json")
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         try? data.write(to: manifestURL, options: .atomic)
+
+        lock.lock()
+        let nameSnapshot = cachedURLsByTeamName.mapValues(\.lastPathComponent)
+        lock.unlock()
+        let nameManifestURL = dir.appendingPathComponent("name-manifest.json")
+        guard let nameData = try? JSONEncoder().encode(nameSnapshot) else { return }
+        try? nameData.write(to: nameManifestURL, options: .atomic)
     }
 
     private func saveColors() {
@@ -222,12 +253,16 @@ final class TeamBadgeCache {
         print("[TeamBadgeCache] init: loaded \(colors.count) team colours")
     }
 
-    private func downloadIfNeeded(teamId: String, badgeUrlString: String) async {
+    private func downloadIfNeeded(teamId: String, teamName: String, badgeUrlString: String) async {
         guard let dest = localPath(forBadgeURL: badgeUrlString) else { return }
 
         // Register the mapping so image(forTeamId:) can find it immediately.
         lock.lock()
         cachedURLs[teamId] = dest
+        let normalizedTeamName = TeamIdentityStore.normalizedKey(teamName)
+        if !normalizedTeamName.isEmpty {
+            cachedURLsByTeamName[normalizedTeamName] = dest
+        }
         lock.unlock()
 
         // Content-addressed filenames: if the file already exists, the badge hasn't changed.
@@ -283,6 +318,21 @@ final class TeamBadgeCache {
         }
         lock.unlock()
         print("[TeamBadgeCache] init: loaded \(loaded)/\(manifest.count) from manifest")
+
+        let nameManifestURL = dir.appendingPathComponent("name-manifest.json")
+        guard let nameData = try? Data(contentsOf: nameManifestURL),
+              let nameManifest = try? JSONDecoder().decode([String: String].self, from: nameData) else {
+            return
+        }
+
+        lock.lock()
+        for (normalizedName, filename) in nameManifest {
+            let fileURL = dir.appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                cachedURLsByTeamName[normalizedName] = fileURL
+            }
+        }
+        lock.unlock()
     }
 
     /// Triggers a network refresh to pick up any new or changed badges.

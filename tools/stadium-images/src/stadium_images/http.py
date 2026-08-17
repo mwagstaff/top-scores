@@ -48,6 +48,13 @@ class HTTPClient:
         self.max_attempts = max_attempts
         self.max_inline_retry_wait = max_inline_retry_wait
         self.last_request_by_host: dict[str, float] = {}
+        self.minimum_interval_by_host: dict[str, float] = {}
+
+    def set_host_interval(self, host: str, seconds: float) -> None:
+        self.minimum_interval_by_host[host] = max(
+            self.minimum_interval_by_host.get(host, 0.0),
+            seconds,
+        )
 
     def close(self) -> None:
         self.client.close()
@@ -73,6 +80,15 @@ class HTTPClient:
         if not isinstance(value, dict):
             raise HTTPError(f"Unexpected JSON response from {url}")
         return value
+
+    def get_text(
+        self,
+        url: str,
+        *,
+        params: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> str:
+        return self._request("GET", url, params=params, headers=headers).text
 
     def notify_download(
         self, url: str, *, headers: dict[str, str] | None = None
@@ -143,10 +159,13 @@ class HTTPClient:
 
     def _respect_rate_limit(self, url: str) -> None:
         host = urlparse(url).netloc
+        minimum_interval = self.minimum_interval_by_host.get(
+            host, self.minimum_interval
+        )
         now = time.monotonic()
         elapsed = now - self.last_request_by_host.get(host, 0.0)
-        if elapsed < self.minimum_interval:
-            time.sleep(self.minimum_interval - elapsed)
+        if elapsed < minimum_interval:
+            time.sleep(minimum_interval - elapsed)
         self.last_request_by_host[host] = time.monotonic()
 
     @staticmethod

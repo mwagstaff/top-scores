@@ -9,14 +9,23 @@ struct MatchStadiumArtworkResolver: Sendable {
     static let shared = MatchStadiumArtworkResolver()
 
     private let genericFamilyCount = 3
+    private let bournemouthDayAssetCount = 6
+    private let bournemouthNightAssetCount = 4
 
     // Add venue-specific asset stems here as licensed stadium photography is
     // introduced, for example "273": "Venue273Stadium". The resolver will
     // continue to append Day/Night and fall back to the deterministic pool.
     private let venueAssetFamilies: [String: String] = [:]
 
-    func assetName(for match: Match) -> String {
+    func assetName(for match: Match, selectionSeed: UInt32? = nil) -> String {
         let light = lightContext(for: match)
+
+        if isBournemouthMatch(match) {
+            let seed = selectionSeed ?? stableHash(
+                "\(match.date)|\(match.time)|\(match.homeTeam)|\(match.awayTeam)"
+            )
+            return bournemouthAssetName(light: light, selectionSeed: seed)
+        }
 
         if let venueID = match.venueID,
            let venueFamily = venueAssetFamilies[venueID] {
@@ -25,6 +34,39 @@ struct MatchStadiumArtworkResolver: Sendable {
 
         let family = familyIndex(homeTeamID: match.homeTeamId, homeTeamName: match.homeTeam)
         return String(format: "MatchStadium%02d%@", family, light.assetSuffix)
+    }
+
+    func teamHeroAssetName(teamID: String?, teamName: String) -> String {
+        if teamName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .contains("bournemouth") {
+            return bournemouthAssetName(
+                light: .night,
+                selectionSeed: stableHash(teamName.lowercased())
+            )
+        }
+
+        let family = familyIndex(homeTeamID: teamID, homeTeamName: teamName)
+        return String(format: "MatchStadium%02dNight", family)
+    }
+
+    private func bournemouthAssetName(
+        light: MatchStadiumLightContext,
+        selectionSeed: UInt32
+    ) -> String {
+        let assetCount = light == .day ? bournemouthDayAssetCount : bournemouthNightAssetCount
+        let assetNumber = Int(selectionSeed % UInt32(assetCount)) + 1
+        return String(format: "BournemouthStadium%@%02d", light.assetSuffix, assetNumber)
+    }
+
+    private func isBournemouthMatch(_ match: Match) -> Bool {
+        [match.homeTeam, match.awayTeam].contains { teamName in
+            teamName
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .contains("bournemouth")
+        }
     }
 
     func lightContext(for match: Match) -> MatchStadiumLightContext {

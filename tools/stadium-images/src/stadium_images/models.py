@@ -1,9 +1,35 @@
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-TimeOfDay = Literal["day", "night", "twilight", "unknown"]
+TimeOfDay = Literal["day", "night"]
+
+
+def team_slug(value: str) -> str:
+    ascii_value = (
+        unicodedata.normalize("NFKD", value)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .casefold()
+    )
+    return re.sub(r"[^a-z0-9]+", "-", ascii_value).strip("-")
+
+
+def license_reference_url(license_name: str, supplied_url: str | None) -> str | None:
+    if supplied_url:
+        return supplied_url
+    normalized = re.sub(r"[_\s]+", "-", license_name.casefold()).strip("-")
+    if "public-domain" in normalized:
+        return "https://commons.wikimedia.org/wiki/Commons:Copyright_tags#Public_domain"
+    if normalized.startswith("cc0"):
+        return "https://creativecommons.org/publicdomain/zero/1.0/"
+    match = re.fullmatch(r"cc-(by(?:-sa)?)-(\d(?:\.\d)?)", normalized)
+    if match:
+        return f"https://creativecommons.org/licenses/{match.group(1)}/{match.group(2)}/"
+    return None
 
 
 @dataclass(frozen=True)
@@ -19,10 +45,9 @@ class FilterConfig:
 
 @dataclass(frozen=True)
 class RetentionConfig:
+    total: int = 20
     day: int = 30
     night: int = 30
-    twilight: int = 15
-    unknown: int = 10
 
     def limit_for(self, time_of_day: TimeOfDay) -> int:
         return int(getattr(self, time_of_day))
@@ -37,6 +62,10 @@ class Stadium:
     search_terms: tuple[str, ...]
     latitude: float | None = None
     longitude: float | None = None
+
+    @property
+    def team_slug(self) -> str:
+        return team_slug(self.club)
 
 
 @dataclass(frozen=True)
@@ -145,6 +174,9 @@ class ImageRecord:
     def from_dict(cls, values: dict[str, Any]) -> ImageRecord:
         values = dict(values)
         values.setdefault("download_url", values.get("image_url", ""))
+        values["license_url"] = license_reference_url(
+            str(values.get("license") or ""), values.get("license_url")
+        )
         values["classification_reasons"] = tuple(
             values.get("classification_reasons", ())
         )

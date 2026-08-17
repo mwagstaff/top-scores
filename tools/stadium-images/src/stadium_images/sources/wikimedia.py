@@ -5,9 +5,10 @@ import os
 import re
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlencode
 
 from ..http import HTTPClient
-from ..models import ImageCandidate, Stadium
+from ..models import ImageCandidate, Stadium, license_reference_url
 
 
 class _TextExtractor(HTMLParser):
@@ -46,13 +47,16 @@ def license_allowed(value: str) -> bool:
 
 class WikimediaSource:
     name = "wikimedia"
+    max_queries_per_stadium = None
     endpoint = "https://commons.wikimedia.org/w/api.php"
 
     def __init__(self, http: HTTPClient) -> None:
         self.http = http
+        self.http.set_host_interval("commons.wikimedia.org", 1.1)
+        self.http.set_host_interval("upload.wikimedia.org", 3.1)
         self.download_width = max(
             1600,
-            int(os.getenv("WIKIMEDIA_DOWNLOAD_WIDTH", "3840")),
+            int(os.getenv("WIKIMEDIA_DOWNLOAD_WIDTH", "2560")),
         )
 
     @property
@@ -85,7 +89,7 @@ class WikimediaSource:
             return []
         candidates: list[ImageCandidate] = []
         for page in pages:
-            candidate = self._parse_page(page, query)
+            candidate = self._parse_page(page, query, self.download_width)
             if candidate is not None:
                 candidates.append(candidate)
         return candidates
@@ -94,7 +98,9 @@ class WikimediaSource:
         return None
 
     @staticmethod
-    def _parse_page(page: object, query: str) -> ImageCandidate | None:
+    def _parse_page(
+        page: object, query: str, download_width: int = 2560
+    ) -> ImageCandidate | None:
         if not isinstance(page, dict):
             return None
         image_info_values = page.get("imageinfo")
@@ -113,9 +119,17 @@ class WikimediaSource:
         if not license_name or not license_allowed(license_name):
             return None
         image_url = str(image_info.get("url") or "")
-        download_url = str(image_info.get("thumburl") or image_url)
+        file_name = str(page.get("title") or "").removeprefix("File:")
+        download_url = (
+            f"https://commons.wikimedia.org/w/thumb.php?"
+            f"{urlencode({'f': file_name, 'w': download_width})}"
+        )
         mime_type = str(image_info.get("mime") or "")
-        if not image_url or mime_type not in {"image/jpeg", "image/png", "image/webp"}:
+        if (
+            not image_url
+            or not file_name
+            or mime_type not in {"image/jpeg", "image/png", "image/webp"}
+        ):
             return None
 
         artist, artist_url = clean_html(_metadata_value(metadata, "Artist"))
@@ -132,7 +146,9 @@ class WikimediaSource:
         source_page = str(image_info.get("descriptionurl") or "")
         if not page_id or not source_page:
             return None
-        license_url = _metadata_value(metadata, "LicenseUrl") or None
+        license_url = license_reference_url(
+            license_name, _metadata_value(metadata, "LicenseUrl") or None
+        )
         author = artist or "Unknown author"
         attribution = f"{author}, {license_name}, via Wikimedia Commons"
         if credit and credit.casefold() not in {"own work", "self-photographed"}:

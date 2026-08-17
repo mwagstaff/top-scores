@@ -5,7 +5,11 @@ from PIL import Image
 from stadium_images.models import FilterConfig, ImageCandidate, Stadium
 from stadium_images.processing.classifier import HeuristicImageClassifier
 from stadium_images.processing.dedupe import calculate_hashes, perceptual_distance
-from stadium_images.processing.scorer import identity_confidence, score_candidate
+from stadium_images.processing.scorer import (
+    identity_confidence,
+    obvious_text_rejection,
+    score_candidate,
+)
 
 
 def candidate(**overrides: object) -> ImageCandidate:
@@ -52,6 +56,15 @@ def test_identity_and_score_favour_stadium_wide_angle() -> None:
     assert any("hero-friendly" in reason for reason in score.reasons)
 
 
+def test_obvious_non_stadium_scene_is_rejected() -> None:
+    value = candidate(
+        title="A surgical operation",
+        description="An aquatint with the stadium barely visible through a window",
+    )
+
+    assert obvious_text_rejection(value) == "aquatint"
+
+
 def test_classifier_combines_keyword_and_luminance(tmp_path: Path) -> None:
     image_path = tmp_path / "night.jpg"
     Image.new("RGB", (1800, 1000), (18, 22, 35)).save(image_path)
@@ -64,6 +77,28 @@ def test_classifier_combines_keyword_and_luminance(tmp_path: Path) -> None:
     assert result.time_of_day == "night"
     assert result.confidence >= 0.9
     assert any("luminance" in reason for reason in result.reasons)
+
+
+def test_classifier_maps_twilight_to_night_and_always_returns_two_categories(
+    tmp_path: Path,
+) -> None:
+    twilight_path = tmp_path / "twilight.jpg"
+    ambiguous_path = tmp_path / "ambiguous.jpg"
+    Image.new("RGB", (1800, 1000), (85, 85, 100)).save(twilight_path)
+    Image.new("RGB", (1800, 1000), (112, 112, 112)).save(ambiguous_path)
+    classifier = HeuristicImageClassifier()
+
+    twilight = classifier.classify(
+        twilight_path,
+        candidate(title="Stadium at twilight", search_query="Stadium"),
+    )
+    ambiguous = classifier.classify(
+        ambiguous_path,
+        candidate(title="Stadium bowl", search_query="Stadium"),
+    )
+
+    assert twilight.time_of_day == "night"
+    assert ambiguous.time_of_day in {"day", "night"}
 
 
 def test_hashes_detect_exact_and_visual_matches(tmp_path: Path) -> None:

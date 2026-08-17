@@ -8,6 +8,7 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
 
     private let lock = NSLock()
     private var localURLsByID: [String: URL] = [:]
+    private var competitionIDsByNormalizedName: [String: String] = [:]
     private var isWarming = false
     private let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
@@ -32,6 +33,17 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
         return image
     }
 
+    func image(competitionID: String?, competitionName: String) -> UIImage? {
+        let resolvedID: String? = lock.withLock { () -> String? in
+            if let competitionID, localURLsByID[competitionID] != nil {
+                return competitionID
+            }
+            return competitionIDsByNormalizedName[Self.normalizedName(competitionName)]
+        }
+        guard let resolvedID else { return nil }
+        return image(for: resolvedID)
+    }
+
     func warmIfNeeded(entries: [CompetitionCatalogEntry]) {
         let shouldWarm = lock.withLock {
             guard !isWarming else { return false }
@@ -41,6 +53,11 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
         guard shouldWarm else { return }
 
         let candidates = entries.compactMap { entry -> (String, URL, URL)? in
+            lock.withLock {
+                for name in entry.allNames {
+                    competitionIDsByNormalizedName[Self.normalizedName(name)] = entry.stableID
+                }
+            }
             guard let rawURL = entry.logoURL,
                   let remoteURL = URL(string: rawURL),
                   !remoteURL.lastPathComponent.isEmpty else {
@@ -96,6 +113,14 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    private static func normalizedName(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined()
     }
 
     private func downloadIfNeeded(

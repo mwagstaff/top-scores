@@ -15,10 +15,9 @@ filters:
   perceptual_hash_distance: 6
 
 retention:
+  total: 20
   day: 30
   night: 30
-  twilight: 15
-  unknown: 10
 
 stadiums:
   - club: Arsenal
@@ -68,6 +67,10 @@ stadiums:
       - Gtech Community Stadium pitch
       - Gtech Community Stadium daytime
       - Gtech Community Stadium night
+      - 'incategory:"Brentford Community Stadium"'
+      - Gtech Community Stadium 2025
+      - Brentford Community Stadium football match
+      - Brentford Gtech Community Stadium
 
   - club: Brighton & Hove Albion
     stadium: American Express Stadium
@@ -128,6 +131,7 @@ stadiums:
       - Hill Dickinson Stadium pitch
       - Everton Stadium daytime
       - Everton Stadium night floodlights
+      - 'incategory:"Hill Dickinson Stadium"'
 
   - club: Fulham
     stadium: Craven Cottage
@@ -164,6 +168,7 @@ stadiums:
       - Portman Road daytime
       - Portman Road night
       - Portman Road floodlights
+      - 'incategory:"Portman Road"'
 
   - club: Leeds United
     stadium: Elland Road

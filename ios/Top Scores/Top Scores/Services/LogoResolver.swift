@@ -45,6 +45,13 @@ final class LogoResolver {
     }
 
     func image(for teamName: String, alternateNames: [String] = []) -> UIImage? {
+        if let badge = TeamBadgeCache.shared.image(
+            forTeamName: teamName,
+            alternateNames: alternateNames
+        ) {
+            return badge
+        }
+
         let source = resolvePreferredSource(for: teamName, alternateNames: alternateNames) ?? fallbackSource
         guard let source else { return nil }
 

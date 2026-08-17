@@ -230,6 +230,41 @@ struct Top_ScoresTests {
         #expect(names.contains("major_tournaments"))
     }
 
+    @MainActor
+    @Test func playerDetails_usesShortTimeoutAndRetriesOnceAfterTimeout() async throws {
+        let recorder = PlayerDetailsRequestRecorder()
+        PlayerDetailsURLProtocol.requestHandler = { request in
+            let attempt = recorder.record(timeout: request.timeoutInterval)
+            if attempt == 1 {
+                throw URLError(.timedOut)
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data(#"{"id":"34167754","name":"Nicolas Pépé"}"#.utf8)
+            return (response, data)
+        }
+        defer { PlayerDetailsURLProtocol.requestHandler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [PlayerDetailsURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+
+        let client = APIClient(
+            baseURL: URL(string: "https://example.com/api/v1")!,
+            session: session
+        )
+
+        let details = try await client.fetchPlayerDetails(playerId: "34167754")
+
+        #expect(details.name == "Nicolas Pépé")
+        #expect(recorder.recordedTimeouts == [5, 5])
+    }
+
     @Test func matchesPageQueryItems_omitCategoryParamsWhenPremierLeagueTeamsOnlyIsOff() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: PreferencesStore.defaultSelectedLeagues,
@@ -3446,4 +3481,53 @@ struct Top_ScoresTests {
         )
     }
 
+}
+
+private final class PlayerDetailsRequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timeouts: [TimeInterval] = []
+
+    var recordedTimeouts: [TimeInterval] {
+        lock.lock()
+        defer { lock.unlock() }
+        return timeouts
+    }
+
+    @discardableResult
+    func record(timeout: TimeInterval) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        timeouts.append(timeout)
+        return timeouts.count
+    }
+}
+
+private final class PlayerDetailsURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let requestHandler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.unknown))
+            return
+        }
+
+        do {
+            let (response, data) = try requestHandler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }

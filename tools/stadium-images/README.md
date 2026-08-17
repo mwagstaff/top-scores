@@ -2,7 +2,11 @@
 
 This is a configuration-driven command-line tool for collecting reusable football-stadium photography with its provenance intact. The checked-in Premier League dataset is explicitly labelled for the 2026/27 season; another league or season can be added as a new YAML file without changing collection logic.
 
-Wikimedia Commons works without credentials. Unsplash and Pexels are enabled only when their official API keys are present. Every retained image has a known licence, source page, author field, hashes, classification evidence, and quality-score evidence.
+Wikimedia Commons, the curated Geograph football-ground collection, and
+non-Wikimedia discovery through Openverse work without credentials. Unsplash and
+Pexels are enabled only when their official API keys are present. Every retained image
+has a known licence, source page, author field, hashes, classification evidence, and
+quality-score evidence.
 
 ## Setup
 
@@ -24,8 +28,8 @@ set +a
 ```
 
 Use a descriptive `STADIUM_IMAGES_USER_AGENT` value when making larger Wikimedia runs.
-`WIKIMEDIA_DOWNLOAD_WIDTH` defaults to 3840 pixels, which uses Wikimedia's official
-high-resolution rendition service while retaining the canonical original URL in metadata.
+`WIKIMEDIA_DOWNLOAD_WIDTH` defaults to 2560 pixels, which uses Wikimedia's official
+`w/thumb.php` high-resolution rendition service while retaining the canonical original URL in metadata.
 This avoids repeatedly pulling exceptionally large originals and is still comfortably above
 the app's largest anticipated hero-image size.
 
@@ -54,6 +58,9 @@ stadium-images collect --league premier-league --min-score 8 --limit 20
 stadium-images report --league premier-league
 stadium-images classify --stadium anfield
 stadium-images dedupe --league premier-league
+stadium-images review-sheet --league premier-league --picks 3
+stadium-images reject wikimedia_12345678 --reason "poor hero composition"
+stadium-images migrate-output
 stadium-images process --stadium anfield --width 1290 --height 600
 stadium-images attributions
 ```
@@ -62,7 +69,13 @@ The default output is `output/`. Completed and rejected candidate state is store
 
 ## Output
 
-Each stadium contains immutable source downloads under `original/`, ranked copies under `day/`, `night/`, `twilight/`, and `unknown/`, plus `metadata.json`. `process` adds centre-cropped WebP files under `processed/` without changing the original.
+Each league is organized by normalized team name, such as
+`premier-league/newcastle-united/`. Every team directory contains immutable source
+downloads under `original/`, ranked copies under `day/` and `night/`, plus
+`metadata.json`. Twilight, dusk, sunset, and evening images are treated as night;
+the classifier always resolves every retained image to one of those two categories.
+`process` adds centre-cropped WebP files under `processed/` without changing the
+original.
 
 The output root contains:
 
@@ -71,6 +84,8 @@ The output root contains:
 - `attributions.json` for a future in-app image-credit screen.
 
 Review the retained images before shipping them. V1 scoring and time-of-day classification are intentionally inexpensive metadata/luminance heuristics; they do not replace human identity, composition, or licence review.
+`review-sheet` generates a labelled overview of each stadium's highest-ranked images under
+`output/review/` for a fast visual pass.
 
 ## Add a league or update a season
 
@@ -86,6 +101,7 @@ Run it with `stadium-images collect --league championship`. Club membership and 
 ## Safety and provider behaviour
 
 - Commons candidates are accepted only for CC0, Public Domain, CC BY, or CC BY-SA licence names. Unknown, NC, ND, SVG, and unsupported media are skipped before download.
+- Geograph candidates come from its curated Football Grounds collection and retain the photographer credit and CC BY-SA 2.0 source-page link.
 - Unsplash search and download tracking use the official API. Pexels uses its official API. Keys are environment-only.
 - Resolution, orientation, obvious non-photo terms, and stadium identity evidence are checked before full download where provider metadata allows.
 - Exact SHA-256 and perceptual hashes remove duplicates, preferring clearer licensing, higher resolution, and then higher score.

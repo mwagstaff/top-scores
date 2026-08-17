@@ -8,6 +8,7 @@ from ..models import ImageCandidate, Stadium
 
 class UnsplashSource:
     name = "unsplash"
+    max_queries_per_stadium = None
     endpoint = "https://api.unsplash.com/search/photos"
 
     def __init__(self, http: HTTPClient, access_key: str | None = None) -> None:

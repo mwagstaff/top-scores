@@ -1,0 +1,289 @@
+league: championship
+name: EFL Championship
+season: 2026/27
+membership_source: https://www.efl.com/news/2026/june/25/the-2026-27-efl-fixtures-are-here/
+results_per_query: 8
+
+filters:
+  min_width: 1600
+  min_height: 900
+  min_aspect_ratio: 1.3
+  preferred_aspect_ratio:
+    min: 1.5
+    max: 2.4
+  min_score: 7.0
+  perceptual_hash_distance: 6
+
+retention:
+  total: 10
+  day: 10
+  night: 10
+
+stadiums:
+  - club: Wolverhampton Wanderers
+    stadium: Molineux Stadium
+    slug: molineux-stadium
+    aliases: [Molineux, Wolves Stadium]
+    search_terms:
+      - Molineux Stadium Wolverhampton
+      - Molineux interior pitch
+      - Molineux panorama
+      - Molineux daytime
+      - Molineux night floodlights
+
+  - club: Blackburn Rovers
+    stadium: Ewood Park
+    slug: ewood-park
+    aliases: [Blackburn Rovers Stadium]
+    search_terms:
+      - Ewood Park Blackburn Rovers
+      - Ewood Park interior pitch
+      - Ewood Park panorama
+      - Ewood Park daytime
+      - Ewood Park night floodlights
+
+  - club: Bolton Wanderers
+    stadium: Toughsheet Community Stadium
+    slug: toughsheet-community-stadium
+    aliases: [Reebok Stadium, Macron Stadium, University of Bolton Stadium]
+    search_terms:
+      - Toughsheet Community Stadium Bolton
+      - University of Bolton Stadium interior
+      - Reebok Stadium Bolton pitch
+      - Bolton stadium daytime
+      - Bolton stadium night floodlights
+
+  - club: Preston North End
+    stadium: Deepdale
+    slug: deepdale
+    aliases: [Deepdale Stadium]
+    search_terms:
+      - Deepdale Preston North End
+      - Deepdale stadium interior pitch
+      - Deepdale panorama
+      - Deepdale daytime
+      - Deepdale night floodlights
+
+  - club: Bristol City
+    stadium: Ashton Gate
+    slug: ashton-gate
+    aliases: [Ashton Gate Stadium]
+    search_terms:
+      - Ashton Gate Bristol City
+      - Ashton Gate interior pitch
+      - Ashton Gate panorama
+      - Ashton Gate daytime
+      - Ashton Gate night floodlights
+
+  - club: Millwall
+    stadium: The Den
+    slug: the-den
+    aliases: [New Den, Millwall Stadium]
+    search_terms:
+      - The Den Millwall stadium
+      - New Den Millwall interior pitch
+      - The Den panorama
+      - The Den daytime Millwall
+      - The Den night floodlights Millwall
+
+  - club: Charlton Athletic
+    stadium: The Valley
+    slug: the-valley
+    aliases: [Valley Stadium, Charlton Stadium]
+    search_terms:
+      - The Valley Charlton Athletic
+      - The Valley stadium interior pitch
+      - The Valley panorama Charlton
+      - The Valley daytime Charlton
+      - The Valley night floodlights Charlton
+
+  - club: Derby County
+    stadium: Pride Park Stadium
+    slug: pride-park-stadium
+    aliases: [Pride Park]
+    search_terms:
+      - Pride Park Stadium Derby County
+      - Pride Park interior pitch
+      - Pride Park panorama
+      - Pride Park daytime
+      - Pride Park night floodlights
+
+  - club: Middlesbrough
+    stadium: Riverside Stadium
+    slug: riverside-stadium
+    aliases: [The Riverside]
+    search_terms:
+      - Riverside Stadium Middlesbrough
+      - Riverside Stadium interior pitch
+      - Riverside Stadium panorama
+      - Riverside Stadium daytime
+      - Riverside Stadium night floodlights
+
+  - club: Lincoln City
+    stadium: LNER Stadium
+    slug: lner-stadium
+    aliases: [Sincil Bank, Lincoln City Stadium]
+    search_terms:
+      - LNER Stadium Lincoln City
+      - Sincil Bank interior pitch
+      - Sincil Bank panorama Lincoln
+      - Lincoln City stadium daytime
+      - Lincoln City stadium night floodlights
+      - Sincil Bank Lincoln City
+      - 'incategory:"Sincil Bank"'
+
+  - club: Norwich City
+    stadium: Carrow Road
+    slug: carrow-road
+    aliases: [Norwich City Stadium]
+    search_terms:
+      - Carrow Road Norwich City
+      - Carrow Road interior pitch
+      - Carrow Road panorama
+      - Carrow Road daytime
+      - Carrow Road night floodlights
+
+  - club: West Bromwich Albion
+    stadium: The Hawthorns
+    slug: the-hawthorns
+    aliases: [Hawthorns Stadium]
+    search_terms:
+      - The Hawthorns West Bromwich Albion
+      - Hawthorns stadium interior pitch
+      - The Hawthorns panorama
+      - The Hawthorns daytime
+      - The Hawthorns night floodlights
+
+  - club: Portsmouth
+    stadium: Fratton Park
+    slug: fratton-park
+    aliases: [Portsmouth Stadium]
+    search_terms:
+      - Fratton Park Portsmouth
+      - Fratton Park interior pitch
+      - Fratton Park panorama
+      - Fratton Park daytime
+      - Fratton Park night floodlights
+
+  - club: Queens Park Rangers
+    stadium: Loftus Road
+    slug: loftus-road
+    aliases: [MATRADE Loftus Road, Kiyan Prince Foundation Stadium, QPR Stadium]
+    search_terms:
+      - Loftus Road Queens Park Rangers
+      - Loftus Road interior pitch
+      - Loftus Road panorama
+      - Loftus Road daytime
+      - Loftus Road night floodlights
+
+  - club: Stoke City
+    stadium: bet365 Stadium
+    slug: bet365-stadium
+    aliases: [Britannia Stadium, Stoke City Stadium]
+    search_terms:
+      - bet365 Stadium Stoke City
+      - Britannia Stadium interior pitch
+      - Stoke City stadium panorama
+      - bet365 Stadium daytime
+      - bet365 Stadium night floodlights
+
+  - club: Swansea City
+    stadium: Swansea.com Stadium
+    slug: swansea-com-stadium
+    aliases: [Liberty Stadium, Swansea Stadium]
+    search_terms:
+      - Swansea.com Stadium Swansea City
+      - Liberty Stadium Swansea interior pitch
+      - Swansea stadium panorama
+      - Swansea stadium daytime
+      - Swansea stadium night floodlights
+      - Liberty Stadium Swansea
+      - 'incategory:"Liberty Stadium"'
+
+  - club: Sheffield United
+    stadium: Bramall Lane
+    slug: bramall-lane
+    aliases: [Sheffield United Stadium]
+    search_terms:
+      - Bramall Lane Sheffield United
+      - Bramall Lane interior pitch
+      - Bramall Lane panorama
+      - Bramall Lane daytime
+      - Bramall Lane night floodlights
+
+  - club: Birmingham City
+    stadium: St Andrew's
+    slug: st-andrews
+    aliases: [St Andrew's @ Knighthead Park, St Andrew's Stadium]
+    search_terms:
+      - St Andrews Birmingham City stadium
+      - St Andrews interior pitch Birmingham
+      - St Andrews panorama Birmingham City
+      - Birmingham City stadium daytime
+      - Birmingham City stadium night floodlights
+
+  - club: Watford
+    stadium: Vicarage Road
+    slug: vicarage-road
+    aliases: [Watford Stadium]
+    search_terms:
+      - Vicarage Road Watford
+      - Vicarage Road interior pitch
+      - Vicarage Road panorama
+      - Vicarage Road daytime
+      - Vicarage Road night floodlights
+
+  - club: Southampton
+    stadium: St Mary's Stadium
+    slug: st-marys-stadium
+    aliases: [St Mary's, Southampton Stadium]
+    search_terms:
+      - St Marys Stadium Southampton
+      - St Marys interior pitch Southampton
+      - Southampton stadium panorama
+      - St Marys Stadium daytime
+      - St Marys Stadium night floodlights
+
+  - club: Burnley
+    stadium: Turf Moor
+    slug: turf-moor
+    aliases: [Burnley Stadium]
+    search_terms:
+      - Turf Moor Burnley
+      - Turf Moor interior pitch
+      - Turf Moor panorama
+      - Turf Moor daytime
+      - Turf Moor night floodlights
+
+  - club: West Ham United
+    stadium: London Stadium
+    slug: london-stadium
+    aliases: [Olympic Stadium London, West Ham Stadium]
+    search_terms:
+      - London Stadium West Ham United
+      - Olympic Stadium London football interior
+      - London Stadium football pitch panorama
+      - London Stadium daytime West Ham
+      - London Stadium night floodlights West Ham
+
+  - club: Cardiff City
+    stadium: Cardiff City Stadium
+    slug: cardiff-city-stadium
+    aliases: [Leckwith Stadium]
+    search_terms:
+      - Cardiff City Stadium
+      - Cardiff City Stadium interior pitch
+      - Cardiff City Stadium panorama
+      - Cardiff City Stadium daytime
+      - Cardiff City Stadium night floodlights
+
+  - club: Wrexham
+    stadium: STōK Cae Ras
+    slug: stok-cae-ras
+    aliases: [SToK Cae Ras, Racecourse Ground, Y Cae Ras]
+    search_terms:
+      - SToK Cae Ras Wrexham
+      - Racecourse Ground Wrexham interior pitch
+      - Cae Ras panorama
+      - Racecourse Ground Wrexham daytime
+      - Racecourse Ground Wrexham night floodlights

@@ -83,7 +83,13 @@ class Collector:
             seen: set[tuple[str, str]] = set()
             for source in available_sources:
                 source_rate_limited = False
-                for query in stadium.search_terms:
+                source_query_limit = getattr(source, "max_queries_per_stadium", None)
+                queries = (
+                    stadium.search_terms[:source_query_limit]
+                    if source_query_limit is not None
+                    else stadium.search_terms
+                )
+                for query in queries:
                     try:
                         candidates = source.search(stadium, query, query_limit)
                     except RateLimitError as error:
@@ -140,6 +146,14 @@ class Collector:
         fingerprint: str,
         stats: Counter[str],
     ) -> None:
+        if self.database.is_manually_rejected(
+            league.slug,
+            stadium.slug,
+            candidate.source,
+            candidate.source_id,
+        ):
+            stats["manual_rejection"] += 1
+            return
         status = self.database.candidate_status(
             league.slug,
             stadium.slug,
@@ -317,7 +331,7 @@ class Collector:
             normalized = ImageOps.exif_transpose(image)
             width, height = normalized.size
             detected_format = (image.format or "").upper()
-        if detected_format not in {"JPEG", "PNG", "WEBP"}:
+        if detected_format not in {"JPEG", "MPO", "PNG", "WEBP"}:
             raise ValueError(
                 f"unsupported downloaded image format: {detected_format or 'unknown'}"
             )
@@ -327,9 +341,12 @@ class Collector:
             raise ValueError(
                 f"downloaded image aspect ratio is too narrow: {width / height:.2f}"
             )
-        mime = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}[
-            detected_format
-        ]
+        mime = {
+            "JPEG": "image/jpeg",
+            "MPO": "image/jpeg",
+            "PNG": "image/png",
+            "WEBP": "image/webp",
+        }[detected_format]
         return replace(candidate, width=width, height=height, mime_type=mime)
 
     def _find_duplicate(
@@ -359,7 +376,7 @@ class Collector:
         stats: Counter[str],
     ) -> None:
         records = self.database.list_images(league.slug, stadium.slug)
-        for category in ("day", "night", "twilight", "unknown"):
+        for category in ("day", "night"):
             limit = (
                 retention_limit
                 if retention_limit is not None
@@ -381,6 +398,21 @@ class Collector:
                     f"outside top {limit} for {category}",
                 )
                 stats["not_retained"] += 1
+
+        records = self.database.list_images(league.slug, stadium.slug)
+        total_limit = league.retention.total
+        for record in sorted(records, key=record_sort_key)[total_limit:]:
+            self._remove_record(record)
+            self.database.set_candidate_status(
+                league.slug,
+                stadium.slug,
+                record.source,
+                record.source_id,
+                fingerprint,
+                "not_retained",
+                f"outside top {total_limit} overall",
+            )
+            stats["not_retained"] += 1
 
     def _remove_record(self, record: ImageRecord) -> None:
         (self.output_dir / record.local_original_path).unlink(missing_ok=True)
@@ -421,7 +453,7 @@ class Collector:
         return (
             self.output_dir
             / league.slug
-            / stadium.slug
+            / stadium.team_slug
             / "original"
             / f"{candidate.id}{_extension(candidate)}"
         )
@@ -438,7 +470,7 @@ class Collector:
         self.console.print(f"  Resumed/skipped        {stats['resumed']}")
         self.console.print(f"  Accepted this run      {stats['accepted']}")
         self.console.print(f"  Retained               {len(records)}")
-        for category in ("day", "night", "twilight", "unknown"):
+        for category in ("day", "night"):
             self.console.print(f"  {category.title():<21}{counts[category]}")
         if records:
             average = sum(record.score for record in records) / len(records)

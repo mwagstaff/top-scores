@@ -7,6 +7,7 @@ from ..models import ImageCandidate, Stadium
 
 class ImageSource(Protocol):
     name: str
+    max_queries_per_stadium: int | None
 
     @property
     def available(self) -> bool: ...

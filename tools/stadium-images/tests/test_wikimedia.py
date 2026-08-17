@@ -1,3 +1,4 @@
+from stadium_images.models import license_reference_url
 from stadium_images.sources.wikimedia import (
     WikimediaSource,
     clean_html,
@@ -13,6 +14,15 @@ def test_license_allowlist_is_explicit() -> None:
     assert not license_allowed("CC BY-NC 4.0")
     assert not license_allowed("CC BY-ND 4.0")
     assert not license_allowed("")
+
+
+def test_missing_public_domain_license_url_gets_a_reference() -> None:
+    assert license_reference_url("Public domain", None) == (
+        "https://commons.wikimedia.org/wiki/Commons:Copyright_tags#Public_domain"
+    )
+    assert license_reference_url("CC0 1.0", None) == (
+        "https://creativecommons.org/publicdomain/zero/1.0/"
+    )
 
 
 def test_clean_html_preserves_artist_link() -> None:
@@ -63,7 +73,10 @@ def test_wikimedia_page_parsing_preserves_provenance() -> None:
     assert candidate.categories == ("Emirates Stadium",)
     assert candidate.source_page.startswith("https://commons.wikimedia.org/")
     assert candidate.image_url == "https://upload.wikimedia.org/example.jpg"
-    assert candidate.download_url == ("https://upload.wikimedia.org/example-3840px.jpg")
+    assert candidate.download_url == (
+        "https://commons.wikimedia.org/w/thumb.php?"
+        "f=Emirates+Stadium+at+night.jpg&w=2560"
+    )
     assert (candidate.width, candidate.height) == (3840, 2304)
     assert candidate.attribution == (
         "Jane Smith / Wikimedia Commons, CC BY-SA 4.0, via Wikimedia Commons"

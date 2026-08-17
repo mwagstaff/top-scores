@@ -36,6 +36,7 @@ const {
     isMatchDetailsActive,
     normalizeMatchDetailsPayload,
     mergeMatchDetailsPayload,
+    playerDetailsPayloadFromMatchLineups,
     buildSyntheticMatchDetailsId,
     pickPreferredMatchStatus,
     resolveStableMatchScoreStatus,
@@ -110,6 +111,61 @@ function detailsPayload(overrides = {}) {
     ...overrides,
   };
 }
+
+test("player details fall back to the newest cached match lineup", () => {
+  const payload = playerDetailsPayloadFromMatchLineups("34259208", [
+    {
+      date: "2026-01-10",
+      time: "15:00",
+      home_team: "Previous Club",
+      away_team: "Opponent",
+      team_lineups: {
+        home: {
+          starting_lineup: [{
+            number: 20,
+            name: "Mamadou Doumbia",
+            id_player: "34259208",
+            position: "F",
+            position_category: "attacker",
+            cutout_url: "https://example.com/old.png",
+          }],
+        },
+      },
+    },
+    {
+      date: "2026-08-16",
+      time: "13:30",
+      home_team: "Watford",
+      away_team: "Southampton",
+      team_lineups: {
+        home: {
+          starting_lineup: [{
+            number: 20,
+            name: "Mamadou Doumbia",
+            id_player: "34259208",
+            position: "F",
+            position_category: "attacker",
+            cutout_url: "https://example.com/current.png",
+          }],
+        },
+      },
+    },
+  ]);
+
+  assert.deepStrictEqual(payload, {
+    id: "34259208",
+    name: "Mamadou Doumbia",
+    team: "Watford",
+    born: null,
+    description: null,
+    side: null,
+    position: "Forward",
+    birth_location: null,
+    cutout_url: "https://example.com/current.png",
+    thumb_url: null,
+    render_url: null,
+  });
+});
 
 function buildCompleteTeamLineups() {
   const buildStarter = (number, name, position_category, formation_row_index, formation_slot_index, formation_row_size) => ({

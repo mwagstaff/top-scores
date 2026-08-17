@@ -9,6 +9,8 @@ struct APIClient {
     private static let maxLoggedBodyLength = 240
     private static let retryDelayNanos: UInt64 = 350_000_000
     private static let retryableStatusCodes: Set<Int> = [408, 429, 500, 502, 503, 504]
+    private static let playerDetailsRequestTimeout: TimeInterval = 5
+    private static let playerDetailsMaxAttempts = 2
     private nonisolated static func makeNoCacheSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
@@ -265,24 +267,70 @@ struct APIClient {
 
     func fetchTeamResults(
         teamName: String,
-        limit: Int = 20,
+        limit: Int = 200,
         now: Date = Date()
+    ) async throws -> MatchResponse {
+        try await fetchTeamMatches(teamName: teamName, mode: .results, limit: limit, now: now)
+    }
+
+    func fetchTeamResults(
+        teamNames: [String],
+        since startDate: Date,
+        limit: Int = 200,
+        now: Date = Date()
+    ) async throws -> MatchResponse {
+        let queryItems = Self.teamResultsQueryItems(
+            teamNames: teamNames,
+            startDate: startDate,
+            limit: limit,
+            now: now
+        )
+        guard queryItems.contains(where: { $0.name == "team" }) else {
+            return MatchResponse(matches: [], lastUpdated: nil, isNotModified: false)
+        }
+
+        let request = try buildRequest(path: "matches", queryItems: queryItems)
+        let (data, http) = try await performRequest(request, operation: "team_results_bulk")
+        try validateSuccess(http, data: data, operation: "team_results_bulk")
+
+        return MatchResponse(
+            matches: Array(try decodeMatches(from: data, operation: "team_results_bulk").prefix(max(1, limit))),
+            lastUpdated: Self.lastUpdated(from: http),
+            isNotModified: false
+        )
+    }
+
+    func fetchTeamFixtures(
+        teamName: String,
+        limit: Int = 200,
+        now: Date = Date()
+    ) async throws -> MatchResponse {
+        try await fetchTeamMatches(teamName: teamName, mode: .fixtures, limit: limit, now: now)
+    }
+
+    private func fetchTeamMatches(
+        teamName: String,
+        mode: MatchesViewMode,
+        limit: Int,
+        now: Date
     ) async throws -> MatchResponse {
         guard let normalizedTeamName = Self.normalizedTeamNames([teamName]).first else {
             return MatchResponse(matches: [], lastUpdated: nil, isNotModified: false)
         }
 
-        let queryItems = Self.teamResultsQueryItems(
+        let queryItems = Self.teamMatchesQueryItems(
             teamName: normalizedTeamName,
+            mode: mode,
             limit: limit,
             now: now
         )
         let request = try buildRequest(path: "matches", queryItems: queryItems)
-        let (data, http) = try await performRequest(request, operation: "team_results")
-        try validateSuccess(http, data: data, operation: "team_results")
+        let operation = mode == .fixtures ? "team_fixtures" : "team_results"
+        let (data, http) = try await performRequest(request, operation: operation)
+        try validateSuccess(http, data: data, operation: operation)
 
         return MatchResponse(
-            matches: Array(try decodeMatches(from: data, operation: "team_results").prefix(max(1, limit))),
+            matches: Array(try decodeMatches(from: data, operation: operation).prefix(max(1, limit))),
             lastUpdated: Self.lastUpdated(from: http),
             isNotModified: false
         )
@@ -293,16 +341,57 @@ struct APIClient {
         limit: Int = 20,
         now: Date = Date()
     ) -> [URLQueryItem] {
-        let trimmedTeamName = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let startDate = resultHistoryStartDate(from: now)
+        teamMatchesQueryItems(teamName: teamName, mode: .results, limit: limit, now: now)
+    }
+
+    static func teamResultsQueryItems(
+        teamNames: [String],
+        startDate: Date,
+        limit: Int = 200,
+        now: Date = Date()
+    ) -> [URLQueryItem] {
+        let normalizedNames = normalizedTeamNames(teamNames)
+        guard !normalizedNames.isEmpty else { return [] }
         let pageSize = min(max(1, limit), 200)
 
         return [
             URLQueryItem(name: "start", value: dateFormatter.string(from: startDate)),
             URLQueryItem(name: "end", value: dateFormatter.string(from: now)),
-            URLQueryItem(name: "team", value: trimmedTeamName),
+            URLQueryItem(name: "team", value: normalizedNames.joined(separator: ",")),
             URLQueryItem(name: "mode", value: MatchesViewMode.results.rawValue),
             URLQueryItem(name: "sort", value: MatchesViewMode.results.sortOrder),
+            URLQueryItem(name: "filter_mode", value: "intersection"),
+            URLQueryItem(name: "page", value: "1"),
+            URLQueryItem(name: "page_size", value: String(pageSize)),
+            URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
+        ]
+    }
+
+    static func teamFixturesQueryItems(
+        teamName: String,
+        limit: Int = 200,
+        now: Date = Date()
+    ) -> [URLQueryItem] {
+        teamMatchesQueryItems(teamName: teamName, mode: .fixtures, limit: limit, now: now)
+    }
+
+    private static func teamMatchesQueryItems(
+        teamName: String,
+        mode: MatchesViewMode,
+        limit: Int,
+        now: Date
+    ) -> [URLQueryItem] {
+        let trimmedTeamName = teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pageSize = min(max(1, limit), 200)
+        let startDate = mode == .fixtures ? Calendar.current.startOfDay(for: now) : resultHistoryStartDate(from: now)
+        let endDate = mode == .fixtures ? openEndedFixtureEndDate : dateFormatter.string(from: now)
+
+        return [
+            URLQueryItem(name: "start", value: dateFormatter.string(from: startDate)),
+            URLQueryItem(name: "end", value: endDate),
+            URLQueryItem(name: "team", value: trimmedTeamName),
+            URLQueryItem(name: "mode", value: mode.rawValue),
+            URLQueryItem(name: "sort", value: mode.sortOrder),
             URLQueryItem(name: "filter_mode", value: "intersection"),
             URLQueryItem(name: "page", value: "1"),
             URLQueryItem(name: "page_size", value: String(pageSize)),
@@ -609,8 +698,13 @@ struct APIClient {
         guard !normalizedID.isEmpty, normalizedID.allSatisfy(\.isNumber) else {
             throw APIClientError.invalidPlayerID(playerId)
         }
-        let request = try buildRequest(path: "players/\(normalizedID)", queryItems: [])
-        let (data, http) = try await performRequest(request, operation: "player_details")
+        var request = try buildRequest(path: "players/\(normalizedID)", queryItems: [])
+        request.timeoutInterval = Self.playerDetailsRequestTimeout
+        let (data, http) = try await performRequest(
+            request,
+            operation: "player_details",
+            maxAttempts: Self.playerDetailsMaxAttempts
+        )
         try validateSuccess(http, data: data, operation: "player_details")
         return try JSONDecoder().decode(PlayerDetails.self, from: data)
     }

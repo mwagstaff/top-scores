@@ -8,6 +8,7 @@ from ..models import ImageCandidate, Stadium
 
 class PexelsSource:
     name = "pexels"
+    max_queries_per_stadium = None
     endpoint = "https://api.pexels.com/v1/search"
 
     def __init__(self, http: HTTPClient, api_key: str | None = None) -> None:

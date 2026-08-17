@@ -85,7 +85,7 @@ def test_collection_writes_ranked_output_metadata_and_resume_state(
         membership_source="https://example.com",
         stadiums=(stadium,),
         filters=FilterConfig(min_score=7),
-        retention=RetentionConfig(day=1, night=1, twilight=1, unknown=1),
+        retention=RetentionConfig(day=1, night=1),
         results_per_query=10,
     )
 
@@ -105,9 +105,9 @@ def test_collection_writes_ranked_output_metadata_and_resume_state(
 
         assert len(database.list_images("test-league", "test-stadium")) == 1
 
-    ranked = output / "test-league" / "test-stadium" / "night" / "001.jpg"
+    ranked = output / "test-league" / "test-fc" / "night" / "001.jpg"
     metadata = json.loads(
-        (output / "test-league" / "test-stadium" / "metadata.json").read_text()
+        (output / "test-league" / "test-fc" / "metadata.json").read_text()
     )
     manifest = json.loads((output / "manifest.json").read_text())
     attributions = (output / "ATTRIBUTIONS.md").read_text()
@@ -116,7 +116,7 @@ def test_collection_writes_ranked_output_metadata_and_resume_state(
     assert metadata["images"][0]["license"] == "CC BY 4.0"
     assert metadata["images"][0]["download_url"] == str(source_image)
     assert metadata["images"][0]["sha256"]
-    assert manifest["leagues"]["test-league"]["stadiums"]["test-stadium"]["night"][0][
+    assert manifest["leagues"]["test-league"]["stadiums"]["test-fc"]["night"][0][
         "path"
     ].endswith("night/001.jpg")
     assert "Example Photographer" in attributions
