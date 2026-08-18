@@ -6,6 +6,7 @@ struct TeamSelectionView: View {
     var onCancel: (() -> Void)?
     var onDone: (() -> Void)?
 
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @StateObject private var store = TeamCatalogStore()
     @State private var searchText = ""
 
@@ -40,6 +41,9 @@ struct TeamSelectionView: View {
         .navigationTitle("Teams")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search teams")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            searchCompletionAction
+        }
         .toolbar {
             if let onCancel {
                 ToolbarItem(placement: .cancellationAction) {
@@ -62,37 +66,103 @@ struct TeamSelectionView: View {
         .onChange(of: selectedTeamIDs) { _, ids in
             Task { await store.updateSelectedTeamIDs(ids) }
         }
+        .animation(
+            accessibilityReduceMotion ? nil : .easeOut(duration: 0.22),
+            value: trimmedSearch.isEmpty
+        )
+    }
+
+    @ViewBuilder
+    private var searchCompletionAction: some View {
+        if let onDone, !trimmedSearch.isEmpty {
+            Button(action: onDone) {
+                HStack(spacing: 12) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title2.weight(.semibold))
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Done selecting teams")
+                            .font(.headline)
+                        Text(selectedTeamCountText)
+                            .font(.caption)
+                            .foregroundStyle(Color.primary.opacity(0.74))
+                            .contentTransition(.numericText())
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 16)
+                .frame(minHeight: 56)
+                .background(
+                    Color.accentColor.opacity(0.20),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.78), lineWidth: 1)
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+            .accessibilityLabel("Done selecting teams")
+            .accessibilityValue(selectedTeamCountText)
+            .accessibilityHint("Applies your team selection and closes the team picker")
+            .transition(
+                accessibilityReduceMotion
+                    ? .opacity
+                    : .move(edge: .bottom).combined(with: .opacity)
+            )
+        }
+    }
+
+    private var selectedTeamCountText: String {
+        switch selectedTeamIDs.count {
+        case 0:
+            return "No teams selected"
+        case 1:
+            return "1 team selected"
+        default:
+            return "\(selectedTeamIDs.count) teams selected"
+        }
     }
 
     @ViewBuilder
     private var selectedTeamsSection: some View {
         if !selectedTeamIDs.isEmpty {
             Section("Selected teams") {
-                ForEach(selectedTeamIDs.sorted(), id: \.self) { teamID in
-                    if let team = store.team(for: teamID) {
-                        TeamSelectionRow(
-                            team: team,
-                            isSelected: true,
-                            action: { toggle(team.id, selectedAliasID: teamID) }
-                        )
-                    } else {
-                        Button {
-                            selectedTeamIDs.remove(teamID)
-                        } label: {
-                            HStack(spacing: 12) {
-                                TeamSelectionFallbackIcon()
-                                Text(Self.displayName(for: teamID))
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(Color.accentColor)
-                            }
-                        }
-                        .buttonStyle(.plain)
+                ForEach(sortedSelectedTeamIDs, id: \.self) { teamID in
+                    SelectedTeamRow(
+                        team: store.team(for: teamID),
+                        fallbackName: Self.displayName(for: teamID),
+                        removeAction: { selectedTeamIDs.remove(teamID) }
+                    )
+                }
+
+                if selectedTeamIDs.count > 1 {
+                    Button(role: .destructive) {
+                        selectedTeamIDs.removeAll()
+                    } label: {
+                        Label("Clear all teams", systemImage: "xmark.circle")
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
         }
+    }
+
+    private var sortedSelectedTeamIDs: [String] {
+        selectedTeamIDs.sorted { leftID, rightID in
+            selectedTeamName(for: leftID).localizedCaseInsensitiveCompare(
+                selectedTeamName(for: rightID)
+            ) == .orderedAscending
+        }
+    }
+
+    private func selectedTeamName(for teamID: String) -> String {
+        store.team(for: teamID)?.name ?? Self.displayName(for: teamID)
     }
 
     private var browseSection: some View {
@@ -148,11 +218,7 @@ struct TeamSelectionView: View {
         }
     }
 
-    private func toggle(_ teamID: String, selectedAliasID: String? = nil) {
-        if let selectedAliasID, selectedTeamIDs.contains(selectedAliasID) {
-            selectedTeamIDs.remove(selectedAliasID)
-            return
-        }
+    private func toggle(_ teamID: String) {
         if selectedTeamIDs.contains(teamID) {
             selectedTeamIDs.remove(teamID)
         } else {
@@ -165,6 +231,42 @@ struct TeamSelectionView: View {
             .split(separator: "-")
             .map { $0.capitalized }
             .joined(separator: " ")
+    }
+}
+
+private struct SelectedTeamRow: View {
+    let team: TeamCatalogEntry?
+    let fallbackName: String
+    let removeAction: () -> Void
+
+    private var name: String {
+        team?.name ?? fallbackName
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let team {
+                TeamSelectionLogo(team: team)
+            } else {
+                TeamSelectionFallbackIcon()
+            }
+
+            Text(name)
+                .font(.body.weight(.medium))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(role: .destructive, action: removeAction) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(name)")
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 

@@ -80,6 +80,15 @@ nonisolated enum FixtureViewOptionID {
         return stableID.isEmpty ? nil : stableID
     }
 
+    static func replacingTeams(
+        in optionIDs: Set<String>,
+        with teamIDs: Set<String>
+    ) -> Set<String> {
+        optionIDs
+            .filter { teamStableID(from: $0) == nil }
+            .union(teamIDs.map(team))
+    }
+
     static func rivalry(_ stableID: String) -> String {
         "rivalry:\(stableID)"
     }
@@ -161,6 +170,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let selectedLeagues: [String]
     let selectedFixtureViewOptionIDs: [String]
     let favouriteFixtureViewOptionIDs: [String]
+    let favouriteShowPredictedScores: Bool
     let selectedNotificationLeagues: [String]
     let selectedNotificationViewOptionIDs: [String]
     let selectedChannels: [String]
@@ -239,6 +249,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         selectedLeagues: [String],
         selectedFixtureViewOptionIDs: [String] = PreferencesStore.defaultFavouriteFixtureViewOptionIDs,
         favouriteFixtureViewOptionIDs: [String] = PreferencesStore.defaultFavouriteFixtureViewOptionIDs,
+        favouriteShowPredictedScores: Bool = PreferencesStore.defaultFavouriteShowPredictedScores,
         selectedNotificationLeagues: [String] = PreferencesStore.defaultSelectedNotificationLeagues,
         selectedNotificationViewOptionIDs: [String] = PreferencesStore.defaultSelectedNotificationViewOptionIDs,
         selectedChannels: [String],
@@ -277,6 +288,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.selectedLeagues = selectedLeagues
         self.selectedFixtureViewOptionIDs = selectedFixtureViewOptionIDs
         self.favouriteFixtureViewOptionIDs = favouriteFixtureViewOptionIDs
+        self.favouriteShowPredictedScores = favouriteShowPredictedScores
         self.selectedNotificationLeagues = selectedNotificationLeagues
         self.selectedNotificationViewOptionIDs = selectedNotificationViewOptionIDs
         self.selectedChannels = selectedChannels
@@ -317,6 +329,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case selectedLeagues
         case selectedFixtureViewOptionIDs
         case favouriteFixtureViewOptionIDs
+        case favouriteShowPredictedScores
         case selectedNotificationLeagues
         case selectedNotificationViewOptionIDs
         case selectedChannels
@@ -364,6 +377,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
             ?? selectedLeagues.map(FixtureViewOptionID.legacyCompetition)
         favouriteFixtureViewOptionIDs = try container.decodeIfPresent([String].self, forKey: .favouriteFixtureViewOptionIDs)
             ?? PreferencesStore.defaultFavouriteFixtureViewOptionIDs
+        favouriteShowPredictedScores = try container.decodeIfPresent(Bool.self, forKey: .favouriteShowPredictedScores)
+            ?? PreferencesStore.defaultFavouriteShowPredictedScores
         selectedNotificationLeagues = try container.decodeIfPresent([String].self, forKey: .selectedNotificationLeagues)
             ?? selectedLeagues
         selectedNotificationViewOptionIDs = try container.decodeIfPresent(
@@ -429,6 +444,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         try container.encode(selectedLeagues, forKey: .selectedLeagues)
         try container.encode(selectedFixtureViewOptionIDs, forKey: .selectedFixtureViewOptionIDs)
         try container.encode(favouriteFixtureViewOptionIDs, forKey: .favouriteFixtureViewOptionIDs)
+        try container.encode(favouriteShowPredictedScores, forKey: .favouriteShowPredictedScores)
         try container.encode(selectedNotificationLeagues, forKey: .selectedNotificationLeagues)
         try container.encode(selectedNotificationViewOptionIDs, forKey: .selectedNotificationViewOptionIDs)
         try container.encode(selectedChannels, forKey: .selectedChannels)
@@ -469,6 +485,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         lhs.selectedLeagues == rhs.selectedLeagues &&
         lhs.selectedFixtureViewOptionIDs == rhs.selectedFixtureViewOptionIDs &&
         lhs.favouriteFixtureViewOptionIDs == rhs.favouriteFixtureViewOptionIDs &&
+        lhs.favouriteShowPredictedScores == rhs.favouriteShowPredictedScores &&
         lhs.selectedNotificationLeagues == rhs.selectedNotificationLeagues &&
         lhs.selectedNotificationViewOptionIDs == rhs.selectedNotificationViewOptionIDs &&
         lhs.selectedChannels == rhs.selectedChannels &&
@@ -526,6 +543,7 @@ final class PreferencesStore: ObservableObject {
         FixtureViewOptionID.topUEFAClubs,
         FixtureViewOptionID.competition("uefa-nations-league")
     ]
+    nonisolated static let defaultFavouriteShowPredictedScores = false
     nonisolated static let defaultSelectedNotificationLeagues = [
         "Premier League",
         "FIFA World Cup 2026",
@@ -572,7 +590,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultShowFantasyMatchPills = false
     nonisolated static let defaultPremierLeagueMatchesFirst = true
     nonisolated static let defaultShowPostponedGames = false
-    nonisolated static let defaultShowPredictedScores = true
+    nonisolated static let defaultShowPredictedScores = false
 
     @Published var selectedLeagues: [String] {
         didSet { persist() }
@@ -583,6 +601,10 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var favouriteFixtureViewOptionIDs: [String] {
+        didSet { persist() }
+    }
+
+    @Published var favouriteShowPredictedScores: Bool {
         didSet { persist() }
     }
 
@@ -735,6 +757,8 @@ final class PreferencesStore: ObservableObject {
             ?? leagues.map(FixtureViewOptionID.legacyCompetition)
         let favouriteFixtureViewOptionIDs = userDefaults.stringArray(forKey: Keys.favouriteFixtureViewOptionIDs)
             ?? Self.defaultFavouriteFixtureViewOptionIDs
+        let favouriteShowPredictedScores = userDefaults.object(forKey: Keys.favouriteShowPredictedScores) as? Bool
+            ?? Self.defaultFavouriteShowPredictedScores
         let notificationLeagues = userDefaults.stringArray(forKey: Keys.selectedNotificationLeagues) ?? leagues
         let notificationViewOptionIDs = userDefaults.stringArray(forKey: Keys.selectedNotificationViewOptionIDs)
             ?? notificationLeagues.map(FixtureViewOptionID.legacyCompetition)
@@ -821,6 +845,7 @@ final class PreferencesStore: ObservableObject {
         self.selectedLeagues = leagues
         self.selectedFixtureViewOptionIDs = selectedFixtureViewOptionIDs
         self.favouriteFixtureViewOptionIDs = favouriteFixtureViewOptionIDs
+        self.favouriteShowPredictedScores = favouriteShowPredictedScores
         self.selectedNotificationLeagues = notificationLeagues
         self.selectedNotificationViewOptionIDs = notificationViewOptionIDs
         self.selectedChannels = ChannelSelection.normalizedSelectedOptions(channels)
@@ -869,6 +894,7 @@ final class PreferencesStore: ObservableObject {
             selectedLeagues: selectedLeagues,
             selectedFixtureViewOptionIDs: selectedFixtureViewOptionIDs,
             favouriteFixtureViewOptionIDs: favouriteFixtureViewOptionIDs,
+            favouriteShowPredictedScores: favouriteShowPredictedScores,
             selectedNotificationLeagues: selectedNotificationLeagues,
             selectedNotificationViewOptionIDs: selectedNotificationViewOptionIDs,
             selectedChannels: selectedChannels,
@@ -910,11 +936,23 @@ final class PreferencesStore: ObservableObject {
         snapshot.showsFantasyDataInFixtures
     }
 
+    var currentFixtureViewOptionIDs: Set<String> {
+        if showAllMatches { return [FixtureViewOptionID.all] }
+        if fixtureAllMajorMatchesEnabled { return Set(favouriteFixtureViewOptionIDs) }
+        return Set(selectedFixtureViewOptionIDs)
+    }
+
+    var hasUnsavedFixtureViewChanges: Bool {
+        currentFixtureViewOptionIDs != Set(favouriteFixtureViewOptionIDs) ||
+        showPredictedScores != favouriteShowPredictedScores
+    }
+
     var unfilteredSnapshot: PreferencesSnapshot {
         PreferencesSnapshot(
             selectedLeagues: selectedLeagues,
             selectedFixtureViewOptionIDs: selectedFixtureViewOptionIDs,
             favouriteFixtureViewOptionIDs: favouriteFixtureViewOptionIDs,
+            favouriteShowPredictedScores: favouriteShowPredictedScores,
             selectedNotificationLeagues: selectedNotificationLeagues,
             selectedNotificationViewOptionIDs: selectedNotificationViewOptionIDs,
             selectedChannels: selectedChannels,
@@ -956,6 +994,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(selectedLeagues, forKey: Keys.selectedLeagues)
         userDefaults.set(selectedFixtureViewOptionIDs, forKey: Keys.selectedFixtureViewOptionIDs)
         userDefaults.set(favouriteFixtureViewOptionIDs, forKey: Keys.favouriteFixtureViewOptionIDs)
+        userDefaults.set(favouriteShowPredictedScores, forKey: Keys.favouriteShowPredictedScores)
         userDefaults.set(selectedNotificationLeagues, forKey: Keys.selectedNotificationLeagues)
         userDefaults.set(selectedNotificationViewOptionIDs, forKey: Keys.selectedNotificationViewOptionIDs)
         userDefaults.set(selectedChannels, forKey: Keys.selectedChannels)
@@ -1012,6 +1051,8 @@ final class PreferencesStore: ObservableObject {
             ?? leagues.map(FixtureViewOptionID.legacyCompetition)
         let favouriteFixtureViewOptionIDs = userDefaults.stringArray(forKey: Keys.favouriteFixtureViewOptionIDs)
             ?? Self.defaultFavouriteFixtureViewOptionIDs
+        let favouriteShowPredictedScores = userDefaults.object(forKey: Keys.favouriteShowPredictedScores) as? Bool
+            ?? Self.defaultFavouriteShowPredictedScores
         let notificationLeagues = userDefaults.stringArray(forKey: Keys.selectedNotificationLeagues) ?? leagues
         let notificationViewOptionIDs = userDefaults.stringArray(forKey: Keys.selectedNotificationViewOptionIDs)
             ?? notificationLeagues.map(FixtureViewOptionID.legacyCompetition)
@@ -1097,6 +1138,7 @@ final class PreferencesStore: ObservableObject {
             selectedLeagues: leagues,
             selectedFixtureViewOptionIDs: selectedFixtureViewOptionIDs,
             favouriteFixtureViewOptionIDs: favouriteFixtureViewOptionIDs,
+            favouriteShowPredictedScores: favouriteShowPredictedScores,
             selectedNotificationLeagues: notificationLeagues,
             selectedNotificationViewOptionIDs: notificationViewOptionIDs,
             selectedChannels: ChannelSelection.normalizedSelectedOptions(channels),
@@ -1138,6 +1180,7 @@ final class PreferencesStore: ObservableObject {
         static let selectedLeagues = "preferences.selectedLeagues"
         static let selectedFixtureViewOptionIDs = "preferences.selectedFixtureViewOptionIDs"
         static let favouriteFixtureViewOptionIDs = "preferences.favouriteFixtureViewOptionIDs"
+        static let favouriteShowPredictedScores = "preferences.favouriteShowPredictedScores"
         static let selectedNotificationLeagues = "preferences.selectedNotificationLeagues"
         static let selectedNotificationViewOptionIDs = "preferences.selectedNotificationViewOptionIDs"
         static let selectedChannels = "preferences.selectedChannels"

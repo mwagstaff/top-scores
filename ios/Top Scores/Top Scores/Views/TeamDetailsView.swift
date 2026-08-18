@@ -700,10 +700,11 @@ struct TeamDetailsView: View {
         }
         .coordinateSpace(name: "TeamDetailsScroll")
         .environment(\.colorScheme, .dark)
-        .background(TeamDetailsPalette.pageBackground.ignoresSafeArea())
+        .background(FootballVisualStyle.pageBackground.ignoresSafeArea())
         .navigationTitle("Team Details")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(TeamDetailsPalette.pageBackground.opacity(0.96), for: .navigationBar)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(FootballVisualStyle.pageBackground.opacity(0.96), for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .navigationDestination(for: TeamDetailsContext.self) { destinationContext in
@@ -765,16 +766,16 @@ struct TeamDetailsView: View {
 
                 LinearGradient(
                     colors: [
-                        TeamDetailsPalette.pageBackground.opacity(0.30),
-                        TeamDetailsPalette.pageBackground.opacity(0.48),
-                        TeamDetailsPalette.pageBackground.opacity(0.98),
+                        FootballVisualStyle.pageBackground.opacity(0.30),
+                        FootballVisualStyle.pageBackground.opacity(0.48),
+                        FootballVisualStyle.pageBackground.opacity(0.98),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
 
                 RadialGradient(
-                    colors: [.clear, TeamDetailsPalette.pageBackground.opacity(0.68)],
+                    colors: [.clear, FootballVisualStyle.pageBackground.opacity(0.68)],
                     center: .center,
                     startRadius: 100,
                     endRadius: max(proxy.size.width, heroHeight) * 0.72
@@ -1174,7 +1175,7 @@ struct TeamDetailsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(TeamDetailsPalette.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(FootballVisualStyle.elevatedSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
@@ -1207,7 +1208,7 @@ struct TeamDetailsView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(18)
-        .background(TeamDetailsPalette.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(FootballVisualStyle.elevatedSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
@@ -1487,58 +1488,8 @@ private struct TeamSeasonCardBackground: View {
     let accentColor: Color
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.055, green: 0.105, blue: 0.165),
-                        Color(red: 0.025, green: 0.065, blue: 0.110),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-
-                RadialGradient(
-                    colors: [accentColor.opacity(0.18), .clear],
-                    center: .topLeading,
-                    startRadius: 0,
-                    endRadius: proxy.size.width * 0.78
-                )
-
-                TeamSeasonPitchLines()
-                    .stroke(Color.white.opacity(0.025), lineWidth: 1)
-                    .padding(20)
-
-                LinearGradient(
-                    colors: [Color.white.opacity(0.055), .clear],
-                    startPoint: .top,
-                    endPoint: .center
-                )
-            }
-        }
-        .accessibilityHidden(true)
+        FootballCardSurface(accentColor: accentColor, showsPitchMarkings: true)
     }
-}
-
-private struct TeamSeasonPitchLines: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.addRect(rect)
-        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
-        path.addEllipse(in: CGRect(
-            x: rect.midX - rect.width * 0.12,
-            y: rect.midY - rect.width * 0.12,
-            width: rect.width * 0.24,
-            height: rect.width * 0.24
-        ))
-        return path
-    }
-}
-
-private enum TeamDetailsPalette {
-    static let pageBackground = Color(red: 0.015, green: 0.030, blue: 0.048)
-    static let surface = Color(red: 0.040, green: 0.075, blue: 0.115)
 }
 
 private struct TeamFormBadge: View {

@@ -135,8 +135,25 @@ struct Top_ScoresTests {
         #expect(!store.showFantasyExpectedPoints)
         #expect(!store.showFantasyRealTimePoints)
         #expect(!store.showsFantasyDataInFixtures)
-        #expect(store.showPredictedScores)
+        #expect(!store.showPredictedScores)
+        #expect(!store.favouriteShowPredictedScores)
         #expect(!store.channelFilterEnabled)
+    }
+
+    @Test @MainActor func preferencesStore_persistsFavouritePredictionsSetting() async throws {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+
+        let store = PreferencesStore(userDefaults: defaults)
+        #expect(!store.hasUnsavedFixtureViewChanges)
+        store.showPredictedScores = true
+        #expect(store.hasUnsavedFixtureViewChanges)
+        store.favouriteShowPredictedScores = true
+        #expect(!store.hasUnsavedFixtureViewChanges)
+
+        let reloadedStore = PreferencesStore(userDefaults: defaults)
+        #expect(reloadedStore.showPredictedScores)
+        #expect(reloadedStore.favouriteShowPredictedScores)
     }
 
     @Test @MainActor func preferencesStore_persistsCompactFixtureDisplaySettings() async throws {
@@ -439,6 +456,29 @@ struct Top_ScoresTests {
         )
 
         #expect(selected == ["la-liga"])
+    }
+
+    @Test func scoresCompetitionAccent_resolvesSupportedCompetitionsAndFallback() {
+        #expect(CompetitionAccentRole.resolve(
+            competitionID: "premier-league",
+            competitionName: "Premier League"
+        ) == .premierLeague)
+        #expect(CompetitionAccentRole.resolve(
+            competitionID: nil,
+            competitionName: "Spanish La Liga"
+        ) == .laLiga)
+        #expect(CompetitionAccentRole.resolve(
+            competitionID: "uefa-champions-league",
+            competitionName: "UEFA Champions League"
+        ) == .championsLeague)
+        #expect(CompetitionAccentRole.resolve(
+            competitionID: "uefa-europa-conference-league",
+            competitionName: "UEFA Conference League"
+        ) == .conferenceLeague)
+        #expect(CompetitionAccentRole.resolve(
+            competitionID: "club-world-cup",
+            competitionName: "Club World Cup"
+        ) == .standard)
     }
 
     @Test func fixtureBrowserAutoRefresh_usesLiveAndPendingTodayCadences() {
@@ -811,6 +851,32 @@ struct Top_ScoresTests {
             FixtureViewOptionID.competition("uefa-super-cup"),
             FixtureViewOptionID.premierLeagueTeams,
         ]))
+    }
+
+    @Test func fixtureViewOptions_replacingTeamsPreservesCompetitionsAndRules() {
+        let premierLeague = FixtureViewOptionID.competition("premier-league")
+        let championsLeague = FixtureViewOptionID.competition("uefa-champions-league")
+        let rivalry = FixtureViewOptionID.rivalry("el-clasico")
+        let existing: Set<String> = [
+            premierLeague,
+            championsLeague,
+            rivalry,
+            FixtureViewOptionID.topUEFAClubs,
+            FixtureViewOptionID.team("barcelona"),
+        ]
+
+        let updated = FixtureViewOptionID.replacingTeams(
+            in: existing,
+            with: ["millwall", "rangers"]
+        )
+
+        #expect(updated.contains(premierLeague))
+        #expect(updated.contains(championsLeague))
+        #expect(updated.contains(rivalry))
+        #expect(updated.contains(FixtureViewOptionID.topUEFAClubs))
+        #expect(!updated.contains(FixtureViewOptionID.team("barcelona")))
+        #expect(updated.contains(FixtureViewOptionID.team("millwall")))
+        #expect(updated.contains(FixtureViewOptionID.team("rangers")))
     }
 
     @Test func fixtureBrowserSelection_premierLeagueTeamsRuleFiltersSelectedUEFACompetitions() {

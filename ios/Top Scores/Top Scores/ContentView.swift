@@ -30,6 +30,11 @@ struct ContentView: View {
                 store: matchesStore,
                 fixturesCoordinator: fixturesCoordinator
             )
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if selectedTab == 0 && fixturesCoordinator.isDockEnabled {
+                        FixtureCompetitionDockView(coordinator: fixturesCoordinator)
+                    }
+                }
                 .tabItem {
                     Label("Scores", systemImage: "soccerball")
                 }
@@ -45,7 +50,7 @@ struct ContentView: View {
                         Text("FPL")
                     } icon: {
                         Image("FantasyPremierLeagueLionTab")
-                            .renderingMode(.original)
+                            .renderingMode(.template)
                             .scaleEffect(fantasyTabShouldPulse ? 1.08 : 1.0)
                             .animation(
                                 fantasyTabShouldPulse
@@ -62,11 +67,6 @@ struct ContentView: View {
                     Label("Profile", systemImage: "person.crop.circle")
                 }
                 .tag(3)
-        }
-        .tabViewBottomAccessory(
-            isEnabled: selectedTab == 0 && fixturesCoordinator.isDockEnabled
-        ) {
-            FixtureCompetitionDockView(coordinator: fixturesCoordinator)
         }
         .overlayPreferenceValue(FixtureCompetitionDockBoundsPreferenceKey.self) { dockBounds in
             if selectedTab == 0,
@@ -95,7 +95,8 @@ struct ContentView: View {
                 content: .teamPicker
             )
         }
-        .background(Color(.systemBackground))
+        .background(FootballVisualStyle.pageBackground)
+        .tint(Color.accentColor)
         .onChange(of: tablesNavigationCoordinator.pendingTarget) { _, newValue in
             guard newValue != nil else { return }
             if selectedTab != Self.tablesTabIndex {

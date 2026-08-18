@@ -44,6 +44,54 @@ enum MatchesViewMode: String, Sendable {
 
 }
 
+enum CompetitionAccentRole: Equatable, Sendable {
+    case premierLeague
+    case laLiga
+    case bundesliga
+    case serieA
+    case championsLeague
+    case europaLeague
+    case conferenceLeague
+    case standard
+
+    static func resolve(competitionID: String?, competitionName: String) -> CompetitionAccentRole {
+        let key = [competitionID, competitionName]
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .filter(\.isLetter)
+
+        if key.contains("premierleague") { return .premierLeague }
+        if key.contains("laliga") || key.contains("spanishleague") { return .laLiga }
+        if key.contains("bundesliga") { return .bundesliga }
+        if key.contains("seriea") { return .serieA }
+        if key.contains("championsleague") { return .championsLeague }
+        if key.contains("europaleague") { return .europaLeague }
+        if key.contains("conferenceleague") { return .conferenceLeague }
+        return .standard
+    }
+
+    var color: Color {
+        switch self {
+        case .premierLeague:
+            Color(red: 0.55, green: 0.38, blue: 0.94)
+        case .laLiga, .bundesliga:
+            Color(red: 0.91, green: 0.20, blue: 0.28)
+        case .serieA:
+            Color(red: 0.08, green: 0.57, blue: 0.93)
+        case .championsLeague:
+            Color(red: 0.24, green: 0.42, blue: 0.94)
+        case .europaLeague:
+            Color(red: 0.94, green: 0.43, blue: 0.12)
+        case .conferenceLeague:
+            Color(red: 0.25, green: 0.73, blue: 0.43)
+        case .standard:
+            Color.accentColor
+        }
+    }
+}
+
 struct FixtureCompetitionDockBoundsPreferenceKey: PreferenceKey {
     static var defaultValue: Anchor<CGRect>?
 
@@ -63,9 +111,10 @@ final class FixturesViewCoordinator: ObservableObject {
     @Published var fixturePickerDraftOptionIDs: Set<String>?
     @Published var fixturePickerBaselineOptionIDs: Set<String>?
     @Published var isFixtureFavouritesMenuExpanded = false
-    @Published var isFixtureViewSettingsExpanded = false
     @Published var isTeamPickerPresented = false
     @Published var teamPickerDraftTeamIDs: Set<String> = []
+    @Published private(set) var isSaveFixtureViewPromptVisible = false
+    @Published private(set) var isFixtureSaveRecoveryButtonVisible = false
     @Published var isDockEnabled = true
     @Published private(set) var toastMessage: String?
     @Published private(set) var predictionWarmRequestToken = 0
@@ -74,14 +123,12 @@ final class FixturesViewCoordinator: ObservableObject {
 
     var isDateSwipeEnabled: Bool {
         expandedFixtureRegionID == nil &&
-        !isFixtureFavouritesMenuExpanded &&
-        !isFixtureViewSettingsExpanded
+        !isFixtureFavouritesMenuExpanded
     }
 
     var hasExpandedPanel: Bool {
         expandedFixtureRegionID != nil ||
-        isFixtureFavouritesMenuExpanded ||
-        isFixtureViewSettingsExpanded
+        isFixtureFavouritesMenuExpanded
     }
 
     func resetPresentation() {
@@ -89,8 +136,23 @@ final class FixturesViewCoordinator: ObservableObject {
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
         isFixtureFavouritesMenuExpanded = false
-        isFixtureViewSettingsExpanded = false
         isTeamPickerPresented = false
+        clearSaveFixtureViewPresentation()
+    }
+
+    func presentSaveFixtureViewPrompt() {
+        isFixtureSaveRecoveryButtonVisible = false
+        isSaveFixtureViewPromptVisible = true
+    }
+
+    func dismissSaveFixtureViewPrompt() {
+        isSaveFixtureViewPromptVisible = false
+        isFixtureSaveRecoveryButtonVisible = true
+    }
+
+    func clearSaveFixtureViewPresentation() {
+        isSaveFixtureViewPromptVisible = false
+        isFixtureSaveRecoveryButtonVisible = false
     }
 
     func requestPredictionWarm() {
@@ -126,6 +188,7 @@ struct MatchesView: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
     @State private var predictionIndex = FixturePredictionStore.allPredictions()
@@ -162,10 +225,6 @@ struct MatchesView: View {
         let dayHeaderTopFirst: CGFloat
         let dayHeaderTop: CGFloat
         let dayHeaderBottom: CGFloat
-        let leagueHeadingTop: CGFloat
-        let leagueHeadingBottom: CGFloat
-        let rowTop: CGFloat
-        let rowBottom: CGFloat
         let minListRowHeight: CGFloat
     }
 
@@ -187,10 +246,6 @@ struct MatchesView: View {
             dayHeaderTopFirst: 6,
             dayHeaderTop: 10,
             dayHeaderBottom: 2,
-            leagueHeadingTop: 3,
-            leagueHeadingBottom: 2,
-            rowTop: 2,
-            rowBottom: 5,
             minListRowHeight: 24
         )
     }
@@ -241,23 +296,31 @@ struct MatchesView: View {
 
     private var navigationStackContent: some View {
         GeometryReader { proxy in
-            VStack(spacing: 0) {
-                if mode == .fixtures {
-                    fixtureDateBrowserControl
+            ZStack(alignment: .top) {
+                FootballVisualStyle.pageBackground
+                    .ignoresSafeArea()
+
+                ScoresStadiumBackdrop()
+
+                VStack(spacing: 0) {
+                    scoresHeroHeader
+
+                    if mode == .fixtures {
+                        fixtureDateBrowserControl
+                    }
+                    if usesFixtureBrowser {
+                        fixtureDatePagedContent(containerWidth: proxy.size.width)
+                    } else {
+                        activeMatchesContent
+                    }
                 }
-                if usesFixtureBrowser {
-                    fixtureDatePagedContent(containerWidth: proxy.size.width)
-                } else {
-                    activeMatchesContent
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
-            .background(Color(.systemBackground))
-            .overlay(alignment: .top) {
-                if let toastMessage = fixturesCoordinator.toastMessage {
-                    ToastView(message: toastMessage)
-                        .padding(.top, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                .overlay(alignment: .top) {
+                    if let toastMessage = fixturesCoordinator.toastMessage {
+                        ToastView(message: toastMessage)
+                            .padding(.top, 8)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
             }
         }
@@ -312,9 +375,12 @@ struct MatchesView: View {
     var body: some View {
         NavigationStack {
             navigationStackContent
-                .navigationTitle(scoresNavigationTitle)
+                .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar(.hidden, for: .navigationBar)
+                .toolbarColorScheme(.dark, for: .navigationBar)
         }
+        .environment(\.colorScheme, .dark)
         .onAppear {
             fixturesCoordinator.isDockEnabled = navigationMatch == nil
             refreshVisibleGroupedDays(from: sourceGroupedDays)
@@ -417,14 +483,148 @@ struct MatchesView: View {
         .onDisappear(perform: handleScreenDisappear)
     }
 
-    private var scoresNavigationTitle: String {
-        guard let selectedDateKey = fixtureBrowser.selectedDateKey,
-              let dateLabel = Self.friendlyFixtureDateLabel(selectedDateKey) else {
-            return "Scores"
+    private var scoresHeaderTitle: String {
+        guard mode == .fixtures else { return "Results" }
+        guard let selectedDateKey = fixtureBrowser.selectedDateKey else {
+            return "Fixtures"
         }
-
         let matches = fixtureBrowser.cachedMatchesByDate[selectedDateKey] ?? []
-        return "\(Self.navigationTitlePrefix(for: matches)): \(dateLabel)"
+        return Self.navigationTitlePrefix(for: matches)
+    }
+
+    private var scoresHeaderSubtitle: String? {
+        guard mode == .fixtures else { return nil }
+        guard let selectedDateKey = fixtureBrowser.selectedDateKey else { return nil }
+        return Self.friendlyFixtureDateLabel(selectedDateKey)
+    }
+
+    private var scoresHeroHeader: some View {
+        VStack(spacing: 5) {
+            Text(scoresHeaderTitle)
+                .font(.system(
+                    dynamicTypeSize.isAccessibilitySize ? .title2 : .largeTitle,
+                    design: .rounded,
+                    weight: .heavy
+                ))
+                .foregroundStyle(Color.white.opacity(0.96))
+                .contentTransition(.opacity)
+
+            if let scoresHeaderSubtitle {
+                Text(scoresHeaderSubtitle)
+                    .font((dynamicTypeSize.isAccessibilitySize ? Font.body : .headline).weight(.semibold))
+                    .foregroundStyle(Color.accentColor.opacity(0.88))
+                    .multilineTextAlignment(.center)
+                    .contentTransition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.top, dynamicTypeSize.isAccessibilitySize ? 8 : 4)
+        .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 14 : 10)
+        .animation(accessibilityReduceMotion ? nil : .easeOut(duration: 0.18), value: fixtureBrowser.selectedDateKey)
+        .accessibilityElement(children: .combine)
+        .overlay(alignment: .topTrailing) {
+            if mode == .fixtures {
+                fixtureHeaderActions
+                    .padding(.trailing, 14)
+            }
+        }
+    }
+
+    private var fixtureHeaderActions: some View {
+        HStack(spacing: 8) {
+            if fixturesCoordinator.isFixtureSaveRecoveryButtonVisible {
+                Button(action: restoreFixtureSavePrompt) {
+                    Image(systemName: "bookmark.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 44, height: 44)
+                        .background(Color.accentColor.opacity(0.20), in: Circle())
+                        .overlay {
+                            Circle()
+                                .stroke(Color.accentColor.opacity(0.88), lineWidth: 1)
+                        }
+                        .shadow(color: Color.accentColor.opacity(0.42), radius: 9)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Save current Match View")
+                .accessibilityHint("Shows the save favourites prompt again")
+                .transition(fixtureRecoveryButtonTransition)
+            }
+
+            Button(action: togglePredictedScores) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(
+                        preferences.showPredictedScores
+                            ? Color.primary
+                            : FootballVisualStyle.predictionAccent
+                    )
+                    .frame(width: 44, height: 44)
+                    .background(
+                        FootballVisualStyle.predictionAccent.opacity(
+                            preferences.showPredictedScores ? 0.24 : 0.08
+                        ),
+                        in: Circle()
+                    )
+                    .overlay {
+                        Circle()
+                            .stroke(
+                                FootballVisualStyle.predictionAccent.opacity(
+                                    preferences.showPredictedScores ? 0.90 : 0.36
+                                ),
+                                lineWidth: 1
+                            )
+                    }
+                    .shadow(
+                        color: preferences.showPredictedScores
+                            ? FootballVisualStyle.predictionAccent.opacity(0.28)
+                            : .clear,
+                        radius: 8
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Predicted scores")
+            .accessibilityValue(preferences.showPredictedScores ? "On" : "Off")
+            .accessibilityHint("Toggles AI score predictions")
+        }
+    }
+
+    private var fixtureRecoveryButtonTransition: AnyTransition {
+        accessibilityReduceMotion
+            ? .opacity
+            : .scale(scale: 0.74).combined(with: .opacity)
+    }
+
+    private func togglePredictedScores() {
+        preferences.showPredictedScores.toggle()
+        if preferences.showPredictedScores {
+            fixturesCoordinator.requestPredictionWarm()
+        }
+        fixturesCoordinator.showToast(
+            preferences.showPredictedScores
+                ? "Showing predicted scores"
+                : "Hiding predicted scores"
+        )
+        reconcileFixtureSavePrompt()
+    }
+
+    private func restoreFixtureSavePrompt() {
+        let animation = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.28)
+        withAnimation(accessibilityReduceMotion ? nil : animation) {
+            fixturesCoordinator.presentSaveFixtureViewPrompt()
+        }
+    }
+
+    private func reconcileFixtureSavePrompt() {
+        let animation = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.32)
+        withAnimation(accessibilityReduceMotion ? nil : animation) {
+            if preferences.hasUnsavedFixtureViewChanges {
+                fixturesCoordinator.presentSaveFixtureViewPrompt()
+            } else {
+                fixturesCoordinator.clearSaveFixtureViewPresentation()
+            }
+        }
     }
 
     private static func navigationTitlePrefix(for matches: [Match], now: Date = Date()) -> String {
@@ -561,6 +761,7 @@ struct MatchesView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .background(Color.clear)
         .environment(\.defaultMinListRowHeight, compactFixturesSpacing.minListRowHeight)
         .safeAreaPadding(
             .bottom,
@@ -598,7 +799,7 @@ struct MatchesView: View {
         .padding(.bottom, compactFixturesSpacing.dayHeaderBottom)
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
+        .background(FootballVisualStyle.pageBackground.opacity(0.92))
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color(.separator).opacity(0.35))
@@ -610,15 +811,7 @@ struct MatchesView: View {
     @ViewBuilder
     private func compactLeagueRows(for day: MatchDay) -> some View {
         ForEach(day.leagues) { league in
-            leagueHeadingDividerRow(for: league)
-
-            ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
-                let prevTime: String? = index > 0 ? league.matches[index - 1].time : nil
-                if shouldShowKickoffDivider(currentTime: match.time, previousTime: prevTime) {
-                    kickoffDividerRow(time: match.time)
-                }
-                matchRow(for: match, day: day)
-            }
+            competitionCardRow(for: league, day: day)
         }
     }
 
@@ -629,46 +822,114 @@ struct MatchesView: View {
         previousTime != currentTime
     }
 
-    private func leagueHeadingDividerRow(for league: MatchLeague) -> some View {
-        Text(league.league)
-            .font(.caption)
-            .fontWeight(.semibold)
-            .foregroundStyle(.secondary.opacity(0.95))
-            .textCase(nil)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .listRowInsets(
-                EdgeInsets(
-                    top: compactFixturesSpacing.leagueHeadingTop + 2,
-                    leading: 16,
-                    bottom: compactFixturesSpacing.leagueHeadingBottom,
-                    trailing: 16
-                )
-            )
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-    }
-
-    private func kickoffDividerRow(time: String) -> some View {
+    private func embeddedKickoffDivider(time: String) -> some View {
         HStack(spacing: 8) {
             Rectangle()
                 .frame(height: 1)
-                .foregroundStyle(.white.opacity(0.08))
+                .foregroundStyle(FootballVisualStyle.divider)
             Text(time)
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary.opacity(0.55))
+                .foregroundStyle(FootballVisualStyle.mutedText.opacity(0.72))
                 .monospacedDigit()
                 .fixedSize()
             Rectangle()
                 .frame(height: 1)
-                .foregroundStyle(.white.opacity(0.08))
+                .foregroundStyle(FootballVisualStyle.divider)
         }
-        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 2, trailing: 16))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+    }
+
+    private func competitionCardRow(for league: MatchLeague, day: MatchDay) -> some View {
+        let competitionName = league.matches.first?.league ?? league.league
+        let competitionSubtitle = league.matches.first?.leagueSubcategory?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let accentRole = CompetitionAccentRole.resolve(
+            competitionID: league.matches.first?.leagueId,
+            competitionName: competitionName
+        )
+        let accentColor = accentRole.color
+
+        return VStack(spacing: 0) {
+            HStack(spacing: 11) {
+                LeagueBadgeImage(
+                    competitionID: league.matches.first?.leagueId,
+                    competitionName: competitionName,
+                    size: 29
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(competitionName.uppercased())
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(Color.white.opacity(0.94))
+
+                    if let competitionSubtitle, !competitionSubtitle.isEmpty {
+                        Text(competitionSubtitle.uppercased())
+                            .font(.caption2.weight(.semibold))
+                            .tracking(0.35)
+                            .foregroundStyle(FootballVisualStyle.mutedText.opacity(0.80))
+                    }
+                }
+                .lineLimit(2)
+
+                Spacer(minLength: 8)
+
+                Circle()
+                    .fill(accentColor)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: accentColor.opacity(0.55), radius: 5)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+
+            Rectangle()
+                .fill(FootballVisualStyle.divider)
+                .frame(height: 0.5)
+                .padding(.horizontal, 16)
+
+            ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
+                let previousTime = index > 0 ? league.matches[index - 1].time : nil
+                if shouldShowKickoffDivider(currentTime: match.time, previousTime: previousTime) {
+                    embeddedKickoffDivider(time: match.time)
+                }
+
+                matchButton(for: match, day: day)
+                    .padding(.horizontal, 8)
+
+                if index < league.matches.count - 1 {
+                    Rectangle()
+                        .fill(FootballVisualStyle.divider)
+                        .frame(height: 0.5)
+                        .padding(.horizontal, 16)
+                }
+            }
+        }
+        .background {
+            FootballCardSurface(accentColor: accentColor.opacity(0.65))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: FootballVisualStyle.cardCornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: FootballVisualStyle.cardCornerRadius, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [accentColor.opacity(0.32), FootballVisualStyle.border, FootballVisualStyle.border],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.6
+                )
+        }
+        .shadow(color: .black.opacity(0.24), radius: 16, y: 9)
+        .modifier(CompetitionCardEntrance())
+        .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
-    private func matchRow(for match: Match, day: MatchDay) -> some View {
+    private func matchButton(for match: Match, day: MatchDay) -> some View {
         let showFPLChevron = fantasyParticipationBadgeVisibility(
             for: match,
             showFantasyBadge: mode == .fixtures,
@@ -713,16 +974,6 @@ struct MatchesView: View {
                 )
             }
         }
-        .listRowInsets(
-            EdgeInsets(
-                top: compactFixturesSpacing.rowTop,
-                leading: 16,
-                bottom: compactFixturesSpacing.rowBottom,
-                trailing: 0
-            )
-        )
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
     }
 
     private func matchDebugFooterText(for match: Match) -> String? {
@@ -834,6 +1085,10 @@ struct MatchesView: View {
         .accessibilityLabel(mode.loadingText)
     }
 
+    private var fixtureDateCarouselHeight: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 74 : 62
+    }
+
     private var fixtureDateBrowserControl: some View {
         Group {
             if fixtureBrowser.availableDays.isEmpty {
@@ -852,14 +1107,14 @@ struct MatchesView: View {
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
-                .frame(height: 52)
+                .frame(height: fixtureDateCarouselHeight)
                 .padding(.horizontal, 16)
             } else {
                 let jumpDirection = fixtureBrowser.nextMatchDateJumpDirection
                 ZStack {
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal) {
-                            LazyHStack(spacing: 6) {
+                            LazyHStack(spacing: 10) {
                                 ForEach(fixtureBrowser.availableDays) { day in
                                     let selected = fixtureBrowser.selectedDateKey == day.date
                                     Button {
@@ -899,7 +1154,7 @@ struct MatchesView: View {
                                 .frame(width: 10)
                             }
                         }
-                        .frame(height: 56)
+                        .frame(height: fixtureDateCarouselHeight)
                         .onAppear {
                             if let selectedDateKey = fixtureBrowser.selectedDateKey {
                                 proxy.scrollTo(selectedDateKey, anchor: .center)
@@ -926,10 +1181,19 @@ struct MatchesView: View {
                         }
                     }
                 }
-                .frame(height: 56)
+                .frame(height: fixtureDateCarouselHeight)
             }
         }
-        .background(Color(.systemBackground).opacity(0.82))
+        .background(Color.clear)
+        .overlay(alignment: .bottom) {
+            LinearGradient(
+                colors: [.clear, FootballVisualStyle.divider, .clear],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(height: 0.5)
+            .padding(.horizontal, 18)
+        }
     }
 
     private func fixtureNextMatchButton(
@@ -952,12 +1216,14 @@ struct MatchesView: View {
             .font(.system(size: 15, weight: .bold))
             .foregroundStyle(Color.accentColor)
             .frame(width: 50, height: 42)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background {
+                FixtureGlassSurface(cornerRadius: 12)
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.accentColor.opacity(0.8), lineWidth: 1)
+                    .stroke(Color.accentColor.opacity(0.66), lineWidth: 1)
             }
-            .shadow(color: .black.opacity(0.2), radius: 5, y: 2)
+            .shadow(color: Color.accentColor.opacity(0.16), radius: 7)
         }
         .buttonStyle(.plain)
         .padding(.leading, direction == .earlier ? 6 : 0)
@@ -1014,6 +1280,8 @@ struct FixtureCompetitionDockView: View {
     @ObservedObject private var coordinator: FixturesViewCoordinator
     @ObservedObject private var fixtureBrowser: FixtureBrowserStore
     @EnvironmentObject private var preferences: PreferencesStore
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private let content: Content
 
     init(coordinator: FixturesViewCoordinator, content: Content = .rail) {
@@ -1024,8 +1292,30 @@ struct FixtureCompetitionDockView: View {
 
     @ViewBuilder
     var body: some View {
-        switch content {
-        case .rail:
+        Group {
+            switch content {
+            case .rail:
+                fixtureCompetitionAccessory
+            case .panel:
+                fixtureCompetitionOverlayPanel
+            case .teamPicker:
+                NavigationStack {
+                    TeamSelectionView(
+                        apiBaseURL: preferences.apiBaseURL,
+                        selectedTeamIDs: $coordinator.teamPickerDraftTeamIDs,
+                        onCancel: { coordinator.isTeamPickerPresented = false },
+                        onDone: commitTeamPicker
+                    )
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
+        }
+        .environment(\.colorScheme, .dark)
+    }
+
+    private var fixtureCompetitionAccessory: some View {
+        VStack(spacing: 0) {
             fixtureCompetitionDock
                 .anchorPreference(
                     key: FixtureCompetitionDockBoundsPreferenceKey.self,
@@ -1033,19 +1323,13 @@ struct FixtureCompetitionDockView: View {
                 ) { bounds in
                     bounds
                 }
-        case .panel:
-            fixtureCompetitionOverlayPanel
-        case .teamPicker:
-            NavigationStack {
-                TeamSelectionView(
-                    apiBaseURL: preferences.apiBaseURL,
-                    selectedTeamIDs: $coordinator.teamPickerDraftTeamIDs,
-                    onCancel: { coordinator.isTeamPickerPresented = false },
-                    onDone: commitTeamPicker
-                )
+
+            if coordinator.isSaveFixtureViewPromptVisible {
+                fixtureSaveFavouritesPrompt
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                    .transition(fixtureSavePromptTransition)
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
         }
     }
 
@@ -1069,11 +1353,6 @@ struct FixtureCompetitionDockView: View {
         nonmutating set { coordinator.isFixtureFavouritesMenuExpanded = newValue }
     }
 
-    private var isFixtureViewSettingsExpanded: Bool {
-        get { coordinator.isFixtureViewSettingsExpanded }
-        nonmutating set { coordinator.isFixtureViewSettingsExpanded = newValue }
-    }
-
     private var isTeamPickerPresented: Bool {
         get { coordinator.isTeamPickerPresented }
         nonmutating set { coordinator.isTeamPickerPresented = newValue }
@@ -1089,24 +1368,115 @@ struct FixtureCompetitionDockView: View {
             .padding(.horizontal, 12)
             .padding(.top, 6)
             .padding(.bottom, 8)
-            .animation(.easeOut(duration: 0.2), value: expandedFixtureRegionID)
-            .animation(.easeOut(duration: 0.2), value: isFixtureFavouritesMenuExpanded)
-            .animation(.easeOut(duration: 0.2), value: isFixtureViewSettingsExpanded)
+            .animation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut, value: expandedFixtureRegionID)
+            .animation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut, value: isFixtureFavouritesMenuExpanded)
             .zIndex(20)
     }
 
     @ViewBuilder
     private var fixtureCompetitionOverlayPanel: some View {
-        if isFixtureViewSettingsExpanded {
-            fixtureViewSettingsPanel
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-        } else if isFixtureFavouritesMenuExpanded {
+        if isFixtureFavouritesMenuExpanded {
             fixtureFavouritesPanel
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(fixturePanelTransition)
         } else if let region = expandedFixtureRegion {
             fixtureCompetitionPanel(for: region)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(fixturePanelTransition)
         }
+    }
+
+    private var fixturePanelTransition: AnyTransition {
+        accessibilityReduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity)
+    }
+
+    private var fixtureSavePromptTransition: AnyTransition {
+        guard !accessibilityReduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity),
+            removal: .opacity
+        )
+    }
+
+    private var fixtureSaveFavouritesPrompt: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) {
+                    fixtureSaveFavouritesPromptLabel
+                    HStack(spacing: 10) {
+                        Spacer(minLength: 0)
+                        dismissFixtureSavePromptButton
+                        saveFixtureViewButton
+                    }
+                }
+            } else {
+                HStack(spacing: 12) {
+                    fixtureSaveFavouritesPromptLabel
+                    Spacer(minLength: 4)
+                    dismissFixtureSavePromptButton
+                    saveFixtureViewButton
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 720)
+        .background {
+            FixtureGlassSurface(cornerRadius: 18)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color(.separator).opacity(0.62), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.24), radius: 18, y: 8)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var fixtureSaveFavouritesPromptLabel: some View {
+        HStack(spacing: 11) {
+            Image(systemName: "bookmark.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 30, height: 36)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Save current view as favourites?")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("Use this selection as your default match view.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var dismissFixtureSavePromptButton: some View {
+        Button(action: dismissFixtureSavePrompt) {
+            Image(systemName: "xmark")
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .background(Color(.tertiarySystemFill), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Keep existing favourites")
+        .accessibilityHint("Dismisses without changing your saved match view")
+    }
+
+    private var saveFixtureViewButton: some View {
+        Button(action: saveCurrentFixtureViewAsFavourites) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(Color.primary)
+                .frame(width: 44, height: 44)
+                .background(Color.accentColor.opacity(0.18), in: Circle())
+                .overlay {
+                    Circle()
+                        .stroke(Color.accentColor.opacity(0.82), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Save as favourites")
+        .accessibilityHint("Replaces your saved match view with this selection")
     }
 
     private var fixtureCompetitionRail: some View {
@@ -1116,7 +1486,6 @@ struct FixtureCompetitionDockView: View {
                 fixturePickerBaselineOptionIDs = nil
                 withAnimation(.easeOut(duration: 0.2)) {
                     expandedFixtureRegionID = nil
-                    isFixtureViewSettingsExpanded = false
                     isFixtureFavouritesMenuExpanded.toggle()
                 }
             } label: {
@@ -1127,7 +1496,9 @@ struct FixtureCompetitionDockView: View {
                         preferences.showAllMatches ||
                         isPremierLeagueMatchesPresetSelected,
                     isExpanded: isFixtureFavouritesMenuExpanded,
-                    showsFantasyPremierLeagueIcon: isPremierLeagueMatchesPresetSelected
+                    showsFantasyPremierLeagueIcon: isPremierLeagueMatchesPresetSelected,
+                    usesPrimaryIconColor: true,
+                    showsSelectionChrome: false
                 )
             }
             .buttonStyle(.plain)
@@ -1185,7 +1556,8 @@ struct FixtureCompetitionDockView: View {
                                 isSelected: selectedFixtureTeamIDs.count > 0,
                                 isExpanded: isTeamPickerPresented,
                                 systemSymbolSize: 30,
-                                systemSymbolTint: Color(red: 0.18, green: 0.55, blue: 0.88)
+                                systemSymbolTint: Color(red: 0.18, green: 0.55, blue: 0.88),
+                                showsPersistentBorder: true
                             )
                         }
                         .buttonStyle(.plain)
@@ -1196,20 +1568,6 @@ struct FixtureCompetitionDockView: View {
                                 : "\(selectedFixtureTeamIDs.count) teams selected"
                         )
                         .accessibilityHint("Choose individual teams to include")
-
-                        fixtureDockSeparator
-
-                        Button(action: toggleFixtureViewSettings) {
-                            FixtureRegionDockButton(
-                                systemSymbol: "gearshape.fill",
-                                regionID: nil,
-                                isSelected: false,
-                                isExpanded: isFixtureViewSettingsExpanded
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("View settings")
-                        .accessibilityHint("Adjust predictions or save the current view")
                     }
                 }
                 .scrollIndicators(.hidden)
@@ -1217,6 +1575,13 @@ struct FixtureCompetitionDockView: View {
         }
         .padding(6)
         .frame(height: 58)
+        .background {
+            FixtureGlassSurface(cornerRadius: 29)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 29, style: .continuous)
+                .stroke(Color(.separator).opacity(0.62), lineWidth: 0.5)
+        }
     }
 
     private var fixtureFavouritesPanel: some View {
@@ -1278,60 +1643,9 @@ struct FixtureCompetitionDockView: View {
             )
         }
         .frame(maxWidth: 420)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color(.separator).opacity(0.55), lineWidth: 0.5)
+        .background {
+            FixtureGlassSurface(cornerRadius: 22)
         }
-        .shadow(color: .black.opacity(0.28), radius: 24, y: 10)
-    }
-
-    private var fixtureViewSettingsPanel: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 36, height: 36)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("View settings")
-                        .font(.headline)
-                    Text("Adjust and save this match view")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        isFixtureViewSettingsExpanded = false
-                    }
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 34, height: 34)
-                        .background(Color(.tertiarySystemFill), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close view settings")
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-
-            Divider()
-
-            fixturePredictionsActionRow
-            Divider().padding(.leading, 58)
-            fixtureFavouritesActionRow(
-                title: "Save current view as favourites",
-                subtitle: "Replace your saved match view",
-                icon: .system("square.and.arrow.down"),
-                isSelected: false,
-                action: saveCurrentFixtureViewAsFavourites
-            )
-        }
-        .frame(maxWidth: 420)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Color(.separator).opacity(0.55), lineWidth: 0.5)
@@ -1345,40 +1659,6 @@ struct FixtureCompetitionDockView: View {
             .frame(width: 0.5, height: 28)
             .padding(.horizontal, 2)
             .accessibilityHidden(true)
-    }
-
-    private var fixturePredictionsActionRow: some View {
-        Button {
-            preferences.showPredictedScores.toggle()
-            if preferences.showPredictedScores {
-                coordinator.requestPredictionWarm()
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 32, height: 32)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Show predictions")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
-                    Text("Display AI score predictions")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                FixturePickerCheckbox(isSelected: preferences.showPredictedScores)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 58)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Show predictions")
-        .accessibilityValue(preferences.showPredictedScores ? "Checked" : "Not checked")
-        .accessibilityHint("Displays AI score predictions for matches")
     }
 
     private var fixtureViewOptionsSymbol: String {
@@ -1580,7 +1860,9 @@ struct FixtureCompetitionDockView: View {
             .padding(10)
         }
         .frame(maxWidth: 420)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background {
+            FixtureGlassSurface(cornerRadius: 22)
+        }
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Color(.separator).opacity(0.55), lineWidth: 0.5)
@@ -1668,6 +1950,24 @@ struct FixtureCompetitionDockView: View {
         })
     }
 
+    private func dismissFixtureSavePrompt() {
+        let animation = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.22)
+        withAnimation(accessibilityReduceMotion ? nil : animation) {
+            coordinator.dismissSaveFixtureViewPrompt()
+        }
+    }
+
+    private func updateFixtureSavePrompt() {
+        let animation = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.32)
+        withAnimation(accessibilityReduceMotion ? nil : animation) {
+            if preferences.hasUnsavedFixtureViewChanges {
+                coordinator.presentSaveFixtureViewPrompt()
+            } else {
+                coordinator.clearSaveFixtureViewPresentation()
+            }
+        }
+    }
+
     private func toggleFixtureCompetitionPicker(for regionID: String) {
         guard expandedFixtureRegionID != regionID else {
             dismissFixtureCompetitionPicker()
@@ -1679,16 +1979,7 @@ struct FixtureCompetitionDockView: View {
         fixturePickerBaselineOptionIDs = initialOptionIDs
         withAnimation(.easeOut(duration: 0.2)) {
             isFixtureFavouritesMenuExpanded = false
-            isFixtureViewSettingsExpanded = false
             expandedFixtureRegionID = regionID
-        }
-    }
-
-    private func toggleFixtureViewSettings() {
-        withAnimation(.easeOut(duration: 0.2)) {
-            expandedFixtureRegionID = nil
-            isFixtureFavouritesMenuExpanded = false
-            isFixtureViewSettingsExpanded.toggle()
         }
     }
 
@@ -1701,19 +1992,18 @@ struct FixtureCompetitionDockView: View {
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
-            isFixtureViewSettingsExpanded = false
         }
         isTeamPickerPresented = true
     }
 
     private func commitTeamPicker() {
-        let nonTeamOptionIDs = effectiveFixtureViewOptionIDs.filter {
-            FixtureViewOptionID.teamStableID(from: $0) == nil
-        }
-        let updatedOptionIDs = nonTeamOptionIDs.union(
-            teamPickerDraftTeamIDs.map(FixtureViewOptionID.team)
+        let initialOptionIDs = fixturePickerInitialOptionIDs
+        let updatedOptionIDs = FixtureViewOptionID.replacingTeams(
+            in: initialOptionIDs,
+            with: teamPickerDraftTeamIDs
         )
         isTeamPickerPresented = false
+        guard updatedOptionIDs != initialOptionIDs else { return }
         guard !updatedOptionIDs.isEmpty else {
             selectFavourites()
             return
@@ -1763,22 +2053,14 @@ struct FixtureCompetitionDockView: View {
     private func selectFavourites() {
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
+        withAnimation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut) {
+            coordinator.clearSaveFixtureViewPresentation()
+        }
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
-            isFixtureViewSettingsExpanded = false
         }
-        preferences.fixtureAllMajorMatchesEnabled = true
-        preferences.competitionFilterEnabled = false
-        preferences.englishPremierLeagueTeamsOnly = true
-        preferences.majorUEFAClubGamesEnabled = true
-        preferences.homeNationsFilterEnabled = true
-        preferences.majorTournamentsFilterEnabled = true
-        preferences.showAllMatches = false
-        fixtureBrowser.configure(
-            preferences: preferences.snapshot,
-            resetSelectedDate: true
-        )
+        activateFavouriteFixtureView()
         AppMetricsService.shared.fireActivity(
             "fixture_competition_favourites",
             screen: MatchesViewMode.fixtures.rawValue,
@@ -1786,14 +2068,33 @@ struct FixtureCompetitionDockView: View {
         )
     }
 
+    private func activateFavouriteFixtureView() {
+        preferences.fixtureAllMajorMatchesEnabled = true
+        preferences.competitionFilterEnabled = false
+        preferences.englishPremierLeagueTeamsOnly = true
+        preferences.majorUEFAClubGamesEnabled = true
+        preferences.homeNationsFilterEnabled = true
+        preferences.majorTournamentsFilterEnabled = true
+        preferences.showAllMatches = false
+        preferences.showPredictedScores = preferences.favouriteShowPredictedScores
+        if preferences.showPredictedScores {
+            coordinator.requestPredictionWarm()
+        }
+        fixtureBrowser.configure(
+            preferences: preferences.snapshot,
+            resetSelectedDate: true
+        )
+    }
+
     private func selectAllFixtureCompetitions() {
+        let hasChanges = !preferences.showAllMatches
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
-            isFixtureViewSettingsExpanded = false
         }
+        guard hasChanges else { return }
         preferences.fixtureAllMajorMatchesEnabled = false
         preferences.competitionFilterEnabled = false
         preferences.englishPremierLeagueTeamsOnly = false
@@ -1805,6 +2106,7 @@ struct FixtureCompetitionDockView: View {
             preferences: preferences.snapshot,
             resetSelectedDate: true
         )
+        updateFixtureSavePrompt()
         AppMetricsService.shared.fireActivity(
             "fixture_competition_all",
             screen: MatchesViewMode.fixtures.rawValue,
@@ -1813,19 +2115,16 @@ struct FixtureCompetitionDockView: View {
     }
 
     private func saveCurrentFixtureViewAsFavourites() {
-        let optionIDs: [String]
-        if preferences.showAllMatches {
-            optionIDs = [FixtureViewOptionID.all]
-        } else if preferences.fixtureAllMajorMatchesEnabled {
-            optionIDs = preferences.favouriteFixtureViewOptionIDs
-        } else {
-            optionIDs = preferences.selectedFixtureViewOptionIDs
-        }
+        let optionIDs = preferences.currentFixtureViewOptionIDs.sorted()
         guard !optionIDs.isEmpty else { return }
         preferences.favouriteFixtureViewOptionIDs = optionIDs
+        preferences.favouriteShowPredictedScores = preferences.showPredictedScores
+        activateFavouriteFixtureView()
+        withAnimation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut) {
+            coordinator.clearSaveFixtureViewPresentation()
+        }
         withAnimation(.easeOut(duration: 0.2)) {
             isFixtureFavouritesMenuExpanded = false
-            isFixtureViewSettingsExpanded = false
         }
         coordinator.showToast("Current view saved as favourites")
         AppMetricsService.shared.fireActivity(
@@ -1836,13 +2135,14 @@ struct FixtureCompetitionDockView: View {
     }
 
     private func selectPremierLeagueMatches() {
+        let hasChanges = !isPremierLeagueMatchesPresetSelected
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
-            isFixtureViewSettingsExpanded = false
         }
+        guard hasChanges else { return }
         applyCustomFixtureView(FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs)
         AppMetricsService.shared.fireActivity(
             "fixture_premier_league_matches_preset",
@@ -1872,6 +2172,7 @@ struct FixtureCompetitionDockView: View {
             preferences: preferences.snapshot,
             resetSelectedDate: true
         )
+        updateFixtureSavePrompt()
     }
 }
 
@@ -2097,22 +2398,40 @@ private struct FixtureRegionDockButton: View {
     let isSelected: Bool
     let isExpanded: Bool
     var showsFantasyPremierLeagueIcon = false
+    var usesPrimaryIconColor = false
+    var showsSelectionChrome = true
     var systemSymbolSize: CGFloat = 22
     var systemSymbolTint: Color?
+    var showsPersistentBorder = false
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(isExpanded ? Color.accentColor.opacity(0.16) : Color.clear)
+                .fill(
+                    showsSelectionChrome
+                        ? isExpanded
+                            ? Color.accentColor.opacity(0.18)
+                            : isSelected
+                                ? Color.accentColor.opacity(0.08)
+                                : Color.clear
+                        : Color.clear
+                )
 
             if showsFantasyPremierLeagueIcon {
                 FantasyLionIconView(size: 24)
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                    .foregroundStyle(
+                        usesPrimaryIconColor
+                            ? Color.primary
+                            : isSelected ? Color.accentColor : Color.primary
+                    )
             } else if let systemSymbol {
                 Image(systemName: systemSymbol)
                     .font(.system(size: systemSymbolSize, weight: .semibold))
                     .foregroundStyle(
-                        isSelected ? Color.accentColor : systemSymbolTint ?? Color.primary
+                        usesPrimaryIconColor
+                            ? Color.primary
+                            : isSelected ? Color.accentColor : systemSymbolTint ?? Color.primary
                     )
             } else if let regionID {
                 FixtureRegionFlagIcon(regionID: regionID, size: 30)
@@ -2128,12 +2447,55 @@ private struct FixtureRegionDockButton: View {
         }
         .frame(width: 44, height: 44)
         .overlay {
-            if systemSymbol != nil || showsFantasyPremierLeagueIcon {
+            if showsSelectionChrome && (systemSymbol != nil || showsFantasyPremierLeagueIcon) {
                 Circle()
-                    .stroke(isExpanded ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                    .stroke(
+                        isExpanded
+                            ? Color.accentColor.opacity(0.88)
+                            : isSelected
+                                ? Color.accentColor.opacity(0.34)
+                                : showsPersistentBorder
+                                    ? (systemSymbolTint ?? Color.accentColor).opacity(0.82)
+                                    : Color.clear,
+                        lineWidth: isExpanded ? 1.5 : showsPersistentBorder ? 1 : 0.8
+                    )
             }
         }
+        .shadow(
+            color: showsSelectionChrome && isExpanded ? Color.accentColor.opacity(0.30) : .clear,
+            radius: 8
+        )
+        .animation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut, value: isExpanded)
+        .animation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut, value: isSelected)
         .contentShape(Circle())
+    }
+}
+
+private struct FixtureGlassSurface: View {
+    let cornerRadius: CGFloat
+    @Environment(\.accessibilityReduceTransparency) private var accessibilityReduceTransparency
+
+    var body: some View {
+        ZStack {
+            if accessibilityReduceTransparency {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(FootballVisualStyle.elevatedSurface)
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(FootballVisualStyle.elevatedSurface.opacity(0.68))
+            }
+
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.045), .clear],
+                        startPoint: .top,
+                        endPoint: .center
+                    )
+                )
+        }
     }
 }
 
@@ -2235,6 +2597,99 @@ private struct CompetitionBadgeImage: View {
     }
 }
 
+private struct LeagueBadgeImage: View {
+    let competitionID: String?
+    let competitionName: String
+    let size: CGFloat
+    @State private var badgeCacheVersion = 0
+
+    var body: some View {
+        let _ = badgeCacheVersion
+        Group {
+            if let image = CompetitionBadgeCache.shared.image(
+                competitionID: competitionID,
+                competitionName: competitionName
+            ) {
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Image(systemName: competitionName.localizedCaseInsensitiveContains("cup") ? "trophy.fill" : "soccerball")
+                    .font(.system(size: size * 0.68, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.82))
+            }
+        }
+        .frame(width: size, height: size)
+        .onReceive(NotificationCenter.default.publisher(for: CompetitionBadgeCache.badgesUpdatedNotification)) { _ in
+            badgeCacheVersion &+= 1
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct CompetitionCardEntrance: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @State private var hasAppeared = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(hasAppeared ? 1 : 0)
+            .offset(y: hasAppeared || accessibilityReduceMotion ? 0 : 10)
+            .onAppear {
+                guard !hasAppeared else { return }
+                if accessibilityReduceMotion {
+                    hasAppeared = true
+                } else {
+                    withAnimation(FootballVisualStyle.easeOut) {
+                        hasAppeared = true
+                    }
+                }
+            }
+    }
+}
+
+private struct ScoresStadiumBackdrop: View {
+    @Environment(\.accessibilityReduceTransparency) private var accessibilityReduceTransparency
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .top) {
+                FootballVisualStyle.pageBackground
+
+                Image("MatchStadium01Night")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: 300)
+                    .clipped()
+                    .blur(radius: accessibilityReduceTransparency ? 0 : 2.5, opaque: true)
+                    .offset(y: -42)
+                    .opacity(accessibilityReduceTransparency ? 0.32 : 0.60)
+
+                LinearGradient(
+                    colors: [
+                        FootballVisualStyle.pageBackground.opacity(0.28),
+                        FootballVisualStyle.pageBackground.opacity(0.44),
+                        FootballVisualStyle.pageBackground.opacity(0.94),
+                        FootballVisualStyle.pageBackground,
+                    ],
+                    startPoint: .top,
+                    endPoint: UnitPoint(x: 0.5, y: 0.46)
+                )
+
+                RadialGradient(
+                    colors: [.clear, FootballVisualStyle.pageBackground.opacity(0.74)],
+                    center: .top,
+                    startRadius: 80,
+                    endRadius: max(proxy.size.width, 360) * 0.72
+                )
+            }
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+}
+
 /// Owns high-frequency drag state so a swipe doesn't invalidate the entire fixtures screen.
 private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent: View>: View {
     let containerWidth: CGFloat
@@ -2291,7 +2746,7 @@ private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent:
                 .offset(x: dragOffset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color(.systemBackground))
+        .background(FootballVisualStyle.pageBackground)
         .clipped()
         .contentShape(Rectangle())
         .simultaneousGesture(swipeGesture)
@@ -2409,6 +2864,7 @@ private struct FixtureDateCarouselTile: View {
     let dateKey: String
     let matchCount: Int
     let isSelected: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var date: Date? {
         Self.inputFormatter.date(from: dateKey)
@@ -2423,32 +2879,33 @@ private struct FixtureDateCarouselTile: View {
     }
 
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 4) {
             Text(isToday ? "Today" : (date.map { Self.weekdayFormatter.string(from: $0) } ?? "–"))
                 .font(.caption2.weight(.semibold))
                 .textCase(.uppercase)
             Text(date.map { Self.dayFormatter.string(from: $0) } ?? dateKey)
-                .font(.subheadline.weight(isSelected ? .semibold : .medium))
+                .font(
+                    (dynamicTypeSize.isAccessibilitySize ? Font.caption : .subheadline)
+                        .weight(isSelected ? .bold : .medium)
+                )
                 .monospacedDigit()
         }
-        .foregroundStyle(isSelected || isToday ? Color.accentColor : Color.secondary)
-        .frame(width: 76, height: 50)
-        .background {
-            if isToday {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor.opacity(isSelected ? 0.18 : 0.1))
-            }
-        }
-        .overlay {
-            if isToday {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.accentColor.opacity(isSelected ? 0.8 : 0.5), lineWidth: 1)
-            }
-        }
+        .foregroundStyle(
+            isSelected
+                ? Color.white.opacity(0.96)
+                : isToday
+                    ? Color.accentColor.opacity(0.84)
+                    : FootballVisualStyle.mutedText.opacity(0.78)
+        )
+        .frame(
+            width: dynamicTypeSize.isAccessibilitySize ? 132 : 78,
+            height: dynamicTypeSize.isAccessibilitySize ? 72 : 54
+        )
         .overlay(alignment: .bottom) {
             Capsule()
                 .fill(isSelected ? Color.accentColor : Color.clear)
-                .frame(width: 46, height: 3)
+                .frame(width: 44, height: 3)
+                .shadow(color: isSelected ? Color.accentColor.opacity(0.70) : .clear, radius: 5)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
@@ -2509,6 +2966,7 @@ private struct MatchesListRowLabel: View, Equatable {
             teamLogoScale: 1.518,
             showsFinishedInlineAggregateBrackets: true,
             layoutStyle: .compactFixture,
+            presentationStyle: .embedded,
             fantasyContext: fantasyContext,
             rowPreferences: rowPreferences,
             predictionDisplay: predictionDisplay

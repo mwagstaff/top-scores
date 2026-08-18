@@ -302,6 +302,7 @@ struct MatchDetailView: View {
         }
         .navigationTitle("Match Details")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .onAppear {
             screenOpenedAt = Date()
             screenViewSent = false

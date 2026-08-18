@@ -321,6 +321,7 @@ actor PreferencesSyncService {
                 "selectedLeagues": snapshot.selectedLeagues,
                 "selectedFixtureViewOptionIDs": snapshot.selectedFixtureViewOptionIDs,
                 "favouriteFixtureViewOptionIDs": snapshot.favouriteFixtureViewOptionIDs,
+                "favouriteShowPredictedScores": snapshot.favouriteShowPredictedScores,
                 "selectedNotificationLeagues": snapshot.selectedNotificationLeagues,
                 "selectedNotificationViewOptionIDs": snapshot.selectedNotificationViewOptionIDs,
                 "selectedChannels": snapshot.selectedChannels,
@@ -496,6 +497,8 @@ actor PreferencesSyncService {
                         .map(FixtureViewOptionID.legacyCompetition),
                 favouriteFixtureViewOptionIDs: preferences["favouriteFixtureViewOptionIDs"] as? [String]
                     ?? PreferencesStore.defaultFavouriteFixtureViewOptionIDs,
+                favouriteShowPredictedScores: preferences["favouriteShowPredictedScores"] as? Bool
+                    ?? PreferencesStore.defaultFavouriteShowPredictedScores,
                 selectedNotificationLeagues: preferences["selectedNotificationLeagues"] as? [String]
                     ?? preferences["selectedLeagues"] as? [String]
                     ?? PreferencesStore.defaultSelectedNotificationLeagues,

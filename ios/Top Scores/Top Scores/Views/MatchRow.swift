@@ -7,6 +7,11 @@ enum MatchRowLayoutStyle {
     case compactFixture
 }
 
+enum MatchRowPresentationStyle {
+    case standalone
+    case embedded
+}
+
 /// What a row's predicted-score chip should show. Rows compute this from a shared,
 /// on-disk prediction store (see `FixturePredictionStore` in MatchesView.swift) that
 /// freezes each match's prediction the first time it's generated, so `.available`
@@ -72,6 +77,8 @@ struct MatchRowTeamSummary: Equatable, Sendable {
 }
 
 struct MatchRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let match: Match
     var showTeamEvents: Bool = false
     var showLeague: Bool = false
@@ -84,6 +91,7 @@ struct MatchRow: View {
     var teamLogoScale: CGFloat = 1.0
     var showsFinishedInlineAggregateBrackets: Bool = false
     var layoutStyle: MatchRowLayoutStyle = .standard
+    var presentationStyle: MatchRowPresentationStyle = .standalone
     var fantasyContext: FantasyMatchRowContext = .empty
     var rowPreferences: MatchRowPreferences = .disabledFantasy
     var predictionDisplay: FixturePredictionDisplayState = .hidden
@@ -189,49 +197,70 @@ struct MatchRow: View {
             MatchCardChrome(
                 cornerRadius: cardCornerRadius,
                 isLive: match.isInProgress,
-                isFinal: match.isFinalRound
+                isFinal: match.isFinalRound,
+                isEmbedded: presentationStyle == .embedded
             )
         )
     }
 
     private var compactFixtureMatchCard: some View {
         VStack(alignment: .leading, spacing: compactFixtureVerticalSpacing) {
-            if showLeague {
-                Text(match.displayLeague)
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(alignment: .center, spacing: compactFixtureHorizontalSpacing) {
-                TeamLogo(
-                    name: match.homeTeam,
-                    teamId: match.homeTeamId,
-                    alternateNames: [match.homeShortName].compactMap { $0 },
-                    size: logoSize
-                )
-
-                VStack(spacing: compactFixtureContentRowSpacing) {
-                    HStack(alignment: .firstTextBaseline, spacing: compactFixtureHorizontalSpacing) {
-                        teamNameLabel(isHome: true)
-
-                        compactFixtureCenterContent
-
-                        teamNameLabel(isHome: false)
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) {
+                    if showLeague {
+                        Text(match.displayLeague)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
+
+                    compactFixtureCenterContent
+                        .frame(maxWidth: .infinity, alignment: .center)
+
+                    accessibilityCompactTeamLine(isHome: true)
+                    accessibilityCompactTeamLine(isHome: false)
 
                     if shouldShowCompactFixtureSecondRow {
                         compactFixtureSecondRow
                     }
                 }
-                .frame(maxWidth: .infinity)
+            } else {
+                if showLeague {
+                    Text(match.displayLeague)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
+                }
 
-                TeamLogo(
-                    name: match.awayTeam,
-                    teamId: match.awayTeamId,
-                    alternateNames: [match.awayShortName].compactMap { $0 },
-                    size: logoSize
-                )
+                HStack(alignment: .center, spacing: compactFixtureHorizontalSpacing) {
+                    TeamLogo(
+                        name: match.homeTeam,
+                        teamId: match.homeTeamId,
+                        alternateNames: [match.homeShortName].compactMap { $0 },
+                        size: logoSize
+                    )
+
+                    VStack(spacing: compactFixtureContentRowSpacing) {
+                        HStack(alignment: .firstTextBaseline, spacing: compactFixtureHorizontalSpacing) {
+                            teamNameLabel(isHome: true)
+
+                            compactFixtureCenterContent
+
+                            teamNameLabel(isHome: false)
+                        }
+
+                        if shouldShowCompactFixtureSecondRow {
+                            compactFixtureSecondRow
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    TeamLogo(
+                        name: match.awayTeam,
+                        teamId: match.awayTeamId,
+                        alternateNames: [match.awayShortName].compactMap { $0 },
+                        size: logoSize
+                    )
+                }
             }
         }
         .padding(cardPadding)
@@ -240,9 +269,61 @@ struct MatchRow: View {
             MatchCardChrome(
                 cornerRadius: cardCornerRadius,
                 isLive: match.isInProgress,
-                isFinal: match.isFinalRound
+                isFinal: match.isFinalRound,
+                isEmbedded: presentationStyle == .embedded
             )
         )
+    }
+
+    private func accessibilityCompactTeamLine(isHome: Bool) -> some View {
+        HStack(spacing: 12) {
+            TeamLogo(
+                name: isHome ? match.homeTeam : match.awayTeam,
+                teamId: isHome ? match.homeTeamId : match.awayTeamId,
+                alternateNames: [isHome ? match.homeShortName : match.awayShortName].compactMap { $0 },
+                size: max(logoSize, 36)
+            )
+
+            if enablesTeamDetailsNavigation {
+                NavigationLink(value: teamDetailsContext(isHome: isHome)) {
+                    accessibilityCompactTeamName(isHome: isHome)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("View team details")
+            } else {
+                accessibilityCompactTeamName(isHome: isHome)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func accessibilityCompactTeamName(isHome: Bool) -> some View {
+        let displayName = isHome ? match.displayHomeTeam : match.displayAwayTeam
+        let summary = isHome ? homeTeamSummary : awayTeamSummary
+
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(displayName)
+                .font(teamNameFont)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+
+            if let summary {
+                Text(Self.ordinal(summary.position))
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Color.accentColor)
+
+                if !summary.form.isEmpty {
+                    HStack(spacing: 3) {
+                        ForEach(Array(summary.form.prefix(5).enumerated()), id: \.offset) { _, result in
+                            MatchRowFormBadge(result: result)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(teamAccessibilityLabel(isHome: isHome, summary: summary))
     }
 
     private var homeScoreText: String? {
@@ -635,37 +716,54 @@ struct MatchRow: View {
 
     @ViewBuilder
     private var compactFixtureSecondRow: some View {
-        HStack(spacing: 8) {
-            if predictionDisplay != .hidden {
-                PredictionStripView(match: match, predictionDisplay: predictionDisplay)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-
-            if predictionDisplay != .hidden, compactPrimaryBroadcastChannel != nil {
-                Text("•")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .accessibilityHidden(true)
-            }
-
-            if let compactPrimaryBroadcastChannel {
-                HStack(spacing: 5) {
-                    Image(systemName: "tv")
-                        .accessibilityHidden(true)
-
-                    Text(compactPrimaryBroadcastChannel.name)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .minimumScaleFactor(0.75)
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: 8) {
+                if predictionDisplay != .hidden {
+                    PredictionStripView(match: match, predictionDisplay: predictionDisplay)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Watch on \(compactPrimaryBroadcastChannel.name)")
+
+                if let compactPrimaryBroadcastChannel {
+                    compactBroadcastLabel(compactPrimaryBroadcastChannel)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .center)
+        } else {
+            HStack(spacing: 8) {
+                if predictionDisplay != .hidden {
+                    PredictionStripView(match: match, predictionDisplay: predictionDisplay)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+
+                if predictionDisplay != .hidden, compactPrimaryBroadcastChannel != nil {
+                    Text("•")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+
+                if let compactPrimaryBroadcastChannel {
+                    compactBroadcastLabel(compactPrimaryBroadcastChannel)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(minHeight: compactAccessorySlotHeight)
         }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .frame(minHeight: compactAccessorySlotHeight)
+    }
+
+    private func compactBroadcastLabel(_ channel: TvChannel) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "tv")
+                .accessibilityHidden(true)
+
+            Text(channel.name)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                .truncationMode(.tail)
+                .minimumScaleFactor(0.75)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Watch on \(channel.name)")
     }
 
     private var shouldShowCompactFixtureSecondRow: Bool {
@@ -817,12 +915,19 @@ struct PredictionStripView: View {
         .padding(.vertical, isLargePresentation ? 3 : 2)
         .background(
             Capsule(style: .continuous)
-                .fill(accentColor.opacity(0.16))
+                .fill(
+                    LinearGradient(
+                        colors: [accentColor.opacity(0.22), accentColor.opacity(0.10)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
         .overlay(
             Capsule(style: .continuous)
                 .stroke(accentColor.opacity(0.42), lineWidth: 1)
         )
+        .shadow(color: isResolved ? .clear : accentColor.opacity(0.18), radius: 5)
         .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel(homeGoals: homeGoals, awayGoals: awayGoals))
@@ -1491,6 +1596,7 @@ private struct MatchCardChrome: ViewModifier {
     let cornerRadius: CGFloat
     let isLive: Bool
     var isFinal: Bool = false
+    var isEmbedded = false
 
     private var tintColor: Color {
         isLive ? .liveMatch : .finalMatch
@@ -1500,25 +1606,30 @@ private struct MatchCardChrome: ViewModifier {
         isLive || isFinal
     }
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color(.secondarySystemBackground))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(showsHighlight ? tintColor.opacity(0.08) : Color.clear)
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(borderColor, lineWidth: showsHighlight ? 1.5 : 1)
-            )
-            .shadow(
-                color: showsHighlight ? tintColor.opacity(0.30) : .clear,
-                radius: showsHighlight ? 9 : 0,
-                y: showsHighlight ? 1 : 0
-            )
+        if isEmbedded {
+            content
+        } else {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(Color(.secondarySystemBackground))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .fill(showsHighlight ? tintColor.opacity(0.08) : Color.clear)
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(borderColor, lineWidth: showsHighlight ? 1.5 : 1)
+                )
+                .shadow(
+                    color: showsHighlight ? tintColor.opacity(0.30) : .clear,
+                    radius: showsHighlight ? 9 : 0,
+                    y: showsHighlight ? 1 : 0
+                )
+        }
     }
 
     private var borderColor: Color {
