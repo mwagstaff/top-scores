@@ -98,6 +98,18 @@ function normalizeTeamLogoSource(value) {
   return TEAM_LOGO_SOURCE_BUNDLED;
 }
 
+const PLAYER_IMAGE_SOURCE_TSDB = "tsdb";
+const PLAYER_IMAGE_SOURCE_BSD = "bsd";
+
+function normalizePlayerImageSource(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === PLAYER_IMAGE_SOURCE_BSD) return PLAYER_IMAGE_SOURCE_BSD;
+  if (normalized === PLAYER_IMAGE_SOURCE_TSDB || normalized === "thesportsdb") {
+    return PLAYER_IMAGE_SOURCE_TSDB;
+  }
+  return null;
+}
+
 const MATCH_SOURCE_TSDB = "tsdb";
 const MATCH_SOURCE_BSD = "bsd";
 
@@ -115,6 +127,8 @@ const envTeamRankingDefaultSource = normalizeTeamRankingSource(
 );
 const envTeamRankingDefaultElo = parseNumberEnv(process.env.TEAM_RANKING_DEFAULT_ELO, 1000);
 const envTeamLogoSource = normalizeTeamLogoSource(process.env.TEAM_LOGO_SOURCE || TEAM_LOGO_SOURCE_TSDB);
+const envPlayerImageSource =
+  normalizePlayerImageSource(process.env.PLAYER_IMAGE_SOURCE) || PLAYER_IMAGE_SOURCE_BSD;
 const envMatchDataSource = normalizeMatchSource(process.env.MATCH_DATA_SOURCE) || MATCH_SOURCE_TSDB;
 
 const SERVER_CONFIG = {
@@ -126,6 +140,7 @@ const SERVER_CONFIG = {
     envTeamRankingDefaultSource || TEAM_RANKING_SOURCE_MERGED,
   teamRankingDefaultElo: envTeamRankingDefaultElo,
   teamLogoSource: envTeamLogoSource,
+  playerImageSource: envPlayerImageSource,
   // Default match data source when no request override or runtime flag is set.
   matchDataSource: envMatchDataSource,
 };
@@ -143,10 +158,13 @@ module.exports = {
   TEAM_RANKING_SOURCE_NATIONAL_ELO,
   TEAM_LOGO_SOURCE_BUNDLED,
   TEAM_LOGO_SOURCE_TSDB,
+  PLAYER_IMAGE_SOURCE_TSDB,
+  PLAYER_IMAGE_SOURCE_BSD,
   MATCH_SOURCE_TSDB,
   MATCH_SOURCE_BSD,
   normalizeTeamRankingSource,
   normalizeTeamLogoSource,
+  normalizePlayerImageSource,
   normalizeMatchSource,
   loadCompetitionWeightsConfig,
   SERVER_CONFIG,

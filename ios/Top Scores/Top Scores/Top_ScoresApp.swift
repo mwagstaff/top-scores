@@ -23,9 +23,6 @@ struct Top_ScoresApp: App {
     private let startupDeferredSpacingNanos: UInt64 = 2_000_000_000
 
     init() {
-        NSLog("=====================================")
-        NSLog("Top Scores App Init - BUILD TIMESTAMP: 2026-02-15 16:45:00")
-        NSLog("=====================================")
         PerformanceSignposter.startup.emitEvent("AppInit")
         BackgroundRefreshManager.register()
         PhoneWatchSyncService.shared.activate()
@@ -46,18 +43,17 @@ struct Top_ScoresApp: App {
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            NSLog("[TopScoresApp] scenePhase changed to %@", String(describing: newPhase))
+            diagnosticLog("[TopScoresApp] scenePhase changed to %@", String(describing: newPhase))
             LiveActivitySyncService.shared.handleScenePhaseChange(newPhase)
             switch newPhase {
             case .background:
                 deferredStartupWorkTask?.cancel()
                 deferredStartupWorkTask = nil
                 BackgroundRefreshManager.scheduleNextRefresh(
-                    intervalMinutes: preferences.refreshIntervalMinutes,
-                    hasInProgressMatches: matchesStore.hasInProgressMatches
+                    intervalMinutes: preferences.refreshIntervalMinutes
                 )
             case .active:
-                NSLog("[TopScoresApp] scenePhase active -> reconcileOnForeground")
+                diagnosticLog("[TopScoresApp] scenePhase active -> reconcileOnForeground")
                 stadiumBackdropStore.rotateIfNeeded()
                 LiveActivitySyncService.shared.reconcileOnForeground()
                 let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
@@ -171,8 +167,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        NSLog("[APNS] Successfully registered for remote notifications")
-        NSLog("[APNS] Device token: %@", tokenString.prefix(12) + "...")
+        diagnosticLog("[APNS] Successfully registered for remote notifications")
+        diagnosticLog("[APNS] Device token: %@", tokenString.prefix(12) + "...")
 
         // Store the APNS token
         Task {
@@ -181,7 +177,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        NSLog("[APNS] Failed to register for remote notifications: %@", error.localizedDescription)
+        diagnosticLog("[APNS] Failed to register for remote notifications: %@", error.localizedDescription)
     }
 
     func userNotificationCenter(
@@ -189,7 +185,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        NSLog("[APNS] Foreground push received: %@", notification.request.identifier)
+        diagnosticLog("[APNS] Foreground push received: %@", notification.request.identifier)
         completionHandler([.banner, .list, .sound, .badge])
     }
 
@@ -198,7 +194,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        NSLog("[APNS] User interacted with push: %@", response.notification.request.identifier)
+        diagnosticLog("[APNS] User interacted with push: %@", response.notification.request.identifier)
         completionHandler()
     }
 }
@@ -238,13 +234,13 @@ actor MissingTeamLogoAuditCleanupService {
 
             guard !resolvedEntries.isEmpty else { return }
             try await client.removeMissingTeamLogosAuditEntries(resolvedEntries)
-            NSLog(
+            diagnosticLog(
                 "[MissingTeamLogoAuditCleanup] removed_count=%d names=%@",
                 resolvedEntries.count,
                 resolvedEntries.joined(separator: ", ")
             )
         } catch {
-            NSLog(
+            diagnosticLog(
                 "[MissingTeamLogoAuditCleanup] failed api_base_url=%@ error=%@",
                 trimmedBaseURL,
                 String(describing: error)

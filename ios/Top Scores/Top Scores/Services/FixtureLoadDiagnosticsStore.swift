@@ -18,17 +18,23 @@ final class FixtureLoadDiagnosticsStore: ObservableObject {
 
     private init() {}
 
-    func record(title: String, summary: String, recordedAt: Date = Date()) {
+    func record(
+        title: @autoclosure () -> String,
+        summary: @autoclosure () -> String,
+        recordedAt: Date = Date()
+    ) {
+        #if DEBUG
         let entry = FixtureLoadDiagnosticEntry(
             recordedAt: recordedAt,
-            title: title,
-            summary: summary
+            title: title(),
+            summary: summary()
         )
         entries.insert(entry, at: 0)
         if entries.count > maximumEntries {
             entries.removeLast(entries.count - maximumEntries)
         }
-        NSLog("[FixtureLoadDebug] %@ %@", title, summary)
+        diagnosticLog("[FixtureLoadDebug] %@ %@", entry.title, entry.summary)
+        #endif
     }
 
     func clear() {

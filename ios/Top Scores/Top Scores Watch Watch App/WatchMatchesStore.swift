@@ -213,7 +213,7 @@ final class WatchMatchesStore: NSObject, ObservableObject {
                         self.cacheDetails(updated)
                     }
                 } catch {
-                    NSLog("[WatchMatchesStore] Failed to warm live match details for %@: %@", matchID, String(describing: error))
+                    diagnosticLog("[WatchMatchesStore] Failed to warm live match details for %@: %@", matchID, String(describing: error))
                 }
             }
         }

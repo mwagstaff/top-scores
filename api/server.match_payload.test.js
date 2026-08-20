@@ -37,6 +37,8 @@ const {
     normalizeMatchDetailsPayload,
     mergeMatchDetailsPayload,
     playerDetailsPayloadFromMatchLineups,
+    withConfiguredMatchDetailsPlayerImages,
+    withConfiguredPlayerDetailsImage,
     buildSyntheticMatchDetailsId,
     pickPreferredMatchStatus,
     resolveStableMatchScoreStatus,
@@ -165,6 +167,54 @@ test("player details fall back to the newest cached match lineup", () => {
     thumb_url: null,
     render_url: null,
   });
+});
+
+test("configured BSD player details replace all TSDB image candidates", async () => {
+  const payload = await withConfiguredPlayerDetailsImage(
+    {
+      id: "34167754",
+      name: "Cameron Burgess",
+      cutout_url: "https://www.thesportsdb.com/cutout.png",
+      thumb_url: "https://www.thesportsdb.com/thumb.png",
+      render_url: "https://www.thesportsdb.com/render.png",
+    },
+    "34167754",
+    {
+      playerImageSource: "bsd",
+      mapDocs: [{ _id: "6525", payload: { tsdb_player_id: "34167754" } }],
+    }
+  );
+
+  assert.equal(payload.cutout_url, "https://sports.bzzoiro.com/img/player/6525/");
+  assert.equal(payload.thumb_url, null);
+  assert.equal(payload.render_url, null);
+});
+
+test("configured BSD match details replace cached TSDB lineup portraits", async () => {
+  const payload = await withConfiguredMatchDetailsPlayerImages(
+    {
+      team_lineups: {
+        home: {
+          starting_lineup: [{
+            id_player: "34167754",
+            name: "Cameron Burgess",
+            cutout_url: "https://www.thesportsdb.com/cutout.png",
+          }],
+          substitutes: [],
+          substitutions: [],
+        },
+      },
+    },
+    {
+      playerImageSource: "bsd",
+      mapDocs: [{ _id: "6525", payload: { tsdb_player_id: "34167754" } }],
+    }
+  );
+
+  assert.equal(
+    payload.team_lineups.home.starting_lineup[0].cutout_url,
+    "https://sports.bzzoiro.com/img/player/6525/"
+  );
 });
 
 function buildCompleteTeamLineups() {

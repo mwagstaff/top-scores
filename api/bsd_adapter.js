@@ -22,6 +22,11 @@ const { utcDateTimeToZonedDateTime } = require("./match_time");
 const { __private: tsdbPrivate } = require("./fetch_tsdb_matches");
 const { getBsdRecords } = require("./mongo_client");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
+const {
+  SERVER_CONFIG,
+  PLAYER_IMAGE_SOURCE_BSD,
+} = require("./config");
+const { bsdPlayerImageUrl } = require("./player_images");
 const SunCalc = require("suncalc");
 
 const assignFormationGridPositions = tsdbPrivate.assignFormationGridPositions;
@@ -357,20 +362,26 @@ function parseBsdIncidents(incidents) {
 // Lineups
 // ---------------------------------------------------------------------------
 
-function bsdPlayerEntry(player) {
+function bsdPlayerEntry(player, options = {}) {
   if (!player || typeof player !== "object") return null;
   const name = String(player.name || player.short_name || "").trim();
   if (!name) return null;
   const number = Number(player.jersey_number);
   const position = String(player.position || "").trim() || null;
+  const bsdPlayerId = player.id != null ? String(player.id) : null;
+  const playerImageSource = options.playerImageSource || SERVER_CONFIG.playerImageSource;
   return {
     number: Number.isFinite(number) ? number : null,
     name,
-    id_player: player.id != null ? String(player.id) : null,
+    id_player: bsdPlayerId,
+    bsd_player_id: bsdPlayerId,
     position_category: bsdPositionCategory(position),
     position,
     position_short: position,
-    cutout_url: null,
+    cutout_url:
+      playerImageSource === PLAYER_IMAGE_SOURCE_BSD
+        ? bsdPlayerImageUrl(bsdPlayerId)
+        : null,
   };
 }
 
@@ -414,7 +425,7 @@ function extractBsdSubstitutions(incidents, homeLineup, awayLineup) {
   return { home, away };
 }
 
-function buildBsdTeamLineups(lineupsPayload, incidents) {
+function buildBsdTeamLineups(lineupsPayload, incidents, options = {}) {
   const lineups = lineupsPayload && lineupsPayload.lineups;
   if (!lineups || typeof lineups !== "object") return null;
 
@@ -423,10 +434,10 @@ function buildBsdTeamLineups(lineupsPayload, incidents) {
     const team = lineups[side];
     if (!team) return;
     const starters = (Array.isArray(team.players) ? team.players : [])
-      .map(bsdPlayerEntry)
+      .map((player) => bsdPlayerEntry(player, options))
       .filter(Boolean);
     const substitutes = (Array.isArray(team.substitutes) ? team.substitutes : [])
-      .map(bsdPlayerEntry)
+      .map((player) => bsdPlayerEntry(player, options))
       .filter(Boolean);
     if (starters.length === 0 && substitutes.length === 0) return;
     const formation = String(team.formation || "").trim() || null;
@@ -855,7 +866,9 @@ function bsdEventToCanonicalMatch(event, options = {}) {
 
   if (options.detail) {
     Object.assign(match, parseBsdIncidents(incidents));
-    const teamLineups = buildBsdTeamLineups(options.lineupsPayload, incidents);
+    const teamLineups = buildBsdTeamLineups(options.lineupsPayload, incidents, {
+      playerImageSource: options.playerImageSource,
+    });
     if (teamLineups) match.team_lineups = teamLineups;
   }
 
@@ -1191,13 +1204,11 @@ async function projectBsdMatches() {
 // Projects a single bsd_event (with incidents + lineups) into a canonical
 // match-details payload. `recordsById` lets callers pass pre-loaded docs.
 // Strict enrichment from the persistent bsd_tsdb_player_map (keyed by BSD
-// player id = the player's id_player): fills cutout_url, AND swaps id_player
-// to the TSDB player id so the client's existing GET /api/v1/players/:id ->
-// TSDB cache/live-fetch path (bio, position, birth info) works unmodified for
-// BSD lineup players. Players without a confident map entry keep their BSD
-// id_player and cutout_url = null — the client shows an initials placeholder
-// and "Player details unavailable" rather than risk the wrong player's data.
-async function enrichBsdLineupPhotos(match) {
+// player id): swaps id_player to the TSDB id used by the existing player-bio
+// endpoint. Image selection remains independent and uses the original BSD id.
+// In BSD image mode, an unmapped player retains their BSD portrait but has no
+// id_player so clients cannot accidentally query TSDB with a BSD id.
+async function enrichBsdLineupPlayerIdentity(match, options = {}) {
   const lineups = match && match.team_lineups;
   if (!lineups || typeof lineups !== "object") return match;
 
@@ -1212,36 +1223,57 @@ async function enrichBsdLineupPhotos(match) {
   });
   if (ids.size === 0) return match;
 
-  const mapDocs = await getBsdRecords("bsd_tsdb_player_map", { _id: { $in: [...ids] } });
-  const photoById = new Map();
+  const mapDocs = Array.isArray(options.mapDocs)
+    ? options.mapDocs
+    : await getBsdRecords("bsd_tsdb_player_map", { _id: { $in: [...ids] } });
+  const mappingById = new Map();
   mapDocs.forEach((doc) => {
     const payload = doc && doc.payload;
     const tsdbId = payload && payload.tsdb_player_id ? String(payload.tsdb_player_id) : null;
     if (tsdbId) {
-      photoById.set(String(doc._id), { cutout_url: payload.cutout_url || null, tsdb_player_id: tsdbId });
+      mappingById.set(String(doc._id), {
+        cutout_url: payload.cutout_url || null,
+        tsdb_player_id: tsdbId,
+      });
     }
   });
-  if (photoById.size === 0) return match;
+  const playerImageSource = options.playerImageSource || SERVER_CONFIG.playerImageSource;
 
-  const applyPhotos = (players) =>
+  const applyIdentity = (players) =>
     (Array.isArray(players) ? players : []).map((p) => {
-      const mapped = p && p.id_player != null ? photoById.get(String(p.id_player)) : null;
-      if (!mapped) return p;
+      const bsdPlayerId = p && (p.bsd_player_id != null ? p.bsd_player_id : p.id_player);
+      const normalizedBsdId = bsdPlayerId != null ? String(bsdPlayerId) : null;
+      const mapped = normalizedBsdId ? mappingById.get(normalizedBsdId) : null;
+      if (!mapped) {
+        if (playerImageSource !== PLAYER_IMAGE_SOURCE_BSD) return p;
+        return {
+          ...p,
+          id_player: null,
+          bsd_player_id: normalizedBsdId,
+          cutout_url: bsdPlayerImageUrl(normalizedBsdId),
+        };
+      }
       return {
         ...p,
         id_player: mapped.tsdb_player_id,
-        cutout_url: mapped.cutout_url || p.cutout_url,
+        bsd_player_id: normalizedBsdId,
+        cutout_url:
+          playerImageSource === PLAYER_IMAGE_SOURCE_BSD
+            ? bsdPlayerImageUrl(normalizedBsdId)
+            : mapped.cutout_url || p.cutout_url,
       };
     });
 
   ["home", "away"].forEach((side) => {
     const team = lineups[side];
     if (!team) return;
-    team.starting_lineup = applyPhotos(team.starting_lineup);
-    team.substitutes = applyPhotos(team.substitutes);
+    team.starting_lineup = applyIdentity(team.starting_lineup);
+    team.substitutes = applyIdentity(team.substitutes);
   });
   return match;
 }
+
+const enrichBsdLineupPhotos = enrichBsdLineupPlayerIdentity;
 
 async function projectBsdMatchDetails(eventId, options = {}) {
   const id = String(eventId || "").trim();
@@ -1274,7 +1306,10 @@ async function projectBsdMatchDetails(eventId, options = {}) {
       ? new Map([[venueId, venueDoc.payload || null]])
       : new Map(),
   });
-  return enrichBsdLineupPhotos(match);
+  return enrichBsdLineupPlayerIdentity(match, {
+    playerImageSource: options.playerImageSource,
+    mapDocs: options.playerMapDocs,
+  });
 }
 
 module.exports = {
@@ -1289,6 +1324,7 @@ module.exports = {
     isDisallowedGoalVarDecision,
     parseBsdIncidents,
     buildBsdTeamLineups,
+    bsdPlayerEntry,
     extractBsdSubstitutions,
     isPlaceholderTeam,
     bsdMinute,
@@ -1312,6 +1348,7 @@ module.exports = {
     currentSeasonByLeagueFromDocs,
     currentSeasonContextByLeagueFromDocs,
     enrichBsdLineupPhotos,
+    enrichBsdLineupPlayerIdentity,
     bsdPredictionFixtureToCanonical,
     bsdPredictionsPayloadToLeague,
   },

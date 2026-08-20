@@ -28,6 +28,10 @@ final class LogoResolver {
     }
 
     private let fallbackName = "_noTeamLogo"
+    private static let bundledLogoOverrideKeys: Set<String> = [
+        normalizedKey("Sheffield Wednesday"),
+        normalizedKey("Sheff Wed")
+    ]
     private var normalizedLookup: [String: ImageSource] = [:]
     private var coreLookup: [String: [ImageSource]] = [:]
     private var originalLookup: [String: ImageSource] = [:]
@@ -45,6 +49,15 @@ final class LogoResolver {
     }
 
     func image(for teamName: String, alternateNames: [String] = []) -> UIImage? {
+        if prefersBundledLogo(for: teamName, alternateNames: alternateNames),
+           let image = bundledImage(
+               for: teamName,
+               alternateNames: alternateNames,
+               useFallback: false
+           ) {
+            return image
+        }
+
         if let badge = TeamBadgeCache.shared.image(
             forTeamName: teamName,
             alternateNames: alternateNames
@@ -52,7 +65,16 @@ final class LogoResolver {
             return badge
         }
 
-        let source = resolvePreferredSource(for: teamName, alternateNames: alternateNames) ?? fallbackSource
+        return bundledImage(for: teamName, alternateNames: alternateNames, useFallback: true)
+    }
+
+    private func bundledImage(
+        for teamName: String,
+        alternateNames: [String],
+        useFallback: Bool
+    ) -> UIImage? {
+        let resolvedSource = resolvePreferredSource(for: teamName, alternateNames: alternateNames)
+        let source = resolvedSource ?? (useFallback ? fallbackSource : nil)
         guard let source else { return nil }
 
         let cacheKey = source.identifier as NSString
@@ -67,15 +89,30 @@ final class LogoResolver {
         return image
     }
 
-    /// Resolves a logo, preferring a TSDB badge downloaded by TeamBadgeCache
-    /// when a teamId is provided, then falling back to the bundled lookup.
+    /// Resolves a logo, using an explicit bundled override when configured,
+    /// otherwise preferring a TSDB badge before the bundled lookup.
     func image(for teamName: String, teamId: String?, alternateNames: [String] = []) -> UIImage? {
+        if prefersBundledLogo(for: teamName, alternateNames: alternateNames),
+           let image = bundledImage(
+               for: teamName,
+               alternateNames: alternateNames,
+               useFallback: false
+           ) {
+            return image
+        }
+
         if let teamId {
             if let badge = TeamBadgeCache.shared.image(forTeamId: teamId) {
                 return badge
             }
         }
         return image(for: teamName, alternateNames: alternateNames)
+    }
+
+    private func prefersBundledLogo(for teamName: String, alternateNames: [String]) -> Bool {
+        Self.lookupCandidates(for: teamName, alternateNames: alternateNames).contains {
+            Self.bundledLogoOverrideKeys.contains(Self.normalizedKey($0))
+        }
     }
 
     func hasDedicatedLogo(for teamName: String, alternateNames: [String] = []) -> Bool {

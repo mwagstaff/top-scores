@@ -522,8 +522,10 @@ struct MatchesView: View {
             fixtureBrowsePageSourceMatchesByDate = [:]
             fixtureBrowsePageGroupedDays = [:]
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-            NSLog("[MatchesView] snapshot_change mode=%@ showAllMatches=%d epl_pref=%d effective_snapshot=%@",
+            #if DEBUG
+            diagnosticLog("[MatchesView] snapshot_change mode=%@ showAllMatches=%d epl_pref=%d effective_snapshot=%@",
                   mode.rawValue, showAllMatches, preferences.englishPremierLeagueTeamsOnly, debugSnapshotSummary(snapshot))
+            #endif
             matchesStore.configure(with: snapshot, mode: mode)
             if mode == .fixtures {
                 fixtureBrowser.configure(preferences: preferences.snapshot)
@@ -533,7 +535,9 @@ struct MatchesView: View {
         .onChange(of: preferences.showAllMatches) { _, newValue in
             guard isSelected else { return }
             let snapshot = newValue ? preferences.unfilteredSnapshot : preferences.snapshot
-            NSLog("[MatchesView] showAllMatches_change mode=%@ value=%d snapshot=%@", mode.rawValue, newValue, debugSnapshotSummary(snapshot))
+            #if DEBUG
+            diagnosticLog("[MatchesView] showAllMatches_change mode=%@ value=%d snapshot=%@", mode.rawValue, newValue, debugSnapshotSummary(snapshot))
+            #endif
             matchesStore.configure(with: snapshot, mode: mode)
             fixturesCoordinator.showToast(
                 newValue ? "Viewing all matches (unfiltered)" : "Viewing preferred matches only"
@@ -567,7 +571,7 @@ struct MatchesView: View {
                 screen: mode.rawValue,
                 apiBaseURL: preferences.apiBaseURL
             )
-            NSLog("[MatchesView] fixture_date_change date=%@", dateKey)
+            diagnosticLog("[MatchesView] fixture_date_change date=%@", dateKey)
         }
         .onChange(of: preferences.showPostponedGames) { _, _ in
             refreshVisibleGroupedDays(from: sourceGroupedDays, force: true)
@@ -2447,7 +2451,9 @@ private extension MatchesView {
             matchesStore.setFixtureBrowserLiveRefreshActive(true)
         }
         let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
-        NSLog("[MatchesView] %@ mode=%@ selected=%d snapshot=%@", logEvent, mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
+        #if DEBUG
+        diagnosticLog("[MatchesView] %@ mode=%@ selected=%d snapshot=%@", logEvent, mode.rawValue, isSelected, debugSnapshotSummary(snapshot))
+        #endif
         matchesStore.configure(with: snapshot, mode: mode)
         if mode == .fixtures {
             fixtureBrowser.configure(preferences: preferences.snapshot)
@@ -2485,7 +2491,7 @@ private extension MatchesView {
             do {
                 try await client.reportMissingTeamLogos(Array(missingTeamNames))
             } catch {
-                NSLog("Missing logo audit post failed error=%@", String(describing: error))
+                diagnosticLog("Missing logo audit post failed error=%@", String(describing: error))
             }
         }
     }

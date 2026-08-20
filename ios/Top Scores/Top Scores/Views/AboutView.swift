@@ -69,6 +69,12 @@ struct AboutView: View {
                         }
                     }
 
+                    Section("Privacy") {
+                        Link(destination: URL(string: "https://skynolimit.dev/privacy_policy")!) {
+                            Label("Privacy Policy", systemImage: "hand.raised")
+                        }
+                    }
+
                     Section("Data sources") {
                         Link(destination: URL(string: "https://www.bbc.co.uk/sport/football")!) {
                             Label("BBC Sport", systemImage: "tv")

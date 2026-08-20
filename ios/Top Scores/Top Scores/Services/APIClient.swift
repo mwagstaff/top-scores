@@ -1179,9 +1179,8 @@ struct APIClient {
         return decoded
     }
 
-    private static func log(_ level: String, _ message: String) {
-        let line = "[APIClient][\(level)] \(message)"
-        NSLog("%@", line)
+    private static func log(_ level: String, _ message: @autoclosure () -> String) {
+        diagnosticLog("[APIClient][\(level)] \(message())")
     }
 
     private static func isRetryable(error: Error) -> Bool {

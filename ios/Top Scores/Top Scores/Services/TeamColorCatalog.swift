@@ -230,8 +230,8 @@ final class TeamColorCatalog: ObservableObject {
         return directory.appendingPathComponent(Self.cacheFileName)
     }
 
-    private func log(_ message: String) {
-        NSLog("[TeamColorCatalog] %@", message)
+    private func log(_ message: @autoclosure () -> String) {
+        diagnosticLog("[TeamColorCatalog] \(message())")
     }
 
     private func accessibleForegroundHex(backgroundHex: String, preferredForegroundHex: String) -> String {

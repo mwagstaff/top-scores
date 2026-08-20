@@ -46,7 +46,7 @@ enum AppIconBadgeManager {
         do {
             try await UNUserNotificationCenter.current().setBadgeCount(count)
         } catch {
-            NSLog("[AppIconBadge] Failed to set badge count to %d: %@", count, error.localizedDescription)
+            diagnosticLog("[AppIconBadge] Failed to set badge count to %d: %@", count, error.localizedDescription)
         }
     }
 }

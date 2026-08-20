@@ -22,11 +22,8 @@ struct TablesView: View {
     // ~30s. The endpoint is cached server-side, so this stays cheap.
     private let liveRefreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
-    private static let apiBaseURLDefaultsKey = "preferences.apiBaseURL"
-
     init() {
-        let apiBaseURL = UserDefaults.standard.string(forKey: Self.apiBaseURLDefaultsKey)
-            ?? PreferencesStore.defaultApiBaseURL
+        let apiBaseURL = PreferencesStore.resolvedAPIBaseURL()
         let cachedResponse = LeagueTablesCache.load(for: apiBaseURL)?.response
         let initialLeagues = cachedResponse?.leagues ?? []
 

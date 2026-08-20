@@ -98,8 +98,6 @@ struct FantasyView: View {
     @State private var screenViewSentForActivation = false
     private let rivalsSectionScrollID = "fantasy-rivals-section"
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
-    private let sharedEntryPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
-    private let addSheetClipboardPollTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     var body: some View {
         lifecycleBoundView
     }
@@ -439,21 +437,11 @@ struct FantasyView: View {
                     trackedLeagues: trackedLeagues
                 )
             }
-            .onReceive(sharedEntryPollTimer) { _ in
-                guard isSelected, scenePhase == .active else { return }
-                guard let deadline = sharedEntryPollingDeadline else { return }
-                if Date() > deadline {
-                    sharedEntryPollingDeadline = nil
-                    return
-                }
-                consumeSharedFantasyEntryURLIfNeeded()
+            .task(id: sharedEntryPollingDeadline) {
+                await pollForSharedFantasyEntry()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
                 guard showAddRivalSheet else { return }
-                autoPopulateAddSheetIDFromClipboard(forceRead: false)
-            }
-            .onReceive(addSheetClipboardPollTimer) { _ in
-                guard showAddRivalSheet, scenePhase == .active else { return }
                 autoPopulateAddSheetIDFromClipboard(forceRead: false)
             }
     }
@@ -3052,7 +3040,7 @@ struct FantasyView: View {
             }
             PerformanceSignposter.fantasy.emitEvent("FantasyRefreshQueued")
             #if DEBUG
-            print(
+            diagnosticPrint(
                 "[FantasyUI] queue_refresh force=\(force) rivals=\(rivalManagersSnapshot.count) leagues=\(trackedLeaguesSnapshot.count)"
             )
             #endif
@@ -3061,7 +3049,7 @@ struct FantasyView: View {
 
         PerformanceSignposter.fantasy.emitEvent("FantasyRefreshTriggered")
         #if DEBUG
-        print(
+        diagnosticPrint(
             "[FantasyUI] trigger_refresh force=\(force) rivals=\(rivalManagersSnapshot.count) leagues=\(trackedLeaguesSnapshot.count)"
         )
         #endif
@@ -3569,13 +3557,13 @@ struct FantasyView: View {
 
             if let image {
                 #if DEBUG
-                print("[FantasyShare] rendered image size=\(Int(image.size.width))x\(Int(image.size.height)) scale=\(image.scale)")
+                diagnosticPrint("[FantasyShare] rendered image size=\(Int(image.size.width))x\(Int(image.size.height)) scale=\(image.scale)")
                 #endif
                 queuedShareItems = [FantasyImageShareItemSource(image: image)]
                 showReviewShareSheet = false
             } else {
                 #if DEBUG
-                print("[FantasyShare] render returned nil")
+                diagnosticPrint("[FantasyShare] render returned nil")
                 #endif
                 isLaunchingShareFlow = false
             }
@@ -3586,7 +3574,7 @@ struct FantasyView: View {
         guard activeSharePayload == nil else { return }
         #if DEBUG
         let typeDescriptions = items.map { String(describing: type(of: $0)) }.joined(separator: ",")
-        print("[FantasyShare] presenting share sheet items=\(items.count) types=[\(typeDescriptions)]")
+        diagnosticPrint("[FantasyShare] presenting share sheet items=\(items.count) types=[\(typeDescriptions)]")
         #endif
         activeSharePayload = FantasySharePayload(items: items)
         isLaunchingShareFlow = false
@@ -3889,6 +3877,25 @@ struct FantasyView: View {
 
     private func armSharedEntryPolling() {
         sharedEntryPollingDeadline = Date().addingTimeInterval(12)
+    }
+
+    @MainActor
+    private func pollForSharedFantasyEntry() async {
+        guard let deadline = sharedEntryPollingDeadline else { return }
+
+        while !Task.isCancelled, Date() <= deadline {
+            guard isSelected, scenePhase == .active else { return }
+            consumeSharedFantasyEntryURLIfNeeded()
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
+            }
+        }
+
+        if sharedEntryPollingDeadline == deadline {
+            sharedEntryPollingDeadline = nil
+        }
     }
 
     private func setShareImportStatus(_ message: String, isError: Bool) {

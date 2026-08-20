@@ -525,6 +525,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
 
 @MainActor
 final class PreferencesStore: ObservableObject {
+    private let userDefaults: UserDefaults
+
     nonisolated static let defaultSelectedLeagues = [
         "Premier League",
         "FA Cup",
@@ -561,6 +563,15 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let productionApiBaseURL = "https://api.skynolimit.dev/top-scores/api/v1"
     nonisolated static let developmentApiBaseURL = "http://Mikes-MacBook-Air.local:3011/api/v1"
     nonisolated static let defaultApiBaseURL = productionApiBaseURL
+
+    nonisolated static func resolvedAPIBaseURL(userDefaults: UserDefaults = .standard) -> String {
+        #if DEBUG
+        return userDefaults.string(forKey: Keys.apiBaseURL) ?? defaultApiBaseURL
+        #else
+        return productionApiBaseURL
+        #endif
+    }
+
     nonisolated static let defaultRefreshIntervalMinutes = 10
     nonisolated static let defaultSelectedChannels = ["Amazon (all)", "BBC (all)", "ITV (all)", "Sky (all)", "TNT (all)"]
     nonisolated static let defaultEnglishPremierLeagueTeamsOnly = true
@@ -752,6 +763,8 @@ final class PreferencesStore: ObservableObject {
     }
 
     init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+
         let leagues = userDefaults.stringArray(forKey: Keys.selectedLeagues) ?? Self.defaultSelectedLeagues
         let selectedFixtureViewOptionIDs = userDefaults.stringArray(forKey: Keys.selectedFixtureViewOptionIDs)
             ?? leagues.map(FixtureViewOptionID.legacyCompetition)
@@ -791,7 +804,12 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultHomeNationsFilterEnabled
         let majorTournamentsFilterEnabled = userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool
             ?? Self.defaultMajorTournamentsFilterEnabled
-        let apiBaseURL = userDefaults.string(forKey: Keys.apiBaseURL) ?? Self.defaultApiBaseURL
+        let apiBaseURL = Self.resolvedAPIBaseURL(userDefaults: userDefaults)
+        #if !DEBUG
+        if userDefaults.string(forKey: Keys.apiBaseURL) != apiBaseURL {
+            userDefaults.set(apiBaseURL, forKey: Keys.apiBaseURL)
+        }
+        #endif
         let refreshInterval = userDefaults.object(forKey: Keys.refreshIntervalMinutes) as? Int
             ?? Self.defaultRefreshIntervalMinutes
         let showAllMatches = userDefaults.object(forKey: Keys.showAllMatches) as? Bool
@@ -990,7 +1008,8 @@ final class PreferencesStore: ObservableObject {
         )
     }
 
-    func persist(userDefaults: UserDefaults = .standard) {
+    func persist(userDefaults: UserDefaults? = nil) {
+        let userDefaults = userDefaults ?? self.userDefaults
         userDefaults.set(selectedLeagues, forKey: Keys.selectedLeagues)
         userDefaults.set(selectedFixtureViewOptionIDs, forKey: Keys.selectedFixtureViewOptionIDs)
         userDefaults.set(favouriteFixtureViewOptionIDs, forKey: Keys.favouriteFixtureViewOptionIDs)
@@ -1085,7 +1104,7 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultHomeNationsFilterEnabled
         let majorTournamentsFilterEnabled = userDefaults.object(forKey: Keys.majorTournamentsFilterEnabled) as? Bool
             ?? Self.defaultMajorTournamentsFilterEnabled
-        let apiBaseURL = userDefaults.string(forKey: Keys.apiBaseURL) ?? Self.defaultApiBaseURL
+        let apiBaseURL = Self.resolvedAPIBaseURL(userDefaults: userDefaults)
         let refreshInterval = userDefaults.object(forKey: Keys.refreshIntervalMinutes) as? Int
             ?? Self.defaultRefreshIntervalMinutes
         let showAllMatches = userDefaults.object(forKey: Keys.showAllMatches) as? Bool

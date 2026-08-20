@@ -115,14 +115,14 @@ final class TeamBadgeCache {
     /// Call once at app startup (and optionally on background refresh). Fire-and-forget.
     func warmIfNeeded(apiBaseURL: String) {
         guard let base = URL(string: apiBaseURL) else {
-            print("[TeamBadgeCache] warmIfNeeded: invalid apiBaseURL=\(apiBaseURL)")
+            diagnosticPrint("[TeamBadgeCache] warmIfNeeded: invalid apiBaseURL=\(apiBaseURL)")
             return
         }
         lock.lock()
-        guard !isRefreshing else { lock.unlock(); print("[TeamBadgeCache] warmIfNeeded: already refreshing"); return }
+        guard !isRefreshing else { lock.unlock(); diagnosticPrint("[TeamBadgeCache] warmIfNeeded: already refreshing"); return }
         isRefreshing = true
         lock.unlock()
-        print("[TeamBadgeCache] warmIfNeeded: starting refresh apiBaseURL=\(base)")
+        diagnosticPrint("[TeamBadgeCache] warmIfNeeded: starting refresh apiBaseURL=\(base)")
 
         Task.detached(priority: .utility) {
             defer {
@@ -140,11 +140,11 @@ final class TeamBadgeCache {
         // 1. Check feature flag.
         let configURL = apiBaseURL.appendingPathComponent("teams/config")
         guard let config = try? await fetchJSON(ConfigPayload.self, from: configURL) else {
-            print("[TeamBadgeCache] refresh: failed to fetch config url=\(configURL)")
+            diagnosticPrint("[TeamBadgeCache] refresh: failed to fetch config url=\(configURL)")
             return
         }
         guard config.team_logo_source == "tsdb" else {
-            print("[TeamBadgeCache] refresh: team_logo_source=\(config.team_logo_source ?? "nil") - skipping")
+            diagnosticPrint("[TeamBadgeCache] refresh: team_logo_source=\(config.team_logo_source ?? "nil") - skipping")
             return
         }
 
@@ -156,23 +156,23 @@ final class TeamBadgeCache {
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               let http = response as? HTTPURLResponse else {
-            print("[TeamBadgeCache] refresh: failed to fetch badges url=\(badgesURL)")
+            diagnosticPrint("[TeamBadgeCache] refresh: failed to fetch badges url=\(badgesURL)")
             return
         }
 
-        if http.statusCode == 304 { print("[TeamBadgeCache] refresh: badges 304 not modified"); return }
+        if http.statusCode == 304 { diagnosticPrint("[TeamBadgeCache] refresh: badges 304 not modified"); return }
         guard http.statusCode == 200 else {
-            print("[TeamBadgeCache] refresh: badges status=\(http.statusCode)")
+            diagnosticPrint("[TeamBadgeCache] refresh: badges status=\(http.statusCode)")
             return
         }
 
         if let newETag = http.value(forHTTPHeaderField: "ETag") { eTag = newETag }
 
         guard let payload = try? JSONDecoder().decode(BadgesPayload.self, from: data) else {
-            print("[TeamBadgeCache] refresh: failed to decode badges payload bytes=\(data.count)")
+            diagnosticPrint("[TeamBadgeCache] refresh: failed to decode badges payload bytes=\(data.count)")
             return
         }
-        print("[TeamBadgeCache] refresh: fetched manifest teams=\(payload.teams.count)")
+        diagnosticPrint("[TeamBadgeCache] refresh: fetched manifest teams=\(payload.teams.count)")
 
         // 2b. Capture brand colours (TSDB strColour1) keyed by team id.
         var colors: [String: String] = [:]
@@ -193,23 +193,26 @@ final class TeamBadgeCache {
         }
 
         // 4. Download each badge, skipping ones we already have at that URL.
-        await withTaskGroup(of: Void.self) { group in
-            for (teamId, entry) in payload.teams {
-                guard !entry.badge_url.isEmpty else { continue }
-                let badgeUrlString = entry.badge_url
-                group.addTask {
-                    await self.downloadIfNeeded(
-                        teamId: teamId,
-                        teamName: entry.name,
-                        badgeUrlString: badgeUrlString
-                    )
+        let badgeEntries = Array(payload.teams.filter { !$0.value.badge_url.isEmpty })
+        let maximumConcurrentDownloads = 6
+        for batchStart in stride(from: 0, to: badgeEntries.count, by: maximumConcurrentDownloads) {
+            let batchEnd = min(batchStart + maximumConcurrentDownloads, badgeEntries.count)
+            await withTaskGroup(of: Void.self) { group in
+                for (teamId, entry) in badgeEntries[batchStart..<batchEnd] {
+                    group.addTask {
+                        await self.downloadIfNeeded(
+                            teamId: teamId,
+                            teamName: entry.name,
+                            badgeUrlString: entry.badge_url
+                        )
+                    }
                 }
             }
         }
 
         // 5. Persist teamId → filename manifest so next launch is instant.
         saveManifest()
-        print("[TeamBadgeCache] refresh: complete cachedURLs=\(self.cachedURLs.count)")
+        diagnosticPrint("[TeamBadgeCache] refresh: complete cachedURLs=\(self.cachedURLs.count)")
         NotificationCenter.default.post(name: TeamBadgeCache.badgesUpdatedNotification, object: nil)
     }
 
@@ -250,7 +253,7 @@ final class TeamBadgeCache {
         lock.lock()
         primaryColorByTeamId = colors
         lock.unlock()
-        print("[TeamBadgeCache] init: loaded \(colors.count) team colours")
+        diagnosticPrint("[TeamBadgeCache] init: loaded \(colors.count) team colours")
     }
 
     private func downloadIfNeeded(teamId: String, teamName: String, badgeUrlString: String) async {
@@ -307,17 +310,23 @@ final class TeamBadgeCache {
               let manifest = try? JSONDecoder().decode([String: String].self, from: data) else {
             return
         }
+        let existingFilenames = Set(
+            (try? FileManager.default.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: nil
+            ).map(\.lastPathComponent)) ?? []
+        )
         lock.lock()
         var loaded = 0
         for (teamId, filename) in manifest {
             let fileURL = dir.appendingPathComponent(filename)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
+            if existingFilenames.contains(filename) {
                 cachedURLs[teamId] = fileURL
                 loaded += 1
             }
         }
         lock.unlock()
-        print("[TeamBadgeCache] init: loaded \(loaded)/\(manifest.count) from manifest")
+        diagnosticPrint("[TeamBadgeCache] init: loaded \(loaded)/\(manifest.count) from manifest")
 
         let nameManifestURL = dir.appendingPathComponent("name-manifest.json")
         guard let nameData = try? Data(contentsOf: nameManifestURL),
@@ -328,7 +337,7 @@ final class TeamBadgeCache {
         lock.lock()
         for (normalizedName, filename) in nameManifest {
             let fileURL = dir.appendingPathComponent(filename)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
+            if existingFilenames.contains(filename) {
                 cachedURLsByTeamName[normalizedName] = fileURL
             }
         }
@@ -339,7 +348,7 @@ final class TeamBadgeCache {
     /// Call once at startup (and on background refresh). The manifest is already
     /// loaded from disk in init(), so this is purely a network warm-up.
     func restoreFromDisk(apiBaseURL: String) {
-        print("[TeamBadgeCache] restoreFromDisk: triggering network refresh cachedURLs=\(cachedURLs.count)")
+        diagnosticPrint("[TeamBadgeCache] restoreFromDisk: triggering network refresh cachedURLs=\(cachedURLs.count)")
         warmIfNeeded(apiBaseURL: apiBaseURL)
     }
 }

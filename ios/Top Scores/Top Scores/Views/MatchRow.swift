@@ -2023,11 +2023,22 @@ func fantasyTeamLookupKeys(_ value: String) -> Set<String> {
         return Set(cached.allObjects.compactMap { $0 as? String })
     }
 
-    let candidates = TeamIdentityStore.shared.names(for: value) + BundledTeamIdentityCatalog.shared.names(for: value)
-    let resolved = Set(candidates.compactMap { candidate in
+    let clubAdornments: Set<String> = ["afc", "cf", "fc"]
+    let candidates = [value] + TeamIdentityStore.shared.names(for: value) + BundledTeamIdentityCatalog.shared.names(for: value)
+    let resolved = candidates.reduce(into: Set<String>()) { keys, candidate in
         let normalized = normalizeFantasyLookupName(candidate)
-        return normalized.isEmpty ? nil : normalized
-    })
+        guard !normalized.isEmpty else { return }
+        keys.insert(normalized)
+
+        var components = normalized.split(separator: " ").map(String.init)
+        while components.count > 1, let first = components.first, clubAdornments.contains(first) {
+            components.removeFirst()
+        }
+        while components.count > 1, let last = components.last, clubAdornments.contains(last) {
+            components.removeLast()
+        }
+        keys.insert(components.joined(separator: " "))
+    }
     FantasyTeamLookupKeyCache.cache.setObject(resolved as NSSet, forKey: cacheKey)
     return resolved
 }

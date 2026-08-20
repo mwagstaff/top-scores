@@ -429,7 +429,7 @@ actor LeagueTablesCatalog {
         LeagueTablesCache.save(response: response, fetchedAt: fetchedAt, apiBaseURL: apiBaseURL)
     }
 
-    private func log(_ message: String) {
-        NSLog("[LeagueTablesCatalog] %@", message)
+    private func log(_ message: @autoclosure () -> String) {
+        diagnosticLog("[LeagueTablesCatalog] \(message())")
     }
 }

@@ -62,16 +62,16 @@ final class NotificationManager: NSObject, ObservableObject {
             await checkAuthorizationStatus()
 
             if granted {
-                NSLog("[NotificationManager] Notification permission granted")
+                diagnosticLog("[NotificationManager] Notification permission granted")
                 // Register for remote notifications on the main thread
                 await MainActor.run {
                     UIApplication.shared.registerForRemoteNotifications()
                 }
             } else {
-                NSLog("[NotificationManager] Notification permission denied")
+                diagnosticLog("[NotificationManager] Notification permission denied")
             }
         } catch {
-            NSLog("[NotificationManager] Error requesting authorization: %@", error.localizedDescription)
+            diagnosticLog("[NotificationManager] Error requesting authorization: %@", error.localizedDescription)
         }
     }
 
@@ -94,7 +94,7 @@ final class NotificationManager: NSObject, ObservableObject {
         apnsDeviceToken = token
         userDefaults.set(token, forKey: apnsTokenKey)
 
-        NSLog("[NotificationManager] APNS token updated and saved")
+        diagnosticLog("[NotificationManager] APNS token updated and saved")
 
         // Trigger preferences sync to send token to server
         let snapshot = PreferencesStore.loadSnapshot()
@@ -111,12 +111,7 @@ final class NotificationManager: NSObject, ObservableObject {
         #if DEBUG
         return true
         #else
-        // Check if the app is running with a development provisioning profile
-        // Development builds will have an embedded.mobileprovision file
-        guard let provisioningPath = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") else {
-            return false
-        }
-        return FileManager.default.fileExists(atPath: provisioningPath)
+        return false
         #endif
     }
 

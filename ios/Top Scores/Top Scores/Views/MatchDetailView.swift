@@ -462,7 +462,7 @@ struct MatchDetailView: View {
         let cached = detailsID.flatMap { Self.loadCachedDetails(for: $0) }
         if let detailsID, let cached {
             detailedMatch = baseMatch.withDetails(cached)
-            NSLog(
+            diagnosticLog(
                 "[MatchDetail][INFO] details_load_start id=%@ cached=true goals=%ld assists=%ld red_cards=%ld",
                 detailsID,
                 cached.homeGoalScorers.count + cached.awayGoalScorers.count,
@@ -470,7 +470,7 @@ struct MatchDetailView: View {
                 cached.homeRedCards.count + cached.awayRedCards.count
             )
         } else if let detailsID {
-            NSLog("[MatchDetail][INFO] details_load_start id=%@ cached=false", detailsID)
+            diagnosticLog("[MatchDetail][INFO] details_load_start id=%@ cached=false", detailsID)
         }
 
         guard let baseURL = URL(string: preferences.apiBaseURL) else {
@@ -559,7 +559,7 @@ struct MatchDetailView: View {
             return resolved
         } catch {
             if Self.isCancellationError(error) { return nil }
-            NSLog("Match snapshot refresh failed date=%@ error=%@", referenceMatch.date, String(describing: error))
+            diagnosticLog("Match snapshot refresh failed date=%@ error=%@", referenceMatch.date, String(describing: error))
             return nil
         }
     }
@@ -605,7 +605,7 @@ struct MatchDetailView: View {
                 }
             }
             let durationMs = Int(Date().timeIntervalSince(fetchStartedAt) * 1000)
-            NSLog(
+            diagnosticLog(
                 "[MatchDetail][INFO] key_events_loaded id=%@ duration_ms=%ld goals=%ld assists=%ld red_cards=%ld status=%@",
                 detailsID,
                 durationMs,
@@ -626,7 +626,7 @@ struct MatchDetailView: View {
         } catch {
             if Self.isCancellationError(error) { return false }
             let durationMs = Int(Date().timeIntervalSince(fetchStartedAt) * 1000)
-            NSLog(
+            diagnosticLog(
                 "[MatchDetail][WARN] key_events_load_failed id=%@ duration_ms=%ld error=%@",
                 detailsID, durationMs, String(describing: error)
             )
@@ -659,7 +659,7 @@ struct MatchDetailView: View {
             }
         } catch {
             if Self.isCancellationError(error) { return }
-            NSLog("[MatchDetail][WARN] social_load_failed id=%@ error=%@", detailsID, String(describing: error))
+            diagnosticLog("[MatchDetail][WARN] social_load_failed id=%@ error=%@", detailsID, String(describing: error))
             await MainActor.run {
                 socialItems = []
             }
@@ -708,7 +708,7 @@ struct MatchDetailView: View {
             do {
                 try await client.reportMissingTeamLogos(missingTeamNames)
             } catch {
-                NSLog("Missing logo audit post failed error=%@", String(describing: error))
+                diagnosticLog("Missing logo audit post failed error=%@", String(describing: error))
             }
         }
     }
@@ -722,7 +722,7 @@ struct MatchDetailView: View {
             let encoded = try JSONEncoder().encode(details)
             UserDefaults.standard.set(encoded, forKey: detailsCacheKey(for: detailsID))
         } catch {
-            NSLog("Failed to cache match details id=%@ error=%@", detailsID, String(describing: error))
+            diagnosticLog("Failed to cache match details id=%@ error=%@", detailsID, String(describing: error))
         }
     }
 
@@ -740,14 +740,14 @@ struct MatchDetailView: View {
                 isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                 if let timestamp = isoFormatter.date(from: updatedAt) {
                     let age = Date().timeIntervalSince(timestamp)
-                    NSLog("Cached match details id=%@ age=%.1fs goals=%ld", detailsID, age,
+                    diagnosticLog("Cached match details id=%@ age=%.1fs goals=%ld", detailsID, age,
                           cached.homeGoalScorers.count + cached.awayGoalScorers.count)
                 }
             }
 
             return cached
         } catch {
-            NSLog("Failed to decode cached match details id=%@ error=%@", detailsID, String(describing: error))
+            diagnosticLog("Failed to decode cached match details id=%@ error=%@", detailsID, String(describing: error))
             return nil
         }
     }
@@ -3072,7 +3072,17 @@ private struct MatchLineupPlayerPortraitView: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color.black.opacity(0.28))
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            borderColor.opacity(0.28),
+                            Color.black.opacity(0.34)
+                        ],
+                        center: .top,
+                        startRadius: 1,
+                        endRadius: diameter * 0.72
+                    )
+                )
 
             if !portraitURLCandidates.isEmpty {
                 MatchLineupRemotePortrait(urls: portraitURLCandidates, fallback: initialsView)
@@ -3101,28 +3111,14 @@ private struct MatchLineupRemotePortrait<Fallback: View>: View {
     let urls: [URL]
     let fallback: Fallback
 
-    @State private var imageIndex = 0
-
     var body: some View {
-        if let url = urls[safe: imageIndex] {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case let .success(image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .scaleEffect(1.42)
-                        .offset(y: 7)
-                case .failure:
-                    fallback
-                        .task(id: url) {
-                            imageIndex += 1
-                        }
-                default:
-                    fallback
-                }
-            }
-        } else {
+        RemotePlayerPortraitImage(urls: urls) { image in
+            image
+                .resizable()
+                .scaledToFill()
+                .scaleEffect(1.42)
+                .offset(y: 7)
+        } placeholder: {
             fallback
         }
     }
@@ -3298,6 +3294,7 @@ private struct MatchLineupSubstituteRow: Identifiable {
 
 private struct PlayerDetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let player: MatchLineupPlayer
     let apiBaseURL: String
@@ -3305,28 +3302,27 @@ private struct PlayerDetailsSheet: View {
     @State private var details: PlayerDetails?
     @State private var errorMessage: String?
     @State private var isLoadingDetails = false
+    @State private var heroIsPresented = false
 
-    private var imageURL: URL? {
+    private var imageURLs: [URL] {
         let candidates: [String?] = [
-            details?.renderURL,
+            player.cutoutURL,
             details?.cutoutURL,
-            details?.thumbURL,
-            player.cutoutURL
+            details?.renderURL,
+            details?.thumbURL
         ]
 
-        for candidate in candidates {
+        var seen = Set<URL>()
+        return candidates.compactMap { candidate in
             guard let value = candidate?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
                   !value.isEmpty,
                   let url = URL(string: value)
             else {
-                continue
+                return nil
             }
-
-            return url
+            return seen.insert(url).inserted ? url : nil
         }
-
-        return nil
     }
 
     var body: some View {
@@ -3389,65 +3385,199 @@ private struct PlayerDetailsSheet: View {
     }
 
     private var hero: some View {
-        ZStack(alignment: .bottom) {
+        GeometryReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                heroBackdrop
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+
+                heroCopy
+                    .frame(width: proxy.size.width * 0.44, alignment: .leading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .padding(.leading, 20)
+                    .padding(.bottom, 20)
+
+                heroPortrait
+                    .frame(width: proxy.size.width * 0.58, height: proxy.size.height, alignment: .bottomTrailing)
+                    .padding(.trailing, 2)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomTrailing)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.19),
+                                Color.blue.opacity(0.10),
+                                Color.black.opacity(0.22)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            }
+            .overlay(alignment: .top) {
+                Capsule()
+                    .fill(Color.white.opacity(0.10))
+                    .frame(height: 1)
+                    .padding(.horizontal, 28)
+                    .blur(radius: 0.4)
+            }
+            .shadow(color: .black.opacity(0.28), radius: 14, y: 8)
+        }
+        .frame(height: 264)
+        .onAppear {
+            guard !heroIsPresented else { return }
+            if reduceMotion {
+                heroIsPresented = true
+            } else {
+                withAnimation(.easeOut(duration: 0.35)) {
+                    heroIsPresented = true
+                }
+            }
+        }
+    }
+
+    private var heroBackdrop: some View {
+        ZStack {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.05, green: 0.21, blue: 0.36),
-                            Color(red: 0.02, green: 0.10, blue: 0.18)
+                            Color(red: 0.055, green: 0.22, blue: 0.37),
+                            Color(red: 0.025, green: 0.115, blue: 0.20),
+                            Color(red: 0.012, green: 0.065, blue: 0.12)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
 
-            HStack(alignment: .bottom, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(details?.position ?? player.position ?? "Position")
-                        .font(.caption.weight(.black))
-                        .textCase(.uppercase)
-                        .foregroundStyle(Color.blue)
+            Ellipse()
+                .fill(Color.blue.opacity(0.045))
+                .frame(width: 330, height: 420)
+                .rotationEffect(.degrees(24))
+                .offset(x: -145, y: 110)
 
-                    Text(details?.name ?? player.name)
-                        .font(.system(size: 38, weight: .black, design: .rounded))
-                        .foregroundStyle(.white)
-                        .lineLimit(3)
+            Circle()
+                .trim(from: 0.06, to: 0.62)
+                .stroke(Color.white.opacity(0.045), lineWidth: 1)
+                .frame(width: 310, height: 310)
+                .rotationEffect(.degrees(-22))
+                .offset(x: 108, y: -112)
+
+            Circle()
+                .stroke(Color.blue.opacity(0.055), lineWidth: 16)
+                .frame(width: 235, height: 235)
+                .blur(radius: 13)
+                .offset(x: 108, y: -88)
+
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.055),
+                    Color.clear,
+                    Color.black.opacity(0.10)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+    }
+
+    private var heroCopy: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(details?.position ?? player.position ?? "Position")
+                .font(.system(size: 11, weight: .black, design: .rounded))
+                .tracking(1.0)
+                .textCase(.uppercase)
+                .foregroundStyle(Color(red: 0.23, green: 0.58, blue: 1.0))
+                .padding(.bottom, 12)
+
+            Text(details?.name ?? player.name)
+                .font(.system(size: 38, weight: .black, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.98))
+                .lineLimit(3)
+                .minimumScaleFactor(0.68)
+                .padding(.bottom, 14)
+
+            if let team = details?.team, !team.isEmpty {
+                HStack(spacing: 8) {
+                    if let logo = LogoResolver.shared.image(for: team) {
+                        Image(uiImage: logo)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 24, height: 24)
+                            .saturation(0.76)
+                            .shadow(color: .black.opacity(0.28), radius: 3, y: 2)
+                    }
+
+                    Text(team)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.white.opacity(0.78))
+                        .lineLimit(1)
                         .minimumScaleFactor(0.72)
-
-                    if let team = details?.team, !team.isEmpty {
-                        Text(team)
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.82))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                if let imageURL {
-                    AsyncImage(url: imageURL) { phase in
-                        switch phase {
-                        case let .success(image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        default:
-                            MatchLineupPlayerPortraitView(player: player)
-                        }
-                    }
-                    .frame(width: 150, height: 190, alignment: .bottom)
-                } else {
-                    MatchLineupPlayerPortraitView(player: player)
-                        .frame(width: 150, height: 190, alignment: .bottom)
                 }
             }
-            .padding(18)
         }
-        .frame(minHeight: 230)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+    }
+
+    private var heroPortrait: some View {
+        ZStack(alignment: .bottom) {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.blue.opacity(0.24),
+                            Color(red: 0.01, green: 0.08, blue: 0.15).opacity(0.32)
+                        ],
+                        center: .center,
+                        startRadius: 8,
+                        endRadius: 98
+                    )
+                )
+                .frame(width: 196, height: 196)
+                .overlay {
+                    Circle()
+                        .stroke(Color.blue.opacity(0.48), lineWidth: 1.25)
+                }
+                .shadow(color: Color.blue.opacity(0.14), radius: 15)
+                .opacity(heroIsPresented ? 1 : 0)
+
+            if !imageURLs.isEmpty {
+                RemotePlayerPortraitImage(urls: imageURLs) { image in
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .scaleEffect(1.12, anchor: .bottom)
+                        .offset(y: 15)
+                        .compositingGroup()
+                        .shadow(color: Color.blue.opacity(0.26), radius: 3)
+                        .shadow(color: .black.opacity(0.44), radius: 10, y: 6)
+                } placeholder: {
+                    heroPortraitPlaceholder
+                }
+                .frame(width: 176, height: 228, alignment: .bottom)
+            } else {
+                heroPortraitPlaceholder
+            }
         }
+        .frame(width: 218, height: 250, alignment: .bottom)
+        .scaleEffect(heroIsPresented ? 1 : 0.96, anchor: .bottomTrailing)
+        .opacity(heroIsPresented ? 1 : 0)
+        .offset(x: 10, y: 13)
+    }
+
+    private var heroPortraitPlaceholder: some View {
+        MatchLineupPlayerPortraitView(
+            player: player,
+            diameter: 112,
+            borderColor: Color.blue.opacity(0.70),
+            borderLineWidth: 1.5,
+            glowColor: Color.blue.opacity(0.30),
+            glowRadius: 8
+        )
     }
 
     private func factStrip(_ details: PlayerDetails) -> some View {

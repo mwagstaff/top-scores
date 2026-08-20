@@ -322,8 +322,8 @@ actor TeamRankingSettingsCatalog {
         return directory.appendingPathComponent(Self.cacheFileName)
     }
 
-    private func log(_ message: String) {
-        NSLog("[TeamRankingSettingsCatalog] %@", message)
+    private func log(_ message: @autoclosure () -> String) {
+        diagnosticLog("[TeamRankingSettingsCatalog] \(message())")
     }
 }
 
@@ -496,8 +496,8 @@ actor TeamRankingsCatalog {
         return directory.appendingPathComponent(Self.cacheFileName)
     }
 
-    private func log(_ message: String) {
-        NSLog("[TeamRankingsCatalog] %@", message)
+    private func log(_ message: @autoclosure () -> String) {
+        diagnosticLog("[TeamRankingsCatalog] \(message())")
     }
 }
 
@@ -677,7 +677,7 @@ actor FantasyTeamShortNameMappingsCatalog {
         return directory.appendingPathComponent(Self.cacheFileName)
     }
 
-    private func log(_ message: String) {
-        NSLog("[FantasyTeamShortNameMappingsCatalog] %@", message)
+    private func log(_ message: @autoclosure () -> String) {
+        diagnosticLog("[FantasyTeamShortNameMappingsCatalog] \(message())")
     }
 }

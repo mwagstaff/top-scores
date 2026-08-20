@@ -10,6 +10,7 @@
 		55613BCE4BFFFD69F0CFBC64 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C50E718921438BE91AE856D /* ShareViewController.swift */; };
 		B9707E5236C03403E67799BC /* Top Scores Share Extension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 8C13B8A3E56DC06B5DF70FDB /* Top Scores Share Extension.appex */; };
 		C3D4A0D1234567890ABCDEF1 /* top-scores-logo.png in Resources */ = {isa = PBXBuildFile; fileRef = C3D4A0D1234567890ABCDEF2 /* top-scores-logo.png */; };
+		D39D3CF8AFCE4F9EA66E2351 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A4A14B7A33AE43A6A814ECF8 /* PrivacyInfo.xcprivacy */; };
 		E70D65572F3E413E00E38737 /* Top Scores Watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = E70D65372F3E413C00E38737 /* Top Scores Watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E77994E52F4F8AF90063BB9C /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E77994E42F4F8AF90063BB9C /* Media.xcassets */; };
 		E77994E62F4F8AF90063BB9C /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E77994E42F4F8AF90063BB9C /* Media.xcassets */; };
@@ -100,6 +101,7 @@
 		8C13B8A3E56DC06B5DF70FDB /* Top Scores Share Extension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Top Scores Share Extension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9C50E718921438BE91AE856D /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		A00C896AE1EA717292BD7AFD /* Top Scores Share Extension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = "Top Scores Share Extension.entitlements"; sourceTree = "<group>"; };
+		A4A14B7A33AE43A6A814ECF8 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		C3D4A0D1234567890ABCDEF2 /* top-scores-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "top-scores-logo.png"; sourceTree = "<group>"; };
 		E70D51D52F3C957B00E38737 /* Top Scores.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Top Scores.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E70D51E22F3C957D00E38737 /* Top ScoresTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Top ScoresTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -214,6 +216,7 @@
 			children = (
 				9C50E718921438BE91AE856D /* ShareViewController.swift */,
 				A00C896AE1EA717292BD7AFD /* Top Scores Share Extension.entitlements */,
+				A4A14B7A33AE43A6A814ECF8 /* PrivacyInfo.xcprivacy */,
 				C3D4A0D1234567890ABCDEF2 /* top-scores-logo.png */,
 			);
 			path = "Top Scores Share Extension";
@@ -489,6 +492,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C3D4A0D1234567890ABCDEF1 /* top-scores-logo.png in Resources */,
+				D39D3CF8AFCE4F9EA66E2351 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

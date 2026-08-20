@@ -164,12 +164,19 @@ nonisolated enum FixtureBrowseSelectionResolver {
         showAllMatches: Bool = false,
         includePostponed: Bool
     ) -> [Match] {
+        let displayableMatches: [Match]
+        #if DEBUG
+        displayableMatches = matches
+        #else
+        displayableMatches = matches.filter { $0.isTestMatch != true }
+        #endif
+
         let competitionFiltered: [Match]
         if showAllMatches {
-            competitionFiltered = matches
+            competitionFiltered = displayableMatches
         } else if !fixtureViewOptionIDs.isEmpty {
             let lookup = competitionLookup(competitions)
-            competitionFiltered = matches.filter { match in
+            competitionFiltered = displayableMatches.filter { match in
                 matchesFixtureViewOption(
                     match,
                     optionIDs: fixtureViewOptionIDs,
@@ -177,10 +184,10 @@ nonisolated enum FixtureBrowseSelectionResolver {
                 )
             }
         } else if topMatchesOnly {
-            competitionFiltered = matches
+            competitionFiltered = displayableMatches
         } else {
             let lookup = competitionLookup(competitions)
-            competitionFiltered = matches.filter { match in
+            competitionFiltered = displayableMatches.filter { match in
                 guard let competitionID = lookup[normalizedKey(match.league)] else { return false }
                 return selectedCompetitionIDs.contains(competitionID)
             }
@@ -712,7 +719,7 @@ final class FixtureBrowserStore: ObservableObject {
             while !Task.isCancelled {
                 guard let self, self.isAutoRefreshEnabled else { return }
                 if self.selectedDateTask != nil || self.visibleMatches.isEmpty {
-                    try? await Task.sleep(for: .milliseconds(250))
+                    try? await Task.sleep(for: .seconds(1))
                     continue
                 }
 
@@ -795,7 +802,7 @@ final class FixtureBrowserStore: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
-            NSLog("[FixtureBrowserStore] live state refresh failed: %@", String(describing: error))
+            diagnosticLog("[FixtureBrowserStore] live state refresh failed: %@", String(describing: error))
         }
     }
 

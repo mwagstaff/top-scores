@@ -825,12 +825,14 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         let nextAggregateHome = aggregateHome ?? adjustedAggregate(
             base: resolvedAggregateHomeScore,
             previousScore: homeScore,
-            nextScore: home
+            nextScore: home,
+            hasFirstLegBaseline: firstLegHomeScore != nil
         )
         let nextAggregateAway = aggregateAway ?? adjustedAggregate(
             base: resolvedAggregateAwayScore,
             previousScore: awayScore,
-            nextScore: away
+            nextScore: away,
+            hasFirstLegBaseline: firstLegAwayScore != nil
         )
 
         return Match(
@@ -1301,9 +1303,17 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     private nonisolated static let dateOnlyPattern = try! NSRegularExpression(pattern: #"^\d{4}-\d{2}-\d{2}$"#)
     private nonisolated static let timeOnlyPattern = try! NSRegularExpression(pattern: #"^\d{2}:\d{2}$"#)
 
-    private func adjustedAggregate(base: Int?, previousScore: Int?, nextScore: Int) -> Int? {
+    private func adjustedAggregate(
+        base: Int?,
+        previousScore: Int?,
+        nextScore: Int,
+        hasFirstLegBaseline: Bool
+    ) -> Int? {
         guard let base else { return nil }
-        return base + (nextScore - (previousScore ?? 0))
+        guard let previousScore else {
+            return hasFirstLegBaseline ? base + nextScore : base
+        }
+        return base + (nextScore - previousScore)
     }
 
     private nonisolated var resolvedAggregateScore: (home: Int, away: Int)? {
@@ -1556,6 +1566,13 @@ enum MatchStatusFormatter {
             return incomingStatus
         }
 
+        if incomingStatus == "HT", isFirstHalfMinuteStatus(currentStatus) {
+            return incomingStatus
+        }
+        if currentStatus == "HT", isFirstHalfMinuteStatus(incomingStatus) {
+            return currentStatus
+        }
+
         let currentMinute = parseMatchTimeMinutes(currentStatus)
         let incomingMinute = parseMatchTimeMinutes(incomingStatus)
         if let currentMinute, let incomingMinute {
@@ -1566,9 +1583,6 @@ enum MatchStatusFormatter {
                 if currentStatus == "LIVE" {
                     return incomingStatus
                 }
-                if currentStatus == "HT", isFirstHalfMinuteStatus(incomingStatus) {
-                    return currentStatus
-                }
                 if currentStatus == "ET", incomingMinute <= 90 {
                     return currentStatus
                 }
@@ -1576,9 +1590,6 @@ enum MatchStatusFormatter {
             }
 
             if incomingStatus == "LIVE" {
-                return currentStatus
-            }
-            if incomingStatus == "HT", !isFirstHalfMinuteStatus(currentStatus) {
                 return currentStatus
             }
             if incomingStatus == "ET" || isPenaltyShootoutStatus(incomingStatus) {
@@ -1653,9 +1664,11 @@ enum MatchStatusFormatter {
     }
 
     private nonisolated static func isFirstHalfMinuteStatus(_ status: String) -> Bool {
-        guard let minute = parseMatchTimeMinutes(status) else { return false }
         let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isMinuteStatus(trimmed) else { return false }
+        let baseMinute = trimmed.split(separator: "+", maxSplits: 1)[0]
+            .trimmingCharacters(in: CharacterSet(charactersIn: "'"))
+        guard let minute = Int(baseMinute) else { return false }
         return minute <= 45
     }
 

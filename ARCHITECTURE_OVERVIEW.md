@@ -273,3 +273,14 @@ What the status UI shows:
 Important scope note:
 
 - The fantasy/FPL caches are shown in admin status, but they are not part of the Redis operational reconciliation loop.
+
+## Player Portrait Source
+
+Player portraits use the existing canonical `cutout_url` response field, with the provider selected by `PLAYER_IMAGE_SOURCE`:
+
+- `bsd` (default) emits the public, long-cache BSD URL `https://sports.bzzoiro.com/img/player/{bsd_player_id}/`.
+- `tsdb` preserves the previous TheSportsDB portrait path as a rollback option.
+
+BSD match projections retain `bsd_player_id` for portrait construction while `id_player` remains the mapped TSDB identifier used by the existing player-biography endpoint. When no confident mapping exists, the BSD portrait is still returned but `id_player` is null so clients cannot query TSDB with a BSD identifier.
+
+The web and iOS portrait loaders treat decoded 1×1 responses as missing images and fall back to player initials. This is required because the BSD image proxy can return a successful 1×1 missing-image response rather than an HTTP error.

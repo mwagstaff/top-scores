@@ -234,8 +234,8 @@ struct TeamDetailsTests {
 
         let form = TeamDetailsFormResolver.recentForm(
             teamName: "West Ham United",
-            leagueID: "4329",
-            leagueName: "Championship",
+            leagueID: "4328",
+            leagueName: "Premier League",
             matches: [cupWin, burnleyDraw],
             now: makeDate(year: 2026, month: 8, day: 17)
         )

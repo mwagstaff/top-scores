@@ -281,10 +281,12 @@ struct Top_ScoresTests {
         #expect(snapshot.effectiveMajorTournamentsFilterEnabled)
     }
 
-    @Test func matchesPageQueryItems_includeCategoryParamsWhenMasterFilterIsOff() async throws {
+    @Test func matchesPageQueryItems_useSelectedViewOptionsWhenMasterFilterIsOff() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: PreferencesStore.defaultSelectedLeagues,
+            selectedFixtureViewOptionIDs: [FixtureViewOptionID.competition("premier-league")],
             selectedChannels: PreferencesStore.defaultSelectedChannels,
+            fixtureAllMajorMatchesEnabled: false,
             competitionFilterEnabled: false,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: true,
@@ -306,12 +308,16 @@ struct Top_ScoresTests {
         )
 
         let names = Set(queryItems.map(\.name))
+        #expect(queryItems.contains(URLQueryItem(
+            name: "view_option",
+            value: FixtureViewOptionID.competition("premier-league")
+        )))
         #expect(!names.contains("league"))
         #expect(names.contains("time_zone"))
-        #expect(names.contains("epl_only"))
-        #expect(names.contains("major_uefa"))
-        #expect(names.contains("home_nations"))
-        #expect(names.contains("major_tournaments"))
+        #expect(!names.contains("epl_only"))
+        #expect(!names.contains("major_uefa"))
+        #expect(!names.contains("home_nations"))
+        #expect(!names.contains("major_tournaments"))
     }
 
     @MainActor
@@ -347,6 +353,24 @@ struct Top_ScoresTests {
 
         #expect(details.name == "Nicolas Pépé")
         #expect(recorder.recordedTimeouts == [5, 5])
+    }
+
+    @Test func playerPortraitPixelSize_rejectsBSDMissingImagePlaceholder() {
+        #expect(!playerPortraitPixelSizeIsRenderable(width: 1, height: 1))
+        #expect(!playerPortraitPixelSizeIsRenderable(width: 150, height: 1))
+        #expect(playerPortraitPixelSizeIsRenderable(width: 150, height: 150))
+    }
+
+    @Test func playerPortraitURLNeedsBackgroundRemoval_onlyTargetsBSDPortraits() throws {
+        #expect(playerPortraitURLNeedsBackgroundRemoval(
+            try #require(URL(string: "https://sports.bzzoiro.com/img/player/6525/"))
+        ))
+        #expect(!playerPortraitURLNeedsBackgroundRemoval(
+            try #require(URL(string: "https://sports.bzzoiro.com/img/team/208/"))
+        ))
+        #expect(!playerPortraitURLNeedsBackgroundRemoval(
+            try #require(URL(string: "https://www.thesportsdb.com/images/player.png"))
+        ))
     }
 
     @Test func matchesPageQueryItems_omitCategoryParamsWhenPremierLeagueTeamsOnlyIsOff() async throws {
@@ -385,10 +409,13 @@ struct Top_ScoresTests {
         #expect(!names.contains("major_tournaments"))
     }
 
-    @Test func matchesPageQueryItems_includeCompetitionCategoryParamsWhenMasterFilterIsOn() async throws {
+    @Test func matchesPageQueryItems_useFavouriteViewOptionsWhenMasterFilterIsOn() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: PreferencesStore.defaultSelectedLeagues,
+            selectedFixtureViewOptionIDs: [FixtureViewOptionID.competition("fa-cup")],
+            favouriteFixtureViewOptionIDs: [FixtureViewOptionID.competition("premier-league")],
             selectedChannels: PreferencesStore.defaultSelectedChannels,
+            fixtureAllMajorMatchesEnabled: true,
             competitionFilterEnabled: true,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: true,
@@ -410,15 +437,24 @@ struct Top_ScoresTests {
         )
 
         let names = Set(queryItems.map(\.name))
-        #expect(names.contains("epl_only"))
-        #expect(names.contains("major_uefa"))
-        #expect(names.contains("home_nations"))
-        #expect(names.contains("major_tournaments"))
+        #expect(queryItems.contains(URLQueryItem(
+            name: "view_option",
+            value: FixtureViewOptionID.competition("premier-league")
+        )))
+        #expect(!queryItems.contains(URLQueryItem(
+            name: "view_option",
+            value: FixtureViewOptionID.competition("fa-cup")
+        )))
+        #expect(!names.contains("epl_only"))
+        #expect(!names.contains("major_uefa"))
+        #expect(!names.contains("home_nations"))
+        #expect(!names.contains("major_tournaments"))
     }
 
     @Test func matchesPageQueryItems_useIndividualCompetitionSelectionWhenAllMajorMatchesIsOff() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: ["FA Cup"],
+            selectedFixtureViewOptionIDs: [FixtureViewOptionID.competition("fa-cup")],
             selectedChannels: [],
             fixtureAllMajorMatchesEnabled: false,
             englishPremierLeagueTeamsOnly: false,
@@ -432,7 +468,11 @@ struct Top_ScoresTests {
             dateRangeQueryItems: []
         )
 
-        #expect(queryItems.contains(URLQueryItem(name: "league", value: "FA Cup")))
+        #expect(queryItems.contains(URLQueryItem(
+            name: "view_option",
+            value: FixtureViewOptionID.competition("fa-cup")
+        )))
+        #expect(!queryItems.contains { $0.name == "league" })
         #expect(!queryItems.contains(URLQueryItem(name: "epl_only", value: "true")))
     }
 
@@ -505,7 +545,7 @@ struct Top_ScoresTests {
         #expect(!queryItems.contains { $0.name == "major_tournaments" })
     }
 
-    @Test func fixtureBrowserSelection_resolvesCompetitionAliases() {
+    @Test func fixtureBrowserSelection_mapsDefaultSelectionsPresentInCatalog() {
         let competitions = [
             CompetitionCatalogEntry(
                 id: "la-liga",
@@ -706,7 +746,7 @@ struct Top_ScoresTests {
             competitions: competitions
         )
 
-        #expect(favouriteIDs == ["premier-league", "uefa-champions-league"])
+        #expect(favouriteIDs == ["premier-league"])
     }
 
     @Test func fixtureBrowserSelection_resetsToImmediateUpcomingDateAfterAddingCompetition() {
@@ -1111,13 +1151,13 @@ struct Top_ScoresTests {
         #expect(AppIconBadgeManager.unfinishedFixtureCount(for: matches) == 2)
     }
 
-    @Test func fixturesFilter_keepsPreviousDayInProgressMatchesVisible() async throws {
+    @Test func fixturesFilter_excludesStalePreviousDayInProgressMatches() async throws {
         let today = formattedDate(offsetDays: 0)
         let yesterday = formattedDate(offsetDays: -1)
 
         let liveLateKickoff = makeMatch(
             date: yesterday,
-            time: "23:00",
+            time: "00:00",
             homeScore: 1,
             awayScore: 1,
             aggregateHomeScore: nil,
@@ -1148,7 +1188,7 @@ struct Top_ScoresTests {
             for: .fixtures
         )
 
-        #expect(fixtures.contains(liveLateKickoff))
+        #expect(!fixtures.contains(liveLateKickoff))
         #expect(!fixtures.contains(finishedYesterday))
         #expect(fixtures.contains(upcomingToday))
     }
@@ -1337,7 +1377,7 @@ struct Top_ScoresTests {
         )
     }
 
-    @Test func filterMatches_fixturesRequireBbcMatchEntry() async throws {
+    @Test func filterMatches_fixturesAllowCanonicalNonBbcSources() async throws {
         let fixtures = [
             makeMatch(
                 date: formattedDate(offsetDays: 0),
@@ -1363,8 +1403,9 @@ struct Top_ScoresTests {
 
         let filtered = MatchesStore.filterMatches(fixtures, for: .fixtures)
 
-        #expect(filtered.count == 1)
-        #expect(filtered.first?.hasBbcMatchEntry == true)
+        #expect(filtered.count == 2)
+        #expect(filtered.contains { !$0.hasBbcMatchEntry })
+        #expect(filtered.contains { $0.hasBbcMatchEntry })
     }
 
     @Test func filterMatches_resultsDoNotRequireBbcMatchEntry() async throws {
@@ -1385,7 +1426,7 @@ struct Top_ScoresTests {
         #expect(filtered.count == 1)
     }
 
-    @Test func applyPreferenceFilters_fixtures_appliesPremierLeagueTeamsOnlyLocally() async throws {
+    @Test func applyPreferenceFilters_fixtures_doesNotReapplyServerCompetitionSelectionLocally() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: [],
             selectedChannels: [],
@@ -1404,7 +1445,7 @@ struct Top_ScoresTests {
                 homeTeam: "Arsenal",
                 awayTeam: "Real Madrid",
                 league: "UEFA Champions League",
-                matchDetailsID: "prem-team",
+                matchDetailsID: "premteam",
                 hasBbcSource: true,
                 tvChannels: []
             ),
@@ -1414,7 +1455,7 @@ struct Top_ScoresTests {
                 homeTeam: "Real Madrid",
                 awayTeam: "Barcelona",
                 league: "La Liga",
-                matchDetailsID: "non-prem-team",
+                matchDetailsID: "nonpremteam",
                 hasBbcSource: true,
                 tvChannels: []
             )
@@ -1426,10 +1467,10 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["prem-team"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["premteam", "nonpremteam"])
     }
 
-    @Test func applyPreferenceFilters_fixtures_keepsStagedMajorUefaClubMatchesVisible() async throws {
+    @Test func applyPreferenceFilters_fixtures_doesNotReapplyServerCategorySelectionLocally() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: [],
             selectedChannels: [],
@@ -1450,7 +1491,7 @@ struct Top_ScoresTests {
                 awayTeam: "Sporting CP",
                 league: "UEFA Champions League Quarter-Final 2nd Leg",
                 leagueSubcategory: "Quarter-finals",
-                matchDetailsID: "arsenal-ucl",
+                matchDetailsID: "arsenalucl",
                 hasBbcSource: true,
                 tvChannels: []
             ),
@@ -1460,7 +1501,7 @@ struct Top_ScoresTests {
                 homeTeam: "AFC Wimbledon",
                 awayTeam: "Stockport County",
                 league: "League One",
-                matchDetailsID: "league-one",
+                matchDetailsID: "leagueone",
                 hasBbcSource: true,
                 tvChannels: []
             )
@@ -1472,10 +1513,10 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-ucl"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenalucl", "leagueone"])
     }
 
-    @Test func applyPreferenceFilters_fixtures_supportLeagueSelectionForStagedUefaClubCompetitions() async throws {
+    @Test func applyPreferenceFilters_fixtures_doesNotReapplyServerLeagueSelectionLocally() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: ["UEFA Champions League"],
             selectedChannels: [],
@@ -1496,7 +1537,7 @@ struct Top_ScoresTests {
                 awayTeam: "Sporting CP",
                 league: "UEFA Champions League Quarter-Final 2nd Leg",
                 leagueSubcategory: "Quarter-finals",
-                matchDetailsID: "arsenal-ucl",
+                matchDetailsID: "arsenalucl",
                 hasBbcSource: true,
                 tvChannels: []
             ),
@@ -1518,7 +1559,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-ucl"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenalucl", "laliga"])
     }
 
     @Test func applyPreferenceFilters_results_showAllCompetitionsWhenFiltersAreOff() async throws {
@@ -1541,7 +1582,7 @@ struct Top_ScoresTests {
                 homeTeam: "Manchester United",
                 awayTeam: "Brentford",
                 league: "Premier League",
-                matchDetailsID: "man-utd-brentford",
+                matchDetailsID: "manutdbrentford",
                 hasBbcSource: true,
                 tvChannels: [],
                 homeScore: 2,
@@ -1555,7 +1596,7 @@ struct Top_ScoresTests {
                 awayTeam: "Bayern Munich",
                 league: "UEFA Champions League",
                 leagueSubcategory: "Semi-finals",
-                matchDetailsID: "psg-bayern",
+                matchDetailsID: "psgbayern",
                 hasBbcSource: true,
                 tvChannels: [],
                 homeScore: 5,
@@ -1570,10 +1611,10 @@ struct Top_ScoresTests {
             mode: .results
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["man-utd-brentford", "psg-bayern"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["manutdbrentford", "psgbayern"])
     }
 
-    @Test func applyPreferenceFilters_results_appliesCompetitionFilterLocally() async throws {
+    @Test func applyPreferenceFilters_results_doesNotReapplyServerCompetitionSelectionLocally() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: ["Premier League"],
             selectedChannels: [],
@@ -1593,7 +1634,7 @@ struct Top_ScoresTests {
                 homeTeam: "Manchester United",
                 awayTeam: "Brentford",
                 league: "Premier League",
-                matchDetailsID: "man-utd-brentford",
+                matchDetailsID: "manutdbrentford",
                 hasBbcSource: true,
                 tvChannels: [],
                 homeScore: 2,
@@ -1606,7 +1647,7 @@ struct Top_ScoresTests {
                 homeTeam: "PSG",
                 awayTeam: "Bayern Munich",
                 league: "UEFA Champions League",
-                matchDetailsID: "psg-bayern",
+                matchDetailsID: "psgbayern",
                 hasBbcSource: true,
                 tvChannels: [],
                 homeScore: 5,
@@ -1621,10 +1662,10 @@ struct Top_ScoresTests {
             mode: .results
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["man-utd-brentford"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["manutdbrentford", "psgbayern"])
     }
 
-    @Test func applyPreferenceFilters_results_emptyCompetitionSelectionShowsNoMatches() async throws {
+    @Test func applyPreferenceFilters_results_emptySelectionDoesNotHideServerResultsLocally() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: [],
             selectedChannels: [],
@@ -1644,7 +1685,7 @@ struct Top_ScoresTests {
                 homeTeam: "Manchester United",
                 awayTeam: "Brentford",
                 league: "Premier League",
-                matchDetailsID: "man-utd-brentford",
+                matchDetailsID: "manutdbrentford",
                 hasBbcSource: true,
                 tvChannels: [],
                 homeScore: 2,
@@ -1659,10 +1700,10 @@ struct Top_ScoresTests {
             mode: .results
         )
 
-        #expect(filtered.isEmpty)
+        #expect(filtered.compactMap(\.matchDetailsID) == ["manutdbrentford"])
     }
 
-    @Test func applyPreferenceFilters_fixtures_supportLocalMajorTournamentFiltering() async throws {
+    @Test func applyPreferenceFilters_fixtures_doesNotReapplyServerTournamentSelectionLocally() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: [],
             selectedChannels: [],
@@ -1682,7 +1723,7 @@ struct Top_ScoresTests {
                 awayTeam: "TBC",
                 league: "FIFA World Cup",
                 leagueSubcategory: "Final",
-                matchDetailsID: "world-cup-final",
+                matchDetailsID: "worldcupfinal",
                 hasBbcSource: true,
                 tvChannels: []
             ),
@@ -1714,7 +1755,7 @@ struct Top_ScoresTests {
             mode: .fixtures
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["world-cup-final", "major"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["worldcupfinal", "major", "qualifying"])
     }
 
     @Test func hasBbcMatchEntry_acceptsLegacyBbcSportWebsiteChannel() async throws {
@@ -1726,7 +1767,10 @@ struct Top_ScoresTests {
             league: "Premier League",
             matchDetailsID: nil,
             hasBbcSource: nil,
-            tvChannels: ["Sky Sports Main Event", "BBC Sport Website"]
+            tvChannels: [
+                TvChannel(name: "Sky Sports Main Event"),
+                TvChannel(name: "BBC Sport Website")
+            ]
         )
 
         #expect(match.hasBbcMatchEntry)
@@ -1739,9 +1783,6 @@ struct Top_ScoresTests {
     }
 
     @Test func stabilizedScoreStatus_clampsOverdueLiveMatchesToFullTime() async throws {
-        let kickoff = Date(timeIntervalSince1970: 1_772_626_800) // 2026-03-07 15:00 UTC
-        let now = kickoff.addingTimeInterval((3.5 * 60 * 60) + 60)
-
         let match = makeMatch(
             date: "2026-03-07",
             time: "15:00",
@@ -1751,6 +1792,8 @@ struct Top_ScoresTests {
             aggregateAwayScore: nil,
             scoreStatus: "90+7"
         )
+        let kickoff = try #require(match.dateTime)
+        let now = kickoff.addingTimeInterval((3.5 * 60 * 60) + 60)
 
         #expect(match.stabilizedScoreStatus(now: now) == "FT")
     }
@@ -1940,7 +1983,7 @@ struct Top_ScoresTests {
             awayTeam: "Barcelona",
             league: "UEFA Champions League",
             leagueSubcategory: "Quarter-finals",
-            tvChannels: ["TNT Sports 1"],
+            tvChannels: [TvChannel(name: "TNT Sports 1")],
             homeScore: nil,
             awayScore: nil,
             aggregateHomeScore: 2,
@@ -1961,7 +2004,7 @@ struct Top_ScoresTests {
             awayTeam: "Sporting CP",
             league: "UEFA Champions League",
             leagueSubcategory: "Quarter-finals",
-            tvChannels: ["TNT Sports 1"],
+            tvChannels: [TvChannel(name: "TNT Sports 1")],
             homeScore: nil,
             awayScore: nil,
             aggregateHomeScore: nil,
@@ -2001,7 +2044,7 @@ struct Top_ScoresTests {
             homeTeam: "Burnley",
             awayTeam: "Manchester City",
             league: "Premier League",
-            tvChannels: ["Sky Sports Main Event"],
+            tvChannels: [TvChannel(name: "Sky Sports Main Event")],
             homeScore: nil,
             awayScore: nil,
             aggregateHomeScore: nil,
@@ -2021,7 +2064,7 @@ struct Top_ScoresTests {
             homeTeam: "Chelsea",
             awayTeam: "Leeds United",
             league: "FA Cup",
-            tvChannels: ["BBC One"],
+            tvChannels: [TvChannel(name: "BBC One")],
             homeScore: 2,
             awayScore: 1,
             aggregateHomeScore: nil,
@@ -2039,7 +2082,7 @@ struct Top_ScoresTests {
             homeTeam: "Inter Milan",
             awayTeam: "Napoli",
             league: "Coppa Italia",
-            tvChannels: ["TNT Sports 2"],
+            tvChannels: [TvChannel(name: "TNT Sports 2")],
             homeScore: 3,
             awayScore: 2,
             aggregateHomeScore: nil,
@@ -2057,7 +2100,7 @@ struct Top_ScoresTests {
             homeTeam: "Brentford",
             awayTeam: "Fulham",
             league: "Premier League",
-            tvChannels: ["Sky Sports"],
+            tvChannels: [TvChannel(name: "Sky Sports")],
             homeScore: 1,
             awayScore: 0,
             aggregateHomeScore: nil,
@@ -2078,7 +2121,7 @@ struct Top_ScoresTests {
             awayTeam: "Barcelona",
             league: "UEFA Champions League",
             leagueSubcategory: "Quarter-finals",
-            tvChannels: ["TNT Sports 1"],
+            tvChannels: [TvChannel(name: "TNT Sports 1")],
             homeScore: 1,
             awayScore: 0,
             aggregateHomeScore: 3,
@@ -2103,7 +2146,7 @@ struct Top_ScoresTests {
             awayTeam: "Barcelona",
             league: "UEFA Champions League",
             leagueSubcategory: "Quarter-finals",
-            tvChannels: ["TNT Sports 1"],
+            tvChannels: [TvChannel(name: "TNT Sports 1")],
             homeScore: 1,
             awayScore: 2,
             aggregateHomeScore: 3,
@@ -2128,7 +2171,7 @@ struct Top_ScoresTests {
             awayTeam: "Barcelona",
             league: "UEFA Champions League",
             leagueSubcategory: "Quarter-finals",
-            tvChannels: ["TNT Sports 1"],
+            tvChannels: [TvChannel(name: "TNT Sports 1")],
             homeScore: 1,
             awayScore: 2,
             aggregateHomeScore: 3,
@@ -2153,7 +2196,7 @@ struct Top_ScoresTests {
             awayTeam: "Barcelona",
             league: "UEFA Champions League",
             leagueSubcategory: "Quarter-finals",
-            tvChannels: ["TNT Sports 1"],
+            tvChannels: [TvChannel(name: "TNT Sports 1")],
             homeScore: 1,
             awayScore: 2,
             aggregateHomeScore: 3,
@@ -2926,7 +2969,7 @@ struct Top_ScoresTests {
         #expect(blank.hasFinishedScoringForGameweek)
     }
 
-    @Test func fantasyExpectedPointsSection_sumsStartersForSelectedTeamXP() async throws {
+    @Test func fantasyExpectedPointsSection_sumsFullSquadForSelectedTeamXP() async throws {
         let section = FantasyAssistantManagerResponse.ExpectedPointsSection(
             starters: [
                 makeExpectedPointsPlayer(elementID: 1, pickPosition: 1, expectedPointsNextGameweek: 5.4),
@@ -2937,7 +2980,7 @@ struct Top_ScoresTests {
             ]
         )
 
-        #expect(abs(section.selectedTeamExpectedPointsNextGameweek - 11.5) < 0.001)
+        #expect(abs(section.selectedTeamExpectedPointsNextGameweek - 15.3) < 0.001)
     }
 
     @Test func fantasySquadProjectedGameweekPoints_addsCurrentScoreToRemainingExpectedPoints() async throws {
@@ -3085,6 +3128,7 @@ struct Top_ScoresTests {
         seedTeamIdentityStore()
         #expect(fantasyTeamLookupKeys("AFC Bournemouth").contains("bournemouth"))
         #expect(fantasyTeamLookupKeys("Bournemouth FC").contains("bournemouth"))
+        #expect(fantasyTeamLookupKeys("Valencia CF").contains("valencia"))
     }
 
     @Test func fantasyTeamLookupKeys_handleFantasyShortTeamAliases() async throws {
@@ -3288,7 +3332,7 @@ struct Top_ScoresTests {
             detailsURL: detailsURL,
             matchDetailsID: matchDetailsID,
             hasBbcSource: hasBbcSource,
-            tvChannels: ["TNT Sports 3"],
+            tvChannels: [TvChannel(name: "TNT Sports 3")],
             homeScore: homeScore,
             awayScore: awayScore,
             aggregateHomeScore: aggregateHomeScore,
@@ -3413,6 +3457,13 @@ struct Top_ScoresTests {
             teamName: teamName,
             profileImageURL: nil,
             nowCostMillions: 5.0,
+            hasStartedCurrentSeason: true,
+            ownershipPercent: nil,
+            ownershipCount: nil,
+            form: nil,
+            pointsPerMatch: nil,
+            totalPoints: nil,
+            averageMinutes: nil,
             rawPoints: rawPoints,
             appliedPoints: appliedPoints,
             displayPoints: displayPoints,
@@ -3430,6 +3481,7 @@ struct Top_ScoresTests {
             minutesPlayed: minutesPlayed,
             upcomingOpponentDisplay: nil,
             fixtureDifficulty: nil,
+            nextFiveFixtureDifficulties: [],
             expectedPointsThisGameweek: nil,
             officialExpectedPointsNextGameweek: officialExpectedPointsNextGameweek,
             goalsScored: 0,
@@ -3548,6 +3600,8 @@ struct Top_ScoresTests {
             pointsPerGame: "0.0",
             eventPoints: 0,
             totalPoints: 0,
+            minutes: 0,
+            starts: 0,
             bonus: 0,
             ictIndex: "0.0",
             selectedByPercent: "0.0",

@@ -153,7 +153,10 @@ async function ensureIndexes() {
     collection("bsd_lineups").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_players").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     // BSD<->TSDB id maps (keyed by _id = BSD player/team id).
-    collection("bsd_tsdb_player_map").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_tsdb_player_map").createIndexes([
+      { key: { updated_at: -1 }, name: "updatedAt_desc" },
+      { key: { "payload.tsdb_player_id": 1 }, name: "tsdbPlayerId" },
+    ]),
     collection("bsd_tsdb_team_map").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("gg_players").createIndexes([
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
@@ -1301,6 +1304,23 @@ async function getBsdRecords(collectionName, filter = {}, options = {}) {
   return cursor.toArray();
 }
 
+async function getBsdPlayerMapsByTsdbIds(playerIds = []) {
+  const ids = Array.isArray(playerIds)
+    ? [...new Set(playerIds.map((id) => String(id || "").trim()).filter(Boolean))]
+    : [];
+  if (ids.length === 0) return [];
+  return getBsdRecords(
+    "bsd_tsdb_player_map",
+    { "payload.tsdb_player_id": { $in: ids } },
+    {
+      projection: {
+        _id: 1,
+        "payload.tsdb_player_id": 1,
+      },
+    }
+  );
+}
+
 // Lightweight existence check across a whole bsd_ collection — projects only
 // _id so callers can build a "already have this" Set without pulling every
 // payload (used to skip re-hydrating incidents/lineups for events already on
@@ -1383,6 +1403,7 @@ module.exports = {
   upsertBsdRecord,
   upsertBsdRecords,
   getBsdRecords,
+  getBsdPlayerMapsByTsdbIds,
   getBsdRecordIds,
   getBsdRecord,
   deleteBsdRecordsNotIn,

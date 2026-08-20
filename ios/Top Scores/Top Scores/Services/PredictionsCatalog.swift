@@ -131,7 +131,7 @@ actor PredictionsCatalog {
         return directory.appendingPathComponent(Self.cacheFileName)
     }
 
-    private func log(_ message: String) {
-        NSLog("[PredictionsCatalog] %@", message)
+    private func log(_ message: @autoclosure () -> String) {
+        diagnosticLog("[PredictionsCatalog] \(message())")
     }
 }

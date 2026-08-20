@@ -1355,7 +1355,7 @@ final class FantasyViewModel: ObservableObject {
 
     private func logPerf(_ message: String) {
         #if DEBUG
-        print("[FantasyPerf] \(message)")
+        diagnosticPrint("[FantasyPerf] \(message)")
         #endif
     }
 

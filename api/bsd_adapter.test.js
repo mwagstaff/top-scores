@@ -16,6 +16,8 @@ const {
   bsdBroadcastChannels,
   isCurrentSeasonEvent,
   enrichBsdLineupPhotos,
+  enrichBsdLineupPlayerIdentity,
+  bsdPlayerEntry,
   parseBsdFormString,
   bsdStandingsPayloadToTable,
   completeBsdStandingsRowsFromEvents,
@@ -582,9 +584,61 @@ test("enrichBsdLineupPhotos: returns match unchanged when the map is empty (no M
       away: { starting_lineup: [], substitutes: [] },
     },
   };
-  const result = await enrichBsdLineupPhotos(match);
+  const result = await enrichBsdLineupPhotos(match, { playerImageSource: "tsdb" });
   assert.equal(result.team_lineups.home.starting_lineup[0].id_player, "595");
   assert.equal(result.team_lineups.home.starting_lineup[0].cutout_url, null);
+});
+
+test("bsdPlayerEntry emits a BSD portrait URL without changing the details id contract", () => {
+  const player = bsdPlayerEntry(
+    { id: 6525, name: "Cameron Burgess", jersey_number: 15, position: "D" },
+    { playerImageSource: "bsd" }
+  );
+  assert.equal(player.id_player, "6525");
+  assert.equal(player.bsd_player_id, "6525");
+  assert.equal(player.cutout_url, "https://sports.bzzoiro.com/img/player/6525/");
+});
+
+test("enrichBsdLineupPlayerIdentity keeps BSD images while mapping the biography id", async () => {
+  const match = {
+    team_lineups: {
+      home: {
+        starting_lineup: [{
+          id_player: "6525",
+          bsd_player_id: "6525",
+          name: "Cameron Burgess",
+          cutout_url: "https://sports.bzzoiro.com/img/player/6525/",
+        }],
+        substitutes: [{
+          id_player: "9999",
+          bsd_player_id: "9999",
+          name: "Unmapped Player",
+          cutout_url: "https://sports.bzzoiro.com/img/player/9999/",
+        }],
+      },
+    },
+  };
+  const result = await enrichBsdLineupPlayerIdentity(match, {
+    playerImageSource: "bsd",
+    mapDocs: [{
+      _id: "6525",
+      payload: {
+        tsdb_player_id: "34167754",
+        cutout_url: "https://tsdb.test/cameron.png",
+      },
+    }],
+  });
+
+  assert.equal(result.team_lineups.home.starting_lineup[0].id_player, "34167754");
+  assert.equal(
+    result.team_lineups.home.starting_lineup[0].cutout_url,
+    "https://sports.bzzoiro.com/img/player/6525/"
+  );
+  assert.equal(result.team_lineups.home.substitutes[0].id_player, null);
+  assert.equal(
+    result.team_lineups.home.substitutes[0].cutout_url,
+    "https://sports.bzzoiro.com/img/player/9999/"
+  );
 });
 
 // ---------------------------------------------------------------------------

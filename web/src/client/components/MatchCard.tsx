@@ -1082,7 +1082,17 @@ function LineupPlayerPortrait({ player, className = "" }: { player: MatchLineupP
   return (
     <div className={`lineup-player-portrait${className ? ` ${className}` : ""}`}>
       {player.cutoutUrl ? (
-        <img src={player.cutoutUrl} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = "none"; }} />
+        <img
+          src={player.cutoutUrl}
+          alt=""
+          loading="lazy"
+          onLoad={(event) => {
+            if (isMissingPlayerImage(event.currentTarget)) {
+              event.currentTarget.style.display = "none";
+            }
+          }}
+          onError={(event) => { event.currentTarget.style.display = "none"; }}
+        />
       ) : null}
       <span className="lineup-player-initials">{initials}</span>
     </div>
@@ -1177,7 +1187,7 @@ function PlayerDetailsDialog({ player, onClose }: { player: MatchLineupPlayer; o
 
 function PlayerDetailsPhoto({ player, display }: { player: MatchLineupPlayer; display: PlayerDetails | null }) {
   const imageCandidates = useMemo(
-    () => uniqueStrings([display?.renderUrl, display?.cutoutUrl, display?.thumbUrl, player.cutoutUrl]),
+    () => uniqueStrings([player.cutoutUrl, display?.cutoutUrl, display?.renderUrl, display?.thumbUrl]),
     [display?.renderUrl, display?.cutoutUrl, display?.thumbUrl, player.cutoutUrl]
   );
   const imageKey = imageCandidates.join("|");
@@ -1196,6 +1206,11 @@ function PlayerDetailsPhoto({ player, display }: { player: MatchLineupPlayer; di
           key={imageUrl}
           src={imageUrl}
           alt=""
+          onLoad={(event) => {
+            if (isMissingPlayerImage(event.currentTarget)) {
+              setImageIndex((index) => index + 1);
+            }
+          }}
           onError={() => setImageIndex((index) => index + 1)}
         />
       ) : (
@@ -1207,6 +1222,10 @@ function PlayerDetailsPhoto({ player, display }: { player: MatchLineupPlayer; di
 
 function uniqueStrings(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.map((value) => value?.trim() ?? "").filter(Boolean)));
+}
+
+function isMissingPlayerImage(image: HTMLImageElement): boolean {
+  return image.naturalWidth <= 1 || image.naturalHeight <= 1;
 }
 
 function PlayerFact({ label, value, meta }: { label: string; value: string; meta?: string | null }) {

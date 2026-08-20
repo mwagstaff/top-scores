@@ -3,8 +3,7 @@ import Foundation
 
 enum BackgroundRefreshManager {
     static let taskIdentifier = "dev.skynolimit.Top-Scores.refresh"
-    private static let liveRefreshIntervalMinutes = 1
-    private static let preferencesSyncIntervalMinutes = 5
+    private static let minimumRefreshIntervalMinutes = 15
 
     static func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
@@ -12,21 +11,15 @@ enum BackgroundRefreshManager {
         }
     }
 
-    static func scheduleNextRefresh(intervalMinutes: Int, hasInProgressMatches: Bool = false) {
+    static func scheduleNextRefresh(intervalMinutes: Int) {
         let request = BGAppRefreshTaskRequest(identifier: taskIdentifier)
-        let resolvedRefreshIntervalMinutes = hasInProgressMatches
-            ? min(max(1, intervalMinutes), liveRefreshIntervalMinutes)
-            : max(1, intervalMinutes)
-        let resolvedIntervalMinutes = min(
-            resolvedRefreshIntervalMinutes,
-            preferencesSyncIntervalMinutes
-        )
+        let resolvedIntervalMinutes = max(minimumRefreshIntervalMinutes, intervalMinutes)
         request.earliestBeginDate = Date().addingTimeInterval(TimeInterval(resolvedIntervalMinutes * 60))
         do {
             BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskIdentifier)
             try BGTaskScheduler.shared.submit(request)
         } catch {
-            NSLog("Failed to schedule background refresh: \(error)")
+            diagnosticLog("Failed to schedule background refresh: \(error)")
         }
     }
 
@@ -53,19 +46,25 @@ enum BackgroundRefreshManager {
                     }
                 }
                 let response = try await client.fetchMatches(preferences: snapshot)
+                let releaseMatches: [Match]
+                #if DEBUG
+                releaseMatches = response.matches
+                #else
+                releaseMatches = response.matches.filter { $0.isTestMatch != true }
+                #endif
                 let visibleFixtures = MatchesStore.applyPreferenceFilters(
-                    to: response.matches,
+                    to: releaseMatches,
                     snapshot: snapshot,
                     mode: .fixtures
                 )
                 let visibleResults = MatchesStore.applyPreferenceFilters(
-                    to: response.matches,
+                    to: releaseMatches,
                     snapshot: snapshot,
                     mode: .results
                 )
                 let mergedVisible = mergeMatches(visibleFixtures + visibleResults)
                 let sorted = sortedMatches(mergedVisible)
-                let unfilteredSorted = sortedMatches(response.matches)
+                let unfilteredSorted = sortedMatches(releaseMatches)
                 let fixtureCoverageEnd = Calendar.current.date(
                     byAdding: .day,
                     value: 89,
@@ -87,8 +86,7 @@ enum BackgroundRefreshManager {
                 await syncTask.value
                 await AppIconBadgeManager.update(preferences: snapshot, matches: sorted)
                 scheduleNextRefresh(
-                    intervalMinutes: snapshot.refreshIntervalMinutes,
-                    hasInProgressMatches: sorted.contains(where: \.isInProgress)
+                    intervalMinutes: snapshot.refreshIntervalMinutes
                 )
                 task.setTaskCompleted(success: true)
             } catch {

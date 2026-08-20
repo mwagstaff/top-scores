@@ -730,17 +730,17 @@ private enum WidgetMatchDataLoader {
         guard let containerURL = FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: WidgetAppGroupConfig.identifier)
         else {
-            NSLog("[Widget] app group container URL missing")
+            diagnosticLog("[Widget] app group container URL missing")
             return nil
         }
 
         let url = containerURL.appendingPathComponent(WidgetAppGroupConfig.sharedMatchesFileName)
         guard let data = try? Data(contentsOf: url) else {
-            NSLog("[Widget] shared payload missing at %@", url.path)
+            diagnosticLog("[Widget] shared payload missing at %@", url.path)
             return nil
         }
 
-        NSLog("[Widget] loaded shared payload bytes=\(data.count) path=\(url.path)")
+        diagnosticLog("[Widget] loaded shared payload bytes=\(data.count) path=\(url.path)")
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
@@ -759,7 +759,7 @@ private enum WidgetMatchDataLoader {
         do {
             return try decoder.decode(WidgetSharedMatchesPayload.self, from: data)
         } catch {
-            NSLog("[Widget] payload decode failed: %@", error.localizedDescription)
+            diagnosticLog("[Widget] payload decode failed: %@", error.localizedDescription)
             return nil
         }
     }
@@ -978,12 +978,12 @@ private struct TopScoresWidgetProvider: TimelineProvider {
         let payload = WidgetMatchDataLoader.loadPayload()
         if let payload {
             let firstDate = payload.matches.first?.date ?? "none"
-            NSLog("[Widget] payload loaded: matches=\(payload.matches.count) firstDate=\(firstDate) lastUpdated=\(payload.lastUpdated?.description ?? "nil")")
+            diagnosticLog("[Widget] payload loaded: matches=\(payload.matches.count) firstDate=\(firstDate) lastUpdated=\(payload.lastUpdated?.description ?? "nil")")
         } else {
-            NSLog("[Widget] payload missing (shared-matches.json not available)")
+            diagnosticLog("[Widget] payload missing (shared-matches.json not available)")
         }
         let days = WidgetMatchPipeline.groupedDays(from: payload)
-        NSLog("[Widget] grouped days=\(days.count) firstDay=\(days.first?.dateKey ?? "none")")
+        diagnosticLog("[Widget] grouped days=\(days.count) firstDay=\(days.first?.dateKey ?? "none")")
 
         if days.isEmpty, fallbackToSample {
             return TopScoresWidgetEntry(date: Date(), days: sampleDays, lastUpdated: nil)
@@ -1751,7 +1751,7 @@ private final class WidgetTeamLogoResolver {
 
         loadAssetCatalogLogos()
 
-        NSLog("[Widget] team logos file fallback loaded count=\(urls.count)")
+        diagnosticLog("[Widget] team logos file fallback loaded count=\(urls.count)")
     }
 
     private static func logoBundles() -> [Bundle] {
@@ -2296,13 +2296,20 @@ private final class WidgetTvLogoResolver {
         "disneyplus": "TVLogoDisneyPlus",
         "premiersports": "TVLogoPremierSports",
         "laligatv": "TVLogoLaLigaTV",
+        "now": "TVLogoNOW",
         "nologo": "TVLogoFallback"
     ]
+    private static let rawLogoNames = [
+        "amazon", "apple", "bbc", "channel 4", "dazn", "disney+", "hbo max", "itv",
+        "laliga tv", "now", "premier sports", "sky", "tnt", "_noLogo"
+    ]
     private let lock = NSLock()
+    private let bundles: [Bundle]
     private var normalizedLookup: [String: URL] = [:]
     private var cache: [String: UIImage] = [:]
 
     private init() {
+        bundles = Self.makeLogoBundles()
         loadLogos()
     }
 
@@ -2313,7 +2320,7 @@ private final class WidgetTvLogoResolver {
         idealPointSize: CGFloat? = nil
     ) -> UIImage? {
         let normalizedRequest = Self.normalizedKey(channelName)
-        NSLog("[Widget][TvLogo] image(for:) channelName='\(channelName)' normalized='\(normalizedRequest)' lookupSize=\(normalizedLookup.count)")
+        diagnosticLog("[Widget][TvLogo] image(for:) channelName='\(channelName)' normalized='\(normalizedRequest)' lookupSize=\(normalizedLookup.count)")
 
         let cacheKey = Self.cacheKey(
             for: channelName,
@@ -2324,7 +2331,7 @@ private final class WidgetTvLogoResolver {
         lock.lock()
         if let cached = cache[cacheKey] {
             lock.unlock()
-            NSLog("[Widget][TvLogo] image(for:) cache HIT for '\(channelName)'")
+            diagnosticLog("[Widget][TvLogo] image(for:) cache HIT for '\(channelName)'")
             return cached
         }
         lock.unlock()
@@ -2338,7 +2345,7 @@ private final class WidgetTvLogoResolver {
             lock.lock()
             cache[cacheKey] = assetImage
             lock.unlock()
-            NSLog("[Widget][TvLogo] image(for:) asset HIT for '\(channelName)'")
+            diagnosticLog("[Widget][TvLogo] image(for:) asset HIT for '\(channelName)'")
             return assetImage
         }
 
@@ -2349,14 +2356,14 @@ private final class WidgetTvLogoResolver {
         }
 
         if let url {
-            NSLog("[Widget][TvLogo] image(for:) resolved URL = \(url.path)")
+            diagnosticLog("[Widget][TvLogo] image(for:) resolved URL = \(url.path)")
         } else {
-            NSLog("[Widget][TvLogo] image(for:) resolved URL = nil (returning nil image) for '\(channelName)'")
+            diagnosticLog("[Widget][TvLogo] image(for:) resolved URL = nil (returning nil image) for '\(channelName)'")
         }
         guard let url else { return nil }
 
         let image = Self.downsampledImage(at: url, idealPointSize: idealPointSize)
-        NSLog("[Widget][TvLogo] image(for:) UIImage load \(image != nil ? "SUCCESS" : "FAILED") from \(url.lastPathComponent)")
+        diagnosticLog("[Widget][TvLogo] image(for:) UIImage load \(image != nil ? "SUCCESS" : "FAILED") from \(url.lastPathComponent)")
         if let image {
             lock.lock()
             cache[cacheKey] = image
@@ -2395,97 +2402,21 @@ private final class WidgetTvLogoResolver {
     }
 
     private func loadLogos() {
-        NSLog("[Widget][TvLogo] ── loadLogos START ──")
-        NSLog("[Widget][TvLogo] Bundle.main.bundleURL = \(Bundle.main.bundleURL)")
-        NSLog("[Widget][TvLogo] Bundle.main.bundlePath = \(Bundle.main.bundlePath)")
-        NSLog("[Widget][TvLogo] Bundle.main.bundleURL.pathExtension = \(Bundle.main.bundleURL.pathExtension)")
-        NSLog("[Widget][TvLogo] Bundle.allBundles.count = \(Bundle.allBundles.count)")
-        NSLog("[Widget][TvLogo] Bundle.allFrameworks.count = \(Bundle.allFrameworks.count)")
-
-        let bundles = logoBundles()
-        NSLog("[Widget][TvLogo] logoBundles() returned \(bundles.count) bundle(s)")
-
-        var allUrls: [URL] = []
-        for (i, bundle) in bundles.enumerated() {
-            let bundlePath = bundle.bundlePath
-            NSLog("[Widget][TvLogo] Bundle[\(i)] path = \(bundlePath)")
-
-            // Check tv-logos subdirectory existence via FileManager
-            let tvLogosDir = URL(fileURLWithPath: bundlePath).appendingPathComponent("tv-logos")
-            let tvLogosDirExists = FileManager.default.fileExists(atPath: tvLogosDir.path)
-            NSLog("[Widget][TvLogo] Bundle[\(i)] tv-logos dir exists (FileManager) = \(tvLogosDirExists)")
-
-            // Try Bundle API — subdirectory
-            let fromSubdir = bundle.urls(forResourcesWithExtension: "png", subdirectory: "tv-logos") ?? []
-            NSLog("[Widget][TvLogo] Bundle[\(i)] Bundle API tv-logos/png count = \(fromSubdir.count)")
-
-            // Try Bundle API — root
-            let fromRoot = bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []
-            NSLog("[Widget][TvLogo] Bundle[\(i)] Bundle API root/png count = \(fromRoot.count)")
-            allUrls.append(contentsOf: fromSubdir)
-            allUrls.append(contentsOf: fromRoot)
-
-            // FileManager — tv-logos subdirectory
-            if tvLogosDirExists {
-                if let fmSubdir = try? FileManager.default.contentsOfDirectory(at: tvLogosDir, includingPropertiesForKeys: nil) {
-                    let pngs = fmSubdir.filter { $0.pathExtension.lowercased() == "png" }
-                    NSLog("[Widget][TvLogo] Bundle[\(i)] FileManager tv-logos/png count = \(pngs.count)")
-                    if !pngs.isEmpty {
-                        NSLog("[Widget][TvLogo] Bundle[\(i)] FileManager tv-logos first 5: \(pngs.prefix(5).map { $0.lastPathComponent })")
-                    }
-                    allUrls.append(contentsOf: pngs)
-                } else {
-                    NSLog("[Widget][TvLogo] Bundle[\(i)] FileManager tv-logos enumeration FAILED")
+        for bundle in bundles {
+            for name in Self.rawLogoNames {
+                guard let url = bundle.url(
+                    forResource: name,
+                    withExtension: "png",
+                    subdirectory: "tv-logos"
+                ) ?? bundle.url(forResource: name, withExtension: "png") else {
+                    continue
                 }
-            } else {
-                // Log what IS in the bundle root to help diagnose where files ended up
-                let bundleDir = URL(fileURLWithPath: bundlePath)
-                if let rootContents = try? FileManager.default.contentsOfDirectory(at: bundleDir, includingPropertiesForKeys: nil) {
-                    let names = rootContents.prefix(20).map { $0.lastPathComponent }
-                    NSLog("[Widget][TvLogo] Bundle[\(i)] root contents (first 20): \(names)")
-                    let rootPngs = rootContents.filter { $0.pathExtension.lowercased() == "png" }
-                    NSLog("[Widget][TvLogo] Bundle[\(i)] FileManager root/png count = \(rootPngs.count)")
-                    allUrls.append(contentsOf: rootPngs)
-                } else {
-                    NSLog("[Widget][TvLogo] Bundle[\(i)] root enumeration FAILED")
-                }
+
+                let key = Self.normalizedKey(name)
+                normalizedLookup[key] = normalizedLookup[key] ?? url
             }
         }
-
-        NSLog("[Widget][TvLogo] Total URLs collected before dedup: \(allUrls.count)")
-
-        for url in allUrls {
-            let fileName = url.deletingPathExtension().lastPathComponent
-            guard !fileName.isEmpty else { continue }
-            let normalized = Self.normalizedKey(fileName)
-            guard !normalized.isEmpty else { continue }
-            normalizedLookup[normalized] = normalizedLookup[normalized] ?? url
-        }
-
-        NSLog("[Widget][TvLogo] normalizedLookup count after bundle scan = \(normalizedLookup.count)")
-
-        // Last-resort: explicit per-resource lookup via Bundle.main.path(forResource:ofType:)
-        // This is the most direct Bundle API and works even when enumeration-based approaches fail.
-        let knownLogoNames = ["amazon", "bbc", "sky", "itv", "tnt", "apple", "channel 4", "hbo max", "dazn", "disney+", "premier sports", "laliga tv", "_noLogo"]
-        for name in knownLogoNames {
-            let key = Self.normalizedKey(name)
-            guard normalizedLookup[key] == nil else { continue }
-            if let path = Bundle.main.path(forResource: name, ofType: "png") {
-                let url = URL(fileURLWithPath: path)
-                normalizedLookup[key] = url
-                NSLog("[Widget][TvLogo] explicit path(forResource:) FOUND '\(name)' at \(path)")
-            } else {
-                NSLog("[Widget][TvLogo] explicit path(forResource:) MISSING '\(name)'")
-            }
-        }
-
-        NSLog("[Widget][TvLogo] normalizedLookup count = \(normalizedLookup.count)")
-        // Log whether specific keys we care about are present
-        let keysToCheck = ["amazon", "amazonprime", "primevideo", "sky", "bbc", "itv"]
-        for key in keysToCheck {
-            NSLog("[Widget][TvLogo] key '\(key)' present = \(normalizedLookup[key] != nil)")
-        }
-        NSLog("[Widget][TvLogo] ── loadLogos END ──")
+        diagnosticLog("[Widget][TvLogo] loaded \(normalizedLookup.count) raw logo resources")
     }
 
     private func assetImage(
@@ -2499,7 +2430,7 @@ private final class WidgetTvLogoResolver {
             return nil
         }
 
-        for bundle in logoBundles() {
+        for bundle in bundles {
             if let image = UIImage(named: assetName, in: bundle, compatibleWith: nil) {
                 return Self.preparedImage(image, idealPointSize: idealPointSize)
             }
@@ -2620,7 +2551,7 @@ private final class WidgetTvLogoResolver {
     private func preferredAssetName(from baseAssetName: String?, variant: WidgetLogoAssetVariant) -> String? {
         guard let baseAssetName else { return nil }
         for candidate in variant.candidateAssetNames(for: baseAssetName) {
-            for bundle in logoBundles() {
+            for bundle in bundles {
                 if UIImage(named: candidate, in: bundle, compatibleWith: nil) != nil {
                     return candidate
                 }
@@ -2629,42 +2560,18 @@ private final class WidgetTvLogoResolver {
         return nil
     }
 
-    private func logoBundles() -> [Bundle] {
-        var output: [Bundle] = []
-        var seenURLs = Set<URL>()
-
-        for bundle in [Bundle.main] + Bundle.allBundles + Bundle.allFrameworks {
-            let url = bundle.bundleURL
-            guard !seenURLs.contains(url) else { continue }
-            seenURLs.insert(url)
-            output.append(bundle)
-        }
+    private static func makeLogoBundles() -> [Bundle] {
+        var output = [Bundle.main]
 
         let mainBundleURL = Bundle.main.bundleURL
-        NSLog("[Widget][TvLogo] logoBundles: mainBundleURL.pathExtension = '\(mainBundleURL.pathExtension)'")
         if mainBundleURL.pathExtension == "appex" {
             let plugInsDir = mainBundleURL.deletingLastPathComponent()
             let containingAppURL = plugInsDir.deletingLastPathComponent()
-            NSLog("[Widget][TvLogo] logoBundles: PlugIns dir = \(plugInsDir.path)")
-            NSLog("[Widget][TvLogo] logoBundles: Derived containing app URL = \(containingAppURL.path)")
-            let containingAppExists = FileManager.default.fileExists(atPath: containingAppURL.path)
-            NSLog("[Widget][TvLogo] logoBundles: Containing app URL exists = \(containingAppExists)")
-            if let containingAppBundle = Bundle(url: containingAppURL) {
-                let url = containingAppBundle.bundleURL
-                let alreadySeen = seenURLs.contains(url)
-                NSLog("[Widget][TvLogo] logoBundles: Containing app bundle loaded, alreadySeen = \(alreadySeen)")
-                if !seenURLs.contains(url) {
-                    seenURLs.insert(url)
-                    output.append(containingAppBundle)
-                }
-            } else {
-                NSLog("[Widget][TvLogo] logoBundles: Bundle(url:) FAILED for containing app URL")
+            if let containingAppBundle = Bundle(url: containingAppURL),
+               containingAppBundle.bundleURL != mainBundleURL {
+                output.append(containingAppBundle)
             }
-        } else {
-            NSLog("[Widget][TvLogo] logoBundles: NOT an .appex bundle — skipping containing app lookup")
         }
-
-        NSLog("[Widget][TvLogo] logoBundles: returning \(output.count) bundles")
         return output
     }
 
@@ -2781,7 +2688,8 @@ private final class WidgetTvLogoResolver {
         ("disney", "disneyplus"),
         ("premiersports", "premiersports"),
         ("laligatv", "laligatv"),
-        ("laliga", "laligatv")
+        ("laliga", "laligatv"),
+        ("nowtv", "now")
     ]
 }
 

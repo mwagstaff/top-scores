@@ -809,18 +809,18 @@ private struct WatchMatchDetailView: View {
 
     private func refreshMatchDetails() async {
         guard let matchID = match.matchDetailsIDValue else {
-            NSLog("[WatchMatchDetailView] No match details ID for %@ vs %@", match.homeTeam, match.awayTeam)
+            diagnosticLog("[WatchMatchDetailView] No match details ID for %@ vs %@", match.homeTeam, match.awayTeam)
             return
         }
         let apiBaseURL = await MainActor.run {
             matchesStore.apiBaseURL
         }
         guard let baseURL = URL(string: apiBaseURL) else {
-            NSLog("[WatchMatchDetailView] Invalid API base URL: %@", apiBaseURL)
+            diagnosticLog("[WatchMatchDetailView] Invalid API base URL: %@", apiBaseURL)
             return
         }
 
-        NSLog("[WatchMatchDetailView] Fetching details for match ID: %@ (baseURL: %@)", matchID, baseURL.absoluteString)
+        diagnosticLog("[WatchMatchDetailView] Fetching details for match ID: %@ (baseURL: %@)", matchID, baseURL.absoluteString)
 
         let client = WatchAPIClient(baseURL: baseURL)
         await MainActor.run {
@@ -828,7 +828,7 @@ private struct WatchMatchDetailView: View {
         }
         do {
             let details = try await client.fetchMatchDetails(matchId: matchID)
-            NSLog("[WatchMatchDetailView] Fetched details - homeGoals=%d awayGoals=%d homeAssists=%d awayAssists=%d",
+            diagnosticLog("[WatchMatchDetailView] Fetched details - homeGoals=%d awayGoals=%d homeAssists=%d awayAssists=%d",
                   details.homeGoalScorers.count,
                   details.awayGoalScorers.count,
                   details.homeAssists.count,
@@ -840,13 +840,13 @@ private struct WatchMatchDetailView: View {
                 matchesStore.cacheDetails(updated)
                 isRefreshingLatestData = false
                 let entries = teamEventEntries(for: updated)
-                NSLog("[WatchMatchDetailView] Updated detailedMatch - teamEventEntries count: %d", entries.count)
+                diagnosticLog("[WatchMatchDetailView] Updated detailedMatch - teamEventEntries count: %d", entries.count)
             }
         } catch {
             await MainActor.run {
                 isRefreshingLatestData = false
             }
-            NSLog("[WatchMatchDetailView] Failed to fetch match details: %@", String(describing: error))
+            diagnosticLog("[WatchMatchDetailView] Failed to fetch match details: %@", String(describing: error))
         }
     }
 

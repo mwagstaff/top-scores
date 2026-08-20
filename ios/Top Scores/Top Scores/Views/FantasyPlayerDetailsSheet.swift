@@ -809,7 +809,7 @@ struct FantasyPlayerDetailsSheet: View {
         .onAppear {
             guard let recommendationNavigationStartedAt else { return }
             let durationMs = Int(Date().timeIntervalSince(recommendationNavigationStartedAt) * 1000)
-            print("[FantasyPerf] transfer_recommendations_screen_appeared duration_ms=\(durationMs)")
+            diagnosticPrint("[FantasyPerf] transfer_recommendations_screen_appeared duration_ms=\(durationMs)")
             self.recommendationNavigationStartedAt = nil
         }
     }

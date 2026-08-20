@@ -26,6 +26,7 @@ const {
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
   TEAM_RANKING_SOURCE_NATIONAL_ELO,
   TEAM_LOGO_SOURCE_TSDB,
+  PLAYER_IMAGE_SOURCE_BSD,
   normalizeTeamRankingSource,
 } = require("./config");
 const { resolveMatchSource } = require("./match_source");
@@ -67,7 +68,13 @@ const {
 } = require("./fetch_tsdb_matches");
 const {
   findPlayerCachesByNames,
+  getBsdPlayerMapsByTsdbIds,
 } = require("./mongo_client");
+const {
+  collectMatchLineupTsdbPlayerIds,
+  matchDetailsWithBsdPlayerImages,
+  playerDetailsWithBsdImage,
+} = require("./player_images");
 const { getTeam, getPlayer } = require("./thesportsdb_client");
 const { fetchTsdbTvListingsFull } = require("./fetch_tsdb_tv");
 const { fetchSoccerLeagues } = require("./fetch_tsdb_leagues");
@@ -9430,6 +9437,25 @@ function normalizePlayerDetailsPayload(value) {
     thumb_url: String(value.strThumb || "").trim() || null,
     render_url: String(value.strRender || "").trim() || null,
   };
+}
+
+async function withConfiguredPlayerDetailsImage(payload, playerId, options = {}) {
+  const playerImageSource = options.playerImageSource || SERVER_CONFIG.playerImageSource;
+  if (playerImageSource !== PLAYER_IMAGE_SOURCE_BSD || !payload) return payload;
+  const mapDocs = Array.isArray(options.mapDocs)
+    ? options.mapDocs
+    : await getBsdPlayerMapsByTsdbIds([playerId]);
+  return playerDetailsWithBsdImage(payload, playerId, mapDocs);
+}
+
+async function withConfiguredMatchDetailsPlayerImages(payload, options = {}) {
+  const playerImageSource = options.playerImageSource || SERVER_CONFIG.playerImageSource;
+  if (playerImageSource !== PLAYER_IMAGE_SOURCE_BSD || !payload) return payload;
+  const tsdbPlayerIds = collectMatchLineupTsdbPlayerIds(payload);
+  const mapDocs = Array.isArray(options.mapDocs)
+    ? options.mapDocs
+    : await getBsdPlayerMapsByTsdbIds(tsdbPlayerIds);
+  return matchDetailsWithBsdPlayerImages(payload, mapDocs);
 }
 
 const TSDB_ENTITY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -25234,9 +25260,11 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
       return null;
     });
     if (bsdDetails) {
+      const bsdDetailsWithImages = await withConfiguredMatchDetailsPlayerImages(bsdDetails);
+      res.set("X-Player-Image-Source", SERVER_CONFIG.playerImageSource);
       res.json(
         applyTeamShortNamesToApiValue(
-          localizeMatchDetailsPayload(bsdDetails),
+          localizeMatchDetailsPayload(bsdDetailsWithImages),
           teamShortNameLookup
         )
       );
@@ -25278,6 +25306,9 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   const playerEnrichedResponsePayload = await enrichMatchDetailsPlayersFromCache(
     enrichedResponsePayload || lineupEnrichedResponsePayload || stableResponsePayload
   );
+  const imageEnrichedResponsePayload = await withConfiguredMatchDetailsPlayerImages(
+    playerEnrichedResponsePayload || enrichedResponsePayload
+  );
 
   if (payload) {
     // Backfill handles aggregate enrichment asynchronously (matchDetailsMissingKnockoutAggregate
@@ -25294,7 +25325,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   }
 
   const totalDurationMs = Date.now() - handlerStartMs;
-  const p = playerEnrichedResponsePayload || enrichedResponsePayload || {};
+  const p = imageEnrichedResponsePayload || playerEnrichedResponsePayload || enrichedResponsePayload || {};
   const goals = (Array.isArray(p.home_goal_scorers) ? p.home_goal_scorers.length : 0) +
                 (Array.isArray(p.away_goal_scorers) ? p.away_goal_scorers.length : 0);
   const assists = (Array.isArray(p.home_assists) ? p.home_assists.length : 0) +
@@ -25310,6 +25341,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   );
 
   res.set("X-Operational-Source", detailsSource);
+  res.set("X-Player-Image-Source", SERVER_CONFIG.playerImageSource);
   if (stableResponsePayload.updated_at) {
     res.set("X-Last-Updated", stableResponsePayload.updated_at);
   } else if (matchDetailsLastUpdated) {
@@ -25317,7 +25349,9 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   }
   res.json(
     applyTeamShortNamesToApiValue(
-      localizeMatchDetailsPayload(playerEnrichedResponsePayload || enrichedResponsePayload),
+      localizeMatchDetailsPayload(
+        imageEnrichedResponsePayload || playerEnrichedResponsePayload || enrichedResponsePayload
+      ),
       teamShortNameLookup
     )
   );
@@ -25546,13 +25580,14 @@ app.get(`${API_PREFIX}/players/:playerId`, async (req, res) => {
       reason: "player_details_request",
       trigger: "player_details_request",
     });
-    const payload = result.payload;
+    const payload = await withConfiguredPlayerDetailsImage(result.payload, playerId);
     if (!payload) {
       res.status(404).json({ error: "No player details found for player id." });
       return;
     }
     res.set("X-Operational-Source", result.source);
     res.set("X-Data-Source", result.source);
+    res.set("X-Player-Image-Source", SERVER_CONFIG.playerImageSource);
     res.json(payload);
   } catch (error) {
     console.warn(`[API] Failed to load player details for ${playerId}:`, error.message || error);
@@ -33725,6 +33760,8 @@ module.exports = {
     mergeMatchDetailsPayload,
     normalizePlayerDetailsPayload,
     playerDetailsPayloadFromMatchLineups,
+    withConfiguredMatchDetailsPlayerImages,
+    withConfiguredPlayerDetailsImage,
     resolveStableMatchScoreStatus,
     withStableMatchDetailsState,
     pickPreferredMatchStatus,

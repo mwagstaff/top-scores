@@ -37,7 +37,7 @@ actor AppMetricsService {
 
     private func sendEvent(event: String, screen: String?, durationMs: Int?, apiBaseURL: String) async {
         guard let baseURL = URL(string: apiBaseURL) else {
-            NSLog("[AppMetrics] Invalid API base URL: %@", apiBaseURL)
+            diagnosticLog("[AppMetrics] Invalid API base URL: %@", apiBaseURL)
             return
         }
 
@@ -55,14 +55,14 @@ actor AppMetricsService {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
-                NSLog("[AppMetrics] Invalid response type for event=%@", event)
+                diagnosticLog("[AppMetrics] Invalid response type for event=%@", event)
                 return
             }
             if !(200...299).contains(httpResponse.statusCode) {
-                NSLog("[AppMetrics] HTTP %d for event=%@ screen=%@", httpResponse.statusCode, event, screen ?? "-")
+                diagnosticLog("[AppMetrics] HTTP %d for event=%@ screen=%@", httpResponse.statusCode, event, screen ?? "-")
             }
         } catch {
-            NSLog("[AppMetrics] Error sending event=%@ error=%@", event, error.localizedDescription)
+            diagnosticLog("[AppMetrics] Error sending event=%@ error=%@", event, error.localizedDescription)
         }
     }
 

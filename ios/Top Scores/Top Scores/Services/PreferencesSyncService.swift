@@ -292,7 +292,7 @@ actor PreferencesSyncService {
         let deviceToken = getDeviceToken()
 
         guard let baseURL = URL(string: snapshot.apiBaseURL) else {
-            NSLog("[PreferencesSync] Invalid API base URL: %@", snapshot.apiBaseURL)
+            diagnosticLog("[PreferencesSync] Invalid API base URL: %@", snapshot.apiBaseURL)
             lastSyncFailure = now
             lastSyncHTTPStatus = nil
             lastSyncFailureReason = "Invalid API base URL"
@@ -360,11 +360,13 @@ actor PreferencesSyncService {
             ]
         ]
 
-        NSLog(
+        #if DEBUG
+        diagnosticLog(
             "[PreferencesSync] Sending sync device=%@ fantasy=%@",
             shortDeviceToken(deviceToken),
             summarizeFantasyPayload(fantasyState)
         )
+        #endif
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -372,7 +374,7 @@ actor PreferencesSyncService {
             let (data, response) = try await URLSession.shared.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                NSLog("[PreferencesSync] Invalid response type")
+                diagnosticLog("[PreferencesSync] Invalid response type")
                 lastSyncFailure = Date()
                 lastSyncHTTPStatus = nil
                 lastSyncFailureReason = "Invalid response type"
@@ -380,25 +382,27 @@ actor PreferencesSyncService {
             }
 
             if (200...299).contains(httpResponse.statusCode) {
+                #if DEBUG
                 let responseFantasySummary = summarizeFantasyPayload(fromResponseData: data)
-                NSLog(
+                diagnosticLog(
                     "[PreferencesSync] Successfully synced preferences to Redis device=%@ fantasy=%@",
                     shortDeviceToken(deviceToken),
                     responseFantasySummary
                 )
+                #endif
                 lastSyncSuccess = Date()
                 lastSyncFailure = nil
                 lastSyncHTTPStatus = httpResponse.statusCode
                 lastSyncFailureReason = nil
             } else {
                 let errorBody = String(data: data, encoding: .utf8) ?? "No response body"
-                NSLog("[PreferencesSync] Failed to sync: HTTP %d - %@", httpResponse.statusCode, errorBody)
+                diagnosticLog("[PreferencesSync] Failed to sync: HTTP %d - %@", httpResponse.statusCode, errorBody)
                 lastSyncFailure = Date()
                 lastSyncHTTPStatus = httpResponse.statusCode
                 lastSyncFailureReason = errorBody
             }
         } catch {
-            NSLog("[PreferencesSync] Error syncing preferences: %@", error.localizedDescription)
+            diagnosticLog("[PreferencesSync] Error syncing preferences: %@", error.localizedDescription)
             lastSyncFailure = Date()
             lastSyncHTTPStatus = nil
             lastSyncFailureReason = error.localizedDescription
@@ -448,7 +452,7 @@ actor PreferencesSyncService {
         let deviceToken = getDeviceToken()
 
         guard let baseURL = URL(string: apiBaseURL) else {
-            NSLog("[PreferencesSync] Invalid API base URL: %@", apiBaseURL)
+            diagnosticLog("[PreferencesSync] Invalid API base URL: %@", apiBaseURL)
             return nil
         }
 
@@ -463,24 +467,24 @@ actor PreferencesSyncService {
             let (data, response) = try await URLSession.shared.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                NSLog("[PreferencesSync] Invalid response type")
+                diagnosticLog("[PreferencesSync] Invalid response type")
                 return nil
             }
 
             if httpResponse.statusCode == 404 {
-                NSLog("[PreferencesSync] No preferences found in Redis for this device")
+                diagnosticLog("[PreferencesSync] No preferences found in Redis for this device")
                 return nil
             }
 
             guard (200...299).contains(httpResponse.statusCode) else {
-                NSLog("[PreferencesSync] Failed to fetch: HTTP %d", httpResponse.statusCode)
+                diagnosticLog("[PreferencesSync] Failed to fetch: HTTP %d", httpResponse.statusCode)
                 return nil
             }
 
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             guard let responseData = json?["data"] as? [String: Any],
                   let preferences = responseData["preferences"] as? [String: Any] else {
-                NSLog("[PreferencesSync] Invalid response format")
+                diagnosticLog("[PreferencesSync] Invalid response format")
                 return nil
             }
 
@@ -554,10 +558,10 @@ actor PreferencesSyncService {
                 showFantasyRealTimePoints: preferences["showFantasyRealTimePoints"] as? Bool ?? legacyShowFantasyMatchPills
             )
 
-            NSLog("[PreferencesSync] Successfully fetched preferences from Redis")
+            diagnosticLog("[PreferencesSync] Successfully fetched preferences from Redis")
             return snapshot
         } catch {
-            NSLog("[PreferencesSync] Error fetching preferences: %@", error.localizedDescription)
+            diagnosticLog("[PreferencesSync] Error fetching preferences: %@", error.localizedDescription)
             return nil
         }
     }

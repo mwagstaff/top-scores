@@ -154,7 +154,7 @@ actor FantasyLoadingMessagesCatalog {
         return directory.appendingPathComponent(Self.cacheFileName)
     }
 
-    private func log(_ message: String) {
-        NSLog("[FantasyLoadingMessagesCatalog] %@", message)
+    private func log(_ message: @autoclosure () -> String) {
+        diagnosticLog("[FantasyLoadingMessagesCatalog] \(message())")
     }
 }

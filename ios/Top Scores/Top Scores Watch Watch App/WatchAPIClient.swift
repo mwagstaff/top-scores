@@ -223,13 +223,13 @@ extension WatchMatch {
             penaltyResult: details.penaltyResult ?? penaltyResult,
             homeTeamId: homeTeamId,
             awayTeamId: awayTeamId
-        )
+        ) ?? self
         return updatedMatch
     }
 }
 
 private extension WatchMatch {
-    init(
+    init?(
         date: String,
         time: String,
         homeTeam: String,
@@ -345,8 +345,11 @@ private extension WatchMatch {
             dict["penalty_result"] = penaltyResult
         }
 
-        let data = try! JSONSerialization.data(withJSONObject: dict)
-        self = try! JSONDecoder().decode(WatchMatch.self, from: data)
+        guard let data = try? JSONSerialization.data(withJSONObject: dict),
+              let decodedMatch = try? JSONDecoder().decode(WatchMatch.self, from: data) else {
+            return nil
+        }
+        self = decodedMatch
     }
 
     static func varEventDictionary(_ event: WatchVarEvent) -> [String: Any] {

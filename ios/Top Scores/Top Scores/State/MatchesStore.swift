@@ -1048,10 +1048,10 @@ final class MatchesStore: ObservableObject {
                 cancelledState.errorMessage = nil
                 modeStates[.fixtures] = cancelledState
                 publishState(for: .fixtures)
-                NSLog("Matches refresh cancelled for mode=%@", MatchesViewMode.fixtures.rawValue)
+                diagnosticLog("Matches refresh cancelled for mode=%@", MatchesViewMode.fixtures.rawValue)
                 return
             }
-            NSLog("Matches refresh failed for mode=%@ error=%@", MatchesViewMode.fixtures.rawValue, String(describing: error))
+            diagnosticLog("Matches refresh failed for mode=%@ error=%@", MatchesViewMode.fixtures.rawValue, String(describing: error))
             Self.log("fixtures_refresh_failed error=\(String(describing: error))")
             let durationMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
             FixtureLoadDiagnosticsStore.shared.record(
@@ -1208,10 +1208,10 @@ final class MatchesStore: ObservableObject {
                 cancelledState.errorMessage = nil
                 modeStates[.results] = cancelledState
                 publishState(for: .results)
-                NSLog("Matches refresh cancelled for mode=%@", MatchesViewMode.results.rawValue)
+                diagnosticLog("Matches refresh cancelled for mode=%@", MatchesViewMode.results.rawValue)
                 return
             }
-            NSLog("Matches refresh failed for mode=%@ error=%@", MatchesViewMode.results.rawValue, String(describing: error))
+            diagnosticLog("Matches refresh failed for mode=%@ error=%@", MatchesViewMode.results.rawValue, String(describing: error))
             setError("Unable to load matches. Check your API URL or connection.", for: .results)
         }
     }
@@ -1445,7 +1445,7 @@ final class MatchesStore: ObservableObject {
                     if Self.isCancellationError(error) {
                         break
                     }
-                    NSLog("Fixtures lazy load failed error=%@", String(describing: error))
+                    diagnosticLog("Fixtures lazy load failed error=%@", String(describing: error))
                     break
                 }
                 nextIndex = batchEnd
@@ -1508,6 +1508,7 @@ final class MatchesStore: ObservableObject {
         fixtureState.isUsingCache = false
         modeStates[.fixtures] = fixtureState
 
+        #if DEBUG
         let rangeSummary = loadedRanges.map {
             "\(Self.formatDateForLog($0.range.lowerBound))...\(Self.formatDateForLog($0.range.upperBound))(\($0.matches.count))"
         }.joined(separator: ",")
@@ -1515,6 +1516,7 @@ final class MatchesStore: ObservableObject {
             "fixtures_lazy_batch_applied ranges=\(rangeSummary) visible=\(fixtureState.matches.count) " +
             "stored=\(fixtureState.unfilteredMatches.count) coverage_end=\(Self.formatDateForLog(fixtureState.fixtureCoverageEnd))"
         )
+        #endif
         loadedRanges.forEach { loadedRange in
             FixtureLoadDiagnosticsStore.shared.record(
                 title: "Lazy fixture batch",
@@ -1673,7 +1675,7 @@ final class MatchesStore: ObservableObject {
             cacheStateLastFetchedAt = Date()
             applyCacheInvalidation(MatchCache.applyServerCacheState(serverState))
         } catch {
-            NSLog("Cache state refresh failed error=%@", String(describing: error))
+            diagnosticLog("Cache state refresh failed error=%@", String(describing: error))
         }
     }
 
@@ -1733,7 +1735,7 @@ final class MatchesStore: ObservableObject {
             }
             bbcLiveLastFetchedAt = Date()
         } catch {
-            NSLog("BBC live prefetch failed error=%@", String(describing: error))
+            diagnosticLog("BBC live prefetch failed error=%@", String(describing: error))
         }
     }
 
@@ -2455,8 +2457,8 @@ final class MatchesStore: ObservableObject {
         return String(format: "%04d-%02d-%02d", year, month, day)
     }
 
-    nonisolated private static func log(_ message: String) {
-        NSLog("[MatchesStore] %@", message)
+    nonisolated private static func log(_ message: @autoclosure () -> String) {
+        diagnosticLog("[MatchesStore] \(message())")
     }
 
     private func scheduleCachePersistence(

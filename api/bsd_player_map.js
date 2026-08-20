@@ -5,9 +5,9 @@
 // ---------------------------------------------------------------------------
 // BSD <-> TSDB id mapping layer.
 //
-// BSD line-ups (bsd_lineups) carry no player photos; TSDB has them. We build a
-// persistent map from BSD player id -> TSDB player id (+ snapshotted photo) by
-// pairing the two providers' line-ups for the SAME fixture.
+// We build a persistent map from BSD player id -> TSDB player id by pairing the
+// two providers' line-ups for the SAME fixture. TSDB photo snapshots remain in
+// the map temporarily so PLAYER_IMAGE_SOURCE=tsdb is a safe rollback path.
 //
 // The authoritative join is (side, jersey number): within one fixture, the two
 // line-ups agree on squad numbers even when names are formatted very
