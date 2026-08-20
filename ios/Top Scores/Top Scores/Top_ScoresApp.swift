@@ -15,6 +15,7 @@ struct Top_ScoresApp: App {
     @StateObject private var preferences = PreferencesStore()
     @StateObject private var matchesStore = MatchesStore()
     @StateObject private var fantasyViewModel = FantasyViewModel()
+    @StateObject private var stadiumBackdropStore = StadiumBackdropStore()
     @State private var deferredStartupWorkTask: Task<Void, Never>?
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
@@ -39,6 +40,10 @@ struct Top_ScoresApp: App {
                 .environmentObject(preferences)
                 .environmentObject(matchesStore)
                 .environmentObject(fantasyViewModel)
+                .environment(\.stadiumBackdropAssetName, stadiumBackdropStore.assetName)
+                .task {
+                    await stadiumBackdropStore.runHourlyRotation()
+                }
         }
         .onChange(of: scenePhase) { _, newPhase in
             NSLog("[TopScoresApp] scenePhase changed to %@", String(describing: newPhase))
@@ -53,6 +58,7 @@ struct Top_ScoresApp: App {
                 )
             case .active:
                 NSLog("[TopScoresApp] scenePhase active -> reconcileOnForeground")
+                stadiumBackdropStore.rotateIfNeeded()
                 LiveActivitySyncService.shared.reconcileOnForeground()
                 let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
                 matchesStore.refreshOnForeground(preferences: snapshot)

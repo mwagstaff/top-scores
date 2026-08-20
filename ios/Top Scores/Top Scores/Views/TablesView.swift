@@ -38,18 +38,29 @@ struct TablesView: View {
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
-                VStack(spacing: 0) {
-                    if navigationCoordinator.returnTabIndex != nil {
-                        backToOriginButton
+                ZStack(alignment: .top) {
+                    FootballVisualStyle.pageBackground
+                        .ignoresSafeArea()
+
+                    FootballScreenBackdrop()
+
+                    VStack(spacing: 0) {
+                        FootballHeroHeader(title: "Tables", subtitle: tablesHeaderSubtitle)
+
+                        if navigationCoordinator.returnTabIndex != nil {
+                            backToOriginButton
+                        }
+                        contentView
                     }
-                    contentView
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
                 }
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
-                .background(Color(.systemBackground))
             }
-            .navigationTitle(tablesNavigationTitle)
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
         }
+        .environment(\.colorScheme, .dark)
         .onAppear {
             isVisible = true
             guard !hasLoaded else { return }
@@ -95,15 +106,15 @@ struct TablesView: View {
         }
     }
 
-    private var tablesNavigationTitle: String {
+    private var tablesHeaderSubtitle: String? {
         guard let leagueName = leagues
             .first(where: { $0.leagueID == selectedLeagueID })?
             .leagueName
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !leagueName.isEmpty else {
-            return "Tables"
+            return nil
         }
-        return "Tables: \(leagueName)"
+        return leagueName
     }
 
     // Applies a cross-tab navigation request from MatchDetailView (selects the
@@ -141,21 +152,23 @@ struct TablesView: View {
             if isLoading && leagues.isEmpty {
                 VStack(spacing: 16) {
                     ProgressView()
+                        .tint(Color.accentColor)
                     Text("Loading tables")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(FootballVisualStyle.mutedText)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if leagues.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: "tablecells")
                         .font(.system(size: 40))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.accentColor)
                     Text("No tables to show")
-                        .font(.title3)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(Color.white.opacity(0.96))
                     Text(errorMessage ?? "League tables will appear here once available.")
                         .font(.subheadline)
-                        .foregroundStyle(errorMessage == nil ? Color.secondary : Color.red)
+                        .foregroundStyle(errorMessage == nil ? FootballVisualStyle.mutedText : Color.red)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
                 }
@@ -227,14 +240,23 @@ struct TablesView: View {
                                 .foregroundStyle(
                                     selectedLeagueID == league.leagueID
                                         ? Color.white
-                                        : Color.primary
+                                        : Color.white.opacity(0.78)
                                 )
                                 .background(
                                     selectedLeagueID == league.leagueID
                                         ? Color.accentColor
-                                        : Color(.secondarySystemBackground),
+                                        : FootballVisualStyle.elevatedSurface.opacity(0.88),
                                     in: Capsule()
                                 )
+                                .overlay {
+                                    Capsule()
+                                        .stroke(
+                                            selectedLeagueID == league.leagueID
+                                                ? Color.accentColor.opacity(0.95)
+                                                : FootballVisualStyle.border,
+                                            lineWidth: 1
+                                        )
+                                }
                         }
                         .buttonStyle(.plain)
                         .id(league.leagueID)
@@ -247,7 +269,12 @@ struct TablesView: View {
                 .padding(.vertical, 10)
             }
             .frame(height: 56)
-            .background(.ultraThinMaterial)
+            .background(FootballVisualStyle.elevatedSurface.opacity(0.66))
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(FootballVisualStyle.divider)
+                    .frame(height: 1)
+            }
             .onAppear {
                 proxy.scrollTo(selectedLeagueID, anchor: .center)
             }
@@ -302,8 +329,12 @@ struct TablesView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(FootballVisualStyle.elevatedSurface.opacity(0.82))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(FootballVisualStyle.border, lineWidth: 1)
+        }
     }
 
     // Small, unobtrusive pinned bar (sits between the header and the scroll
@@ -324,8 +355,13 @@ struct TablesView: View {
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .background(.thinMaterial)
+        .foregroundStyle(Color.white.opacity(0.78))
+        .background(FootballVisualStyle.elevatedSurface.opacity(0.76))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(FootballVisualStyle.divider)
+                .frame(height: 1)
+        }
     }
 
     private func loadTables(force: Bool) async {
@@ -441,6 +477,13 @@ private struct LeagueTableCard: View {
     let showsStats: Bool
     var highlightedRowID: String?
 
+    private var accentColor: Color {
+        CompetitionAccentRole.resolve(
+            competitionID: league.leagueID,
+            competitionName: league.leagueName
+        ).color
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if league.hasLiveRows {
@@ -467,18 +510,30 @@ private struct LeagueTableCard: View {
                         }
                     }
                 }
-                .background(.thinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .background {
+                    FootballCardSurface(accentColor: accentColor, showsPitchMarkings: true)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(FootballVisualStyle.border, lineWidth: 1)
+                }
             } else {
                 Text("This table will be populated once the season is underway.")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(FootballVisualStyle.mutedText)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
                     .padding(.vertical, 28)
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .background {
+                        FootballCardSurface(accentColor: accentColor, showsPitchMarkings: true)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(FootballVisualStyle.border, lineWidth: 1)
+                    }
             }
         }
     }
@@ -606,7 +661,7 @@ private struct LeagueTableCard: View {
 
     private func tableSeparator(isThick: Bool) -> some View {
         Rectangle()
-            .fill(Color.secondary.opacity(isThick ? 0.45 : 0.22))
+            .fill(Color.white.opacity(isThick ? 0.16 : 0.075))
             .frame(height: isThick ? 2.5 : 1)
     }
 

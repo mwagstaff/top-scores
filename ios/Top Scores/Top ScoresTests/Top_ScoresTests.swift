@@ -11,6 +11,73 @@ import Testing
 
 struct Top_ScoresTests {
 
+    @Test @MainActor func stadiumBackdrop_rotatesAtLaunchAndAfterOneHour() {
+        let suiteName = #function
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set("HeaderStadium01", forKey: "appearance.previousHeaderStadiumAssetName")
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let store = StadiumBackdropStore(defaults: defaults, now: start)
+        let startupAssetName = store.assetName
+
+        #expect(StadiumBackdropStore.assetNames.count == 22)
+        #expect(startupAssetName != "HeaderStadium01")
+
+        store.rotateIfNeeded(now: start.addingTimeInterval(3_599))
+        #expect(store.assetName == startupAssetName)
+
+        store.rotateIfNeeded(now: start.addingTimeInterval(3_600))
+        #expect(store.assetName != startupAssetName)
+
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func competitionDockIntro_isPresentedOnlyOncePerSession() {
+        let coordinator = FixturesViewCoordinator()
+
+        coordinator.prepareCompetitionDockForScoresEntry()
+
+        #expect(coordinator.isCompetitionDockExpanded)
+        #expect(coordinator.isCompetitionDockIntroPending)
+        #expect(coordinator.hasPresentedCompetitionDockIntro)
+
+        coordinator.resetPresentation()
+        coordinator.prepareCompetitionDockForScoresEntry()
+
+        #expect(!coordinator.isCompetitionDockExpanded)
+        #expect(!coordinator.isCompetitionDockIntroPending)
+    }
+
+    @Test @MainActor func competitionDockIntro_interactionCancelsAutomaticCollapse() async {
+        let coordinator = FixturesViewCoordinator()
+        coordinator.prepareCompetitionDockForScoresEntry()
+        coordinator.scheduleCompetitionDockAutoCollapse(
+            reduceMotion: true,
+            voiceOverRunning: false,
+            delayNanoseconds: 20_000_000
+        )
+
+        coordinator.noteCompetitionDockInteraction()
+        try? await Task.sleep(nanoseconds: 40_000_000)
+
+        #expect(coordinator.isCompetitionDockExpanded)
+    }
+
+    @Test @MainActor func competitionDockIntro_voiceOverKeepsCarouselExpanded() {
+        let coordinator = FixturesViewCoordinator()
+        coordinator.prepareCompetitionDockForScoresEntry()
+
+        coordinator.scheduleCompetitionDockAutoCollapse(
+            reduceMotion: false,
+            voiceOverRunning: true,
+            delayNanoseconds: 0
+        )
+
+        #expect(coordinator.isCompetitionDockExpanded)
+        #expect(!coordinator.isCompetitionDockIntroPending)
+    }
+
     @Test func fantasyExpectedPoints_usesNearestFPLForecastToModelLaterFixtures() {
         let gw1 = makeUpcomingFixture(gameweek: 1, difficulty: 2)
         let gw2 = makeUpcomingFixture(gameweek: 2, difficulty: 4)

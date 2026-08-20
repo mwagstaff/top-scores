@@ -2790,7 +2790,7 @@ function pruneResolvableMissingTeamLogos() {
   const retained = new Map();
   const removed = [];
   for (const teamName of missingTeamLogosByKey.values()) {
-    if (resolveKnownTeamLogoAsset(teamName)) {
+    if (isMissingTeamLogoPlaceholder(teamName) || resolveKnownTeamLogoAsset(teamName)) {
       removed.push(teamName);
       continue;
     }
@@ -7376,6 +7376,10 @@ function missingTeamLogoKey(value) {
   return normalizeMissingTeamLogoName(value).toLowerCase();
 }
 
+function isMissingTeamLogoPlaceholder(value) {
+  return missingTeamLogoKey(value) === "tbc";
+}
+
 function sortedMissingTeamLogoNames() {
   return Array.from(missingTeamLogosByKey.values()).sort(compareInsensitive);
 }
@@ -7400,6 +7404,7 @@ function ingestMissingTeamLogoNames(teamNames) {
     if (typeof rawTeamName !== "string") return;
     const normalized = normalizeMissingTeamLogoName(rawTeamName);
     if (!normalized) return;
+    if (isMissingTeamLogoPlaceholder(normalized)) return;
     const key = missingTeamLogoKey(normalized);
     if (!key || seenInRequest.has(key)) return;
     seenInRequest.add(key);

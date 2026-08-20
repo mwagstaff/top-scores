@@ -1,4 +1,68 @@
+import Combine
+import Foundation
 import SwiftUI
+
+@MainActor
+final class StadiumBackdropStore: ObservableObject {
+    static let assetNames = (1...22).map { String(format: "HeaderStadium%02d", $0) }
+
+    private static let previousAssetNameKey = "appearance.previousHeaderStadiumAssetName"
+    private static let rotationInterval: TimeInterval = 60 * 60
+    private static let rotationIntervalNanoseconds: UInt64 = 3_600_000_000_000
+
+    @Published private(set) var assetName: String
+
+    private let defaults: UserDefaults
+    private var lastRotationDate: Date
+
+    init(defaults: UserDefaults = .standard, now: Date = Date()) {
+        self.defaults = defaults
+        self.lastRotationDate = now
+
+        let previousAssetName = defaults.string(forKey: Self.previousAssetNameKey)
+        let candidates = Self.assetNames.filter { $0 != previousAssetName }
+        let selectedAssetName = candidates.randomElement() ?? Self.assetNames[0]
+        self.assetName = selectedAssetName
+        defaults.set(selectedAssetName, forKey: Self.previousAssetNameKey)
+    }
+
+    func rotateIfNeeded(now: Date = Date()) {
+        guard now.timeIntervalSince(lastRotationDate) >= Self.rotationInterval else { return }
+        rotate(now: now)
+    }
+
+    func runHourlyRotation() async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: Self.rotationIntervalNanoseconds)
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+            rotateIfNeeded()
+        }
+    }
+
+    private func rotate(now: Date = Date()) {
+        let candidates = Self.assetNames.filter { $0 != assetName }
+        guard let nextAssetName = candidates.randomElement() else { return }
+        assetName = nextAssetName
+        lastRotationDate = now
+        defaults.set(nextAssetName, forKey: Self.previousAssetNameKey)
+    }
+}
+
+private struct StadiumBackdropAssetNameKey: EnvironmentKey {
+    static let defaultValue = "HeaderStadium01"
+}
+
+extension EnvironmentValues {
+    var stadiumBackdropAssetName: String {
+        get { self[StadiumBackdropAssetNameKey.self] }
+        set { self[StadiumBackdropAssetNameKey.self] = newValue }
+    }
+}
 
 enum FootballVisualStyle {
     static let pageBackground = Color(red: 0.015, green: 0.030, blue: 0.048)
@@ -51,6 +115,121 @@ struct FootballCardSurface: View {
             }
         }
         .accessibilityHidden(true)
+    }
+}
+
+struct FootballScreenBackdrop: View {
+    @Environment(\.accessibilityReduceTransparency) private var accessibilityReduceTransparency
+    @Environment(\.stadiumBackdropAssetName) private var stadiumBackdropAssetName
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .top) {
+                FootballVisualStyle.pageBackground
+
+                Image(stadiumBackdropAssetName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: 300)
+                    .clipped()
+                    .blur(radius: accessibilityReduceTransparency ? 0 : 2.5, opaque: true)
+                    .offset(y: -42)
+                    .opacity(accessibilityReduceTransparency ? 0.32 : 0.60)
+
+                LinearGradient(
+                    colors: [
+                        FootballVisualStyle.pageBackground.opacity(0.28),
+                        FootballVisualStyle.pageBackground.opacity(0.44),
+                        FootballVisualStyle.pageBackground.opacity(0.94),
+                        FootballVisualStyle.pageBackground,
+                    ],
+                    startPoint: .top,
+                    endPoint: UnitPoint(x: 0.5, y: 0.46)
+                )
+
+                RadialGradient(
+                    colors: [.clear, FootballVisualStyle.pageBackground.opacity(0.74)],
+                    center: .top,
+                    startRadius: 80,
+                    endRadius: max(proxy.size.width, 360) * 0.72
+                )
+            }
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+}
+
+struct FootballHeroHeader: View {
+    let title: String
+    var subtitle: String?
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Text(title)
+                .font(.system(
+                    dynamicTypeSize.isAccessibilitySize ? .title2 : .largeTitle,
+                    design: .rounded,
+                    weight: .heavy
+                ))
+                .foregroundStyle(Color.white.opacity(0.96))
+                .contentTransition(.opacity)
+
+            if let subtitle {
+                Text(subtitle)
+                    .font((dynamicTypeSize.isAccessibilitySize ? Font.body : .headline).weight(.semibold))
+                    .foregroundStyle(Color.accentColor.opacity(0.88))
+                    .multilineTextAlignment(.center)
+                    .contentTransition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.top, dynamicTypeSize.isAccessibilitySize ? 8 : 4)
+        .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 14 : 10)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct FootballNavigationScreen<Content: View>: View {
+    let title: String
+    var subtitle: String?
+    private let content: Content
+
+    init(
+        title: String,
+        subtitle: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .top) {
+                FootballVisualStyle.pageBackground
+                    .ignoresSafeArea()
+
+                FootballScreenBackdrop()
+
+                VStack(spacing: 0) {
+                    FootballHeroHeader(title: title, subtitle: subtitle)
+                    content
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+            }
+        }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .environment(\.colorScheme, .dark)
     }
 }
 

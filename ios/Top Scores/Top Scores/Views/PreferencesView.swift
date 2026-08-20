@@ -46,12 +46,10 @@ struct PreferencesView: View {
     var body: some View {
         Group {
             if embeddedInNavigation {
-                content
-                    .navigationTitle(showsOnlyAdvancedSettings ? "Profile: Advanced" : "Profile: Preferences")
-                    .navigationBarTitleDisplayMode(.inline)
+                styledContent
             } else {
                 NavigationStack {
-                    content
+                    styledContent
                 }
             }
         }
@@ -70,6 +68,15 @@ struct PreferencesView: View {
                 guard !Task.isCancelled else { return }
                 await viewModel.reload(baseURL: newValue)
             }
+        }
+    }
+
+    private var styledContent: some View {
+        FootballNavigationScreen(
+            title: "Preferences",
+            subtitle: showsOnlyAdvancedSettings ? "Advanced settings" : "Scores, notifications and display"
+        ) {
+            content
         }
     }
 
@@ -426,9 +433,10 @@ struct PreferencesView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .background(Color(.systemGroupedBackground))
+                .background(Color.clear)
+                .tint(Color.accentColor)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(Color.clear)
         }
     }
 

@@ -11,55 +11,76 @@ struct ProfileView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    NavigationLink {
-                        PreferencesView(embeddedInNavigation: true)
-                    } label: {
-                        profileRow(
-                            title: "Preferences",
-                            subtitle: "Competition filters, notifications, display, channels, and fantasy settings.",
-                            systemImage: "slider.horizontal.3"
-                        )
-                    }
+            GeometryReader { proxy in
+                ZStack(alignment: .top) {
+                    FootballVisualStyle.pageBackground
+                        .ignoresSafeArea()
 
-                    NavigationLink {
-                        TeamSelectionView(
-                            apiBaseURL: preferences.apiBaseURL,
-                            selectedTeamIDs: fixtureTeamSelectionBinding
-                        )
-                    } label: {
-                        profileRow(
-                            title: "Teams",
-                            subtitle: fixtureTeamSelectionSubtitle,
-                            systemImage: "person.3.fill"
-                        )
-                    }
+                    FootballScreenBackdrop()
 
-                    NavigationLink {
-                        FantasyAccountSettingsView(signOut: signOutOfFantasyAccount)
-                    } label: {
-                        profileRow(
-                            title: "FPL",
-                            subtitle: "Manage your connected Fantasy Premier League account.",
-                            systemImage: "trophy.fill"
-                        )
-                    }
+                    VStack(spacing: 0) {
+                        FootballHeroHeader(title: "Profile")
 
-                    NavigationLink {
-                        AboutView(embeddedInNavigation: true)
-                    } label: {
-                        profileRow(
-                            title: "About",
-                            subtitle: "Version info, feedback, credits, and data sources.",
-                            systemImage: "info.circle"
-                        )
+                        ScrollView {
+                            LazyVStack(spacing: 12) {
+                                NavigationLink {
+                                    PreferencesView(embeddedInNavigation: true)
+                                } label: {
+                                    profileRow(
+                                        title: "Preferences",
+                                        subtitle: "Competition filters, notifications, display, channels, and fantasy settings.",
+                                        systemImage: "slider.horizontal.3"
+                                    )
+                                }
+
+                                NavigationLink {
+                                    TeamSelectionView(
+                                        apiBaseURL: preferences.apiBaseURL,
+                                        selectedTeamIDs: fixtureTeamSelectionBinding
+                                    )
+                                } label: {
+                                    profileRow(
+                                        title: "Teams",
+                                        subtitle: fixtureTeamSelectionSubtitle,
+                                        systemImage: "person.3.fill"
+                                    )
+                                }
+
+                                NavigationLink {
+                                    FantasyAccountSettingsView(signOut: signOutOfFantasyAccount)
+                                } label: {
+                                    profileRow(
+                                        title: "FPL",
+                                        subtitle: "Manage your connected Fantasy Premier League account.",
+                                        systemImage: "trophy.fill"
+                                    )
+                                }
+
+                                NavigationLink {
+                                    AboutView(embeddedInNavigation: true)
+                                } label: {
+                                    profileRow(
+                                        title: "About",
+                                        subtitle: "Version info, feedback, credits, and data sources.",
+                                        systemImage: "info.circle"
+                                    )
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                        }
+                        .safeAreaPadding(.bottom, 80)
                     }
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
                 }
             }
-            .navigationTitle("Profile")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
         }
+        .environment(\.colorScheme, .dark)
         .onAppear {
             let openedAt = Date()
             let durationMs = Int(Date().timeIntervalSince(openedAt) * 1000)
@@ -71,20 +92,35 @@ struct ProfileView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: systemImage)
                 .font(.system(size: 20, weight: .semibold))
-                .frame(width: 28, height: 28)
+                .frame(width: 42, height: 42)
                 .foregroundStyle(Color.accentColor)
+                .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Color.white.opacity(0.96))
                 Text(subtitle)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(FootballVisualStyle.mutedText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(FootballVisualStyle.mutedText)
+                .padding(.top, 14)
         }
-        .padding(.vertical, 4)
+        .padding(16)
+        .background {
+            FootballCardSurface(accentColor: Color.accentColor)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: FootballVisualStyle.cardCornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: FootballVisualStyle.cardCornerRadius, style: .continuous)
+                .stroke(FootballVisualStyle.border, lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: FootballVisualStyle.cardCornerRadius, style: .continuous))
     }
 
     private var fixtureTeamSelectionBinding: Binding<Set<String>> {
@@ -160,28 +196,35 @@ private struct FantasyAccountSettingsView: View {
     }
 
     var body: some View {
-        List {
-            Section {
-                Text(
-                    isAccountConnected
-                        ? "Your Fantasy Premier League account is connected to Top Scores."
-                        : "No Fantasy Premier League account is connected."
-                )
-                .foregroundStyle(.secondary)
-            }
-
-            if isAccountConnected {
+        FootballNavigationScreen(title: "FPL", subtitle: "Account settings") {
+            List {
                 Section {
-                    Button("Sign out", role: .destructive) {
-                        showSignOutConfirmation = true
+                    Label {
+                        Text(
+                            isAccountConnected
+                                ? "Your Fantasy Premier League account is connected to Top Scores."
+                                : "No Fantasy Premier League account is connected."
+                        )
+                        .foregroundStyle(FootballVisualStyle.mutedText)
+                    } icon: {
+                        Image(systemName: isAccountConnected ? "checkmark.circle.fill" : "person.crop.circle.badge.questionmark")
+                            .foregroundStyle(isAccountConnected ? Color.accentColor : FootballVisualStyle.mutedText)
                     }
-                } footer: {
-                    Text("Signing out removes your manager account, rivals, and FPL data from this device. You can connect again at any time.")
+                }
+
+                if isAccountConnected {
+                    Section {
+                        Button("Sign out", role: .destructive) {
+                            showSignOutConfirmation = true
+                        }
+                    } footer: {
+                        Text("Signing out removes your manager account, rivals, and FPL data from this device. You can connect again at any time.")
+                    }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
         }
-        .navigationTitle("Profile: FPL")
-        .navigationBarTitleDisplayMode(.inline)
         .alert("Sign out of FPL?", isPresented: $showSignOutConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Sign out", role: .destructive, action: signOut)

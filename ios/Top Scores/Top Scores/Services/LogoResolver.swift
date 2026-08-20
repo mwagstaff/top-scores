@@ -96,6 +96,7 @@ final class LogoResolver {
         for (rawTeamName, alternateNames) in teamEntries {
             let normalizedDisplayName = Self.normalizedDisplayName(rawTeamName)
             guard !normalizedDisplayName.isEmpty else { continue }
+            guard !Self.isNonTeamPlaceholder(normalizedDisplayName) else { continue }
             let dedupeKey = normalizedDisplayName.lowercased()
             guard !seen.contains(dedupeKey) else { continue }
             seen.insert(dedupeKey)
@@ -282,6 +283,10 @@ final class LogoResolver {
         let fallback = normalizedKey("_noTeamLogo")
         let normalized = normalizedKey(name)
         return normalized == fallback || normalized.hasPrefix(fallback)
+    }
+
+    private static func isNonTeamPlaceholder(_ name: String) -> Bool {
+        normalizedDisplayName(name).localizedCaseInsensitiveCompare("TBC") == .orderedSame
     }
 
     private static func normalizedDisplayName(_ value: String) -> String {

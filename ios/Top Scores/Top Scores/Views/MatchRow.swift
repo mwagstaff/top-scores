@@ -1641,6 +1641,8 @@ private struct MatchCardChrome: ViewModifier {
 }
 
 private struct MatchTimeStatusView: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
     let text: String
     let isLive: Bool
     var isFinal: Bool = false
@@ -1667,6 +1669,7 @@ private struct MatchTimeStatusView: View {
                 if isLive {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(tintColor.opacity(isPulsing ? 0.14 : 0.26))
+                        .animation(pulseAnimation, value: isPulsing)
                 }
             }
             .overlay {
@@ -1674,18 +1677,23 @@ private struct MatchTimeStatusView: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(tintColor.opacity(isPulsing ? 0.45 : 0.95), lineWidth: 1)
                         .scaleEffect(isPulsing ? 1.08 : 1.0)
+                        .animation(pulseAnimation, value: isPulsing)
                 }
             }
-            .animation(
-                isLive ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
-                value: isPulsing
-            )
             .onAppear {
-                isPulsing = isLive
+                isPulsing = isLive && !accessibilityReduceMotion
             }
             .onChange(of: isLive) { _, newValue in
-                isPulsing = newValue
+                isPulsing = newValue && !accessibilityReduceMotion
             }
+            .onChange(of: accessibilityReduceMotion) { _, newValue in
+                isPulsing = isLive && !newValue
+            }
+    }
+
+    private var pulseAnimation: Animation? {
+        guard isLive, !accessibilityReduceMotion else { return nil }
+        return .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
     }
 
     private var statusFont: Font {

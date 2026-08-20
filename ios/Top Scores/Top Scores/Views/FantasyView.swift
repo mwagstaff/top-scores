@@ -106,29 +106,50 @@ struct FantasyView: View {
 
     private var baseNavigationView: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Group {
-                    if managerEntryID.isEmpty {
-                        setupFlowView
-                    } else if initialSetupVersion < Self.currentInitialSetupVersion {
-                        initialSetupFlowView
-                    } else {
-                        linkedFantasyView
+            GeometryReader { proxy in
+                ZStack(alignment: .top) {
+                    FootballVisualStyle.pageBackground
+                        .ignoresSafeArea()
+
+                    FootballScreenBackdrop()
+
+                    VStack(spacing: 0) {
+                        if !usesInitialSetupNavigation {
+                            FootballHeroHeader(title: "FPL", subtitle: fplHeaderSubtitle)
+                        }
+
+                        Group {
+                            if managerEntryID.isEmpty {
+                                setupFlowView
+                            } else if initialSetupVersion < Self.currentInitialSetupVersion {
+                                initialSetupFlowView
+                            } else {
+                                linkedFantasyView
+                            }
+                        }
                     }
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
                 }
             }
-            .navigationTitle(fplNavigationTitle)
+            .navigationTitle(usesInitialSetupNavigation ? "Choose rivals" : "")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(usesInitialSetupNavigation ? .visible : .hidden, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
         }
+        .environment(\.colorScheme, .dark)
     }
 
-    private var fplNavigationTitle: String {
+    private var usesInitialSetupNavigation: Bool {
+        !managerEntryID.isEmpty && initialSetupVersion < Self.currentInitialSetupVersion
+    }
+
+    private var fplHeaderSubtitle: String? {
         guard let teamName = fantasyViewModel.myProfile?.name
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !teamName.isEmpty else {
-            return "FPL"
+            return "Fantasy Premier League"
         }
-        return "FPL: \(teamName)"
+        return teamName
     }
 
     private var modalPresentationView: some View {
@@ -442,6 +463,8 @@ struct FantasyView: View {
             setupSection
             managerEntryInputSection
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
     }
 
     private var initialSetupFlowView: some View {
@@ -454,7 +477,6 @@ struct FantasyView: View {
                 initialSetupRecoveryView
             }
         }
-        .navigationTitle("Choose rivals")
     }
 
     private var isFantasySetupReadyForRefresh: Bool {
@@ -628,7 +650,7 @@ struct FantasyView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(Color.clear)
             .refreshable {
                 await fantasyViewModel.refresh(
                     managerEntryID: managerEntryID,
@@ -938,7 +960,7 @@ struct FantasyView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)
-        .background(Color(.systemGroupedBackground))
+        .background(Color.clear)
     }
 
     private var initialSetupRecoveryView: some View {
@@ -962,7 +984,7 @@ struct FantasyView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)
-        .background(Color(.systemGroupedBackground))
+        .background(Color.clear)
     }
 
     private var chooseRivalsSetupView: some View {
@@ -1003,6 +1025,8 @@ struct FantasyView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
         .searchable(
             text: $setupRivalSearchText,
             placement: .navigationBarDrawer(displayMode: .always),

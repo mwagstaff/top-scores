@@ -15,34 +15,36 @@ struct TeamSelectionView: View {
     }
 
     var body: some View {
-        List {
-            if trimmedSearch.isEmpty {
-                selectedTeamsSection
-                browseSection
-            } else if trimmedSearch.count < 2 {
-                ContentUnavailableView(
-                    "Keep typing",
-                    systemImage: "magnifyingglass",
-                    description: Text("Enter at least two characters to search for a team.")
-                )
-                .listRowBackground(Color.clear)
-            } else {
-                searchResultsSection
-            }
+        FootballNavigationScreen(title: "Teams", subtitle: selectedTeamCountText) {
+            List {
+                if trimmedSearch.isEmpty {
+                    selectedTeamsSection
+                    browseSection
+                } else if trimmedSearch.count < 2 {
+                    ContentUnavailableView(
+                        "Keep typing",
+                        systemImage: "magnifyingglass",
+                        description: Text("Enter at least two characters to search for a team.")
+                    )
+                    .listRowBackground(Color.clear)
+                } else {
+                    searchResultsSection
+                }
 
-            if let errorMessage = store.errorMessage {
-                Section {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                if let errorMessage = store.errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-        }
-        .navigationTitle("Teams")
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchText, prompt: "Search teams")
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            searchCompletionAction
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
+            .searchable(text: $searchText, prompt: "Search teams")
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                searchCompletionAction
+            }
         }
         .toolbar {
             if let onCancel {
@@ -280,34 +282,36 @@ private struct CompetitionTeamSelectionView: View {
     }
 
     var body: some View {
-        List {
-            if store.loadingCompetitionIDs.contains(competition.stableID) && teams.isEmpty {
-                ProgressView("Loading teams")
-            } else if teams.isEmpty {
-                ContentUnavailableView(
-                    "No teams available",
-                    systemImage: "person.3",
-                    description: Text("Pull back and try this competition again later.")
-                )
-                .listRowBackground(Color.clear)
-            } else {
-                ForEach(teams) { team in
-                    TeamSelectionRow(
-                        team: team,
-                        isSelected: selectedTeamIDs.contains(team.id),
-                        action: {
-                            if selectedTeamIDs.contains(team.id) {
-                                selectedTeamIDs.remove(team.id)
-                            } else {
-                                selectedTeamIDs.insert(team.id)
-                            }
-                        }
+        FootballNavigationScreen(title: competition.name, subtitle: "Choose teams") {
+            List {
+                if store.loadingCompetitionIDs.contains(competition.stableID) && teams.isEmpty {
+                    ProgressView("Loading teams")
+                } else if teams.isEmpty {
+                    ContentUnavailableView(
+                        "No teams available",
+                        systemImage: "person.3",
+                        description: Text("Pull back and try this competition again later.")
                     )
+                    .listRowBackground(Color.clear)
+                } else {
+                    ForEach(teams) { team in
+                        TeamSelectionRow(
+                            team: team,
+                            isSelected: selectedTeamIDs.contains(team.id),
+                            action: {
+                                if selectedTeamIDs.contains(team.id) {
+                                    selectedTeamIDs.remove(team.id)
+                                } else {
+                                    selectedTeamIDs.insert(team.id)
+                                }
+                            }
+                        )
+                    }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
         }
-        .navigationTitle(competition.name)
-        .navigationBarTitleDisplayMode(.inline)
         .task {
             await store.loadTeams(for: competition.stableID)
         }

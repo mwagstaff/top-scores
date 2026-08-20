@@ -27,12 +27,10 @@ struct AboutView: View {
     var body: some View {
         Group {
             if embeddedInNavigation {
-                content
-                    .navigationTitle("Profile: About")
-                    .navigationBarTitleDisplayMode(.inline)
+                styledContent
             } else {
                 NavigationStack {
-                    content
+                    styledContent
                 }
             }
         }
@@ -40,6 +38,12 @@ struct AboutView: View {
             let openedAt = Date()
             let durationMs = Int(Date().timeIntervalSince(openedAt) * 1000)
             AppMetricsService.shared.fireScreenView(screen: "about", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
+        }
+    }
+
+    private var styledContent: some View {
+        FootballNavigationScreen(title: "About", subtitle: "Top Scores") {
+            content
         }
     }
 
@@ -191,7 +195,8 @@ struct AboutView: View {
                     #endif
                 }
                 .scrollContentBackground(.hidden)
-                .background(Color(.systemGroupedBackground))
+                .background(Color.clear)
+                .tint(Color.accentColor)
             }
         }
         #if DEBUG

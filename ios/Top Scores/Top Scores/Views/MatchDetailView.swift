@@ -1070,31 +1070,53 @@ private struct MatchDetailScoreboardHero: View {
         let alignment: HorizontalAlignment = isTrailing ? .trailing : .leading
         return VStack(alignment: alignment, spacing: 9) {
             ForEach(summaries) { summary in
-                VStack(alignment: alignment, spacing: 2) {
-                    HStack(spacing: 5) {
-                        if isTrailing { Spacer(minLength: 0) }
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    if !isTrailing {
                         Image(systemName: "soccerball")
                             .font(.caption2)
-                        Text(summary.scorer)
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1)
-                        Text(summary.minute)
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.72))
-                        if !isTrailing { Spacer(minLength: 0) }
                     }
 
-                    if let assister = summary.assister {
-                        Text("Assist: \(assister)")
+                    VStack(alignment: alignment, spacing: 2) {
+                        HStack(spacing: 5) {
+                            if isTrailing {
+                                goalMinute(summary.minute)
+                                goalScorer(summary.scorer)
+                            } else {
+                                goalScorer(summary.scorer)
+                                goalMinute(summary.minute)
+                            }
+                        }
+
+                        if let assister = summary.assister {
+                            Text("Assist: \(assister)")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.68))
+                                .lineLimit(1)
+                        }
+                    }
+
+                    if isTrailing {
+                        Image(systemName: "soccerball")
                             .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.68))
-                            .lineLimit(1)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: isTrailing ? .trailing : .leading)
             }
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, alignment: isTrailing ? .trailing : .leading)
+    }
+
+    private func goalScorer(_ scorer: String) -> some View {
+        Text(scorer)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+    }
+
+    private func goalMinute(_ minute: String) -> some View {
+        Text(minute)
+            .font(.caption.monospacedDigit().weight(.semibold))
+            .foregroundStyle(.white.opacity(0.72))
     }
 
     private func goalSummaries(
