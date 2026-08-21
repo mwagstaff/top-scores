@@ -1001,6 +1001,7 @@ test("normalizeCompetitionFilterName maps World Cup qualifying competitions to t
   );
   assert.equal(isAllowedCompetition("FIFA World Cup"), true);
   assert.equal(isAllowedCompetition("FIFA World Cup Qualifying - European"), true);
+  assert.equal(isAllowedCompetition("DFB-Pokal"), false);
   assert.equal(isAllowedCompetition("Ukraine Premier League"), false);
   assert.equal(isAllowedCompetition("Scottish Championship"), true);
 });

@@ -73,7 +73,7 @@ const BSD_FIXTURE_SEEDED_STANDINGS_TEAM_COUNTS = new Map([
 function isPlaceholderTeam(name) {
   const n = String(name || "").trim();
   if (!n) return true;
-  if (n.includes("/")) return true; // "3D/3E/3I" composite slot
+  if (/^\d[A-Za-z](?:\/\d[A-Za-z])+$/i.test(n)) return true; // "3D/3E/3I" composite slot
   if (/^[WL]\d+$/i.test(n)) return true; // W101 / L33 (winner/loser of match N)
   if (/^\d[A-Za-z]$/.test(n)) return true; // 1A, 2B (group position)
   if (/^[A-Za-z]\d+$/.test(n) && n.length <= 3) return true; // H2, G1
@@ -257,7 +257,7 @@ function mapBsdStatus(event, options = {}) {
   if (isFutureScorelessKickoff && !minuteStr && !period) {
     return null;
   }
-  if (["postponed", "cancelled", "canceled", "abandoned", "suspended", "void"].includes(status)) {
+  if (["postponed", "cancelled", "canceled", "abandoned", "suspended", "interrupted", "void"].includes(status)) {
     return "POSTPONED";
   }
   if (periodSummary && periodSummary.penaltyShootout) {

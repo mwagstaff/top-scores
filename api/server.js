@@ -31114,6 +31114,8 @@ if (typeof matchMonitor.setLiveActivityOperationalMatchesProvider === "function"
 }
 if (typeof matchMonitor.setLiveActivityFixtureCategoryFilter === "function") {
   matchMonitor.setLiveActivityFixtureCategoryFilter((user, match) => {
+    if (!isAllowedCompetitionMatch(match)) return false;
+
     const preferences =
       user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
     const fixtureViewOptionIDs = fixtureViewOptionIDsForPreferences(preferences);

@@ -573,12 +573,10 @@ struct FantasyView: View {
                                     displayData,
                                     playerSelectionEnabled: true,
                                     detailMode: $fantasyPitchDetailMode,
-                                    showsPoints: false
-                                )
-                                currentTeamSummaryCard(
-                                    data,
                                     expectedPoints: fantasyViewModel.currentSquadProjectedGameweekPoints,
-                                    isExpectedPointsLoading: fantasyViewModel.currentSquadProjectedGameweekPoints == nil
+                                    teamValue: data.currentTeamValueMillions,
+                                    isExpectedPointsLoading: fantasyViewModel.currentSquadProjectedGameweekPoints == nil,
+                                    showsPoints: false
                                 )
                                 benchSection(
                                     displayData,
@@ -662,70 +660,6 @@ struct FantasyView: View {
         }
         .pickerStyle(.segmented)
         .accessibilityHint("Switch between your latest squad and your most recently completed gameweek.")
-    }
-
-    private func currentTeamSummaryCard(
-        _ data: FantasySquadDisplayData,
-        expectedPoints: Double?,
-        isExpectedPointsLoading: Bool
-    ) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            teamSummaryProgressCard(
-                title: "Expected points (xP)",
-                value: expectedPoints,
-                displayValue: expectedPoints.map { "\(fantasyExpectedPointsText($0)) xP" },
-                target: 50,
-                tint: Color(red: 0.70, green: 0.28, blue: 0.96),
-                isLoading: isExpectedPointsLoading
-            )
-
-            teamSummaryProgressCard(
-                title: "Team value",
-                value: data.currentTeamValueMillions,
-                displayValue: "£\(data.currentTeamValueMillions.formatted(.number.precision(.fractionLength(1))))m",
-                target: 100,
-                tint: Color(red: 0.12, green: 0.73, blue: 0.25),
-                isLoading: false
-            )
-        }
-    }
-
-    private func teamSummaryProgressCard(
-        title: String,
-        value: Double?,
-        displayValue: String?,
-        target: Double,
-        tint: Color,
-        isLoading: Bool
-    ) -> some View {
-        let ratio = value.map { max($0 / target, 0) }
-
-        return VStack(alignment: .leading, spacing: 18) {
-            Label(title, systemImage: "info.circle")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.94))
-                .labelStyle(.titleAndIcon)
-
-            FantasyTeamSummaryRing(
-                ratio: ratio,
-                centerText: displayValue,
-                tint: tint,
-                isLoading: isLoading
-            )
-            .frame(maxWidth: .infinity)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: 150)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(tint.opacity(0.16), lineWidth: 1)
-        )
-        .accessibilityElement(children: .combine)
     }
 
     private var noPreviousTeamCard: some View {
@@ -2585,11 +2519,14 @@ struct FantasyView: View {
         _ data: FantasySquadDisplayData,
         playerSelectionEnabled: Bool,
         detailMode: Binding<FantasyPitchPlayerDetailMode>,
+        expectedPoints: Double? = nil,
+        teamValue: Double? = nil,
+        isExpectedPointsLoading: Bool = false,
         showsPoints: Bool = true
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
 
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: .bottomTrailing) {
                 FantasyPitchBackground()
 
                 VStack(spacing: 8) {
@@ -2623,13 +2560,42 @@ struct FantasyView: View {
                     )
                 }
                 .padding(.horizontal, 6)
-                .padding(.vertical, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 50)
+
+                if let teamValue {
+                    HStack(alignment: .top, spacing: 8) {
+                        pitchSummaryMetric(
+                            title: "Expected Points (xP)",
+                            value: expectedPoints,
+                            displayValue: expectedPoints.map { "\(fantasyExpectedPointsText($0)) xP" },
+                            target: 50,
+                            tint: Color(red: 0.70, green: 0.28, blue: 0.96),
+                            isLoading: isExpectedPointsLoading
+                        )
+
+                        Spacer(minLength: 44)
+
+                        pitchSummaryMetric(
+                            title: "Team Value",
+                            value: teamValue,
+                            displayValue: "£\(teamValue.formatted(.number.precision(.fractionLength(1))))m",
+                            target: 100,
+                            tint: Color(red: 0.12, green: 0.73, blue: 0.25),
+                            isLoading: false
+                        )
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .allowsHitTesting(false)
+                }
 
                 FantasyPitchDetailToggleButton(mode: detailMode)
-                    .padding(.top, 10)
+                    .padding(.bottom, 10)
                     .padding(.trailing, 10)
             }
-            .frame(height: 540)
+            .frame(height: 576)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -2637,6 +2603,61 @@ struct FantasyView: View {
             }
             .shadow(color: Color.black.opacity(0.34), radius: 16, x: 0, y: 9)
         }
+    }
+
+    private func pitchSummaryMetric(
+        title: String,
+        value: Double?,
+        displayValue: String?,
+        target: Double,
+        tint: Color,
+        isLoading: Bool
+    ) -> some View {
+        let cardShape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
+        return VStack(spacing: 4) {
+            Text(title)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.92))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            FantasyTeamSummaryRing(
+                ratio: value.map { max($0 / target, 0) },
+                centerText: displayValue,
+                tint: tint,
+                isLoading: isLoading,
+                diameter: 52,
+                lineWidth: 5
+            )
+        }
+        .padding(.vertical, 9)
+        .frame(width: 92)
+        .background {
+            cardShape
+                .fill(.thinMaterial)
+                .overlay {
+                    cardShape
+                        .fill(Color(red: 0.025, green: 0.14, blue: 0.095).opacity(0.22))
+                }
+        }
+        .overlay {
+            cardShape
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.30),
+                            tint.opacity(0.20),
+                            Color.white.opacity(0.12)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        }
+        .shadow(color: Color.black.opacity(0.22), radius: 7, x: 0, y: 3)
+        .accessibilityElement(children: .combine)
     }
 
     private func positionRow(
@@ -3613,7 +3634,7 @@ struct FantasyView: View {
     }
 
     private func openFantasyLeagues() {
-        guard let url = URL(string: "https://fantasy.premierleague.com/en/leagues") else { return }
+        guard let url = URL(string: "https://fantasy.premierleague.com/leagues/cups") else { return }
         openURL(url)
     }
 
@@ -4418,17 +4439,17 @@ private struct FantasyPlayerCard: View {
 
             VStack(spacing: 2) {
                 Text(player.displayName)
-                    .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.68)
+                    .minimumScaleFactor(0.72)
                     .foregroundStyle(primaryTextColor)
 
                 if detailMode == .opponent {
                     Text(opponentDisplayText)
-                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .lineLimit(1)
-                        .minimumScaleFactor(0.78)
+                        .minimumScaleFactor(0.82)
                         .foregroundStyle(opponentDifficultyTextColor)
                         .padding(.vertical, 2.5)
                         .frame(width: max(0, width - 12))
@@ -4440,9 +4461,9 @@ private struct FantasyPlayerCard: View {
                     difficultyDots
                 } else {
                     Text(secondaryDisplayText)
-                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.72)
+                        .minimumScaleFactor(0.76)
                         .foregroundStyle(secondaryTextColor)
                 }
             }
@@ -5146,6 +5167,8 @@ private struct FantasyTeamSummaryRing: View {
     let centerText: String?
     let tint: Color
     let isLoading: Bool
+    var diameter: CGFloat = 96
+    var lineWidth: CGFloat = 9
 
     private var baseProgress: Double {
         min(max(ratio ?? 0, 0), 1)
@@ -5156,19 +5179,22 @@ private struct FantasyTeamSummaryRing: View {
     }
 
     private var centerFontSize: CGFloat {
-        (centerText?.count ?? 0) > 6 ? 16 : 21
+        if diameter <= 60 {
+            return (centerText?.count ?? 0) > 6 ? 8.5 : 10.5
+        }
+        return (centerText?.count ?? 0) > 6 ? 16 : 21
     }
 
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.white.opacity(0.12), style: StrokeStyle(lineWidth: 9))
+                .stroke(Color.white.opacity(0.12), style: StrokeStyle(lineWidth: lineWidth))
 
             Circle()
                 .trim(from: 0, to: baseProgress)
                 .stroke(
                     tint,
-                    style: StrokeStyle(lineWidth: 9, lineCap: .round)
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
 
@@ -5177,7 +5203,7 @@ private struct FantasyTeamSummaryRing: View {
                     .trim(from: 0, to: overflowProgress)
                     .stroke(
                         tint.opacity(0.72),
-                        style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                        style: StrokeStyle(lineWidth: max(2, lineWidth / 3), lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
                     .scaleEffect(1.16)
@@ -5194,10 +5220,10 @@ private struct FantasyTeamSummaryRing: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, diameter <= 60 ? 4 : 8)
             }
         }
-        .frame(width: 96, height: 96)
+        .frame(width: diameter, height: diameter)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(centerText ?? "Calculating value")
     }

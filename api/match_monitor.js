@@ -4093,6 +4093,14 @@ function canonicalLiveActivityChannelsForMatch(match) {
   return channels;
 }
 
+function isPlausiblyCurrentLiveActivityMatch(match, nowMs = Date.now()) {
+  if (!isLiveMatchStatus(match && match.score_status)) return false;
+  const kickoffMs = parseMatchDateTimeMs(match);
+  if (!Number.isFinite(kickoffMs)) return false;
+  const elapsedMs = nowMs - kickoffMs;
+  return elapsedMs >= -UPCOMING_MONITOR_WINDOW_MS && elapsedMs <= MAX_MONITOR_DURATION_MS;
+}
+
 function filterCanonicalLiveActivityCandidateMatches(matches, nowMs = Date.now()) {
   const todayDateKey = currentLondonDateKey(nowMs);
   return (Array.isArray(matches) ? matches : [])
@@ -4100,7 +4108,7 @@ function filterCanonicalLiveActivityCandidateMatches(matches, nowMs = Date.now()
     .filter(
       (match) =>
         isLiveActivityMatchOnDateKey(match, todayDateKey) ||
-        isLiveMatchStatus(match && match.score_status)
+        isPlausiblyCurrentLiveActivityMatch(match, nowMs)
     )
     .filter((match) => !isPostponedMatchStatus(match && match.score_status));
 }

@@ -98,9 +98,10 @@ test("mapBsdStatus: future scoreless started event remains upcoming", () => {
   );
 });
 
-test("mapBsdStatus: postponed/abandoned → POSTPONED", () => {
+test("mapBsdStatus: postponed/abandoned/interrupted → POSTPONED", () => {
   assert.equal(mapBsdStatus({ status: "postponed" }), "POSTPONED");
   assert.equal(mapBsdStatus({ status: "abandoned" }), "POSTPONED");
+  assert.equal(mapBsdStatus({ status: "interrupted" }), "POSTPONED");
 });
 
 // ---------------------------------------------------------------------------
@@ -122,9 +123,14 @@ test("isPlaceholderTeam flags knockout slots, keeps real teams", () => {
   ["W101", "L33", "1A", "2B", "H2", "G1", "3D/3E/3I", ""].forEach((n) =>
     assert.equal(isPlaceholderTeam(n), true, `${n} should be placeholder`)
   );
-  ["USA", "Uruguay", "Cabo Verde", "Bosnia & Herzegovina", "Türkiye"].forEach((n) =>
-    assert.equal(isPlaceholderTeam(n), false, `${n} should be real`)
-  );
+  [
+    "USA",
+    "Uruguay",
+    "Cabo Verde",
+    "Bosnia & Herzegovina",
+    "Türkiye",
+    "SC St Tönis 11/20",
+  ].forEach((n) => assert.equal(isPlaceholderTeam(n), false, `${n} should be real`));
 });
 
 // ---------------------------------------------------------------------------

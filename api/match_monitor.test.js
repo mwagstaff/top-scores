@@ -981,6 +981,43 @@ test("filterCanonicalLiveActivityMatchesForUser keeps a match that kicked off ye
   );
 });
 
+test("filterCanonicalLiveActivityMatchesForUser drops stale historical live statuses", () => {
+  const nowMs = Date.parse("2026-08-21T18:21:00Z");
+
+  const filtered = __testHooks.filterCanonicalLiveActivityMatchesForUser(
+    [
+      {
+        match_details_id: "254150",
+        date: "2022-09-26",
+        time: "20:00",
+        league: "International Friendly",
+        home_team: "Mali",
+        away_team: "Zambia",
+        home_score: 0,
+        away_score: 0,
+        score_status: "LIVE",
+        tv_channels: [],
+      },
+      {
+        match_details_id: "209535",
+        date: "2026-08-21",
+        time: "20:00",
+        league: "Premier League",
+        home_team: "Arsenal",
+        away_team: "Coventry City",
+        tv_channels: ["Sky Sports"],
+      },
+    ],
+    liveActivityUser(0, { showAllMatches: true }),
+    nowMs
+  );
+
+  assert.deepEqual(
+    filtered.map((match) => match.match_details_id),
+    ["209535"]
+  );
+});
+
 test("filterCanonicalLiveActivityMatchesForUser uses the Fixtures category filter when provided", () => {
   __testHooks.setLiveActivityFixtureCategoryFilter((_user, match) =>
     match.league === "Premier League"
@@ -1024,6 +1061,56 @@ test("filterCanonicalLiveActivityMatchesForUser uses the Fixtures category filte
         }
       ).eligible,
       false
+    );
+  } finally {
+    __testHooks.setLiveActivityFixtureCategoryFilter(null);
+  }
+});
+
+test("buildLiveActivityEntriesForUser applies the Fixtures category filter to monitored matches", () => {
+  const nowMs = Date.parse("2026-08-21T18:00:00Z");
+  __testHooks.setLiveActivityFixtureCategoryFilter((_user, match) =>
+    match.league !== "DFB-Pokal"
+  );
+
+  try {
+    const entries = __testHooks.buildLiveActivityEntriesForUser(
+      liveActivityUser(0, { showAllMatches: true }),
+      [
+        {
+          matchId: "212143",
+          state: {},
+          match: {
+            match_details_id: "212143",
+            date: "2026-08-21",
+            time: "17:00",
+            league: "DFB-Pokal",
+            home_team: "SC St Tönis 11/20",
+            away_team: "Eintracht Frankfurt",
+            home_score: 0,
+            away_score: 11,
+            score_status: "90",
+            tv_channels: [],
+          },
+        },
+      ],
+      [
+        {
+          match_details_id: "209535",
+          date: "2026-08-21",
+          time: "20:00",
+          league: "Premier League",
+          home_team: "Arsenal",
+          away_team: "Coventry City",
+          tv_channels: ["Sky Sports"],
+        },
+      ],
+      nowMs
+    );
+
+    assert.deepEqual(
+      entries.map((entry) => entry.match.match_details_id),
+      ["209535"]
     );
   } finally {
     __testHooks.setLiveActivityFixtureCategoryFilter(null);
