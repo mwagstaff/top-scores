@@ -2232,7 +2232,6 @@ private struct TeamLogo: View {
     var teamId: String? = nil
     var alternateNames: [String] = []
     var size: CGFloat = 22
-    @State private var badgeCacheVersion: Int = 0
 
     var body: some View {
         Group {
@@ -2250,9 +2249,6 @@ private struct TeamLogo: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .accessibilityHidden(true)
-        .onReceive(NotificationCenter.default.publisher(for: TeamBadgeCache.badgesUpdatedNotification)) { _ in
-            badgeCacheVersion += 1
-        }
     }
 }
 

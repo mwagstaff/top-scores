@@ -5,6 +5,7 @@ import {
   type LeagueTable,
   type LeagueTableGroup,
   type LeagueTableRow,
+  type LeagueTableZone,
   type LeagueTablesPayload,
   type MatchAssistProvider,
   type MatchDetails,
@@ -35,61 +36,8 @@ let channelsCache: string[] | null = null;
 let teamRankingsCache: TeamRankingEntry[] | null = null;
 let competitionWeightsCache: CompetitionWeightEntry[] | null = null;
 
-// Team badge catalog — populated lazily when TEAM_LOGO_SOURCE === "tsdb".
-// Maps idTeam → badge URL. A null map means catalog not loaded yet.
-let teamBadgesByIdCache: Map<string, string> | null = null;
-// Maps idTeam → TSDB brand colours (strColour1/strColour2).
-let teamColorsByIdCache: Map<string, { primary: string | null; secondary: string | null }> | null = null;
-let teamBadgesETag: string | null = null;
-let teamBadgesLoading = false;
-
-export function teamBadgeUrl(teamId: string | null | undefined): string | null {
-  if (!teamId || !teamBadgesByIdCache) return null;
-  return teamBadgesByIdCache.get(teamId) ?? null;
-}
-
-// Primary brand colour (TSDB strColour1) for a team, as `#RRGGBB`, or null.
-export function teamAccentColor(teamId: string | null | undefined): string | null {
-  if (!teamId || !teamColorsByIdCache) return null;
-  return teamColorsByIdCache.get(teamId)?.primary ?? null;
-}
-
 export async function warmTeamBadges(): Promise<void> {
-  if (teamBadgesLoading) return;
-  teamBadgesLoading = true;
-  try {
-    const configRes = await fetch("/api/v1/teams/config");
-    if (!configRes.ok) return;
-    const config = await configRes.json() as Record<string, unknown>;
-    if (String(config.team_logo_source ?? "") !== "tsdb") return;
-
-    const headers: Record<string, string> = {};
-    if (teamBadgesETag) headers["If-None-Match"] = teamBadgesETag;
-    const res = await fetch("/api/v1/teams/badges", { headers });
-    if (res.status === 304) return;
-    if (!res.ok) return;
-
-    const etag = res.headers.get("ETag");
-    const payload = await res.json() as {
-      teams?: Record<string, { badge_url?: string; color_primary?: string | null; color_secondary?: string | null }>;
-    };
-    const teams = payload.teams ?? {};
-    const map = new Map<string, string>();
-    const colorMap = new Map<string, { primary: string | null; secondary: string | null }>();
-    for (const [id, entry] of Object.entries(teams)) {
-      if (entry.badge_url) map.set(id, entry.badge_url);
-      if (entry.color_primary || entry.color_secondary) {
-        colorMap.set(id, { primary: entry.color_primary ?? null, secondary: entry.color_secondary ?? null });
-      }
-    }
-    teamBadgesByIdCache = map;
-    teamColorsByIdCache = colorMap;
-    if (etag) teamBadgesETag = etag;
-  } catch {
-    // non-fatal: fall back to bundled logos
-  } finally {
-    teamBadgesLoading = false;
-  }
+  // Team marks are served by the local logo resolver; no remote warm-up is required.
 }
 const matchDetailsCache = new Map<string, MatchDetails>();
 const matchDetailsPromises = new Map<string, Promise<MatchDetails>>();
@@ -225,7 +173,7 @@ export function fetchTeamRankings(): Promise<TeamRankingEntry[]> {
 let predictionsCache: PredictionLeague[] | null = null;
 let predictionsPromise: Promise<PredictionLeague[]> | null = null;
 
-// Predictions are BSD-exclusive (no TSDB equivalent) and change slowly, so the
+// Predictions change slowly, so the
 // server response is cached in-memory for the tab's lifetime rather than
 // re-fetched per fixtures-screen mount. Callers that need a hard refresh
 // (e.g. after the module-level 1hr TTL in predictions.ts expires) should
@@ -719,10 +667,36 @@ function normalizeLeagueTables(value: unknown): LeagueTable[] {
       sourceUrl: optionalString(source.source_url),
       updatedAt: optionalString(source.updated_at),
       realtime: source.realtime === true,
+      zones: normalizeLeagueTableZones(source.zones),
       groups: normalizeLeagueTableGroups(source.groups),
       rows: normalizeLeagueTableRows(source.rows),
     };
   });
+}
+
+function normalizeLeagueTableZones(value: unknown): LeagueTableZone[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.reduce<LeagueTableZone[]>((zones, item) => {
+    const source = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
+    const from = optionalNumber(source.from);
+    const to = optionalNumber(source.to);
+    const label = asString(source.label).trim();
+    if (from == null || to == null || !Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from || !label) {
+      return zones;
+    }
+
+    zones.push({
+      key: asString(source.key).trim(),
+      label,
+      type: asString(source.type).trim(),
+      from,
+      to,
+    });
+    return zones;
+  }, []);
 }
 
 function normalizeLeagueTableGroups(value: unknown): LeagueTableGroup[] {

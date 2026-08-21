@@ -40,6 +40,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
     let updatedAt: String?
     /// True when live/just-finished results have been overlaid (positions are provisional).
     let realtime: Bool
+    let zones: [LeagueTableZone]
     let groups: [LeagueTableGroup]
     let rows: [LeagueTableRow]
 
@@ -65,6 +66,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         case sourceURL = "source_url"
         case updatedAt = "updated_at"
         case realtime
+        case zones
         case groups
         case rows
     }
@@ -76,6 +78,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         sourceURL: String?,
         updatedAt: String?,
         realtime: Bool = false,
+        zones: [LeagueTableZone] = [],
         groups: [LeagueTableGroup] = [],
         rows: [LeagueTableRow]
     ) {
@@ -85,6 +88,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         self.sourceURL = sourceURL
         self.updatedAt = updatedAt
         self.realtime = realtime
+        self.zones = zones
         self.groups = groups
         self.rows = rows
     }
@@ -97,6 +101,7 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
         realtime = try container.decodeIfPresent(Bool.self, forKey: .realtime) ?? false
+        zones = try container.decodeIfPresent([LeagueTableZone].self, forKey: .zones) ?? []
         groups = try container.decodeIfPresent([LeagueTableGroup].self, forKey: .groups) ?? []
         rows = try container.decodeIfPresent([LeagueTableRow].self, forKey: .rows) ?? []
     }
@@ -109,8 +114,30 @@ struct LeagueTable: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(sourceURL, forKey: .sourceURL)
         try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
         try container.encode(realtime, forKey: .realtime)
+        try container.encode(zones, forKey: .zones)
         try container.encode(groups, forKey: .groups)
         try container.encode(rows, forKey: .rows)
+    }
+}
+
+struct LeagueTableZone: Identifiable, Codable, Hashable, Sendable {
+    let key: String
+    let label: String
+    let type: String
+    let from: Int
+    let to: Int
+
+    nonisolated var id: String {
+        "\(key)-\(from)-\(to)"
+    }
+
+    nonisolated func contains(position: Int) -> Bool {
+        position >= from && position <= to
+    }
+
+    nonisolated var usesLookDownBoundary: Bool {
+        "\(key) \(label) \(type)"
+            .range(of: "releg", options: [.caseInsensitive, .diacriticInsensitive]) != nil
     }
 }
 

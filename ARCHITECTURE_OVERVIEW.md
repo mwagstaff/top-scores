@@ -62,7 +62,7 @@ flowchart LR
 | Source | What it provides | Default pull cadence | Retry behavior | What is updated |
 | --- | --- | --- | --- | --- |
 | LiveFootballOnTV | Scheduled TV fixtures and channel data | Every 30 minutes | No explicit retry in scheduler | `live_matches`, `recent_matches`, `merged_matches` |
-| TheSportsDB Live Scores | Fast live score/status overlay | Every 5 seconds while live matches are active; every 30 seconds when idle | Shared v2 token bucket caps upstream calls below 100/minute | `tsdb_live_matches`, `recent_matches`, `match_details` seeds |
+| BSD | Fixtures, results, live scores, incidents, lineups, broadcasts, players, predictions, and standings | Live events every 10 seconds; incidents every 30 seconds; other datasets use the BSD poller cadence | HTTP 429-aware exponential backoff and retries | `bsd_*` Mongo collections and the `bsd_current_matches` serving projection |
 | BBC Scores/Fixtures Range | Broad past/future fixture coverage | Every 1 hour | No explicit retry in scheduler; multi-page fetch with configured concurrency | `bbc_range_matches`, `merged_matches` |
 | BBC Match Details | Detailed scorers/cards/lineups/aggregate state for in-progress matches | Every 10 seconds | Per-target failures are logged and skipped; remaining targets continue | `match_details` |
 | BBC Tables | League tables plus EPL team list | Tables every 2 minutes, EPL team list every 24 hours | No explicit retry in scheduler | `league_tables`, `premier_league_teams` |
@@ -276,11 +276,8 @@ Important scope note:
 
 ## Player Portrait Source
 
-Player portraits use the existing canonical `cutout_url` response field, with the provider selected by `PLAYER_IMAGE_SOURCE`:
+Player portraits use the canonical `cutout_url` response field and the public, long-cache BSD URL `https://sports.bzzoiro.com/img/player/{bsd_player_id}/`.
 
-- `bsd` (default) emits the public, long-cache BSD URL `https://sports.bzzoiro.com/img/player/{bsd_player_id}/`.
-- `tsdb` preserves the previous TheSportsDB portrait path as a rollback option.
-
-BSD match projections retain `bsd_player_id` for portrait construction while `id_player` remains the mapped TSDB identifier used by the existing player-biography endpoint. When no confident mapping exists, the BSD portrait is still returned but `id_player` is null so clients cannot query TSDB with a BSD identifier.
+BSD match projections expose the BSD player identifier as both `id_player` and `bsd_player_id`, allowing clients to pass it directly to the BSD-backed player-details endpoint.
 
 The web and iOS portrait loaders treat decoded 1×1 responses as missing images and fall back to player initials. This is required because the BSD image proxy can return a successful 1×1 missing-image response rather than an HTTP error.

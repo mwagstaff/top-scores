@@ -5,35 +5,18 @@
 // ---------------------------------------------------------------------------
 // BSD → canonical match adapter.
 //
-// Projects the already-ingested `bsd_*` Mongo collections into the SAME
-// canonical match shape the TSDB pipeline emits (see fetch_tsdb_matches.js).
-// Keeping the shape identical means the source toggle is a cache selection —
-// serving, the clients (which key matches on the source-independent composite
-// `date|time|league|home|away`), and the monitor are all unchanged.
-//
-// The correctness gate is that team and league names + zoned date/time
-// normalise to the SAME values TSDB produces, so the composite id is stable
-// across a source switch. Team names go through team_identity (alias-backed);
-// league names go through BSD_LEAGUE_NAME_MAP; date/time through match_time.
+// Projects the already-ingested `bsd_*` Mongo collections into the canonical
+// match shape consumed by the API, website, iOS app, widgets, and monitor.
 // ---------------------------------------------------------------------------
 
 const { canonicalTeamName } = require("./team_identity");
 const { utcDateTimeToZonedDateTime } = require("./match_time");
-const { __private: tsdbPrivate } = require("./fetch_tsdb_matches");
 const { getBsdRecords } = require("./mongo_client");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
-const {
-  SERVER_CONFIG,
-  PLAYER_IMAGE_SOURCE_BSD,
-} = require("./config");
 const { bsdPlayerImageUrl } = require("./player_images");
 const SunCalc = require("suncalc");
 
-const assignFormationGridPositions = tsdbPrivate.assignFormationGridPositions;
-
-// BSD league_id → canonical league name. Must match what the TSDB pipeline
-// emits for the same competition (e.g. TSDB emits "FIFA World Cup 2026"),
-// otherwise the composite match id diverges across sources.
+// BSD league_id → canonical league name used by clients and preferences.
 const BSD_LEAGUE_NAME_MAP = {
   "27": "FIFA World Cup 2026",
   "1": "Premier League",
@@ -97,7 +80,7 @@ function isPlaceholderTeam(name) {
   return false;
 }
 
-// Format a minute as "67'" or "45+6'", mirroring fetch_tsdb_matches formatMinute.
+// Format a minute as "67'" or "45+6'".
 function bsdMinute(minute, addedTime) {
   if (minute === null || minute === undefined || minute === "") return null;
   const base = String(minute).trim();
@@ -107,8 +90,7 @@ function bsdMinute(minute, addedTime) {
   return `${base}'`;
 }
 
-// BSD position code (G/D/M/F) → canonical category (matches TSDB
-// positionCategoryFromShort output).
+// BSD position code (G/D/M/F) → canonical category.
 function bsdPositionCategory(position) {
   switch (String(position || "").trim().toUpperCase()) {
     case "G": return "goalkeeper";
@@ -117,6 +99,125 @@ function bsdPositionCategory(position) {
     case "F": return "attacker";
     default: return null;
   }
+}
+
+function parseFormationRows(formation) {
+  if (!formation) return null;
+  const parts = String(formation)
+    .trim()
+    .replace(/\s+/g, "-")
+    .split("-")
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return parts.length >= 2 ? [1, ...parts] : null;
+}
+
+function positionSideHint(position) {
+  const normalized = String(position || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  if (/\bleft\b/.test(normalized)) return "left";
+  if (/\bright\b/.test(normalized)) return "right";
+  if (/\b(centre|center|central)\b/.test(normalized)) return "centre";
+  return null;
+}
+
+function preferredSlotsForHint(hint, rowSize, side) {
+  if (!hint || rowSize <= 0) return [];
+  const slots = Array.from({ length: rowSize }, (_, index) => index);
+  const middle = Math.floor(rowSize / 2);
+  const centreSlots = rowSize % 2 === 1
+    ? [middle]
+    : (rowSize >= 4 ? [middle - 1, middle] : []);
+  const screenLeftSlots = slots.filter((slot) => slot < middle);
+  const screenRightSlots = slots.filter((slot) => slot >= rowSize - middle);
+  if (hint === "centre") return centreSlots;
+
+  const screenRightPreferredSlots = rowSize === 4
+    ? [...screenRightSlots].reverse()
+    : screenRightSlots;
+  const logicalLeftSlots = side === "home" ? screenRightPreferredSlots : screenLeftSlots;
+  const logicalRightSlots = side === "home" ? screenLeftSlots : screenRightPreferredSlots;
+  return hint === "left" ? logicalLeftSlots : logicalRightSlots;
+}
+
+function assignSideAwareRowSlots(rowPlayers, side) {
+  const rowSize = rowPlayers.length;
+  if (rowSize <= 1) return rowPlayers;
+
+  const assignment = Array(rowSize).fill(null);
+  const assigned = new Set();
+  const groups = { left: [], right: [], centre: [] };
+  rowPlayers.forEach((player) => {
+    const hint = positionSideHint(player.position);
+    if (hint) groups[hint].push(player);
+  });
+
+  ["right", "left", "centre"].forEach((hint) => {
+    const players = groups[hint];
+    const slots = preferredSlotsForHint(hint, rowSize, side);
+    if (players.length === 0 || players.length > slots.length) return;
+    players.forEach((player, index) => {
+      const slot = slots[index];
+      if (Number.isInteger(slot) && assignment[slot] === null) {
+        assignment[slot] = player;
+        assigned.add(player);
+      }
+    });
+  });
+
+  const unassigned = rowPlayers.filter((player) => !assigned.has(player));
+  let cursor = 0;
+  for (let slot = 0; slot < rowSize; slot += 1) {
+    if (assignment[slot] !== null) continue;
+    assignment[slot] = unassigned[cursor];
+    cursor += 1;
+  }
+  return assignment.filter(Boolean);
+}
+
+function assignFormationGridPositions(starters, formation, options = {}) {
+  const roleOrder = { goalkeeper: 0, defender: 1, midfielder: 2, attacker: 3 };
+  const side = options.side === "away" ? "away" : "home";
+  const sorted = [...starters].sort((left, right) => {
+    const roleDifference =
+      (roleOrder[left.position_category] ?? 4) - (roleOrder[right.position_category] ?? 4);
+    return roleDifference || (left.number ?? 99) - (right.number ?? 99);
+  });
+  const rows = parseFormationRows(formation);
+  if (!rows) {
+    return sorted.map((player, index) => ({
+      ...player,
+      formation_row_index: 0,
+      formation_slot_index: index,
+      formation_row_size: sorted.length,
+    }));
+  }
+
+  const result = [];
+  let cursor = 0;
+  for (let rowIndex = 0; rowIndex < rows.length && cursor < sorted.length; rowIndex += 1) {
+    const players = sorted.slice(cursor, cursor + rows[rowIndex]);
+    const ordered = rowIndex === 0 ? players : assignSideAwareRowSlots(players, side);
+    ordered.forEach((player, slotIndex) => result.push({
+      ...player,
+      formation_row_index: rowIndex,
+      formation_slot_index: slotIndex,
+      formation_row_size: ordered.length,
+    }));
+    cursor += players.length;
+  }
+  if (cursor < sorted.length) {
+    const overflow = sorted.slice(cursor);
+    overflow.forEach((player, slotIndex) => result.push({
+      ...player,
+      formation_row_index: rows.length,
+      formation_slot_index: slotIndex,
+      formation_row_size: overflow.length,
+    }));
+  }
+  return result;
 }
 
 // BSD's `decision` names what was under review (e.g. "goalAwarded");
@@ -129,8 +230,7 @@ function isDisallowedGoalVarDecision(decision, confirmed) {
   return confirmed === false && /goal/i.test(String(decision || ""));
 }
 
-// Maps BSD status/period/current_minute to the internal score_status vocabulary
-// used throughout the codebase (mirrors fetch_tsdb_matches mapTsdbStatus output:
+// Maps BSD status/period/current_minute to the internal score_status vocabulary:
 // null | "HT" | "FT" | "AET" | "Pens" | "POSTPONED" | "ET" | minute | "LIVE").
 function mapBsdStatus(event, options = {}) {
   const status = String(event.status || "").trim().toLowerCase();
@@ -281,12 +381,18 @@ function parseBsdIncidents(incidents) {
   const homeRed = new Map();
   const awayRed = new Map();
 
-  function addGoal(map, player, time, isOwn) {
+  function addGoal(map, player, playerId, time, isOwn) {
     if (!player || !time) return;
-    const existing = map.get(player) || { player, goal_times: [], own_goal_times: [] };
+    const key = playerId ? `id:${playerId}` : `name:${player}`;
+    const existing = map.get(key) || {
+      player,
+      ...(playerId ? { id_player: playerId } : {}),
+      goal_times: [],
+      own_goal_times: [],
+    };
     const bucket = isOwn ? existing.own_goal_times : existing.goal_times;
     if (!bucket.includes(time)) bucket.push(time);
-    map.set(player, existing);
+    map.set(key, existing);
   }
   function addAssist(map, player, time) {
     if (!player || !time) return;
@@ -294,11 +400,16 @@ function parseBsdIncidents(incidents) {
     if (!existing.assist_times.includes(time)) existing.assist_times.push(time);
     map.set(player, existing);
   }
-  function addCard(map, player, time, field) {
+  function addCard(map, player, playerId, time, field) {
     if (!player || !time) return;
-    const existing = map.get(player) || { player, [field]: [] };
+    const key = playerId ? `id:${playerId}` : `name:${player}`;
+    const existing = map.get(key) || {
+      player,
+      ...(playerId ? { id_player: playerId } : {}),
+      [field]: [],
+    };
     if (!existing[field].includes(time)) existing[field].push(time);
-    map.set(player, existing);
+    map.set(key, existing);
   }
 
   incidents.forEach((inc) => {
@@ -306,28 +417,33 @@ function parseBsdIncidents(incidents) {
     const home = inc.is_home === true;
     const minute = bsdMinute(inc.minute, inc.added_time);
     const player = String(inc.player || "").trim() || null;
+    const playerId = /^\d+$/.test(String(inc.player_id ?? "").trim())
+      ? String(inc.player_id).trim()
+      : null;
 
     if (inc.type === "goal") {
       const own = String(inc.goal_type || "").toLowerCase().includes("own");
       const assist = String(inc.assist || "").trim() || null;
       if (own) {
-        // Own goal benefits the opposing side (matches TSDB/BBC convention).
-        addGoal(home ? awayGoals : homeGoals, player, minute, true);
+        // BSD marks is_home as the side awarded the goal. Keep the scorer in
+        // the opposing (player's actual) team array so lineup IDs resolve.
+        addGoal(home ? awayGoals : homeGoals, player, playerId, minute, true);
       } else {
-        addGoal(home ? homeGoals : awayGoals, player, minute, false);
+        addGoal(home ? homeGoals : awayGoals, player, playerId, minute, false);
         if (assist) addAssist(home ? homeAssists : awayAssists, assist, minute);
       }
     } else if (inc.type === "card") {
       const cardType = String(inc.card_type || "").toLowerCase();
       if (cardType.includes("red")) {
-        addCard(home ? homeRed : awayRed, player, minute, "red_card_times");
+        addCard(home ? homeRed : awayRed, player, playerId, minute, "red_card_times");
       } else if (cardType.includes("yellow")) {
-        addCard(home ? homeYellow : awayYellow, player, minute, "yellow_card_times");
+        addCard(home ? homeYellow : awayYellow, player, playerId, minute, "yellow_card_times");
       }
     } else if (inc.type === "varDecision") {
       if (isDisallowedGoalVarDecision(inc.decision, inc.confirmed)) {
         (home ? result.home_var_events : result.away_var_events).push({
           player,
+          ...(playerId ? { id_player: playerId } : {}),
           minute,
           detail: "VAR: Goal disallowed",
         });
@@ -337,7 +453,10 @@ function parseBsdIncidents(incidents) {
 
   const materialiseGoals = (map) =>
     Array.from(map.values()).map((e) => {
-      const out = { player: e.player };
+      const out = {
+        player: e.player,
+        ...(e.id_player ? { id_player: e.id_player } : {}),
+      };
       if (e.goal_times.length) out.goal_times = e.goal_times;
       if (e.own_goal_times.length) out.own_goal_times = e.own_goal_times;
       return out;
@@ -362,14 +481,13 @@ function parseBsdIncidents(incidents) {
 // Lineups
 // ---------------------------------------------------------------------------
 
-function bsdPlayerEntry(player, options = {}) {
+function bsdPlayerEntry(player) {
   if (!player || typeof player !== "object") return null;
   const name = String(player.name || player.short_name || "").trim();
   if (!name) return null;
   const number = Number(player.jersey_number);
   const position = String(player.position || "").trim() || null;
   const bsdPlayerId = player.id != null ? String(player.id) : null;
-  const playerImageSource = options.playerImageSource || SERVER_CONFIG.playerImageSource;
   return {
     number: Number.isFinite(number) ? number : null,
     name,
@@ -378,10 +496,7 @@ function bsdPlayerEntry(player, options = {}) {
     position_category: bsdPositionCategory(position),
     position,
     position_short: position,
-    cutout_url:
-      playerImageSource === PLAYER_IMAGE_SOURCE_BSD
-        ? bsdPlayerImageUrl(bsdPlayerId)
-        : null,
+    cutout_url: bsdPlayerImageUrl(bsdPlayerId),
   };
 }
 
@@ -406,13 +521,27 @@ function extractBsdSubstitutions(incidents, homeLineup, awayLineup) {
     if (!minute) return;
     const playerOn = String(inc.player_in || "").trim() || null;
     const playerOff = String(inc.player_out || "").trim() || null;
+    const playerOnId = /^\d+$/.test(String(inc.player_in_id ?? "").trim())
+      ? String(inc.player_in_id).trim()
+      : null;
+    const playerOffId = /^\d+$/.test(String(inc.player_out_id ?? "").trim())
+      ? String(inc.player_out_id).trim()
+      : null;
     if (!playerOn) return;
     const home_ = inc.is_home === true;
     const lookup = home_ ? homeLookup : awayLookup;
     const subEvent = {
       minute,
-      player_off: playerOff ? { number: lookup.get(playerOff.toLowerCase()) ?? null, name: playerOff } : null,
-      player_on: { number: lookup.get(playerOn.toLowerCase()) ?? null, name: playerOn },
+      player_off: playerOff ? {
+        number: lookup.get(playerOff.toLowerCase()) ?? null,
+        name: playerOff,
+        ...(playerOffId ? { id_player: playerOffId } : {}),
+      } : null,
+      player_on: {
+        number: lookup.get(playerOn.toLowerCase()) ?? null,
+        name: playerOn,
+        ...(playerOnId ? { id_player: playerOnId } : {}),
+      },
     };
     (home_ ? home : away).push(subEvent);
   });
@@ -434,10 +563,10 @@ function buildBsdTeamLineups(lineupsPayload, incidents, options = {}) {
     const team = lineups[side];
     if (!team) return;
     const starters = (Array.isArray(team.players) ? team.players : [])
-      .map((player) => bsdPlayerEntry(player, options))
+      .map((player) => bsdPlayerEntry(player))
       .filter(Boolean);
     const substitutes = (Array.isArray(team.substitutes) ? team.substitutes : [])
-      .map((player) => bsdPlayerEntry(player, options))
+      .map((player) => bsdPlayerEntry(player))
       .filter(Boolean);
     if (starters.length === 0 && substitutes.length === 0) return;
     const formation = String(team.formation || "").trim() || null;
@@ -468,8 +597,8 @@ function canonicalLeagueName(event, leagueNameById) {
   return null;
 }
 
-// Splits a BSD ISO event_date into UTC date + time, then zones it through the
-// shared match_time helper so it matches the TSDB pipeline's date/time exactly.
+// Splits a BSD ISO event_date into UTC date + time, then converts it through
+// the shared match-time helper used by all clients.
 function zonedKickoff(eventDate) {
   const ms = Date.parse(String(eventDate || ""));
   if (!Number.isFinite(ms)) return { date: null, time: null };
@@ -484,6 +613,30 @@ function bsdVenueCoordinates(venue) {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
   return { latitude, longitude };
+}
+
+function bsdVenueDetails(venueId, venue) {
+  if (!venueId || !venue || typeof venue !== "object") return null;
+  const name = String(venue.name || "").trim();
+  if (!name) return null;
+
+  const finiteNumber = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  return {
+    id: String(venueId),
+    name,
+    city: String(venue.city || "").trim() || null,
+    country: String(venue.country || "").trim() || null,
+    capacity: finiteNumber(venue.capacity),
+    built_year: finiteNumber(venue.built_year),
+    latitude: finiteNumber(venue.latitude),
+    longitude: finiteNumber(venue.longitude),
+    image_url: `https://sports.bzzoiro.com/img/venue/${encodeURIComponent(String(venueId))}/`,
+  };
 }
 
 // SunCalc returns the solar altitude in radians at the exact instant. The
@@ -515,7 +668,7 @@ function toNumber(value) {
 // BSD broadcasts are fetched filtered to GB, so every channel is a UK listing.
 // Project a bsd_broadcasts payload's channels into the structured TvChannel
 // shape the clients expect ({ name, country, countryCode, logo }), matching
-// what the TSDB pipeline emitted. countryCode "GB" lets the clients' locale
+// the canonical channel payload. countryCode "GB" lets the clients' locale
 // filter surface them; logo is null because clients resolve logos by name.
 function bsdBroadcastChannels(broadcastsPayload) {
   const channels =
@@ -567,6 +720,35 @@ function bsdStandingsRowToCanonical(row) {
     form: parseBsdFormString(row && row.form),
     rank_status: null,
   };
+}
+
+function bsdStandingsZonesToCanonical(zones) {
+  if (!Array.isArray(zones)) return [];
+
+  return zones.reduce((out, zone) => {
+    if (!zone || typeof zone !== "object") return out;
+    const from = toNumber(zone.from);
+    const to = toNumber(zone.to);
+    const label = String(zone.label || "").trim();
+    if (
+      !Number.isInteger(from) ||
+      !Number.isInteger(to) ||
+      from < 1 ||
+      to < from ||
+      !label
+    ) {
+      return out;
+    }
+
+    out.push({
+      key: String(zone.key || "").trim(),
+      label,
+      type: String(zone.type || "").trim(),
+      from,
+      to,
+    });
+    return out;
+  }, []);
 }
 
 function bsdStandingsRowSort(left, right) {
@@ -627,7 +809,7 @@ function completeBsdStandingsRowsFromEvents(rows, events, { leagueId, seasonId }
 }
 
 // Projects one bsd_standings payload (the raw /leagues/:id/standings response)
-// into the canonical league-table shape shared with the TSDB pipeline.
+// into the canonical league-table shape consumed by the clients.
 // `leagueId`/`updatedAt` come from the Mongo doc wrapper; `leagueNameById`
 // resolves a human league name when BSD_LEAGUE_NAME_MAP has no entry.
 function bsdStandingsPayloadToTable(
@@ -676,6 +858,7 @@ function bsdStandingsPayloadToTable(
     source_url: `https://sports.bzzoiro.com/api/v2/leagues/${id}/standings`,
     updated_at: updatedAt || null,
     realtime: false,
+    zones: bsdStandingsZonesToCanonical(payload.zones),
     groups,
     rows,
   };
@@ -865,6 +1048,8 @@ function bsdEventToCanonicalMatch(event, options = {}) {
   };
 
   if (options.detail) {
+    const venueDetails = bsdVenueDetails(venueId, venue);
+    if (venueDetails) match.venue_details = venueDetails;
     Object.assign(match, parseBsdIncidents(incidents));
     const teamLineups = buildBsdTeamLineups(options.lineupsPayload, incidents, {
       playerImageSource: options.playerImageSource,
@@ -1202,79 +1387,8 @@ async function projectBsdMatches() {
 }
 
 // Projects a single bsd_event (with incidents + lineups) into a canonical
-// match-details payload. `recordsById` lets callers pass pre-loaded docs.
-// Strict enrichment from the persistent bsd_tsdb_player_map (keyed by BSD
-// player id): swaps id_player to the TSDB id used by the existing player-bio
-// endpoint. Image selection remains independent and uses the original BSD id.
-// In BSD image mode, an unmapped player retains their BSD portrait but has no
-// id_player so clients cannot accidentally query TSDB with a BSD id.
-async function enrichBsdLineupPlayerIdentity(match, options = {}) {
-  const lineups = match && match.team_lineups;
-  if (!lineups || typeof lineups !== "object") return match;
-
-  const ids = new Set();
-  ["home", "away"].forEach((side) => {
-    const team = lineups[side];
-    if (!team) return;
-    [...(team.starting_lineup || []), ...(team.substitutes || [])].forEach((p) => {
-      const id = p && p.id_player != null ? String(p.id_player) : null;
-      if (id) ids.add(id);
-    });
-  });
-  if (ids.size === 0) return match;
-
-  const mapDocs = Array.isArray(options.mapDocs)
-    ? options.mapDocs
-    : await getBsdRecords("bsd_tsdb_player_map", { _id: { $in: [...ids] } });
-  const mappingById = new Map();
-  mapDocs.forEach((doc) => {
-    const payload = doc && doc.payload;
-    const tsdbId = payload && payload.tsdb_player_id ? String(payload.tsdb_player_id) : null;
-    if (tsdbId) {
-      mappingById.set(String(doc._id), {
-        cutout_url: payload.cutout_url || null,
-        tsdb_player_id: tsdbId,
-      });
-    }
-  });
-  const playerImageSource = options.playerImageSource || SERVER_CONFIG.playerImageSource;
-
-  const applyIdentity = (players) =>
-    (Array.isArray(players) ? players : []).map((p) => {
-      const bsdPlayerId = p && (p.bsd_player_id != null ? p.bsd_player_id : p.id_player);
-      const normalizedBsdId = bsdPlayerId != null ? String(bsdPlayerId) : null;
-      const mapped = normalizedBsdId ? mappingById.get(normalizedBsdId) : null;
-      if (!mapped) {
-        if (playerImageSource !== PLAYER_IMAGE_SOURCE_BSD) return p;
-        return {
-          ...p,
-          id_player: null,
-          bsd_player_id: normalizedBsdId,
-          cutout_url: bsdPlayerImageUrl(normalizedBsdId),
-        };
-      }
-      return {
-        ...p,
-        id_player: mapped.tsdb_player_id,
-        bsd_player_id: normalizedBsdId,
-        cutout_url:
-          playerImageSource === PLAYER_IMAGE_SOURCE_BSD
-            ? bsdPlayerImageUrl(normalizedBsdId)
-            : mapped.cutout_url || p.cutout_url,
-      };
-    });
-
-  ["home", "away"].forEach((side) => {
-    const team = lineups[side];
-    if (!team) return;
-    team.starting_lineup = applyIdentity(team.starting_lineup);
-    team.substitutes = applyIdentity(team.substitutes);
-  });
-  return match;
-}
-
-const enrichBsdLineupPhotos = enrichBsdLineupPlayerIdentity;
-
+// match-details payload. Lineup identifiers remain BSD player identifiers, so
+// clients can pass them directly to the BSD-backed player-details endpoint.
 async function projectBsdMatchDetails(eventId, options = {}) {
   const id = String(eventId || "").trim();
   if (!id) return null;
@@ -1306,10 +1420,7 @@ async function projectBsdMatchDetails(eventId, options = {}) {
       ? new Map([[venueId, venueDoc.payload || null]])
       : new Map(),
   });
-  return enrichBsdLineupPlayerIdentity(match, {
-    playerImageSource: options.playerImageSource,
-    mapDocs: options.playerMapDocs,
-  });
+  return match;
 }
 
 module.exports = {
@@ -1334,6 +1445,7 @@ module.exports = {
     buildPenaltyResultText,
     parseBsdFormString,
     bsdStandingsRowToCanonical,
+    bsdStandingsZonesToCanonical,
     bsdStandingsPayloadToTable,
     completeBsdStandingsRowsFromEvents,
     buildBsdStandingsEventsFilter,
@@ -1342,13 +1454,12 @@ module.exports = {
     zonedKickoff,
     bsdVenueCoordinates,
     bsdKickoffLightContext,
+    bsdVenueDetails,
     fallbackKickoffLightContext,
     isCurrentSeasonEvent,
     buildCurrentBsdEventsFilter,
     currentSeasonByLeagueFromDocs,
     currentSeasonContextByLeagueFromDocs,
-    enrichBsdLineupPhotos,
-    enrichBsdLineupPlayerIdentity,
     bsdPredictionFixtureToCanonical,
     bsdPredictionsPayloadToLeague,
   },

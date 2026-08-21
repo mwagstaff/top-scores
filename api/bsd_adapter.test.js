@@ -15,11 +15,10 @@ const {
   bsdMinute,
   bsdBroadcastChannels,
   isCurrentSeasonEvent,
-  enrichBsdLineupPhotos,
-  enrichBsdLineupPlayerIdentity,
   bsdPlayerEntry,
   parseBsdFormString,
   bsdStandingsPayloadToTable,
+  bsdStandingsZonesToCanonical,
   completeBsdStandingsRowsFromEvents,
   buildBsdStandingsEventsFilter,
   bsdStandingsEventFromDoc,
@@ -134,20 +133,21 @@ test("isPlaceholderTeam flags knockout slots, keeps real teams", () => {
 
 test("parseBsdIncidents: goal with assist, cards, VAR", () => {
   const incidents = [
-    { type: "goal", assist: "M. Araújo", minute: 45, player: "A. Canobbio", is_home: true, goal_type: "regular", added_time: 6 },
-    { type: "goal", minute: 70, player: "X. Own", is_home: true, goal_type: "own_goal" },
-    { type: "card", minute: 33, player: "S. Ezatolahi", is_home: false, card_type: "yellow" },
-    { type: "card", minute: 67, player: "N. Ngoy", is_home: true, card_type: "red" },
-    { type: "varDecision", minute: 25, player: "M. Taremi", is_home: false, decision: "goalAwarded", confirmed: false },
+    { type: "goal", assist: "M. Araújo", minute: 45, player: "A. Canobbio", player_id: 2908, is_home: true, goal_type: "regular", added_time: 6 },
+    { type: "goal", minute: 70, player: "X. Own", player_id: 999, is_home: true, goal_type: "own_goal" },
+    { type: "card", minute: 33, player: "S. Ezatolahi", player_id: 53951, is_home: false, card_type: "yellow" },
+    { type: "card", minute: 67, player: "N. Ngoy", player_id: 1447, is_home: true, card_type: "red" },
+    { type: "varDecision", minute: 25, player: "M. Taremi", player_id: 3487, is_home: false, decision: "goalAwarded", confirmed: false },
   ];
   const r = parseBsdIncidents(incidents);
-  assert.deepEqual(r.home_goal_scorers, [{ player: "A. Canobbio", goal_times: ["45+6'"] }]);
+  assert.deepEqual(r.home_goal_scorers, [{ player: "A. Canobbio", id_player: "2908", goal_times: ["45+6'"] }]);
   assert.deepEqual(r.home_assists, [{ player: "M. Araújo", assist_times: ["45+6'"] }]);
   // Own goal by home player is credited to the away side's own_goal_times.
-  assert.deepEqual(r.away_goal_scorers, [{ player: "X. Own", own_goal_times: ["70'"] }]);
-  assert.deepEqual(r.away_yellow_cards, [{ player: "S. Ezatolahi", yellow_card_times: ["33'"] }]);
-  assert.deepEqual(r.home_red_cards, [{ player: "N. Ngoy", red_card_times: ["67'"] }]);
+  assert.deepEqual(r.away_goal_scorers, [{ player: "X. Own", id_player: "999", own_goal_times: ["70'"] }]);
+  assert.deepEqual(r.away_yellow_cards, [{ player: "S. Ezatolahi", id_player: "53951", yellow_card_times: ["33'"] }]);
+  assert.deepEqual(r.home_red_cards, [{ player: "N. Ngoy", id_player: "1447", red_card_times: ["67'"] }]);
   assert.equal(r.away_var_events.length, 1);
+  assert.equal(r.away_var_events[0].id_player, "3487");
   // confirmed:false means the goal-award decision did NOT stand — disallowed.
   assert.equal(r.away_var_events[0].detail, "VAR: Goal disallowed");
 });
@@ -225,6 +225,9 @@ test("buildBsdTeamLineups: maps formation, starters, subs, grid positions", () =
   // assignFormationGridPositions attaches grid metadata.
   assert.ok(Number.isInteger(lineups.home.starting_lineup[0].formation_row_index));
   assert.ok(Array.isArray(lineups.home.substitutions));
+  const substitution = [...lineups.home.substitutions, ...lineups.away.substitutions][0];
+  assert.match(String(substitution.player_on.id_player), /^\d+$/);
+  assert.match(String(substitution.player_off.id_player), /^\d+$/);
 });
 
 // ---------------------------------------------------------------------------
@@ -250,9 +253,9 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
   const m = bsdEventToCanonicalMatch(event, {
     venuesById: new Map([["273", { latitude: 42.0909, longitude: -71.2643 }]]),
   });
-  assert.equal(m.home_team, "Cape Verde"); // alias-normalised to TSDB spelling
+  assert.equal(m.home_team, "Cape Verde"); // alias-normalised to BSD spelling
   assert.equal(m.away_team, "Uruguay");
-  assert.equal(m.league, "FIFA World Cup 2026"); // matches what TSDB emits
+  assert.equal(m.league, "FIFA World Cup 2026"); // matches what BSD emits
   assert.equal(m.score_status, "FT");
   assert.equal(m.home_score, 1);
   assert.equal(m.away_score, 2);
@@ -261,11 +264,53 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
   assert.equal(m.venue_id, "273");
   assert.equal(m.kickoff_at, "2026-06-21T19:00:00.000Z");
   assert.equal(m.light_context, "day");
-  // 19:00Z in June → 20:00 Europe/London (BST), so the composite id matches TSDB.
+  // 19:00Z in June → 20:00 Europe/London (BST), so the composite id matches BSD.
   assert.equal(m.date, "2026-06-21");
   assert.equal(m.time, "20:00");
   const compositeId = `${m.date}|${m.time}|${m.league}|${m.home_team}|${m.away_team}`;
   assert.equal(compositeId, "2026-06-21|20:00|FIFA World Cup 2026|Cape Verde|Uruguay");
+});
+
+test("bsdEventToCanonicalMatch: includes cached venue details only in the detail projection", () => {
+  const event = {
+    id: 209914,
+    league_id: 1,
+    home_team: "Sunderland",
+    away_team: "Manchester City",
+    status: "notstarted",
+    event_date: "2027-05-30T15:00:00Z",
+    venue_id: 7,
+  };
+  const venue = {
+    name: "Stadium of Light",
+    city: "Sunderland",
+    country: "England",
+    capacity: 48707,
+    latitude: 54.91404,
+    longitude: -1.388983,
+    built_year: 1969,
+  };
+
+  const summary = bsdEventToCanonicalMatch(event, {
+    venuesById: new Map([["7", venue]]),
+  });
+  const details = bsdEventToCanonicalMatch(event, {
+    detail: true,
+    venuesById: new Map([["7", venue]]),
+  });
+
+  assert.equal(summary.venue_details, undefined);
+  assert.deepEqual(details.venue_details, {
+    id: "7",
+    name: "Stadium of Light",
+    city: "Sunderland",
+    country: "England",
+    capacity: 48707,
+    built_year: 1969,
+    latitude: 54.91404,
+    longitude: -1.388983,
+    image_url: "https://sports.bzzoiro.com/img/venue/7/",
+  });
 });
 
 test("bsdEventToCanonicalMatch: maps BSD league 90 to UEFA Super Cup", () => {
@@ -335,7 +380,7 @@ test("bsdEventToCanonicalMatch: surfaces round_name as league_subcategory", () =
   const m = bsdEventToCanonicalMatch(event);
   // league stays bare — normalizeMatchRecord() strips "League: <stage>" suffixes
   // on the server, so the stage must travel as its own field (matching the
-  // TSDB/BBC pipeline's league_subcategory convention) rather than embedded text.
+  // BSD/BBC pipeline's league_subcategory convention) rather than embedded text.
   assert.equal(m.league, "FIFA World Cup 2026");
   assert.equal(m.league_subcategory, "Round of 32");
 });
@@ -561,34 +606,6 @@ test("current-season projection accepts a finished event with an inconsistent BS
 });
 
 // ---------------------------------------------------------------------------
-// enrichBsdLineupPhotos
-//
-// Mongo is unconfigured in this test environment (no MONGODB_URI_TOP_SCORES),
-// so getBsdRecords always returns []. These tests confirm the function
-// degrades gracefully (no-op, never throws) rather than exercising the real
-// id-swap/photo behaviour, which is validated against live production data
-// (see project notes) since it requires a real bsd_tsdb_player_map.
-// ---------------------------------------------------------------------------
-
-test("enrichBsdLineupPhotos: no-op when match has no team_lineups", async () => {
-  const match = { id: "1", home_team: "A", away_team: "B" };
-  const result = await enrichBsdLineupPhotos(match);
-  assert.equal(result, match);
-});
-
-test("enrichBsdLineupPhotos: returns match unchanged when the map is empty (no Mongo)", async () => {
-  const match = {
-    id: "1",
-    team_lineups: {
-      home: { starting_lineup: [{ id_player: "595", name: "Vinícius Jr.", cutout_url: null }], substitutes: [] },
-      away: { starting_lineup: [], substitutes: [] },
-    },
-  };
-  const result = await enrichBsdLineupPhotos(match, { playerImageSource: "tsdb" });
-  assert.equal(result.team_lineups.home.starting_lineup[0].id_player, "595");
-  assert.equal(result.team_lineups.home.starting_lineup[0].cutout_url, null);
-});
-
 test("bsdPlayerEntry emits a BSD portrait URL without changing the details id contract", () => {
   const player = bsdPlayerEntry(
     { id: 6525, name: "Cameron Burgess", jersey_number: 15, position: "D" },
@@ -599,49 +616,6 @@ test("bsdPlayerEntry emits a BSD portrait URL without changing the details id co
   assert.equal(player.cutout_url, "https://sports.bzzoiro.com/img/player/6525/");
 });
 
-test("enrichBsdLineupPlayerIdentity keeps BSD images while mapping the biography id", async () => {
-  const match = {
-    team_lineups: {
-      home: {
-        starting_lineup: [{
-          id_player: "6525",
-          bsd_player_id: "6525",
-          name: "Cameron Burgess",
-          cutout_url: "https://sports.bzzoiro.com/img/player/6525/",
-        }],
-        substitutes: [{
-          id_player: "9999",
-          bsd_player_id: "9999",
-          name: "Unmapped Player",
-          cutout_url: "https://sports.bzzoiro.com/img/player/9999/",
-        }],
-      },
-    },
-  };
-  const result = await enrichBsdLineupPlayerIdentity(match, {
-    playerImageSource: "bsd",
-    mapDocs: [{
-      _id: "6525",
-      payload: {
-        tsdb_player_id: "34167754",
-        cutout_url: "https://tsdb.test/cameron.png",
-      },
-    }],
-  });
-
-  assert.equal(result.team_lineups.home.starting_lineup[0].id_player, "34167754");
-  assert.equal(
-    result.team_lineups.home.starting_lineup[0].cutout_url,
-    "https://sports.bzzoiro.com/img/player/6525/"
-  );
-  assert.equal(result.team_lineups.home.substitutes[0].id_player, null);
-  assert.equal(
-    result.team_lineups.home.substitutes[0].cutout_url,
-    "https://sports.bzzoiro.com/img/player/9999/"
-  );
-});
-
-// ---------------------------------------------------------------------------
 // Standings
 // ---------------------------------------------------------------------------
 
@@ -662,6 +636,7 @@ test("bsdStandingsPayloadToTable: flat (English Premier League) maps rows, leagu
   assert.equal(table.groups.length, 0);
   assert.equal(table.rows.length, 20);
   assert.equal(table.realtime, false);
+  assert.deepEqual(table.zones, []);
 
   const top = table.rows[0];
   assert.equal(top.position, 1);
@@ -673,6 +648,37 @@ test("bsdStandingsPayloadToTable: flat (English Premier League) maps rows, leagu
   // in-progress overlay at serving time.
   assert.equal("live" in top, false);
   assert.equal("bsd_live" in top, false);
+});
+
+test("bsdStandingsPayloadToTable: preserves valid BSD position zones", () => {
+  const payload = {
+    league_id: 12,
+    season: { name: "Championship 26/27" },
+    grouped: false,
+    zones: [
+      { key: "promo", label: "Promotion", type: "promotion", from: 1, to: 2 },
+      { key: "playoff", label: "Promotion Playoffs", type: "promotion", from: 3, to: 8 },
+      { key: "rel", label: "Relegation", type: "relegation", from: 22, to: 24 },
+    ],
+    standings: [],
+  };
+
+  const table = bsdStandingsPayloadToTable(payload, { leagueId: "12" });
+
+  assert.deepEqual(table.zones, payload.zones);
+});
+
+test("bsdStandingsZonesToCanonical: drops malformed zones", () => {
+  assert.deepEqual(
+    bsdStandingsZonesToCanonical([
+      null,
+      { key: "missing-label", from: 1, to: 2 },
+      { key: "backwards", label: "Backwards", from: 4, to: 3 },
+      { key: "fractional", label: "Fractional", from: 1.5, to: 2 },
+      { key: "valid", label: " Valid zone ", type: " other ", from: "4", to: "6" },
+    ]),
+    [{ key: "valid", label: "Valid zone", type: "other", from: 4, to: 6 }]
+  );
 });
 
 test("bsdStandingsPayloadToTable: grouped (World Cup) builds groups[] sorted A-L, no top-level rows", () => {

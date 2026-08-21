@@ -157,7 +157,7 @@ test("bsdMatchesForTable: filters matches by canonical league name", () => {
   assert.equal(filtered[0].home_team, "A");
 });
 
-test("withNormalizedTableLeagueName: aliases TSDB's bare 'FIFA World Cup' to match.league's 'FIFA World Cup 2026'", () => {
+test("withNormalizedTableLeagueName: aliases BSD's bare 'FIFA World Cup' to match.league's 'FIFA World Cup 2026'", () => {
   const table = { league_id: "4429", league_name: "FIFA World Cup", rows: [] };
   const normalized = withNormalizedTableLeagueName(table);
   assert.equal(normalized.league_name, "FIFA World Cup 2026");

@@ -2,7 +2,7 @@
 
 // ---------------------------------------------------------------------------
 // Player-name fuzzy matching shared by the match-details player enrichment in
-// server.js and the BSD<->TSDB player-id mapping job. Handles abbreviated
+// server.js and BSD player matching. Handles abbreviated
 // names ("A. Gunn") against full names ("Angus Gunn") and strips diacritics.
 // ---------------------------------------------------------------------------
 

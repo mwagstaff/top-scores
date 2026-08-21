@@ -19,7 +19,7 @@ const { sendNotification, sendLiveActivityPush } = require("./apns_client");
 const liveActivityMetrics = require("./live_activity_metrics");
 const fantasyScore = require("./fantasy_score");
 const { isEplSeasonActiveCached } = require("./epl_season_status");
-const { DEFAULT_COMPETITION_WEIGHTS, SERVER_CONFIG } = require("./config");
+const { DEFAULT_COMPETITION_WEIGHTS } = require("./config");
 const {
   matchIncludesHomeNation,
   matchIsMajorGameOfInterest,
@@ -2003,16 +2003,6 @@ let dailyMatchesCheckInFlight = false;
 let liveActivityStartupKickTimers = [];
 let apiBaseURL = "http://localhost:3000/api/v1";
 
-// The monitor follows the global match data source (env-driven, cross-process).
-// Per-request `?source=` overrides are serving-only; the monitor uses the global
-// default so the matches it monitors and the details it polls come from the same
-// source the app/website default to.
-const MONITOR_MATCH_SOURCE = SERVER_CONFIG.matchDataSource;
-function withMatchSourceParam(url) {
-  if (MONITOR_MATCH_SOURCE !== "bsd") return url;
-  return `${url}${url.includes("?") ? "&" : "?"}source=bsd`;
-}
-
 async function runScheduledDailyMatchesCheck(reason = "interval") {
   if (!isMonitoring) return;
   if (dailyMatchesCheckInFlight) {
@@ -2186,10 +2176,8 @@ async function fetchTodaysMatchesWithPagination(today) {
   const seenMatchIds = new Set();
 
   for (let page = 1; page <= maxPages; page += 1) {
-    const url = withMatchSourceParam(
-      `${apiBaseURL}/matches?start=${today}&end=${today}` +
-      `&page=${page}&page_size=${pageSize}`
-    );
+    const url = `${apiBaseURL}/matches?start=${today}&end=${today}` +
+      `&page=${page}&page_size=${pageSize}`;
 
     const response = await fetch(url);
     if (!response.ok) {
@@ -2223,56 +2211,8 @@ async function fetchTodaysMatchesWithPagination(today) {
 }
 
 async function fetchTodaysMonitorCandidates(today) {
-  // The /monitor/candidates endpoint is built from the TSDB pipeline and is not
-  // source-aware. When BSD is the active source, monitor the BSD matches list
-  // directly (already filtered to the allowlist by the serving projection).
-  if (MONITOR_MATCH_SOURCE === "bsd") {
-    const bsdMatches = await fetchTodaysMatchesWithPagination(today);
-    return { matches: bsdMatches, source: "matches_bsd", sourceMeta: null };
-  }
-  const monitorCandidatesUrl = `${apiBaseURL}/monitor/candidates?date=${today}`;
-  try {
-    const response = await fetch(monitorCandidatesUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch monitor candidates: ${response.status}`);
-    }
-
-    const payload = await response.json();
-    if (!payload || typeof payload !== "object" || !Array.isArray(payload.candidates)) {
-      throw new Error("Invalid monitor candidates response format");
-    }
-
-    const seenMatchIds = new Set();
-    const candidates = [];
-    payload.candidates.forEach((candidate) => {
-      const matchId = candidate && candidate.match_details_id
-        ? String(candidate.match_details_id).trim()
-        : "";
-      if (!matchId) return;
-      if (seenMatchIds.has(matchId)) return;
-      seenMatchIds.add(matchId);
-      candidates.push(candidate);
-    });
-
-    return {
-      matches: candidates,
-      source: "monitor_candidates",
-      sourceMeta: payload && payload.source ? payload.source : null,
-    };
-  } catch (error) {
-    logDecision("monitor_candidates_fetch", {
-      result: "fallback_to_matches",
-      date: today,
-      error: error.message || String(error),
-    });
-    const fallbackMatches = await fetchTodaysMatchesWithPagination(today);
-    return {
-      matches: fallbackMatches,
-      source: "matches_fallback",
-      sourceMeta: null,
-      fallbackError: error.message || String(error),
-    };
-  }
+  const matches = await fetchTodaysMatchesWithPagination(today);
+  return { matches, source: "matches_bsd", sourceMeta: null };
 }
 
 async function checkTodaysMatches() {
@@ -2565,7 +2505,7 @@ function mergeSnapshotWithFallback(fallbackMatch, payloadMatch) {
 
 async function fetchInitialMatchSnapshot(matchId, fallbackMatch) {
   const fallback = fallbackMatch && typeof fallbackMatch === "object" ? fallbackMatch : {};
-  const url = withMatchSourceParam(`${apiBaseURL}/matches/${matchId}`);
+  const url = `${apiBaseURL}/matches/${matchId}`;
 
   try {
     const response = await fetch(url);
@@ -2615,7 +2555,7 @@ async function pollMatchDetails(matchId) {
   const monitorState = monitoredMatches.get(matchId);
   if (!monitorState) return;
 
-  const url = withMatchSourceParam(`${apiBaseURL}/matches/${matchId}`);
+  const url = `${apiBaseURL}/matches/${matchId}`;
 
   try {
     const response = await fetch(url);

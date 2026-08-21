@@ -2,143 +2,120 @@
   "Premier League": {
     "id": "premier-league",
     "region": "england",
-    "aliases": ["English Premier League"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/gasy9d1737743125.png"
+    "aliases": ["English Premier League"]
   },
   "UEFA Champions League": {
     "id": "uefa-champions-league",
     "region": "europe",
-    "aliases": ["Champions League"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/facv1u1742998896.png"
+    "aliases": ["Champions League"]
   },
   "FIFA World Cup 2026": {
     "id": "fifa-world-cup-2026",
     "region": "world",
-    "aliases": ["FIFA World Cup"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/e7er5g1696521789.png"
+    "aliases": ["FIFA World Cup"]
   },
   "UEFA Europa League": {
     "id": "uefa-europa-league",
     "region": "europe",
-    "aliases": ["Europa League"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/mlsr7d1718774547.png"
+    "aliases": ["Europa League"]
   },
   "UEFA Conference League": {
     "id": "uefa-conference-league",
     "region": "europe",
-    "aliases": ["UEFA Europa Conference League", "Conference League"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/ymfo5j1718775759.png"
+    "aliases": ["UEFA Europa Conference League", "Conference League"]
   },
   "UEFA Nations League": {
     "id": "uefa-nations-league",
     "region": "europe",
-    "aliases": ["Nations League"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/cwsp321698386224.png"
+    "aliases": ["Nations League"]
   },
   "UEFA Super Cup": {
     "id": "uefa-super-cup",
     "region": "europe",
-    "aliases": [],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/1eimvx1551123834.png"
+    "aliases": []
   },
   "FA Cup": {
     "id": "fa-cup",
     "region": "england",
-    "aliases": ["English FA Cup"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/vk7isd1598802862.png"
+    "aliases": ["English FA Cup"]
   },
   "English League Cup": {
     "id": "english-league-cup",
     "name": "EFL Cup",
     "region": "england",
-    "aliases": ["EFL Cup", "Carabao Cup"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/x1va771565372556.png"
+    "aliases": ["EFL Cup", "Carabao Cup"]
   },
   "La Liga": {
     "id": "la-liga",
     "region": "spain",
-    "aliases": ["Spanish La Liga"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/ja4it51687628717.png"
+    "aliases": ["Spanish La Liga"]
   },
   "Copa del Rey": {
     "id": "copa-del-rey",
     "region": "spain",
-    "aliases": [],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/2ikh3a1671782958.png"
+    "aliases": []
   },
   "Bundesliga": {
     "id": "bundesliga",
     "region": "germany",
-    "aliases": ["German Bundesliga"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/teqh1b1679952008.png"
+    "aliases": ["German Bundesliga"]
   },
   "German Super Cup": {
     "id": "german-super-cup",
     "name": "DFL-Supercup",
     "region": "germany",
-    "aliases": ["DFL Supercup", "DFL-Supercup"],
-    "logo_url": "https://www.thesportsdb.com/images/media/league/badge/uinrh41783491483.png"
+    "aliases": ["DFL Supercup", "DFL-Supercup"]
   },
   "Serie A": {
     "id": "serie-a",
     "region": "italy",
-    "aliases": ["Italian Serie A"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/67q3q21679951383.png"
+    "aliases": ["Italian Serie A"]
   },
   "Ligue 1": {
     "id": "ligue-1",
     "region": "france",
-    "aliases": ["French Ligue 1"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/9f7z9d1742983155.png"
+    "aliases": ["French Ligue 1"]
   },
   "Championship": {
     "id": "championship",
     "region": "england",
-    "aliases": ["English League Championship"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/ty5a681688770169.png"
+    "aliases": ["English League Championship"]
   },
   "Scottish Premiership": {
     "id": "scottish-premiership",
     "region": "scotland",
-    "aliases": ["Scottish Premier League"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/72d3zc1688333496.png"
+    "aliases": ["Scottish Premier League"]
   },
   "Scottish Championship": {
     "id": "scottish-championship",
     "region": "scotland",
-    "aliases": [],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/i57nok1721301867.png"
+    "aliases": []
   },
   "Scottish League One": {
     "id": "scottish-league-one",
     "region": "scotland",
-    "aliases": ["Scottish League 1"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/gb4m951721302014.png"
+    "aliases": ["Scottish League 1"]
   },
   "Scottish League Two": {
     "id": "scottish-league-two",
     "region": "scotland",
-    "aliases": ["Scottish League 2"],
-    "logo_url": "https://a.espncdn.com/i/leaguelogos/soccer/500/48.png"
+    "aliases": ["Scottish League 2"]
   },
   "League One": {
     "id": "league-one",
     "name": "EFL League One",
     "region": "england",
-    "aliases": ["English League 1"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/afedb31688770443.png"
+    "aliases": ["English League 1"]
   },
   "League Two": {
     "id": "league-two",
     "name": "EFL League Two",
     "region": "england",
-    "aliases": ["English League 2"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/jmb3ms1688770451.png"
+    "aliases": ["English League 2"]
   },
   "International Friendly": {
     "id": "international-friendly",
     "region": "world",
-    "aliases": ["International Friendlies"],
-    "logo_url": "https://r2.thesportsdb.com/images/media/league/badge/pdnktx1648659448.png"
+    "aliases": ["International Friendlies"]
   }
 }

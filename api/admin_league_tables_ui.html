@@ -57,7 +57,7 @@
       <button class="btn-primary btn-sm" id="load-btn">Load Table</button>
     </div>
     <div>
-      <button class="btn-sm" id="refresh-btn" title="Fetch latest from TheSportsDB">Refresh from TSDB</button>
+      <button class="btn-sm" id="refresh-btn" title="Load the latest BSD standings">Refresh from BSD</button>
     </div>
   </div>
   <div id="league-info"></div>
@@ -128,7 +128,7 @@ async function loadTable() {
   }
 }
 
-async function refreshFromTSDB() {
+async function refreshFromBSD() {
   const leagueId = document.getElementById("league-select").value;
   if (!leagueId) return;
   document.getElementById("refresh-btn").disabled = true;
@@ -136,17 +136,17 @@ async function refreshFromTSDB() {
   try {
     const res = await fetch(`${ADMIN_API}/league-tables/refresh?leagueId=${encodeURIComponent(leagueId)}`, { method: "POST" });
     const data = await res.json();
-    if (data.has_table === false) {
-      alert(`League ${leagueId} has no table in TheSportsDB (cup / friendly / no standings available).`);
-    } else {
+    if (res.ok) {
       await loadLeagues();
       await loadTable();
+    } else {
+      alert(data.error || "BSD standings refresh failed.");
     }
   } catch (e) {
     alert("Refresh failed: " + e.message);
   }
   document.getElementById("refresh-btn").disabled = false;
-  document.getElementById("refresh-btn").textContent = "Refresh from TSDB";
+  document.getElementById("refresh-btn").textContent = "Refresh from BSD";
 }
 
 // Render match input rows
@@ -302,7 +302,7 @@ function esc(str) {
 
 document.getElementById("load-btn").addEventListener("click", loadTable);
 document.getElementById("simulate-btn").addEventListener("click", runSimulation);
-document.getElementById("refresh-btn").addEventListener("click", refreshFromTSDB);
+document.getElementById("refresh-btn").addEventListener("click", refreshFromBSD);
 
 loadLeagues();
 </script>

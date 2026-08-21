@@ -25,25 +25,24 @@ const {
   TEAM_RANKING_SOURCE_CLUBELO,
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
   TEAM_RANKING_SOURCE_NATIONAL_ELO,
-  TEAM_LOGO_SOURCE_TSDB,
-  PLAYER_IMAGE_SOURCE_BSD,
   normalizeTeamRankingSource,
 } = require("./config");
-const { resolveMatchSource } = require("./match_source");
 const {
   projectBsdMatches,
   projectBsdMatchDetails,
   projectBsdStandings,
   projectBsdPredictions,
+  BSD_LEAGUE_NAME_MAP,
 } = require("./bsd_adapter");
+const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const {
   getSocial: getBsdSocial,
+  getPlayer: getBsdPlayer,
   setRequestObserver: setBsdRequestObserver,
 } = require("./bsd_client");
 const bsdHttpMetrics = require("./bsd_http_metrics");
 const { refreshAllPredictions } = require("./fetch_bsd_predictions");
 const { refreshEplSeasonActive, eplSeasonStatusSnapshot } = require("./epl_season_status");
-const { fetchTeamBadges, badgeMapToPayload } = require("./fetch_tsdb_team_badges");
 const {
   LEAGUE_TABLE_SOURCES,
   DEFAULT_BBC_LEAGUE_TABLES_OUTPUT,
@@ -51,33 +50,15 @@ const {
   setBbcLeagueTablesRequestObserver,
   writeLeagueTables,
 } = require("./fetch_bbc_league_tables");
-const { fetchTsdbLeagueTable } = require("./fetch_tsdb_league_tables");
-const {
-  TSDB_LEAGUE_ALLOWLIST,
-  TSDB_LEAGUE_ID_BY_NAME,
-  TSDB_TRACKED_LEAGUE_IDS,
-  TSDB_EPL_LEAGUE_ID,
-} = require("./thesportsdb_leagues");
-const {
-  setTsdbRequestObserver,
-  fetchTsdbLivescores,
-  fetchTsdbAllLeagueSchedules,
-  fetchTsdbMatchDetails,
-  refreshTsdbSupplementalCachesForMatch,
-  fetchTsdbPremierLeagueTeams,
-} = require("./fetch_tsdb_matches");
 const {
   findPlayerCachesByNames,
-  getBsdPlayerMapsByTsdbIds,
+  getBsdRecords,
+  upsertBsdRecords,
 } = require("./mongo_client");
 const {
-  collectMatchLineupTsdbPlayerIds,
   matchDetailsWithBsdPlayerImages,
   playerDetailsWithBsdImage,
 } = require("./player_images");
-const { getTeam, getPlayer } = require("./thesportsdb_client");
-const { fetchTsdbTvListingsFull } = require("./fetch_tsdb_tv");
-const { fetchSoccerLeagues } = require("./fetch_tsdb_leagues");
 const {
   DEFAULT_CLUB_ELO_BASE_URL,
   DEFAULT_CLUB_ELO_TIMEZONE,
@@ -176,52 +157,6 @@ const DEBUG_ROUTE_STAGE_LOGGING_ENABLED = parseEnvBoolean(
   process.env.DEBUG_ROUTE_STAGE_LOGGING,
   false
 );
-
-const TSDB_LIVESCORE_OUTPUT_PATH =
-  process.env.TSDB_LIVESCORE_OUTPUT_PATH || path.join(__dirname, "tsdb_live_matches.json");
-const parsedTsdbLivescoreIntervalMs = Number(process.env.TSDB_LIVESCORE_INTERVAL_MS || 30 * 1000);
-const TSDB_LIVESCORE_INTERVAL_MS = Number.isFinite(parsedTsdbLivescoreIntervalMs)
-  ? Math.max(1000, Math.floor(parsedTsdbLivescoreIntervalMs))
-  : 30 * 1000;
-const parsedTsdbLivescoreActiveIntervalMs = Number(
-  process.env.TSDB_LIVESCORE_ACTIVE_INTERVAL_MS || 5 * 1000
-);
-const parsedTsdbLivescoreMaxCallsPerMinute = Number(
-  process.env.TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE || 20
-);
-const TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE = Number.isFinite(parsedTsdbLivescoreMaxCallsPerMinute)
-  ? Math.max(1, Math.min(90, Math.floor(parsedTsdbLivescoreMaxCallsPerMinute)))
-  : 20;
-const TSDB_LIVESCORE_MIN_INTERVAL_MS = Math.ceil(60_000 / TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE);
-const TSDB_LIVESCORE_ACTIVE_INTERVAL_MS = Number.isFinite(parsedTsdbLivescoreActiveIntervalMs)
-  ? Math.max(TSDB_LIVESCORE_MIN_INTERVAL_MS, Math.floor(parsedTsdbLivescoreActiveIntervalMs))
-  : Math.max(TSDB_LIVESCORE_MIN_INTERVAL_MS, 5 * 1000);
-const TSDB_SCHEDULE_OUTPUT_PATH =
-  process.env.TSDB_SCHEDULE_OUTPUT_PATH || path.join(__dirname, "tsdb_schedule_matches.json");
-const TSDB_SCHEDULE_INTERVAL_HOURS = Number(process.env.TSDB_SCHEDULE_INTERVAL_HOURS || 1);
-const TSDB_SCHEDULE_INTERVAL_MS = Number(
-  process.env.TSDB_SCHEDULE_INTERVAL_MS || TSDB_SCHEDULE_INTERVAL_HOURS * 60 * 60 * 1000
-);
-
-const TSDB_TV_INTERVAL_HOURS = Number(process.env.TSDB_TV_INTERVAL_HOURS || 2);
-const TSDB_TV_INTERVAL_MS = Number(
-  process.env.TSDB_TV_UPDATE_INTERVAL_MS || TSDB_TV_INTERVAL_HOURS * 60 * 60 * 1000
-);
-const TSDB_SUPPLEMENTAL_CACHE_INTERVAL_MS = Number(
-  process.env.TSDB_SUPPLEMENTAL_CACHE_INTERVAL_MS || 30 * 1000
-);
-const TSDB_SUPPLEMENTAL_CACHE_BATCH_SIZE = Number(
-  process.env.TSDB_SUPPLEMENTAL_CACHE_BATCH_SIZE || 25
-);
-const TSDB_SUPPLEMENTAL_CACHE_CONCURRENCY = Number(
-  process.env.TSDB_SUPPLEMENTAL_CACHE_CONCURRENCY || 2
-);
-const TSDB_CACHE_OBSERVABILITY_INTERVAL_MS = Number(
-  process.env.TSDB_CACHE_OBSERVABILITY_INTERVAL_MS || 30 * 1000
-);
-// How many days of TV listings to keep in MongoDB. Older records are pruned
-// on each successful refresh.
-const TSDB_TV_RETENTION_DAYS = Number(process.env.TSDB_TV_RETENTION_DAYS || 3);
 
 const EPL_OUTPUT_PATH = process.env.EPL_OUTPUT_PATH || path.join(__dirname, "premier_league_teams.json");
 const EPL_INTERVAL_HOURS = Number(process.env.EPL_UPDATE_INTERVAL_HOURS || 24);
@@ -792,17 +727,11 @@ let processCpuUsageSample = {
 let eventLoopUtilizationSample = performance.eventLoopUtilization();
 const RUNTIME_ENVIRONMENT = String(process.env.NODE_ENV || "development").trim() || "development";
 const HTTP_REQUEST_DURATION_BUCKETS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5];
-const TSDB_HTTP_REQUEST_DURATION_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30];
 const SOURCE_FETCH_DURATION_BUCKETS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
 const SOURCE_UPDATE_PHASE_DURATION_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10];
 const APP_EVENT_DURATION_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0];
 const REDIS_OP_DURATION_BUCKETS_S = [0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 5.0];
 const FPL_TRANSFER_RECOMMENDATION_DURATION_BUCKETS = [0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1];
-const TSDB_HTTP_SLOW_REQUEST_WINDOW_MS = Number(
-  process.env.TSDB_HTTP_SLOW_REQUEST_WINDOW_MS || 6 * 60 * 60 * 1000
-);
-const TSDB_HTTP_SLOW_URL_P95_LIMIT = Number(process.env.TSDB_HTTP_SLOW_URL_P95_LIMIT || 100);
-const TSDB_HTTP_SLOW_URL_MAX_LIMIT = Number(process.env.TSDB_HTTP_SLOW_URL_MAX_LIMIT || 20);
 const UNIQUE_USER_WINDOWS = [
   { period: "1m", windowMs: 60 * 1000 },
   { period: "5m", windowMs: 5 * 60 * 1000 },
@@ -815,35 +744,27 @@ const httpRequestMetrics = new Map();
 const sourceFetchMetrics = new Map();
 const bbcHttpRequestMetrics = new Map();
 const bbcHttpFailedResponseMetrics = new Map();
-const tsdbHttpRequestDurationMetrics = new Map();
-let tsdbHttpRecentRequests = [];
 const sourceUpdatePhaseMetrics = new Map();
 const fantasyTransferRecommendationMetrics = new Map();
 const sourceRecordsFetchedTotalBySource = new Map();
 const sourceCacheSizeBySource = new Map();
 const sourceLastSuccessAtSeconds = new Map();
-const SOURCE_TSDB_TV = "tsdb_tv_listings";
-const SOURCE_TSDB_LIVE = "tsdb_live_scores";
-const SOURCE_TSDB_SCHEDULE = "tsdb_schedule_fixtures";
-const SOURCE_TSDB_PREMIER_LEAGUE = "tsdb_premier_league_teams";
 const SOURCE_BBC_LEAGUE_TABLES = "bbc_league_tables";
-const SOURCE_TSDB_LEAGUE_TABLES = "tsdb_league_tables";
 const SOURCE_CLUB_ELO = "club_elo_rankings";
 const SOURCE_CLUB_ELO_FIXTURES = "club_elo_fixtures";
 const SOURCE_FOOTBALL_DATABASE = "football_database_rankings";
 const SOURCE_NATIONAL_ELO = "national_elo_rankings";
-const SOURCE_TSDB_MATCH_DETAILS = "tsdb_match_details";
 const SOURCE_RECENT_CACHE = "recent_matches_cache";
 const SOURCE_FPL_BOOTSTRAP = "fpl_bootstrap_static";
 const SOURCE_FPL_FIXTURES = "fpl_fixtures";
 const SOURCE_FPL_EVENT_LIVE = "fpl_event_live";
-const COMPONENT_SOURCE_TSDB_TV = "source_tsdb_tv";
-const COMPONENT_SOURCE_TSDB_LIVE = "source_tsdb_live";
-const COMPONENT_SOURCE_TSDB_SCHEDULE = "source_tsdb_schedule";
-const COMPONENT_SOURCE_TSDB_MATCH_DETAILS = "source_tsdb_match_details";
-const COMPONENT_SOURCE_TSDB_PREMIER_TEAMS = "source_tsdb_premier_teams";
+const SOURCE_BSD_MATCH_DETAILS = "bsd_match_details";
+const SOURCE_BSD_LIVE = "bsd_live_matches";
+const SOURCE_BSD_SCHEDULE = "bsd_schedule_matches";
+const SOURCE_BSD_PREMIER_LEAGUE = "bsd_premier_league_teams";
+const SOURCE_BSD_LEAGUE_TABLES = "bsd_league_tables";
+const SOURCE_BSD_TV = "bsd_broadcasts";
 const COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES = "source_bbc_league_tables";
-const COMPONENT_SOURCE_TSDB_LEAGUE_TABLES = "source_tsdb_league_tables";
 const COMPONENT_SOURCE_CLUB_ELO = "source_club_elo_rankings";
 const COMPONENT_SOURCE_CLUB_ELO_FIXTURES = "source_club_elo_fixtures";
 const COMPONENT_SOURCE_FOOTBALL_DATABASE = "source_football_database";
@@ -851,11 +772,17 @@ const COMPONENT_SOURCE_NATIONAL_ELO = "source_national_elo";
 const COMPONENT_SOURCE_FPL_BOOTSTRAP = "source_fpl_bootstrap";
 const COMPONENT_SOURCE_FPL_FIXTURES = "source_fpl_fixtures";
 const COMPONENT_SOURCE_FPL_EVENT_LIVE = "source_fpl_event_live";
+const COMPONENT_SOURCE_BSD_MATCH_DETAILS = "source_bsd_match_details";
+const COMPONENT_SOURCE_BSD_LIVE = "source_bsd_live";
+const COMPONENT_SOURCE_BSD_SCHEDULE = "source_bsd_schedule";
+const COMPONENT_SOURCE_BSD_PREMIER_TEAMS = "source_bsd_premier_teams";
+const COMPONENT_SOURCE_BSD_LEAGUE_TABLES = "source_bsd_league_tables";
+const BSD_LEAGUE_ID_BY_NAME = new Map(
+  Object.entries(BSD_LEAGUE_NAME_MAP).map(([id, name]) => [String(name).toLowerCase(), id])
+);
 const COMPONENT_OPERATIONAL_REDIS = "operational_redis";
 const COMPONENT_REDIS_RECONCILIATION = "redis_reconciliation";
 const COMPONENT_BOOTSTRAP = "operational_bootstrap";
-const OP_DATASET_TSDB_LIVE_MATCHES = "tsdb_live_matches";
-const OP_DATASET_TSDB_SCHEDULE_MATCHES = "tsdb_schedule_matches";
 const OP_DATASET_RECENT_MATCHES = "recent_matches";
 const OP_DATASET_MERGED_MATCHES = "merged_matches";
 const OP_DATASET_PREMIER_LEAGUE_TEAMS = "premier_league_teams";
@@ -866,17 +793,14 @@ const OP_DATASET_NATIONAL_ELO_TEAMS = "national_elo_teams";
 const OP_DATASET_MISSING_TEAM_LOGOS = "missing_team_logos";
 const OP_DATASET_TEAM_SHORT_NAMES = "team_short_names";
 const OP_DATASET_CACHE_STATE = "cache_state";
-const OP_DATASET_TEAM_BADGES = "team_badges";
-const SOURCE_TSDB_TEAM_BADGES = "tsdb_team_badges";
-const COMPONENT_SOURCE_TSDB_TEAM_BADGES = "source_tsdb_team_badges";
+const OP_DATASET_BSD_LIVE_MATCHES = "bsd_live_matches";
+const OP_DATASET_BSD_SCHEDULE_MATCHES = "bsd_schedule_matches";
 const CACHE_STATE_DOMAINS = Object.freeze([
   "matches",
   "match_details",
   "teams",
   "tables",
   "team_short_names",
-  "team_badges",
-  "tsdb_live",
 ]);
 const CACHE_STATE_DOMAIN_ALIASES = Object.freeze({
   matches: "matches",
@@ -889,15 +813,6 @@ const CACHE_STATE_DOMAIN_ALIASES = Object.freeze({
   "match-details": "match_details",
   matchdetails: "match_details",
   details: "match_details",
-  tsdb_live: "tsdb_live",
-  "tsdb-live": "tsdb_live",
-  tsdblive: "tsdb_live",
-  tsdb: "tsdb_live",
-  // Legacy aliases kept so any cached references still route correctly.
-  bbc_live: "tsdb_live",
-  "bbc-live": "tsdb_live",
-  bbclive: "tsdb_live",
-  bbc: "tsdb_live",
   team: "teams",
   teams: "teams",
   ranking: "teams",
@@ -910,10 +825,6 @@ const CACHE_STATE_DOMAIN_ALIASES = Object.freeze({
   teamshortnames: "team_short_names",
   short_names: "team_short_names",
   shortnames: "team_short_names",
-  team_badges: "team_badges",
-  "team-badges": "team_badges",
-  teambadges: "team_badges",
-  badges: "team_badges",
 });
 const CACHE_STATE_HEADERS_BY_DOMAIN = Object.freeze({
   matches: "X-Cache-Generation-Matches",
@@ -921,8 +832,6 @@ const CACHE_STATE_HEADERS_BY_DOMAIN = Object.freeze({
   teams: "X-Cache-Generation-Teams",
   tables: "X-Cache-Generation-Tables",
   team_short_names: "X-Cache-Generation-Team-Short-Names",
-  team_badges: "X-Cache-Generation-Team-Badges",
-  tsdb_live: "X-Cache-Generation-Tsdb-Live",
 });
 const eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
 eventLoopDelayMonitor.enable();
@@ -990,67 +899,92 @@ app.use((req, res, next) => {
   next();
 });
 
-let cachedTsdbLiveMatches = [];
-let tsdbLiveLastUpdated = null;
-let tsdbLiveUpdating = false;
-let cachedTsdbScheduleMatches = [];
-let tsdbScheduleLastUpdated = null;
-let tsdbScheduleUpdating = false;
-let cachedTvListingsByEvent = new Map(); // idEvent → TvChannel[]
-let tsdbTvLastUpdated = null;
-let tsdbTvUpdating = false;
 const BBC_RANGE_PROGRESS_WINDOWS = Object.freeze(["past", "today", "future", "all"]);
 let bbcRangeScrapeProgress = buildEmptyBbcRangeScrapeProgress();
 let cachedMergedMatches = [];
 
 // ---------------------------------------------------------------------------
-// BSD match source (evaluation toggle).
-//
-// The global default source comes from MATCH_DATA_SOURCE (env, cross-process);
-// per-request `?source=`/`X-Match-Source` overrides it for serving only. When
-// BSD is selected, matches are served from a short-lived in-memory projection
-// of the bsd_* Mongo collections (continuously updated by the bsd service),
-// refreshed stale-while-revalidate so the hot list path stays in-memory.
+// BSD matches are served from a short-lived in-memory projection of the
+// continuously updated `bsd_*` Mongo collections.
 // ---------------------------------------------------------------------------
-const runtimeMatchSourceDefault = SERVER_CONFIG.matchDataSource;
 const BSD_MATCHES_CACHE_TTL_MS = Number(process.env.BSD_MATCHES_CACHE_TTL_MS || 15_000);
 const BSD_CURRENT_MATCHES_DATASET = "bsd_current_matches";
 let cachedBsdMatches = [];
 let cachedBsdMatchesUpdatedAt = null;
+let cachedBsdCurrentProjectionVersion = null;
 let bsdMatchesCacheBuiltMs = 0;
 let bsdMatchesRefreshInFlight = false;
+let bsdMatchesRefreshPromise = null;
 let cachedTeamCatalog = [];
 let cachedTeamCatalogIndex = new Map();
 let cachedTeamCatalogVersion = null;
 
-async function refreshBsdMatchesCache() {
-  if (bsdMatchesRefreshInFlight) return;
-  bsdMatchesRefreshInFlight = true;
-  try {
-    const metadataByName = await getOperationalDatasetMetadata([BSD_CURRENT_MATCHES_DATASET]);
-    const sharedMetadata = metadataByName && metadataByName[BSD_CURRENT_MATCHES_DATASET];
-    if (
-      cachedBsdMatchesUpdatedAt &&
-      sharedMetadata &&
-      sharedMetadata.updated_at === cachedBsdMatchesUpdatedAt
-    ) {
-      bsdMatchesCacheBuiltMs = Date.now();
-      return;
-    }
-    const sharedProjection = await getOperationalDataset(BSD_CURRENT_MATCHES_DATASET);
-    const matches =
-      sharedProjection && Array.isArray(sharedProjection.payload)
-        ? sharedProjection.payload
-        : await projectBsdMatches();
-    cachedBsdMatches = Array.isArray(matches) ? matches : [];
-    cachedBsdMatchesUpdatedAt =
-      (sharedProjection && sharedProjection.updated_at) || new Date().toISOString();
-    bsdMatchesCacheBuiltMs = Date.now();
-  } catch (error) {
-    console.warn("[BSD] projection refresh failed:", error.message || error);
-  } finally {
-    bsdMatchesRefreshInFlight = false;
+function bsdCurrentProjectionVersion(record) {
+  if (!record || typeof record !== "object") return null;
+  return record.payload_hash || record.updated_at || null;
+}
+
+function applyBsdCurrentMatchesRecord(record) {
+  if (!record || !Array.isArray(record.payload)) return false;
+
+  const incomingUpdatedAtMs = Date.parse(record.updated_at || "");
+  const cachedUpdatedAtMs = Date.parse(cachedBsdMatchesUpdatedAt || "");
+  if (
+    cachedBsdCurrentProjectionVersion &&
+    Number.isFinite(incomingUpdatedAtMs) &&
+    Number.isFinite(cachedUpdatedAtMs) &&
+    incomingUpdatedAtMs < cachedUpdatedAtMs
+  ) {
+    return false;
   }
+
+  cachedBsdMatches = record.payload;
+  cachedMergedMatches = cachedBsdMatches;
+  cachedBsdMatchesUpdatedAt = record.updated_at || null;
+  cachedBsdCurrentProjectionVersion = bsdCurrentProjectionVersion(record);
+  bsdMatchesCacheBuiltMs = Date.now();
+  cachedTeamCatalogVersion = null;
+  setSourceCacheSize(SOURCE_BSD_LIVE, cachedBsdMatches.length);
+  setSourceCacheSize(SOURCE_BSD_SCHEDULE, cachedBsdMatches.length);
+  return true;
+}
+
+function refreshBsdMatchesCache() {
+  if (bsdMatchesRefreshPromise) return bsdMatchesRefreshPromise;
+  bsdMatchesRefreshInFlight = true;
+  bsdMatchesRefreshPromise = (async () => {
+    try {
+      const metadataByName = await getOperationalDatasetMetadata([BSD_CURRENT_MATCHES_DATASET]);
+      const sharedMetadata = metadataByName && metadataByName[BSD_CURRENT_MATCHES_DATASET];
+      const sharedProjectionVersion = bsdCurrentProjectionVersion(sharedMetadata);
+      if (
+        cachedBsdCurrentProjectionVersion &&
+        sharedProjectionVersion &&
+        sharedProjectionVersion === cachedBsdCurrentProjectionVersion
+      ) {
+        bsdMatchesCacheBuiltMs = Date.now();
+        return;
+      }
+      const sharedProjection = await getOperationalDataset(BSD_CURRENT_MATCHES_DATASET);
+      if (applyBsdCurrentMatchesRecord(sharedProjection)) return;
+
+      const matches = await projectBsdMatches();
+      cachedBsdMatches = Array.isArray(matches) ? matches : [];
+      cachedMergedMatches = cachedBsdMatches;
+      cachedBsdMatchesUpdatedAt = new Date().toISOString();
+      cachedBsdCurrentProjectionVersion = null;
+      bsdMatchesCacheBuiltMs = Date.now();
+      cachedTeamCatalogVersion = null;
+      setSourceCacheSize(SOURCE_BSD_LIVE, cachedBsdMatches.length);
+      setSourceCacheSize(SOURCE_BSD_SCHEDULE, cachedBsdMatches.length);
+    } catch (error) {
+      console.warn("[BSD] projection refresh failed:", error.message || error);
+    } finally {
+      bsdMatchesRefreshInFlight = false;
+      bsdMatchesRefreshPromise = null;
+    }
+  })();
+  return bsdMatchesRefreshPromise;
 }
 
 // Returns the BSD projection for serving. Awaits the first build (cold), then
@@ -1063,6 +997,10 @@ async function getBsdMatchesForServing() {
     void refreshBsdMatchesCache();
   }
   return cachedBsdMatches;
+}
+
+async function fetchBsdMatchDetails(matchId) {
+  return projectBsdMatchDetails(matchId);
 }
 
 function currentTeamCatalogSnapshot() {
@@ -1098,20 +1036,25 @@ let cachedBsdTables = [];
 let cachedBsdTablesUpdatedAt = null;
 let bsdTablesCacheBuiltMs = 0;
 let bsdTablesRefreshInFlight = false;
+let bsdTablesRefreshPromise = null;
 
-async function refreshBsdTablesCache() {
-  if (bsdTablesRefreshInFlight) return;
+function refreshBsdTablesCache() {
+  if (bsdTablesRefreshPromise) return bsdTablesRefreshPromise;
   bsdTablesRefreshInFlight = true;
-  try {
-    const tables = await projectBsdStandings();
-    cachedBsdTables = Array.isArray(tables) ? tables : [];
-    cachedBsdTablesUpdatedAt = new Date().toISOString();
-    bsdTablesCacheBuiltMs = Date.now();
-  } catch (error) {
-    console.warn("[BSD] standings projection refresh failed:", error.message || error);
-  } finally {
-    bsdTablesRefreshInFlight = false;
-  }
+  bsdTablesRefreshPromise = (async () => {
+    try {
+      const tables = await projectBsdStandings();
+      cachedBsdTables = Array.isArray(tables) ? tables : [];
+      cachedBsdTablesUpdatedAt = new Date().toISOString();
+      bsdTablesCacheBuiltMs = Date.now();
+    } catch (error) {
+      console.warn("[BSD] standings projection refresh failed:", error.message || error);
+    } finally {
+      bsdTablesRefreshInFlight = false;
+      bsdTablesRefreshPromise = null;
+    }
+  })();
+  return bsdTablesRefreshPromise;
 }
 
 async function getBsdTablesForServing() {
@@ -1134,22 +1077,27 @@ let cachedBsdPredictions = [];
 let cachedBsdPredictionsUpdatedAt = null;
 let bsdPredictionsCacheBuiltMs = 0;
 let bsdPredictionsRefreshInFlight = false;
+let bsdPredictionsRefreshPromise = null;
 
-async function refreshBsdPredictionsCache() {
-  if (bsdPredictionsRefreshInFlight) return;
+function refreshBsdPredictionsCache() {
+  if (bsdPredictionsRefreshPromise) return bsdPredictionsRefreshPromise;
   bsdPredictionsRefreshInFlight = true;
-  try {
-    const leagues = await projectBsdPredictions();
-    cachedBsdPredictions = Array.isArray(leagues) ? leagues : [];
-    cachedBsdPredictionsUpdatedAt = newestIsoTimestamp(
-      cachedBsdPredictions.map((league) => String((league && league.updated_at) || "").trim())
-    ) || new Date().toISOString();
-    bsdPredictionsCacheBuiltMs = Date.now();
-  } catch (error) {
-    console.warn("[BSD] predictions projection refresh failed:", error.message || error);
-  } finally {
-    bsdPredictionsRefreshInFlight = false;
-  }
+  bsdPredictionsRefreshPromise = (async () => {
+    try {
+      const leagues = await projectBsdPredictions();
+      cachedBsdPredictions = Array.isArray(leagues) ? leagues : [];
+      cachedBsdPredictionsUpdatedAt = newestIsoTimestamp(
+        cachedBsdPredictions.map((league) => String((league && league.updated_at) || "").trim())
+      ) || new Date().toISOString();
+      bsdPredictionsCacheBuiltMs = Date.now();
+    } catch (error) {
+      console.warn("[BSD] predictions projection refresh failed:", error.message || error);
+    } finally {
+      bsdPredictionsRefreshInFlight = false;
+      bsdPredictionsRefreshPromise = null;
+    }
+  })();
+  return bsdPredictionsRefreshPromise;
 }
 
 async function getBsdPredictionsForServing() {
@@ -1315,23 +1263,19 @@ async function refreshDeletedMatchIdsCacheAsync() {
 }
 
 function proactivelyWarmMatchListResponseCache() {
-  const snapshot = currentMatchDetailsLookupSnapshot();
-  if (!snapshot) return;
-  const mergedItems = filterMatchesByCompetition(cachedMergedMatches);
-  const bbcRangeItems = filterMatchesByCompetition(cachedTsdbScheduleMatches);
-  // Fire-and-forget: the getter kicks an event-loop-yielding background
-  // rebuild; awaiting it here would block reload/startup paths for ~6s.
+  const mergedItems = filterMatchesByCompetition(cachedBsdMatches);
   void getCachedCanonicalPublicMatchListPayloads({
-    matchDetailsLookup: snapshot.lookup,
-    matchDetailsUpdatedAt: snapshot.updated_at,
-    matchDetailsCount: matchDetailsLookupSize(snapshot.lookup),
+    source: "bsd",
+    matchDetailsLookup: {},
+    matchDetailsUpdatedAt: cachedBsdMatchesUpdatedAt,
+    matchDetailsCount: 0,
     mergedDataset: {
       items: mergedItems,
-      updated_at: tsdbScheduleLastUpdated || tsdbLiveLastUpdated || null,
+      updated_at: cachedBsdMatchesUpdatedAt,
     },
     bbcRangeDataset: {
-      items: bbcRangeItems,
-      updated_at: tsdbScheduleLastUpdated || null,
+      items: [],
+      updated_at: null,
     },
   }).catch((error) => {
     console.warn("[MatchList] Proactive warm failed:", error.message || error);
@@ -1343,17 +1287,13 @@ let recentLastUpdated = null;
 let cachedPremierLeagueTeams = [];
 let eplLastUpdated = null;
 let eplUpdating = false;
-let cachedTeamBadges = {};
-let teamBadgesLastUpdated = null;
-let teamBadgesETag = null;
-let teamBadgesUpdating = false;
-let teamBadgesDailyRefreshTimer = null;
-let teamBadgesNextDailyRefreshAt = null;
 let eplSeasonStatusDailyRefreshTimer = null;
 let eplSeasonStatusNextDailyRefreshAt = null;
 let cachedLeagueTables = [];
 let leagueTablesLastUpdated = null;
 let leagueTablesUpdating = false;
+let leagueTablesDailyRefreshTimer = null;
+let leagueTablesNextDailyRefreshAt = null;
 let cachedClubEloTeams = [];
 let clubEloLastUpdated = null;
 let cachedFixtureViewFilterContext = null;
@@ -1505,8 +1445,8 @@ function buildRuntimeActivitySnapshot() {
     runtime: runtimeRole,
     startup_backfill_running: startupBackfillRunning,
     cache_state_refresh_running: Boolean(cacheStateWatchTask),
-    bbc_live_updating: tsdbLiveUpdating,
-    bbc_range_updating: tsdbScheduleUpdating,
+    bbc_live_updating: bsdMatchesRefreshInFlight,
+    bbc_range_updating: bsdMatchesRefreshInFlight,
     epl_updating: eplUpdating,
     league_tables_updating: leagueTablesUpdating,
     club_elo_updating: clubEloUpdating,
@@ -2006,7 +1946,7 @@ function normalizeCompetitionFilterName(name) {
     "dfl supercup": "german super cup",
     "dfl-supercup": "german super cup",
     "uefa europa conference league": "uefa conference league",
-    // SportsDB uses the plural form; our config uses singular.
+    // BSD uses the plural form; our config uses singular.
     "international friendlies": "international friendly",
   };
   return aliases[lowered] || lowered;
@@ -2094,7 +2034,7 @@ const LEAGUE_TABLE_ID_ALIASES = {
 function normalizeLeagueTableId(value) {
   const str = String(value || "").trim();
   if (!str) return "";
-  // Numeric TSDB IDs — return as-is
+  // Numeric provider IDs are stable and can be returned as-is.
   if (/^\d+$/.test(str)) return str;
   // Legacy BBC slug normalization for any residual data
   const slug = str.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -2111,16 +2051,15 @@ function leagueTableRowsCount(tables) {
 
 function sortLeagueTablesForResponse(tables) {
   if (!Array.isArray(tables)) return [];
-  // Primary: TSDB tracked league order (numeric IDs)
-  const tsdbOrder = new Map(TSDB_TRACKED_LEAGUE_IDS.map((id, index) => [String(id), index]));
+  const bsdOrder = new Map(BSD_LEAGUE_ALLOWLIST.map((id, index) => [String(id), index]));
   // Fallback: BBC source order for any legacy slug-keyed tables still in cache
   const bbcOrder = new Map(LEAGUE_TABLE_SOURCES.map((source, index) => [source.id, index]));
   return [...tables].sort((left, right) => {
     const leftId = normalizeLeagueTableId(left && left.league_id);
     const rightId = normalizeLeagueTableId(right && right.league_id);
-    const leftOrder = tsdbOrder.has(leftId) ? tsdbOrder.get(leftId)
+    const leftOrder = bsdOrder.has(leftId) ? bsdOrder.get(leftId)
       : bbcOrder.has(leftId) ? 10000 + bbcOrder.get(leftId) : Number.MAX_SAFE_INTEGER;
-    const rightOrder = tsdbOrder.has(rightId) ? tsdbOrder.get(rightId)
+    const rightOrder = bsdOrder.has(rightId) ? bsdOrder.get(rightId)
       : bbcOrder.has(rightId) ? 10000 + bbcOrder.get(rightId) : Number.MAX_SAFE_INTEGER;
     if (leftOrder !== rightOrder) return leftOrder - rightOrder;
     const leftName = String((left && left.league_name) || "");
@@ -2139,9 +2078,8 @@ function findLeagueTableById(tables, leagueId) {
 }
 
 function extractPremierLeagueTeamsFromTables(tables) {
-  // Try TSDB numeric ID first, then legacy BBC slug
   const premier =
-    findLeagueTableById(tables, TSDB_EPL_LEAGUE_ID) ||
+    findLeagueTableById(tables, "1") ||
     findLeagueTableById(tables, "premier-league");
   if (!premier || !Array.isArray(premier.rows)) return [];
   return premier.rows
@@ -2232,11 +2170,8 @@ function applyLiveResultsToTable(baseTable, liveMatches) {
   return { ...baseTable, rows, realtime: true };
 }
 
-// TSDB's stored table league_name can be a shorter/older alias than what
-// matches report for the same competition (e.g. tables: "FIFA World Cup",
-// matches: "FIFA World Cup 2026" — see normalizeLeagueName). Normalizing here
-// keeps the served table name consistent with match.league everywhere
-// clients compare the two (competition pickers, live-position lookups).
+// Keep the served table name consistent with match.league everywhere clients
+// compare the two (competition pickers and live-position lookups).
 function withNormalizedTableLeagueName(table) {
   if (!table || !table.league_name) return table;
   const normalized = normalizeLeagueName(table.league_name);
@@ -2334,23 +2269,6 @@ function filterMatchesByCompetition(matches, options = {}) {
   return matches.filter((match) => isAllowedCompetitionMatch(match, options));
 }
 
-// BSD does not currently expose every tracked one-off competition. Keep BSD
-// authoritative while supplementing only the explicitly unsupported schedules
-// that are already collected from TheSportsDB.
-const BSD_TSDB_SUPPLEMENT_COMPETITION_IDS = new Set(["german-super-cup"]);
-
-function filterBsdTsdbScheduleSupplements(matches) {
-  const catalog = competitionCatalogLookup();
-  return (Array.isArray(matches) ? matches : []).filter((match) => {
-    const competition = catalog.get(
-      normalizeCompetitionFilterName(match && match.league)
-    );
-    return Boolean(
-      competition && BSD_TSDB_SUPPLEMENT_COMPETITION_IDS.has(competition.id)
-    );
-  });
-}
-
 function matchDetailsLeagueName(payload, fallbackLeague = null) {
   const statePayload = getMatchDetailsStatePayload(payload);
   const league = String(
@@ -2392,11 +2310,6 @@ function filterMatchDetailsRecordsByCompetition(records) {
   return Object.fromEntries(filteredEntries);
 }
 
-function hasTsdbMatchBacking(match) {
-  if (!match || typeof match !== "object") return false;
-  return match.has_tsdb_source === true;
-}
-
 function buildCanonicalDuplicateComparisonRecord(matchId, payload) {
   if (!payload || typeof payload !== "object") return null;
   const statePayload = getMatchDetailsStatePayload(payload);
@@ -2411,7 +2324,6 @@ function buildCanonicalDuplicateComparisonRecord(matchId, payload) {
     league: statePayload.league,
     home_team: statePayload.home_team,
     away_team: statePayload.away_team,
-    has_tsdb_source: payload.has_tsdb_source === true,
   });
   if (!normalized) return null;
 
@@ -2419,10 +2331,7 @@ function buildCanonicalDuplicateComparisonRecord(matchId, payload) {
     match_id: normalizeMatchDetailsId(matchId || (payload && payload.id)) || null,
     normalized,
     payload,
-    has_tsdb_backing: hasTsdbMatchBacking({
-      details_url: statePayload.details_url,
-      has_tsdb_source: payload.has_tsdb_source === true,
-    }),
+    has_bsd_backing: hasBsdMatchBacking(payload),
   };
 }
 
@@ -2432,14 +2341,13 @@ function canonicalDuplicatePriority(record) {
   const normalized = record.normalized;
   let score = 0;
 
-  if (record.has_tsdb_backing) score += 100;
+  if (record.has_bsd_backing) score += 100;
   if (
     record.match_id &&
     !String(record.match_id).toLowerCase().startsWith(SYNTHETIC_MATCH_ID_PREFIX)
   ) {
     score += 50;
   }
-  if (payload.has_tsdb_source === true) score += 20;
   if (payload.team_lineups) score += 10;
 
   [
@@ -3037,81 +2945,6 @@ function trackSourceUpdatePhaseMetric({ source, phase, startedAtMs }) {
   );
 }
 
-function pruneTsdbHttpRecentRequests(nowMs = Date.now()) {
-  const windowMs =
-    Number.isFinite(TSDB_HTTP_SLOW_REQUEST_WINDOW_MS) && TSDB_HTTP_SLOW_REQUEST_WINDOW_MS > 0
-      ? TSDB_HTTP_SLOW_REQUEST_WINDOW_MS
-      : 6 * 60 * 60 * 1000;
-  const cutoffMs = nowMs - windowMs;
-  if (tsdbHttpRecentRequests.length === 0) return;
-  if (tsdbHttpRecentRequests[0].timestampMs >= cutoffMs) return;
-  tsdbHttpRecentRequests = tsdbHttpRecentRequests.filter((entry) => entry.timestampMs >= cutoffMs);
-}
-
-function percentileFromSorted(values, percentile) {
-  if (!Array.isArray(values) || values.length === 0) return 0;
-  const normalizedPercentile = Math.min(1, Math.max(0, Number(percentile) || 0));
-  const index = Math.min(
-    values.length - 1,
-    Math.max(0, Math.ceil(normalizedPercentile * values.length) - 1)
-  );
-  return values[index];
-}
-
-function buildTsdbHttpSlowUrlRows(nowMs = Date.now()) {
-  pruneTsdbHttpRecentRequests(nowMs);
-  const grouped = new Map();
-
-  tsdbHttpRecentRequests.forEach((entry) => {
-    const labels = {
-      source: entry.source,
-      status_code: entry.statusCode,
-      url: entry.url,
-    };
-    const key = metricLabelKey(labels);
-    if (!grouped.has(key)) {
-      grouped.set(key, {
-        labels,
-        durations: [],
-        count: 0,
-        maxSeconds: 0,
-        maxTimestampSeconds: 0,
-      });
-    }
-    const row = grouped.get(key);
-    row.count += 1;
-    row.durations.push(entry.durationSeconds);
-    if (entry.durationSeconds >= row.maxSeconds) {
-      row.maxSeconds = entry.durationSeconds;
-      row.maxTimestampSeconds = entry.timestampMs / 1000;
-    }
-  });
-
-  const rows = Array.from(grouped.values()).map((row) => {
-    row.durations.sort((lhs, rhs) => lhs - rhs);
-    return {
-      labels: row.labels,
-      count: row.count,
-      p95Seconds: percentileFromSorted(row.durations, 0.95),
-      maxSeconds: row.maxSeconds,
-      maxTimestampSeconds: row.maxTimestampSeconds,
-    };
-  });
-
-  const p95Limit = Math.max(1, Number(TSDB_HTTP_SLOW_URL_P95_LIMIT) || 100);
-  const maxLimit = Math.max(1, Number(TSDB_HTTP_SLOW_URL_MAX_LIMIT) || 20);
-  return {
-    p95Rows: rows
-      .slice()
-      .sort((lhs, rhs) => rhs.p95Seconds - lhs.p95Seconds)
-      .slice(0, p95Limit),
-    maxRows: rows
-      .slice()
-      .sort((lhs, rhs) => rhs.maxSeconds - lhs.maxSeconds)
-      .slice(0, maxLimit),
-  };
-}
-
 function buildBbcRangeProgressWindow() {
   return {
     total: 0,
@@ -3280,27 +3113,6 @@ function trackBbcHttpRequestMetric({
   const requestKey = metricLabelKey(requestLabels);
   bbcHttpRequestMetrics.set(requestKey, (bbcHttpRequestMetrics.get(requestKey) || 0) + 1);
 
-  if (normalizedUrl && normalizedDurationMs !== null) {
-    recordHistogramSample(
-      tsdbHttpRequestDurationMetrics,
-      {
-        source: normalizedSource,
-        status_code: normalizedStatusCode,
-      },
-      normalizedDurationMs / 1000,
-      TSDB_HTTP_REQUEST_DURATION_BUCKETS
-    );
-
-    tsdbHttpRecentRequests.push({
-      source: normalizedSource,
-      statusCode: normalizedStatusCode,
-      url: normalizedUrl,
-      durationSeconds: normalizedDurationMs / 1000,
-      timestampMs: normalizedTimestampMs,
-    });
-    pruneTsdbHttpRecentRequests(normalizedTimestampMs);
-  }
-
   saveBbcRequestHistory({
     source: normalizedSource,
     initiator: String(initiator || "").trim() || null,
@@ -3330,7 +3142,6 @@ function trackBbcHttpRequestMetric({
   );
 }
 
-setTsdbRequestObserver(trackBbcHttpRequestMetric);
 setBbcLeagueTablesRequestObserver(trackBbcHttpRequestMetric);
 setBsdRequestObserver(bsdHttpMetrics.trackRequestMetric);
 
@@ -3340,6 +3151,15 @@ function logPollSuccess(job, details = {}) {
     .map(([key, value]) => `${key}=${String(value).replace(/\s+/g, " ").trim()}`);
   const suffix = fields.length > 0 ? ` ${fields.join(" ")}` : "";
   console.info(`[POLL][SUCCESS] job=${job}${suffix}`);
+}
+
+function logPollFailure(job, error, details = {}) {
+  const fields = Object.entries(details)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => `${key}=${String(value).replace(/\s+/g, " ").trim()}`);
+  const message = error && error.message ? error.message : String(error || "unknown error");
+  fields.push(`error=${message.replace(/\s+/g, " ").trim()}`);
+  console.warn(`[POLL][FAILURE] job=${job} ${fields.join(" ")}`);
 }
 
 function isoTimestampToSeconds(value) {
@@ -3875,6 +3695,54 @@ function millisecondsUntilNextLondonTime(targetHour, targetMinute, now = new Dat
   }
 
   return 24 * 60 * 60 * 1000;
+}
+
+function scheduleLeagueTablesDailyRefresh() {
+  if (leagueTablesDailyRefreshTimer) {
+    cancelRuntimeTimeout(leagueTablesDailyRefreshTimer);
+    leagueTablesDailyRefreshTimer = null;
+  }
+
+  const delayMs = millisecondsUntilNextLondonTime(0, 5);
+  const nextAt = new Date(Date.now() + delayMs);
+  leagueTablesNextDailyRefreshAt = nextAt.toISOString();
+  const londonTarget = londonDateTimeFormatter.format(nextAt);
+  console.info(
+    `[LeagueTables] Daily refresh scheduled next_london="${londonTarget}" next_iso=${leagueTablesNextDailyRefreshAt}`
+  );
+
+  leagueTablesDailyRefreshTimer = registerRuntimeTimeout(async () => {
+    leagueTablesDailyRefreshTimer = null;
+    try {
+      await updateLeagueTables({ trigger: "daily_midnight" });
+    } finally {
+      scheduleLeagueTablesDailyRefresh();
+    }
+  }, delayMs);
+}
+
+function scheduleEplSeasonStatusDailyRefresh() {
+  if (eplSeasonStatusDailyRefreshTimer) {
+    cancelRuntimeTimeout(eplSeasonStatusDailyRefreshTimer);
+    eplSeasonStatusDailyRefreshTimer = null;
+  }
+
+  const delayMs = millisecondsUntilNextLondonTime(0, 15);
+  const nextAt = new Date(Date.now() + delayMs);
+  eplSeasonStatusNextDailyRefreshAt = nextAt.toISOString();
+  const londonTarget = londonDateTimeFormatter.format(nextAt);
+  console.info(
+    `[EplSeasonStatus] Daily refresh scheduled next_london="${londonTarget}" next_iso=${eplSeasonStatusNextDailyRefreshAt}`
+  );
+
+  eplSeasonStatusDailyRefreshTimer = registerRuntimeTimeout(async () => {
+    eplSeasonStatusDailyRefreshTimer = null;
+    try {
+      await refreshEplSeasonActive();
+    } finally {
+      scheduleEplSeasonStatusDailyRefresh();
+    }
+  }, delayMs);
 }
 
 function scheduleFantasyBootstrapDailyRefresh() {
@@ -5911,105 +5779,6 @@ function pollFantasyAssistantManagerEntries() {
   });
 }
 
-const TSDB_CACHE_COLLECTION_NAMES = ["tsdb_players", "tsdb_teams", "tsdb_match_lineups", "tsdb_match_timelines"];
-const emptyTsdbCacheCollectionMetrics = Object.freeze({
-  count: 0,
-  expected_count: 0,
-  missing_count: 0,
-  completion_ratio: 0,
-  final_count: 0,
-  non_final_count: 0,
-  due_count: 0,
-  latest_updated_at_seconds: 0,
-  oldest_updated_at_seconds: 0,
-  next_refresh_at_seconds: 0,
-});
-let tsdbCacheObservabilitySnapshot = {
-  available: false,
-  refreshed_at_seconds: 0,
-  collections: Object.fromEntries(
-    TSDB_CACHE_COLLECTION_NAMES.map((name) => [name, { ...emptyTsdbCacheCollectionMetrics }])
-  ),
-};
-let tsdbCacheObservabilityLastDurationSeconds = 0;
-let tsdbCacheObservabilityRefreshFailuresTotal = 0;
-let tsdbCacheObservabilityRefreshRunning = false;
-
-function tsdbCacheCollectionMetrics(name) {
-  return {
-    ...emptyTsdbCacheCollectionMetrics,
-    ...((tsdbCacheObservabilitySnapshot.collections || {})[name] || {}),
-  };
-}
-
-function appendTsdbCachePrometheusMetrics(lines) {
-  lines.push("# HELP top_scores_tsdb_cache_mongo_available Whether Mongo-backed TheSportsDB cache metrics are available.");
-  lines.push("# TYPE top_scores_tsdb_cache_mongo_available gauge");
-  pushPrometheusSample(
-    lines,
-    "top_scores_tsdb_cache_mongo_available",
-    tsdbCacheObservabilitySnapshot.available ? 1 : 0
-  );
-
-  lines.push("# HELP top_scores_tsdb_cache_snapshot_refreshed_timestamp_seconds Last time TheSportsDB cache observability was refreshed.");
-  lines.push("# TYPE top_scores_tsdb_cache_snapshot_refreshed_timestamp_seconds gauge");
-  pushPrometheusSample(
-    lines,
-    "top_scores_tsdb_cache_snapshot_refreshed_timestamp_seconds",
-    tsdbCacheObservabilitySnapshot.refreshed_at_seconds || 0
-  );
-
-  lines.push("# HELP top_scores_tsdb_cache_refresh_running Whether TheSportsDB cache observability refresh is running.");
-  lines.push("# TYPE top_scores_tsdb_cache_refresh_running gauge");
-  pushPrometheusSample(
-    lines,
-    "top_scores_tsdb_cache_refresh_running",
-    tsdbCacheObservabilityRefreshRunning ? 1 : 0
-  );
-
-  lines.push("# HELP top_scores_tsdb_cache_last_refresh_duration_seconds Duration of the last TheSportsDB cache observability refresh.");
-  lines.push("# TYPE top_scores_tsdb_cache_last_refresh_duration_seconds gauge");
-  pushPrometheusSample(
-    lines,
-    "top_scores_tsdb_cache_last_refresh_duration_seconds",
-    tsdbCacheObservabilityLastDurationSeconds
-  );
-
-  lines.push("# HELP top_scores_tsdb_cache_refresh_failures_total Number of failed TheSportsDB cache observability refreshes.");
-  lines.push("# TYPE top_scores_tsdb_cache_refresh_failures_total counter");
-  pushPrometheusSample(
-    lines,
-    "top_scores_tsdb_cache_refresh_failures_total",
-    tsdbCacheObservabilityRefreshFailuresTotal
-  );
-
-  const metricDefinitions = [
-    ["top_scores_tsdb_cache_records", "Cached TheSportsDB records by Mongo collection.", "count"],
-    ["top_scores_tsdb_cache_expected_records", "Expected TheSportsDB records by Mongo collection.", "expected_count"],
-    ["top_scores_tsdb_cache_missing_records", "Expected TheSportsDB records not yet cached by Mongo collection.", "missing_count"],
-    ["top_scores_tsdb_cache_completion_ratio", "TheSportsDB cache completion ratio by Mongo collection.", "completion_ratio"],
-    ["top_scores_tsdb_cache_final_records", "Cached TheSportsDB records marked final by Mongo collection.", "final_count"],
-    ["top_scores_tsdb_cache_non_final_records", "Cached TheSportsDB records not marked final by Mongo collection.", "non_final_count"],
-    ["top_scores_tsdb_cache_due_records", "Cached TheSportsDB records due for refresh by Mongo collection.", "due_count"],
-    ["top_scores_tsdb_cache_last_updated_timestamp_seconds", "Latest update timestamp for cached TheSportsDB records by Mongo collection.", "latest_updated_at_seconds"],
-    ["top_scores_tsdb_cache_oldest_updated_timestamp_seconds", "Oldest update timestamp for cached TheSportsDB records by Mongo collection.", "oldest_updated_at_seconds"],
-    ["top_scores_tsdb_cache_next_refresh_timestamp_seconds", "Next scheduled refresh timestamp for cached TheSportsDB records by Mongo collection.", "next_refresh_at_seconds"],
-  ];
-
-  metricDefinitions.forEach(([metricName, help, field]) => {
-    lines.push(`# HELP ${metricName} ${help}`);
-    lines.push(`# TYPE ${metricName} gauge`);
-    TSDB_CACHE_COLLECTION_NAMES.forEach((collectionName) => {
-      pushPrometheusSample(
-        lines,
-        metricName,
-        tsdbCacheCollectionMetrics(collectionName)[field],
-        { collection: collectionName }
-      );
-    });
-  });
-}
-
 function buildPrometheusMetricsText() {
   const lines = [];
   const nowMs = Date.now();
@@ -6109,7 +5878,6 @@ function buildPrometheusMetricsText() {
   lines.push("# TYPE top_scores_process_cpu_usage_ratio gauge");
   pushPrometheusSample(lines, "top_scores_process_cpu_usage_ratio", processCpuUsageRatio);
 
-  appendTsdbCachePrometheusMetrics(lines);
 
   lines.push("# HELP nodejs_eventloop_lag_seconds Lag of event loop in seconds.");
   lines.push("# TYPE nodejs_eventloop_lag_seconds gauge");
@@ -6367,76 +6135,31 @@ function buildPrometheusMetricsText() {
     pushPrometheusSample(lines, "source_fetches_total", entry.count, entry.labels);
   });
 
-  lines.push("# HELP top_scores_tsdb_http_requests_total Total number of BBC upstream HTTP requests by source and response code.");
-  lines.push("# TYPE top_scores_tsdb_http_requests_total counter");
+  lines.push("# HELP top_scores_bbc_http_requests_total Total number of BBC upstream HTTP requests by source and response code.");
+  lines.push("# TYPE top_scores_bbc_http_requests_total counter");
   Array.from(bbcHttpRequestMetrics.entries())
     .sort(([lhs], [rhs]) => lhs.localeCompare(rhs))
     .forEach(([key, count]) => {
       pushPrometheusSample(
         lines,
-        "top_scores_tsdb_http_requests_total",
+        "top_scores_bbc_http_requests_total",
         count,
         parseMetricLabelKey(key)
       );
     });
 
-  lines.push("# HELP top_scores_tsdb_http_failed_responses_total Total number of failed BBC upstream HTTP responses by source, response code, and URL.");
-  lines.push("# TYPE top_scores_tsdb_http_failed_responses_total counter");
+  lines.push("# HELP top_scores_bbc_http_failed_responses_total Total number of failed BBC upstream HTTP responses by source, response code, and URL.");
+  lines.push("# TYPE top_scores_bbc_http_failed_responses_total counter");
   Array.from(bbcHttpFailedResponseMetrics.entries())
     .sort(([lhs], [rhs]) => lhs.localeCompare(rhs))
     .forEach(([key, count]) => {
       pushPrometheusSample(
         lines,
-        "top_scores_tsdb_http_failed_responses_total",
+        "top_scores_bbc_http_failed_responses_total",
         count,
         parseMetricLabelKey(key)
       );
     });
-
-  const tsdbHttpDurationMetricEntries = Array.from(tsdbHttpRequestDurationMetrics.values()).sort((lhs, rhs) =>
-    metricLabelKey(lhs.labels).localeCompare(metricLabelKey(rhs.labels))
-  );
-  appendHistogramMetrics(
-    lines,
-    "top_scores_tsdb_http_request_duration_seconds",
-    "Duration of TheSportsDB upstream HTTP requests in seconds by source and response code.",
-    TSDB_HTTP_REQUEST_DURATION_BUCKETS,
-    tsdbHttpDurationMetricEntries
-  );
-
-  const tsdbSlowUrlRows = buildTsdbHttpSlowUrlRows(nowMs);
-  lines.push("# HELP top_scores_tsdb_http_slow_url_p95_seconds Top recent TheSportsDB HTTP URL p95 durations in seconds over the API process rolling window.");
-  lines.push("# TYPE top_scores_tsdb_http_slow_url_p95_seconds gauge");
-  tsdbSlowUrlRows.p95Rows.forEach((entry) => {
-    pushPrometheusSample(lines, "top_scores_tsdb_http_slow_url_p95_seconds", entry.p95Seconds, entry.labels);
-  });
-
-  lines.push("# HELP top_scores_tsdb_http_slow_url_max_seconds Top recent TheSportsDB HTTP URL max durations in seconds over the API process rolling window.");
-  lines.push("# TYPE top_scores_tsdb_http_slow_url_max_seconds gauge");
-  tsdbSlowUrlRows.maxRows.forEach((entry) => {
-    pushPrometheusSample(lines, "top_scores_tsdb_http_slow_url_max_seconds", entry.maxSeconds, entry.labels);
-  });
-
-  lines.push("# HELP top_scores_tsdb_http_slow_url_max_timestamp_seconds Timestamp of the max request for top recent TheSportsDB HTTP URLs over the API process rolling window.");
-  lines.push("# TYPE top_scores_tsdb_http_slow_url_max_timestamp_seconds gauge");
-  tsdbSlowUrlRows.maxRows.forEach((entry) => {
-    pushPrometheusSample(
-      lines,
-      "top_scores_tsdb_http_slow_url_max_timestamp_seconds",
-      entry.maxTimestampSeconds,
-      entry.labels
-    );
-  });
-
-  lines.push("# HELP top_scores_tsdb_http_slow_url_requests Requests observed for top recent TheSportsDB HTTP URL rows over the API process rolling window.");
-  lines.push("# TYPE top_scores_tsdb_http_slow_url_requests gauge");
-  Array.from(
-    [...tsdbSlowUrlRows.p95Rows, ...tsdbSlowUrlRows.maxRows]
-      .reduce((rowsByKey, entry) => rowsByKey.set(metricLabelKey(entry.labels), entry), new Map())
-      .values()
-  ).forEach((entry) => {
-    pushPrometheusSample(lines, "top_scores_tsdb_http_slow_url_requests", entry.count, entry.labels);
-  });
 
   bsdHttpMetrics.appendPrometheusMetrics(lines, nowMs);
 
@@ -6466,19 +6189,19 @@ function buildPrometheusMetricsText() {
       });
     });
 
-  const bbcRangeCoverage = bbcRangeMatchDateCoverage(cachedTsdbScheduleMatches);
-  lines.push("# HELP top_scores_bbc_range_match_date_timestamp_seconds Earliest and latest match dates currently held in the BBC scores and fixtures range cache.");
-  lines.push("# TYPE top_scores_bbc_range_match_date_timestamp_seconds gauge");
+  const bsdMatchCoverage = bbcRangeMatchDateCoverage(cachedBsdMatches);
+  lines.push("# HELP top_scores_bsd_match_date_timestamp_seconds Earliest and latest match dates in the BSD projection cache.");
+  lines.push("# TYPE top_scores_bsd_match_date_timestamp_seconds gauge");
   pushPrometheusSample(
     lines,
-    "top_scores_bbc_range_match_date_timestamp_seconds",
-    bbcRangeCoverage.earliest,
+    "top_scores_bsd_match_date_timestamp_seconds",
+    bsdMatchCoverage.earliest,
     { boundary: "earliest" }
   );
   pushPrometheusSample(
     lines,
-    "top_scores_bbc_range_match_date_timestamp_seconds",
-    bbcRangeCoverage.latest,
+    "top_scores_bsd_match_date_timestamp_seconds",
+    bsdMatchCoverage.latest,
     { boundary: "latest" }
   );
 
@@ -8549,7 +8272,7 @@ function addLeagueIdToMatchPayloads(matches) {
   return matches.map((match) => {
     if (!match || typeof match !== "object") return match;
     const leagueName = String(match.league || "").toLowerCase();
-    const leagueId = leagueName ? (TSDB_LEAGUE_ID_BY_NAME.get(leagueName) || null) : null;
+    const leagueId = leagueName ? (BSD_LEAGUE_ID_BY_NAME.get(leagueName) || null) : null;
     return leagueId ? { ...match, league_id: leagueId } : match;
   });
 }
@@ -8621,8 +8344,8 @@ function collectTeamShortNameScrapeCandidates(matches, knownKeys = new Set()) {
 
 function collectTeamShortNameDiscoveryMatches() {
   return [
-    ...(Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : []),
-    ...(Array.isArray(cachedTsdbScheduleMatches) ? cachedTsdbScheduleMatches : []),
+    ...(Array.isArray(cachedBsdMatches) ? cachedBsdMatches : []),
+    ...(Array.isArray(cachedBsdMatches) ? cachedBsdMatches : []),
     ...(Array.isArray(cachedRecentMatches) ? cachedRecentMatches : []),
     ...(Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []),
   ];
@@ -8659,14 +8382,11 @@ async function updateTeamShortNamesCache(options = {}) {
       limitedCandidates,
       TEAM_SHORT_NAMES_SCRAPE_CONCURRENCY,
       async (candidate) => {
-        // TSDB match details include home_short_name/away_short_name when
-        // available. If the candidate already has them, record them directly.
-        // Dedicated team lookups for short names are deferred to a future
-        // enhancement (see THESPORTSDB_MIGRATION_PLAN.md).
+        // Record provider-supplied short names directly when they are present.
         if (candidate.home_short_name || candidate.away_short_name) {
           const result = rememberTeamShortNamesFromMatch(candidate, {
             updated_at: updatedAt,
-            source: "tsdb_team_short_names_inlined",
+            source: "bsd_team_short_names_inlined",
           });
           entriesAdded += result.added;
           entriesUpdated += result.updated;
@@ -9309,7 +9029,7 @@ function normalizeMatchLineupPlayer(value, options = {}) {
 
   const rawNumber = Number(value.number);
   // null is allowed for players whose squad number is unknown (e.g. incoming
-  // substitutes sourced from the match timeline rather than the lineup endpoint).
+  // substitutes sourced from incidents rather than the lineup endpoint).
   const number = Number.isFinite(rawNumber) ? Math.trunc(rawNumber) : null;
 
   const normalized = {
@@ -9354,7 +9074,7 @@ function normalizeMatchLineupSubstitution(value) {
 
   const minute = String(value.minute || "").trim();
   // player_on may have number=null when the sub came from the bench (squad
-  // number not available from SportsDB timeline). Require at least a name.
+  // number not available from BSD timeline). Require at least a name.
   const playerOff = value.player_off ? normalizeMatchLineupPlayer(value.player_off) : null;
   const playerOn = value.player_on
     ? (normalizeMatchLineupPlayer(value.player_on) ||
@@ -9420,52 +9140,43 @@ function normalizeTeamLineupsPayload(value) {
 
 function normalizePlayerDetailsPayload(value) {
   if (!value || typeof value !== "object") return null;
-  const id = String(value.idPlayer || value.id_player || "").trim();
-  const name = String(value.strPlayer || value.name || "").trim();
+  const id = String(value.id || value.id_player || "").trim();
+  const name = String(value.name || value.short_name || "").trim();
   if (!id || !name) return null;
+
+  const preferredFoot = String(value.preferred_foot || "").trim().toUpperCase();
+  const side = preferredFoot === "L" ? "Left" : preferredFoot === "R" ? "Right" : null;
 
   return {
     id,
     name,
-    team: String(value.strTeam || "").trim() || null,
-    born: String(value.dateBorn || "").trim() || null,
-    description: String(value.strDescriptionEN || "").replace(/\r\n/g, "\n").trim() || null,
-    side: String(value.strSide || "").trim() || null,
-    position: String(value.strPosition || "").trim() || null,
-    birth_location: String(value.strBirthLocation || "").trim() || null,
-    cutout_url: String(value.strCutout || "").trim() || null,
-    thumb_url: String(value.strThumb || "").trim() || null,
-    render_url: String(value.strRender || "").trim() || null,
+    team: null,
+    born: String(value.date_of_birth || "").trim() || null,
+    description: null,
+    side,
+    position: String(value.specific_position || value.position || "").trim() || null,
+    birth_location: null,
+    cutout_url: playerDetailsWithBsdImage({}, id).cutout_url,
+    thumb_url: null,
+    render_url: null,
   };
 }
 
-async function withConfiguredPlayerDetailsImage(payload, playerId, options = {}) {
-  const playerImageSource = options.playerImageSource || SERVER_CONFIG.playerImageSource;
-  if (playerImageSource !== PLAYER_IMAGE_SOURCE_BSD || !payload) return payload;
-  const mapDocs = Array.isArray(options.mapDocs)
-    ? options.mapDocs
-    : await getBsdPlayerMapsByTsdbIds([playerId]);
-  return playerDetailsWithBsdImage(payload, playerId, mapDocs);
+function withConfiguredPlayerDetailsImage(payload, playerId) {
+  return playerDetailsWithBsdImage(payload, playerId);
 }
 
-async function withConfiguredMatchDetailsPlayerImages(payload, options = {}) {
-  const playerImageSource = options.playerImageSource || SERVER_CONFIG.playerImageSource;
-  if (playerImageSource !== PLAYER_IMAGE_SOURCE_BSD || !payload) return payload;
-  const tsdbPlayerIds = collectMatchLineupTsdbPlayerIds(payload);
-  const mapDocs = Array.isArray(options.mapDocs)
-    ? options.mapDocs
-    : await getBsdPlayerMapsByTsdbIds(tsdbPlayerIds);
-  return matchDetailsWithBsdPlayerImages(payload, mapDocs);
+function withConfiguredMatchDetailsPlayerImages(payload) {
+  return matchDetailsWithBsdPlayerImages(payload);
 }
 
-const TSDB_ENTITY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const TSDB_ENTITY_WARM_CONCURRENCY = 3;
+const BSD_PLAYER_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const playerPayloadRefreshes = new Map();
 
-function tsdbEntityCacheFresh(record, nowMs = Date.now()) {
+function bsdPlayerCacheFresh(record, nowMs = Date.now()) {
   if (!record || typeof record !== "object") return false;
-  const updatedAtMs = Number(record.updated_at_ms);
-  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < TSDB_ENTITY_CACHE_MAX_AGE_MS;
+  const updatedAtMs = Date.parse(String(record.updated_at || ""));
+  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < BSD_PLAYER_CACHE_MAX_AGE_MS;
 }
 
 function normalizedLineupPlayerPosition(player) {
@@ -9542,22 +9253,17 @@ function playerDetailsPayloadFromMatchLineups(playerId, matches = matchDetailsBy
 }
 
 async function fetchAndCachePlayerPayload(playerId, options = {}) {
-  const response = await getPlayer(playerId, {
+  const raw = await getBsdPlayer(playerId, {
     initiator: options.initiator || "api",
     reason: options.reason || "player_details_request",
     trigger: options.trigger || "player_details_request",
   });
-  const players = Array.isArray(response && response.lookup) ? response.lookup : [];
-  const raw = players[0] || null;
   const payload = normalizePlayerDetailsPayload(raw);
-  if (!payload) return { payload: null, source: "tsdb_player" };
-  await upsertPlayerCache(playerId, raw, {
-    next_refresh_at_ms: Date.now() + TSDB_ENTITY_CACHE_MAX_AGE_MS,
-    source: "tsdb_player",
-  }).catch((error) => {
+  if (!payload) return { payload: null, source: "bsd_player" };
+  await upsertBsdRecords("bsd_players", [{ id: playerId, payload: raw }]).catch((error) => {
     console.warn(`[API] Failed to cache player ${playerId}:`, error.message || error);
   });
-  return { payload, source: "tsdb_player" };
+  return { payload, source: "bsd_player" };
 }
 
 function refreshPlayerPayload(playerId, options = {}) {
@@ -9583,14 +9289,16 @@ function refreshPlayerPayloadInBackground(playerId, options = {}) {
 
 async function getCachedOrFetchPlayerPayload(playerId, options = {}) {
   const nowMs = Date.now();
-  const cached = await getPlayerCache(playerId).catch(() => null);
+  const cached = await getBsdRecords("bsd_players", { _id: String(playerId) })
+    .then((records) => records[0] || null)
+    .catch(() => null);
   const cachedPayload = normalizePlayerDetailsPayload(cached && cached.payload);
   if (!options.force && cachedPayload) {
-    if (tsdbEntityCacheFresh(cached, nowMs)) {
-      return { payload: cachedPayload, source: "mongo_player_cache" };
+    if (bsdPlayerCacheFresh(cached, nowMs)) {
+      return { payload: cachedPayload, source: "bsd_player_cache" };
     }
     refreshPlayerPayloadInBackground(playerId, options);
-    return { payload: cachedPayload, source: "mongo_player_cache_stale" };
+    return { payload: cachedPayload, source: "bsd_player_cache_stale" };
   }
 
   if (!options.force) {
@@ -9684,107 +9392,6 @@ function lineupPlayerNameMatchScore(left, right) {
   if (left.full.length >= 3 && right.full.endsWith(` ${left.full}`)) return 1;
   if (right.full.length >= 3 && left.full.endsWith(` ${right.full}`)) return 1;
   return 0;
-}
-
-function parseTsdbEntityIdsFromRequest(req, fields = []) {
-  const values = [];
-  const body = req && req.body && typeof req.body === "object" ? req.body : {};
-  fields.forEach((field) => {
-    const bodyValue = body[field];
-    if (Array.isArray(bodyValue)) values.push(...bodyValue);
-    else if (bodyValue !== undefined && bodyValue !== null) values.push(bodyValue);
-  });
-  if (body.ids !== undefined) {
-    if (Array.isArray(body.ids)) values.push(...body.ids);
-    else values.push(body.ids);
-  }
-  const queryIds = req && req.query && req.query.ids ? String(req.query.ids) : "";
-  if (queryIds) values.push(...queryIds.split(","));
-  return [
-    ...new Set(
-      values
-        .flatMap((value) => String(value || "").split(","))
-        .map((value) => value.trim())
-        .filter((value) => /^\d+$/.test(value))
-    ),
-  ];
-}
-
-function collectKnownLineupPlayerIds() {
-  const ids = new Set();
-  matchDetailsById.forEach((payload) => {
-    collectLineupPlayers(payload && payload.team_lineups).forEach((player) => {
-      const id = String(player.id_player || "").trim();
-      if (/^\d+$/.test(id)) ids.add(id);
-    });
-  });
-  return Array.from(ids);
-}
-
-function collectKnownTsdbTeamIds() {
-  const ids = new Set();
-  const addMatch = (match) => {
-    if (!match || typeof match !== "object") return;
-    [match.home_team_id, match.away_team_id].forEach((teamId) => {
-      const id = String(teamId || "").trim();
-      if (/^\d+$/.test(id)) ids.add(id);
-    });
-  };
-  matchDetailsById.forEach(addMatch);
-  (Array.isArray(cachedTsdbScheduleMatches) ? cachedTsdbScheduleMatches : []).forEach(addMatch);
-  (Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []).forEach(addMatch);
-  return Array.from(ids);
-}
-
-async function refreshTsdbPlayersByIds(playerIds, options = {}) {
-  const ids = Array.isArray(playerIds) ? [...new Set(playerIds.filter((id) => /^\d+$/.test(String(id))))] : [];
-  const refreshed = [];
-  const failed = [];
-  await mapWithConcurrency(ids, TSDB_ENTITY_WARM_CONCURRENCY, async (playerId) => {
-    try {
-      const result = await getCachedOrFetchPlayerPayload(String(playerId), {
-        force: true,
-        initiator: options.initiator || "admin_api",
-        reason: options.reason || "admin_player_cache_refresh",
-        trigger: options.trigger || "admin_player_cache_refresh",
-      });
-      if (result.payload) refreshed.push(String(playerId));
-      else failed.push(String(playerId));
-    } catch (error) {
-      console.warn(`[API] Failed to refresh TSDB player ${playerId}:`, error.message || error);
-      failed.push(String(playerId));
-    }
-  });
-  return { requested: ids.length, refreshed, failed };
-}
-
-async function refreshTsdbTeamsByIds(teamIds, options = {}) {
-  const ids = Array.isArray(teamIds) ? [...new Set(teamIds.filter((id) => /^\d+$/.test(String(id))))] : [];
-  const refreshed = [];
-  const failed = [];
-  await mapWithConcurrency(ids, TSDB_ENTITY_WARM_CONCURRENCY, async (teamId) => {
-    try {
-      const response = await getTeam(String(teamId), {
-        initiator: options.initiator || "admin_api",
-        reason: options.reason || "admin_team_cache_refresh",
-        trigger: options.trigger || "admin_team_cache_refresh",
-      });
-      const teams = Array.isArray(response && response.lookup) ? response.lookup : [];
-      if (!teams[0]) {
-        failed.push(String(teamId));
-        return;
-      }
-      await upsertTeamCache(String(teamId), teams[0], {
-        next_refresh_at_ms: Date.now() + TSDB_ENTITY_CACHE_MAX_AGE_MS,
-        source: "tsdb_team",
-      });
-      refreshed.push(String(teamId));
-    } catch (error) {
-      console.warn(`[API] Failed to refresh TSDB team ${teamId}:`, error.message || error);
-      failed.push(String(teamId));
-    }
-  });
-  return { requested: ids.length, refreshed, failed };
 }
 
 function collectMatchDetailsPlayerNames(payload) {
@@ -10144,11 +9751,11 @@ function syntheticMatchIdToken(value) {
 
 function buildSyntheticMatchDetailsId(match) {
   if (!match || typeof match !== "object") return null;
-  // TSDB-sourced matches must arrive with a real numeric idEvent. If one reaches
+  // BSD-sourced matches must arrive with a real numeric idEvent. If one reaches
   // this fallback its idEvent was missing or invalid (e.g. a TBD knockout slot
   // returned as -1). Skip it entirely rather than storing a synthetic ID that
   // would block a future real-ID record for the same fixture.
-  if (match.has_tsdb_source === true) return null;
+  if (match.has_bsd_source === true) return null;
   const date = isDateOnly(match.date) ? String(match.date).trim() : "";
   const time = TIME_ONLY_PATTERN.test(String(match.time || "").trim())
     ? String(match.time).trim()
@@ -10394,7 +10001,7 @@ function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now
     (!Number.isFinite(detailsUpdatedAtMs) || listUpdatedAtMs > detailsUpdatedAtMs);
   const shouldPreferFreshLiveListStatus =
     listMatch &&
-    listMatch.has_tsdb_source === true &&
+    listMatch.has_bsd_source === true &&
     listStatusIsLive &&
     detailsStatusIsFinished &&
     listIsNewerThanDetails;
@@ -10499,8 +10106,8 @@ function normalizeMatchDetailsPayload(match, options = {}) {
     tv_channels: uniqueChannels(match.tv_channels),
   };
 
-  if (match.has_tsdb_source === true) {
-    payload.has_tsdb_source = true;
+  if (match.has_bsd_source === true) {
+    payload.has_bsd_source = true;
   }
 
   MATCH_DETAILS_EVENT_FIELDS.forEach((field) => {
@@ -10555,8 +10162,8 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
     ...(Array.isArray(incoming && incoming.tv_channels) ? incoming.tv_channels : []),
   ]);
   merged.tv_channels = mergedChannels;
-  merged.has_tsdb_source = Boolean(
-    (existing && existing.has_tsdb_source === true) || incoming.has_tsdb_source === true
+  merged.has_bsd_source = Boolean(
+    (existing && existing.has_bsd_source === true) || incoming.has_bsd_source === true
   );
 
   if (incomingClearsScoreState || incomingPostponedNoScoreState) {
@@ -10603,9 +10210,9 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
 
   const existingStatus = existing && existing.score_status !== undefined ? existing.score_status : null;
   const incomingStatus = incoming && incoming.score_status !== undefined ? incoming.score_status : null;
-  const allowIncomingTsdbLiveCorrection =
+  const allowIncomingBsdLiveCorrection =
     incoming &&
-    incoming.has_tsdb_source === true &&
+    incoming.has_bsd_source === true &&
     isFinishedMatchStatus(existingStatus) &&
     isInProgressMatchStatus(incomingStatus);
 
@@ -10618,7 +10225,7 @@ function mergeMatchDetailsPayload(existing, incoming, updatedAtIso) {
       incomingStatus,
       {
         preferIncomingOnTie: true,
-        allowTerminalRegression: allowIncomingTsdbLiveCorrection,
+        allowTerminalRegression: allowIncomingBsdLiveCorrection,
       }
     );
 
@@ -10700,11 +10307,11 @@ function upsertMatchDetailsFromMatch(match, updatedAtIso = new Date().toISOStrin
   if (!isAllowedMatchDetailsPayload(incoming, existing && existing.league)) {
     return null;
   }
-  if (incoming.has_tsdb_source !== true) {
+  if (incoming.has_bsd_source !== true) {
     const normalizedIncoming = normalizeMatchRecord(incoming);
     const preferredRecords = Array.from(matchDetailsById.entries())
       .map(([matchId, payload]) => buildCanonicalDuplicateComparisonRecord(matchId, payload))
-      .filter((record) => record && record.has_tsdb_backing === true);
+      .filter((record) => record && record.has_bsd_backing === true);
     if (
       normalizedIncoming &&
       findBbcBackedDuplicateRecord(normalizedIncoming, preferredRecords)
@@ -10738,7 +10345,7 @@ function canonicalMatchComparablePayload(payload) {
   return {
     ...comparable,
     tv_channels: uniqueChannels(payload.tv_channels),
-    has_tsdb_source: payload.has_tsdb_source === true,
+    has_bsd_source: payload.has_bsd_source === true,
   };
 }
 
@@ -11037,10 +10644,10 @@ function matchDetailsMissingTeamLineups(payload) {
 function matchDetailsLineupsNeedRefresh(payload) {
   if (!payload || typeof payload !== "object") return false;
   const id = normalizeMatchDetailsId(payload.id || payload.match_details_id);
-  const canRefreshFromTsdb = Boolean(id && /^\d+$/.test(id));
+  const canRefreshFromBsd = Boolean(id && /^\d+$/.test(id));
   return (
     matchDetailsMissingTeamLineups(payload) ||
-    (canRefreshFromTsdb && (
+    (canRefreshFromBsd && (
       teamLineupsMissingPlayerIds(payload.team_lineups) ||
       teamLineupsHaveResolvableSubstitutionPlayersMissingIds(payload.team_lineups)
     ))
@@ -11136,7 +10743,7 @@ async function enrichMatchDetailsAggregateImmediately(seedPayload, options = {})
   const fetchMatchDetails =
     options && typeof options.fetchMatchByDetailsUrl === "function"
       ? options.fetchMatchByDetailsUrl
-      : (id) => fetchTsdbMatchDetails(id, { scheduleCache: cachedTsdbScheduleMatches });
+      : (id) => fetchBsdMatchDetails(id, { scheduleCache: cachedBsdMatches });
   const persistFn =
     options && typeof options.persistOperationalMatchDetailsSafe === "function"
       ? options.persistOperationalMatchDetailsSafe
@@ -11177,7 +10784,7 @@ async function enrichMatchDetailsAggregateImmediately(seedPayload, options = {})
     }
   } catch (error) {
     console.warn(
-      `[API] Immediate aggregate enrichment failed for ${detailsUrl}:`,
+      `[API] Immediate aggregate enrichment failed for ${payload.details_url || eventId}:`,
       error.message || error
     );
   }
@@ -11199,7 +10806,7 @@ async function enrichMatchDetailsLineupsImmediately(seedPayload, options = {}) {
   const fetchMatchDetails =
     options && typeof options.fetchMatchByDetailsUrl === "function"
       ? options.fetchMatchByDetailsUrl
-      : (id) => fetchTsdbMatchDetails(id, { scheduleCache: cachedTsdbScheduleMatches });
+      : (id) => fetchBsdMatchDetails(id, { scheduleCache: cachedBsdMatches });
   const persistFn =
     options && typeof options.persistOperationalMatchDetailsSafe === "function"
       ? options.persistOperationalMatchDetailsSafe
@@ -11331,11 +10938,11 @@ function scheduleMatchDetailsBackfill(payload, options = {}) {
 
   const task = (async () => {
     try {
-      const fetched = await fetchTsdbMatchDetails(matchId, {
+      const fetched = await fetchBsdMatchDetails(matchId, {
         initiator: "scraper",
         reason: "async_match_details_backfill",
         trigger,
-        scheduleCache: cachedTsdbScheduleMatches,
+        scheduleCache: cachedBsdMatches,
       });
       if (!fetched) {
         matchDetailsBackfillNextAttemptAt.set(
@@ -11531,11 +11138,11 @@ async function backfillIncompleteMatchDetailsOnStartup(options = {}) {
   await mapWithConcurrency(candidates, STARTUP_BACKFILL_CONCURRENCY, async ({ payload }) => {
     const matchId = normalizeMatchDetailsId(payload.id);
     try {
-      const fetched = await fetchTsdbMatchDetails(matchId, {
+      const fetched = await fetchBsdMatchDetails(matchId, {
         initiator: "scraper",
         reason: "startup_backfill",
         trigger,
-        scheduleCache: cachedTsdbScheduleMatches,
+        scheduleCache: cachedBsdMatches,
       });
       if (!fetched) {
         startupBackfillFailed++;
@@ -11569,10 +11176,10 @@ async function backfillIncompleteMatchDetailsOnStartup(options = {}) {
 async function rebuildMatchDetailsCache(source = "match_details_rebuild") {
   const nowIso = new Date().toISOString();
   indexMatchDetailsFromMatches(cachedMergedMatches, nowIso);
-  indexMatchDetailsFromMatches(cachedTsdbLiveMatches, nowIso);
+  indexMatchDetailsFromMatches(cachedBsdMatches, nowIso);
   indexMatchDetailsFromMatches(cachedRecentMatches, nowIso);
   matchDetailsLastUpdated = nowIso;
-  setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
+  setSourceCacheSize(SOURCE_BSD_MATCH_DETAILS, matchDetailsById.size);
   await persistOperationalMatchDetailsSafe(Object.fromEntries(matchDetailsById), {
     replace: true,
     updated_at: nowIso,
@@ -11672,7 +11279,7 @@ async function refreshInProgressMatchDetails(options = {}) {
   let success = false;
   let recordsFetched = 0;
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_MATCH_DETAILS, {
+  recordRuntimeComponentStart(COMPONENT_SOURCE_BSD_MATCH_DETAILS, {
     trigger,
     poll_interval_ms: MATCH_DETAILS_POLL_INTERVAL_MS,
   });
@@ -11681,8 +11288,8 @@ async function refreshInProgressMatchDetails(options = {}) {
     const targets = collectInProgressMatchDetailTargets();
     if (targets.length === 0) {
       success = true;
-      logPollSuccess("tsdb_match_details", {
-        source: SOURCE_TSDB_MATCH_DETAILS,
+      logPollSuccess("bsd_match_details", {
+        source: SOURCE_BSD_MATCH_DETAILS,
         trigger,
         targets: 0,
         refreshed: 0,
@@ -11699,20 +11306,20 @@ async function refreshInProgressMatchDetails(options = {}) {
       MATCH_DETAILS_POLL_CONCURRENCY,
       async (target) => {
         try {
-          const fetched = await fetchTsdbMatchDetails(target.id, {
+          const fetched = await fetchBsdMatchDetails(target.id, {
             initiator: "scraper",
             reason:
               target.kind === "finished_enrichment"
                 ? "scheduled_match_details_finished_enrichment"
                 : "scheduled_match_details_refresh",
             trigger,
-            scheduleCache: cachedTsdbScheduleMatches,
+            scheduleCache: cachedBsdMatches,
           });
           if (!fetched) return;
           const combined = buildMergedMatchDetailsCandidate(target.seed_match, fetched, null);
           const result = await upsertCanonicalMatchDetailsFromMatch(combined, {
             updated_at: nowIso,
-            source: SOURCE_TSDB_MATCH_DETAILS,
+            source: SOURCE_BSD_MATCH_DETAILS,
             reason: "scheduled_match_details_refresh",
           });
           if (result && result.payload && result.match_id) {
@@ -11754,7 +11361,7 @@ async function refreshInProgressMatchDetails(options = {}) {
             );
           }
           console.warn(
-            `Failed to refresh TSDB match details for ${target.id}:`,
+            `Failed to refresh BSD match details for ${target.id}:`,
             err.message || err
           );
         }
@@ -11771,16 +11378,16 @@ async function refreshInProgressMatchDetails(options = {}) {
       matchDetailsLastUpdated = nowIso;
       void proactivelyWarmMatchListResponseCache();
     }
-    setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
-    logPollSuccess("tsdb_match_details", {
-      source: SOURCE_TSDB_MATCH_DETAILS,
+    setSourceCacheSize(SOURCE_BSD_MATCH_DETAILS, matchDetailsById.size);
+    logPollSuccess("bsd_match_details", {
+      source: SOURCE_BSD_MATCH_DETAILS,
       trigger,
       targets: targets.length,
       refreshed: refreshedDetailsIds.size,
       updated_at: nowIso,
       duration_ms: Date.now() - startedAtMs,
     });
-    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_MATCH_DETAILS, {
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_BSD_MATCH_DETAILS, {
       trigger,
       targets: targets.length,
       refreshed: refreshedDetailsIds.size,
@@ -11788,14 +11395,14 @@ async function refreshInProgressMatchDetails(options = {}) {
       poll_interval_ms: MATCH_DETAILS_POLL_INTERVAL_MS,
     });
   } catch (err) {
-    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_MATCH_DETAILS, err, {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_BSD_MATCH_DETAILS, err, {
       trigger,
       poll_interval_ms: MATCH_DETAILS_POLL_INTERVAL_MS,
     });
     console.warn("Failed to refresh in-progress match details:", err.message || err);
   } finally {
     trackSourceUpdateMetrics({
-      source: SOURCE_TSDB_MATCH_DETAILS,
+      source: SOURCE_BSD_MATCH_DETAILS,
       startedAtMs,
       success,
       recordsFetched,
@@ -11874,8 +11481,8 @@ function normalizeMatchRecord(match) {
     record.light_context = lightContext;
   }
 
-  if (match.has_tsdb_source === true) {
-    record.has_tsdb_source = true;
+  if (match.has_bsd_source === true) {
+    record.has_bsd_source = true;
   }
   if (match.is_test_match === true) {
     record.is_test_match = true;
@@ -12159,8 +11766,8 @@ function toMatchListPayload(match, options = {}) {
   if (normalized.league_subcategory) {
     payload.league_subcategory = normalized.league_subcategory;
   }
-  if (normalized.has_tsdb_source === true) {
-    payload.has_tsdb_source = true;
+  if (normalized.has_bsd_source === true) {
+    payload.has_bsd_source = true;
   }
   if (normalized.home_team_id) payload.home_team_id = normalized.home_team_id;
   if (normalized.away_team_id) payload.away_team_id = normalized.away_team_id;
@@ -12364,6 +11971,10 @@ function chooseSupersedingFixturePayload(lhs, rhs) {
   const rightHasPlaceholder = payloadHasPlaceholderTeam(rhs);
   const sharedKnownTeams = sharedKnownTeamCount(lhs, rhs);
 
+  if (leftHasPlaceholder !== rightHasPlaceholder && (leftKnownCount === 0 || rightKnownCount === 0)) {
+    return leftKnownCount > rightKnownCount ? lhs : rhs;
+  }
+
   if (sharedKnownTeams < 1) {
     return null;
   }
@@ -12374,8 +11985,8 @@ function chooseSupersedingFixturePayload(lhs, rhs) {
 
   const leftScheduled = isScorelessScheduledListPayload(lhs);
   const rightScheduled = isScorelessScheduledListPayload(rhs);
-  const leftBbc = lhs.has_tsdb_source === true;
-  const rightBbc = rhs.has_tsdb_source === true;
+  const leftBbc = lhs.has_bsd_source === true;
+  const rightBbc = rhs.has_bsd_source === true;
   const leftResolved = hasResolvedMatchState(lhs);
   const rightResolved = hasResolvedMatchState(rhs);
 
@@ -12383,8 +11994,8 @@ function chooseSupersedingFixturePayload(lhs, rhs) {
     const resolvedPayload = leftResolved ? lhs : rhs;
     const scheduledPayload = leftResolved ? rhs : lhs;
     if (
-      resolvedPayload.has_tsdb_source === true ||
-      scheduledPayload.has_tsdb_source !== true
+      resolvedPayload.has_bsd_source === true ||
+      scheduledPayload.has_bsd_source !== true
     ) {
       return resolvedPayload;
     }
@@ -12490,8 +12101,8 @@ function mergeMatchListPayload(existing, incoming) {
     }
   });
 
-  if (incoming.has_tsdb_source === true) {
-    merged.has_tsdb_source = true;
+  if (incoming.has_bsd_source === true) {
+    merged.has_bsd_source = true;
   }
 
   const mergedChannels = uniqueChannels([
@@ -12611,7 +12222,7 @@ async function dedupeMatchListPayloadsAsync(payloads) {
 
 function listPayloadHasBbcMatchEntry(payload) {
   if (!payload || typeof payload !== "object") return false;
-  if (payload.has_tsdb_source === true) return true;
+  if (payload.has_bsd_source === true) return true;
   if (normalizeMatchDetailsId(payload.match_details_id)) return true;
   return uniqueChannels(payload.tv_channels).some(
     (channel) => compareInsensitive(channel, "BBC Sport Website") === 0
@@ -12903,14 +12514,14 @@ function mergePreferredMatch(existing, incoming, preferIncoming) {
     merged.score_status = incoming.score_status;
   }
   if (incoming.details_url) merged.details_url = incoming.details_url;
-  // When the incoming entry carries a stable TSDB numeric ID, promote it as the
+  // When the incoming entry carries a stable BSD numeric ID, promote it as the
   // canonical match_details_id so the API can look up live data from matchDetailsById.
   if (incoming.id && !String(incoming.id).startsWith("syn")) {
     merged.id = incoming.id;
     merged.match_details_id = incoming.id;
   }
-  if (existing.has_tsdb_source === true || incoming.has_tsdb_source === true) {
-    merged.has_tsdb_source = true;
+  if (existing.has_bsd_source === true || incoming.has_bsd_source === true) {
+    merged.has_bsd_source = true;
   }
 
   [
@@ -13030,7 +12641,7 @@ function compareMatches(lhs, rhs) {
   return compareInsensitive(lhs.away_team || "", rhs.away_team || "");
 }
 
-function mergeTsdbAndLiveMatches(liveMatches, bbcMatches) {
+function mergeBsdAndLiveMatches(liveMatches, bbcMatches) {
   const byPrimaryKey = new Map();
   const keyToPrimary = new Map();
 
@@ -13064,7 +12675,7 @@ function mergeTsdbAndLiveMatches(liveMatches, bbcMatches) {
     if (!competitionAllowed && !(allowDisallowedMerge && canMergeExisting)) return;
 
     if (markAsBbcSource && normalized.is_test_match !== true) {
-      normalized.has_tsdb_source = true;
+      normalized.has_bsd_source = true;
     }
 
     let primaryKey = resolvedPrimaryKey;
@@ -13095,7 +12706,7 @@ function mergeTsdbAndLiveMatches(liveMatches, bbcMatches) {
   );
 
   return Array.from(byPrimaryKey.values())
-    .filter((match) => match && (match.has_tsdb_source === true || match.is_test_match === true))
+    .filter((match) => match && (match.has_bsd_source === true || match.is_test_match === true))
     .sort(compareMatches);
 }
 
@@ -13128,18 +12739,17 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
   }));
 
   const preferredMatchesForMerge = [
-    ...(Array.isArray(cachedTsdbScheduleMatches)
-      ? cachedTsdbScheduleMatches.map((match) => ({
+    ...(Array.isArray(cachedBsdMatches)
+      ? cachedBsdMatches.map((match) => ({
           ...match,
-          has_tsdb_source: true,
-          // Attach TV channel listing for this event if available.
-          tv_channels: cachedTvListingsByEvent.get(String(match.id || "")) || match.tv_channels || [],
+          has_bsd_source: true,
+          tv_channels: match.tv_channels || [],
         }))
       : []),
     ...testMatchesForMerge,
   ];
 
-  cachedMergedMatches = mergeTsdbAndLiveMatches(
+  cachedMergedMatches = mergeBsdAndLiveMatches(
     [],
     preferredMatchesForMerge
   );
@@ -13147,7 +12757,7 @@ async function rebuildMergedMatchesCache(source = "cache_rebuild") {
   invalidateUnmatchedTeamMetrics({ schedule: false });
 
   const updatedAt =
-    newestIsoTimestamp([tsdbScheduleLastUpdated, tsdbLiveLastUpdated, recentLastUpdated]) ||
+    newestIsoTimestamp([cachedBsdMatchesUpdatedAt, cachedBsdMatchesUpdatedAt, recentLastUpdated]) ||
     new Date().toISOString();
   await Promise.all([
     persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
@@ -16197,45 +15807,13 @@ function matchesFilters(match, filters) {
   return true;
 }
 
-function loadTsdbLiveFromDisk() {
-  try {
-    if (!fs.existsSync(TSDB_LIVESCORE_OUTPUT_PATH)) return;
-    const raw = fs.readFileSync(TSDB_LIVESCORE_OUTPUT_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      cachedTsdbLiveMatches = filterMatchesByCompetition(parsed);
-      setSourceCacheSize(SOURCE_TSDB_LIVE, cachedTsdbLiveMatches.length);
-      const stat = fs.statSync(TSDB_LIVESCORE_OUTPUT_PATH);
-      tsdbLiveLastUpdated = stat.mtime.toISOString();
-    }
-  } catch (err) {
-    console.warn("Failed to load TSDB live matches from disk:", err.message || err);
-  }
-}
-
-function loadTsdbScheduleFromDisk() {
-  try {
-    if (!fs.existsSync(TSDB_SCHEDULE_OUTPUT_PATH)) return;
-    const raw = fs.readFileSync(TSDB_SCHEDULE_OUTPUT_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      cachedTsdbScheduleMatches = filterMatchesByCompetition(parsed);
-      setSourceCacheSize(SOURCE_TSDB_SCHEDULE, cachedTsdbScheduleMatches.length);
-      const stat = fs.statSync(TSDB_SCHEDULE_OUTPUT_PATH);
-      tsdbScheduleLastUpdated = stat.mtime.toISOString();
-    }
-  } catch (err) {
-    console.warn("Failed to load TSDB schedule matches from disk:", err.message || err);
-  }
-}
-
 function loadRecentFromDisk() {
   try {
     if (!fs.existsSync(RECENT_OUTPUT_PATH)) return;
     const raw = fs.readFileSync(RECENT_OUTPUT_PATH, "utf8");
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      // Only restore records with a real numeric TSDB idEvent. Synthetic-ID
+      // Only restore records with a real numeric BSD idEvent. Synthetic-ID
       // records from the old live-footballontv scraper must not be re-seeded
       // on restart — they would re-enter matchDetailsById and persist to
       // MongoDB, creating an unbreakable reload cycle.
@@ -16247,24 +15825,6 @@ function loadRecentFromDisk() {
     }
   } catch (err) {
     console.warn("Failed to load recent matches from disk:", err.message || err);
-  }
-}
-
-function loadPremierLeagueFromDisk() {
-  try {
-    if (!fs.existsSync(EPL_OUTPUT_PATH)) return;
-    const raw = fs.readFileSync(EPL_OUTPUT_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      cachedPremierLeagueTeams = parsed
-        .map((team) => String(team || "").trim())
-        .filter(Boolean);
-      setSourceCacheSize(SOURCE_TSDB_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
-      const stat = fs.statSync(EPL_OUTPUT_PATH);
-      eplLastUpdated = stat.mtime.toISOString();
-    }
-  } catch (err) {
-    console.warn("Failed to load Premier League teams from disk:", err.message || err);
   }
 }
 
@@ -16397,30 +15957,6 @@ function writeBbcRangeMatches(outputPath, matches) {
     fs.writeFileSync(outputPath, JSON.stringify(matches, null, 2), "utf8");
   } catch (err) {
     console.warn("Failed to write BBC range matches to disk:", err.message || err);
-  }
-}
-
-function writeTsdbLiveMatches(outputPath, matches) {
-  try {
-    fs.writeFileSync(outputPath, JSON.stringify(matches, null, 2), "utf8");
-  } catch (err) {
-    console.warn("Failed to write TSDB live matches to disk:", err.message || err);
-  }
-}
-
-function writeTsdbScheduleMatches(outputPath, matches) {
-  try {
-    fs.writeFileSync(outputPath, JSON.stringify(matches, null, 2), "utf8");
-  } catch (err) {
-    console.warn("Failed to write TSDB schedule matches to disk:", err.message || err);
-  }
-}
-
-function writeTsdbPremierLeagueTeams(outputPath, teams) {
-  try {
-    fs.writeFileSync(outputPath, JSON.stringify(teams, null, 2), "utf8");
-  } catch (err) {
-    console.warn("Failed to write TSDB Premier League teams to disk:", err.message || err);
   }
 }
 
@@ -16636,8 +16172,6 @@ function buildDefaultOperationalCacheState(nowIso = new Date().toISOString()) {
       teams: buildCacheStateDomainSnapshot(defaultDomainOptions),
       tables: buildCacheStateDomainSnapshot(defaultDomainOptions),
       team_short_names: buildCacheStateDomainSnapshot(defaultDomainOptions),
-      team_badges: buildCacheStateDomainSnapshot(defaultDomainOptions),
-      tsdb_live: buildCacheStateDomainSnapshot(defaultDomainOptions),
     },
   };
 }
@@ -16791,16 +16325,16 @@ async function hydrateOperationalStateFromRedis(options = {}) {
     !(options && options.skipMatchDetails) && !isMonitorRuntime();
   const hydrateDatasets = isMonitorRuntime()
     ? [
-        OP_DATASET_TSDB_LIVE_MATCHES,
-        OP_DATASET_TSDB_SCHEDULE_MATCHES,
+        OP_DATASET_BSD_LIVE_MATCHES,
+        OP_DATASET_BSD_SCHEDULE_MATCHES,
         OP_DATASET_RECENT_MATCHES,
         OP_DATASET_MERGED_MATCHES,
         OP_DATASET_PREMIER_LEAGUE_TEAMS,
         OP_DATASET_CACHE_STATE,
       ]
     : [
-        OP_DATASET_TSDB_LIVE_MATCHES,
-        OP_DATASET_TSDB_SCHEDULE_MATCHES,
+        OP_DATASET_BSD_LIVE_MATCHES,
+        OP_DATASET_BSD_SCHEDULE_MATCHES,
         OP_DATASET_RECENT_MATCHES,
         OP_DATASET_MERGED_MATCHES,
         OP_DATASET_PREMIER_LEAGUE_TEAMS,
@@ -16810,31 +16344,39 @@ async function hydrateOperationalStateFromRedis(options = {}) {
         OP_DATASET_NATIONAL_ELO_TEAMS,
         OP_DATASET_MISSING_TEAM_LOGOS,
         OP_DATASET_TEAM_SHORT_NAMES,
-        OP_DATASET_TEAM_BADGES,
         OP_DATASET_CACHE_STATE,
       ];
   recordRuntimeComponentStart(COMPONENT_OPERATIONAL_REDIS, {
     operation: "hydrate_operational_state",
   });
   try {
-    const datasetRecords = await getOperationalDatasets(hydrateDatasets);
-    rememberOperationalDatasetMetadata(datasetRecords);
-    const matchDetailsSnapshot = shouldHydrateMatchDetails
-      ? await getAllOperationalMatchDetails()
-      : null;
+    const [datasetRecords, bsdCurrentMatchesRecord, matchDetailsSnapshot] = await Promise.all([
+      getOperationalDatasets(hydrateDatasets),
+      getOperationalDataset(BSD_CURRENT_MATCHES_DATASET),
+      shouldHydrateMatchDetails ? getAllOperationalMatchDetails() : null,
+    ]);
+    rememberOperationalDatasetMetadata({
+      ...datasetRecords,
+      ...(bsdCurrentMatchesRecord
+        ? { [BSD_CURRENT_MATCHES_DATASET]: bsdCurrentMatchesRecord }
+        : {}),
+    });
+    applyBsdCurrentMatchesRecord(bsdCurrentMatchesRecord);
 
-    const bbcLiveRecord = datasetRecords[OP_DATASET_TSDB_LIVE_MATCHES];
-    if (bbcLiveRecord && Array.isArray(bbcLiveRecord.payload)) {
-      cachedTsdbLiveMatches = filterMatchesByCompetition(bbcLiveRecord.payload);
-      tsdbLiveLastUpdated = bbcLiveRecord.updated_at || tsdbLiveLastUpdated;
-      setSourceCacheSize(SOURCE_TSDB_LIVE, cachedTsdbLiveMatches.length);
+    const bsdLiveRecord = datasetRecords[OP_DATASET_BSD_LIVE_MATCHES];
+    if (bsdLiveRecord && Array.isArray(bsdLiveRecord.payload)) {
+      setSourceCacheSize(
+        SOURCE_BSD_LIVE,
+        filterMatchesByCompetition(bsdLiveRecord.payload).length
+      );
     }
 
-    const bbcRangeRecord = datasetRecords[OP_DATASET_TSDB_SCHEDULE_MATCHES];
-    if (bbcRangeRecord && Array.isArray(bbcRangeRecord.payload)) {
-      cachedTsdbScheduleMatches = filterMatchesByCompetition(bbcRangeRecord.payload);
-      tsdbScheduleLastUpdated = bbcRangeRecord.updated_at || tsdbScheduleLastUpdated;
-      setSourceCacheSize(SOURCE_TSDB_SCHEDULE, cachedTsdbScheduleMatches.length);
+    const bsdScheduleRecord = datasetRecords[OP_DATASET_BSD_SCHEDULE_MATCHES];
+    if (bsdScheduleRecord && Array.isArray(bsdScheduleRecord.payload)) {
+      setSourceCacheSize(
+        SOURCE_BSD_SCHEDULE,
+        filterMatchesByCompetition(bsdScheduleRecord.payload).length
+      );
     }
 
     const recentRecord = datasetRecords[OP_DATASET_RECENT_MATCHES];
@@ -16855,7 +16397,7 @@ async function hydrateOperationalStateFromRedis(options = {}) {
         .map((team) => String(team || "").trim())
         .filter(Boolean);
       eplLastUpdated = teamsRecord.updated_at || eplLastUpdated;
-      setSourceCacheSize(SOURCE_TSDB_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
+      setSourceCacheSize(SOURCE_BSD_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
     }
 
     const leagueTablesRecord = datasetRecords[OP_DATASET_LEAGUE_TABLES];
@@ -16931,14 +16473,6 @@ async function hydrateOperationalStateFromRedis(options = {}) {
       scrapedTeamShortNamesLastUpdated = restored.updated_at || scrapedTeamShortNamesLastUpdated;
     }
 
-    const teamBadgesRecord = datasetRecords[OP_DATASET_TEAM_BADGES];
-    if (teamBadgesRecord && teamBadgesRecord.payload && typeof teamBadgesRecord.payload === "object") {
-      cachedTeamBadges = teamBadgesRecord.payload;
-      teamBadgesLastUpdated = teamBadgesRecord.updated_at || teamBadgesLastUpdated;
-      teamBadgesETag = require("crypto").createHash("sha1")
-        .update(JSON.stringify(cachedTeamBadges))
-        .digest("hex");
-    }
 
     const cacheStateRecord = datasetRecords[OP_DATASET_CACHE_STATE];
     if (cacheStateRecord && cacheStateRecord.payload && typeof cacheStateRecord.payload === "object") {
@@ -16951,7 +16485,7 @@ async function hydrateOperationalStateFromRedis(options = {}) {
     if (matchDetailsSnapshot && matchDetailsSnapshot.records) {
       const filteredRecords = filterMatchDetailsRecordsByCompetition(matchDetailsSnapshot.records);
       // Strip any synthetic-ID records that were persisted to MongoDB from the
-      // old live-footballontv scraper. Only real positive-integer TSDB idEvent
+      // old live-footballontv scraper. Only real positive-integer BSD idEvent
       // keys are valid; synthetic records must not re-enter matchDetailsById on
       // startup, as the reconciliation repair would immediately re-persist them.
       const entries = Object.entries(filteredRecords).filter(
@@ -16962,7 +16496,7 @@ async function hydrateOperationalStateFromRedis(options = {}) {
         matchDetailsLastUpdated = matchDetailsSnapshot.updated_at;
       }
       matchDetailsChangelogSyncMs = Date.now();
-      setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
+      setSourceCacheSize(SOURCE_BSD_MATCH_DETAILS, matchDetailsById.size);
     }
 
     invalidateUnmatchedTeamMetrics({ schedule: false });
@@ -16970,8 +16504,8 @@ async function hydrateOperationalStateFromRedis(options = {}) {
     console.log(
       "[OperationalState] Hydrated from Redis:",
       JSON.stringify({
-        bbc_live_matches: cachedTsdbLiveMatches.length,
-        bbc_range_matches: cachedTsdbScheduleMatches.length,
+        bbc_live_matches: cachedBsdMatches.length,
+        bbc_range_matches: cachedBsdMatches.length,
         merged_matches: cachedMergedMatches.length,
         recent_matches: cachedRecentMatches.length,
         premier_league_teams: cachedPremierLeagueTeams.length,
@@ -17056,10 +16590,11 @@ async function inspectOperationalStateReadiness() {
 }
 
 function clearFootballOperationalMemoryState() {
-  cachedTsdbLiveMatches = [];
-  tsdbLiveLastUpdated = null;
-  cachedTsdbScheduleMatches = [];
-  tsdbScheduleLastUpdated = null;
+  cachedBsdMatches = [];
+  cachedBsdMatchesUpdatedAt = null;
+  cachedBsdCurrentProjectionVersion = null;
+  bsdMatchesCacheBuiltMs = 0;
+  cachedTeamCatalogVersion = null;
   cachedMergedMatches = [];
   cachedRecentMatches = [];
   recentLastUpdated = null;
@@ -17087,16 +16622,16 @@ function clearFootballOperationalMemoryState() {
   scrapedTeamShortNamesByKey = new Map();
   scrapedTeamShortNamesLastUpdated = null;
   operationalCacheState = buildDefaultOperationalCacheState();
-  setSourceCacheSize(SOURCE_TSDB_LIVE, 0);
-  setSourceCacheSize(SOURCE_TSDB_SCHEDULE, 0);
+  setSourceCacheSize(SOURCE_BSD_LIVE, 0);
+  setSourceCacheSize(SOURCE_BSD_SCHEDULE, 0);
   setSourceCacheSize(SOURCE_RECENT_CACHE, 0);
-  setSourceCacheSize(SOURCE_TSDB_PREMIER_LEAGUE, 0);
+  setSourceCacheSize(SOURCE_BSD_PREMIER_LEAGUE, 0);
   setSourceCacheSize(SOURCE_BBC_LEAGUE_TABLES, 0);
   setSourceCacheSize(SOURCE_CLUB_ELO, 0);
   setSourceCacheSize(SOURCE_CLUB_ELO_FIXTURES, 0);
   setSourceCacheSize(SOURCE_FOOTBALL_DATABASE, 0);
   setSourceCacheSize(SOURCE_NATIONAL_ELO, 0);
-  setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, 0);
+  setSourceCacheSize(SOURCE_BSD_MATCH_DETAILS, 0);
   clearMatchListResponseCache();
   clearTeamRankingsResponseCache();
 }
@@ -17119,7 +16654,7 @@ function filterCacheStateDomainsForRuntimeRefresh(domains, options = {}) {
   }
 
   return selectedDomains.filter(
-    (domain) => domain === "matches" || domain === "tsdb_live" || domain === "teams"
+    (domain) => domain === "matches" || domain === "bsd_live" || domain === "teams"
   );
 }
 
@@ -17149,15 +16684,23 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
       ? options.updated_at.trim()
       : new Date().toISOString();
 
-  if (selectedDomains.includes("matches") || selectedDomains.includes("tsdb_live")) {
+  if (selectedDomains.includes("matches") || selectedDomains.includes("bsd_live")) {
     reloads.push(
-      getOperationalDatasets([
-        OP_DATASET_TSDB_LIVE_MATCHES,
-        OP_DATASET_TSDB_SCHEDULE_MATCHES,
-        OP_DATASET_RECENT_MATCHES,
-        OP_DATASET_MERGED_MATCHES,
-      ]).then((records) => {
-        recordMap.matches = records || {};
+      Promise.all([
+        getOperationalDatasets([
+          OP_DATASET_BSD_LIVE_MATCHES,
+          OP_DATASET_BSD_SCHEDULE_MATCHES,
+          OP_DATASET_RECENT_MATCHES,
+          OP_DATASET_MERGED_MATCHES,
+        ]),
+        getOperationalDataset(BSD_CURRENT_MATCHES_DATASET),
+      ]).then(([records, bsdCurrentMatchesRecord]) => {
+        recordMap.matches = {
+          ...(records || {}),
+          ...(bsdCurrentMatchesRecord
+            ? { [BSD_CURRENT_MATCHES_DATASET]: bsdCurrentMatchesRecord }
+            : {}),
+        };
       })
     );
   }
@@ -17204,13 +16747,6 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
       })
     );
   }
-  if (selectedDomains.includes("team_badges")) {
-    reloads.push(
-      getOperationalDatasets([OP_DATASET_TEAM_BADGES]).then((records) => {
-        recordMap.team_badges = records || {};
-      })
-    );
-  }
 
   const fetchStartedAtMs = Date.now();
   await Promise.all(reloads);
@@ -17220,18 +16756,22 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
   if (recordMap.matches) {
     const startedAtMs = Date.now();
     const records = recordMap.matches;
-    const bbcLiveRecord = records[OP_DATASET_TSDB_LIVE_MATCHES];
-    if (bbcLiveRecord && Array.isArray(bbcLiveRecord.payload)) {
-      cachedTsdbLiveMatches = filterMatchesByCompetition(bbcLiveRecord.payload);
-      tsdbLiveLastUpdated = bbcLiveRecord.updated_at || tsdbLiveLastUpdated;
-      setSourceCacheSize(SOURCE_TSDB_LIVE, cachedTsdbLiveMatches.length);
+    applyBsdCurrentMatchesRecord(records[BSD_CURRENT_MATCHES_DATASET]);
+
+    const bsdLiveRecord = records[OP_DATASET_BSD_LIVE_MATCHES];
+    if (bsdLiveRecord && Array.isArray(bsdLiveRecord.payload)) {
+      setSourceCacheSize(
+        SOURCE_BSD_LIVE,
+        filterMatchesByCompetition(bsdLiveRecord.payload).length
+      );
     }
 
-    const bbcRangeRecord = records[OP_DATASET_TSDB_SCHEDULE_MATCHES];
-    if (bbcRangeRecord && Array.isArray(bbcRangeRecord.payload)) {
-      cachedTsdbScheduleMatches = filterMatchesByCompetition(bbcRangeRecord.payload);
-      tsdbScheduleLastUpdated = bbcRangeRecord.updated_at || tsdbScheduleLastUpdated;
-      setSourceCacheSize(SOURCE_TSDB_SCHEDULE, cachedTsdbScheduleMatches.length);
+    const bsdScheduleRecord = records[OP_DATASET_BSD_SCHEDULE_MATCHES];
+    if (bsdScheduleRecord && Array.isArray(bsdScheduleRecord.payload)) {
+      setSourceCacheSize(
+        SOURCE_BSD_SCHEDULE,
+        filterMatchesByCompetition(bsdScheduleRecord.payload).length
+      );
     }
 
     const recentRecord = records[OP_DATASET_RECENT_MATCHES];
@@ -17267,7 +16807,7 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
       matchDetailsChangelogSyncMs = Number.isFinite(delta.synced_at_ms)
         ? delta.synced_at_ms
         : Date.now();
-      setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
+      setSourceCacheSize(SOURCE_BSD_MATCH_DETAILS, matchDetailsById.size);
       if ((delta.changed_ids || []).length > 0) {
         clearMatchListResponseCache();
       }
@@ -17282,7 +16822,7 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
     );
     matchDetailsLastUpdated = snapshot.updated_at || matchDetailsLastUpdated || nowIso;
     matchDetailsChangelogSyncMs = Date.now();
-    setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
+    setSourceCacheSize(SOURCE_BSD_MATCH_DETAILS, matchDetailsById.size);
     clearMatchListResponseCache();
     stageTimings.match_details_ms = Date.now() - startedAtMs;
   }
@@ -17296,7 +16836,7 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
         .map((team) => String(team || "").trim())
         .filter(Boolean);
       eplLastUpdated = teamsRecord.updated_at || eplLastUpdated;
-      setSourceCacheSize(SOURCE_TSDB_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
+      setSourceCacheSize(SOURCE_BSD_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
     }
     const clubEloRecord = teams[OP_DATASET_CLUB_ELO_TEAMS];
     if (clubEloRecord && Array.isArray(clubEloRecord.payload)) {
@@ -17353,17 +16893,6 @@ async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
       scrapedTeamShortNamesLastUpdated = restored.updated_at || scrapedTeamShortNamesLastUpdated;
     }
     stageTimings.team_short_names_ms = Date.now() - startedAtMs;
-  }
-
-  if (recordMap.team_badges) {
-    const teamBadgesRecord = recordMap.team_badges[OP_DATASET_TEAM_BADGES];
-    if (teamBadgesRecord && teamBadgesRecord.payload && typeof teamBadgesRecord.payload === "object") {
-      cachedTeamBadges = teamBadgesRecord.payload;
-      teamBadgesLastUpdated = teamBadgesRecord.updated_at || teamBadgesLastUpdated;
-      teamBadgesETag = require("crypto").createHash("sha1")
-        .update(JSON.stringify(cachedTeamBadges))
-        .digest("hex");
-    }
   }
 
   const unmatchedMetricsStartedAtMs = Date.now();
@@ -17493,12 +17022,12 @@ async function persistStartupOperationalStateFromDisk() {
     operation: "persist_startup_state_from_disk",
   });
   await Promise.all([
-    persistOperationalDatasetSafe(OP_DATASET_TSDB_LIVE_MATCHES, cachedTsdbLiveMatches, {
-      updated_at: tsdbLiveLastUpdated || new Date().toISOString(),
+    persistOperationalDatasetSafe(OP_DATASET_BSD_LIVE_MATCHES, cachedBsdMatches, {
+      updated_at: cachedBsdMatchesUpdatedAt || new Date().toISOString(),
       source: "startup_disk_seed",
     }),
-    persistOperationalDatasetSafe(OP_DATASET_TSDB_SCHEDULE_MATCHES, cachedTsdbScheduleMatches, {
-      updated_at: tsdbScheduleLastUpdated || new Date().toISOString(),
+    persistOperationalDatasetSafe(OP_DATASET_BSD_SCHEDULE_MATCHES, cachedBsdMatches, {
+      updated_at: cachedBsdMatchesUpdatedAt || new Date().toISOString(),
       source: "startup_disk_seed",
     }),
     persistOperationalDatasetSafe(OP_DATASET_RECENT_MATCHES, cachedRecentMatches, {
@@ -17506,7 +17035,7 @@ async function persistStartupOperationalStateFromDisk() {
       source: "startup_disk_seed",
     }),
     persistOperationalDatasetSafe(OP_DATASET_MERGED_MATCHES, cachedMergedMatches, {
-      updated_at: newestIsoTimestamp([tsdbScheduleLastUpdated, tsdbLiveLastUpdated]) || new Date().toISOString(),
+      updated_at: newestIsoTimestamp([cachedBsdMatchesUpdatedAt, cachedBsdMatchesUpdatedAt]) || new Date().toISOString(),
       source: "startup_disk_seed",
     }),
     persistOperationalDatasetSafe(OP_DATASET_PREMIER_LEAGUE_TEAMS, cachedPremierLeagueTeams, {
@@ -17575,8 +17104,8 @@ async function getOperationalArrayDataset(name, fallback = []) {
     const payload =
       [
         OP_DATASET_MERGED_MATCHES,
-        OP_DATASET_TSDB_LIVE_MATCHES,
-        OP_DATASET_TSDB_SCHEDULE_MATCHES,
+        OP_DATASET_BSD_LIVE_MATCHES,
+        OP_DATASET_BSD_SCHEDULE_MATCHES,
         OP_DATASET_RECENT_MATCHES,
       ].includes(name)
         ? filterMatchesByCompetition(record.payload)
@@ -17629,8 +17158,8 @@ function getMatchDetailsStatePayload(payload) {
     tv_channels: uniqueChannels(normalizedPayload.tv_channels),
   };
 
-  if (normalizedPayload.has_tsdb_source === true) {
-    statePayload.has_tsdb_source = true;
+  if (normalizedPayload.has_bsd_source === true) {
+    statePayload.has_bsd_source = true;
   }
 
   const teamLineups = normalizeTeamLineupsPayload(normalizedPayload.team_lineups);
@@ -17880,8 +17409,8 @@ async function getPreferredOperationalMatchDetailsSnapshotSafe() {
 
 const ADMIN_OPERATIONAL_DATASET_NAMES = [
   OP_DATASET_MERGED_MATCHES,
-  OP_DATASET_TSDB_LIVE_MATCHES,
-  OP_DATASET_TSDB_SCHEDULE_MATCHES,
+  OP_DATASET_BSD_LIVE_MATCHES,
+  OP_DATASET_BSD_SCHEDULE_MATCHES,
   OP_DATASET_RECENT_MATCHES,
   OP_DATASET_PREMIER_LEAGUE_TEAMS,
   OP_DATASET_CLUB_ELO_TEAMS,
@@ -17929,7 +17458,7 @@ function toOperationalAdminMatchPayload(payload) {
     in_progress: Boolean(statePayload.in_progress),
     penalty_result: statePayload.penalty_result || null,
     tv_channels: uniqueChannels(payload.tv_channels),
-    has_tsdb_source: payload.has_tsdb_source === true,
+    has_bsd_source: payload.has_bsd_source === true,
     home_goal_scorers: Array.isArray(payload.home_goal_scorers) ? payload.home_goal_scorers : [],
     away_goal_scorers: Array.isArray(payload.away_goal_scorers) ? payload.away_goal_scorers : [],
     home_assists: Array.isArray(payload.home_assists) ? payload.home_assists : [],
@@ -18178,6 +17707,10 @@ function collectDisallowedCompetitionTargets(
   };
 }
 
+function hasBsdMatchBacking(match) {
+  return Boolean(match && match.has_bsd_source === true);
+}
+
 function collectLiveSourceDuplicateTargets(sourceMatches = {}, detailsLookup = matchDetailsById) {
   const detailEntries =
     detailsLookup instanceof Map
@@ -18185,12 +17718,12 @@ function collectLiveSourceDuplicateTargets(sourceMatches = {}, detailsLookup = m
       : Object.entries(detailsLookup && typeof detailsLookup === "object" ? detailsLookup : {});
   const preferredRecords = detailEntries
     .map(([matchId, payload]) => buildCanonicalDuplicateComparisonRecord(matchId, payload))
-    .filter((record) => record && record.has_tsdb_backing === true);
+    .filter((record) => record && record.has_bsd_backing === true);
 
   const duplicateCanonicalMatchIds = new Set();
   detailEntries.forEach(([matchId, payload]) => {
     const record = buildCanonicalDuplicateComparisonRecord(matchId, payload);
-    if (!record || record.has_tsdb_backing) return;
+    if (!record || record.has_bsd_backing) return;
     if (!record.match_id) return;
     if (!findBbcBackedDuplicateRecord(record.normalized, preferredRecords)) return;
     duplicateCanonicalMatchIds.add(record.match_id);
@@ -18200,7 +17733,7 @@ function collectLiveSourceDuplicateTargets(sourceMatches = {}, detailsLookup = m
     const duplicates = [];
     (Array.isArray(matches) ? matches : []).forEach((match) => {
       if (!match || typeof match !== "object") return;
-      if (hasTsdbMatchBacking(match)) return;
+      if (hasBsdMatchBacking(match)) return;
       const normalized = normalizeMatchRecord(match);
       if (!normalized) return;
       if (!findBbcBackedDuplicateRecord(normalized, preferredRecords)) return;
@@ -18437,8 +17970,8 @@ async function purgeDisallowedCompetitionData(options = {}) {
       ? options.source.trim()
       : "admin_disallowed_competition_purge";
 
-  const bbcLiveBefore = Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches.length : 0;
-  const bbcRangeBefore = Array.isArray(cachedTsdbScheduleMatches) ? cachedTsdbScheduleMatches.length : 0;
+  const bbcLiveBefore = Array.isArray(cachedBsdMatches) ? cachedBsdMatches.length : 0;
+  const bbcRangeBefore = Array.isArray(cachedBsdMatches) ? cachedBsdMatches.length : 0;
   const recentBefore = Array.isArray(cachedRecentMatches) ? cachedRecentMatches.length : 0;
   const mergedBefore = Array.isArray(cachedMergedMatches) ? cachedMergedMatches.length : 0;
 
@@ -18447,11 +17980,11 @@ async function purgeDisallowedCompetitionData(options = {}) {
     matchDetailsById
   );
 
-  cachedTsdbLiveMatches = filterMatchesByCompetition(
-    Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : []
+  cachedBsdMatches = filterMatchesByCompetition(
+    Array.isArray(cachedBsdMatches) ? cachedBsdMatches : []
   );
-  cachedTsdbScheduleMatches = filterMatchesByCompetition(
-    Array.isArray(cachedTsdbScheduleMatches) ? cachedTsdbScheduleMatches : []
+  cachedBsdMatches = filterMatchesByCompetition(
+    Array.isArray(cachedBsdMatches) ? cachedBsdMatches : []
   );
   cachedRecentMatches = filterMatchesByCompetition(
     Array.isArray(cachedRecentMatches) ? cachedRecentMatches : []
@@ -18460,23 +17993,13 @@ async function purgeDisallowedCompetitionData(options = {}) {
     Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []
   );
 
-  setSourceCacheSize(SOURCE_TSDB_LIVE, cachedTsdbLiveMatches.length);
-  setSourceCacheSize(SOURCE_TSDB_SCHEDULE, cachedTsdbScheduleMatches.length);
+  setSourceCacheSize(SOURCE_BSD_LIVE, cachedBsdMatches.length);
+  setSourceCacheSize(SOURCE_BSD_SCHEDULE, cachedBsdMatches.length);
   setSourceCacheSize(SOURCE_RECENT_CACHE, cachedRecentMatches.length);
 
-  writeTsdbLiveMatches(TSDB_LIVESCORE_OUTPUT_PATH, cachedTsdbLiveMatches);
-  writeBbcRangeMatches(TSDB_SCHEDULE_OUTPUT_PATH, cachedTsdbScheduleMatches);
   writeRecentMatches(RECENT_OUTPUT_PATH, cachedRecentMatches);
 
   await Promise.all([
-    persistOperationalDatasetSafe(OP_DATASET_TSDB_LIVE_MATCHES, cachedTsdbLiveMatches, {
-      updated_at: updatedAt,
-      source,
-    }),
-    persistOperationalDatasetSafe(OP_DATASET_TSDB_SCHEDULE_MATCHES, cachedTsdbScheduleMatches, {
-      updated_at: updatedAt,
-      source,
-    }),
     persistOperationalDatasetSafe(OP_DATASET_RECENT_MATCHES, cachedRecentMatches, {
       updated_at: updatedAt,
       source,
@@ -18514,8 +18037,8 @@ async function purgeDisallowedCompetitionData(options = {}) {
         ? canonicalDeleteResult.deleted
         : 0,
     live_matches_removed: 0,
-    bbc_live_matches_removed: bbcLiveBefore - cachedTsdbLiveMatches.length,
-    bbc_range_matches_removed: bbcRangeBefore - cachedTsdbScheduleMatches.length,
+    bbc_live_matches_removed: bbcLiveBefore - cachedBsdMatches.length,
+    bbc_range_matches_removed: bbcRangeBefore - cachedBsdMatches.length,
     recent_matches_removed: recentBefore - cachedRecentMatches.length,
     merged_matches_removed: mergedBefore - cachedMergedMatches.length,
     merged_matches_remaining: cachedMergedMatches.length,
@@ -18675,14 +18198,14 @@ async function rescrapeCanonicalMatchDetailsByIds(matchIds, options = {}) {
           existingLookup && existingLookup.payload && typeof existingLookup.payload === "object"
             ? existingLookup.payload
             : null;
-        const fetched = await fetchTsdbMatchDetails(matchId, {
+        const fetched = await fetchBsdMatchDetails(matchId, {
           initiator: requestInitiator,
           reason: requestReason,
           trigger: requestTrigger,
-          scheduleCache: cachedTsdbScheduleMatches,
+          scheduleCache: cachedBsdMatches,
         });
         if (!fetched) {
-          failed.push({ match_id: matchId, error: "No TSDB match payload returned." });
+          failed.push({ match_id: matchId, error: "No BSD match payload returned." });
           return;
         }
 
@@ -18749,8 +18272,8 @@ function canonicalMatchDetailsToListPayload(payload, options = {}) {
   if (payload && payload.league_subcategory) {
     listPayload.league_subcategory = payload.league_subcategory;
   }
-  if (payload && payload.has_tsdb_source === true) {
-    listPayload.has_tsdb_source = true;
+  if (payload && payload.has_bsd_source === true) {
+    listPayload.has_bsd_source = true;
   }
   const canonicalHomeTeamId = statePayload.home_team_id || (payload && payload.home_team_id);
   const canonicalAwayTeamId = statePayload.away_team_id || (payload && payload.away_team_id);
@@ -18921,7 +18444,7 @@ function buildMatchListResponseCacheKey(options = {}) {
   // detail changes; list views poll /matches/:matchId for real-time scores.
   return JSON.stringify({
     kind: options.kind || "public",
-    source: options.source || "tsdb",
+    source: options.source || "bsd",
     merged_updated_at:
       options.mergedDataset && options.mergedDataset.updated_at
         ? options.mergedDataset.updated_at
@@ -18944,7 +18467,7 @@ function buildMatchListResponseCacheKey(options = {}) {
 function buildMatchQueryResponseCacheKey(options = {}) {
   return JSON.stringify({
     list_cache_key: options.listCacheKey || null,
-    source: options.source || "tsdb",
+    source: options.source || "bsd",
     date_from: options.dateFrom || null,
     date_to: options.dateTo || null,
     leagues: Array.isArray(options.leagues) ? options.leagues : [],
@@ -18980,15 +18503,13 @@ function getCachedMatchQueryPayload(cacheKey) {
 
 // Most recent successfully built public match-list payload, kept outside the
 // keyed/TTL cache so it survives cache clears and key changes. Used as the
-// stale-while-revalidate fallback. Keyed by source ("tsdb" | "bsd") so a
-// periodic TSDB-only warm cycle (proactivelyWarmMatchListResponseCache) can
-// never clobber the fallback a BSD-resolved request relies on, or vice versa.
+// stale-while-revalidate fallback, keyed by the canonical source.
 const matchListLastKnownPublicPayloadBySource = new Map();
 function getMatchListLastKnownPayload(source) {
-  return matchListLastKnownPublicPayloadBySource.get(source || "tsdb") || null;
+  return matchListLastKnownPublicPayloadBySource.get(source || "bsd") || null;
 }
 function setMatchListLastKnownPayload(source, payload) {
-  matchListLastKnownPublicPayloadBySource.set(source || "tsdb", payload);
+  matchListLastKnownPublicPayloadBySource.set(source || "bsd", payload);
 }
 // Coalesces concurrent rebuilds: cacheKey -> Promise
 const matchListInFlightRebuilds = new Map();
@@ -18999,7 +18520,7 @@ function buildMatchListFallbackMatches(options = {}) {
       ? options.mergedDataset.items
       : []),
     ...(Array.isArray(options.bbcRangeDataset && options.bbcRangeDataset.items)
-      ? options.bbcRangeDataset.items.map((match) => ({ ...match, has_tsdb_source: true }))
+      ? options.bbcRangeDataset.items.map((match) => ({ ...match, has_bsd_source: true }))
       : []),
   ];
 }
@@ -19021,7 +18542,7 @@ const MATCH_LIST_PERSIST_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const matchListLastPersistedAtMsBySource = new Map();
 
 // Source-scoped persisted dataset name, so a BSD cold-start can't seed from
-// (or clobber) the TSDB persisted snapshot, and vice versa.
+// (or clobber) the BSD persisted snapshot, and vice versa.
 function matchListPersistDatasetName(source) {
   return source === "bsd"
     ? `${MATCH_LIST_PERSIST_DATASET_NAME}_bsd`
@@ -19030,7 +18551,7 @@ function matchListPersistDatasetName(source) {
 
 function persistMatchListPayloadThrottled(payload, source) {
   if (!Array.isArray(payload) || payload.length === 0) return;
-  const key = source || "tsdb";
+  const key = source || "bsd";
   const nowMs = Date.now();
   const lastPersistedAtMs = matchListLastPersistedAtMsBySource.get(key) || 0;
   if (nowMs - lastPersistedAtMs < MATCH_LIST_PERSIST_MIN_INTERVAL_MS) return;
@@ -19045,7 +18566,7 @@ function startMatchListRebuild(cacheKey, options) {
   if (matchListInFlightRebuilds.has(cacheKey)) {
     return matchListInFlightRebuilds.get(cacheKey);
   }
-  const source = options.source || "tsdb";
+  const source = options.source || "bsd";
   const rebuildPromise = (async () => {
     try {
       const payload = await canonicalMatchDetailsRecordsToPublicListPayloadsAsync(
@@ -19074,7 +18595,7 @@ function startMatchListRebuild(cacheKey, options) {
 }
 
 async function getCachedCanonicalPublicMatchListPayloads(options = {}) {
-  const source = options.source || "tsdb";
+  const source = options.source || "bsd";
   const cacheKey = buildMatchListResponseCacheKey({
     ...options,
     kind: "public",
@@ -19248,12 +18769,12 @@ async function getOperationalRealtimeSnapshot(options = {}) {
 async function updateRecentCache(source = "recent_cache_refresh") {
   const now = new Date();
   const live = [];
-  const bbc = Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : [];
+  const bbc = Array.isArray(cachedBsdMatches) ? cachedBsdMatches : [];
   const liveKeys = new Set(live.map(matchKey));
 
   // Strip any synthetic-ID records that may have been loaded from disk on
   // startup before the loadRecentFromDisk filter was applied. Only real
-  // positive-integer TSDB idEvent keys are valid.
+  // positive-integer BSD idEvent keys are valid.
   if (Array.isArray(cachedRecentMatches)) {
     cachedRecentMatches = cachedRecentMatches.filter(
       (m) => m && /^\d+$/.test(String(m.id || m.match_details_id || ""))
@@ -19301,7 +18822,7 @@ function currentMergedMatchesDatasetSnapshot() {
   return {
     items: mergedMatchesForResponse(),
     updated_at:
-      newestIsoTimestamp([tsdbScheduleLastUpdated, tsdbLiveLastUpdated, recentLastUpdated]) ||
+      newestIsoTimestamp([cachedBsdMatchesUpdatedAt, cachedBsdMatchesUpdatedAt, recentLastUpdated]) ||
       null,
     source: "memory",
   };
@@ -19330,7 +18851,7 @@ function scheduleMatchDetailsSnapshotWarm(trigger = "request") {
       if (snapshot.updated_at) {
         matchDetailsLastUpdated = snapshot.updated_at;
       }
-      setSourceCacheSize(SOURCE_TSDB_MATCH_DETAILS, matchDetailsById.size);
+      setSourceCacheSize(SOURCE_BSD_MATCH_DETAILS, matchDetailsById.size);
     } catch (error) {
       console.warn(
         `[API] Failed to warm match details snapshot (${trigger}):`,
@@ -19463,16 +18984,16 @@ function currentOperationalDatasetMemorySnapshot(name) {
   switch (name) {
     case OP_DATASET_MERGED_MATCHES:
       return currentMergedMatchesDatasetSnapshot();
-    case OP_DATASET_TSDB_LIVE_MATCHES:
+    case OP_DATASET_BSD_LIVE_MATCHES:
       return {
-        items: Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : [],
-        updated_at: tsdbLiveLastUpdated || null,
+        items: Array.isArray(cachedBsdMatches) ? cachedBsdMatches : [],
+        updated_at: cachedBsdMatchesUpdatedAt || null,
         source: "memory",
       };
-    case OP_DATASET_TSDB_SCHEDULE_MATCHES:
+    case OP_DATASET_BSD_SCHEDULE_MATCHES:
       return {
-        items: Array.isArray(cachedTsdbScheduleMatches) ? cachedTsdbScheduleMatches : [],
-        updated_at: tsdbScheduleLastUpdated || null,
+        items: Array.isArray(cachedBsdMatches) ? cachedBsdMatches : [],
+        updated_at: cachedBsdMatchesUpdatedAt || null,
         source: "memory",
       };
     case OP_DATASET_RECENT_MATCHES:
@@ -20365,8 +19886,8 @@ function findInMemoryMatchRecordByMatchId(matchId) {
   const sources = [
     mergedMatchesForResponse(),
     Array.isArray(cachedRecentMatches) ? cachedRecentMatches : [],
-    Array.isArray(cachedTsdbScheduleMatches) ? cachedTsdbScheduleMatches : [],
-    Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : [],
+    Array.isArray(cachedBsdMatches) ? cachedBsdMatches : [],
+    Array.isArray(cachedBsdMatches) ? cachedBsdMatches : [],
   ];
 
   for (const source of sources) {
@@ -20902,669 +20423,32 @@ function parseMatchTimeMinutes(matchTime) {
   return null;
 }
 
-function resolveTsdbLivescorePollIntervalMs(options = {}) {
-  const hasLiveMatches =
-    typeof options.hasLiveMatches === "boolean"
-      ? options.hasLiveMatches
-      : Array.isArray(cachedTsdbLiveMatches) && cachedTsdbLiveMatches.length > 0;
-  return hasLiveMatches ? TSDB_LIVESCORE_ACTIVE_INTERVAL_MS : TSDB_LIVESCORE_INTERVAL_MS;
-}
-
-async function updateTsdbLivescores(options = {}) {
-  if (tsdbLiveUpdating) return;
-  tsdbLiveUpdating = true;
-  const startedAtMs = Date.now();
-  let success = false;
-  let recordsFetched = null;
-  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_LIVE, {
-    trigger,
-    interval_ms: TSDB_LIVESCORE_INTERVAL_MS,
-  });
-  try {
-    const previousMatches = cachedTsdbLiveMatches;
-    const fetchStartedAtMs = Date.now();
-    const matches = filterMatchesByCompetition(
-      await fetchTsdbLivescores({
-        initiator: "scraper",
-        reason: "tsdb_live_scores_poll",
-        trigger,
-      })
-    );
-    trackSourceUpdatePhaseMetric({
-      source: SOURCE_TSDB_LIVE,
-      phase: "fetch_filter",
-      startedAtMs: fetchStartedAtMs,
-    });
-
-    const matchesChanged =
-      hashComparablePayload(matches) !== hashComparablePayload(previousMatches);
-    const canonicalUpdatedAt = new Date().toISOString();
-    cachedTsdbLiveMatches = matches;
-    recordsFetched = matches.length;
-    setSourceCacheSize(SOURCE_TSDB_LIVE, matches.length);
-    const canonicalRefreshTargets = matches.filter(shouldRefreshCanonicalMatchDetails);
-    let canonicalChangedCount = 0;
-    if (matchesChanged) {
-      const persistStartedAtMs = Date.now();
-      tsdbLiveLastUpdated = canonicalUpdatedAt;
-      writeTsdbLiveMatches(TSDB_LIVESCORE_OUTPUT_PATH, matches);
-      await persistOperationalDatasetSafe(OP_DATASET_TSDB_LIVE_MATCHES, matches, {
-        updated_at: tsdbLiveLastUpdated,
-        source: SOURCE_TSDB_LIVE,
-      });
-      await updateRecentCache(SOURCE_TSDB_LIVE);
-      // Rebuild merged matches so TSDB live entries (with numeric idEvent keys)
-      // immediately replace any synthetic-ID entries from LiveFootballOnTV for
-      // the same match. Without this, live scores for matches not in the schedule
-      // (e.g. international friendlies) would stay keyed by synthetic IDs until
-      // the next hourly schedule refresh.
-      await rebuildMergedMatchesCache(SOURCE_TSDB_LIVE);
-      trackSourceUpdatePhaseMetric({
-        source: SOURCE_TSDB_LIVE,
-        phase: "persist_recent_rebuild",
-        startedAtMs: persistStartedAtMs,
-      });
-    }
-    if (canonicalRefreshTargets.length > 0) {
-      const canonicalRefreshStartedAtMs = Date.now();
-      await mapWithConcurrency(
-        canonicalRefreshTargets,
-        Math.min(MATCH_DETAILS_POLL_CONCURRENCY, 8),
-        async (match) => {
-          const result = await upsertCanonicalMatchDetailsFromMatch(match, {
-            updated_at: canonicalUpdatedAt,
-            source: SOURCE_TSDB_LIVE,
-            reason: "tsdb_live_poll",
-            skipCacheInvalidation: true,
-          });
-          if (result && result.changed === true) {
-            canonicalChangedCount += 1;
-          }
-        }
-      );
-      trackSourceUpdatePhaseMetric({
-        source: SOURCE_TSDB_LIVE,
-        phase: "canonical_refresh",
-        startedAtMs: canonicalRefreshStartedAtMs,
-      });
-    }
-    if (matchesChanged || canonicalChangedCount > 0) {
-      const invalidationStartedAtMs = Date.now();
-      invalidateCacheDomains(["matches", "match_details", "tsdb_live"], {
-        updated_at: matchesChanged ? tsdbLiveLastUpdated : canonicalUpdatedAt,
-        reason: "tsdb_live_refresh",
-        source: SOURCE_TSDB_LIVE,
-      });
-      trackSourceUpdatePhaseMetric({
-        source: SOURCE_TSDB_LIVE,
-        phase: "cache_invalidation",
-        startedAtMs: invalidationStartedAtMs,
-      });
-    }
-    success = true;
-    logPollSuccess("tsdb_live_matches", {
-      source: SOURCE_TSDB_LIVE,
-      trigger,
-      count: matches.length,
-      updated_at: tsdbLiveLastUpdated,
-      changed: matchesChanged,
-      canonical_refreshed: canonicalRefreshTargets.length,
-      canonical_changed: canonicalChangedCount,
-      duration_ms: Date.now() - startedAtMs,
-    });
-    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_LIVE, {
-      trigger,
-      interval_ms: TSDB_LIVESCORE_INTERVAL_MS,
-      count: matches.length,
-      updated_at: tsdbLiveLastUpdated,
-      changed: matchesChanged,
-      canonical_refreshed: canonicalRefreshTargets.length,
-      canonical_changed: canonicalChangedCount,
-    });
-  } catch (err) {
-    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_LIVE, err, {
-      trigger,
-      interval_ms: TSDB_LIVESCORE_INTERVAL_MS,
-    });
-    console.warn("Failed to update TSDB live matches:", err.message || err);
-  } finally {
-    trackSourceUpdateMetrics({
-      source: SOURCE_TSDB_LIVE,
-      startedAtMs,
-      success,
-      recordsFetched,
-    });
-    tsdbLiveUpdating = false;
-  }
-}
-
-async function updateTsdbScheduleMatches(options = {}) {
-  if (tsdbScheduleUpdating) return;
-  tsdbScheduleUpdating = true;
-  const startedAtMs = Date.now();
-  let success = false;
-  let recordsFetched = null;
-  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_SCHEDULE, {
-    trigger,
-    leagues: TSDB_LEAGUE_ALLOWLIST.length,
-    interval_ms: TSDB_SCHEDULE_INTERVAL_MS,
-  });
-  try {
-    const matches = filterMatchesByCompetition(
-      await fetchTsdbAllLeagueSchedules({
-        initiator: "scraper",
-        reason: "tsdb_schedule_poll",
-        trigger,
-      })
-    );
-    cachedTsdbScheduleMatches = matches;
-    recordsFetched = matches.length;
-    setSourceCacheSize(SOURCE_TSDB_SCHEDULE, matches.length);
-    tsdbScheduleLastUpdated = new Date().toISOString();
-    writeTsdbScheduleMatches(TSDB_SCHEDULE_OUTPUT_PATH, matches);
-    await persistOperationalDatasetSafe(OP_DATASET_TSDB_SCHEDULE_MATCHES, matches, {
-      updated_at: tsdbScheduleLastUpdated,
-      source: SOURCE_TSDB_SCHEDULE,
-    });
-    await rebuildMergedMatchesCache(SOURCE_TSDB_SCHEDULE);
-    invalidateCacheDomains(["matches", "match_details"], {
-      updated_at: tsdbScheduleLastUpdated,
-      reason: "tsdb_schedule_refresh",
-      source: SOURCE_TSDB_SCHEDULE,
-    });
-    success = true;
-    logPollSuccess("tsdb_schedule_matches", {
-      source: SOURCE_TSDB_SCHEDULE,
-      trigger,
-      leagues: TSDB_LEAGUE_ALLOWLIST.length,
-      count: matches.length,
-      updated_at: tsdbScheduleLastUpdated,
-      duration_ms: Date.now() - startedAtMs,
-    });
-    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_SCHEDULE, {
-      trigger,
-      leagues: TSDB_LEAGUE_ALLOWLIST.length,
-      interval_ms: TSDB_SCHEDULE_INTERVAL_MS,
-      count: matches.length,
-      updated_at: tsdbScheduleLastUpdated,
-    });
-  } catch (err) {
-    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_SCHEDULE, err, {
-      trigger,
-      interval_ms: TSDB_SCHEDULE_INTERVAL_MS,
-    });
-    console.warn("Failed to update TSDB schedule matches:", err.message || err);
-  } finally {
-    trackSourceUpdateMetrics({
-      source: SOURCE_TSDB_SCHEDULE,
-      startedAtMs,
-      success,
-      recordsFetched,
-    });
-    tsdbScheduleUpdating = false;
-  }
-}
-
-async function updateTsdbTvListings(options = {}) {
-  if (tsdbTvUpdating) return;
-  tsdbTvUpdating = true;
-  const startedAtMs = Date.now();
-  let success = false;
-  let recordsFetched = null;
-  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_TV, {
-    trigger,
-    interval_ms: TSDB_TV_INTERVAL_MS,
-  });
-  try {
-    const { byEvent, upsertArray } = await fetchTsdbTvListingsFull({
-      initiator: "scraper",
-      trigger,
-    });
-    cachedTvListingsByEvent = byEvent;
-    recordsFetched = upsertArray.length;
-    tsdbTvLastUpdated = new Date().toISOString();
-    setSourceCacheSize(SOURCE_TSDB_TV, byEvent.size);
-
-    if (upsertArray.length > 0) {
-      await upsertTvListings(upsertArray);
-    }
-
-    // Prune listings older than retention window.
-    const cutoff = new Date(Date.now() - TSDB_TV_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
-    await purgeStaleTvListings(cutoffStr);
-
-    // Rebuild merged matches so fixtures immediately get their TV channels.
-    await rebuildMergedMatchesCache(SOURCE_TSDB_TV);
-    invalidateCacheDomains(["matches"], {
-      updated_at: tsdbTvLastUpdated,
-      reason: "tv_listings_refresh",
-      source: SOURCE_TSDB_TV,
-    });
-
-    success = true;
-    logPollSuccess("tsdb_tv_listings", {
-      source: SOURCE_TSDB_TV,
-      trigger,
-      events: byEvent.size,
-      updated_at: tsdbTvLastUpdated,
-      duration_ms: Date.now() - startedAtMs,
-    });
-    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_TV, {
-      trigger,
-      interval_ms: TSDB_TV_INTERVAL_MS,
-      events: byEvent.size,
-      updated_at: tsdbTvLastUpdated,
-    });
-  } catch (err) {
-    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_TV, err, {
-      trigger,
-      interval_ms: TSDB_TV_INTERVAL_MS,
-    });
-    console.warn("Failed to update TSDB TV listings:", err.message || err);
-  } finally {
-    trackSourceUpdateMetrics({
-      source: SOURCE_TSDB_TV,
-      startedAtMs,
-      success,
-      recordsFetched,
-    });
-    tsdbTvUpdating = false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// TSDB league catalogue — fetched once per day at midnight London time.
-// Stores Soccer leagues as { _id: idLeague, name, sport } in the "leagues"
-// collection for use by future standings / league-table features.
-// ---------------------------------------------------------------------------
-
-let tsdbLeaguesUpdating = false;
-let tsdbLeaguesDailyRefreshTimer = null;
-let tsdbLeaguesNextDailyRefreshAt = null;
-
-async function updateTsdbLeagues(options = {}) {
-  if (tsdbLeaguesUpdating) return;
-  tsdbLeaguesUpdating = true;
-  const startedAtMs = Date.now();
-  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  try {
-    const leagues = await fetchSoccerLeagues({ trigger });
-    if (leagues.length > 0) {
-      await upsertLeagues(leagues);
-    }
-    console.info(
-      `[Leagues] Upserted ${leagues.length} soccer leagues trigger=${trigger} duration_ms=${Date.now() - startedAtMs}`
-    );
-  } catch (err) {
-    console.warn("[Leagues] Failed to update league catalogue:", err.message || err);
-  } finally {
-    tsdbLeaguesUpdating = false;
-  }
-}
-
-function scheduleLeaguesDailyRefresh() {
-  if (tsdbLeaguesDailyRefreshTimer) {
-    cancelRuntimeTimeout(tsdbLeaguesDailyRefreshTimer);
-    tsdbLeaguesDailyRefreshTimer = null;
-  }
-
-  const delayMs = millisecondsUntilNextLondonTime(0, 0);
-  const nextAt = new Date(Date.now() + delayMs);
-  tsdbLeaguesNextDailyRefreshAt = nextAt.toISOString();
-  const londonTarget = londonDateTimeFormatter.format(nextAt);
-  console.info(
-    `[Leagues] Daily refresh scheduled next_london="${londonTarget}" next_iso=${tsdbLeaguesNextDailyRefreshAt}`
-  );
-
-  tsdbLeaguesDailyRefreshTimer = registerRuntimeTimeout(async () => {
-    tsdbLeaguesDailyRefreshTimer = null;
-    try {
-      await updateTsdbLeagues({ trigger: "daily_midnight" });
-    } finally {
-      scheduleLeaguesDailyRefresh();
-    }
-  }, delayMs);
-}
-
-// ---------------------------------------------------------------------------
-// TSDB team badges — fetched once per day at 00:10 London time.
-// Skipped entirely when TEAM_LOGO_SOURCE !== "tsdb" so the bundled-logo
-// default path is zero-cost. On success, persists to Redis + in-memory so
-// cold restarts serve immediately.
-// ---------------------------------------------------------------------------
-
-async function updateTsdbTeamBadges(options = {}) {
-  if (SERVER_CONFIG.teamLogoSource !== TEAM_LOGO_SOURCE_TSDB) return;
-  if (teamBadgesUpdating) return;
-  teamBadgesUpdating = true;
-  const startedAtMs = Date.now();
-  let success = false;
-  let recordsFetched = null;
-  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_TEAM_BADGES, { trigger });
-  try {
-    const byTeamId = await fetchTeamBadges({ trigger });
-    const payload = badgeMapToPayload(byTeamId);
-    recordsFetched = Object.keys(payload).length;
-    if (recordsFetched === 0) {
-      recordRuntimeComponentFailure(
-        COMPONENT_SOURCE_TSDB_TEAM_BADGES,
-        new Error("Team badges update returned no teams"),
-        { trigger }
-      );
-      console.warn("[TeamBadges] Update returned no teams");
-      return;
-    }
-
-    cachedTeamBadges = payload;
-    teamBadgesLastUpdated = new Date().toISOString();
-    teamBadgesETag = require("crypto").createHash("sha1")
-      .update(JSON.stringify(payload))
-      .digest("hex");
-    await persistOperationalDatasetSafe(OP_DATASET_TEAM_BADGES, payload, {
-      updated_at: teamBadgesLastUpdated,
-      source: SOURCE_TSDB_TEAM_BADGES,
-    });
-    invalidateCacheDomains(["team_badges"], { reason: `team_badges_${trigger}`, source: SOURCE_TSDB_TEAM_BADGES });
-    success = true;
-    console.info(
-      `[TeamBadges] Updated teams=${recordsFetched} duration_ms=${Date.now() - startedAtMs}`
-    );
-    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_TEAM_BADGES, {
-      trigger,
-      teams: recordsFetched,
-      duration_ms: Date.now() - startedAtMs,
-    });
-  } catch (err) {
-    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_TEAM_BADGES, err, { trigger });
-    console.warn("[TeamBadges] Failed to update:", err.message || err);
-  } finally {
-    if (!success) {
-      recordRuntimeComponentFailure(
-        COMPONENT_SOURCE_TSDB_TEAM_BADGES,
-        new Error("Team badges update did not succeed"),
-        { trigger }
-      );
-    }
-    teamBadgesUpdating = false;
-  }
-}
-
-function scheduleTeamBadgesDailyRefresh() {
-  if (teamBadgesDailyRefreshTimer) {
-    cancelRuntimeTimeout(teamBadgesDailyRefreshTimer);
-    teamBadgesDailyRefreshTimer = null;
-  }
-
-  // 00:10 London — after leagues (00:00) and tables (00:05) have refreshed.
-  const delayMs = millisecondsUntilNextLondonTime(0, 10);
-  const nextAt = new Date(Date.now() + delayMs);
-  teamBadgesNextDailyRefreshAt = nextAt.toISOString();
-  const londonTarget = londonDateTimeFormatter.format(nextAt);
-  console.info(
-    `[TeamBadges] Daily refresh scheduled next_london="${londonTarget}" next_iso=${teamBadgesNextDailyRefreshAt}`
-  );
-
-  teamBadgesDailyRefreshTimer = registerRuntimeTimeout(async () => {
-    teamBadgesDailyRefreshTimer = null;
-    try {
-      await updateTsdbTeamBadges({ trigger: "daily_midnight" });
-    } finally {
-      scheduleTeamBadgesDailyRefresh();
-    }
-  }, delayMs);
-}
-
-function scheduleEplSeasonStatusDailyRefresh() {
-  if (eplSeasonStatusDailyRefreshTimer) {
-    cancelRuntimeTimeout(eplSeasonStatusDailyRefreshTimer);
-    eplSeasonStatusDailyRefreshTimer = null;
-  }
-
-  // 00:15 London — after leagues (00:00) have refreshed.
-  const delayMs = millisecondsUntilNextLondonTime(0, 15);
-  const nextAt = new Date(Date.now() + delayMs);
-  eplSeasonStatusNextDailyRefreshAt = nextAt.toISOString();
-  const londonTarget = londonDateTimeFormatter.format(nextAt);
-  console.info(
-    `[EplSeasonStatus] Daily refresh scheduled next_london="${londonTarget}" next_iso=${eplSeasonStatusNextDailyRefreshAt}`
-  );
-
-  eplSeasonStatusDailyRefreshTimer = registerRuntimeTimeout(async () => {
-    eplSeasonStatusDailyRefreshTimer = null;
-    try {
-      await refreshEplSeasonActive();
-    } finally {
-      scheduleEplSeasonStatusDailyRefresh();
-    }
-  }, delayMs);
-}
-
-async function updateTsdbPremierLeagueTeams(options = {}) {
-  if (eplUpdating) return;
-  eplUpdating = true;
-  const startedAtMs = Date.now();
-  let success = false;
-  let recordsFetched = null;
-  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_PREMIER_TEAMS, {
-    trigger,
-    interval_ms: EPL_INTERVAL_MS,
-  });
-  try {
-    const teams = await fetchTsdbPremierLeagueTeams({
-      initiator: "scraper",
-      reason: "tsdb_premier_league_teams_poll",
-      trigger,
-    });
-    if (!Array.isArray(teams) || teams.length === 0) {
-      recordRuntimeComponentFailure(
-        COMPONENT_SOURCE_TSDB_PREMIER_TEAMS,
-        new Error("TSDB Premier League teams update returned no teams"),
-        {
-          trigger,
-          interval_ms: EPL_INTERVAL_MS,
-        }
-      );
-      console.warn("TSDB Premier League teams update returned no teams");
-      return;
-    }
-
-    cachedPremierLeagueTeams = teams.map((team) => String(team || "").trim()).filter(Boolean);
-    recordsFetched = cachedPremierLeagueTeams.length;
-    setSourceCacheSize(SOURCE_TSDB_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
-    eplLastUpdated = new Date().toISOString();
-    writeTsdbPremierLeagueTeams(EPL_OUTPUT_PATH, cachedPremierLeagueTeams);
-    await persistOperationalDatasetSafe(
-      OP_DATASET_PREMIER_LEAGUE_TEAMS,
-      cachedPremierLeagueTeams,
-      {
-        updated_at: eplLastUpdated,
-        source: SOURCE_TSDB_PREMIER_LEAGUE,
-      }
-    );
-    invalidateCacheDomains(["teams"], {
-      updated_at: eplLastUpdated,
-      reason: "premier_league_teams_refresh",
-      source: SOURCE_TSDB_PREMIER_LEAGUE,
-    });
-    success = true;
-    logPollSuccess("tsdb_premier_league_teams", {
-      source: SOURCE_TSDB_PREMIER_LEAGUE,
-      trigger,
-      count: cachedPremierLeagueTeams.length,
-      updated_at: eplLastUpdated,
-      duration_ms: Date.now() - startedAtMs,
-    });
-    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_PREMIER_TEAMS, {
-      trigger,
-      interval_ms: EPL_INTERVAL_MS,
-      count: cachedPremierLeagueTeams.length,
-      updated_at: eplLastUpdated,
-    });
-  } catch (err) {
-    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_PREMIER_TEAMS, err, {
-      trigger,
-      interval_ms: EPL_INTERVAL_MS,
-    });
-    console.warn("Failed to update TSDB Premier League teams:", err.message || err);
-  } finally {
-    trackSourceUpdateMetrics({
-      source: SOURCE_TSDB_PREMIER_LEAGUE,
-      startedAtMs,
-      success,
-      recordsFetched,
-    });
-    eplUpdating = false;
-  }
-}
-
 async function updateLeagueTables(options = {}) {
   if (leagueTablesUpdating) return;
   leagueTablesUpdating = true;
-  const startedAtMs = Date.now();
-  let success = false;
-  let recordsFetched = null;
-  const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
-  recordRuntimeComponentStart(COMPONENT_SOURCE_TSDB_LEAGUE_TABLES, { trigger });
-
+  const trigger = String(options.trigger || "scheduled");
   try {
-    // Fetch tables sequentially to stay well within TSDB rate limits.
-    // Most leagues (cups, friendlies, knock-outs) return null and are skipped.
-    const fetched = [];
-    const failures = [];
-    for (const entry of TSDB_LEAGUE_ALLOWLIST) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const table = await fetchTsdbLeagueTable(entry.id, entry.name, {
-          initiator: "scraper",
-          trigger,
-        });
-        if (table) fetched.push(table);
-      } catch (fetchErr) {
-        failures.push({ id: entry.id, message: fetchErr.message || String(fetchErr) });
-      }
-    }
-
-    if (failures.length > 0) {
-      console.warn(
-        `[LeagueTables] ${failures.length} fetch failure(s):`,
-        failures.map((f) => `${f.id}: ${f.message}`).join("; ")
-      );
-    }
-
-    if (fetched.length === 0) {
-      recordRuntimeComponentFailure(
-        COMPONENT_SOURCE_TSDB_LEAGUE_TABLES,
-        new Error("League tables update returned no tables"),
-        { trigger }
-      );
-      console.warn("[LeagueTables] No tables returned from TSDB");
-      return;
-    }
-
-    // Persist to MongoDB league_tables collection
-    try {
-      await upsertTsdbLeagueTables(fetched);
-    } catch (dbErr) {
-      console.warn("[LeagueTables] Failed to upsert to MongoDB:", dbErr.message || dbErr);
-    }
-
-    const sortedTables = sortLeagueTablesForResponse(fetched);
-    const nowIso = new Date().toISOString();
-
-    cachedLeagueTables = sortedTables;
-    leagueTablesLastUpdated = nowIso;
-    recordsFetched = leagueTableRowsCount(sortedTables);
-    setSourceCacheSize(SOURCE_TSDB_LEAGUE_TABLES, recordsFetched);
-
-    await persistOperationalDatasetSafe(OP_DATASET_LEAGUE_TABLES, sortedTables, {
-      updated_at: leagueTablesLastUpdated,
-      source: SOURCE_TSDB_LEAGUE_TABLES,
-    });
-
-    // Keep EPL team filter aligned with the live table.
-    const premierLeagueTeams = extractPremierLeagueTeamsFromTables(sortedTables);
-    if (premierLeagueTeams.length > 0) {
-      cachedPremierLeagueTeams = premierLeagueTeams;
-      eplLastUpdated = leagueTablesLastUpdated;
-      setSourceCacheSize(SOURCE_TSDB_PREMIER_LEAGUE, cachedPremierLeagueTeams.length);
-      await persistOperationalDatasetSafe(
-        OP_DATASET_PREMIER_LEAGUE_TEAMS,
-        cachedPremierLeagueTeams,
-        { updated_at: eplLastUpdated, source: SOURCE_TSDB_LEAGUE_TABLES }
-      );
-    }
-
-    invalidateCacheDomains(["tables", "teams"], {
-      updated_at: leagueTablesLastUpdated,
-      reason: "league_tables_refresh",
-      source: SOURCE_TSDB_LEAGUE_TABLES,
-    });
-
-    success = true;
-    logPollSuccess("tsdb_league_tables", {
-      source: SOURCE_TSDB_LEAGUE_TABLES,
+    await refreshBsdTablesCache();
+    cachedLeagueTables = cachedBsdTables;
+    leagueTablesLastUpdated = cachedBsdTablesUpdatedAt;
+    cachedPremierLeagueTeams = extractPremierLeagueTeamsFromTables(cachedBsdTables);
+    eplLastUpdated = cachedBsdTablesUpdatedAt;
+    setSourceCacheSize("bsd_league_tables", leagueTableRowsCount(cachedBsdTables));
+    logPollSuccess("bsd_league_tables", {
+      source: "bsd_league_tables",
       trigger,
-      leagues: sortedTables.length,
-      rows: recordsFetched,
-      failures: failures.length,
-      updated_at: leagueTablesLastUpdated,
-      duration_ms: Date.now() - startedAtMs,
+      leagues: cachedBsdTables.length,
+      rows: leagueTableRowsCount(cachedBsdTables),
+      updated_at: cachedBsdTablesUpdatedAt,
     });
-    recordRuntimeComponentSuccess(COMPONENT_SOURCE_TSDB_LEAGUE_TABLES, {
+  } catch (error) {
+    logPollFailure("bsd_league_tables", error, {
+      source: "bsd_league_tables",
       trigger,
-      leagues: sortedTables.length,
-      rows: recordsFetched,
-      failures: failures.length,
-      updated_at: leagueTablesLastUpdated,
     });
-  } catch (err) {
-    recordRuntimeComponentFailure(COMPONENT_SOURCE_TSDB_LEAGUE_TABLES, err, { trigger });
-    console.warn("[LeagueTables] Failed to update league tables:", err.message || err);
+    console.warn("Failed to update BSD league tables:", error.message || error);
   } finally {
-    trackSourceUpdateMetrics({
-      source: SOURCE_TSDB_LEAGUE_TABLES,
-      startedAtMs,
-      success,
-      recordsFetched,
-    });
     leagueTablesUpdating = false;
-  }
-}
-
-let leagueTablesDailyRefreshTimer = null;
-let leagueTablesNextDailyRefreshAt = null;
-
-function scheduleLeagueTablesDailyRefresh() {
-  if (leagueTablesDailyRefreshTimer) {
-    clearTimeout(leagueTablesDailyRefreshTimer);
-    leagueTablesDailyRefreshTimer = null;
-  }
-
-  const delayMs = millisecondsUntilNextLondonTime(0, 5); // 00:05 London — after leagues refresh
-  const nextAt = new Date(Date.now() + delayMs);
-  leagueTablesNextDailyRefreshAt = nextAt.toISOString();
-  const londonTarget = londonDateTimeFormatter.format(nextAt);
-  console.info(
-    `[LeagueTables] Daily refresh scheduled next_london="${londonTarget}" next_iso=${leagueTablesNextDailyRefreshAt}`
-  );
-
-  leagueTablesDailyRefreshTimer = setTimeout(async () => {
-    leagueTablesDailyRefreshTimer = null;
-    try {
-      await updateLeagueTables({ trigger: "daily_midnight" });
-    } finally {
-      scheduleLeagueTablesDailyRefresh();
-    }
-  }, delayMs);
-
-  if (leagueTablesDailyRefreshTimer && typeof leagueTablesDailyRefreshTimer.unref === "function") {
-    leagueTablesDailyRefreshTimer.unref();
   }
 }
 
@@ -23281,9 +22165,9 @@ function setCacheOnlyHeaders(res) {
 
 const ADMIN_ARCH_COMPONENT_DEFS = Object.freeze([
   { id: "source_live_football", label: "LiveFootballOnTV", short_label: "LiveFootballOnTV", group: "sources", kind: "source" },
-  { id: "source_tsdb_live", label: "SportsDB Live Scores", short_label: "TSDB Live", group: "sources", kind: "source" },
-  { id: "source_tsdb_schedule", label: "SportsDB Schedule Fixtures", short_label: "TSDB Schedule", group: "sources", kind: "source" },
-  { id: "source_tsdb_match_details", label: "SportsDB Match Details", short_label: "TSDB Details", group: "sources", kind: "source" },
+  { id: "source_bsd_live", label: "BSD Live Scores", short_label: "BSD Live", group: "sources", kind: "source" },
+  { id: "source_bsd_schedule", label: "BSD Schedule Fixtures", short_label: "BSD Schedule", group: "sources", kind: "source" },
+  { id: "source_bsd_match_details", label: "BSD Match Details", short_label: "BSD Details", group: "sources", kind: "source" },
   { id: "source_bbc_tables", label: "BBC Tables", short_label: "BBC Tables", group: "sources", kind: "source" },
   { id: "source_club_elo_rankings", label: "Club Elo Rankings", short_label: "Club Elo", group: "sources", kind: "source" },
   { id: "source_club_elo_fixtures", label: "Club Elo Fixtures", short_label: "Club Elo Fx", group: "sources", kind: "source" },
@@ -23304,9 +22188,9 @@ const ADMIN_ARCH_COMPONENT_BY_ID = new Map(
 );
 const ADMIN_ARCH_FLOW_EDGES = Object.freeze([
   { from: "source_live_football", to: "operational_memory" },
-  { from: "source_tsdb_live", to: "operational_memory" },
-  { from: "source_tsdb_schedule", to: "operational_memory" },
-  { from: "source_tsdb_match_details", to: "operational_memory" },
+  { from: "source_bsd_live", to: "operational_memory" },
+  { from: "source_bsd_schedule", to: "operational_memory" },
+  { from: "source_bsd_match_details", to: "operational_memory" },
   { from: "source_bbc_tables", to: "operational_memory" },
   { from: "source_club_elo_rankings", to: "metadata_api" },
   { from: "source_club_elo_fixtures", to: "operational_memory" },
@@ -23557,54 +22441,54 @@ async function buildAdminArchitectureOverviewPayload() {
   const detailsReconciliation = findReconciliationComponentByName(reconciliation, "match_details");
 
   const bbcLiveFeed = buildUpstreamFeedSnapshot({
-    id: COMPONENT_SOURCE_TSDB_LIVE,
-    title: "SportsDB Live Scores",
-    runtimeId: COMPONENT_SOURCE_TSDB_LIVE,
-    interval_ms: TSDB_LIVESCORE_INTERVAL_MS,
-    updated_at: tsdbLiveLastUpdated,
-    count: cachedTsdbLiveMatches.length,
-    last_success_at: sourceLastSuccessAtIso(SOURCE_TSDB_LIVE),
-    running: tsdbLiveUpdating,
+    id: COMPONENT_SOURCE_BSD_LIVE,
+    title: "BSD Live Scores",
+    runtimeId: COMPONENT_SOURCE_BSD_LIVE,
+    interval_ms: BSD_MATCHES_CACHE_TTL_MS,
+    updated_at: cachedBsdMatchesUpdatedAt,
+    count: cachedBsdMatches.length,
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BSD_LIVE),
+    running: bsdMatchesRefreshInFlight,
   });
   const bbcRangeFeed = buildUpstreamFeedSnapshot({
-    id: COMPONENT_SOURCE_TSDB_SCHEDULE,
-    title: "SportsDB Schedule Fixtures",
-    runtimeId: COMPONENT_SOURCE_TSDB_SCHEDULE,
-    interval_ms: TSDB_SCHEDULE_INTERVAL_MS,
-    updated_at: tsdbScheduleLastUpdated,
-    count: cachedTsdbScheduleMatches.length,
-    last_success_at: sourceLastSuccessAtIso(SOURCE_TSDB_SCHEDULE),
-    running: tsdbScheduleUpdating,
+    id: COMPONENT_SOURCE_BSD_SCHEDULE,
+    title: "BSD Schedule Fixtures",
+    runtimeId: COMPONENT_SOURCE_BSD_SCHEDULE,
+    interval_ms: BSD_MATCHES_CACHE_TTL_MS,
+    updated_at: cachedBsdMatchesUpdatedAt,
+    count: cachedBsdMatches.length,
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BSD_SCHEDULE),
+    running: bsdMatchesRefreshInFlight,
   });
   const bbcDetailsFeed = buildUpstreamFeedSnapshot({
-    id: COMPONENT_SOURCE_TSDB_MATCH_DETAILS,
-    title: "SportsDB Match Details",
-    runtimeId: COMPONENT_SOURCE_TSDB_MATCH_DETAILS,
+    id: COMPONENT_SOURCE_BSD_MATCH_DETAILS,
+    title: "BSD Match Details",
+    runtimeId: COMPONENT_SOURCE_BSD_MATCH_DETAILS,
     interval_ms: MATCH_DETAILS_POLL_INTERVAL_MS,
     updated_at: matchDetailsLastUpdated,
     count: memoryMatchDetails.total,
-    last_success_at: sourceLastSuccessAtIso(SOURCE_TSDB_MATCH_DETAILS),
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BSD_MATCH_DETAILS),
     running: matchDetailsUpdating,
   });
   const bbcPremierFeed = buildUpstreamFeedSnapshot({
-    id: COMPONENT_SOURCE_TSDB_PREMIER_TEAMS,
-    title: "SportsDB Premier League Teams",
-    runtimeId: COMPONENT_SOURCE_TSDB_PREMIER_TEAMS,
+    id: COMPONENT_SOURCE_BSD_PREMIER_TEAMS,
+    title: "BSD Premier League Teams",
+    runtimeId: COMPONENT_SOURCE_BSD_PREMIER_TEAMS,
     interval_ms: EPL_INTERVAL_MS,
     updated_at: eplLastUpdated,
     count: cachedPremierLeagueTeams.length,
-    last_success_at: sourceLastSuccessAtIso(SOURCE_TSDB_PREMIER_LEAGUE),
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BSD_PREMIER_LEAGUE),
     running: eplUpdating,
     allow_missing: true,
   });
   const bbcLeagueTablesFeed = buildUpstreamFeedSnapshot({
-    id: COMPONENT_SOURCE_TSDB_LEAGUE_TABLES,
-    title: "SportsDB League Tables",
-    runtimeId: COMPONENT_SOURCE_TSDB_LEAGUE_TABLES,
+    id: COMPONENT_SOURCE_BSD_LEAGUE_TABLES,
+    title: "BSD League Tables",
+    runtimeId: COMPONENT_SOURCE_BSD_LEAGUE_TABLES,
     updated_at: leagueTablesLastUpdated,
     next_refresh_at: leagueTablesNextDailyRefreshAt,
     count: leagueTableRowsCount(cachedLeagueTables),
-    last_success_at: sourceLastSuccessAtIso(SOURCE_TSDB_LEAGUE_TABLES),
+    last_success_at: sourceLastSuccessAtIso(SOURCE_BSD_LEAGUE_TABLES),
     running: leagueTablesUpdating,
   });
   const bbcTablesHealth = combineAdminHealth(bbcPremierFeed, bbcLeagueTablesFeed);
@@ -23747,21 +22631,21 @@ async function buildAdminArchitectureOverviewPayload() {
   );
 
   const components = [
-    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_tsdb_live"), {
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_bsd_live"), {
       level: bbcLiveFeed.level,
       status: bbcLiveFeed.status,
       summary: `${bbcLiveFeed.count || 0} BBC live matches`,
       updated_at: bbcLiveFeed.updated_at,
       age_seconds: bbcLiveFeed.age_seconds,
     }),
-    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_tsdb_schedule"), {
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_bsd_schedule"), {
       level: bbcRangeFeed.level,
       status: bbcRangeFeed.status,
       summary: `${bbcRangeFeed.count || 0} range matches`,
       updated_at: bbcRangeFeed.updated_at,
       age_seconds: bbcRangeFeed.age_seconds,
     }),
-    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_tsdb_match_details"), {
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_bsd_match_details"), {
       level: bbcDetailsFeed.level,
       status: bbcDetailsFeed.status,
       summary: `${bbcDetailsFeed.count || 0} match-detail records`,
@@ -23837,7 +22721,7 @@ async function buildAdminArchitectureOverviewPayload() {
       summary: "/api/v1/matches and /api/v1/matches/:id",
       updated_at: newestIsoTimestamp([memoryDatasets[OP_DATASET_MERGED_MATCHES].updated_at, memoryMatchDetails.updated_at]),
       age_seconds: ageSecondsFromIso(newestIsoTimestamp([memoryDatasets[OP_DATASET_MERGED_MATCHES].updated_at, memoryMatchDetails.updated_at]), nowMs),
-      dependencies: ["operational_memory", "source_tsdb_match_details"],
+      dependencies: ["operational_memory", "source_bsd_match_details"],
     }),
     buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("metadata_api"), {
       level: metadataApiHealth.level,
@@ -23876,7 +22760,7 @@ async function buildAdminArchitectureOverviewPayload() {
           : null,
         nowMs
       ),
-      dependencies: ["operational_redis", "source_tsdb_match_details"],
+      dependencies: ["operational_redis", "source_bsd_match_details"],
     }),
   ];
 
@@ -23901,11 +22785,11 @@ async function buildAdminArchitectureOverviewPayload() {
     edges: ADMIN_ARCH_FLOW_EDGES,
     components,
     feed_snapshots: {
-      tsdb_live: bbcLiveFeed,
-      tsdb_schedule: bbcRangeFeed,
-      tsdb_match_details: bbcDetailsFeed,
-      tsdb_premier_teams: bbcPremierFeed,
-      tsdb_league_tables: bbcLeagueTablesFeed,
+      bsd_live: bbcLiveFeed,
+      bsd_schedule: bbcRangeFeed,
+      bsd_match_details: bbcDetailsFeed,
+      bsd_premier_teams: bbcPremierFeed,
+      bsd_league_tables: bbcLeagueTablesFeed,
       club_elo: clubEloFeed,
       club_elo_fixtures: clubEloFixturesFeed,
       football_database: footballDatabaseFeed,
@@ -23935,8 +22819,8 @@ async function buildAdminArchitectureComponentDetail(componentId) {
 
   if (componentId === "operational_memory") {
     const datasetCards = [
-      { name: OP_DATASET_TSDB_LIVE_MATCHES, snapshot: memoryDatasets[OP_DATASET_TSDB_LIVE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_TSDB_LIVE_MATCHES) },
-      { name: OP_DATASET_TSDB_SCHEDULE_MATCHES, snapshot: memoryDatasets[OP_DATASET_TSDB_SCHEDULE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_TSDB_SCHEDULE_MATCHES) },
+      { name: OP_DATASET_BSD_LIVE_MATCHES, snapshot: memoryDatasets[OP_DATASET_BSD_LIVE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_BSD_LIVE_MATCHES) },
+      { name: OP_DATASET_BSD_SCHEDULE_MATCHES, snapshot: memoryDatasets[OP_DATASET_BSD_SCHEDULE_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_BSD_SCHEDULE_MATCHES) },
       { name: OP_DATASET_RECENT_MATCHES, snapshot: memoryDatasets[OP_DATASET_RECENT_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_RECENT_MATCHES) },
       { name: OP_DATASET_MERGED_MATCHES, snapshot: memoryDatasets[OP_DATASET_MERGED_MATCHES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_MERGED_MATCHES) },
       { name: OP_DATASET_LEAGUE_TABLES, snapshot: memoryDatasets[OP_DATASET_LEAGUE_TABLES], reconciliation: findReconciliationComponentByName(reconciliation, OP_DATASET_LEAGUE_TABLES) },
@@ -24210,29 +23094,29 @@ async function buildAdminArchitectureComponentDetail(componentId) {
         "Recent cache and merged matches stop incorporating new LiveFootballOnTV entries until the next success.",
       ],
     },
-    source_tsdb_live: {
-      snapshot: feedSnapshots.tsdb_live,
-      description: "Polls SportsDB /livescore/soccer faster while live matches are active, then returns to the idle interval.",
-      writes_to: ["operational_memory.recent_matches", "operational_memory.match_details", "operational_redis.tsdb_live_matches", "operational_redis.match_details"],
+    source_bsd_live: {
+      snapshot: feedSnapshots.bsd_live,
+      description: "Polls BSD /livescore/soccer faster while live matches are active, then returns to the idle interval.",
+      writes_to: ["operational_memory.recent_matches", "operational_memory.match_details", "operational_redis.bsd_live_matches", "operational_redis.match_details"],
       used_by: ["matches_api", "match_monitor"],
       failure_impact: [
         "Live score/status freshness regresses to whatever is already in memory.",
         "Recent matches and match-detail seeds stop receiving live overlays.",
       ],
     },
-    source_tsdb_schedule: {
-      snapshot: feedSnapshots.tsdb_schedule,
+    source_bsd_schedule: {
+      snapshot: feedSnapshots.bsd_schedule,
       description: "Fetches full-season schedules for all allowlisted leagues hourly; main structural source for merged fixtures/results coverage.",
-      writes_to: ["operational_memory.merged_matches", "operational_redis.tsdb_schedule_matches", "operational_redis.merged_matches"],
+      writes_to: ["operational_memory.merged_matches", "operational_redis.bsd_schedule_matches", "operational_redis.merged_matches"],
       used_by: ["matches_api", "metadata_api"],
       failure_impact: [
         "Fixture/result coverage for /api/v1/matches becomes stale and new fixtures may not appear.",
         "Merged matches stop receiving broad schedule/result refreshes until the next success.",
       ],
     },
-    source_tsdb_match_details: {
-      snapshot: feedSnapshots.tsdb_match_details,
-      description: "Polls in-progress SportsDB match events every 10 seconds for tracked matches and maintains the high-detail match_details cache.",
+    source_bsd_match_details: {
+      snapshot: feedSnapshots.bsd_match_details,
+      description: "Polls in-progress BSD match events every 10 seconds for tracked matches and maintains the high-detail match_details cache.",
       writes_to: ["operational_memory.match_details", "operational_redis.match_details"],
       used_by: ["matches_api", "match_monitor"],
       failure_impact: [
@@ -24297,7 +23181,7 @@ async function buildAdminArchitectureComponentDetail(componentId) {
       component,
       detail: {
         description: "Combines the BBC Premier League team-list puller and the multi-league BBC tables puller.",
-        subcomponents: [feedSnapshots.tsdb_premier_teams, feedSnapshots.tsdb_league_tables],
+        subcomponents: [feedSnapshots.bsd_premier_teams, feedSnapshots.bsd_league_tables],
         data_flow: {
           writes_to: ["operational_memory.league_tables", "operational_redis.league_tables", "operational_redis.premier_league_teams"],
           used_by: ["tables_api", "metadata_api"],
@@ -24307,8 +23191,8 @@ async function buildAdminArchitectureComponentDetail(componentId) {
           "Premier League team-only filters can drift if the dedicated team list stops refreshing.",
         ],
         recent_errors: mergeRuntimeDiagnostics([
-          COMPONENT_SOURCE_TSDB_PREMIER_TEAMS,
-          COMPONENT_SOURCE_TSDB_LEAGUE_TABLES,
+          COMPONENT_SOURCE_BSD_PREMIER_TEAMS,
+          COMPONENT_SOURCE_BSD_LEAGUE_TABLES,
         ]).recent_errors,
       },
     };
@@ -24440,11 +23324,9 @@ app.get(`${API_PREFIX}/admin/match-source`, (_req, res) => {
   setCacheOnlyHeaders(res);
   res.status(200).json({
     success: true,
-    // Global default is env-driven (MATCH_DATA_SOURCE), shared across processes.
-    // Per-request `?source=` / `X-Match-Source` overrides it for serving only.
-    default_source: runtimeMatchSourceDefault,
+    default_source: SERVER_CONFIG.matchDataSource,
     env_source: SERVER_CONFIG.matchDataSource,
-    valid_sources: ["tsdb", "bsd"],
+    valid_sources: ["bsd"],
     bsd_projection: {
       count: cachedBsdMatches.length,
       updated_at: cachedBsdMatchesUpdatedAt,
@@ -24688,76 +23570,27 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       return;
     }
 
-    // Resolve the data source for this request (per-request override beats the
-    // global default). When BSD is selected the merged/range/detail datasets
-    // are replaced by the in-memory BSD projection; everything downstream
-    // (filtering, serialisation, the clients' composite ids) is unchanged.
-    const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
+    const matchSource = "bsd";
     res.set("X-Match-Source", matchSource);
-    const useBsdSource = matchSource === "bsd";
-    const bsdMatchesForServing = useBsdSource ? await getBsdMatchesForServing() : null;
-
-    const memoryMatchDetailsSnapshot = useBsdSource ? null : currentMatchDetailsLookupSnapshot();
+    const bsdMatchesForServing = await getBsdMatchesForServing();
     stageStartedAtMs = Date.now();
     // Serve merged and BBC-range datasets from in-memory arrays when available
     // (they're always populated after the first BBC poll). Only fall back to
     // Redis on a cold start before the first poll has run. Deleted match IDs
     // are served from the in-memory Set maintained by refreshDeletedMatchIdsCacheAsync.
-    const mergedDataset = useBsdSource
-      ? {
-          items: filterMatchesByCompetition(bsdMatchesForServing || []),
-          updated_at: cachedBsdMatchesUpdatedAt,
-          source: "bsd",
-        }
-      : cachedMergedMatches.length > 0
-      ? {
-          items: filterMatchesByCompetition(cachedMergedMatches),
-          updated_at: tsdbScheduleLastUpdated || tsdbLiveLastUpdated || null,
-          source: "memory",
-        }
-      : await getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, []);
-    const tsdbScheduleDataset = cachedTsdbScheduleMatches.length > 0
-      ? {
-          items: filterMatchesByCompetition(cachedTsdbScheduleMatches),
-          updated_at: tsdbScheduleLastUpdated || null,
-          source: "memory",
-        }
-      : await getOperationalArrayDataset(OP_DATASET_TSDB_SCHEDULE_MATCHES, []);
-    const bbcRangeDataset = useBsdSource
-      ? {
-          items: filterBsdTsdbScheduleSupplements(tsdbScheduleDataset.items),
-          updated_at: tsdbScheduleDataset.updated_at,
-          source: "tsdb_supplement",
-        }
-      : tsdbScheduleDataset;
-    const redisMatchDetailsSnapshot = memoryMatchDetailsSnapshot || useBsdSource
-      ? null
-      : await getOperationalMatchDetailsSnapshotSafe();
+    const mergedDataset = {
+      items: filterMatchesByCompetition(bsdMatchesForServing || []),
+      updated_at: cachedBsdMatchesUpdatedAt,
+      source: "bsd",
+    };
+    const bbcRangeDataset = { items: [], updated_at: null, source: "bsd" };
     const deletedMatchIdSet = cachedDeletedMatchIds;
     timings.dataset_load_ms = Date.now() - stageStartedAtMs;
     // For BSD the list is built from the projection (passed as fallback
     // matches); there is no separate detail lookup to merge.
-    const canonicalLookup = useBsdSource
-      ? {}
-      : memoryMatchDetailsSnapshot
-      ? memoryMatchDetailsSnapshot.lookup
-      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.records
-        ? redisMatchDetailsSnapshot.records
-        : {};
-    const canonicalUpdatedAt = useBsdSource
-      ? cachedBsdMatchesUpdatedAt
-      : memoryMatchDetailsSnapshot
-      ? memoryMatchDetailsSnapshot.updated_at || matchDetailsLastUpdated || null
-      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.updated_at
-        ? redisMatchDetailsSnapshot.updated_at
-        : null;
-    const canonicalSource = useBsdSource
-      ? "bsd"
-      : memoryMatchDetailsSnapshot
-      ? memoryMatchDetailsSnapshot.source || "memory"
-      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.source
-        ? redisMatchDetailsSnapshot.source
-        : "unknown";
+    const canonicalLookup = {};
+    const canonicalUpdatedAt = cachedBsdMatchesUpdatedAt;
+    const canonicalSource = "bsd";
     const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
     const latestUpdated = newestIsoTimestamp([
       canonicalUpdatedAt,
@@ -25004,62 +23837,18 @@ app.get(`${API_PREFIX}/matches/calendar`, async (req, res) => {
       return;
     }
 
-    const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
+    const matchSource = "bsd";
     res.set("X-Match-Source", matchSource);
-    const useBsdSource = matchSource === "bsd";
-    const bsdMatchesForServing = useBsdSource ? await getBsdMatchesForServing() : null;
-    const memoryMatchDetailsSnapshot = useBsdSource ? null : currentMatchDetailsLookupSnapshot();
-    const mergedDataset = useBsdSource
-      ? {
-          items: filterMatchesByCompetition(bsdMatchesForServing || []),
-          updated_at: cachedBsdMatchesUpdatedAt,
-          source: "bsd",
-        }
-      : cachedMergedMatches.length > 0
-      ? {
-          items: filterMatchesByCompetition(cachedMergedMatches),
-          updated_at: tsdbScheduleLastUpdated || tsdbLiveLastUpdated || null,
-          source: "memory",
-        }
-      : await getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, []);
-    const tsdbScheduleDataset = cachedTsdbScheduleMatches.length > 0
-      ? {
-          items: filterMatchesByCompetition(cachedTsdbScheduleMatches),
-          updated_at: tsdbScheduleLastUpdated || null,
-          source: "memory",
-        }
-      : await getOperationalArrayDataset(OP_DATASET_TSDB_SCHEDULE_MATCHES, []);
-    const bbcRangeDataset = useBsdSource
-      ? {
-          items: filterBsdTsdbScheduleSupplements(tsdbScheduleDataset.items),
-          updated_at: tsdbScheduleDataset.updated_at,
-          source: "tsdb_supplement",
-        }
-      : tsdbScheduleDataset;
-    const redisMatchDetailsSnapshot = memoryMatchDetailsSnapshot || useBsdSource
-      ? null
-      : await getOperationalMatchDetailsSnapshotSafe();
-    const canonicalLookup = useBsdSource
-      ? {}
-      : memoryMatchDetailsSnapshot
-      ? memoryMatchDetailsSnapshot.lookup
-      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.records
-        ? redisMatchDetailsSnapshot.records
-        : {};
-    const canonicalUpdatedAt = useBsdSource
-      ? cachedBsdMatchesUpdatedAt
-      : memoryMatchDetailsSnapshot
-      ? memoryMatchDetailsSnapshot.updated_at || matchDetailsLastUpdated || null
-      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.updated_at
-        ? redisMatchDetailsSnapshot.updated_at
-        : null;
-    const canonicalSource = useBsdSource
-      ? "bsd"
-      : memoryMatchDetailsSnapshot
-      ? memoryMatchDetailsSnapshot.source || "memory"
-      : redisMatchDetailsSnapshot && redisMatchDetailsSnapshot.source
-        ? redisMatchDetailsSnapshot.source
-        : "unknown";
+    const bsdMatchesForServing = await getBsdMatchesForServing();
+    const mergedDataset = {
+      items: filterMatchesByCompetition(bsdMatchesForServing || []),
+      updated_at: cachedBsdMatchesUpdatedAt,
+      source: "bsd",
+    };
+    const bbcRangeDataset = { items: [], updated_at: null, source: "bsd" };
+    const canonicalLookup = {};
+    const canonicalUpdatedAt = cachedBsdMatchesUpdatedAt;
+    const canonicalSource = "bsd";
     const latestUpdated = newestIsoTimestamp([
       canonicalUpdatedAt,
       mergedDataset.updated_at,
@@ -25249,114 +24038,26 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     return;
   }
 
-  // When BSD is the active source, project match details on demand from the
-  // bsd_* Mongo collections (the matchId is the BSD event id carried on the
-  // BSD list projection's match_details_id).
-  const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
-  if (matchSource === "bsd") {
-    res.set("X-Match-Source", "bsd");
-    const bsdDetails = await projectBsdMatchDetails(matchId).catch((error) => {
-      console.warn(`[BSD] match details projection failed for ${matchId}:`, error.message || error);
-      return null;
-    });
-    if (bsdDetails) {
-      const bsdDetailsWithImages = await withConfiguredMatchDetailsPlayerImages(bsdDetails);
-      res.set("X-Player-Image-Source", SERVER_CONFIG.playerImageSource);
-      res.json(
-        applyTeamShortNamesToApiValue(
-          localizeMatchDetailsPayload(bsdDetailsWithImages),
-          teamShortNameLookup
-        )
-      );
-      return;
-    }
-    res.status(404).json({ error: "No BSD match details found for match id." });
-    return;
-  }
-
-  const detailsLookup = await getOperationalMatchDetailsByIdSafe(matchId);
-  const payload = detailsLookup && detailsLookup.payload ? detailsLookup.payload : null;
-  const detailsSource = payload ? detailsLookup.source || "unknown" : "memory_fallback";
-  const fallbackMatchRecord = findInMemoryMatchRecordByMatchId(matchId);
-
-  const responsePayload = payload || buildFallbackMatchDetailsPayload(matchId, fallbackMatchRecord);
-
-  if (!responsePayload) {
-    scheduleMatchDetailsWarm(matchId, {
-      trigger: "match_details_request",
-      fallbackMatchRecord,
-    });
-    res.status(404).json({ error: "No cached match details found for match id." });
-    return;
-  }
-  const stableResponsePayload = withStableMatchDetailsState(responsePayload) || responsePayload;
-
-  const lineupEnrichmentStartMs = Date.now();
-  const lineupEnrichedResponsePayload = await enrichMatchDetailsLineupsImmediately(
-    stableResponsePayload,
-    { persistSource: "match_details_request_lineup_enrichment" }
-  );
-  const lineupEnrichmentDurationMs = Date.now() - lineupEnrichmentStartMs;
-
-  const mergeStartMs = Date.now();
-  const enrichedResponsePayload = await mergeConfirmedVarDisallowedGoalsIntoPayload(
-    lineupEnrichedResponsePayload || stableResponsePayload
-  );
-  const mergeDurationMs = Date.now() - mergeStartMs;
-  const playerEnrichedResponsePayload = await enrichMatchDetailsPlayersFromCache(
-    enrichedResponsePayload || lineupEnrichedResponsePayload || stableResponsePayload
-  );
-  const imageEnrichedResponsePayload = await withConfiguredMatchDetailsPlayerImages(
-    playerEnrichedResponsePayload || enrichedResponsePayload
-  );
-
-  if (payload) {
-    // Backfill handles aggregate enrichment asynchronously (matchDetailsMissingKnockoutAggregate
-    // is one of the backfill trigger conditions), avoiding a blocking BBC API call per request.
-    scheduleMatchDetailsBackfill(
-      playerEnrichedResponsePayload || lineupEnrichedResponsePayload || payload,
-      { trigger: "match_details_request" }
+  res.set("X-Match-Source", "bsd");
+  const bsdDetails = await projectBsdMatchDetails(matchId).catch((error) => {
+    console.warn(`[BSD] match details projection failed for ${matchId}:`, error.message || error);
+    return null;
+  });
+  if (bsdDetails) {
+    const bsdDetailsWithImages = withConfiguredMatchDetailsPlayerImages(bsdDetails);
+    res.set("X-Player-Image-Source", "bsd");
+    res.json(
+      applyTeamShortNamesToApiValue(
+        localizeMatchDetailsPayload(bsdDetailsWithImages),
+        teamShortNameLookup
+      )
     );
-  } else {
-    scheduleMatchDetailsWarm(matchId, {
-      trigger: "match_details_request",
-      fallbackMatchRecord,
-    });
+    return;
   }
+  res.status(404).json({ error: "No BSD match details found for match id." });
+  return;
 
-  const totalDurationMs = Date.now() - handlerStartMs;
-  const p = imageEnrichedResponsePayload || playerEnrichedResponsePayload || enrichedResponsePayload || {};
-  const goals = (Array.isArray(p.home_goal_scorers) ? p.home_goal_scorers.length : 0) +
-                (Array.isArray(p.away_goal_scorers) ? p.away_goal_scorers.length : 0);
-  const assists = (Array.isArray(p.home_assists) ? p.home_assists.length : 0) +
-                  (Array.isArray(p.away_assists) ? p.away_assists.length : 0);
-  const yellowCards = (Array.isArray(p.home_yellow_cards) ? p.home_yellow_cards.length : 0) +
-                      (Array.isArray(p.away_yellow_cards) ? p.away_yellow_cards.length : 0);
-  const redCards = (Array.isArray(p.home_red_cards) ? p.home_red_cards.length : 0) +
-                   (Array.isArray(p.away_red_cards) ? p.away_red_cards.length : 0);
-  console.log(
-    `[API][match_details] id=${matchId} source=${detailsSource} goals=${goals} assists=${assists}` +
-    ` yellow_cards=${yellowCards} red_cards=${redCards}` +
-    ` lineup_ms=${lineupEnrichmentDurationMs} merge_ms=${mergeDurationMs} total_ms=${totalDurationMs}`
-  );
-
-  res.set("X-Operational-Source", detailsSource);
-  res.set("X-Player-Image-Source", SERVER_CONFIG.playerImageSource);
-  if (stableResponsePayload.updated_at) {
-    res.set("X-Last-Updated", stableResponsePayload.updated_at);
-  } else if (matchDetailsLastUpdated) {
-    res.set("X-Last-Updated", matchDetailsLastUpdated);
-  }
-  res.json(
-    applyTeamShortNamesToApiValue(
-      localizeMatchDetailsPayload(
-        imageEnrichedResponsePayload || playerEnrichedResponsePayload || enrichedResponsePayload
-      ),
-      teamShortNameLookup
-    )
-  );
 });
-
 app.get(`${API_PREFIX}/matches/:matchId/social`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const matchId = String(req.params.matchId || "").trim();
@@ -25435,7 +24136,7 @@ app.get(`${API_PREFIX}/monitor/candidates`, async (req, res) => {
     const matchDetailsLookup = matchDetailsSnapshot.lookup || {};
     const mergedItems = Array.isArray(mergedDataset.items) ? mergedDataset.items : [];
     const candidates = buildMonitorCandidatesForDate(date, mergedItems, matchDetailsLookup, {
-      bbcMatches: Array.isArray(cachedTsdbLiveMatches) ? cachedTsdbLiveMatches : [],
+      bbcMatches: Array.isArray(cachedBsdMatches) ? cachedBsdMatches : [],
     });
     const existingCandidateIds = new Set(
       candidates.map((candidate) => normalizeMatchDetailsId(candidate && candidate.match_details_id))
@@ -25595,119 +24296,6 @@ app.get(`${API_PREFIX}/players/:playerId`, async (req, res) => {
   }
 });
 
-app.post(`${API_PREFIX}/admin/tsdb/players/refresh`, async (req, res) => {
-  setCacheOnlyHeaders(res);
-  const explicitIds = parseTsdbEntityIdsFromRequest(req, ["player_ids", "players"]);
-  const playerIds = explicitIds.length > 0 ? explicitIds : collectKnownLineupPlayerIds();
-  if (playerIds.length === 0) {
-    res.status(400).json({
-      error: "No player ids available. Send {\"ids\":[...]} or request match details with line-ups first.",
-    });
-    return;
-  }
-  const result = await refreshTsdbPlayersByIds(playerIds, {
-    trigger: "admin_player_cache_refresh",
-  });
-  res.set("X-Operational-Source", "tsdb_player");
-  res.json({
-    requested_count: result.requested,
-    refreshed_count: result.refreshed.length,
-    failed_count: result.failed.length,
-    refreshed_ids: result.refreshed,
-    failed_ids: result.failed,
-  });
-});
-
-app.post(`${API_PREFIX}/admin/tsdb/teams/refresh`, async (req, res) => {
-  setCacheOnlyHeaders(res);
-  const explicitIds = parseTsdbEntityIdsFromRequest(req, ["team_ids", "teams"]);
-  const teamIds = explicitIds.length > 0 ? explicitIds : collectKnownTsdbTeamIds();
-  if (teamIds.length === 0) {
-    res.status(400).json({
-      error: "No team ids available. Send {\"ids\":[...]} or refresh SportsDB match details first.",
-    });
-    return;
-  }
-  const result = await refreshTsdbTeamsByIds(teamIds, {
-    trigger: "admin_team_cache_refresh",
-  });
-  res.set("X-Operational-Source", "tsdb_team");
-  res.json({
-    requested_count: result.requested,
-    refreshed_count: result.refreshed.length,
-    failed_count: result.failed.length,
-    refreshed_ids: result.refreshed,
-    failed_ids: result.failed,
-  });
-});
-
-app.post(`${API_PREFIX}/admin/tsdb/matches/:matchId/lineup/refresh`, async (req, res) => {
-  setCacheOnlyHeaders(res);
-  const matchId = normalizeMatchDetailsId(req.params.matchId);
-  if (!matchId || !/^\d+$/.test(matchId)) {
-    res.status(400).json({ error: "Invalid SportsDB match id." });
-    return;
-  }
-
-  try {
-    const existingLookup = await getOperationalMatchDetailsByIdSafe(matchId);
-    const existingPayload =
-      existingLookup && existingLookup.payload && typeof existingLookup.payload === "object"
-        ? existingLookup.payload
-        : null;
-    const fetched = await fetchTsdbMatchDetails(matchId, {
-      initiator: "admin_api",
-      trigger: "admin_tsdb_match_lineup_refresh",
-      scheduleCache: cachedTsdbScheduleMatches,
-      forceLineupRefresh: true,
-    });
-    if (!fetched) {
-      res.status(502).json({ error: "No SportsDB match payload returned." });
-      return;
-    }
-    if (!hasRenderableTeamLineups(fetched.team_lineups)) {
-      res.status(502).json({
-        error: "SportsDB returned no renderable line-up for this match.",
-        match_id: matchId,
-      });
-      return;
-    }
-
-    const combined = buildMergedMatchDetailsCandidate(
-      existingPayload || { id: matchId, match_details_id: matchId },
-      fetched,
-      null
-    );
-    const updatedAt = new Date().toISOString();
-    const result = await upsertCanonicalMatchDetailsFromMatch(combined, {
-      updated_at: updatedAt,
-      source: "admin_tsdb_match_lineup_refresh",
-      reason: "admin_tsdb_match_lineup_refresh",
-    });
-    if (!result || !result.payload) {
-      res.status(502).json({ error: "Canonical match details upsert returned no payload." });
-      return;
-    }
-
-    const lineups = normalizeTeamLineupsPayload(result.payload.team_lineups);
-    res.set("X-Operational-Source", "tsdb_event_lineup");
-    res.json({
-      match_id: matchId,
-      changed: result.changed === true,
-      updated_at: updatedAt,
-      home_starters: lineups && lineups.home ? lineups.home.starting_lineup.length : 0,
-      away_starters: lineups && lineups.away ? lineups.away.starting_lineup.length : 0,
-      team_lineups: result.payload.team_lineups,
-    });
-  } catch (error) {
-    console.warn(`[API] Failed to refresh TSDB lineup for match ${matchId}:`, error.message || error);
-    res.status(502).json({
-      error: "Failed to refresh SportsDB line-up.",
-      message: error && error.message ? error.message : String(error),
-    });
-  }
-});
-
 app.get(`${API_PREFIX}/teams`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const handlerStartedAtMs = Date.now();
@@ -25764,32 +24352,8 @@ app.get(`${API_PREFIX}/teams/config`, (_req, res) => {
   res.status(200).json({
     default_elo: TEAM_RANKING_DEFAULT_ELO,
     team_logo_source: SERVER_CONFIG.teamLogoSource,
-    badges_updated_at: teamBadgesLastUpdated,
+    badges_updated_at: null,
     updated_at: updatedAt,
-  });
-});
-
-app.get(`${API_PREFIX}/teams/badges`, (req, res) => {
-  setCacheOnlyHeaders(res);
-
-  if (teamBadgesETag) {
-    const clientETag = req.get("If-None-Match");
-    if (clientETag && clientETag === `"${teamBadgesETag}"`) {
-      res.status(304).end();
-      return;
-    }
-    res.set("ETag", `"${teamBadgesETag}"`);
-  }
-
-  res.set("Cache-Control", "public, max-age=300");
-  if (teamBadgesLastUpdated) {
-    res.set("X-Last-Updated", teamBadgesLastUpdated);
-  }
-  res.set("X-Operational-Source", SOURCE_TSDB_TEAM_BADGES);
-  res.status(200).json({
-    team_logo_source: SERVER_CONFIG.teamLogoSource,
-    updated_at: teamBadgesLastUpdated,
-    teams: cachedTeamBadges,
   });
 });
 
@@ -26068,49 +24632,19 @@ function liveMatchesForLeague(leagueName) {
 
 app.get(`${API_PREFIX}/tables`, async (req, res) => {
   setCacheOnlyHeaders(res);
-  const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
-  res.set("X-Match-Source", matchSource);
-
-  if (matchSource === "bsd") {
-    const [bsdTables, bsdMatches] = await Promise.all([
-      getBsdTablesForServing(),
-      getBsdMatchesForServing(),
-    ]);
-    const leagues = sortLeagueTablesForResponse(bsdTables).map((league) =>
-      applyLiveResultsToBsdTable(league, bsdMatchesForTable(league, bsdMatches))
-    );
-    const updatedAt = cachedBsdTablesUpdatedAt;
-    if (updatedAt) {
-      res.set("X-Last-Updated", updatedAt);
-    }
-    res.set("X-Operational-Source", "bsd_projection");
-    res.json({
-      updated_at: updatedAt || null,
-      count: leagues.length,
-      leagues,
-    });
-    return;
-  }
-
-  const dataset = await getOperationalArrayDataset(OP_DATASET_LEAGUE_TABLES, cachedLeagueTables);
-  const baseLeagues = sortLeagueTablesForResponse(dataset.items);
-  const leagues = baseLeagues.map((league) => {
-    const live = liveMatchesForLeague(league && league.league_name);
-    const overlaid = live.length > 0 ? applyLiveResultsToTable(league, live) : league;
-    return withNormalizedTableLeagueName(overlaid);
-  });
-  const updatedAt =
-    dataset.updated_at ||
-    leagueTablesLastUpdated ||
-    newestIsoTimestamp(
-      baseLeagues
-        .map((league) => String((league && league.updated_at) || "").trim())
-        .filter(Boolean)
-    );
+  res.set("X-Match-Source", "bsd");
+  const [bsdTables, bsdMatches] = await Promise.all([
+    getBsdTablesForServing(),
+    getBsdMatchesForServing(),
+  ]);
+  const leagues = sortLeagueTablesForResponse(bsdTables).map((league) =>
+    applyLiveResultsToBsdTable(league, bsdMatchesForTable(league, bsdMatches))
+  );
+  const updatedAt = cachedBsdTablesUpdatedAt;
   if (updatedAt) {
     res.set("X-Last-Updated", updatedAt);
   }
-  res.set("X-Operational-Source", dataset.source || "unknown");
+  res.set("X-Operational-Source", "bsd_projection");
   res.json({
     updated_at: updatedAt || null,
     count: leagues.length,
@@ -26120,62 +24654,33 @@ app.get(`${API_PREFIX}/tables`, async (req, res) => {
 
 app.get(`${API_PREFIX}/tables/:leagueId`, async (req, res) => {
   setCacheOnlyHeaders(res);
-  const matchSource = resolveMatchSource(req, runtimeMatchSourceDefault);
-  res.set("X-Match-Source", matchSource);
-
-  if (matchSource === "bsd") {
-    const [bsdTables, bsdMatches] = await Promise.all([
-      getBsdTablesForServing(),
-      getBsdMatchesForServing(),
-    ]);
-    const baseLeague = findLeagueTableById(bsdTables, req.params.leagueId);
-    if (!baseLeague) {
-      res.status(404).json({
-        error: "League table not found",
-        league_id: normalizeLeagueTableId(req.params.leagueId),
-        available_leagues: bsdTables.map((item) => item.league_id).filter(Boolean),
-      });
-      return;
-    }
-    const league = applyLiveResultsToBsdTable(
-      baseLeague,
-      bsdMatchesForTable(baseLeague, bsdMatches)
-    );
-    if (baseLeague.updated_at) {
-      res.set("X-Last-Updated", baseLeague.updated_at);
-    }
-    res.set("X-Operational-Source", "bsd_projection");
-    res.json(league);
-    return;
-  }
-
-  const dataset = await getOperationalArrayDataset(OP_DATASET_LEAGUE_TABLES, cachedLeagueTables);
-  const leagues = sortLeagueTablesForResponse(dataset.items);
-  const baseLeague = findLeagueTableById(leagues, req.params.leagueId);
+  res.set("X-Match-Source", "bsd");
+  const [bsdTables, bsdMatches] = await Promise.all([
+    getBsdTablesForServing(),
+    getBsdMatchesForServing(),
+  ]);
+  const baseLeague = findLeagueTableById(bsdTables, req.params.leagueId);
   if (!baseLeague) {
     res.status(404).json({
       error: "League table not found",
       league_id: normalizeLeagueTableId(req.params.leagueId),
-      available_leagues: leagues.map((item) => item.league_id).filter(Boolean),
+      available_leagues: bsdTables.map((item) => item.league_id).filter(Boolean),
     });
     return;
   }
-  const live = liveMatchesForLeague(baseLeague.league_name);
-  const overlaid = live.length > 0 ? applyLiveResultsToTable(baseLeague, live) : baseLeague;
-  const league = withNormalizedTableLeagueName(overlaid);
+  const league = applyLiveResultsToBsdTable(
+    baseLeague,
+    bsdMatchesForTable(baseLeague, bsdMatches)
+  );
   if (baseLeague.updated_at) {
     res.set("X-Last-Updated", baseLeague.updated_at);
-  } else if (dataset.updated_at) {
-    res.set("X-Last-Updated", dataset.updated_at);
   }
-  res.set("X-Operational-Source", dataset.source || "unknown");
+  res.set("X-Operational-Source", "bsd_projection");
   res.json(league);
 });
 
-// Predictions are BSD-exclusive data (no TSDB equivalent), so unlike /tables
-// there's no match-source branching here. The app fetches this aggregate
-// endpoint once on startup and hourly rather than hitting /predictions/league
-// once per competition.
+// The app fetches this aggregate endpoint once on startup and hourly rather
+// than hitting /predictions/league once per competition.
 app.get(`${API_PREFIX}/predictions`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   const leagues = await getBsdPredictionsForServing();
@@ -26902,11 +25407,11 @@ app.get(`${API_PREFIX}/bbc/live`, async (_req, res) => {
     teamShortNameOverridesByKey
   );
   const [bbcLiveDataset, matchDetailsSnapshot] = await Promise.all([
-    getOperationalArrayDataset(OP_DATASET_TSDB_LIVE_MATCHES, cachedTsdbLiveMatches),
+    getOperationalArrayDataset(OP_DATASET_BSD_LIVE_MATCHES, cachedBsdMatches),
     getOperationalMatchDetailsSnapshotSafe(),
   ]);
 
-  const updatedAt = bbcLiveDataset.updated_at || tsdbLiveLastUpdated;
+  const updatedAt = bbcLiveDataset.updated_at || cachedBsdMatchesUpdatedAt;
   if (updatedAt) {
     res.set("X-Last-Updated", updatedAt);
   }
@@ -27021,11 +25526,11 @@ app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
     MATCH_DETAILS_POLL_CONCURRENCY,
     async (candidate) => {
       try {
-        const fetched = await fetchTsdbMatchDetails(candidate.matchId, {
+        const fetched = await fetchBsdMatchDetails(candidate.matchId, {
           initiator: "admin_api",
           reason: "admin_backfill_matches",
           trigger: "admin_backfill_matches",
-          scheduleCache: cachedTsdbScheduleMatches,
+          scheduleCache: cachedBsdMatches,
         });
         if (fetched) {
           const combined = buildMergedMatchDetailsCandidate(candidate.payload, fetched, null);
@@ -27084,8 +25589,8 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     matchDetailsSnapshot,
   ] = await Promise.all([
     getOperationalArrayDataset(OP_DATASET_MERGED_MATCHES, cachedMergedMatches),
-    getOperationalArrayDataset(OP_DATASET_TSDB_LIVE_MATCHES, cachedTsdbLiveMatches),
-    getOperationalArrayDataset(OP_DATASET_TSDB_SCHEDULE_MATCHES, cachedTsdbScheduleMatches),
+    getOperationalArrayDataset(OP_DATASET_BSD_LIVE_MATCHES, cachedBsdMatches),
+    getOperationalArrayDataset(OP_DATASET_BSD_SCHEDULE_MATCHES, cachedBsdMatches),
     getOperationalArrayDataset(OP_DATASET_RECENT_MATCHES, cachedRecentMatches),
     getOperationalArrayDataset(OP_DATASET_PREMIER_LEAGUE_TEAMS, cachedPremierLeagueTeams),
     getOperationalArrayDataset(OP_DATASET_LEAGUE_TABLES, cachedLeagueTables),
@@ -27103,8 +25608,8 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     mergedDataset.updated_at,
     bbcRangeDataset.updated_at,
     bbcLiveDataset.updated_at,
-    tsdbScheduleLastUpdated,
-    tsdbLiveLastUpdated,
+    cachedBsdMatchesUpdatedAt,
+    cachedBsdMatchesUpdatedAt,
   ]);
 
   let needsEnrichmentCount = 0;
@@ -27127,17 +25632,12 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
   res.json({
     count: mergedDataset.items.length,
     last_updated: mergedLastUpdated,
-    tsdb_live_count: bbcLiveDataset.items.length,
-    tsdb_live_last_updated: bbcLiveDataset.updated_at || tsdbLiveLastUpdated,
-    tsdb_live_output_path: path.resolve(TSDB_LIVESCORE_OUTPUT_PATH),
-    tsdb_live_interval_ms: TSDB_LIVESCORE_INTERVAL_MS,
-    tsdb_live_active_interval_ms: TSDB_LIVESCORE_ACTIVE_INTERVAL_MS,
-    tsdb_live_max_calls_per_minute: TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE,
-    tsdb_schedule_count: bbcRangeDataset.items.length,
-    tsdb_schedule_last_updated: bbcRangeDataset.updated_at || tsdbScheduleLastUpdated,
-    tsdb_schedule_output_path: path.resolve(TSDB_SCHEDULE_OUTPUT_PATH),
-    tsdb_schedule_interval_ms: TSDB_SCHEDULE_INTERVAL_MS,
-    tsdb_schedule_leagues: TSDB_LEAGUE_ALLOWLIST.length,
+    bsd_live_count: bbcLiveDataset.items.length,
+    bsd_live_last_updated: bbcLiveDataset.updated_at || cachedBsdMatchesUpdatedAt,
+    bsd_schedule_count: bbcRangeDataset.items.length,
+    bsd_schedule_last_updated: bbcRangeDataset.updated_at || cachedBsdMatchesUpdatedAt,
+    bsd_matches_cache_ttl_ms: BSD_MATCHES_CACHE_TTL_MS,
+    bsd_schedule_leagues: BSD_LEAGUE_ALLOWLIST.length,
     epl_count: teamsDataset.items.length,
     epl_last_updated: teamsDataset.updated_at || eplLastUpdated,
     epl_output_path: path.resolve(EPL_OUTPUT_PATH),
@@ -27306,10 +25806,7 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
   });
 });
 
-loadTsdbLiveFromDisk();
-loadTsdbScheduleFromDisk();
 loadRecentFromDisk();
-loadPremierLeagueFromDisk();
 loadLeagueTablesFromDisk();
 loadClubEloFromDisk();
 loadClubEloFixturesFromDisk();
@@ -27349,16 +25846,6 @@ const {
   getDeletedMatchIds,
   getDeletedMatches,
   unmarkMatchDeleted,
-  upsertTvListings,
-  getAllTvListings,
-  purgeStaleTvListings,
-  upsertLeagues,
-  upsertTsdbLeagueTables,
-  getAllTsdbLeagueTables,
-  upsertTeamCache,
-  upsertPlayerCache,
-  getPlayerCache,
-  getTsdbCacheObservabilitySnapshot,
   __historyConfig: bbcHistoryConfig,
   getRedisMetrics,
 } = require("./redis_client");
@@ -28675,7 +27162,7 @@ function liveActivityPendingStartIsBlocking(liveActivityState, nowMs = Date.now(
 // wiring below: this function feeds the /live-activity/reconcile foregroundStart
 // path, a second content-state pipeline parallel to the monitor's push dispatch,
 // so it needs the identical BSD source to avoid the same duplicate-ID freshness
-// race (TSDB copy briefly winning over the BSD copy with the live score).
+// race (BSD copy briefly winning over the BSD copy with the live score).
 async function resolveCanonicalLiveActivityOperationalMatches() {
   const bsdMatches = filterMatchesByCompetition(await getBsdMatchesForServing());
   const detailsRecords = {};
@@ -29297,7 +27784,7 @@ app.get(`${API_PREFIX}/admin/audit/future-fixtures`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   try {
     const [bbcRangeDataset, redisSnapshot, deletedMatchIdList] = await Promise.all([
-      getOperationalArrayDataset(OP_DATASET_TSDB_SCHEDULE_MATCHES, cachedTsdbScheduleMatches),
+      getOperationalArrayDataset(OP_DATASET_BSD_SCHEDULE_MATCHES, cachedBsdMatches),
       getPreferredOperationalMatchDetailsSnapshotSafe(),
       getDeletedMatchIds().catch(() => []),
     ]);
@@ -29333,7 +27820,7 @@ app.get(`${API_PREFIX}/admin/audit/future-fixtures`, async (_req, res) => {
       coverage: {
         start: todayDateKey,
         end: coverageEnd,
-        tsdb_schedule_leagues: TSDB_LEAGUE_ALLOWLIST.length,
+        bsd_schedule_leagues: BSD_LEAGUE_ALLOWLIST.length,
       },
       sources: {
         redis: redisSnapshot && redisSnapshot.source ? redisSnapshot.source : "unknown",
@@ -30100,156 +28587,6 @@ app.post(`${API_PREFIX}/admin/bbc-history/cleanup`, async (req, res) => {
   }
 });
 
-app.post(`${API_PREFIX}/admin/bbc-state/backfill-range`, async (req, res) => {
-  setCacheOnlyHeaders(res);
-
-  const payload =
-    req.body && typeof req.body === "object" && !Array.isArray(req.body)
-      ? req.body
-      : {};
-
-  const parseBoolean = (value, fallback = false) => {
-    if (value === undefined || value === null) return fallback;
-    if (typeof value === "boolean") return value;
-    const normalized = String(value).trim().toLowerCase();
-    if (["1", "true", "yes", "on"].includes(normalized)) return true;
-    if (["0", "false", "no", "off"].includes(normalized)) return false;
-    return fallback;
-  };
-
-  const startDate = String(payload.start_date || payload.start || "").trim();
-  const endDate = String(payload.end_date || payload.end || "").trim();
-  if (!startDate || !endDate) {
-    res.status(400).json({
-      error: "Missing required fields: start_date and end_date (YYYY-MM-DD).",
-    });
-    return;
-  }
-  if (!isDateOnly(startDate) || !isDateOnly(endDate)) {
-    res.status(400).json({
-      error: "Invalid date format. Expected YYYY-MM-DD for start_date and end_date.",
-    });
-    return;
-  }
-  if (startDate > endDate) {
-    res.status(400).json({
-      error: "Invalid date range. start_date must be on or before end_date.",
-    });
-    return;
-  }
-
-  // Date-range filtering: after fetching all TSDB league schedules, only
-  // matches within the requested window are merged into the cache. This
-  // preserves the admin intent of "refresh coverage for a specific date span".
-  const applyToRangeCache = parseBoolean(payload.apply_to_range_cache, true);
-  const startedAtMs = Date.now();
-
-  try {
-    const allFetched = filterMatchesByCompetition(
-      await fetchTsdbAllLeagueSchedules({
-        initiator: "admin_api",
-        reason: "admin_tsdb_schedule_refetch",
-        trigger: "admin_tsdb_schedule_refetch",
-      })
-    );
-    const fetchedInWindow = allFetched.filter((m) => {
-      const d = String(m.date || "").trim();
-      return d >= startDate && d <= endDate;
-    });
-
-    let nextRangeMatches = allFetched;
-    const existingRangeCount = cachedTsdbScheduleMatches.length;
-    if (applyToRangeCache) {
-      cachedTsdbScheduleMatches = nextRangeMatches;
-      tsdbScheduleLastUpdated = new Date().toISOString();
-      setSourceCacheSize(SOURCE_TSDB_SCHEDULE, nextRangeMatches.length);
-      writeTsdbScheduleMatches(TSDB_SCHEDULE_OUTPUT_PATH, nextRangeMatches);
-      await persistOperationalDatasetSafe(OP_DATASET_TSDB_SCHEDULE_MATCHES, nextRangeMatches, {
-        updated_at: tsdbScheduleLastUpdated,
-        source: "admin_tsdb_schedule_backfill",
-      });
-      await rebuildMergedMatchesCache("admin_tsdb_schedule_backfill");
-    }
-
-    res.status(200).json({
-      success: true,
-      backfill: {
-        start_date: startDate,
-        end_date: endDate,
-        apply_to_range_cache: applyToRangeCache,
-        fetched_in_window: fetchedInWindow.length,
-        fetched_total: allFetched.length,
-        existing_range_matches: existingRangeCount,
-        updated_range_matches: nextRangeMatches.length,
-        duration_ms: Date.now() - startedAtMs,
-      },
-      state: {
-        tsdb_schedule_last_updated: tsdbScheduleLastUpdated,
-        tsdb_schedule_count: cachedTsdbScheduleMatches.length,
-      },
-    });
-  } catch (error) {
-    console.error("[API] Error backfilling TSDB schedule state:", error);
-    res.status(500).json({
-      error: "Failed to backfill TSDB schedule state",
-      message: error.message,
-    });
-  }
-});
-
-app.post(`${API_PREFIX}/admin/leagues/refresh`, async (_req, res) => {
-  setCacheOnlyHeaders(res);
-  if (tsdbLeaguesUpdating) {
-    res.status(409).json({ error: "League refresh already in progress." });
-    return;
-  }
-  const startedAtMs = Date.now();
-  try {
-    const leagues = await fetchSoccerLeagues({ trigger: "admin_api" });
-    if (leagues.length > 0) {
-      await upsertLeagues(leagues);
-    }
-    tsdbLeaguesUpdating = false;
-    res.status(200).json({
-      success: true,
-      upserted: leagues.length,
-      duration_ms: Date.now() - startedAtMs,
-    });
-  } catch (error) {
-    tsdbLeaguesUpdating = false;
-    res.status(500).json({
-      error: "Failed to refresh league catalogue.",
-      message: error.message || String(error),
-    });
-  }
-});
-
-// Refresh TSDB team badges + brand colours (strColour1/strColour2) on demand,
-// rather than waiting for the daily scheduled fetch.
-app.post(`${API_PREFIX}/admin/team-badges/refresh`, async (_req, res) => {
-  setCacheOnlyHeaders(res);
-  if (SERVER_CONFIG.teamLogoSource !== TEAM_LOGO_SOURCE_TSDB) {
-    res.status(409).json({ error: "Team badges are only fetched when team_logo_source is 'tsdb'." });
-    return;
-  }
-  if (teamBadgesUpdating) {
-    res.status(409).json({ error: "Team badges refresh already in progress." });
-    return;
-  }
-  const startedAtMs = Date.now();
-  await updateTsdbTeamBadges({ trigger: "admin_api" });
-  res.status(200).json({
-    success: true,
-    teams: Object.keys(cachedTeamBadges || {}).length,
-    updated_at: teamBadgesLastUpdated,
-    duration_ms: Date.now() - startedAtMs,
-  });
-});
-
-// Refresh BSD predictions on demand, rather than waiting for the daily
-// scheduled fetch in bsd_poller.js. Resets the in-memory serving cache's
-// built timestamp so the next /predictions request reflects the refresh
-// immediately instead of waiting out BSD_PREDICTIONS_CACHE_TTL_MS.
 app.post(`${API_PREFIX}/admin/predictions/refresh`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   if (bsdPredictionsRefreshInFlight) {
@@ -30277,53 +28614,20 @@ app.post(`${API_PREFIX}/admin/predictions/refresh`, async (_req, res) => {
 
 // ===== League Tables Admin Endpoints =====
 
-app.post(`${API_PREFIX}/admin/league-tables/refresh`, async (req, res) => {
+app.post(`${API_PREFIX}/admin/league-tables/refresh`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   if (leagueTablesUpdating) {
     res.status(409).json({ error: "League tables refresh already in progress." });
     return;
   }
-  const leagueId = req.query.leagueId || req.body && req.body.leagueId;
   const startedAtMs = Date.now();
-  try {
-    if (leagueId) {
-      // Refresh a single league
-      const entry = TSDB_LEAGUE_ALLOWLIST.find((e) => String(e.id) === String(leagueId));
-      if (!entry) {
-        res.status(404).json({ error: "League ID not in tracked allowlist", league_id: leagueId });
-        return;
-      }
-      const table = await fetchTsdbLeagueTable(entry.id, entry.name, { trigger: "admin_api" });
-      if (table) {
-        try { await upsertTsdbLeagueTables([table]); } catch (_) {}
-        // Merge into cache
-        const idx = cachedLeagueTables.findIndex(
-          (t) => normalizeLeagueTableId(t.league_id) === normalizeLeagueTableId(table.league_id)
-        );
-        if (idx >= 0) {
-          cachedLeagueTables = [...cachedLeagueTables.slice(0, idx), table, ...cachedLeagueTables.slice(idx + 1)];
-        } else {
-          cachedLeagueTables = sortLeagueTablesForResponse([...cachedLeagueTables, table]);
-        }
-        invalidateCacheDomains(["tables"], { reason: "league_table_single_refresh" });
-      }
-      res.json({
-        success: true,
-        league_id: leagueId,
-        has_table: !!table,
-        duration_ms: Date.now() - startedAtMs,
-      });
-    } else {
-      // Full refresh — run in background and return immediately
-      void updateLeagueTables({ trigger: "admin_api" });
-      res.json({ success: true, message: "Full refresh started in background." });
-    }
-  } catch (error) {
-    res.status(500).json({
-      error: "Failed to refresh league table",
-      message: error.message || String(error),
-    });
-  }
+  await updateLeagueTables({ trigger: "admin_api" });
+  res.status(200).json({
+    success: true,
+    leagues: cachedLeagueTables.length,
+    updated_at: leagueTablesLastUpdated,
+    duration_ms: Date.now() - startedAtMs,
+  });
 });
 
 app.post(`${API_PREFIX}/admin/league-tables/simulate`, async (req, res) => {
@@ -32306,29 +30610,11 @@ async function bootstrapOperationalState(options = {}) {
     }
 
     await updateRecentCache("startup_bootstrap");
-    // Load TV listings from MongoDB so the first merged-matches build has channels.
-    try {
-      const tvSnapshot = await getAllTvListings();
-      cachedTvListingsByEvent = new Map(Object.entries(tvSnapshot));
-      setSourceCacheSize(SOURCE_TSDB_TV, cachedTvListingsByEvent.size);
-    } catch (tvLoadErr) {
-      console.warn("[Startup] Failed to load TV listings from MongoDB:", tvLoadErr.message || tvLoadErr);
-    }
-    // Load league tables from dedicated MongoDB collection if in-memory is empty
-    if (cachedLeagueTables.length === 0) {
-      try {
-        const mongoTables = await getAllTsdbLeagueTables();
-        if (mongoTables.length > 0) {
-          cachedLeagueTables = sortLeagueTablesForResponse(mongoTables);
-          leagueTablesLastUpdated = new Date().toISOString();
-          setSourceCacheSize(SOURCE_TSDB_LEAGUE_TABLES, leagueTableRowsCount(cachedLeagueTables));
-          console.info(`[Startup] Loaded ${cachedLeagueTables.length} league tables from MongoDB`);
-        }
-      } catch (ltLoadErr) {
-        console.warn("[Startup] Failed to load league tables from MongoDB:", ltLoadErr.message || ltLoadErr);
-      }
-    }
-
+    await Promise.all([refreshBsdMatchesCache(), refreshBsdTablesCache()]);
+    cachedLeagueTables = cachedBsdTables;
+    leagueTablesLastUpdated = cachedBsdTablesUpdatedAt;
+    cachedPremierLeagueTeams = extractPremierLeagueTeamsFromTables(cachedBsdTables);
+    eplLastUpdated = cachedBsdTablesUpdatedAt;
     await rebuildMergedMatchesCache("startup_bootstrap");
     if (matchDetailsById.size === 0) {
       await rebuildMatchDetailsCache("startup_bootstrap");
@@ -32338,11 +30624,6 @@ async function bootstrapOperationalState(options = {}) {
       );
     }
 
-    void updateTsdbLivescores({ trigger: "startup_bootstrap" });
-    void updateTsdbScheduleMatches({ trigger: "startup_bootstrap" });
-    void updateTsdbTvListings({ trigger: "startup_bootstrap" });
-    void updateTsdbPremierLeagueTeams({ trigger: "startup_bootstrap" });
-    void updateTsdbTeamBadges({ trigger: "startup_bootstrap" });
     void updateLeagueTables({ trigger: "startup_bootstrap" });
     void updateClubEloTeams({ trigger: "startup_bootstrap" });
     void updateClubEloFixtures({ trigger: "startup_bootstrap" });
@@ -32519,145 +30800,6 @@ function scheduleDeferredApiWarmTasks() {
   return registerRuntimeTimeout(runWarmTasks, delayMs);
 }
 
-let tsdbSupplementalCacheRefreshRunning = false;
-
-function collectTsdbSupplementalCacheCandidates(nowMs = Date.now()) {
-  const byId = new Map();
-  const addMatch = (match) => {
-    if (!match || typeof match !== "object") return;
-    const id = normalizeMatchDetailsId(match.id || match.match_details_id);
-    if (!id || !/^\d+$/.test(id)) return;
-    if (!byId.has(id)) byId.set(id, match);
-  };
-
-  matchDetailsById.forEach(addMatch);
-  (Array.isArray(cachedTsdbScheduleMatches) ? cachedTsdbScheduleMatches : []).forEach(addMatch);
-  (Array.isArray(cachedMergedMatches) ? cachedMergedMatches : []).forEach(addMatch);
-
-  const cutoffPastMs = nowMs - 7 * 24 * 60 * 60 * 1000;
-  const cutoffFutureMs = nowMs + 45 * 24 * 60 * 60 * 1000;
-  return Array.from(byId.values())
-    .filter((match) => {
-      const status = resolveStableMatchScoreStatus(match);
-      if (isInProgressMatchStatus(status)) return true;
-      const hasLineupsField = Object.prototype.hasOwnProperty.call(match, "team_lineups");
-      if (hasLineupsField && matchDetailsLineupsNeedRefresh(match)) return true;
-      const kickoffMs = kickoffTimestampMs(match);
-      if (!Number.isFinite(kickoffMs)) return false;
-      return kickoffMs >= cutoffPastMs && kickoffMs <= cutoffFutureMs;
-    })
-    .sort((a, b) => {
-      const aStatus = resolveStableMatchScoreStatus(a);
-      const bStatus = resolveStableMatchScoreStatus(b);
-      const aLive = isInProgressMatchStatus(aStatus) ? 1 : 0;
-      const bLive = isInProgressMatchStatus(bStatus) ? 1 : 0;
-      if (aLive !== bLive) return bLive - aLive;
-      const aNeedsLineup =
-        Object.prototype.hasOwnProperty.call(a, "team_lineups") && matchDetailsLineupsNeedRefresh(a)
-          ? 1
-          : 0;
-      const bNeedsLineup =
-        Object.prototype.hasOwnProperty.call(b, "team_lineups") && matchDetailsLineupsNeedRefresh(b)
-          ? 1
-          : 0;
-      if (aNeedsLineup !== bNeedsLineup) return bNeedsLineup - aNeedsLineup;
-      const aKickoff = kickoffTimestampMs(a);
-      const bKickoff = kickoffTimestampMs(b);
-      const aDistance = Number.isFinite(aKickoff) ? Math.abs(aKickoff - nowMs) : Number.MAX_SAFE_INTEGER;
-      const bDistance = Number.isFinite(bKickoff) ? Math.abs(bKickoff - nowMs) : Number.MAX_SAFE_INTEGER;
-      return aDistance - bDistance;
-    });
-}
-
-async function refreshTsdbSupplementalCaches(options = {}) {
-  if (tsdbSupplementalCacheRefreshRunning) return { skipped: true, reason: "running" };
-  tsdbSupplementalCacheRefreshRunning = true;
-  const startedAtMs = Date.now();
-  const batchSize = Math.max(1, Number(TSDB_SUPPLEMENTAL_CACHE_BATCH_SIZE) || 25);
-  const concurrency = Math.max(1, Number(TSDB_SUPPLEMENTAL_CACHE_CONCURRENCY) || 2);
-  const candidates = collectTsdbSupplementalCacheCandidates(startedAtMs).slice(0, batchSize);
-  const refreshed = [];
-  const failed = [];
-  try {
-    await mapWithConcurrency(candidates, concurrency, async (match) => {
-      try {
-        const result = await refreshTsdbSupplementalCachesForMatch(match, {
-          initiator: options.initiator || "scraper",
-          trigger: options.trigger || "tsdb_supplemental_cache_interval",
-          nowMs: startedAtMs,
-        });
-        if (result && result.id) refreshed.push(result.id);
-      } catch (error) {
-        const id = normalizeMatchDetailsId(match && (match.id || match.match_details_id));
-        if (id) failed.push(id);
-        console.warn(`[TSDB] Supplemental cache refresh failed for event=${id || "unknown"}:`, error.message || error);
-      }
-    });
-  } finally {
-    tsdbSupplementalCacheRefreshRunning = false;
-  }
-  return {
-    candidate_count: candidates.length,
-    refreshed_count: refreshed.length,
-    failed_count: failed.length,
-    refreshed_ids: refreshed,
-    failed_ids: failed,
-    duration_ms: Date.now() - startedAtMs,
-  };
-}
-
-async function refreshTsdbCacheObservability(options = {}) {
-  if (tsdbCacheObservabilityRefreshRunning) {
-    return { skipped: true, reason: "running" };
-  }
-  tsdbCacheObservabilityRefreshRunning = true;
-  const startedAtMs = Date.now();
-  try {
-    const snapshot = await getTsdbCacheObservabilitySnapshot();
-    if (snapshot && typeof snapshot === "object") {
-      tsdbCacheObservabilitySnapshot = {
-        available: snapshot.available === true,
-        refreshed_at_seconds: Number(snapshot.refreshed_at_seconds) || Math.floor(Date.now() / 1000),
-        collections: {
-          ...tsdbCacheObservabilitySnapshot.collections,
-          ...(snapshot.collections || {}),
-        },
-      };
-    }
-    tsdbCacheObservabilityLastDurationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
-    return {
-      skipped: false,
-      duration_seconds: tsdbCacheObservabilityLastDurationSeconds,
-      trigger: options.trigger || null,
-    };
-  } catch (error) {
-    tsdbCacheObservabilityRefreshFailuresTotal += 1;
-    tsdbCacheObservabilityLastDurationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
-    console.warn("[TSDB] Cache observability refresh failed:", error.message || error);
-    return {
-      skipped: false,
-      failed: true,
-      duration_seconds: tsdbCacheObservabilityLastDurationSeconds,
-      trigger: options.trigger || null,
-    };
-  } finally {
-    tsdbCacheObservabilityRefreshRunning = false;
-  }
-}
-
-function startTsdbCacheObservabilityInterval(initialDelayMs = 10 * 1000) {
-  void refreshTsdbCacheObservability({ trigger: "startup" });
-  const intervalMs =
-    Number.isFinite(TSDB_CACHE_OBSERVABILITY_INTERVAL_MS) && TSDB_CACHE_OBSERVABILITY_INTERVAL_MS > 0
-      ? TSDB_CACHE_OBSERVABILITY_INTERVAL_MS
-      : 30 * 1000;
-  registerRuntimeInterval(() => {
-    void refreshTsdbCacheObservability({ trigger: "interval" });
-  }, intervalMs, {
-    initialDelayMs: Math.min(initialDelayMs, Math.max(0, intervalMs - 1000)),
-  });
-}
-
 function startApiIntervals() {
   const fantasyBootstrapInterval =
     Number.isFinite(FPL_BOOTSTRAP_INTERVAL_MS) && FPL_BOOTSTRAP_INTERVAL_MS > 0
@@ -32689,7 +30831,6 @@ function startApiIntervals() {
     pollFantasyAssistantManagerEntries();
   }, FANTASY_ASSISTANT_MANAGER_POLL_INTERVAL_MS);
 
-  startTsdbCacheObservabilityInterval(15 * 1000);
   startCacheStateWatcher();
 }
 
@@ -32697,81 +30838,7 @@ function startMonitorIntervals() {
   startCacheStateWatcher();
 }
 
-function startTsdbLivescorePolling() {
-  let timeoutHandle = null;
-
-  const scheduleNext = () => {
-    timeoutHandle = null;
-    const intervalMs = resolveTsdbLivescorePollIntervalMs();
-    timeoutHandle = registerRuntimeTimeout(async () => {
-      try {
-        await updateTsdbLivescores({
-          trigger: Array.isArray(cachedTsdbLiveMatches) && cachedTsdbLiveMatches.length > 0
-            ? "active_interval"
-            : "interval",
-        });
-      } finally {
-        scheduleNext();
-      }
-    }, intervalMs);
-  };
-
-  const initialDelayMs = Math.min(
-    5 * 1000,
-    Math.max(0, resolveTsdbLivescorePollIntervalMs() - 1000)
-  );
-  timeoutHandle = registerRuntimeTimeout(async () => {
-    timeoutHandle = null;
-    try {
-      await updateTsdbLivescores({ trigger: "interval" });
-    } finally {
-      scheduleNext();
-    }
-  }, initialDelayMs);
-
-  return timeoutHandle;
-}
-
 function startScraperIntervals() {
-  startTsdbLivescorePolling();
-
-  const tsdbScheduleInterval =
-    Number.isFinite(TSDB_SCHEDULE_INTERVAL_MS) && TSDB_SCHEDULE_INTERVAL_MS > 0
-      ? TSDB_SCHEDULE_INTERVAL_MS
-      : 60 * 60 * 1000;
-  const tsdbScheduleIntervalOffsetMs = Math.min(35 * 1000, Math.max(0, tsdbScheduleInterval - 1000));
-  registerRuntimeInterval(() => {
-    void updateTsdbScheduleMatches({ trigger: "interval" });
-  }, tsdbScheduleInterval, { initialDelayMs: tsdbScheduleIntervalOffsetMs });
-
-  const tsdbTvInterval =
-    Number.isFinite(TSDB_TV_INTERVAL_MS) && TSDB_TV_INTERVAL_MS > 0
-      ? TSDB_TV_INTERVAL_MS
-      : 2 * 60 * 60 * 1000;
-  const tsdbTvIntervalOffsetMs = Math.min(75 * 1000, Math.max(0, tsdbTvInterval - 1000));
-  registerRuntimeInterval(() => {
-    void updateTsdbTvListings({ trigger: "interval" });
-  }, tsdbTvInterval, { initialDelayMs: tsdbTvIntervalOffsetMs });
-
-  startTsdbCacheObservabilityInterval(15 * 1000);
-
-  const tsdbSupplementalInterval =
-    Number.isFinite(TSDB_SUPPLEMENTAL_CACHE_INTERVAL_MS) && TSDB_SUPPLEMENTAL_CACHE_INTERVAL_MS > 0
-      ? TSDB_SUPPLEMENTAL_CACHE_INTERVAL_MS
-      : 30 * 1000;
-  registerRuntimeInterval(() => {
-    void refreshTsdbSupplementalCaches({ trigger: "interval" });
-  }, tsdbSupplementalInterval, {
-    initialDelayMs: Math.min(20 * 1000, Math.max(0, tsdbSupplementalInterval - 1000)),
-  });
-
-  const eplInterval =
-    Number.isFinite(EPL_INTERVAL_MS) && EPL_INTERVAL_MS > 0 ? EPL_INTERVAL_MS : 24 * 60 * 60 * 1000;
-  const eplIntervalOffsetMs = Math.min(90 * 1000, Math.max(0, eplInterval - 1000));
-  registerRuntimeInterval(() => {
-    void updateTsdbPremierLeagueTeams({ trigger: "interval" });
-  }, eplInterval, { initialDelayMs: eplIntervalOffsetMs });
-
   scheduleLeagueTablesDailyRefresh();
   void updateLeagueTables({ trigger: "startup_scraper" });
 
@@ -33029,7 +31096,7 @@ const SERVER_BASE_URL = `http://localhost:${PORT}${API_PREFIX}`;
 // BSD is the sole source of truth for match data (scores, status, TV channels).
 // Both providers read the same getBsdMatchesForServing() cache so the details
 // lookup and the operational match list are always the same record under the
-// same BSD event id — no more TSDB/BSD duplicate-ID freshness race where one
+// same BSD event id, avoiding duplicate-ID freshness races where one
 // side had a live score and the other didn't.
 matchMonitor.setLiveActivityMatchDetailsProvider(async () => {
   const bsdMatches = await getBsdMatchesForServing();
@@ -33633,10 +31700,7 @@ function startApiRuntime() {
   startApiIntervals();
   scheduleInitialTeamRankingsWarm();
   scheduleTeamRankingsDailyWarm();
-  scheduleLeaguesDailyRefresh();
-  void updateTsdbLeagues({ trigger: "startup" });
   scheduleLeagueTablesDailyRefresh();
-  scheduleTeamBadgesDailyRefresh();
   void refreshEplSeasonActive();
   scheduleEplSeasonStatusDailyRefresh();
   scheduleDeferredApiWarmTasks();
@@ -33781,13 +31845,12 @@ module.exports = {
     collectTeamShortNameScrapeCandidates,
     filterCacheStateDomainsForRuntimeRefresh,
     normalizeCompetitionFilterName,
-    filterBsdTsdbScheduleSupplements,
     normalizeMatchesListMode,
     isAllowedCompetition,
     isAllowedMatchDetailsPayload,
     matchPassesCompetitionTableValidation,
     collectDisallowedCompetitionTargets,
-    mergeTsdbAndLiveMatches,
+    mergeBsdAndLiveMatches,
     matchIncludesHomeNation,
     matchIsMajorGameOfInterest,
     matchIsMajorTournament,
@@ -33801,7 +31864,6 @@ module.exports = {
     matchDetailsIdFromUrl,
     filterStaleMatches,
     shouldRefreshCanonicalMatchDetails,
-    resolveTsdbLivescorePollIntervalMs,
     buildDefaultOperationalCacheState,
     normalizeCacheStateDomains,
     normalizeOperationalCacheState,
@@ -33811,11 +31873,19 @@ module.exports = {
     buildTeamRankingsBaseCacheKey,
     inspectOperationalStateReadiness,
     clearFootballOperationalMemoryState,
+    hydrateOperationalStateFromRedis,
     collectInProgressMatchDetailTargets,
     reloadOperationalStateDomainsFromRedis,
     pollCacheStateAndRefreshFromRedis,
+    refreshBsdMatchesCache,
+    getBsdMatchesForServing,
     startApiIntervals,
     startScraperIntervals,
+    scheduleLeagueTablesDailyRefresh,
+    scheduleEplSeasonStatusDailyRefresh,
+    updateFantasyBootstrapStatic,
+    updateFantasyFixtures,
+    updateFantasyEventLive,
     buildLiveActivityTestContentState,
     buildLiveActivityTestPresets,
     resolveLiveActivityTestPreset,
@@ -33823,9 +31893,6 @@ module.exports = {
     upsertMatchDetailsFromMatch,
     preferencesSaveShouldTriggerLiveActivityReconcile,
     liveActivityReconcileTriggerForPreferencesSave,
-    TSDB_LIVESCORE_INTERVAL_MS,
-    TSDB_LIVESCORE_ACTIVE_INTERVAL_MS,
-    TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE,
     applyLiveResultsToBsdTable,
     bsdMatchesForTable,
     normalizeLeagueName,

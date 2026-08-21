@@ -12,54 +12,19 @@ function bsdPlayerImageUrl(playerId) {
   return id ? `${BSD_PLAYER_IMAGE_BASE_URL}/${id}/` : null;
 }
 
-function bsdPlayerIdByTsdbId(mapDocs = []) {
-  const byTsdbId = new Map();
-  (Array.isArray(mapDocs) ? mapDocs : []).forEach((doc) => {
-    const bsdPlayerId = normalizeNumericPlayerId(doc && doc._id);
-    const tsdbPlayerId = normalizeNumericPlayerId(
-      doc && doc.payload && doc.payload.tsdb_player_id
-    );
-    if (bsdPlayerId && tsdbPlayerId && !byTsdbId.has(tsdbPlayerId)) {
-      byTsdbId.set(tsdbPlayerId, bsdPlayerId);
-    }
-  });
-  return byTsdbId;
-}
-
-function collectMatchLineupTsdbPlayerIds(payload) {
-  const ids = new Set();
-  const addPlayer = (player) => {
-    if (!player || normalizeNumericPlayerId(player.bsd_player_id)) return;
-    const id = normalizeNumericPlayerId(player.id_player);
-    if (id) ids.add(id);
-  };
-  const lineups = payload && payload.team_lineups;
-  [lineups && lineups.home, lineups && lineups.away].filter(Boolean).forEach((side) => {
-    (Array.isArray(side.starting_lineup) ? side.starting_lineup : []).forEach(addPlayer);
-    (Array.isArray(side.substitutes) ? side.substitutes : []).forEach(addPlayer);
-    (Array.isArray(side.substitutions) ? side.substitutions : []).forEach((substitution) => {
-      addPlayer(substitution && substitution.player_off);
-      addPlayer(substitution && substitution.player_on);
-    });
-  });
-  return [...ids];
-}
-
-function matchDetailsWithBsdPlayerImages(payload, mapDocs = []) {
+function matchDetailsWithBsdPlayerImages(payload) {
   const lineups = payload && payload.team_lineups;
   if (!lineups || typeof lineups !== "object") return payload;
-  const bsdIdByTsdbId = bsdPlayerIdByTsdbId(mapDocs);
 
   const rewritePlayer = (player) => {
     if (!player || typeof player !== "object") return player;
-    const tsdbPlayerId = normalizeNumericPlayerId(player.id_player);
-    const bsdPlayerId =
-      normalizeNumericPlayerId(player.bsd_player_id) ||
-      (tsdbPlayerId ? bsdIdByTsdbId.get(tsdbPlayerId) : null);
+    const playerId =
+      normalizeNumericPlayerId(player.id_player) ||
+      normalizeNumericPlayerId(player.bsd_player_id);
     return {
       ...player,
-      ...(bsdPlayerId ? { bsd_player_id: bsdPlayerId } : {}),
-      cutout_url: bsdPlayerImageUrl(bsdPlayerId),
+      ...(playerId ? { id_player: playerId, bsd_player_id: playerId } : {}),
+      cutout_url: bsdPlayerImageUrl(playerId),
     };
   };
 
@@ -87,15 +52,13 @@ function matchDetailsWithBsdPlayerImages(payload, mapDocs = []) {
   };
 }
 
-function playerDetailsWithBsdImage(payload, tsdbPlayerId, mapDocs = []) {
+function playerDetailsWithBsdImage(payload, playerId) {
   if (!payload || typeof payload !== "object") return payload;
-  const bsdId =
-    normalizeNumericPlayerId(payload.bsd_player_id) ||
-    bsdPlayerIdByTsdbId(mapDocs).get(normalizeNumericPlayerId(tsdbPlayerId));
+  const id = normalizeNumericPlayerId(payload.bsd_player_id) || normalizeNumericPlayerId(playerId);
   return {
     ...payload,
-    ...(bsdId ? { bsd_player_id: bsdId } : {}),
-    cutout_url: bsdPlayerImageUrl(bsdId),
+    ...(id ? { bsd_player_id: id } : {}),
+    cutout_url: bsdPlayerImageUrl(id),
     thumb_url: null,
     render_url: null,
   };
@@ -103,9 +66,7 @@ function playerDetailsWithBsdImage(payload, tsdbPlayerId, mapDocs = []) {
 
 module.exports = {
   BSD_PLAYER_IMAGE_BASE_URL,
-  bsdPlayerIdByTsdbId,
   bsdPlayerImageUrl,
-  collectMatchLineupTsdbPlayerIds,
   matchDetailsWithBsdPlayerImages,
   normalizeNumericPlayerId,
   playerDetailsWithBsdImage,

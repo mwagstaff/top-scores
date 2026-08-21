@@ -5,9 +5,8 @@
 // ---------------------------------------------------------------------------
 // BSD API client (https://sports.bzzoiro.com/api/v2)
 //
-// Mirrors the design of thesportsdb_client.js: a token-bucket rate limiter,
-// exponential-backoff retry that honours Retry-After on HTTP 429, a request
-// observer hook, and a pagination helper for list endpoints.
+// Provides a token-bucket rate limiter, exponential-backoff retry that honours
+// Retry-After on HTTP 429, a request observer hook, and pagination helpers.
 //
 // Auth: every request sends `Authorization: Token <BSD_API_KEY>`.
 // ---------------------------------------------------------------------------

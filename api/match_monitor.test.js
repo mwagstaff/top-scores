@@ -593,7 +593,7 @@ test("buildLiveActivityPresentationForUser keeps a high-minute live match long a
   // BSD reliably reports full time, so a match deep in stoppage/extra time
   // 130+ minutes after kickoff is genuinely still in progress — there is no
   // stale-live heuristic second-guessing the feed (that was a hangover from
-  // the BBC/TSDB days).
+  // the legacy multi-provider days).
   const nowMs = Date.now();
   const kickoffMs = nowMs - 130 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -2345,7 +2345,7 @@ test("buildLiveActivityContentState resolves a hyphenated full name to its logo 
     Date.now()
   );
 
-  // "Bosnia-Herzegovina" has no exact team_logo_assets entry and no BSD/TSDB
+  // "Bosnia-Herzegovina" has no exact team_logo_assets entry and no
   // short name of its own — without the static team_short_names.json fallback
   // this resolves to null and the widget falls back to a "B" letter circle.
   assert.equal(contentState.matches[0].awayLogoKey, "Bosnia");

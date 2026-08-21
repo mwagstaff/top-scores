@@ -90,13 +90,11 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 # BSD API
 
-The BSD APIs will be used in combination with the existing TSDB APIs, potentially with a view to ultimately replacing them if appropriate.
-
-Some data may be sourced from TSDB with other data being from BSD being merged as needed - final approach TBD.
+BSD is the sole upstream sports-data provider for fixtures, results, live scores, match details, standings, teams, players, broadcasts, and predictions.
 
 ## Implementation approach
 
-- Call BSD APIs and save output to Mongo using collections with a `bsd_` prefix (to distinguish them from other data sources, e.g. TSDB - TheSportsDB)
+- Call BSD APIs and save output to Mongo using collections with a `bsd_` prefix
 - Data should be upserted as needed
 - All collections should include an internal timestamp to reflect the time the data was last updated
 - The `limit` parameter for all API calls should be set to 200 (max allowed)

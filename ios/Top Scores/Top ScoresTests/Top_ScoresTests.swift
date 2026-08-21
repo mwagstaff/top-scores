@@ -115,6 +115,75 @@ struct Top_ScoresTests {
         #expect(projection == 2.7)
     }
 
+    @Test func fantasySquadBuilder_seedsUpcomingGameweekExpectedPointsFromBootstrap() {
+        let gameweek = FantasyGameweek(
+            id: 1,
+            name: "Gameweek 1",
+            isCurrent: false,
+            isNext: true,
+            finished: false,
+            deadlineTime: "2026-08-21T17:30:00Z"
+        )
+        let bootstrap = FantasyBootstrapLookup(
+            updatedAt: nil,
+            elements: [
+                makeFantasyBootstrapElement(
+                    id: 1,
+                    team: 1,
+                    elementType: 1,
+                    webName: "Keeper",
+                    expectedPointsNextGameweek: "4.2"
+                )
+            ],
+            teams: [
+                FantasyBootstrapTeam(id: 1, name: "Arsenal", shortName: "ARS"),
+                FantasyBootstrapTeam(id: 2, name: "Chelsea", shortName: "CHE")
+            ],
+            elementTypes: [
+                FantasyBootstrapElementType(id: 1, singularName: "Goalkeeper", singularNameShort: "GKP")
+            ],
+            events: [gameweek]
+        )
+        let picks = FantasyPicksResponse(
+            picks: [makeFantasyPick(element: 1, position: 1, elementType: 1)],
+            entryHistory: FantasyEntryHistory(
+                event: 1,
+                points: 0,
+                rank: nil,
+                overallRank: nil,
+                eventTransfersCost: nil,
+                pointsOnBench: 0
+            ),
+            activeChipCodes: []
+        )
+        let fixtures = [
+            FantasyFixture(
+                id: 1,
+                event: 1,
+                teamH: 1,
+                teamA: 2,
+                kickoffTime: "2026-08-22T14:00:00Z",
+                started: false,
+                finished: false,
+                finishedProvisional: false
+            )
+        ]
+
+        let squad = FantasySquadBuilder.build(
+            gameweek: gameweek,
+            picksResponse: picks,
+            liveResponse: FantasyEventLiveResponse(elements: []),
+            fixtures: fixtures,
+            seasonFixtures: fixtures,
+            bootstrap: bootstrap,
+            now: Date(timeIntervalSince1970: 1_776_794_400)
+        )
+
+        #expect(squad.goalkeepers.first?.expectedPointsThisGameweek == 4.2)
+        #expect(squad.detailedExpectedPointsThisGameweek == 4.2)
+        #expect(squad.applyingExpectedPoints([:]).goalkeepers.first?.expectedPointsThisGameweek == 4.2)
+    }
+
     @Test func fantasyClassicLeague_resolvesPlayerCreatedRankAndMemberCount() {
         let league = FantasyEntryClassicLeague(
             id: 101,
@@ -369,8 +438,123 @@ struct Top_ScoresTests {
             try #require(URL(string: "https://sports.bzzoiro.com/img/team/208/"))
         ))
         #expect(!playerPortraitURLNeedsBackgroundRemoval(
-            try #require(URL(string: "https://www.thesportsdb.com/images/player.png"))
+            try #require(URL(string: "https://example.com/images/player.png"))
         ))
+    }
+
+    @Test func lineupPlayerResolver_prefersPortraitOverSparseExactAbbreviation() throws {
+        let portraitURL = "https://sports.bzzoiro.com/img/player/7354/"
+        let substitutePortraitURL = "https://sports.bzzoiro.com/img/player/7356/"
+        let fullPlayer = MatchLineupPlayer(
+            number: 9,
+            name: "Mihajlo Cvetković",
+            idPlayer: "7354",
+            positionCategory: "attacker",
+            cutoutURL: portraitURL,
+            formationRowIndex: 1,
+            formationSlotIndex: 1,
+            formationRowSize: 3
+        )
+        let sparsePlayer = MatchLineupPlayer(
+            number: nil,
+            name: "M. Cvetković",
+            positionCategory: nil,
+            formationRowIndex: nil,
+            formationSlotIndex: nil,
+            formationRowSize: nil
+        )
+        let incomingPlayer = MatchLineupPlayer(
+            number: nil,
+            name: "T. Degreef",
+            idPlayer: "7356",
+            positionCategory: nil,
+            formationRowIndex: nil,
+            formationSlotIndex: nil,
+            formationRowSize: nil
+        )
+        let fullIncomingPlayer = MatchLineupPlayer(
+            number: 83,
+            name: "Tristan Degreef",
+            idPlayer: "7356",
+            positionCategory: nil,
+            cutoutURL: substitutePortraitURL,
+            formationRowIndex: nil,
+            formationSlotIndex: nil,
+            formationRowSize: nil
+        )
+        let lineup = MatchTeamLineup(
+            team: "RSC Anderlecht",
+            manager: nil,
+            formation: "4-3-3",
+            startingLineup: [fullPlayer],
+            substitutes: [fullIncomingPlayer],
+            substitutions: [
+                MatchLineupSubstitution(
+                    minute: "46'",
+                    playerOff: sparsePlayer,
+                    playerOn: incomingPlayer
+                )
+            ]
+        )
+
+        let resolved = try #require(
+            preferredLineupPlayer(
+                named: "An event label that does not match",
+                idPlayer: "7354",
+                in: lineup
+            )
+        )
+
+        #expect(resolved.idPlayer == "7354")
+        #expect(resolved.cutoutURL == portraitURL)
+
+        let resolvedSubstitute = try #require(
+            preferredLineupPlayer(named: "T. Degreef", in: lineup)
+        )
+        #expect(resolvedSubstitute.idPlayer == "7356")
+        #expect(resolvedSubstitute.cutoutURL == substitutePortraitURL)
+    }
+
+    @Test func matchEventPlayerResolver_usesPlayerIDAcrossBothLineupsForOwnGoals() throws {
+        let portraitURL = "https://sports.bzzoiro.com/img/player/12537/"
+        let oksanen = MatchLineupPlayer(
+            number: 13,
+            name: "Jaakko Oksanen",
+            idPlayer: "12537",
+            positionCategory: "midfielder",
+            cutoutURL: portraitURL,
+            formationRowIndex: 2,
+            formationSlotIndex: 1,
+            formationRowSize: 4
+        )
+        let homeLineup = MatchTeamLineup(
+            team: "Kairat Almaty",
+            manager: nil,
+            formation: "4-4-1-1",
+            startingLineup: [oksanen],
+            substitutes: [],
+            substitutions: []
+        )
+        let awayLineup = MatchTeamLineup(
+            team: "RSC Anderlecht",
+            manager: nil,
+            formation: "4-3-3",
+            startingLineup: [],
+            substitutes: [],
+            substitutions: []
+        )
+
+        let resolved = try #require(
+            preferredMatchEventLineupPlayer(
+                named: "J. Oksanen",
+                idPlayer: "12537",
+                primaryLineup: awayLineup,
+                secondaryLineup: homeLineup
+            )
+        )
+
+        #expect(resolved.idPlayer == "12537")
+        #expect(resolved.cutoutURL == portraitURL)
     }
 
     @Test func matchesPageQueryItems_omitCategoryParamsWhenPremierLeagueTeamsOnlyIsOff() async throws {
@@ -1247,8 +1431,20 @@ struct Top_ScoresTests {
         let data = Data("""
         {
           "id": "213528",
+          "venue_id": "7",
+          "venue_details": {
+            "id": "7",
+            "name": "Stadium of Light",
+            "city": "Sunderland",
+            "country": "England",
+            "capacity": 48707,
+            "built_year": 1969,
+            "latitude": 54.91404,
+            "longitude": -1.388983,
+            "image_url": "https://sports.bzzoiro.com/img/venue/7/"
+          },
           "home_goal_scorers": [
-            { "player": "J. Guridi", "goal_times": ["52'"] }
+            { "player": "J. Guridi", "id_player": "7319", "goal_times": ["52'"] }
           ],
           "team_lineups": {
             "home": {
@@ -1257,8 +1453,8 @@ struct Top_ScoresTests {
               "substitutions": [
                 {
                   "minute": "46'",
-                  "player_off": { "number": null, "name": "I. Romero" },
-                  "player_on": { "number": null, "name": "R. Ure" }
+                  "player_off": { "number": null, "name": "I. Romero", "id_player": "17441" },
+                  "player_on": { "number": null, "name": "R. Ure", "id_player": "15972" }
                 }
               ]
             }
@@ -1270,8 +1466,14 @@ struct Top_ScoresTests {
         let substitution = try #require(details.teamLineups?.home?.substitutions.first)
 
         #expect(details.homeGoalScorers.first?.player == "J. Guridi")
+        #expect(details.homeGoalScorers.first?.idPlayer == "7319")
+        #expect(details.venueDetails?.name == "Stadium of Light")
+        #expect(details.venueDetails?.capacity == 48707)
+        #expect(details.venueDetails?.builtYear == 1969)
         #expect(substitution.playerOff.number == nil)
+        #expect(substitution.playerOff.idPlayer == "17441")
         #expect(substitution.playerOn.number == nil)
+        #expect(substitution.playerOn.idPlayer == "15972")
     }
 
     @Test func withDetails_preservesFinishedStatusWhenDetailsRegressToLiveMinute() async throws {

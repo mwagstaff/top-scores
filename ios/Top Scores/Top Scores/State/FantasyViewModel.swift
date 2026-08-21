@@ -1275,7 +1275,7 @@ final class FantasyViewModel: ObservableObject {
         let hasNextProjection = lookup.elements.contains {
             Double($0.expectedPointsNextGameweek ?? "") != nil
         }
-        return hasCurrentProjection && hasNextProjection
+        return hasCurrentProjection || hasNextProjection
     }
 
     private static func parseSeasonStatusCheckedAt(_ value: String?) -> Date? {

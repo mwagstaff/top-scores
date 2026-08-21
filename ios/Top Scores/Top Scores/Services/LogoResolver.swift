@@ -49,22 +49,6 @@ final class LogoResolver {
     }
 
     func image(for teamName: String, alternateNames: [String] = []) -> UIImage? {
-        if prefersBundledLogo(for: teamName, alternateNames: alternateNames),
-           let image = bundledImage(
-               for: teamName,
-               alternateNames: alternateNames,
-               useFallback: false
-           ) {
-            return image
-        }
-
-        if let badge = TeamBadgeCache.shared.image(
-            forTeamName: teamName,
-            alternateNames: alternateNames
-        ) {
-            return badge
-        }
-
         return bundledImage(for: teamName, alternateNames: alternateNames, useFallback: true)
     }
 
@@ -89,23 +73,7 @@ final class LogoResolver {
         return image
     }
 
-    /// Resolves a logo, using an explicit bundled override when configured,
-    /// otherwise preferring a TSDB badge before the bundled lookup.
     func image(for teamName: String, teamId: String?, alternateNames: [String] = []) -> UIImage? {
-        if prefersBundledLogo(for: teamName, alternateNames: alternateNames),
-           let image = bundledImage(
-               for: teamName,
-               alternateNames: alternateNames,
-               useFallback: false
-           ) {
-            return image
-        }
-
-        if let teamId {
-            if let badge = TeamBadgeCache.shared.image(forTeamId: teamId) {
-                return badge
-            }
-        }
         return image(for: teamName, alternateNames: alternateNames)
     }
 

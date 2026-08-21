@@ -163,10 +163,21 @@ struct FootballScreenBackdrop: View {
 struct FootballHeroHeader: View {
     let title: String
     var subtitle: String?
+    var subtitleLink: URL?
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    @ViewBuilder
     var body: some View {
+        if subtitleLink == nil {
+            headerContent
+                .accessibilityElement(children: .combine)
+        } else {
+            headerContent
+        }
+    }
+
+    private var headerContent: some View {
         VStack(spacing: 5) {
             Text(title)
                 .font(.system(
@@ -178,18 +189,36 @@ struct FootballHeroHeader: View {
                 .contentTransition(.opacity)
 
             if let subtitle {
-                Text(subtitle)
-                    .font((dynamicTypeSize.isAccessibilitySize ? Font.body : .headline).weight(.semibold))
-                    .foregroundStyle(Color.accentColor.opacity(0.88))
-                    .multilineTextAlignment(.center)
-                    .contentTransition(.opacity)
+                if let subtitleLink {
+                    Link(destination: subtitleLink) {
+                        HStack(spacing: 5) {
+                            Text(subtitle)
+                            Image(systemName: "arrow.up.right.square")
+                                .imageScale(.small)
+                        }
+                        .font((dynamicTypeSize.isAccessibilitySize ? Font.body : .headline).weight(.semibold))
+                        .foregroundStyle(Color.accentColor.opacity(0.88))
+                        .multilineTextAlignment(.center)
+                        .contentTransition(.opacity)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(subtitle)
+                    .accessibilityHint("Opens in another app or browser")
+                } else {
+                    Text(subtitle)
+                        .font((dynamicTypeSize.isAccessibilitySize ? Font.body : .headline).weight(.semibold))
+                        .foregroundStyle(Color.accentColor.opacity(0.88))
+                        .multilineTextAlignment(.center)
+                        .contentTransition(.opacity)
+                }
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
         .padding(.top, dynamicTypeSize.isAccessibilitySize ? 8 : 4)
         .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 14 : 10)
-        .accessibilityElement(children: .combine)
     }
 }
 

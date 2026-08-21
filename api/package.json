@@ -8,8 +8,6 @@
     "fetch:bsd-reference": "node fetch_bsd_reference.js",
     "fetch:bsd-events": "node fetch_bsd_events.js",
     "start:bsd-poller": "node bsd_poller.js",
-    "report:bsd-vs-tsdb": "node compare_bsd_tsdb.js",
-    "rebuild:bsd-player-map": "node bsd_player_map.js --full",
     "cleanup:invalid-redis-matches": "node scripts/cleanup_invalid_redis_matches.js",
     "cleanup:legacy-history": "node scripts/cleanup_legacy_history.js",
     "start": "node server.js",
@@ -18,7 +16,6 @@
     "start:scraper": "node scraper.js",
     "start:audit": "node audit.js",
     "migrate:redis-to-mongo": "node scripts/migrate_redis_to_mongo.js",
-    "migrate:rename-tsdb-collections": "node scripts/rename_tsdb_collections.js",
     "test-harness": "node -e \"console.log('Start the main API server with npm start, then open http://localhost:3000/admin/harness')\"",
     "live-activity:harness": "./live_activity_test_harness.sh"
   },

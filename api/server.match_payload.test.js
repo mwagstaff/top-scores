@@ -59,7 +59,7 @@ const {
     collectDisallowedCompetitionTargets,
     clearFootballOperationalMemoryState,
     collectInProgressMatchDetailTargets,
-    mergeTsdbAndLiveMatches,
+    mergeBsdAndLiveMatches,
     matchIncludesHomeNation,
     matchIsMajorGameOfInterest,
     matchIsMajorTournament,
@@ -169,20 +169,16 @@ test("player details fall back to the newest cached match lineup", () => {
   });
 });
 
-test("configured BSD player details replace all TSDB image candidates", async () => {
+test("configured BSD player details use the direct BSD player id", async () => {
   const payload = await withConfiguredPlayerDetailsImage(
     {
-      id: "34167754",
+      id: "6525",
       name: "Cameron Burgess",
-      cutout_url: "https://www.thesportsdb.com/cutout.png",
-      thumb_url: "https://www.thesportsdb.com/thumb.png",
-      render_url: "https://www.thesportsdb.com/render.png",
+      cutout_url: "https://example.test/cutout.png",
+      thumb_url: "https://example.test/thumb.png",
+      render_url: "https://example.test/render.png",
     },
-    "34167754",
-    {
-      playerImageSource: "bsd",
-      mapDocs: [{ _id: "6525", payload: { tsdb_player_id: "34167754" } }],
-    }
+    "6525"
   );
 
   assert.equal(payload.cutout_url, "https://sports.bzzoiro.com/img/player/6525/");
@@ -190,24 +186,20 @@ test("configured BSD player details replace all TSDB image candidates", async ()
   assert.equal(payload.render_url, null);
 });
 
-test("configured BSD match details replace cached TSDB lineup portraits", async () => {
+test("configured BSD match details use direct BSD lineup ids", async () => {
   const payload = await withConfiguredMatchDetailsPlayerImages(
     {
       team_lineups: {
         home: {
           starting_lineup: [{
-            id_player: "34167754",
+            id_player: "6525",
             name: "Cameron Burgess",
-            cutout_url: "https://www.thesportsdb.com/cutout.png",
+            cutout_url: "https://example.test/cutout.png",
           }],
           substitutes: [],
           substitutions: [],
         },
       },
-    },
-    {
-      playerImageSource: "bsd",
-      mapDocs: [{ _id: "6525", payload: { tsdb_player_id: "34167754" } }],
     }
   );
 
@@ -326,14 +318,14 @@ test("toMatchListPayload preserves explicit BBC-source flag without requiring ma
     baseMatch({
       details_url: null,
       match_details_id: null,
-      has_tsdb_source: true,
+      has_bsd_source: true,
       home_score: null,
       away_score: null,
       score_status: null,
     })
   );
 
-  assert.equal(payload.has_tsdb_source, true);
+  assert.equal(payload.has_bsd_source, true);
   assert.equal(payload.match_details_id, undefined);
 });
 
@@ -419,7 +411,7 @@ test("canonicalMatchDetailsToListPayload materializes a list row from canonical 
       score_status: "AET",
       penalty_result: "Leeds United win 4 - 2 on penalties",
       tv_channels: ["TNT Sports 1"],
-      has_tsdb_source: true,
+      has_bsd_source: true,
     }),
     league_subcategory: "Quarter-finals",
   });
@@ -437,7 +429,7 @@ test("canonicalMatchDetailsToListPayload materializes a list row from canonical 
     away_score: 1,
     score_status: "AET",
     penalty_result: "Leeds United win 4 - 2 on penalties",
-    has_tsdb_source: true,
+    has_bsd_source: true,
   });
 });
 
@@ -557,7 +549,7 @@ test("canonicalMatchDetailsRecordsToPublicListPayloads supplements missing canon
           league_subcategory: "Quarter-finals",
           home_team: "Real Madrid",
           away_team: "Bayern Munich",
-          has_tsdb_source: true,
+          has_bsd_source: true,
           tv_channels: [],
         },
       ],
@@ -569,7 +561,7 @@ test("canonicalMatchDetailsRecordsToPublicListPayloads supplements missing canon
   assert.equal(payloads[0].away_team, "Bayern Munich");
   assert.equal(payloads[0].league, "UEFA Champions League");
   assert.equal(payloads[0].league_subcategory, "Quarter-finals");
-  assert.equal(payloads[0].has_tsdb_source, true);
+  assert.equal(payloads[0].has_bsd_source, true);
 });
 
 test("canonicalMatchDetailsRecordsToListPayloads drops stale TBC final placeholders", () => {
@@ -662,7 +654,7 @@ test("canonicalMatchDetailsRecordsToListPayloads lets resolved BBC final suppres
         home_score: 1,
         away_score: 0,
         score_status: "FT",
-        has_tsdb_source: true,
+        has_bsd_source: true,
         updated_at: "2026-05-23T16:55:00.000Z",
         tv_channels: [],
       },
@@ -676,7 +668,7 @@ test("canonicalMatchDetailsRecordsToListPayloads lets resolved BBC final suppres
           league_subcategory: "Promotion Play-offs - Final",
           home_team: "Hull City",
           away_team: "Southampton",
-          has_tsdb_source: true,
+          has_bsd_source: true,
           tv_channels: ["Sky Sports Football"],
         },
       ],
@@ -1434,8 +1426,8 @@ test("matchPassesCategoryFilters fails closed when the current Premier League da
   );
 });
 
-test("mergeTsdbAndLiveMatches prefers BBC competition metadata for duplicate fixtures", () => {
-  const merged = mergeTsdbAndLiveMatches(
+test("mergeBsdAndLiveMatches prefers BBC competition metadata for duplicate fixtures", () => {
+  const merged = mergeBsdAndLiveMatches(
     [
       {
         date: "2026-03-26",
@@ -1465,8 +1457,8 @@ test("mergeTsdbAndLiveMatches prefers BBC competition metadata for duplicate fix
   assert.deepStrictEqual(merged[0].tv_channels, ["BBC Three"]);
 });
 
-test("mergeTsdbAndLiveMatches ignores unmatched live-football rows", () => {
-  const merged = mergeTsdbAndLiveMatches(
+test("mergeBsdAndLiveMatches ignores unmatched live-football rows", () => {
+  const merged = mergeBsdAndLiveMatches(
     [
       {
         date: "2026-04-06",
@@ -1483,8 +1475,8 @@ test("mergeTsdbAndLiveMatches ignores unmatched live-football rows", () => {
   assert.deepStrictEqual(merged, []);
 });
 
-test("mergeTsdbAndLiveMatches keeps BBC team names while merging live TV metadata", () => {
-  const merged = mergeTsdbAndLiveMatches(
+test("mergeBsdAndLiveMatches keeps BBC team names while merging live TV metadata", () => {
+  const merged = mergeBsdAndLiveMatches(
     [
       {
         date: "2026-04-06",
@@ -1503,7 +1495,7 @@ test("mergeTsdbAndLiveMatches keeps BBC team names while merging live TV metadat
         home_team: "Preston North End",
         away_team: "Queens Park Rangers",
         tv_channels: [],
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ]
   );
@@ -1511,12 +1503,12 @@ test("mergeTsdbAndLiveMatches keeps BBC team names while merging live TV metadat
   assert.equal(merged.length, 1);
   assert.equal(merged[0].home_team, "Preston North End");
   assert.equal(merged[0].away_team, "Queens Park Rangers");
-  assert.equal(merged[0].has_tsdb_source, true);
+  assert.equal(merged[0].has_bsd_source, true);
   assert.deepStrictEqual(merged[0].tv_channels, ["Sky Sports Football"]);
 });
 
-test("mergeTsdbAndLiveMatches collapses Bundesliga aliases onto the BBC-backed FT row", () => {
-  const merged = mergeTsdbAndLiveMatches(
+test("mergeBsdAndLiveMatches collapses Bundesliga aliases onto the BBC-backed FT row", () => {
+  const merged = mergeBsdAndLiveMatches(
     [
       {
         date: "2026-04-19",
@@ -1542,7 +1534,7 @@ test("mergeTsdbAndLiveMatches collapses Bundesliga aliases onto the BBC-backed F
         away_score: 2,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/c89558d5d5nt",
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ]
   );
@@ -1552,11 +1544,11 @@ test("mergeTsdbAndLiveMatches collapses Bundesliga aliases onto the BBC-backed F
   assert.equal(merged[0].away_team, "Stuttgart");
   assert.equal(merged[0].score_status, "FT");
   assert.equal(merged[0].details_url, "https://www.bbc.co.uk/sport/football/live/c89558d5d5nt");
-  assert.equal(merged[0].has_tsdb_source, true);
+  assert.equal(merged[0].has_bsd_source, true);
 });
 
-test("mergeTsdbAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT rows", () => {
-  const veronaMerged = mergeTsdbAndLiveMatches(
+test("mergeBsdAndLiveMatches collapses Serie A alias rows onto the BBC-backed FT rows", () => {
+  const veronaMerged = mergeBsdAndLiveMatches(
     [
       {
         date: "2026-04-19",
@@ -1578,7 +1570,7 @@ test("mergeTsdbAndLiveMatches collapses Serie A alias rows onto the BBC-backed F
         away_score: 1,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/c5yjjq5jlrmt",
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ]
   );
@@ -1589,7 +1581,7 @@ test("mergeTsdbAndLiveMatches collapses Serie A alias rows onto the BBC-backed F
   assert.equal(veronaMerged[0].score_status, "FT");
   assert.equal(veronaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/c5yjjq5jlrmt");
 
-  const pisaMerged = mergeTsdbAndLiveMatches(
+  const pisaMerged = mergeBsdAndLiveMatches(
     [
       {
         date: "2026-04-19",
@@ -1611,7 +1603,7 @@ test("mergeTsdbAndLiveMatches collapses Serie A alias rows onto the BBC-backed F
         away_score: 2,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/cx2vvg0v3rpt",
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ]
   );
@@ -1622,8 +1614,8 @@ test("mergeTsdbAndLiveMatches collapses Serie A alias rows onto the BBC-backed F
   assert.equal(pisaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/cx2vvg0v3rpt");
 });
 
-test("mergeTsdbAndLiveMatches collapses La Liga and Bundesliga alias rows onto BBC-backed FT rows", () => {
-  const osasunaMerged = mergeTsdbAndLiveMatches(
+test("mergeBsdAndLiveMatches collapses La Liga and Bundesliga alias rows onto BBC-backed FT rows", () => {
+  const osasunaMerged = mergeBsdAndLiveMatches(
     [
       {
         date: "2026-04-12",
@@ -1645,7 +1637,7 @@ test("mergeTsdbAndLiveMatches collapses La Liga and Bundesliga alias rows onto B
         away_score: 1,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/cx24nxnxggkt",
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ]
   );
@@ -1655,7 +1647,7 @@ test("mergeTsdbAndLiveMatches collapses La Liga and Bundesliga alias rows onto B
   assert.equal(osasunaMerged[0].score_status, "FT");
   assert.equal(osasunaMerged[0].details_url, "https://www.bbc.co.uk/sport/football/live/cx24nxnxggkt");
 
-  const stuttgartMerged = mergeTsdbAndLiveMatches(
+  const stuttgartMerged = mergeBsdAndLiveMatches(
     [
       {
         date: "2026-04-12",
@@ -1677,7 +1669,7 @@ test("mergeTsdbAndLiveMatches collapses La Liga and Bundesliga alias rows onto B
         away_score: 0,
         score_status: "FT",
         details_url: "https://www.bbc.co.uk/sport/football/live/c705j1jx2y0t",
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ]
   );
@@ -1736,7 +1728,7 @@ test("collectAdminRogueMatchTargets only selects the exact rogue short-name row"
         home_team: "Preston North End",
         away_team: "Queens Park Rangers",
         match_details_id: bbcId,
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ],
     new Map([
@@ -1760,7 +1752,7 @@ test("collectAdminRogueMatchTargets only selects the exact rogue short-name row"
           league: "Championship",
           home_team: "Preston North End",
           away_team: "Queens Park Rangers",
-          has_tsdb_source: true,
+          has_bsd_source: true,
         },
       ],
     ])
@@ -1811,7 +1803,7 @@ test("collectLiveSourceDuplicateTargets finds live-only duplicates of BBC-backed
         home_team: "Mainz 05",
         away_team: "Strasbourg",
         details_url: `https://www.bbc.co.uk/sport/football/live/${mainzBbcId}`,
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ],
     [
@@ -1835,7 +1827,7 @@ test("collectLiveSourceDuplicateTargets finds live-only duplicates of BBC-backed
         home_team: "Shakhtar Donetsk",
         away_team: "AZ Alkmaar",
         details_url: `https://www.bbc.co.uk/sport/football/live/${azBbcId}`,
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ],
   ]);
@@ -1914,7 +1906,7 @@ test("collectCanonicalDuplicateTargets finds weaker canonical alias duplicates",
         home_team: "Mainz 05",
         away_team: "Strasbourg",
         details_url: `https://www.bbc.co.uk/sport/football/live/${mainzBbcId}`,
-        has_tsdb_source: true,
+        has_bsd_source: true,
         updated_at: "2026-04-09T18:01:00.000Z",
       },
     ],
@@ -1940,7 +1932,7 @@ test("collectCanonicalDuplicateTargets finds weaker canonical alias duplicates",
         home_team: "Shakhtar Donetsk",
         away_team: "AZ Alkmaar",
         details_url: `https://www.bbc.co.uk/sport/football/live/${azBbcId}`,
-        has_tsdb_source: true,
+        has_bsd_source: true,
         updated_at: "2026-04-09T18:01:00.000Z",
       },
     ],
@@ -2129,7 +2121,7 @@ test("dedupeMatchListPayloads collapses duplicate match ids and preserves the ri
       home_team: "Manchester City",
       away_team: "Liverpool",
       match_details_id: "clydqev9y9et",
-      has_tsdb_source: true,
+      has_bsd_source: true,
       tv_channels: ["BBC One"],
     },
     {
@@ -2151,7 +2143,7 @@ test("dedupeMatchListPayloads collapses duplicate match ids and preserves the ri
   assert.equal(deduped[0].score_status, "FT");
   assert.equal(deduped[0].home_score, 4);
   assert.equal(deduped[0].away_score, 0);
-  assert.equal(deduped[0].has_tsdb_source, true);
+  assert.equal(deduped[0].has_bsd_source, true);
   assert.deepEqual(deduped[0].tv_channels, ["BBC One", "BBC iPlayer"]);
   assert.equal(deduped[0].league_subcategory, "Quarter-finals");
 });
@@ -2245,7 +2237,7 @@ test("dedupeMatchListPayloads collapses Bundesliga alias rows and keeps the BBC 
       home_team: "Bayern Munich",
       away_team: "Stuttgart",
       match_details_id: "c89558d5d5nt",
-      has_tsdb_source: true,
+      has_bsd_source: true,
       home_score: 4,
       away_score: 2,
       score_status: "FT",
@@ -2255,7 +2247,7 @@ test("dedupeMatchListPayloads collapses Bundesliga alias rows and keeps the BBC 
   assert.equal(deduped.length, 1);
   assert.equal(deduped[0].match_details_id, "c89558d5d5nt");
   assert.equal(deduped[0].score_status, "FT");
-  assert.equal(deduped[0].has_tsdb_source, true);
+  assert.equal(deduped[0].has_bsd_source, true);
   assert.equal(deduped[0].away_team, "Stuttgart");
 });
 
@@ -2280,7 +2272,7 @@ test("dedupeMatchListPayloads collapses Serie A alias rows and keeps the BBC liv
       home_score: 0,
       away_score: 1,
       score_status: "FT",
-      has_tsdb_source: true,
+      has_bsd_source: true,
     },
   ]);
 
@@ -2309,7 +2301,7 @@ test("dedupeMatchListPayloads collapses Serie A alias rows and keeps the BBC liv
       home_score: 1,
       away_score: 2,
       score_status: "FT",
-      has_tsdb_source: true,
+      has_bsd_source: true,
     },
   ]);
 
@@ -2340,14 +2332,14 @@ test("dedupeMatchListPayloads collapses La Liga and Bundesliga alias rows and ke
       home_score: 1,
       away_score: 1,
       score_status: "FT",
-      has_tsdb_source: true,
+      has_bsd_source: true,
     },
   ]);
 
   assert.equal(osasunaDeduped.length, 1);
   assert.equal(osasunaDeduped[0].match_details_id, "cx24nxnxggkt");
   assert.equal(osasunaDeduped[0].score_status, "FT");
-  assert.equal(osasunaDeduped[0].has_tsdb_source, true);
+  assert.equal(osasunaDeduped[0].has_bsd_source, true);
 
   const stuttgartDeduped = dedupeMatchListPayloads([
     {
@@ -2369,14 +2361,14 @@ test("dedupeMatchListPayloads collapses La Liga and Bundesliga alias rows and ke
       home_score: 4,
       away_score: 0,
       score_status: "FT",
-      has_tsdb_source: true,
+      has_bsd_source: true,
     },
   ]);
 
   assert.equal(stuttgartDeduped.length, 1);
   assert.equal(stuttgartDeduped[0].match_details_id, "c705j1jx2y0t");
   assert.equal(stuttgartDeduped[0].score_status, "FT");
-  assert.equal(stuttgartDeduped[0].has_tsdb_source, true);
+  assert.equal(stuttgartDeduped[0].has_bsd_source, true);
 });
 
 test("isListPayloadVisibleForMode excludes future same-day fixtures from results", () => {
@@ -2843,7 +2835,7 @@ test("mergeMatchDetailsPayload preserves FT when refreshed live poll regresses t
   assert.equal(merged.score_status, "FT");
 });
 
-test("mergeMatchDetailsPayload lets TSDB live state correct a stale terminal status", () => {
+test("mergeMatchDetailsPayload lets BSD live state correct a stale terminal status", () => {
   const nowMs = Date.parse("2026-06-18T20:56:21.000Z");
   const existing = normalizeMatchDetailsPayload({
     id: "2461110",
@@ -2869,7 +2861,7 @@ test("mergeMatchDetailsPayload lets TSDB live state correct a stale terminal sta
     home_score: 3,
     away_score: 1,
     score_status: "90+6",
-    has_tsdb_source: true,
+    has_bsd_source: true,
   }, { nowMs });
 
   const merged = mergeMatchDetailsPayload(existing, incoming, "2026-06-18T20:56:21.000Z");
@@ -3409,13 +3401,13 @@ test("filterStaleMatches accepts a corrected scoreless kickoff fixture over stal
 test("normalizeCacheStateDomains resolves aliases and rejects unknown values", () => {
   const normalized = normalizeCacheStateDomains(["fixtures", "match-details", "bbc", "bogus"]);
 
-  assert.deepStrictEqual(normalized.domains, ["matches", "match_details", "tsdb_live"]);
-  assert.deepStrictEqual(normalized.invalid, ["bogus"]);
+  assert.deepStrictEqual(normalized.domains, ["matches", "match_details"]);
+  assert.deepStrictEqual(normalized.invalid, ["bbc", "bogus"]);
 });
 
 test("bumpCacheStateSnapshot increments only requested cache generations", () => {
   const base = buildDefaultOperationalCacheState("2026-03-08T09:00:00.000Z");
-  const bumped = bumpCacheStateSnapshot(base, ["matches", "bbc_live"], {
+  const bumped = bumpCacheStateSnapshot(base, ["matches"], {
     updated_at: "2026-03-08T09:05:00.000Z",
     reason: "incident_fix",
     source: "admin_api",
@@ -3426,9 +3418,7 @@ test("bumpCacheStateSnapshot increments only requested cache generations", () =>
     bumped.domains.match_details.generation,
     base.domains.match_details.generation
   );
-  assert.equal(bumped.domains.tsdb_live.generation, base.domains.tsdb_live.generation + 1);
   assert.equal(bumped.domains.matches.reason, "incident_fix");
-  assert.equal(bumped.domains.tsdb_live.source, "admin_api");
   assert.equal(bumped.updated_at, "2026-03-08T09:05:00.000Z");
 });
 
@@ -3447,7 +3437,6 @@ test("normalizeOperationalCacheState backfills missing domains", () => {
 
   assert.equal(normalized.domains.matches.generation, 4);
   assert.equal(normalized.domains.match_details.generation, 1);
-  assert.equal(normalized.domains.tsdb_live.generation, 1);
   assert.equal(normalized.updated_at, "2026-03-08T09:10:00.000Z");
 });
 
@@ -3711,7 +3700,7 @@ test("toMatchListPayload stabilizes stale in-progress status to FT once kickoff 
   assert.equal(payload.away_score, 3);
 });
 
-test("toMatchListPayload prefers fresher TSDB live list state over stale details FT", () => {
+test("toMatchListPayload prefers fresher BSD live list state over stale details FT", () => {
   const payload = toMatchListPayload(
     {
       id: "2461110",
@@ -3724,7 +3713,7 @@ test("toMatchListPayload prefers fresher TSDB live list state over stale details
       home_score: 3,
       away_score: 1,
       score_status: "90+6",
-      has_tsdb_source: true,
+      has_bsd_source: true,
       updated_at: "2026-06-18T20:56:21.000Z",
     },
     {
@@ -4055,7 +4044,7 @@ test("collectInProgressMatchDetailTargets includes live matches without active r
       score_status: "111",
       home_score: 2,
       away_score: 2,
-      has_tsdb_source: true,
+      has_bsd_source: true,
     }),
     new Date(Date.now() - 5 * 60 * 1000).toISOString()
   );
@@ -4108,7 +4097,7 @@ test("collectInProgressMatchDetailTargets excludes stale live records with missi
       score_status: "74",
       home_score: 1,
       away_score: 0,
-      has_tsdb_source: true,
+      has_bsd_source: true,
     }),
     "2026-03-03T12:15:00.000Z"
   );
@@ -4269,7 +4258,7 @@ test("matchDetailsNeedsBackfill accepts renderable non-11v11 lineups", () => {
   );
 });
 
-test("matchDetailsNeedsBackfill refreshes SportsDB lineups missing player ids", () => {
+test("matchDetailsNeedsBackfill refreshes BSD lineups missing player ids", () => {
   assert.equal(
     matchDetailsNeedsBackfill({
       id: "2461104",

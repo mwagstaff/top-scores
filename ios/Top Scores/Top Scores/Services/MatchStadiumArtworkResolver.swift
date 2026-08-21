@@ -80,7 +80,7 @@ struct MatchStadiumArtworkResolver: Sendable {
     }
 
     func familyIndex(homeTeamID: String?, homeTeamName: String) -> Int {
-        // The canonical team name is stable across BSD/TSDB source switches,
+        // The canonical team name is stable across BSD payload refreshes,
         // whereas provider-specific numeric IDs are not.
         let identity = homeTeamName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().nonEmpty
             ?? homeTeamID?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty

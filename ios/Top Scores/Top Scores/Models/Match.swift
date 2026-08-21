@@ -2,12 +2,20 @@ import Foundation
 
 struct MatchGoalScorer: Codable, Hashable, Sendable {
     let player: String
+    let idPlayer: String?
     let goalTimes: [String]
     let ownGoalTimes: [String]
     let disallowedGoalTimes: [String]
 
-    init(player: String, goalTimes: [String], ownGoalTimes: [String] = [], disallowedGoalTimes: [String] = []) {
+    init(
+        player: String,
+        idPlayer: String? = nil,
+        goalTimes: [String],
+        ownGoalTimes: [String] = [],
+        disallowedGoalTimes: [String] = []
+    ) {
         self.player = player
+        self.idPlayer = idPlayer
         self.goalTimes = goalTimes
         self.ownGoalTimes = ownGoalTimes
         self.disallowedGoalTimes = disallowedGoalTimes
@@ -15,6 +23,7 @@ struct MatchGoalScorer: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case player
+        case idPlayer = "id_player"
         case goalTimes = "goal_times"
         case ownGoalTimes = "own_goal_times"
         case disallowedGoalTimes = "disallowed_goal_times"
@@ -32,6 +41,7 @@ struct MatchGoalScorer: Codable, Hashable, Sendable {
             let alternate = try decoder.container(keyedBy: AlternateCodingKeys.self)
             player = try alternate.decodeIfPresent(String.self, forKey: .playerName) ?? ""
         }
+        idPlayer = try container.decodeIfPresent(String.self, forKey: .idPlayer)
         goalTimes = try container.decodeIfPresent([String].self, forKey: .goalTimes) ?? []
         ownGoalTimes = try container.decodeIfPresent([String].self, forKey: .ownGoalTimes) ?? []
         disallowedGoalTimes = try container.decodeIfPresent([String].self, forKey: .disallowedGoalTimes) ?? []
@@ -39,6 +49,7 @@ struct MatchGoalScorer: Codable, Hashable, Sendable {
 
     nonisolated static func == (lhs: MatchGoalScorer, rhs: MatchGoalScorer) -> Bool {
         lhs.player == rhs.player &&
+        lhs.idPlayer == rhs.idPlayer &&
         lhs.goalTimes == rhs.goalTimes &&
         lhs.ownGoalTimes == rhs.ownGoalTimes &&
         lhs.disallowedGoalTimes == rhs.disallowedGoalTimes
@@ -82,15 +93,18 @@ struct MatchAssistProvider: Codable, Hashable, Sendable {
 
 struct MatchRedCardEvent: Codable, Hashable, Sendable {
     let player: String
+    let idPlayer: String?
     let redCardTimes: [String]
 
-    init(player: String, redCardTimes: [String]) {
+    init(player: String, idPlayer: String? = nil, redCardTimes: [String]) {
         self.player = player
+        self.idPlayer = idPlayer
         self.redCardTimes = redCardTimes
     }
 
     enum CodingKeys: String, CodingKey {
         case player
+        case idPlayer = "id_player"
         case redCardTimes = "red_card_times"
     }
 
@@ -106,26 +120,31 @@ struct MatchRedCardEvent: Codable, Hashable, Sendable {
             let alternate = try decoder.container(keyedBy: AlternateCodingKeys.self)
             player = try alternate.decodeIfPresent(String.self, forKey: .playerName) ?? ""
         }
+        idPlayer = try container.decodeIfPresent(String.self, forKey: .idPlayer)
         redCardTimes = try container.decodeIfPresent([String].self, forKey: .redCardTimes) ?? []
     }
 
     nonisolated static func == (lhs: MatchRedCardEvent, rhs: MatchRedCardEvent) -> Bool {
         lhs.player == rhs.player &&
+        lhs.idPlayer == rhs.idPlayer &&
         lhs.redCardTimes == rhs.redCardTimes
     }
 }
 
 struct MatchYellowCardEvent: Codable, Hashable, Sendable {
     let player: String
+    let idPlayer: String?
     let yellowCardTimes: [String]
 
-    init(player: String, yellowCardTimes: [String]) {
+    init(player: String, idPlayer: String? = nil, yellowCardTimes: [String]) {
         self.player = player
+        self.idPlayer = idPlayer
         self.yellowCardTimes = yellowCardTimes
     }
 
     enum CodingKeys: String, CodingKey {
         case player
+        case idPlayer = "id_player"
         case yellowCardTimes = "yellow_card_times"
     }
 
@@ -141,11 +160,13 @@ struct MatchYellowCardEvent: Codable, Hashable, Sendable {
             let alternate = try decoder.container(keyedBy: AlternateCodingKeys.self)
             player = try alternate.decodeIfPresent(String.self, forKey: .playerName) ?? ""
         }
+        idPlayer = try container.decodeIfPresent(String.self, forKey: .idPlayer)
         yellowCardTimes = try container.decodeIfPresent([String].self, forKey: .yellowCardTimes) ?? []
     }
 
     nonisolated static func == (lhs: MatchYellowCardEvent, rhs: MatchYellowCardEvent) -> Bool {
         lhs.player == rhs.player &&
+        lhs.idPlayer == rhs.idPlayer &&
         lhs.yellowCardTimes == rhs.yellowCardTimes
     }
 }
@@ -368,6 +389,30 @@ struct MatchTeamLineups: Codable, Hashable, Sendable {
     }
 }
 
+struct MatchVenueDetails: Codable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let city: String?
+    let country: String?
+    let capacity: Int?
+    let builtYear: Int?
+    let latitude: Double?
+    let longitude: Double?
+    let imageURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case city
+        case country
+        case capacity
+        case builtYear = "built_year"
+        case latitude
+        case longitude
+        case imageURL = "image_url"
+    }
+}
+
 struct MatchDetailsPayload: Codable, Hashable, Sendable {
     let id: String
     let detailsURL: String?
@@ -377,6 +422,7 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
     let homeTeam: String?
     let awayTeam: String?
     let venueID: String?
+    let venueDetails: MatchVenueDetails?
     let kickoffAt: String?
     let lightContext: String?
     let homeShortName: String?
@@ -412,6 +458,7 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
         case homeTeam = "home_team"
         case awayTeam = "away_team"
         case venueID = "venue_id"
+        case venueDetails = "venue_details"
         case kickoffAt = "kickoff_at"
         case lightContext = "light_context"
         case homeShortName = "home_short_name"
@@ -449,6 +496,7 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
         homeTeam = try container.decodeIfPresent(String.self, forKey: .homeTeam)
         awayTeam = try container.decodeIfPresent(String.self, forKey: .awayTeam)
         venueID = try container.decodeIfPresent(String.self, forKey: .venueID)
+        venueDetails = try container.decodeIfPresent(MatchVenueDetails.self, forKey: .venueDetails)
         kickoffAt = try container.decodeIfPresent(String.self, forKey: .kickoffAt)
         lightContext = try container.decodeIfPresent(String.self, forKey: .lightContext)
         homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
@@ -523,6 +571,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let homeTeamId: String?
     let awayTeamId: String?
     let venueID: String?
+    let venueDetails: MatchVenueDetails?
     let kickoffAt: String?
     let lightContext: String?
     let homeShortName: String?
@@ -564,6 +613,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         homeTeamId: String? = nil,
         awayTeamId: String? = nil,
         venueID: String? = nil,
+        venueDetails: MatchVenueDetails? = nil,
         kickoffAt: String? = nil,
         lightContext: String? = nil,
         homeShortName: String? = nil,
@@ -604,6 +654,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.homeTeamId = homeTeamId
         self.awayTeamId = awayTeamId
         self.venueID = venueID
+        self.venueDetails = venueDetails
         self.kickoffAt = kickoffAt
         self.lightContext = lightContext
         self.homeShortName = homeShortName
@@ -843,6 +894,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             homeTeamId: homeTeamId,
             awayTeamId: awayTeamId,
             venueID: venueID,
+            venueDetails: venueDetails,
             kickoffAt: kickoffAt,
             lightContext: lightContext,
             homeShortName: homeShortName,
@@ -887,6 +939,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             homeTeamId: homeTeamId,
             awayTeamId: awayTeamId,
             venueID: venueID,
+            venueDetails: venueDetails,
             kickoffAt: kickoffAt,
             lightContext: lightContext,
             homeShortName: homeShortName,
@@ -931,6 +984,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         homeTeamId = try container.decodeIfPresent(String.self, forKey: .homeTeamId)
         awayTeamId = try container.decodeIfPresent(String.self, forKey: .awayTeamId)
         venueID = try container.decodeIfPresent(String.self, forKey: .venueID)
+        venueDetails = try container.decodeIfPresent(MatchVenueDetails.self, forKey: .venueDetails)
         kickoffAt = try container.decodeIfPresent(String.self, forKey: .kickoffAt)
         lightContext = try container.decodeIfPresent(String.self, forKey: .lightContext)
         homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
@@ -976,6 +1030,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case homeTeamId = "home_team_id"
         case awayTeamId = "away_team_id"
         case venueID = "venue_id"
+        case venueDetails = "venue_details"
         case kickoffAt = "kickoff_at"
         case lightContext = "light_context"
         case homeShortName = "home_short_name"
@@ -1019,6 +1074,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(homeTeamId, forKey: .homeTeamId)
         try container.encodeIfPresent(awayTeamId, forKey: .awayTeamId)
         try container.encodeIfPresent(venueID, forKey: .venueID)
+        try container.encodeIfPresent(venueDetails, forKey: .venueDetails)
         try container.encodeIfPresent(kickoffAt, forKey: .kickoffAt)
         try container.encodeIfPresent(lightContext, forKey: .lightContext)
         try container.encodeIfPresent(homeShortName, forKey: .homeShortName)
@@ -1059,6 +1115,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         lhs.homeTeam == rhs.homeTeam &&
         lhs.awayTeam == rhs.awayTeam &&
         lhs.venueID == rhs.venueID &&
+        lhs.venueDetails == rhs.venueDetails &&
         lhs.kickoffAt == rhs.kickoffAt &&
         lhs.lightContext == rhs.lightContext &&
         lhs.homeShortName == rhs.homeShortName &&
@@ -1130,6 +1187,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             homeTeamId: homeTeamId,
             awayTeamId: awayTeamId,
             venueID: details.venueID ?? venueID,
+            venueDetails: details.venueDetails ?? venueDetails,
             kickoffAt: details.kickoffAt ?? kickoffAt,
             lightContext: details.lightContext ?? lightContext,
             homeShortName: details.homeShortName ?? homeShortName,
@@ -1177,6 +1235,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             homeTeamId: refreshed.homeTeamId,
             awayTeamId: refreshed.awayTeamId,
             venueID: refreshed.venueID,
+            venueDetails: refreshed.venueDetails,
             kickoffAt: refreshed.kickoffAt,
             lightContext: refreshed.lightContext,
             homeShortName: refreshed.homeShortName,

@@ -496,9 +496,20 @@ private struct LeagueTableCard: View {
                         }
 
                         ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
-                            rowView(row)
-                            if index < group.rows.count - 1 {
-                                tableSeparator(isThick: isBenefitBoundary(in: group.rows, after: index))
+                            VStack(spacing: 0) {
+                                ForEach(lookDownZonesStarting(at: row.position)) { zone in
+                                    zoneBoundary(zone)
+                                }
+
+                                rowView(row)
+
+                                ForEach(lookUpZonesEnding(at: row.position)) { zone in
+                                    zoneBoundary(zone)
+                                }
+
+                                if shouldShowStandardSeparator(in: group.rows, after: index) {
+                                    tableSeparator(isThick: isBenefitBoundary(in: group.rows, after: index))
+                                }
                             }
                         }
 
@@ -613,46 +624,54 @@ private struct LeagueTableCard: View {
     }
 
     private func rowView(_ row: LeagueTableRow) -> some View {
-        Group {
-            if showsStats {
-                HStack(spacing: 0) {
-                    compactPositionCell(row)
-                    Color.clear.frame(width: 8)
-                    TableTeamLogo(name: row.team)
-                        .frame(width: 24)
-                    statsCell(row.played, width: 24)
-                    statsCell(row.won, width: 24)
-                    statsCell(row.drawn, width: 24)
-                    statsCell(row.lost, width: 24)
-                    statsCell(row.goalsFor, width: 27)
-                    statsCell(row.goalsAgainst, width: 27)
-                    statsCell(row.goalDifference, width: 27, signed: true)
-                    statsCell(row.points, width: 30, weight: .semibold)
-                    compactForm(row.form)
+        NavigationLink {
+            TeamDetailsView(context: teamDetailsContext(for: row))
+        } label: {
+            Group {
+                if showsStats {
+                    HStack(spacing: 0) {
+                        compactPositionCell(row)
+                        Color.clear.frame(width: 8)
+                        TableTeamLogo(name: row.team)
+                            .frame(width: 24)
+                        statsCell(row.played, width: 24)
+                        statsCell(row.won, width: 24)
+                        statsCell(row.drawn, width: 24)
+                        statsCell(row.lost, width: 24)
+                        statsCell(row.goalsFor, width: 27)
+                        statsCell(row.goalsAgainst, width: 27)
+                        statsCell(row.goalDifference, width: 27, signed: true)
+                        statsCell(row.points, width: 30, weight: .semibold)
+                        compactForm(row.form)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 10)
+                } else {
+                    HStack(spacing: 6) {
+                        positionCell(row)
+                        TableTeamLogo(name: row.team)
+                        Text(displayTeamName(for: row))
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        cell(String(row.played), width: 30)
+                        subtleCell(signedNumber(row.goalDifference), width: 34)
+                        cell(String(row.points), width: 38, weight: .semibold)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 10)
-            } else {
-                HStack(spacing: 6) {
-                    positionCell(row)
-                    TableTeamLogo(name: row.team)
-                    Text(displayTeamName(for: row))
-                        .font(.subheadline)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    cell(String(row.played), width: 30)
-                    subtleCell(signedNumber(row.goalDifference), width: 34)
-                    cell(String(row.points), width: 38, weight: .semibold)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 10)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .background(HighlightedTableRowBackground(isActive: highlightedRowID == row.id))
         .background(LiveTableRowBackground(isActive: row.live))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.team)
         .accessibilityValue(accessibilityStats(for: row))
+        .accessibilityHint("View team details")
         .id(row.id)
     }
 
@@ -660,6 +679,25 @@ private struct LeagueTableCard: View {
         Rectangle()
             .fill(Color.white.opacity(isThick ? 0.16 : 0.075))
             .frame(height: isThick ? 2.5 : 1)
+    }
+
+    private func zoneBoundary(_ zone: LeagueTableZone) -> some View {
+        let color = zoneColor(zone)
+        return HStack(spacing: 6) {
+            ZoneDashedLine(color: color)
+            Text(zoneDisplayLabel(zone))
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Image(systemName: zone.usesLookDownBoundary ? "chevron.down.circle" : "chevron.up.circle")
+                .font(.caption.weight(.semibold))
+            ZoneDashedLine(color: color)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(zoneDisplayLabel(zone)) positions \(zone.from) to \(zone.to)")
     }
 
     private func groupHeading(for group: LeagueTableGroup) -> String? {
@@ -720,6 +758,9 @@ private struct LeagueTableCard: View {
                 .lineLimit(1)
         }
         .frame(width: 40, alignment: .trailing)
+        .overlay(alignment: .leading) {
+            positionRail(for: row, height: 28)
+        }
     }
 
     private func compactPositionCell(_ row: LeagueTableRow) -> some View {
@@ -729,7 +770,21 @@ private struct LeagueTableCard: View {
                 .font(.caption.monospacedDigit())
                 .lineLimit(1)
         }
+        .padding(.leading, league.zones.isEmpty ? 0 : 6)
         .frame(width: 30, alignment: .leading)
+        .overlay(alignment: .leading) {
+            positionRail(for: row, height: 26)
+        }
+    }
+
+    @ViewBuilder
+    private func positionRail(for row: LeagueTableRow, height: CGFloat) -> some View {
+        if !league.zones.isEmpty {
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(zone(at: row.position).map(zoneColor) ?? Color.secondary.opacity(0.52))
+                .frame(width: 3, height: height)
+                .accessibilityHidden(true)
+        }
     }
 
     private func statsCell(
@@ -787,7 +842,9 @@ private struct LeagueTableCard: View {
     }
 
     private func accessibilityStats(for row: LeagueTableRow) -> String {
-        "Position \(row.position), played \(row.played), won \(row.won), drawn \(row.drawn), lost \(row.lost), goals for \(row.goalsFor), goals against \(row.goalsAgainst), goal difference \(signedNumber(row.goalDifference)), \(row.points) points. \(formAccessibilityLabel(Array(row.form.prefix(5))))"
+        let zoneDescription = zone(at: row.position)
+            .map { " \(zoneDisplayLabel($0)) zone." } ?? ""
+        return "Position \(row.position), played \(row.played), won \(row.won), drawn \(row.drawn), lost \(row.lost), goals for \(row.goalsFor), goals against \(row.goalsAgainst), goal difference \(signedNumber(row.goalDifference)), \(row.points) points.\(zoneDescription) \(formAccessibilityLabel(Array(row.form.prefix(5))))"
     }
 
     @ViewBuilder
@@ -828,6 +885,78 @@ private struct LeagueTableCard: View {
     private func displayTeamName(for row: LeagueTableRow) -> String {
         let canonicalName = TeamIdentityStore.shared.canonicalName(for: row.team)
         return FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: canonicalName)
+    }
+
+    private func teamDetailsContext(for row: LeagueTableRow) -> TeamDetailsContext {
+        let canonicalName = TeamIdentityStore.shared.canonicalName(for: row.team)
+        let teamName = canonicalName.isEmpty ? row.team : canonicalName
+        return TeamDetailsContext(
+            teamID: nil,
+            teamName: teamName,
+            displayName: displayTeamName(for: row),
+            alternateNames: teamName == row.team ? [] : [row.team],
+            originatingLeagueID: league.leagueID,
+            originatingLeagueName: league.leagueName,
+            originatingMatch: nil
+        )
+    }
+
+    private func zone(at position: Int) -> LeagueTableZone? {
+        league.zones.first { $0.contains(position: position) }
+    }
+
+    private func lookDownZonesStarting(at position: Int) -> [LeagueTableZone] {
+        league.zones.filter { $0.usesLookDownBoundary && $0.from == position }
+    }
+
+    private func lookUpZonesEnding(at position: Int) -> [LeagueTableZone] {
+        league.zones.filter { !$0.usesLookDownBoundary && $0.to == position }
+    }
+
+    private func shouldShowStandardSeparator(in rows: [LeagueTableRow], after index: Int) -> Bool {
+        guard index >= 0, index < rows.count - 1 else { return false }
+        guard lookUpZonesEnding(at: rows[index].position).isEmpty else { return false }
+        return lookDownZonesStarting(at: rows[index + 1].position).isEmpty
+    }
+
+    private func zoneColor(_ zone: LeagueTableZone) -> Color {
+        let descriptor = "\(zone.key) \(zone.label) \(zone.type)".lowercased()
+        if descriptor.contains("playoff") || descriptor.contains("play-off") {
+            return descriptor.contains("releg") ? .orange : .blue
+        }
+        if descriptor.contains("releg") {
+            return .red
+        }
+        if descriptor.contains("promo") {
+            return .green
+        }
+        return accentColor
+    }
+
+    private func zoneDisplayLabel(_ zone: LeagueTableZone) -> String {
+        let descriptor = "\(zone.key) \(zone.label) \(zone.type)".lowercased()
+        if descriptor.contains("playoff") || descriptor.contains("play-off") {
+            return descriptor.contains("releg") ? "Relegation play-off" : "Play-offs"
+        }
+        return zone.label
+    }
+}
+
+private struct ZoneDashedLine: View {
+    let color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            Path { path in
+                let y = proxy.size.height / 2
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: proxy.size.width, y: y))
+            }
+            .stroke(color, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 1)
+        .accessibilityHidden(true)
     }
 }
 

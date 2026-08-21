@@ -2538,7 +2538,6 @@ private struct FixturePickerCheckbox: View {
 private struct FixtureViewSpecialOptionIcon: View {
     let option: FixtureViewSpecialOption
     let size: CGFloat
-    @State private var badgeCacheVersion = 0
 
     var body: some View {
         Group {
@@ -2561,9 +2560,6 @@ private struct FixtureViewSpecialOptionIcon: View {
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
-        .onReceive(NotificationCenter.default.publisher(for: TeamBadgeCache.badgesUpdatedNotification)) { _ in
-            badgeCacheVersion += 1
-        }
     }
 
     @ViewBuilder

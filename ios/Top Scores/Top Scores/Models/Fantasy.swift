@@ -132,6 +132,19 @@ extension FantasyBootstrapElement {
             .flatMap { Int($0) }
         return photoCode.flatMap { $0 > 0 ? $0 : nil }
     }
+
+    nonisolated func expectedPoints(for gameweek: FantasyGameweek) -> Double? {
+        let currentProjection = expectedPointsThisGameweek.flatMap(Double.init)
+        let nextProjection = expectedPointsNextGameweek.flatMap(Double.init)
+
+        if gameweek.isCurrent == true {
+            return currentProjection
+        }
+        if gameweek.isNext == true {
+            return nextProjection
+        }
+        return nextProjection ?? currentProjection
+    }
 }
 
 struct FantasyBootstrapTeam: Codable, Hashable {
@@ -438,6 +451,7 @@ struct FantasyElementSummaryFixture: Codable, Hashable {
         }
         return nil
     }
+
 }
 
 struct FantasyElementSummaryHistory: Codable, Hashable {
@@ -1787,7 +1801,9 @@ struct FantasySquadDisplayData: Hashable, Sendable {
             guard player.hasRemainingFixtureThisGameweek else {
                 return player.applyingExpectedPoints(nil)
             }
-            return player.applyingExpectedPoints(expectedPointsByElementID[player.elementID])
+            return player.applyingExpectedPoints(
+                expectedPointsByElementID[player.elementID] ?? player.expectedPointsThisGameweek
+            )
         }
 
         return FantasySquadDisplayData(
@@ -3129,6 +3145,7 @@ enum FantasySquadBuilder {
 
         let players = picksResponse.picks.compactMap { pick -> FantasyDisplayPlayer? in
             let element = elementByID[pick.element]
+            let officialExpectedPointsForGameweek = element?.expectedPoints(for: gameweek)
             let teamName = teamNameByID[element?.team ?? -1] ?? "Unknown Team"
             let displayName = {
                 let fromWebName = element?.webName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -3248,7 +3265,7 @@ enum FantasySquadBuilder {
                 upcomingOpponentDisplay: selectedFixture?.label,
                 fixtureDifficulty: selectedFixture?.difficulty,
                 nextFiveFixtureDifficulties: nextFiveFixtureDifficultiesByTeamID[element?.team ?? -1] ?? [],
-                expectedPointsThisGameweek: nil,
+                expectedPointsThisGameweek: officialExpectedPointsForGameweek,
                 officialExpectedPointsNextGameweek: element?.expectedPointsNextGameweek.flatMap { Double($0) },
                 goalsScored: goalsScored,
                 assists: assists,

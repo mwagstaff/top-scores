@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { fetchLeagueTables } from "../api";
-import type { LeagueTable, LeagueTableRow } from "../types";
+import type { LeagueTable, LeagueTableRow, LeagueTableZone } from "../types";
 
 interface TablesState {
   loading: boolean;
@@ -264,9 +264,26 @@ function LeagueTableCard({
             {group.rows.map((row, index) => {
               const isExpanded = expandedRows.has(row.id);
               const boundary = isBenefitBoundary(group.rows, index);
+              const activeZone = zoneAtPosition(league.zones, row.position);
+              const startingZones = league.zones.filter(
+                (zone) => zoneUsesLookDownBoundary(zone) && zone.from === row.position,
+              );
+              const endingZones = league.zones.filter(
+                (zone) => !zoneUsesLookDownBoundary(zone) && zone.to === row.position,
+              );
+              const nextRow = group.rows[index + 1];
+              const nextStartsLookDownZone = nextRow
+                ? league.zones.some(
+                    (zone) => zoneUsesLookDownBoundary(zone) && zone.from === nextRow.position,
+                  )
+                : false;
 
               return (
                 <div className="league-table-row-wrap" key={`${groupIndex}-${row.id}`}>
+                  {startingZones.map((zone) => (
+                    <TableZoneBoundary zone={zone} key={zoneBoundaryKey(zone)} />
+                  ))}
+
                   <button
                     type="button"
                     id={`table-row-${row.id}`}
@@ -275,6 +292,12 @@ function LeagueTableCard({
                     aria-expanded={isExpanded}
                   >
                     <span className="table-cell table-cell-position">
+                      {league.zones.length > 0 ? (
+                        <span
+                          className={`table-zone-rail ${zoneClassName(activeZone)}`}
+                          aria-hidden="true"
+                        />
+                      ) : null}
                       {league.realtime ? <PositionTrend row={row} /> : null}
                       {row.position}
                     </span>
@@ -294,7 +317,11 @@ function LeagueTableCard({
 
                   {isExpanded ? <LeagueTableExpandedRow row={row} /> : null}
 
-                  {index < group.rows.length - 1 ? (
+                  {endingZones.map((zone) => (
+                    <TableZoneBoundary zone={zone} key={zoneBoundaryKey(zone)} />
+                  ))}
+
+                  {endingZones.length === 0 && index < group.rows.length - 1 && !nextStartsLookDownZone ? (
                     <div className={`table-divider${boundary ? " is-thick" : ""}`} />
                   ) : null}
                 </div>
@@ -305,6 +332,22 @@ function LeagueTableCard({
           </div>
         ))}
       </div>
+  );
+}
+
+function TableZoneBoundary({ zone }: { zone: LeagueTableZone }) {
+  const label = zoneDisplayLabel(zone);
+  return (
+    <div
+      className={`table-zone-boundary ${zoneClassName(zone)}`}
+      role="separator"
+      aria-label={`${label} positions ${zone.from} to ${zone.to}`}
+    >
+      <span>{label}</span>
+      <span className="table-zone-boundary-icon" aria-hidden="true">
+        {zoneUsesLookDownBoundary(zone) ? "⌄" : "⌃"}
+      </span>
+    </div>
   );
 }
 
@@ -443,6 +486,41 @@ function resolveLeagueID(leagues: LeagueTable[], currentSelection: string): stri
 
 function normalizeRankStatus(value: string | null | undefined): string {
   return String(value || "").trim().toLowerCase();
+}
+
+function zoneAtPosition(zones: LeagueTableZone[], position: number): LeagueTableZone | null {
+  return zones.find((zone) => position >= zone.from && position <= zone.to) || null;
+}
+
+function zoneDescriptor(zone: LeagueTableZone): string {
+  return `${zone.key} ${zone.label} ${zone.type}`.toLowerCase();
+}
+
+function zoneUsesLookDownBoundary(zone: LeagueTableZone): boolean {
+  return zoneDescriptor(zone).includes("releg");
+}
+
+function zoneBoundaryKey(zone: LeagueTableZone): string {
+  return `${zone.key}-${zone.from}-${zone.to}`;
+}
+
+function zoneClassName(zone: LeagueTableZone | null): string {
+  if (!zone) return "is-neutral";
+  const descriptor = zoneDescriptor(zone);
+  if (descriptor.includes("playoff") || descriptor.includes("play-off")) {
+    return descriptor.includes("releg") ? "is-relegation-playoff" : "is-playoff";
+  }
+  if (descriptor.includes("releg")) return "is-relegation";
+  if (descriptor.includes("promo")) return "is-promotion";
+  return "is-other";
+}
+
+function zoneDisplayLabel(zone: LeagueTableZone): string {
+  const descriptor = zoneDescriptor(zone);
+  if (descriptor.includes("playoff") || descriptor.includes("play-off")) {
+    return descriptor.includes("releg") ? "Relegation play-off" : "Play-offs";
+  }
+  return zone.label;
 }
 
 function isBenefitBoundary(rows: LeagueTableRow[], index: number): boolean {

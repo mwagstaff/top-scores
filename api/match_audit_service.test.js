@@ -210,7 +210,7 @@ test("buildFutureRedisFixtureAuditResults flags future redis fixtures absent fro
         league: "UEFA Champions League",
         home_team: "Atletico Madrid",
         away_team: "Arsenal",
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ],
     [
@@ -251,7 +251,7 @@ test("buildFutureRedisFixtureAuditResults matches Redis fixture via team alias (
         league: "Spanish La Liga",
         home_team: "Athletic Bilbao",
         away_team: "Osasuna",
-        has_tsdb_source: true,
+        has_bsd_source: true,
       },
     ],
     [

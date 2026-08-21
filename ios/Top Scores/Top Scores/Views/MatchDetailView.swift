@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import EventKit
+import MapKit
 
 struct MatchDetailView: View {
     @EnvironmentObject private var preferences: PreferencesStore
@@ -286,6 +287,11 @@ struct MatchDetailView: View {
 
                 if !socialItems.isEmpty {
                     MatchSocialSection(items: socialItems)
+                        .padding(.horizontal)
+                }
+
+                if let venue = activeMatch.venueDetails {
+                    MatchVenueSection(venue: venue)
                         .padding(.horizontal)
                 }
             }
@@ -831,6 +837,142 @@ struct MatchDetailView: View {
             return nil
         }
         return (hours * 60) + minutes
+    }
+}
+
+private struct MatchVenueSection: View {
+    let venue: MatchVenueDetails
+
+    private var locationText: String? {
+        let parts = [venue.city, venue.country].compactMap { value -> String? in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    private var coordinate: CLLocationCoordinate2D? {
+        guard let latitude = venue.latitude,
+              let longitude = venue.longitude,
+              (-90...90).contains(latitude),
+              (-180...180).contains(longitude)
+        else {
+            return nil
+        }
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(venue.name)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.primary)
+
+            if let imageURL = venue.imageURL.flatMap(URL.init(string:)) {
+                AsyncImage(url: imageURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                            .frame(maxWidth: .infinity)
+                            .aspectRatio(16 / 9, contentMode: .fit)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    case .empty:
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color(.tertiarySystemFill))
+                            .aspectRatio(16 / 9, contentMode: .fit)
+                            .overlay { ProgressView() }
+                    case .failure:
+                        EmptyView()
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+                .accessibilityLabel("Photo of \(venue.name)")
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 24) {
+                    venueFacts
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    venueFacts
+                }
+            }
+
+            if let coordinate {
+                Button {
+                    openInMaps(coordinate)
+                } label: {
+                    Label("View in Maps", systemImage: "map")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .accessibilityHint("Opens the stadium location in Apple Maps")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var venueFacts: some View {
+        if let locationText {
+            MatchVenueFact(icon: "mappin.and.ellipse", title: "Location", value: locationText)
+        }
+        if let capacity = venue.capacity {
+            MatchVenueFact(
+                icon: "person.3.fill",
+                title: "Capacity",
+                value: capacity.formatted(.number.grouping(.automatic))
+            )
+        }
+        if let builtYear = venue.builtYear {
+            MatchVenueFact(icon: "building.2.fill", title: "Built", value: String(builtYear))
+        }
+    }
+
+    private func openInMaps(_ coordinate: CLLocationCoordinate2D) {
+        let mapItem = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+        mapItem.name = venue.name
+        mapItem.openInMaps()
+    }
+}
+
+private struct MatchVenueFact: View {
+    let icon: String
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 
@@ -1753,7 +1895,12 @@ private struct MatchEventsCard: View {
     ) {
         let assistLookup = assistProviderByMinute(assists)
         for scorer in scorers {
-            let player = playerForEvent(named: scorer.player, side: side, match: match)
+            let player = playerForEvent(
+                idPlayer: scorer.idPlayer,
+                named: scorer.player,
+                side: side,
+                match: match
+            )
             for minute in scorer.goalTimes {
                 output.append(
                     MatchEventEntry(
@@ -1778,7 +1925,12 @@ private struct MatchEventsCard: View {
                         side: side,
                         title: "\(scorer.player) (OG)",
                         subtitle: teamName,
-                        player: player
+                        player: playerForEvent(
+                            idPlayer: scorer.idPlayer,
+                            named: scorer.player,
+                            side: side,
+                            match: match
+                        )
                     )
                 )
             }
@@ -1807,7 +1959,12 @@ private struct MatchEventsCard: View {
         to output: inout [MatchEventEntry]
     ) {
         for card in cards {
-            let player = playerForEvent(named: card.player, side: side, match: match)
+            let player = playerForEvent(
+                idPlayer: card.idPlayer,
+                named: card.player,
+                side: side,
+                match: match
+            )
             for minute in card.yellowCardTimes {
                 output.append(
                     MatchEventEntry(
@@ -1833,7 +1990,12 @@ private struct MatchEventsCard: View {
         to output: inout [MatchEventEntry]
     ) {
         for card in cards {
-            let player = playerForEvent(named: card.player, side: side, match: match)
+            let player = playerForEvent(
+                idPlayer: card.idPlayer,
+                named: card.player,
+                side: side,
+                match: match
+            )
             for minute in card.redCardTimes {
                 output.append(
                     MatchEventEntry(
@@ -1871,7 +2033,12 @@ private struct MatchEventsCard: View {
                     formationRowSize: nil
                 )
             } else if let name = event.player, !name.isEmpty {
-                player = playerForEvent(named: name, side: side, match: match)
+                player = playerForEvent(
+                    idPlayer: event.idPlayer,
+                    named: name,
+                    side: side,
+                    match: match
+                )
             } else {
                 player = nil
             }
@@ -1898,26 +2065,8 @@ private struct MatchEventsCard: View {
     ) {
         guard let lineup else { return }
         for sub in lineup.substitutions {
-            let player = MatchLineupPlayer(
-                number: sub.playerOn.number,
-                name: sub.playerOn.name,
-                idPlayer: sub.playerOn.idPlayer,
-                positionCategory: nil,
-                cutoutURL: sub.playerOn.cutoutURL,
-                formationRowIndex: nil,
-                formationSlotIndex: nil,
-                formationRowSize: nil
-            )
-            let playerOff = MatchLineupPlayer(
-                number: sub.playerOff.number,
-                name: sub.playerOff.name,
-                idPlayer: sub.playerOff.idPlayer,
-                positionCategory: nil,
-                cutoutURL: sub.playerOff.cutoutURL,
-                formationRowIndex: nil,
-                formationSlotIndex: nil,
-                formationRowSize: nil
-            )
+            let player = preferredLineupPlayer(matching: sub.playerOn, in: lineup)
+            let playerOff = preferredLineupPlayer(matching: sub.playerOff, in: lineup)
             output.append(
                 MatchEventEntry(
                     minute: formattedMatchMinute(sub.minute),
@@ -1935,26 +2084,20 @@ private struct MatchEventsCard: View {
         }
     }
 
-    private static func playerForEvent(named name: String, side: MatchEventEntry.Side, match: Match) -> MatchLineupPlayer? {
-        let lineup = side == .home ? match.teamLineups?.home : match.teamLineups?.away
-        let candidates = eventPlayerCandidates(from: lineup)
-        let lookup = MatchPlayerNameLookup(name: name)
-        return candidates.max { lhs, rhs in
-            lookup.matchScore(against: MatchPlayerNameLookup(name: lhs.name)) <
-                lookup.matchScore(against: MatchPlayerNameLookup(name: rhs.name))
-        }.flatMap { player in
-            lookup.matchScore(against: MatchPlayerNameLookup(name: player.name)) > 0 ? player : nil
-        }
-    }
-
-    private static func eventPlayerCandidates(from lineup: MatchTeamLineup?) -> [MatchLineupPlayer] {
-        guard let lineup else { return [] }
-        var players = lineup.startingLineup + lineup.substitutes
-        lineup.substitutions.forEach { substitution in
-            players.append(substitution.playerOff)
-            players.append(substitution.playerOn)
-        }
-        return players
+    private static func playerForEvent(
+        idPlayer: String?,
+        named name: String,
+        side: MatchEventEntry.Side,
+        match: Match
+    ) -> MatchLineupPlayer? {
+        let primaryLineup = side == .home ? match.teamLineups?.home : match.teamLineups?.away
+        let secondaryLineup = side == .home ? match.teamLineups?.away : match.teamLineups?.home
+        return preferredMatchEventLineupPlayer(
+            named: name,
+            idPlayer: idPlayer,
+            primaryLineup: primaryLineup,
+            secondaryLineup: secondaryLineup
+        )
     }
 
     private static func assistProviderByMinute(_ assists: [MatchAssistProvider]) -> [String: String] {
@@ -2491,7 +2634,7 @@ private struct MatchLineupTeamPanelsView: View {
                     ZStack {
                         Image("MatchLineupPitchTexture")
                             .resizable()
-                            .scaledToFill()
+                            .frame(width: proxy.size.width, height: proxy.size.height)
 
                         LinearGradient(
                             colors: [
@@ -2520,12 +2663,14 @@ private struct MatchLineupTeamPanelsView: View {
                                 onSelectPlayer: { selectedPlayer = $0 }
                             )
                         }
-                        .padding(.horizontal, 5)
+                        .padding(.horizontal, 16)
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
                 }
-                .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                // The two stacked formations need more vertical room than a
+                // regulation-pitch ratio once portraits and incidents are shown.
+                .aspectRatio(6.0 / 11.0, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .clipped()
 
@@ -2570,9 +2715,6 @@ private struct MatchLineupTeamPanelsView: View {
     }
 
     private func teamAccentColor(teamID: String?, side: MatchLineupDisplaySide) -> Color {
-        if let teamID, let color = TeamBadgeCache.shared.accentColor(forTeamId: teamID) {
-            return color
-        }
         return side == .home ? Color.yellow : Color.red
     }
 
@@ -2630,35 +2772,40 @@ private struct MatchLineupTeamPanelsView: View {
                 spacing: 10
             ) {
                 ForEach(lineup.substitutions) { substitution in
+                    let playerOn = preferredLineupPlayer(
+                        matching: substitution.playerOn,
+                        in: lineup
+                    )
                     Button {
-                        if substitution.playerOn.idPlayer != nil {
-                            selectedPlayer = substitution.playerOn
+                        if playerOn.idPlayer != nil {
+                            selectedPlayer = playerOn
                         }
                     } label: {
                         VStack(spacing: 5) {
                             MatchLineupPlayerPortraitView(
-                                player: substitution.playerOn,
+                                player: playerOn,
                                 diameter: 40,
                                 borderColor: accentColor
                             )
 
-                            Text(condensedLineupPlayerName(substitution.playerOn.name))
+                            Text(condensedLineupPlayerName(playerOn.name))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.78)
 
-                            HStack(spacing: 2) {
+                            MatchLineupBadgeFlowLayout(spacing: 2) {
                                 MatchLineupInlineMarker(kind: .subIn, minute: substitution.minute)
-                                ForEach(lookup.markers(for: substitution.playerOn).prefix(2)) { marker in
+                                ForEach(lookup.markers(for: playerOn)) { marker in
                                     MatchLineupInlineMarker(kind: marker.kind, minute: marker.minute)
                                 }
                             }
+                            .frame(maxWidth: .infinity)
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.plain)
-                    .allowsHitTesting(substitution.playerOn.idPlayer != nil)
+                    .allowsHitTesting(playerOn.idPlayer != nil)
                 }
             }
         }
@@ -2711,17 +2858,27 @@ private struct MatchLineupCombinedFormationHalf: View {
         return (left.number ?? Int.max) < (right.number ?? Int.max)
     }
 
+    private var portraitDiameter: CGFloat {
+        rows.count >= 5 ? 50 : 52
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ZStack {
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                     let columnWidth = proxy.size.width / CGFloat(max(row.count, 1))
+                    let nameMaxWidth = nameLabelWidth(
+                        columnWidth: columnWidth,
+                        playerCount: row.count
+                    )
                     HStack(alignment: .center, spacing: 0) {
                         ForEach(row) { player in
                             MatchLineupPlayerTacticalMarker(
                                 player: player,
                                 markers: lookup.markers(for: player),
                                 accentColor: accentColor,
+                                portraitDiameter: portraitDiameter,
+                                nameMaxWidth: nameMaxWidth,
                                 onSelectPlayer: onSelectPlayer
                             )
                             .frame(width: columnWidth)
@@ -2743,22 +2900,42 @@ private struct MatchLineupCombinedFormationHalf: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private func nameLabelWidth(columnWidth: CGFloat, playerCount: Int) -> CGFloat {
+        let preferredMaximum: CGFloat
+        switch playerCount {
+        case 1:
+            preferredMaximum = 132
+        case 2:
+            preferredMaximum = 120
+        case 3:
+            preferredMaximum = 108
+        default:
+            preferredMaximum = 92
+        }
+
+        let cellGutter: CGFloat = playerCount >= 4 ? 4 : 8
+        return max(
+            portraitDiameter,
+            min(preferredMaximum, max(columnWidth - cellGutter, portraitDiameter))
+        )
+    }
+
     private func rowPosition(index: Int, count: Int, height: CGFloat) -> CGFloat {
-        let safeInset = min(32, height * 0.11)
+        let topInset = min(40, height * 0.11)
+        let bottomInset = side == .away ? min(72, height * 0.22) : topInset
         guard count > 1 else { return height / 2 }
-        let availableHeight = max(0, height - (safeInset * 2))
+        let availableHeight = max(0, height - topInset - bottomInset)
         let progress: CGFloat
         if count == 5 {
-            // A 4-2-3-1 has consecutive central players in its final two lines.
-            // Reserve more room between those lines without pushing either team
-            // across halfway or beyond its own goal line.
-            let homeProgress: [CGFloat] = [0, 0.21, 0.45, 0.68, 1]
-            let awayProgress: [CGFloat] = [0, 0.32, 0.55, 0.79, 1]
+            // Five-line formations need more space between rows that commonly
+            // share lanes, while staggered rows can sit closer together.
+            let homeProgress: [CGFloat] = [0, 0.18, 0.48, 0.72, 1]
+            let awayProgress: [CGFloat] = [0, 0.28, 0.52, 0.82, 1]
             progress = (side == .home ? homeProgress : awayProgress)[index]
         } else {
             progress = CGFloat(index) / CGFloat(count - 1)
         }
-        return safeInset + (availableHeight * progress)
+        return topInset + (availableHeight * progress)
     }
 }
 
@@ -2766,51 +2943,42 @@ private struct MatchLineupPlayerTacticalMarker: View {
     let player: MatchLineupPlayer
     let markers: [MatchLineupMarker]
     let accentColor: Color
+    let portraitDiameter: CGFloat
+    let nameMaxWidth: CGFloat
     let onSelectPlayer: (MatchLineupPlayer) -> Void
 
     var body: some View {
         Button {
             if player.idPlayer != nil { onSelectPlayer(player) }
         } label: {
-            VStack(spacing: 3) {
-                ZStack(alignment: .bottom) {
-                    ZStack(alignment: .topLeading) {
-                        MatchLineupPlayerPortraitView(
-                            player: player,
-                            diameter: 40,
-                            borderColor: accentColor,
-                            borderLineWidth: 2
-                        )
+            ZStack(alignment: .top) {
+                ZStack(alignment: .topLeading) {
+                    MatchLineupPlayerPortraitView(
+                        player: player,
+                        diameter: portraitDiameter,
+                        borderColor: accentColor,
+                        borderLineWidth: 2
+                    )
 
-                        if let number = player.number {
-                            Text("\(number)")
-                                .font(.system(size: 9.5, weight: .black, design: .rounded))
-                                .foregroundStyle(.black)
-                                .frame(width: 18, height: 18)
-                                .background(accentColor, in: Circle())
-                                .overlay(Circle().stroke(Color.black.opacity(0.30), lineWidth: 1))
-                                .offset(x: -4, y: -2)
-                        }
-                    }
-
-                    Text(condensedLineupPlayerName(player.name))
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                }
-
-                if !markers.isEmpty {
-                    HStack(spacing: 2) {
-                        ForEach(markers.prefix(3)) { marker in
-                            MatchLineupInlineMarker(kind: marker.kind, minute: marker.minute)
-                        }
+                    if let number = player.number {
+                        Text("\(number)")
+                            .font(.system(size: 9.5, weight: .black, design: .rounded))
+                            .foregroundStyle(.black)
+                            .frame(width: 20, height: 20)
+                            .background(accentColor, in: Circle())
+                            .overlay(Circle().stroke(Color.black.opacity(0.30), lineWidth: 1))
+                            .offset(x: -4, y: -2)
                     }
                 }
+
+                MatchLineupPlayerNameLabel(
+                    name: condensedLineupPlayerName(player.name),
+                    markers: markers,
+                    maxWidth: nameMaxWidth
+                )
+                .offset(y: portraitDiameter + 4)
             }
+            .frame(height: portraitDiameter, alignment: .top)
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
@@ -2820,49 +2988,177 @@ private struct MatchLineupPlayerTacticalMarker: View {
     }
 }
 
+private struct MatchLineupPlayerNameLabel: View {
+    let name: String
+    let markers: [MatchLineupMarker]
+    let maxWidth: CGFloat
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            label(fontSize: 10)
+                .fixedSize(horizontal: true, vertical: false)
+
+            label(fontSize: 9)
+                .fixedSize(horizontal: true, vertical: false)
+
+            label(fontSize: 9)
+                .minimumScaleFactor(0.78)
+        }
+        .frame(width: maxWidth)
+    }
+
+    private func label(fontSize: CGFloat) -> some View {
+        HStack(spacing: 3) {
+            Text(name)
+                .font(.system(size: fontSize, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .layoutPriority(1)
+
+            if !markers.isEmpty {
+                HStack(spacing: 2) {
+                    ForEach(markers) { marker in
+                        MatchLineupMarkerIcon(kind: marker.kind)
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: true)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(
+            Color.black.opacity(0.72),
+            in: RoundedRectangle(cornerRadius: 3, style: .continuous)
+        )
+    }
+}
+
+private struct MatchLineupBadgeFlowLayout: Layout {
+    let spacing: CGFloat
+
+    private struct Row {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let rows = makeRows(sizes: sizes, maxWidth: proposal.width ?? .infinity)
+        return CGSize(
+            width: rows.map(\.width).max() ?? 0,
+            height: rows.reduce(0) { $0 + $1.height }
+                + (CGFloat(max(rows.count - 1, 0)) * spacing)
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let rows = makeRows(sizes: sizes, maxWidth: bounds.width)
+        var y = bounds.minY
+
+        for row in rows {
+            var x = bounds.midX - (row.width / 2)
+            for index in row.indices {
+                subviews[index].place(
+                    at: CGPoint(x: x, y: y),
+                    anchor: .topLeading,
+                    proposal: .unspecified
+                )
+                x += sizes[index].width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private func makeRows(sizes: [CGSize], maxWidth: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var current = Row()
+
+        for (index, size) in sizes.enumerated() {
+            let candidateWidth = current.indices.isEmpty
+                ? size.width
+                : current.width + spacing + size.width
+
+            if !current.indices.isEmpty, candidateWidth > maxWidth {
+                rows.append(current)
+                current = Row()
+            }
+
+            if !current.indices.isEmpty {
+                current.width += spacing
+            }
+            current.indices.append(index)
+            current.width += size.width
+            current.height = max(current.height, size.height)
+        }
+
+        if !current.indices.isEmpty {
+            rows.append(current)
+        }
+        return rows
+    }
+}
+
 private struct MatchLineupInlineMarker: View {
     let kind: MatchLineupMarker.Kind
     let minute: String
 
     var body: some View {
-        HStack(spacing: 3) {
-            markerIcon
+        HStack(spacing: 2) {
+            MatchLineupMarkerIcon(kind: kind)
             if !minute.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(formattedMatchMinute(minute))
-                    .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                    .font(.system(size: 7.5, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: true)
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
-        .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .padding(.horizontal, 3)
+        .padding(.vertical, 1)
+        .background(Color.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .fixedSize(horizontal: true, vertical: true)
     }
+}
+
+private struct MatchLineupMarkerIcon: View {
+    let kind: MatchLineupMarker.Kind
 
     @ViewBuilder
-    private var markerIcon: some View {
+    var body: some View {
         switch kind {
         case .goal:
             Image(systemName: "soccerball")
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: 7, weight: .bold))
                 .foregroundStyle(.white)
         case .assist:
             Text("A")
-                .font(.system(size: 7, weight: .black, design: .rounded))
+                .font(.system(size: 6, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
-                .frame(width: 11, height: 11)
+                .frame(width: 9, height: 9)
                 .background(Color.blue, in: Circle())
         case .yellowCard:
-            RoundedRectangle(cornerRadius: 1).fill(Color.yellow).frame(width: 7, height: 10)
+            RoundedRectangle(cornerRadius: 1).fill(Color.yellow).frame(width: 6, height: 9)
         case .redCard:
-            RoundedRectangle(cornerRadius: 1).fill(Color.red).frame(width: 7, height: 10)
+            RoundedRectangle(cornerRadius: 1).fill(Color.red).frame(width: 6, height: 9)
         case .subIn:
             Image(systemName: "arrow.up")
-                .font(.system(size: 8, weight: .black))
+                .font(.system(size: 7, weight: .black))
                 .foregroundStyle(.green)
         case .subOut:
             Image(systemName: "arrow.down")
-                .font(.system(size: 8, weight: .black))
+                .font(.system(size: 7, weight: .black))
                 .foregroundStyle(.red)
         }
     }
@@ -2924,10 +3220,16 @@ private struct MatchLineupMarkerLookup {
         redCards: [MatchRedCardEvent],
         substitutions: [MatchLineupSubstitution]
     ) {
-        self.goals = goals.map { MatchNamedMinutes(name: $0.player, minutes: $0.goalTimes) }
+        self.goals = goals.map {
+            MatchNamedMinutes(idPlayer: $0.idPlayer, name: $0.player, minutes: $0.goalTimes)
+        }
         self.assists = assists.map { MatchNamedMinutes(name: $0.player, minutes: $0.assistTimes) }
-        self.yellowCards = yellowCards.map { MatchNamedMinutes(name: $0.player, minutes: $0.yellowCardTimes) }
-        self.redCards = redCards.map { MatchNamedMinutes(name: $0.player, minutes: $0.redCardTimes) }
+        self.yellowCards = yellowCards.map {
+            MatchNamedMinutes(idPlayer: $0.idPlayer, name: $0.player, minutes: $0.yellowCardTimes)
+        }
+        self.redCards = redCards.map {
+            MatchNamedMinutes(idPlayer: $0.idPlayer, name: $0.player, minutes: $0.redCardTimes)
+        }
         self.substitutions = substitutions
     }
 
@@ -2946,6 +3248,14 @@ private struct MatchLineupMarkerLookup {
     }
 
     private func minutes(for player: MatchLineupPlayer, in entries: [MatchNamedMinutes]) -> [String] {
+        if let playerID = player.idPlayer?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !playerID.isEmpty,
+           let idMatch = entries.first(where: {
+               $0.idPlayer?.trimmingCharacters(in: .whitespacesAndNewlines) == playerID
+           }) {
+            return idMatch.minutes
+        }
+
         let playerLookup = MatchPlayerNameLookup(name: player.name)
         let best = entries.max { left, right in
             playerLookup.matchScore(against: left.lookup) < playerLookup.matchScore(against: right.lookup)
@@ -2955,6 +3265,14 @@ private struct MatchLineupMarkerLookup {
     }
 
     private func substitution(for player: MatchLineupPlayer) -> MatchLineupSubstitution? {
+        if let playerID = player.idPlayer?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !playerID.isEmpty,
+           let idMatch = substitutions.first(where: {
+               $0.playerOff.idPlayer?.trimmingCharacters(in: .whitespacesAndNewlines) == playerID
+           }) {
+            return idMatch
+        }
+
         let lookup = MatchPlayerNameLookup(name: player.name)
         if let nameMatch = substitutions.first(where: {
             lookup.matchScore(against: MatchPlayerNameLookup(name: $0.playerOff.name)) > 1
@@ -2969,10 +3287,12 @@ private struct MatchLineupMarkerLookup {
 }
 
 private struct MatchNamedMinutes {
+    let idPlayer: String?
     let lookup: MatchPlayerNameLookup
     let minutes: [String]
 
-    init(name: String, minutes: [String]) {
+    init(idPlayer: String? = nil, name: String, minutes: [String]) {
+        self.idPlayer = idPlayer
         lookup = MatchPlayerNameLookup(name: name)
         self.minutes = minutes
     }
@@ -3116,8 +3436,7 @@ private struct MatchLineupRemotePortrait<Fallback: View>: View {
             image
                 .resizable()
                 .scaledToFill()
-                .scaleEffect(1.42)
-                .offset(y: 7)
+                .scaleEffect(1.08, anchor: .top)
         } placeholder: {
             fallback
         }
@@ -3125,26 +3444,8 @@ private struct MatchLineupRemotePortrait<Fallback: View>: View {
 }
 
 private func lineupPortraitURLCandidates(for value: String) -> [URL] {
-    var candidates: [String] = [value]
-
-    if let url = URL(string: value),
-       let host = url.host?.lowercased(),
-       host == "www.thesportsdb.com" || host == "r2.thesportsdb.com" {
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        components?.host = host == "www.thesportsdb.com" ? "r2.thesportsdb.com" : "www.thesportsdb.com"
-        if let fallback = components?.url?.absoluteString {
-            candidates.append(fallback)
-        }
-    }
-
-    var seen = Set<String>()
-    return candidates.compactMap { candidate in
-        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, seen.insert(trimmed).inserted else {
-            return nil
-        }
-        return URL(string: trimmed)
-    }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return URL(string: trimmed).map { [$0] } ?? []
 }
 
 private extension Array {
@@ -3393,12 +3694,11 @@ private struct PlayerDetailsSheet: View {
 
                 heroCopy
                     .frame(width: proxy.size.width * 0.44, alignment: .leading)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     .padding(.leading, 20)
-                    .padding(.bottom, 20)
 
                 heroPortrait
-                    .frame(width: proxy.size.width * 0.58, height: proxy.size.height, alignment: .bottomTrailing)
+                    .frame(width: proxy.size.width * 0.58, height: proxy.size.height, alignment: .trailing)
                     .padding(.trailing, 2)
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomTrailing)
@@ -3566,7 +3866,7 @@ private struct PlayerDetailsSheet: View {
         .frame(width: 218, height: 250, alignment: .bottom)
         .scaleEffect(heroIsPresented ? 1 : 0.96, anchor: .bottomTrailing)
         .opacity(heroIsPresented ? 1 : 0)
-        .offset(x: 10, y: 13)
+        .offset(x: 10, y: -4)
     }
 
     private var heroPortraitPlaceholder: some View {
@@ -3808,4 +4108,98 @@ private struct MatchPlayerNameLookup {
         if !last.isEmpty, last == other.last { return 1 }
         return 0
     }
+}
+
+private func preferredLineupPlayer(
+    matching player: MatchLineupPlayer,
+    in lineup: MatchTeamLineup
+) -> MatchLineupPlayer {
+    preferredLineupPlayer(
+        named: player.name,
+        idPlayer: player.idPlayer,
+        in: lineup
+    ) ?? player
+}
+
+func preferredMatchEventLineupPlayer(
+    named name: String,
+    idPlayer: String?,
+    primaryLineup: MatchTeamLineup?,
+    secondaryLineup: MatchTeamLineup?
+) -> MatchLineupPlayer? {
+    let normalizedID = idPlayer?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let normalizedID, !normalizedID.isEmpty {
+        for lineup in [primaryLineup, secondaryLineup].compactMap({ $0 }) {
+            let matches = lineupPlayerCandidates(from: lineup).filter { candidate in
+                candidate.idPlayer?.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedID
+            }
+            if let portraitMatch = matches.first(where: hasLineupPortrait) {
+                return portraitMatch
+            }
+            if let match = matches.first {
+                return match
+            }
+        }
+    }
+
+    return preferredLineupPlayer(named: name, in: primaryLineup)
+        ?? preferredLineupPlayer(named: name, in: secondaryLineup)
+}
+
+func preferredLineupPlayer(
+    named name: String,
+    idPlayer: String? = nil,
+    in lineup: MatchTeamLineup?
+) -> MatchLineupPlayer? {
+    guard let lineup else { return nil }
+    let candidates = lineupPlayerCandidates(from: lineup)
+    let normalizedID = idPlayer?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let idMatches = candidates.filter { candidate in
+        guard let normalizedID, !normalizedID.isEmpty else { return false }
+        return candidate.idPlayer?.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedID
+    }
+
+    if !idMatches.isEmpty {
+        if let portraitMatch = idMatches.first(where: hasLineupPortrait) {
+            return portraitMatch
+        }
+
+        let nameLookup = MatchPlayerNameLookup(name: name)
+        if let portraitMatch = candidates.first(where: { candidate in
+            hasLineupPortrait(candidate) &&
+                nameLookup.matchScore(against: MatchPlayerNameLookup(name: candidate.name)) == 3
+        }) {
+            return portraitMatch
+        }
+        return idMatches[0]
+    }
+
+    let nameLookup = MatchPlayerNameLookup(name: name)
+    let scored = candidates.map { candidate in
+        (
+            player: candidate,
+            score: nameLookup.matchScore(against: MatchPlayerNameLookup(name: candidate.name))
+        )
+    }
+    let matches = scored.filter { $0.score > 0 }
+    guard !matches.isEmpty else { return nil }
+    let portraitMatches = matches.filter { hasLineupPortrait($0.player) }
+    let preferredMatches = portraitMatches.isEmpty ? matches : portraitMatches
+    return preferredMatches.max { $0.score < $1.score }?.player
+}
+
+private func lineupPlayerCandidates(from lineup: MatchTeamLineup) -> [MatchLineupPlayer] {
+    var players = lineup.startingLineup + lineup.substitutes
+    lineup.substitutions.forEach { substitution in
+        players.append(substitution.playerOff)
+        players.append(substitution.playerOn)
+    }
+    return players
+}
+
+private func hasLineupPortrait(_ player: MatchLineupPlayer) -> Bool {
+    guard let value = player.cutoutURL?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+        return false
+    }
+    return !value.isEmpty
 }

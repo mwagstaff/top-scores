@@ -223,6 +223,14 @@ export interface LeagueTableGroup {
   rows: LeagueTableRow[];
 }
 
+export interface LeagueTableZone {
+  key: string;
+  label: string;
+  type: string;
+  from: number;
+  to: number;
+}
+
 export interface LeagueTable {
   id: string;
   leagueID: string;
@@ -232,6 +240,7 @@ export interface LeagueTable {
   updatedAt?: string | null;
   /** True when live/just-finished results have been overlaid (positions are provisional). */
   realtime?: boolean;
+  zones: LeagueTableZone[];
   groups: LeagueTableGroup[];
   rows: LeagueTableRow[];
 }

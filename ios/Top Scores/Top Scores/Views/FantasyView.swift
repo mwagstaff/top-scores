@@ -7,6 +7,7 @@ import ImageIO
 
 struct FantasyView: View {
     private static let currentInitialSetupVersion = 1
+    private static let teamManagementURL = URL(string: "https://fantasy.premierleague.com/my-team")
 
     private struct PendingFantasyRefreshRequest: Equatable {
         let force: Bool
@@ -113,7 +114,11 @@ struct FantasyView: View {
 
                     VStack(spacing: 0) {
                         if !usesInitialSetupNavigation {
-                            FootballHeroHeader(title: "FPL", subtitle: fplHeaderSubtitle)
+                            FootballHeroHeader(
+                                title: "FPL",
+                                subtitle: fplHeaderSubtitle,
+                                subtitleLink: currentManagerEntryID == nil ? nil : Self.teamManagementURL
+                            )
                         }
 
                         Group {

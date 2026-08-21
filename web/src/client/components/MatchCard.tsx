@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, memo, type CSSProperties } from "react";
-import { clearMatchDetailsCache, fetchMatchDetails, fetchMatchSocial, fetchPlayerDetails, shouldRetryMatchDetails, teamAccentColor, teamBadgeUrl } from "../api";
+import { clearMatchDetailsCache, fetchMatchDetails, fetchMatchSocial, fetchPlayerDetails, shouldRetryMatchDetails } from "../api";
 import { getPrediction, isPredictionPending } from "../predictions";
 import { MatchTeamLeaguePositionsLink } from "./MatchTeamLeaguePositionsLink";
 
-// Neutral accent for teams TSDB has no brand colour for (~80% of teams),
+// Neutral accent for teams without a configured brand colour,
 // so every card still shows a consistent home-left / away-right stripe.
 const NEUTRAL_EVENT_ACCENT = "#6b7280";
 import {
@@ -451,7 +451,7 @@ function normalizeTeamToken(value: string): string {
 
 // ── Debug panel ───────────────────────────────────────────────────
 
-const TSDB_BASE = "https://www.thesportsdb.com/api/v2/json";
+const BSD_BASE = "https://sports.bzzoiro.com/api/v2";
 
 function MatchDebugPanel({ match }: { match: Match }) {
   const eventId  = match.matchDetailsId ?? null;
@@ -460,12 +460,13 @@ function MatchDebugPanel({ match }: { match: Match }) {
   const links: Array<{ label: string; url: string }> = [];
 
   if (eventId) {
-    links.push({ label: `event_timeline/${eventId}`,  url: `${TSDB_BASE}/lookup/event_timeline/${eventId}` });
-    links.push({ label: `event_lineup/${eventId}`,    url: `${TSDB_BASE}/lookup/event_lineup/${eventId}` });
+    links.push({ label: `events/${eventId}`, url: `${BSD_BASE}/events/${eventId}` });
+    links.push({ label: `events/${eventId}/incidents`, url: `${BSD_BASE}/events/${eventId}/incidents` });
+    links.push({ label: `events/${eventId}/lineups`, url: `${BSD_BASE}/events/${eventId}/lineups` });
   }
   if (leagueId) {
-    links.push({ label: `livescore/${leagueId}`,      url: `${TSDB_BASE}/livescore/${leagueId}` });
-    links.push({ label: `list/teams/${leagueId}`,     url: `${TSDB_BASE}/list/teams/${leagueId}` });
+    links.push({ label: `leagues/${leagueId}`, url: `${BSD_BASE}/leagues/${leagueId}` });
+    links.push({ label: `leagues/${leagueId}/standings`, url: `${BSD_BASE}/leagues/${leagueId}/standings` });
   }
 
   return (
@@ -568,8 +569,7 @@ function TeamBadge({ teamName, teamId, missing, onMissing }: TeamBadgeProps) {
     return <div className="team-logo-fallback">{initials || "?"}</div>;
   }
 
-  const tsdbUrl = teamId ? teamBadgeUrl(teamId) : null;
-  const src = tsdbUrl ?? `/logos/team?name=${encodeURIComponent(teamName)}`;
+  const src = `/logos/team?name=${encodeURIComponent(teamName)}`;
 
   return (
     <img
@@ -695,10 +695,8 @@ function ExpandedMatchDetails({
   const hasTvData          = tvChannels.length > 0;
   const [selectedTimelinePlayer, setSelectedTimelinePlayer] = useState<MatchLineupPlayer | null>(null);
 
-  // The team's real TSDB brand colour (strColour1) keyed by team id, when TSDB
-  // has it; otherwise a neutral accent so the stripe is consistent across games.
-  const homeAccent    = teamAccentColor(homeTeamId) ?? NEUTRAL_EVENT_ACCENT;
-  const awayAccent    = teamAccentColor(awayTeamId) ?? NEUTRAL_EVENT_ACCENT;
+  const homeAccent = NEUTRAL_EVENT_ACCENT;
+  const awayAccent = NEUTRAL_EVENT_ACCENT;
 
   if (timelineEntries.length === 0 && !hasCompleteLineups && !hasTvData) {
     return <div className="match-details-message">No additional match details available.</div>;

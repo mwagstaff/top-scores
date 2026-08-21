@@ -37,7 +37,6 @@ const {
 } = require("./fetch_bsd_reference");
 const { refreshAllBroadcasts } = require("./fetch_bsd_broadcasts");
 const { refreshAllPredictions } = require("./fetch_bsd_predictions");
-const { buildBsdTsdbMaps } = require("./bsd_player_map");
 const { projectBsdMatches } = require("./bsd_adapter");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const {
@@ -61,8 +60,6 @@ const REFERENCE_REFRESH_MS = Number(process.env.BSD_REFERENCE_REFRESH_MS || 12 *
 const EVENTS_REFRESH_MS = Number(process.env.BSD_EVENTS_REFRESH_MS || 15 * 60 * 1000);
 const BROADCASTS_REFRESH_MS = Number(process.env.BSD_BROADCASTS_REFRESH_MS || 6 * 60 * 60 * 1000);
 const PREDICTIONS_REFRESH_MS = Number(process.env.BSD_PREDICTIONS_REFRESH_MS || 6 * 60 * 60 * 1000);
-// BSD<->TSDB player/team id map: rebuilt periodically as line-ups appear.
-const MAP_REFRESH_MS = Number(process.env.BSD_MAP_REFRESH_MS || 5 * 60 * 1000);
 // Standings (tables): poll cadence while an allowlisted league has a live match.
 const STANDINGS_LIVE_POLL_MS = Number(process.env.BSD_STANDINGS_LIVE_POLL_MS || 30_000);
 const DETAIL_FETCH_CONCURRENCY = Math.max(
@@ -102,7 +99,6 @@ let referenceRefreshInFlight = false;
 let eventsRefreshInFlight = false;
 let broadcastsRefreshInFlight = false;
 let predictionsRefreshInFlight = false;
-let mapRefreshInFlight = false;
 let standingsPollInFlight = false;
 let standingsDailyRefreshTimer = null;
 let metricsServer = null;
@@ -674,18 +670,6 @@ async function pollLineups() {
   }
 }
 
-async function refreshMaps() {
-  if (mapRefreshInFlight) return;
-  mapRefreshInFlight = true;
-  try {
-    await buildBsdTsdbMaps();
-  } catch (error) {
-    console.error(`[bsd-runtime] map refresh failed: ${error.message || error}`);
-  } finally {
-    mapRefreshInFlight = false;
-  }
-}
-
 // Initial on-start population: leagues + standings, so a freshly deployed
 // process is fully populated before the standings live/daily cadences below
 // have had a chance to run.
@@ -764,7 +748,7 @@ function start() {
   console.log(
     `[bsd-runtime] starting (live=${LIVE_POLL_MS}ms, live_idle=${LIVE_IDLE_POLL_MS}ms, incidents=${INCIDENTS_POLL_MS}ms, ` +
       `lineups=${LINEUPS_POLL_MS}ms, events=${EVENTS_REFRESH_MS}ms, reference=${REFERENCE_REFRESH_MS}ms, ` +
-      `broadcasts=${BROADCASTS_REFRESH_MS}ms, predictions=${PREDICTIONS_REFRESH_MS}ms, map=${MAP_REFRESH_MS}ms, ` +
+      `broadcasts=${BROADCASTS_REFRESH_MS}ms, predictions=${PREDICTIONS_REFRESH_MS}ms, ` +
       `standings_live=${STANDINGS_LIVE_POLL_MS}ms, standings_daily=${STANDINGS_DAILY_HOUR_UK}:${String(STANDINGS_DAILY_MINUTE_UK).padStart(2, "0")} Europe/London)`
   );
 
@@ -778,7 +762,6 @@ function start() {
   refreshPredictions();
   pollLiveEvents();
   pollLineups();
-  refreshMaps();
   scheduleStandingsDailyRefresh();
 
   timers.push(setInterval(pollLiveEvents, LIVE_POLL_MS));
@@ -789,7 +772,6 @@ function start() {
   timers.push(setInterval(refreshLeagues, REFERENCE_REFRESH_MS));
   timers.push(setInterval(refreshBroadcasts, BROADCASTS_REFRESH_MS));
   timers.push(setInterval(refreshPredictions, PREDICTIONS_REFRESH_MS));
-  timers.push(setInterval(refreshMaps, MAP_REFRESH_MS));
 }
 
 async function stop(signal) {
@@ -832,7 +814,6 @@ module.exports = {
   refreshEvents,
   refreshBroadcasts,
   refreshPredictions,
-  refreshMaps,
   startMetricsServer,
   closeMetricsServer,
   start,

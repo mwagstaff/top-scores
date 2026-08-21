@@ -2377,7 +2377,25 @@ button.match-row:hover {
   align-items: center;
   justify-content: flex-end;
   gap: 0.2rem;
+  position: relative;
+  padding-left: 0.45rem;
 }
+
+.table-zone-rail {
+  position: absolute;
+  left: -0.15rem;
+  width: 0.2rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.table-zone-rail.is-neutral { color: color-mix(in srgb, var(--text-muted) 58%, transparent); }
+.is-promotion { color: #30d158; }
+.is-playoff { color: #0a84ff; }
+.is-relegation-playoff { color: #ff9f0a; }
+.is-relegation { color: #ff453a; }
+.is-other { color: var(--accent); }
 
 .table-trend {
   font-size: 0.62rem;
@@ -2468,6 +2486,37 @@ button.match-row:hover {
 .table-divider.is-group-divider {
   height: 2.5px;
   background: color-mix(in srgb, var(--text-muted) 34%, transparent);
+}
+
+.table-zone-boundary {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 1.55rem;
+  padding-inline: 0.7rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.table-zone-boundary::before,
+.table-zone-boundary::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 0.75rem;
+  border-top: 1px dashed currentColor;
+}
+
+.table-zone-boundary-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 0.72rem;
+  line-height: 1;
 }
 
 .league-table-expanded {

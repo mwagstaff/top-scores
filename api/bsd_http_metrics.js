@@ -2,17 +2,15 @@
 
 const BSD_HTTP_REQUEST_DURATION_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30];
 const BSD_HTTP_SLOW_REQUEST_WINDOW_MS = Number(
-  process.env.BSD_HTTP_SLOW_REQUEST_WINDOW_MS ||
-    process.env.TSDB_HTTP_SLOW_REQUEST_WINDOW_MS ||
-    6 * 60 * 60 * 1000
+  process.env.BSD_HTTP_SLOW_REQUEST_WINDOW_MS || 6 * 60 * 60 * 1000
 );
 const BSD_HTTP_TOP_URL_COUNT_LIMIT = Number(process.env.BSD_HTTP_TOP_URL_COUNT_LIMIT || 100);
 const BSD_HTTP_TIMEOUT_URL_LIMIT = Number(process.env.BSD_HTTP_TIMEOUT_URL_LIMIT || 100);
 const BSD_HTTP_SLOW_URL_P95_LIMIT = Number(
-  process.env.BSD_HTTP_SLOW_URL_P95_LIMIT || process.env.TSDB_HTTP_SLOW_URL_P95_LIMIT || 100
+  process.env.BSD_HTTP_SLOW_URL_P95_LIMIT || 100
 );
 const BSD_HTTP_SLOW_URL_MAX_LIMIT = Number(
-  process.env.BSD_HTTP_SLOW_URL_MAX_LIMIT || process.env.TSDB_HTTP_SLOW_URL_MAX_LIMIT || 20
+  process.env.BSD_HTTP_SLOW_URL_MAX_LIMIT || 20
 );
 
 const bsdHttpRequestMetrics = new Map();

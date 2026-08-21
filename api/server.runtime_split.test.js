@@ -6,10 +6,11 @@ const {
     buildDefaultOperationalCacheState,
     filterCacheStateDomainsForRuntimeRefresh,
     normalizeCacheStateDomains,
-    resolveTsdbLivescorePollIntervalMs,
-    TSDB_LIVESCORE_ACTIVE_INTERVAL_MS,
-    TSDB_LIVESCORE_INTERVAL_MS,
-    TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE,
+    scheduleEplSeasonStatusDailyRefresh,
+    scheduleLeagueTablesDailyRefresh,
+    updateFantasyBootstrapStatic,
+    updateFantasyEventLive,
+    updateFantasyFixtures,
   },
   startApiRuntime,
   startMonitorRuntime,
@@ -26,8 +27,6 @@ test("buildDefaultOperationalCacheState initializes all split-runtime cache doma
     "teams",
     "tables",
     "team_short_names",
-    "team_badges",
-    "tsdb_live",
   ]);
 });
 
@@ -40,10 +39,10 @@ test("normalizeCacheStateDomains accepts teams tables and team short name aliase
 
 test("filterCacheStateDomainsForRuntimeRefresh keeps the monitor's team dataset current without match-details churn", () => {
   assert.deepEqual(
-    filterCacheStateDomainsForRuntimeRefresh(["matches", "match_details", "teams", "tsdb_live"], {
+    filterCacheStateDomainsForRuntimeRefresh(["matches", "match_details", "teams"], {
       runtimeRole: "monitor",
     }),
-    ["matches", "teams", "tsdb_live"]
+    ["matches", "teams"]
   );
   assert.deepEqual(
     filterCacheStateDomainsForRuntimeRefresh(["match_details"], {
@@ -66,12 +65,18 @@ test("server exports explicit api monitor and scraper runtime starters", () => {
   assert.equal(typeof shutdownRuntime, "function");
 });
 
-test("TSDB livescore polling uses faster bounded cadence while matches are live", () => {
-  assert.equal(resolveTsdbLivescorePollIntervalMs({ hasLiveMatches: false }), TSDB_LIVESCORE_INTERVAL_MS);
-  assert.equal(resolveTsdbLivescorePollIntervalMs({ hasLiveMatches: true }), TSDB_LIVESCORE_ACTIVE_INTERVAL_MS);
-  assert.ok(TSDB_LIVESCORE_ACTIVE_INTERVAL_MS <= TSDB_LIVESCORE_INTERVAL_MS);
-  assert.ok(
-    Math.ceil(60_000 / TSDB_LIVESCORE_ACTIVE_INTERVAL_MS) <= TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE
-  );
-  assert.ok(TSDB_LIVESCORE_MAX_CALLS_PER_MINUTE <= 90);
+test("split runtimes retain working daily schedulers", async () => {
+  assert.equal(typeof scheduleLeagueTablesDailyRefresh, "function");
+  assert.equal(typeof scheduleEplSeasonStatusDailyRefresh, "function");
+  assert.doesNotThrow(() => {
+    scheduleLeagueTablesDailyRefresh();
+    scheduleEplSeasonStatusDailyRefresh();
+  });
+  await shutdownRuntime();
+});
+
+test("API intervals retain their fantasy updaters", () => {
+  assert.equal(typeof updateFantasyBootstrapStatic, "function");
+  assert.equal(typeof updateFantasyFixtures, "function");
+  assert.equal(typeof updateFantasyEventLive, "function");
 });

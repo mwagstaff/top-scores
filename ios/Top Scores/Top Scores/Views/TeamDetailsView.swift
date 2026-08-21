@@ -622,7 +622,6 @@ struct TeamDetailsView: View {
     @State private var showsAllUpcomingFixtures = false
     @State private var showsAllPreviousMatches = false
     @State private var hasAppeared = false
-    @State private var badgeCacheVersion = 0
 
     private var taskKey: String {
         "\(context.id)|\(preferences.apiBaseURL)"
@@ -731,9 +730,6 @@ struct TeamDetailsView: View {
                 apiBaseURL: preferences.apiBaseURL
             )
         }
-        .onReceive(NotificationCenter.default.publisher(for: TeamBadgeCache.badgesUpdatedNotification)) { _ in
-            badgeCacheVersion += 1
-        }
         .refreshable {
             await viewModel.load(
                 context: context,
@@ -746,8 +742,6 @@ struct TeamDetailsView: View {
     private var teamHero: some View {
         GeometryReader { proxy in
             let scrollOffset = proxy.frame(in: .named("TeamDetailsScroll")).minY
-            let _ = badgeCacheVersion
-
             ZStack {
                 Image(
                     MatchStadiumArtworkResolver.shared.teamHeroAssetName(

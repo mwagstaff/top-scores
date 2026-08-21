@@ -9,7 +9,6 @@ const {
     buildCompetitionWeightsPayload,
     buildFixtureCalendar,
     clubEloRowIsTopTeam,
-    filterBsdTsdbScheduleSupplements,
     matchPassesFixtureViewOptions,
     normalizeCompetitionFilterName,
   },
@@ -22,7 +21,7 @@ test("competition weights payload mirrors the competition catalog name and weigh
   );
 });
 
-test("competition catalog exposes canonical ids, aliases and logo metadata", () => {
+test("competition catalog exposes canonical ids and aliases", () => {
   const catalog = buildCompetitionCatalog();
   const laLiga = catalog.find((entry) => entry.name === "La Liga");
 
@@ -30,13 +29,13 @@ test("competition catalog exposes canonical ids, aliases and logo metadata", () 
   assert.equal(laLiga.id, "la-liga");
   assert.equal(laLiga.region, "spain");
   assert.ok(laLiga.aliases.includes("Spanish La Liga"));
-  assert.match(laLiga.logo_url, /^https:\/\//);
+  assert.equal(laLiga.logo_url, null);
   assert.equal(catalog.filter((entry) => entry.name === "La Liga").length, 1);
   assert.ok(catalog.some((entry) => entry.name === "Ligue 1"));
   assert.ok(catalog.some((entry) => entry.name === "EFL League One" && entry.region === "england"));
   assert.ok(catalog.some((entry) => entry.name === "EFL League Two" && entry.region === "england"));
   assert.ok(catalog.some((entry) => entry.id === "german-super-cup" && entry.region === "germany"));
-  assert.ok(catalog.every((entry) => /^https:\/\//.test(entry.logo_url)));
+  assert.ok(catalog.every((entry) => entry.logo_url === null));
   assert.equal(normalizeCompetitionFilterName("DFL-Supercup"), "german super cup");
 });
 
@@ -168,23 +167,6 @@ test("fixture-view filters support arbitrary catalogue teams outside their compe
     matchPassesFixtureViewOptions(unrelatedChampionshipMatch, ["team:watford"]),
     false
   );
-});
-
-test("BSD schedules are supplemented only with explicitly unsupported TSDB competitions", () => {
-  const matches = [
-    {
-      league: "German Super Cup",
-      home_team: "Borussia Dortmund",
-      away_team: "Bayern Munich",
-    },
-    {
-      league: "Bundesliga",
-      home_team: "Bayern Munich",
-      away_team: "RB Leipzig",
-    },
-  ];
-
-  assert.deepEqual(filterBsdTsdbScheduleSupplements(matches), [matches[0]]);
 });
 
 test("top UEFA teams uses club ranking and excludes international UEFA matches", () => {
