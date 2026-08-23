@@ -393,6 +393,16 @@ enum FantasyTeamGameweekResolver {
             .filter({ $0.dataChecked == true })
             .max(by: { $0.id < $1.id })
     }
+
+    static func latestPublicTeamGameweek(from events: [FantasyGameweek]) -> FantasyGameweek? {
+        if let current = events.first(where: {
+            $0.isCurrent == true && $0.dataChecked != true
+        }) {
+            return current
+        }
+
+        return previousTeamGameweek(from: events)
+    }
 }
 
 struct FantasyEventLiveResponse: Codable, Hashable {
@@ -830,7 +840,6 @@ struct FantasyClassicLeagueStandings: Codable, Hashable {
 }
 
 struct FantasyClassicLeagueStandingEntry: Codable, Hashable, Identifiable {
-    let id: Int
     let eventTotal: Int
     let playerName: String
     let rank: Int
@@ -840,8 +849,11 @@ struct FantasyClassicLeagueStandingEntry: Codable, Hashable, Identifiable {
     let entryName: String
     let clubBadgeSrc: String?
 
+    var id: Int {
+        entry
+    }
+
     enum CodingKeys: String, CodingKey {
-        case id
         case eventTotal = "event_total"
         case playerName = "player_name"
         case rank
@@ -1664,6 +1676,18 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
 
     nonisolated var didNotPlay: Bool {
         minutesPlayed == 0
+    }
+
+    nonisolated func provisionalPoints(
+        during scorePhase: FantasySquadDisplayData.ScorePhase
+    ) -> Int? {
+        guard scorePhase == .provisional,
+              hasAnyFixtureThisGameweek,
+              hasStartedFixtureThisGameweek,
+              !hasActiveFixtureThisGameweek else {
+            return nil
+        }
+        return displayPoints
     }
 
     nonisolated var shouldAutoSubAsNonParticipant: Bool {

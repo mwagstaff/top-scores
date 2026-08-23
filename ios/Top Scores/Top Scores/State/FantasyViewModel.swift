@@ -656,6 +656,79 @@ final class FantasyViewModel: ObservableObject {
         return try await fetchLeagueStandingSnapshot(leagueID: leagueID, managerEntryID: entryID)
     }
 
+    func loadLeagueMemberSquad(
+        _ member: FantasyClassicLeagueStandingEntry
+    ) async throws -> FantasyRivalSquad {
+        if member.entry == authenticatedEntryID, let data {
+            return FantasyRivalSquad(
+                entryID: member.entry,
+                teamName: member.entryName,
+                managerName: member.playerName,
+                clubBadgeSrc: myProfile?.clubBadgeSrc ?? member.clubBadgeSrc,
+                squad: data,
+                allGameweeksPoints: myProfile?.summaryOverallPoints ?? member.total,
+                projectedGameweekPoints: currentSquadProjectedGameweekPoints,
+                expectedPointsSection: nil,
+                isExpectedPointsLoading: false
+            )
+        }
+
+        guard let bootstrap = currentSquadBootstrap,
+              let gameweek = FantasyTeamGameweekResolver.latestPublicTeamGameweek(
+                from: bootstrap.events
+              ) else {
+            throw FantasyLeagueMemberSquadError.noPublicGameweek
+        }
+
+        async let profileTask = fetchMyProfile(entryID: member.entry)
+        let snapshot: FantasySquadSnapshot
+        if let currentSnapshot = currentSquadSnapshot,
+           currentSnapshot.gameweek.id == gameweek.id {
+            let picks = try await timed(
+                "league_member_picks entry_id=\(member.entry) event_id=\(gameweek.id)"
+            ) {
+                try await fantasyPublicClient.fetchPicks(
+                    entryID: member.entry,
+                    eventID: gameweek.id
+                )
+            }
+            snapshot = FantasySquadSnapshot(
+                gameweek: gameweek,
+                picksResponse: picks,
+                liveResponse: currentSnapshot.liveResponse,
+                fixtures: currentSnapshot.fixtures
+            )
+        } else {
+            snapshot = try await fetchSquadSnapshot(
+                entryID: member.entry,
+                gameweek: gameweek,
+                labelPrefix: "league_member"
+            )
+        }
+
+        let squad = await buildSquadDisplayData(
+            gameweek: snapshot.gameweek,
+            picksResponse: snapshot.picksResponse,
+            liveResponse: snapshot.liveResponse,
+            fixtures: snapshot.fixtures,
+            seasonFixtures: currentSquadSeasonFixtures,
+            bootstrap: bootstrap
+        )
+        let profile = await profileTask
+
+        return FantasyRivalSquad(
+            entryID: member.entry,
+            teamName: member.entryName,
+            managerName: member.playerName,
+            clubBadgeSrc: profile?.clubBadgeSrc ?? member.clubBadgeSrc,
+            squad: squad,
+            allGameweeksPoints: profile?.summaryOverallPoints ?? member.total,
+            projectedGameweekPoints: nil,
+            expectedPointsSection: nil,
+            isExpectedPointsLoading: false
+        )
+    }
+
     func loadPlayerDetails(
         elementID: Int,
         gameweekID: Int,
@@ -1550,6 +1623,14 @@ final class FantasyViewModel: ObservableObject {
             return true
         }
         return false
+    }
+}
+
+private enum FantasyLeagueMemberSquadError: LocalizedError {
+    case noPublicGameweek
+
+    var errorDescription: String? {
+        "This manager's latest team is not public yet. Please try again after the next FPL deadline."
     }
 }
 

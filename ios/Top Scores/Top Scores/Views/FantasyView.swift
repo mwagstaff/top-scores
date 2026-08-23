@@ -66,6 +66,13 @@ struct FantasyView: View {
     @State private var isValidatingLeague = false
     @State private var selectedRivalSquad: FantasyRivalSquad?
     @State private var selectedLeagueStanding: FantasyTrackedLeagueStanding?
+    @State private var selectedLeagueMemberSquad: FantasyRivalSquad?
+    @State private var selectedLeagueMemberPlayerSelection: FantasySelectedPlayerSelection?
+    @State private var selectedLeagueMemberScoreBreakdown: FantasyScoreBreakdownSelection?
+    @State private var leagueMemberEntryIDLoading: Int?
+    @State private var leagueMemberLoadErrorMessage = ""
+    @State private var showLeagueMemberLoadError = false
+    @State private var leagueMemberLoadTask: Task<Void, Never>?
     @State private var selectedPlayerSelection: FantasySelectedPlayerSelection?
     @State private var pendingPlayerSelectionAfterRivalDismiss: FantasySelectedPlayerSelection?
     @State private var pendingScoreBreakdownAfterRivalDismiss: FantasyScoreBreakdownSelection?
@@ -179,7 +186,10 @@ struct FantasyView: View {
                 rivalDetailSheet(rival)
                     .presentationDragIndicator(.visible)
             }
-            .sheet(item: $selectedLeagueStanding) { league in
+            .sheet(
+                item: $selectedLeagueStanding,
+                onDismiss: resetLeagueDetailPresentation
+            ) { league in
                 leagueDetailSheet(league)
                     .presentationDragIndicator(.visible)
             }
@@ -1349,6 +1359,11 @@ struct FantasyView: View {
         }()
         let selection = FantasyScoreBreakdownSelection(teamName: teamName, squad: data)
 
+        if selectedLeagueMemberSquad != nil {
+            selectedLeagueMemberScoreBreakdown = selection
+            return
+        }
+
         if selectedRivalSquad != nil {
             pendingScoreBreakdownAfterRivalDismiss = selection
             selectedRivalSquad = nil
@@ -1358,7 +1373,10 @@ struct FantasyView: View {
         selectedScoreBreakdown = selection
     }
 
-    private func scoreBreakdownSheet(_ breakdown: FantasyScoreBreakdownSelection) -> some View {
+    private func scoreBreakdownSheet(
+        _ breakdown: FantasyScoreBreakdownSelection,
+        closeAction: (() -> Void)? = nil
+    ) -> some View {
         let rows = scoreBreakdownRows(for: breakdown.squad)
         let maxAbsTotal = max(rows.map { abs($0.totalPoints) }.max() ?? 1, 1)
 
@@ -1435,7 +1453,11 @@ struct FantasyView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        selectedScoreBreakdown = nil
+                        if let closeAction {
+                            closeAction()
+                        } else {
+                            selectedScoreBreakdown = nil
+                        }
                     } label: {
                         Image(systemName: "xmark")
                             .font(.body.weight(.semibold))
@@ -2050,7 +2072,7 @@ struct FantasyView: View {
                                         .frame(width: 56, alignment: .trailing)
                                     Text("")
                                         .font(.subheadline.weight(.semibold))
-                                        .frame(width: 20, alignment: .trailing)
+                                        .frame(width: 36, alignment: .trailing)
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 8)
@@ -2061,8 +2083,19 @@ struct FantasyView: View {
                                     .frame(height: 1)
 
                                 ForEach(Array(league.standings.enumerated()), id: \.element.id) { index, row in
-                                    leagueStandingRow(row, isCurrentUser: row.entry == league.myEntryID)
-                                        .id(row.entry)
+                                    Button {
+                                        openLeagueMemberSquad(row)
+                                    } label: {
+                                        leagueStandingRow(
+                                            row,
+                                            isCurrentUser: row.entry == league.myEntryID,
+                                            isLoading: leagueMemberEntryIDLoading == row.entry
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(leagueMemberEntryIDLoading != nil)
+                                    .accessibilityHint("Opens this manager's latest team and score")
+                                    .id(row.entry)
                                     if index < league.standings.count - 1 {
                                         Rectangle()
                                             .fill(Color.secondary.opacity(0.22))
@@ -2105,7 +2138,43 @@ struct FantasyView: View {
                     .accessibilityLabel("Close")
                 }
             }
+            .navigationDestination(item: $selectedLeagueMemberSquad) { rival in
+                rivalSquadDetailView(
+                    rival,
+                    showsDeleteButton: false,
+                    closeAction: nil
+                )
+            }
         }
+        .alert("Team unavailable", isPresented: $showLeagueMemberLoadError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(leagueMemberLoadErrorMessage)
+        }
+        .sheet(item: $selectedLeagueMemberPlayerSelection) { selection in
+            FantasyPlayerDetailsSheet(
+                selection: selection,
+                apiBaseURL: preferences.apiBaseURL,
+                fantasyViewModel: fantasyViewModel
+            )
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $selectedLeagueMemberScoreBreakdown) { breakdown in
+            scoreBreakdownSheet(
+                breakdown,
+                closeAction: { selectedLeagueMemberScoreBreakdown = nil }
+            )
+            .presentationDragIndicator(.visible)
+        }
+    }
+
+    private func resetLeagueDetailPresentation() {
+        leagueMemberLoadTask?.cancel()
+        leagueMemberLoadTask = nil
+        leagueMemberEntryIDLoading = nil
+        selectedLeagueMemberSquad = nil
+        selectedLeagueMemberPlayerSelection = nil
+        selectedLeagueMemberScoreBreakdown = nil
     }
 
     private func scrollToCurrentLeagueEntry(
@@ -2118,7 +2187,11 @@ struct FantasyView: View {
         }
     }
 
-    private func leagueStandingRow(_ row: FantasyClassicLeagueStandingEntry, isCurrentUser: Bool) -> some View {
+    private func leagueStandingRow(
+        _ row: FantasyClassicLeagueStandingEntry,
+        isCurrentUser: Bool,
+        isLoading: Bool
+    ) -> some View {
         HStack(spacing: 8) {
             Text("\(row.rank)")
                 .font(.body.monospacedDigit())
@@ -2160,8 +2233,20 @@ struct FantasyView: View {
                 .frame(width: 56, alignment: .trailing)
                 .foregroundStyle(.primary)
 
-            leagueTrendIcon(currentRank: row.rank, lastRank: row.lastRank)
-                .frame(width: 20, alignment: .trailing)
+            HStack(spacing: 4) {
+                leagueTrendIcon(currentRank: row.rank, lastRank: row.lastRank)
+                    .frame(width: 20, alignment: .trailing)
+
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 36, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
@@ -2535,52 +2620,66 @@ struct FantasyView: View {
     }
 
     private func rivalDetailSheet(_ rival: FantasyRivalSquad) -> some View {
+        NavigationStack {
+            rivalSquadDetailView(
+                rival,
+                showsDeleteButton: true,
+                closeAction: { selectedRivalSquad = nil }
+            )
+        }
+    }
+
+    private func rivalSquadDetailView(
+        _ rival: FantasyRivalSquad,
+        showsDeleteButton: Bool,
+        closeAction: (() -> Void)?
+    ) -> some View {
         let displayData = rival.squad.applyingExpectedPoints(rival.expectedPointsSection)
 
-        return NavigationStack {
-            ScrollView {
-                VStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(rival.managerName)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    scoreSummaryCard(
-                        rival.squad,
-                        showRivalPills: false,
-                        showsActiveChipMessage: rival.squad.hasActiveChip,
-                        projectedGameweekPoints: rival.projectedGameweekPoints,
-                        isExpectedPointsLoading: rival.isExpectedPointsLoading,
-                        scoreTapEnabled: true,
-                        scoreTapAction: {
-                            openScoreBreakdown(for: rival.squad, teamNameOverride: rival.teamName)
-                        }
-                    )
-                    pitchSection(
-                        displayData,
-                        playerSelectionEnabled: true,
-                        detailMode: $fantasyPitchDetailMode
-                    )
-                    benchSection(
-                        displayData,
-                        playerSelectionEnabled: true,
-                        detailMode: fantasyPitchDetailMode
-                    )
-                    eventLegendSection(rival.squad)
-                    if rival.squad.isEstimatedScore {
-                        scoreCalculationSection(rival.squad)
-                    }
-                    summaryStatsSection(rival.squad)
+        return ScrollView {
+            VStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(rival.managerName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                scoreSummaryCard(
+                    rival.squad,
+                    showRivalPills: false,
+                    showsActiveChipMessage: rival.squad.hasActiveChip,
+                    projectedGameweekPoints: rival.projectedGameweekPoints,
+                    isExpectedPointsLoading: rival.isExpectedPointsLoading,
+                    scoreTapEnabled: true,
+                    scoreTapAction: {
+                        openScoreBreakdown(for: rival.squad, teamNameOverride: rival.teamName)
+                    }
+                )
+                pitchSection(
+                    displayData,
+                    playerSelectionEnabled: true,
+                    detailMode: $fantasyPitchDetailMode
+                )
+                benchSection(
+                    displayData,
+                    playerSelectionEnabled: true,
+                    detailMode: fantasyPitchDetailMode
+                )
+                eventLegendSection(rival.squad)
+                if rival.squad.isEstimatedScore {
+                    scoreCalculationSection(rival.squad)
+                }
+                summaryStatsSection(rival.squad)
             }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle(rival.teamName)
-            .toolbarTitleDisplayMode(.inline)
-            .toolbar {
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle(rival.teamName)
+        .toolbarTitleDisplayMode(.inline)
+        .toolbar {
+            if showsDeleteButton {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(role: .destructive) {
                         rivalEntryIDPendingDeletion = rival.entryID
@@ -2592,9 +2691,11 @@ struct FantasyView: View {
                     }
                     .accessibilityLabel("Delete rival")
                 }
+            }
+            if let closeAction {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        selectedRivalSquad = nil
+                        closeAction()
                     } label: {
                         Image(systemName: "xmark")
                             .font(.body.weight(.semibold))
@@ -3767,6 +3868,38 @@ struct FantasyView: View {
         )
     }
 
+    private func openLeagueMemberSquad(_ member: FantasyClassicLeagueStandingEntry) {
+        guard leagueMemberEntryIDLoading == nil else { return }
+
+        leagueMemberLoadTask?.cancel()
+        leagueMemberEntryIDLoading = member.entry
+        leagueMemberLoadErrorMessage = ""
+        leagueMemberLoadTask = Task {
+            defer {
+                if leagueMemberEntryIDLoading == member.entry {
+                    leagueMemberEntryIDLoading = nil
+                }
+            }
+
+            do {
+                let squad = try await fantasyViewModel.loadLeagueMemberSquad(member)
+                try Task.checkCancellation()
+                selectedLeagueMemberSquad = squad
+            } catch is CancellationError {
+                return
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                return
+            } catch {
+                let message = error.localizedDescription
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                leagueMemberLoadErrorMessage = message.contains("not public yet")
+                    ? message
+                    : "\(member.entryName)'s latest team is unavailable right now. Please try again shortly."
+                showLeagueMemberLoadError = true
+            }
+        }
+    }
+
     private func openLeagueTableEntry(_ entry: FantasyLeagueTableEntry) {
         guard let squad = entry.squad else { return }
         let rivalExpectedPointsSection = fantasyViewModel.rivalSquads
@@ -3790,6 +3923,11 @@ struct FantasyView: View {
             player: player,
             gameweekID: gameweekID
         )
+
+        if selectedLeagueMemberSquad != nil {
+            selectedLeagueMemberPlayerSelection = selection
+            return
+        }
 
         if selectedRivalSquad != nil {
             pendingPlayerSelectionAfterRivalDismiss = selection
@@ -5300,7 +5438,7 @@ private func fantasyExpectedPointsText(_ value: Double) -> String {
     String(format: "%.1f", value)
 }
 
-private func fantasyProvisionalPointsTint(_ points: Int) -> Color {
+func fantasyProvisionalPointsTint(_ points: Int) -> Color {
     switch points {
     case ...2:
         return Color(red: 0.92, green: 0.23, blue: 0.20)

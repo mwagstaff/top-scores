@@ -205,27 +205,35 @@ struct FantasyPlayerDetailsSheet: View {
         let expectedPoints = firstFixture.map {
             FantasyExpectedPointsEstimator.estimate(details: details, fixture: $0, fixtureIndex: fixtureIndex)
         }
+        let provisionalPoints = selectedPlayerProvisionalPoints
+        let title = provisionalPoints == nil ? "Expected points" : "Provisional points"
+        let gameweek = provisionalPoints == nil ? firstFixture?.gameweek : selection.gameweekID
+        let value = provisionalPoints.map { "\($0) pt\($0 == 1 ? "" : "s")" }
+            ?? expectedPoints.map { fantasyExpectedPointsText($0) + " xP" }
+            ?? "—"
+        let accent = provisionalPoints.map(fantasyProvisionalPointsTint)
+            ?? Color(red: 0.78, green: 0.38, blue: 1.0)
 
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
-                    Text("Expected points")
+                    Text(title)
                         .font(.subheadline.weight(.semibold))
-                    if let gameweek = firstFixture?.gameweek {
+                    if let gameweek {
                         Text("GW \(gameweek)")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                     }
                 }
-                Text(expectedPoints.map { fantasyExpectedPointsText($0) + " xP" } ?? "—")
+                Text(value)
                     .font(.system(size: 31, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color(red: 0.78, green: 0.38, blue: 1.0))
+                    .foregroundStyle(accent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
             .background(
                 LinearGradient(
-                    colors: [Color.purple.opacity(0.16), Color(.secondarySystemGroupedBackground)],
+                    colors: [accent.opacity(0.16), Color(.secondarySystemGroupedBackground)],
                     startPoint: .leading,
                     endPoint: .trailing
                 ),
@@ -233,12 +241,20 @@ struct FantasyPlayerDetailsSheet: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.purple.opacity(0.62), lineWidth: 1)
+                    .stroke(accent.opacity(0.62), lineWidth: 1)
             )
 
             compactMetric(title: "Form", value: metricValue(details, title: "Form"), accent: .green)
             compactMetric(title: "Pts / match", value: metricValue(details, title: "Pts / Match"), accent: .white)
         }
+    }
+
+    private var selectedPlayerProvisionalPoints: Int? {
+        guard let squad = fantasyViewModel.data,
+              squad.gameweekID == selection.gameweekID else {
+            return nil
+        }
+        return selection.player.provisionalPoints(during: squad.scorePhase)
     }
 
     private func compactMetric(title: String, value: String, accent: Color) -> some View {

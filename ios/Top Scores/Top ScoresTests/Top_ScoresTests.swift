@@ -250,10 +250,11 @@ struct Top_ScoresTests {
         let standing = try JSONDecoder().decode(
             FantasyClassicLeagueStandingEntry.self,
             from: Data(
-                #"{"id":10,"event_total":12,"player_name":"Mike Wagstaff","rank":3,"last_rank":5,"total":78,"entry":42,"entry_name":"Wagstaff's Team","club_badge_src":"https://example.com/badge.png"}"#.utf8
+                #"{"event_total":12,"player_name":"Mike Wagstaff","rank":3,"last_rank":5,"total":78,"entry":42,"entry_name":"Wagstaff's Team","club_badge_src":"https://example.com/badge.png"}"#.utf8
             )
         )
 
+        #expect(standing.id == 42)
         #expect(standing.entryName == "Wagstaff's Team")
         #expect(standing.playerName == "Mike Wagstaff")
         #expect(standing.eventTotal == 12)
@@ -3272,6 +3273,52 @@ struct Top_ScoresTests {
         #expect(FantasyTeamGameweekResolver.previousTeamGameweek(from: events)?.id == 2)
     }
 
+    @Test func fantasyTeamGameweekResolver_usesLatestPublicTeamForLeagueMembers() {
+        let activeEvents = [
+            FantasyGameweek(
+                id: 1,
+                name: "Gameweek 1",
+                isCurrent: false,
+                isNext: false,
+                finished: true,
+                dataChecked: true,
+                deadlineTime: nil
+            ),
+            FantasyGameweek(
+                id: 2,
+                name: "Gameweek 2",
+                isCurrent: true,
+                isNext: false,
+                finished: false,
+                dataChecked: false,
+                deadlineTime: nil
+            )
+        ]
+        let betweenGameweeks = [
+            FantasyGameweek(
+                id: 2,
+                name: "Gameweek 2",
+                isCurrent: false,
+                isNext: false,
+                finished: true,
+                dataChecked: true,
+                deadlineTime: nil
+            ),
+            FantasyGameweek(
+                id: 3,
+                name: "Gameweek 3",
+                isCurrent: false,
+                isNext: true,
+                finished: false,
+                dataChecked: false,
+                deadlineTime: nil
+            )
+        ]
+
+        #expect(FantasyTeamGameweekResolver.latestPublicTeamGameweek(from: activeEvents)?.id == 2)
+        #expect(FantasyTeamGameweekResolver.latestPublicTeamGameweek(from: betweenGameweeks)?.id == 2)
+    }
+
     @Test func fantasyGameweek_decodesDataCheckedFinalitySignal() throws {
         let gameweek = try JSONDecoder().decode(
             FantasyGameweek.self,
@@ -3588,6 +3635,46 @@ struct Top_ScoresTests {
         #expect(squad.scorePhase == .provisional)
         #expect(squad.hasActiveFixtures)
         #expect(squad.goalkeepers.first?.isPlayingNow == true)
+    }
+
+    @Test func fantasyDisplayPlayer_exposesOnlyCompletedProvisionalPoints() {
+        let completedPlayer = makeFantasyPlayer(
+            elementID: 1,
+            pickPosition: 1,
+            positionType: .defender,
+            displayName: "Truffert",
+            fullName: "Adrien Truffert",
+            teamName: "Bournemouth",
+            hasStartedFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: false,
+            displayPoints: 1
+        )
+        let livePlayer = makeFantasyPlayer(
+            elementID: 2,
+            pickPosition: 2,
+            positionType: .defender,
+            displayName: "Live Player",
+            fullName: "Live Player",
+            teamName: "Bournemouth",
+            hasStartedFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: false,
+            hasActiveFixtureThisGameweek: true,
+            displayPoints: 1
+        )
+        let unplayedPlayer = makeFantasyPlayer(
+            elementID: 3,
+            pickPosition: 3,
+            positionType: .defender,
+            displayName: "Unplayed Player",
+            fullName: "Unplayed Player",
+            teamName: "Bournemouth",
+            displayPoints: 1
+        )
+
+        #expect(completedPlayer.provisionalPoints(during: .provisional) == 1)
+        #expect(completedPlayer.provisionalPoints(during: .final) == nil)
+        #expect(livePlayer.provisionalPoints(during: .provisional) == nil)
+        #expect(unplayedPlayer.provisionalPoints(during: .provisional) == nil)
     }
 
     @Test func fantasyExpectedPointsSection_sumsFullSquadForSelectedTeamXP() async throws {
