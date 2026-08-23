@@ -264,6 +264,14 @@ struct Top_ScoresTests {
         #expect(standing.clubBadgeSrc == "https://example.com/badge.png")
     }
 
+    @Test func fantasyLeagueRankTrend_treatsFirstGameweekRankAsUnavailable() {
+        #expect(LeagueRankTrend.resolve(currentRank: 36, lastRank: 0) == .unavailable)
+        #expect(LeagueRankTrend.resolve(currentRank: 36, lastRank: nil) == .unavailable)
+        #expect(LeagueRankTrend.resolve(currentRank: 3, lastRank: 5) == .up)
+        #expect(LeagueRankTrend.resolve(currentRank: 5, lastRank: 3) == .down)
+        #expect(LeagueRankTrend.resolve(currentRank: 3, lastRank: 3) == .equal)
+    }
+
     @Test func fantasyLeagueBadgeInitials_usesUpToTwoTeamWords() {
         #expect(FantasyLeagueBadgeInitials.make(from: "Wagstaff's Team") == "WT")
         #expect(FantasyLeagueBadgeInitials.make(from: "Arsenal") == "AR")

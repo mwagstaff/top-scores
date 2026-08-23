@@ -86,9 +86,6 @@ struct FantasyView: View {
     @State private var showDeleteRivalConfirmation = false
     @State private var rivalEntryIDPendingDeletion: Int?
     @State private var rivalTeamNamePendingDeletion = ""
-    @State private var showDeleteLeagueConfirmation = false
-    @State private var leagueIDPendingDeletion: Int?
-    @State private var leagueNamePendingDeletion = ""
     @State private var rivalsScoreMode: RivalsScoreMode = .currentGameweek
     @State private var teamViewMode: FantasyTeamViewMode = .current
     @State private var showFantasySignIn = false
@@ -215,26 +212,6 @@ struct FantasyView: View {
                     Text("This rival will be removed from your table.")
                 } else {
                     Text("Remove \(rivalTeamNamePendingDeletion) from your rivals table?")
-                }
-            }
-            .alert("Delete league?", isPresented: $showDeleteLeagueConfirmation) {
-                Button("Cancel", role: .cancel) {
-                    leagueIDPendingDeletion = nil
-                    leagueNamePendingDeletion = ""
-                }
-                Button("Delete", role: .destructive) {
-                    guard let leagueID = leagueIDPendingDeletion else { return }
-                    removeLeague(leagueID: leagueID)
-                    selectedLeagueStanding = nil
-                    leagueIDPendingDeletion = nil
-                    leagueNamePendingDeletion = ""
-                    setShareImportStatus("League removed.", isError: false)
-                }
-            } message: {
-                if leagueNamePendingDeletion.isEmpty {
-                    Text("This league will be removed from your saved leagues.")
-                } else {
-                    Text("Remove \(leagueNamePendingDeletion) from your leagues?")
                 }
             }
             .sheet(item: $selectedPlayerSelection) { selection in
@@ -788,7 +765,10 @@ struct FantasyView: View {
 
     private func playerLeagueRow(_ league: FantasyEntryClassicLeague) -> some View {
         let rank = league.resolvedEntryRank
-        let trend = leagueRankTrend(currentRank: rank, lastRank: league.resolvedEntryLastRank)
+        let trend = LeagueRankTrend.resolve(
+            currentRank: rank,
+            lastRank: league.resolvedEntryLastRank
+        )
         let isLoading = leagueIDLoadingDetails.contains(league.id)
 
         return HStack(spacing: 12) {
@@ -1852,7 +1832,7 @@ struct FantasyView: View {
     }
 
     private func leagueSummaryRow(_ league: FantasyTrackedLeagueStanding) -> some View {
-        let trend = leagueRankTrend(currentRank: league.myRank, lastRank: league.myLastRank)
+        let trend = LeagueRankTrend.resolve(currentRank: league.myRank, lastRank: league.myLastRank)
         let isLoadingDetails = leagueIDLoadingDetails.contains(league.leagueID)
         let showsChevron = league.canOpenDetails || league.leagueType == "x"
 
@@ -2117,17 +2097,6 @@ struct FantasyView: View {
             .navigationTitle(league.leagueName)
             .toolbarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(role: .destructive) {
-                        leagueIDPendingDeletion = league.leagueID
-                        leagueNamePendingDeletion = league.leagueName
-                        showDeleteLeagueConfirmation = true
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.body.weight(.semibold))
-                    }
-                    .accessibilityLabel("Delete league")
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         selectedLeagueStanding = nil
@@ -2307,7 +2276,7 @@ struct FantasyView: View {
 
     @ViewBuilder
     private func leagueTrendIcon(currentRank: Int, lastRank: Int?) -> some View {
-        switch leagueRankTrend(currentRank: currentRank, lastRank: lastRank) {
+        switch LeagueRankTrend.resolve(currentRank: currentRank, lastRank: lastRank) {
         case .up:
             Image(systemName: "arrow.up")
                 .font(.caption.weight(.semibold))
@@ -2325,17 +2294,6 @@ struct FantasyView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.gray)
         }
-    }
-
-    private func leagueRankTrend(currentRank: Int?, lastRank: Int?) -> LeagueRankTrend {
-        guard let currentRank, let lastRank else { return .unavailable }
-        if currentRank < lastRank {
-            return .up
-        }
-        if currentRank > lastRank {
-            return .down
-        }
-        return .equal
     }
 
     private func leagueTrendOutlineColor(for trend: LeagueRankTrend) -> Color {
@@ -2645,32 +2603,19 @@ struct FantasyView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                scoreSummaryCard(
-                    rival.squad,
-                    showRivalPills: false,
-                    showsActiveChipMessage: rival.squad.hasActiveChip,
-                    projectedGameweekPoints: rival.projectedGameweekPoints,
-                    isExpectedPointsLoading: rival.isExpectedPointsLoading,
-                    scoreTapEnabled: true,
-                    scoreTapAction: {
-                        openScoreBreakdown(for: rival.squad, teamNameOverride: rival.teamName)
-                    }
-                )
                 pitchSection(
                     displayData,
                     playerSelectionEnabled: true,
-                    detailMode: $fantasyPitchDetailMode
+                    detailMode: $fantasyPitchDetailMode,
+                    expectedPoints: rival.projectedGameweekPoints,
+                    teamValue: displayData.currentTeamValueMillions,
+                    isExpectedPointsLoading: rival.isExpectedPointsLoading
                 )
                 benchSection(
                     displayData,
                     playerSelectionEnabled: true,
                     detailMode: fantasyPitchDetailMode
                 )
-                eventLegendSection(rival.squad)
-                if rival.squad.isEstimatedScore {
-                    scoreCalculationSection(rival.squad)
-                }
-                summaryStatsSection(rival.squad)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -2720,7 +2665,8 @@ struct FantasyView: View {
         let pointsMetricDisplayValue: String?
         let pointsMetricTint: Color
         let pointsMetricIsLoading: Bool
-        let canTogglePointsMetric = data.scorePhase == .provisional
+        let canTogglePointsMetric = data.scorePhase == .provisional &&
+            (expectedPoints != nil || isExpectedPointsLoading)
         let showsExpectedPointsMetric = data.scorePhase == .expected ||
             (canTogglePointsMetric && expectedPointsMetricGameweekID == data.gameweekID)
         let pointsMetricFooter = !showsExpectedPointsMetric && data.scorePhase != .expected
@@ -3800,13 +3746,6 @@ struct FantasyView: View {
         rivalManagers = updatedRivals
         persistRivalManagersToStorage(updatedRivals)
         triggerFantasyRefresh(force: true, rivalManagers: updatedRivals)
-    }
-
-    private func removeLeague(leagueID: Int) {
-        let updatedLeagues = trackedLeagues.filter { $0.leagueID != leagueID }
-        trackedLeagues = updatedLeagues
-        persistTrackedLeaguesToStorage(updatedLeagues)
-        triggerFantasyRefresh(force: true, trackedLeagues: updatedLeagues)
     }
 
     private func openLeagueSummary(_ league: FantasyTrackedLeagueStanding) {
@@ -5306,11 +5245,25 @@ private enum RivalsScoreMode: String, CaseIterable {
     }
 }
 
-private enum LeagueRankTrend {
+enum LeagueRankTrend: Equatable {
     case up
     case down
     case equal
     case unavailable
+
+    nonisolated static func resolve(currentRank: Int?, lastRank: Int?) -> Self {
+        guard let currentRank, currentRank > 0,
+              let lastRank, lastRank > 0 else {
+            return .unavailable
+        }
+        if currentRank < lastRank {
+            return .up
+        }
+        if currentRank > lastRank {
+            return .down
+        }
+        return .equal
+    }
 }
 
 private enum FantasyIDAddMode {
