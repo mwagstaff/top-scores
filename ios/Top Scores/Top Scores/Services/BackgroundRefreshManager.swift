@@ -13,7 +13,12 @@ enum BackgroundRefreshManager {
 
     static func scheduleNextRefresh(intervalMinutes: Int) {
         let request = BGAppRefreshTaskRequest(identifier: taskIdentifier)
-        let resolvedIntervalMinutes = max(minimumRefreshIntervalMinutes, intervalMinutes)
+        let hasLinkedFantasyTeam = !(UserDefaults.standard.string(forKey: "fantasy.managerEntryID") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        let resolvedIntervalMinutes = hasLinkedFantasyTeam
+            ? minimumRefreshIntervalMinutes
+            : max(minimumRefreshIntervalMinutes, intervalMinutes)
         request.earliestBeginDate = Date().addingTimeInterval(TimeInterval(resolvedIntervalMinutes * 60))
         do {
             BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskIdentifier)
@@ -27,17 +32,16 @@ enum BackgroundRefreshManager {
         let operation = Task {
             let snapshot = PreferencesStore.loadSnapshot()
             scheduleNextRefresh(intervalMinutes: snapshot.refreshIntervalMinutes)
+            async let fantasyRefresh: Void = refreshFantasySnapshotIfNeeded()
 
             guard let baseURL = URL(string: snapshot.apiBaseURL) else {
+                await fantasyRefresh
                 task.setTaskCompleted(success: false)
                 return
             }
 
             do {
                 let client = APIClient(baseURL: baseURL)
-                let syncTask = Task {
-                    await PreferencesSyncService.shared.syncPreferences(snapshot)
-                }
                 if let cacheState = try? await client.fetchCacheState() {
                     let invalidation = MatchCache.applyServerCacheState(cacheState)
                     if invalidation.shouldClearMatchCaches {
@@ -83,13 +87,13 @@ enum BackgroundRefreshManager {
                     lastUpdated: response.lastUpdated,
                     snapshot: snapshot
                 )
-                await syncTask.value
+                await fantasyRefresh
+                await PreferencesSyncService.shared.syncPreferences(snapshot)
                 await AppIconBadgeManager.update(preferences: snapshot, matches: sorted)
-                scheduleNextRefresh(
-                    intervalMinutes: snapshot.refreshIntervalMinutes
-                )
+                scheduleNextRefresh(intervalMinutes: snapshot.refreshIntervalMinutes)
                 task.setTaskCompleted(success: true)
             } catch {
+                await fantasyRefresh
                 await PreferencesSyncService.shared.syncPreferences(snapshot)
                 task.setTaskCompleted(success: false)
             }
@@ -97,6 +101,43 @@ enum BackgroundRefreshManager {
 
         task.expirationHandler = {
             operation.cancel()
+        }
+    }
+
+    private static func refreshFantasySnapshotIfNeeded() async {
+        let rawEntryID = UserDefaults.standard.string(forKey: "fantasy.managerEntryID") ?? ""
+        guard let entryID = Int(rawEntryID.trimmingCharacters(in: .whitespacesAndNewlines)),
+              entryID > 0 else {
+            return
+        }
+
+        do {
+            let client = FantasyPublicAPIClient()
+            let bootstrap = try await client.fetchBootstrapStatic()
+            guard let gameweek = bootstrap.events.first(where: {
+                $0.isCurrent == true && $0.dataChecked != true
+            }) else {
+                return
+            }
+
+            async let picksTask = client.fetchPicks(entryID: entryID, eventID: gameweek.id)
+            async let liveTask = client.fetchEventLive(eventID: gameweek.id)
+            async let fixturesTask = client.fetchAllFixtures()
+            let (picks, live, seasonFixtures) = try await (picksTask, liveTask, fixturesTask)
+            let eventFixtures = seasonFixtures.filter { $0.event == gameweek.id }
+            let squad = FantasySquadBuilder.build(
+                gameweek: gameweek,
+                picksResponse: picks,
+                liveResponse: live,
+                fixtures: eventFixtures,
+                seasonFixtures: seasonFixtures,
+                bootstrap: bootstrap
+            )
+            FantasySyncStore.persist(managerEntryID: String(entryID), squad: squad)
+        } catch is CancellationError {
+            return
+        } catch {
+            diagnosticLog("Fantasy background refresh failed: \(error.localizedDescription)")
         }
     }
 

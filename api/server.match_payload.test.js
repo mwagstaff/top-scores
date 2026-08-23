@@ -21,6 +21,9 @@ const {
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
+    getMatchListLastKnownPayload,
+    setMatchListLastKnownPayload,
+    overlayCurrentDayBsdProjection,
     buildMatchQueryResponseCacheKey,
     buildTeamRankingsResponseCacheKey,
     buildTeamRankingsBaseCacheKey,
@@ -54,6 +57,7 @@ const {
     normalizeCompetitionFilterName,
     normalizeMatchesListMode,
     isAllowedCompetition,
+    isAllowedCompetitionMatch,
     isAllowedMatchDetailsPayload,
     matchPassesCompetitionTableValidation,
     collectDisallowedCompetitionTargets,
@@ -1076,6 +1080,30 @@ test("matchPassesCompetitionTableValidation only rejects generic English league 
   );
 });
 
+test("canonical BSD fixtures are not hidden by a stale partial league table", () => {
+  const staleTables = [
+    {
+      league_id: "premier-league",
+      league_name: "Premier League",
+      rows: [{ team: "Brighton & Hove Albion" }, { team: "Aston Villa" }],
+    },
+  ];
+  const manCityFixture = {
+    league: "Premier League",
+    home_team: "Manchester City",
+    away_team: "Bournemouth",
+  };
+
+  assert.equal(isAllowedCompetitionMatch(manCityFixture, { tables: staleTables }), false);
+  assert.equal(
+    isAllowedCompetitionMatch(
+      { ...manCityFixture, has_bsd_source: true },
+      { tables: staleTables }
+    ),
+    true
+  );
+});
+
 test("isAllowedMatchDetailsPayload rejects generic competition labels when table membership disagrees", () => {
   const tables = [
     {
@@ -2062,6 +2090,85 @@ test("buildMatchQueryResponseCacheKey ignores pagination and changes with filter
     buildMatchQueryResponseCacheKey(baseOptions),
     buildMatchQueryResponseCacheKey({ ...baseOptions, homeNations: false })
   );
+});
+
+test("older match-list rebuild cannot replace a newer live-score payload", () => {
+  const source = "bsd-rebuild-order-regression";
+  const newerPayload = [{
+    match_details_id: "209543",
+    home_team: "Newcastle United",
+    away_team: "Liverpool",
+    home_score: 1,
+    away_score: 0,
+    score_status: "35",
+  }];
+  const olderPayload = [{
+    match_details_id: "209543",
+    home_team: "Newcastle United",
+    away_team: "Liverpool",
+    home_score: 0,
+    away_score: 0,
+    score_status: null,
+  }];
+
+  assert.equal(setMatchListLastKnownPayload(source, newerPayload, 2), true);
+  assert.equal(setMatchListLastKnownPayload(source, olderPayload, 1), false);
+  assert.deepEqual(getMatchListLastKnownPayload(source), newerPayload);
+});
+
+test("current BSD projection restores missing live fixtures in a stale public list", () => {
+  const date = "2026-08-23";
+  const fixture = (id, homeTeam, awayTeam, overrides = {}) => ({
+    id,
+    match_details_id: id,
+    date,
+    time: "14:00",
+    league: "Premier League",
+    home_team: homeTeam,
+    away_team: awayTeam,
+    has_bsd_source: true,
+    tv_channels: [],
+    ...overrides,
+  });
+  const cachedPayload = [
+    fixture("209541", "Brighton & Hove Albion", "Aston Villa", {
+      home_score: 4,
+      away_score: 0,
+      score_status: "FT",
+    }),
+    fixture("209543", "Newcastle United", "Liverpool", {
+      time: "16:30",
+      home_score: 0,
+      away_score: 0,
+    }),
+  ];
+  const projection = [
+    fixture("209542", "Manchester City", "Bournemouth", {
+      home_score: 2,
+      away_score: 1,
+      score_status: "FT",
+    }),
+    fixture("209543", "Newcastle United", "Liverpool", {
+      time: "16:30",
+      home_score: 1,
+      away_score: 0,
+      score_status: "HT",
+    }),
+    fixture("future-fixture", "Arsenal", "Chelsea", {
+      date: "2026-08-24",
+      time: "20:00",
+    }),
+  ];
+
+  const result = overlayCurrentDayBsdProjection(cachedPayload, projection, date);
+  const premierLeagueMatches = result.filter((match) => match.league === "Premier League");
+  const newcastle = premierLeagueMatches.find((match) => match.match_details_id === "209543");
+
+  assert.equal(premierLeagueMatches.length, 3);
+  assert.equal(newcastle.home_score, 1);
+  assert.equal(newcastle.away_score, 0);
+  assert.equal(newcastle.score_status, "HT");
+  assert.equal(result.some((match) => match.match_details_id === "future-fixture"), false);
 });
 
 test("buildTeamRankingsBaseCacheKey ignores type while response keys preserve it", () => {

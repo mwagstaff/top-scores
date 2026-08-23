@@ -11,7 +11,29 @@ struct FantasyGameweek: Codable, Hashable {
     let isCurrent: Bool?
     let isNext: Bool?
     let finished: Bool?
+    let dataChecked: Bool?
+    let averageEntryScore: Int?
     let deadlineTime: String?
+
+    init(
+        id: Int,
+        name: String?,
+        isCurrent: Bool?,
+        isNext: Bool?,
+        finished: Bool?,
+        dataChecked: Bool? = nil,
+        averageEntryScore: Int? = nil,
+        deadlineTime: String?
+    ) {
+        self.id = id
+        self.name = name
+        self.isCurrent = isCurrent
+        self.isNext = isNext
+        self.finished = finished
+        self.dataChecked = dataChecked
+        self.averageEntryScore = averageEntryScore
+        self.deadlineTime = deadlineTime
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -19,6 +41,8 @@ struct FantasyGameweek: Codable, Hashable {
         case isCurrent = "is_current"
         case isNext = "is_next"
         case finished
+        case dataChecked = "data_checked"
+        case averageEntryScore = "average_entry_score"
         case deadlineTime = "deadline_time"
     }
 }
@@ -347,24 +371,26 @@ struct FantasyEntryHistory: Codable, Hashable {
 
 enum FantasyTeamGameweekResolver {
     static func currentTeamGameweek(from events: [FantasyGameweek]) -> FantasyGameweek? {
+        if let current = events.first(where: {
+            $0.isCurrent == true && $0.dataChecked != true
+        }) {
+            return current
+        }
+
         if let next = events
             .filter({ $0.isNext == true })
             .min(by: { $0.id < $1.id }) {
             return next
         }
 
-        if let current = events.first(where: { $0.isCurrent == true }) {
-            return current
-        }
-
         return events
-            .filter({ $0.finished != true })
+            .filter({ $0.dataChecked != true })
             .min(by: { $0.id < $1.id })
     }
 
     static func previousTeamGameweek(from events: [FantasyGameweek]) -> FantasyGameweek? {
         events
-            .filter({ $0.finished == true })
+            .filter({ $0.dataChecked == true })
             .max(by: { $0.id < $1.id })
     }
 }
@@ -1466,6 +1492,24 @@ struct FantasyTrackedLeagueStanding: Hashable, Identifiable {
     }
 }
 
+enum FantasyLeagueBadgeInitials {
+    nonisolated static func make(from teamName: String) -> String {
+        let words = teamName
+            .components(separatedBy: .whitespacesAndNewlines)
+            .map { token in
+                token.unicodeScalars
+                    .filter(CharacterSet.alphanumerics.contains)
+                    .map(String.init)
+                    .joined()
+            }
+            .filter { !$0.isEmpty }
+        if words.count >= 2 {
+            return words.prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
+        }
+        return String((words.first ?? "T").prefix(2)).uppercased()
+    }
+}
+
 struct FantasySetupRivalCandidate: Identifiable, Hashable {
     let entryID: Int
     let teamName: String
@@ -1573,6 +1617,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
     let isUnavailable: Bool
     let isDefinitelyUnavailable: Bool
     let hasAnyFixtureThisGameweek: Bool
+    var hasStartedFixtureThisGameweek: Bool = false
     let hasUpcomingFixtureThisGameweek: Bool
     let hasActiveFixtureThisGameweek: Bool
     let hasFutureAvailabilityIssue: Bool
@@ -1660,6 +1705,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
             isUnavailable: isUnavailable,
             isDefinitelyUnavailable: isDefinitelyUnavailable,
             hasAnyFixtureThisGameweek: hasAnyFixtureThisGameweek,
+            hasStartedFixtureThisGameweek: hasStartedFixtureThisGameweek,
             hasUpcomingFixtureThisGameweek: hasUpcomingFixtureThisGameweek,
             hasActiveFixtureThisGameweek: hasActiveFixtureThisGameweek,
             hasFutureAvailabilityIssue: hasFutureAvailabilityIssue,
@@ -1701,11 +1747,18 @@ struct FantasyEffectivePlayerContribution: Hashable, Sendable {
 }
 
 struct FantasySquadDisplayData: Hashable, Sendable {
+    enum ScorePhase: Hashable, Sendable {
+        case expected
+        case provisional
+        case final
+    }
+
     let gameweekID: Int
     let gameweekTitle: String
     let deadlineGameweekID: Int?
     let deadlineTime: String?
     let totalPoints: Int
+    let gameweekAverageScore: Int?
     let hasActiveFixtures: Bool
     let hasStartedFixturesInGameweek: Bool
     let hasFixturesPlayedToday: Bool
@@ -1746,6 +1799,11 @@ struct FantasySquadDisplayData: Hashable, Sendable {
             : totalPoints
     }
 
+    nonisolated var scorePhase: ScorePhase {
+        guard hasStartedFixturesInGameweek else { return .expected }
+        return isEstimatedScore ? .provisional : .final
+    }
+
     nonisolated var hasActiveChip: Bool {
         !activeChips.isEmpty
     }
@@ -1783,8 +1841,10 @@ struct FantasySquadDisplayData: Hashable, Sendable {
 
     nonisolated var detailedExpectedPointsThisGameweek: Double? {
         let expectedPlayers = starters.filter(\.hasRemainingFixtureThisGameweek)
-        guard !expectedPlayers.isEmpty,
-              expectedPlayers.allSatisfy({ $0.expectedPointsThisGameweek != nil }) else {
+        if expectedPlayers.isEmpty {
+            return hasStartedFixturesInGameweek ? Double(resolvedCurrentScore) : nil
+        }
+        guard expectedPlayers.allSatisfy({ $0.expectedPointsThisGameweek != nil }) else {
             return nil
         }
 
@@ -1812,6 +1872,7 @@ struct FantasySquadDisplayData: Hashable, Sendable {
             deadlineGameweekID: deadlineGameweekID,
             deadlineTime: deadlineTime,
             totalPoints: totalPoints,
+            gameweekAverageScore: gameweekAverageScore,
             hasActiveFixtures: hasActiveFixtures,
             hasStartedFixturesInGameweek: hasStartedFixturesInGameweek,
             hasFixturesPlayedToday: hasFixturesPlayedToday,
@@ -1951,6 +2012,7 @@ struct FantasySquadDisplayData: Hashable, Sendable {
             deadlineGameweekID: deadlineGameweekID,
             deadlineTime: deadlineTime,
             totalPoints: totalPoints,
+            gameweekAverageScore: gameweekAverageScore,
             hasActiveFixtures: hasActiveFixtures,
             hasStartedFixturesInGameweek: hasStartedFixturesInGameweek,
             hasFixturesPlayedToday: hasFixturesPlayedToday,
@@ -2860,19 +2922,39 @@ enum FantasySquadBuilder {
             uniqueKeysWithValues: bootstrap.teams.map { ($0.id, $0.shortName) }
         )
 
+        let squadTeamIDs = Set(
+            picksResponse.picks.compactMap { pick in
+                elementByID[pick.element]?.team
+            }
+        )
+
+        func fixtureHasEnded(_ fixture: FantasyFixture) -> Bool {
+            fixture.finished == true || fixture.finishedProvisional == true
+        }
+
+        func fixtureHasStarted(_ fixture: FantasyFixture) -> Bool {
+            fixture.started == true || fixtureHasEnded(fixture)
+        }
+
+        func fixtureIsLive(_ fixture: FantasyFixture) -> Bool {
+            fixture.started == true && !fixtureHasEnded(fixture)
+        }
+
         let activeTeamIDs = Set(
             fixtures.flatMap { fixture -> [Int] in
-                let hasStarted = fixture.started == true
-                let isConfirmed = fixture.finished == true && fixture.finishedProvisional != true
-                guard hasStarted, !isConfirmed else { return [] }
+                guard fixtureIsLive(fixture) else { return [] }
+                return [fixture.teamH, fixture.teamA]
+            }
+        )
+        let startedTeamIDs = Set(
+            fixtures.flatMap { fixture -> [Int] in
+                guard fixtureHasStarted(fixture) else { return [] }
                 return [fixture.teamH, fixture.teamA]
             }
         )
         let upcomingTeamIDs = Set(
             fixtures.flatMap { fixture -> [Int] in
-                let hasStarted = fixture.started == true
-                let isConfirmed = fixture.finished == true && fixture.finishedProvisional != true
-                guard !hasStarted, !isConfirmed else { return [] }
+                guard !fixtureHasStarted(fixture) else { return [] }
                 return [fixture.teamH, fixture.teamA]
             }
         )
@@ -2881,11 +2963,10 @@ enum FantasySquadBuilder {
                 [fixture.teamH, fixture.teamA]
             }
         )
-        let hasActiveFixtures = !activeTeamIDs.isEmpty
+        let hasActiveFixtures = !activeTeamIDs.isDisjoint(with: squadTeamIDs)
         let hasStartedFixturesInGameweek = fixtures.contains { fixture in
-            fixture.started == true ||
-            fixture.finished == true ||
-            fixture.finishedProvisional == true
+            fixtureHasStarted(fixture) &&
+                (squadTeamIDs.contains(fixture.teamH) || squadTeamIDs.contains(fixture.teamA))
         }
         let hasFixturesPlayedToday = {
             let calendar = Calendar.current
@@ -2900,7 +2981,10 @@ enum FantasySquadBuilder {
             fallbackFormatter.formatOptions = [.withInternetDateTime]
 
             for fixture in fixtures {
-                guard fixture.started == true else { continue }
+                guard fixtureHasStarted(fixture),
+                      squadTeamIDs.contains(fixture.teamH) || squadTeamIDs.contains(fixture.teamA) else {
+                    continue
+                }
                 guard let kickoffRaw = fixture.kickoffTime?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !kickoffRaw.isEmpty else {
                     continue
@@ -2993,11 +3077,6 @@ enum FantasySquadBuilder {
             $0.started == true || $0.finished == true || $0.finishedProvisional == true
         }
 
-        let squadTeamIDs = Set(
-            picksResponse.picks.compactMap { pick in
-                elementByID[pick.element]?.team
-            }
-        )
         let shouldPreferCurrentGameweekOpponents =
             squadTeamIDs.isDisjoint(with: activeTeamIDs.union(upcomingTeamIDs)) == false
 
@@ -3195,6 +3274,10 @@ enum FantasySquadBuilder {
                 guard let teamID = element?.team else { return false }
                 return teamsWithAnyFixture.contains(teamID)
             }()
+            let hasStartedFixtureThisGameweek = {
+                guard let teamID = element?.team else { return false }
+                return startedTeamIDs.contains(teamID)
+            }()
             let hasUpcomingFixtureThisGameweek = {
                 guard let teamID = element?.team else { return false }
                 return upcomingTeamIDs.contains(teamID)
@@ -3257,6 +3340,7 @@ enum FantasySquadBuilder {
                 isUnavailable: isUnavailable,
                 isDefinitelyUnavailable: isDefinitelyUnavailable,
                 hasAnyFixtureThisGameweek: hasAnyFixtureThisGameweek,
+                hasStartedFixtureThisGameweek: hasStartedFixtureThisGameweek,
                 hasUpcomingFixtureThisGameweek: hasUpcomingFixtureThisGameweek,
                 hasActiveFixtureThisGameweek: hasActiveFixtureThisGameweek,
                 hasFutureAvailabilityIssue: futureAvailabilityIssueGameweek != nil,
@@ -3282,7 +3366,7 @@ enum FantasySquadBuilder {
         let activeChips = picksResponse.activeChips
         let hasBenchBoostActive = activeChips.contains(where: \.isBenchBoost)
 
-        let isEstimatedScore = hasActiveFixtures || hasFixturesPlayedToday
+        let isEstimatedScore = hasStartedFixturesInGameweek && gameweek.dataChecked != true
         let computedAppliedPointsTotal = starters.reduce(0) { $0 + $1.appliedPoints }
         var estimatedCurrentScore = picksResponse.entryHistory.points
         var scoreCalculationRulesApplied: [String] = []
@@ -3408,6 +3492,7 @@ enum FantasySquadBuilder {
             deadlineGameweekID: resolvedDeadline?.id,
             deadlineTime: resolvedDeadline?.deadlineTime,
             totalPoints: picksResponse.entryHistory.points,
+            gameweekAverageScore: gameweek.averageEntryScore,
             hasActiveFixtures: hasActiveFixtures,
             hasStartedFixturesInGameweek: hasStartedFixturesInGameweek,
             hasFixturesPlayedToday: hasFixturesPlayedToday,

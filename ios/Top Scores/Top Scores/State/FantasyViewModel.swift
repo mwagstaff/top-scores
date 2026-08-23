@@ -55,6 +55,10 @@ final class FantasyViewModel: ObservableObject {
     private var leagueRefreshTask: Task<Void, Never>?
     private var assistantManagerPrewarmTask: Task<Void, Never>?
     private var detailedExpectedPointsTask: Task<Void, Never>?
+    private var currentSquadSnapshot: FantasySquadSnapshot?
+    private var currentSquadBootstrap: FantasyBootstrapLookup?
+    private var currentSquadSeasonFixtures: [FantasyFixture] = []
+    private var isRefreshingCurrentScores = false
     private let trackedLeaguePageWindowRadius = 1
     private let setupRivalPageWindowRadius = 1
     private let leagueStandingsPageSize = 50
@@ -160,6 +164,10 @@ final class FantasyViewModel: ObservableObject {
         cachedPlayerDetailsBootstrapFetchedAt = nil
         cachedSeasonFixtures = []
         cachedSeasonFixturesFetchedAt = nil
+        currentSquadSnapshot = nil
+        currentSquadBootstrap = nil
+        currentSquadSeasonFixtures = []
+        isRefreshingCurrentScores = false
         rebuildMatchRowContext()
     }
 
@@ -215,6 +223,148 @@ final class FantasyViewModel: ObservableObject {
 
     var currentSquadProjectedGameweekPoints: Double? {
         data?.detailedExpectedPointsThisGameweek
+    }
+
+    var automaticScoreRefreshMinimumInterval: TimeInterval {
+        guard let data, let snapshot = currentSquadSnapshot else { return 15 * 60 }
+        if data.hasActiveFixtures { return 30 }
+        if data.scorePhase == .provisional {
+            let hasUpcomingRelevantFixture = snapshot.fixtures.contains { fixture in
+                guard fixture.started != true,
+                      fixture.finished != true,
+                      fixture.finishedProvisional != true else {
+                    return false
+                }
+                return squadTeamIDs(in: snapshot).contains(fixture.teamH) ||
+                    squadTeamIDs(in: snapshot).contains(fixture.teamA)
+            }
+            return hasUpcomingRelevantFixture ? 5 * 60 : 60
+        }
+
+        let now = Date()
+        let nextKickoff = snapshot.fixtures
+            .filter { fixture in
+                guard fixture.started != true,
+                      fixture.finished != true,
+                      fixture.finishedProvisional != true else {
+                    return false
+                }
+                let teamIDs = squadTeamIDs(in: snapshot)
+                return teamIDs.contains(fixture.teamH) || teamIDs.contains(fixture.teamA)
+            }
+            .compactMap { Self.parseISO8601Date($0.kickoffTime) }
+            .filter { $0 > now }
+            .min()
+
+        guard let nextKickoff else { return 15 * 60 }
+        return min(15 * 60, max(30, nextKickoff.timeIntervalSince(now)))
+    }
+
+    /// Refreshes the locked active-gameweek picks, fixture state, and official live points
+    /// without repeating profile, rival, league, or authenticated-team work.
+    /// Returns true when FPL has just confirmed the gameweek via `data_checked`.
+    func refreshCurrentScores() async -> Bool {
+        guard !isLoading, !isRefreshing, !isRefreshingCurrentScores,
+              let snapshot = currentSquadSnapshot,
+              let entryID = authenticatedEntryID,
+              currentSquadBootstrap != nil else {
+            return false
+        }
+
+        isRefreshingCurrentScores = true
+        defer { isRefreshingCurrentScores = false }
+
+        do {
+            let refreshedBootstrap = try await timed("current_score_bootstrap") {
+                try await fantasyPublicClient.fetchBootstrapStatic()
+            }
+            let refreshedGameweek = refreshedBootstrap.events.first(where: { $0.id == snapshot.gameweek.id })
+                ?? snapshot.gameweek
+            let previousDataChecked = snapshot.gameweek.dataChecked == true
+
+            let refreshedPicks: FantasyPicksResponse
+            let refreshedLive: FantasyEventLiveResponse
+            let refreshedFixtures: [FantasyFixture]
+            if refreshedGameweek.isCurrent == true || refreshedGameweek.dataChecked == true {
+                async let picksTask = fantasyPublicClient.fetchPicks(
+                    entryID: entryID,
+                    eventID: refreshedGameweek.id
+                )
+                async let liveTask = fantasyPublicClient.fetchEventLive(eventID: refreshedGameweek.id)
+                async let fixturesTask = fantasyPublicClient.fetchEventFixtures(eventID: refreshedGameweek.id)
+                (refreshedPicks, refreshedLive, refreshedFixtures) = try await (
+                    picksTask,
+                    liveTask,
+                    fixturesTask
+                )
+            } else {
+                refreshedPicks = snapshot.picksResponse
+                refreshedLive = FantasyEventLiveResponse(elements: [])
+                refreshedFixtures = try await fantasyPublicClient.fetchEventFixtures(
+                    eventID: refreshedGameweek.id
+                )
+            }
+
+            let mergedSeasonFixtures = Self.mergingFixtures(
+                refreshedFixtures,
+                into: currentSquadSeasonFixtures
+            )
+            let refreshedData = await buildSquadDisplayData(
+                gameweek: refreshedGameweek,
+                picksResponse: refreshedPicks,
+                liveResponse: refreshedLive,
+                fixtures: refreshedFixtures,
+                seasonFixtures: mergedSeasonFixtures,
+                bootstrap: refreshedBootstrap
+            )
+
+            currentSquadSnapshot = FantasySquadSnapshot(
+                gameweek: refreshedGameweek,
+                picksResponse: refreshedPicks,
+                liveResponse: refreshedLive,
+                fixtures: refreshedFixtures
+            )
+            currentSquadBootstrap = refreshedBootstrap
+            currentSquadSeasonFixtures = mergedSeasonFixtures
+            cachedBootstrapLookup = refreshedBootstrap
+            cachedBootstrapFetchedAt = Date()
+            cachedSeasonFixtures = mergedSeasonFixtures
+            cachedSeasonFixturesFetchedAt = Date()
+            data = refreshedData
+            lastUpdated = Date()
+            rebuildMatchRowContext()
+            errorMessage = nil
+
+            return !previousDataChecked && refreshedGameweek.dataChecked == true
+        } catch {
+            if !Self.isCancellationError(error) {
+                logPerf("current_score_refresh_failed error=\"\(error.localizedDescription)\"")
+            }
+            return false
+        }
+    }
+
+    private func squadTeamIDs(in snapshot: FantasySquadSnapshot) -> Set<Int> {
+        guard let bootstrap = currentSquadBootstrap else { return [] }
+        let elementsByID = Dictionary(uniqueKeysWithValues: bootstrap.elements.map { ($0.id, $0) })
+        return Set(snapshot.picksResponse.picks.compactMap { elementsByID[$0.element]?.team })
+    }
+
+    private static func mergingFixtures(
+        _ refreshedFixtures: [FantasyFixture],
+        into seasonFixtures: [FantasyFixture]
+    ) -> [FantasyFixture] {
+        let refreshedByID = Dictionary(uniqueKeysWithValues: refreshedFixtures.map { ($0.id, $0) })
+        let refreshedIDs = Set(refreshedByID.keys)
+        return seasonFixtures.filter { !refreshedIDs.contains($0.id) } + refreshedFixtures
+    }
+
+    private static func parseISO8601Date(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        return ISO8601DateFormatter().date(from: value)
     }
 
     func isEligibleFantasyFixture(_ match: Match) -> Bool {
@@ -302,15 +452,36 @@ final class FantasyViewModel: ObservableObject {
             self.myProfile = myProfile
 
             let currentTeamGameweek = resolvedCurrentTeamGameweek(events: bootstrapLookup.events)
-            let currentTeamFixtures = seasonFixtures.filter { $0.event == currentTeamGameweek.id }
+            let currentSnapshot: FantasySquadSnapshot
+            if currentTeamGameweek.isCurrent == true && currentTeamGameweek.dataChecked != true {
+                currentSnapshot = try await fetchSquadSnapshot(
+                    entryID: activeEntryID,
+                    gameweek: currentTeamGameweek,
+                    labelPrefix: "current"
+                )
+            } else {
+                currentSnapshot = FantasySquadSnapshot(
+                    gameweek: currentTeamGameweek,
+                    picksResponse: currentTeamResult.team.asPicksResponse(eventID: currentTeamGameweek.id),
+                    liveResponse: FantasyEventLiveResponse(elements: []),
+                    fixtures: seasonFixtures.filter { $0.event == currentTeamGameweek.id }
+                )
+            }
+            let mergedSeasonFixtures = Self.mergingFixtures(
+                currentSnapshot.fixtures,
+                into: seasonFixtures
+            )
             data = await buildSquadDisplayData(
                 gameweek: currentTeamGameweek,
-                picksResponse: currentTeamResult.team.asPicksResponse(eventID: currentTeamGameweek.id),
-                liveResponse: FantasyEventLiveResponse(elements: []),
-                fixtures: currentTeamFixtures,
-                seasonFixtures: seasonFixtures,
+                picksResponse: currentSnapshot.picksResponse,
+                liveResponse: currentSnapshot.liveResponse,
+                fixtures: currentSnapshot.fixtures,
+                seasonFixtures: mergedSeasonFixtures,
                 bootstrap: bootstrapLookup
             )
+            currentSquadSnapshot = currentSnapshot
+            currentSquadBootstrap = bootstrapLookup
+            currentSquadSeasonFixtures = mergedSeasonFixtures
             rebuildMatchRowContext()
             detailedExpectedPointsTask?.cancel()
             detailedExpectedPointsTask = Task(priority: .utility) { [weak self] in
@@ -336,7 +507,7 @@ final class FantasyViewModel: ObservableObject {
                         picksResponse: snapshot.picksResponse,
                         liveResponse: snapshot.liveResponse,
                         fixtures: snapshot.fixtures,
-                        seasonFixtures: seasonFixtures,
+                        seasonFixtures: mergedSeasonFixtures,
                         bootstrap: bootstrapLookup
                     )
                     previousSnapshot = snapshot
@@ -366,7 +537,7 @@ final class FantasyViewModel: ObservableObject {
                         gameweek: previousSnapshot.gameweek,
                         liveResponse: previousSnapshot.liveResponse,
                         fixtures: previousSnapshot.fixtures,
-                        seasonFixtures: seasonFixtures,
+                        seasonFixtures: mergedSeasonFixtures,
                         bootstrapLookup: bootstrapLookup
                     )
                     guard self.rivalRefreshToken == refreshToken else { return }
@@ -1231,12 +1402,14 @@ final class FantasyViewModel: ObservableObject {
            let cachedBootstrapFetchedAt,
            now.timeIntervalSince(cachedBootstrapFetchedAt) < bootstrapCacheTTL {
             if Self.bootstrapLookupHasUsablePlayerCosts(cachedBootstrapLookup),
-               Self.bootstrapLookupHasUsableExpectedPoints(cachedBootstrapLookup) {
+               Self.bootstrapLookupHasUsableExpectedPoints(cachedBootstrapLookup),
+               Self.bootstrapLookupHasUsableGameweekStatus(cachedBootstrapLookup),
+               !Self.bootstrapLookupNeedsFreshGameweekStatus(cachedBootstrapLookup) {
                 let age = Int(now.timeIntervalSince(cachedBootstrapFetchedAt))
                 logPerf("bootstrap_lookup_cache_hit age_s=\(age)")
                 return cachedBootstrapLookup
             }
-            logPerf("bootstrap_lookup_cache_invalidated reason=missing_player_costs_or_expected_points")
+            logPerf("bootstrap_lookup_cache_invalidated reason=missing_player_costs_expected_points_or_gameweek_status")
             self.cachedBootstrapLookup = nil
             self.cachedBootstrapFetchedAt = nil
             rebuildMatchRowContext()
@@ -1246,7 +1419,9 @@ final class FantasyViewModel: ObservableObject {
             try await serverClient.fetchFantasyBootstrapLookup()
         }
         if !Self.bootstrapLookupHasUsablePlayerCosts(lookup) ||
-            !Self.bootstrapLookupHasUsableExpectedPoints(lookup) {
+            !Self.bootstrapLookupHasUsableExpectedPoints(lookup) ||
+            !Self.bootstrapLookupHasUsableGameweekStatus(lookup) ||
+            Self.bootstrapLookupNeedsFreshGameweekStatus(lookup) {
             logPerf("bootstrap_lookup_incomplete fallback=bootstrap_static")
             lookup = try await timed("bootstrap_static_fallback_fetch") {
                 try await fantasyPublicClient.fetchBootstrapStatic()
@@ -1276,6 +1451,14 @@ final class FantasyViewModel: ObservableObject {
             Double($0.expectedPointsNextGameweek ?? "") != nil
         }
         return hasCurrentProjection || hasNextProjection
+    }
+
+    private static func bootstrapLookupHasUsableGameweekStatus(_ lookup: FantasyBootstrapLookup) -> Bool {
+        lookup.events.contains { $0.dataChecked != nil }
+    }
+
+    private static func bootstrapLookupNeedsFreshGameweekStatus(_ lookup: FantasyBootstrapLookup) -> Bool {
+        lookup.events.contains { $0.isCurrent == true && $0.dataChecked != true }
     }
 
     private static func parseSeasonStatusCheckedAt(_ value: String?) -> Date? {

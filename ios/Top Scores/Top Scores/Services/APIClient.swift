@@ -403,16 +403,41 @@ struct APIClient {
         on date: String,
         preferences: PreferencesSnapshot,
         topMatchesOnly: Bool,
-        pageSize: Int = 2000
+        pageSize: Int = 2000,
+        hydrateStates: Bool = true
     ) async throws -> MatchResponse {
         let trimmedDate = date.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedDate.isEmpty else {
             return MatchResponse(matches: [], lastUpdated: nil, isNotModified: false)
         }
 
+        return try await fetchFixtureBrowseMatches(
+            from: trimmedDate,
+            through: trimmedDate,
+            preferences: preferences,
+            topMatchesOnly: topMatchesOnly,
+            pageSize: pageSize,
+            hydrateStates: hydrateStates
+        )
+    }
+
+    func fetchFixtureBrowseMatches(
+        from startDate: String,
+        through endDate: String,
+        preferences: PreferencesSnapshot,
+        topMatchesOnly: Bool,
+        pageSize: Int = 2000,
+        hydrateStates: Bool = false
+    ) async throws -> MatchResponse {
+        let trimmedStartDate = startDate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEndDate = endDate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedStartDate.isEmpty, !trimmedEndDate.isEmpty else {
+            return MatchResponse(matches: [], lastUpdated: nil, isNotModified: false)
+        }
+
         var queryItems: [URLQueryItem] = [
-            URLQueryItem(name: "start", value: trimmedDate),
-            URLQueryItem(name: "end", value: trimmedDate),
+            URLQueryItem(name: "start", value: min(trimmedStartDate, trimmedEndDate)),
+            URLQueryItem(name: "end", value: max(trimmedStartDate, trimmedEndDate)),
             URLQueryItem(name: "sort", value: "asc"),
             URLQueryItem(name: "filter_mode", value: "intersection"),
             URLQueryItem(name: "page_size", value: String(max(1, pageSize))),
@@ -432,7 +457,7 @@ struct APIClient {
         try validateSuccess(http, data: data, operation: "fixture_browse_matches")
         let decoded = try decodeMatches(from: data, operation: "fixture_browse_matches")
         return MatchResponse(
-            matches: try await hydrateMatchStates(decoded),
+            matches: hydrateStates ? try await hydrateMatchStates(decoded) : decoded,
             lastUpdated: Self.lastUpdated(from: http),
             isNotModified: false
         )

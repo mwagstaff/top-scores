@@ -132,9 +132,15 @@ private struct ContentLifecycleCoordinator: View {
     let fantasyManagerEntryID: String
     @Binding var fantasyTabBadge: String?
     @Binding var fantasyTabShouldPulse: Bool
+    @State private var lastAutomaticFantasyScoreRefreshAt: Date?
 
     private let fantasyBackgroundRefreshTimer = Timer.publish(
         every: 300,
+        on: .main,
+        in: .common
+    ).autoconnect()
+    private let fantasyScoreRefreshTimer = Timer.publish(
+        every: 30,
         on: .main,
         in: .common
     ).autoconnect()
@@ -175,6 +181,22 @@ private struct ContentLifecycleCoordinator: View {
                 guard scenePhase == .active else { return }
                 Task {
                     await refreshFantasyInBackground()
+                }
+            }
+            .onReceive(fantasyScoreRefreshTimer) { date in
+                guard scenePhase == .active,
+                      selectedTab != 2,
+                      fantasyViewModel.data != nil,
+                      date.timeIntervalSince(lastAutomaticFantasyScoreRefreshAt ?? .distantPast)
+                        >= fantasyViewModel.automaticScoreRefreshMinimumInterval else {
+                    return
+                }
+                lastAutomaticFantasyScoreRefreshAt = date
+                Task {
+                    let becameFinal = await fantasyViewModel.refreshCurrentScores()
+                    if becameFinal {
+                        await refreshFantasyInBackground()
+                    }
                 }
             }
             .onChange(of: preferences.snapshot) { _, _ in

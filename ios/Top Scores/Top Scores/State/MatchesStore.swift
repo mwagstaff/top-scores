@@ -258,6 +258,52 @@ struct MatchLeague: Identifiable, Hashable, Sendable {
     let matches: [Match]
 }
 
+struct MatchOrderPinning {
+    private var lastDisplayedMatchIDsBySection: [String: [String]] = [:]
+    private var pinnedMatchIDsBySection: [String: [String]] = [:]
+
+    mutating func stabilize(_ days: [MatchDay], context: String) -> [MatchDay] {
+        days.map { day in
+            let leagues = day.leagues.map { league in
+                let sectionKey = "\(context)|\(league.id)"
+                let currentMatchIDs = league.matches.map(\.id)
+                let hasInProgressMatches = league.matches.contains(where: \.isInProgress)
+
+                guard hasInProgressMatches else {
+                    pinnedMatchIDsBySection.removeValue(forKey: sectionKey)
+                    lastDisplayedMatchIDsBySection[sectionKey] = currentMatchIDs
+                    return league
+                }
+
+                let pinnedMatchIDs = pinnedMatchIDsBySection[sectionKey]
+                    ?? lastDisplayedMatchIDsBySection[sectionKey]
+                    ?? currentMatchIDs
+                let matchesByID = Dictionary(
+                    league.matches.map { ($0.id, $0) },
+                    uniquingKeysWith: { current, _ in current }
+                )
+                var stabilizedMatches = pinnedMatchIDs.compactMap { matchesByID[$0] }
+                let stabilizedMatchIDs = Set(stabilizedMatches.map(\.id))
+                stabilizedMatches.append(contentsOf: league.matches.filter { !stabilizedMatchIDs.contains($0.id) })
+
+                let stabilizedMatchIDOrder = stabilizedMatches.map(\.id)
+                pinnedMatchIDsBySection[sectionKey] = stabilizedMatchIDOrder
+                lastDisplayedMatchIDsBySection[sectionKey] = stabilizedMatchIDOrder
+                return MatchLeague(id: league.id, league: league.league, matches: stabilizedMatches)
+            }
+
+            return MatchDay(
+                id: day.id,
+                dateKey: day.dateKey,
+                displayDate: day.displayDate,
+                isToday: day.isToday,
+                isTomorrow: day.isTomorrow,
+                leagues: leagues
+            )
+        }
+    }
+}
+
 private enum MatchGroupingEngine {
     private final class GroupingMemo: @unchecked Sendable {
         private nonisolated(unsafe) var teamRatings: [String: Double] = [:]
@@ -568,12 +614,13 @@ final class MatchesStore: ObservableObject {
     ) -> [MatchDay] {
         let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowseGrouping")
         defer { PerformanceSignposter.matches.endInterval("FixtureBrowseGrouping", signpost) }
-        return MatchGroupingEngine.groupMatches(
+        let grouped = MatchGroupingEngine.groupMatches(
             matches,
             sortOrder: preferences.matchGroupSortOrder,
             ratingLookup: teamRatingLookup,
             premierLeagueMatchesFirst: preferences.premierLeagueMatchesFirst
         )
+        return matchOrderPinning.stabilize(grouped, context: "fixture-browser")
     }
 
     private struct ModeState {
@@ -620,6 +667,7 @@ final class MatchesStore: ObservableObject {
         entries: [],
         defaultPoints: TeamRankingSettings.defaultDefaultElo
     )
+    private var matchOrderPinning = MatchOrderPinning()
     private var groupingRevision = 0
 
     private let liveRefreshInterval: TimeInterval = 30
@@ -2019,13 +2067,17 @@ final class MatchesStore: ObservableObject {
                         "grouping_complete mode=\(mode.rawValue) matches=\(matchesToGroup.count) days=\(grouped.count) duration_ms=\(durationMs)"
                     )
                 }
+                let stabilizedGrouped = self.matchOrderPinning.stabilize(
+                    grouped,
+                    context: mode.rawValue
+                )
                 var cachedState = self.state(for: mode)
-                cachedState.groupedMatches = grouped
+                cachedState.groupedMatches = stabilizedGrouped
                 cachedState.groupedMatchesRevision = groupingRevisionAtStart
                 self.modeStates[mode] = cachedState
-                self.viewState(for: mode).groupedMatches = grouped
+                self.viewState(for: mode).groupedMatches = stabilizedGrouped
                 if self.activeMode == mode && self.visibleModes.contains(mode) {
-                    self.groupedMatches = grouped
+                    self.groupedMatches = stabilizedGrouped
                 }
             }
         }

@@ -13,6 +13,7 @@ struct FixtureBrowseCachePayload: Codable, Sendable {
     var competitions: [CompetitionCatalogEntry]
     var calendarDays: [FixtureCalendarDay]
     var calendarSelectionApplied: Bool?
+    var catalogFetchedAt: Date?
     var calendarFetchedAt: Date?
     var buckets: [String: FixtureBrowseBucket]
 }
@@ -31,6 +32,47 @@ private actor FixtureBrowseCacheWriter {
         latestWriteRequest = requestedAt
         guard let data = try? JSONEncoder().encode(payload) else { return }
         try? data.write(to: cacheURL, options: .atomic)
+    }
+}
+
+@MainActor
+final class FixtureBrowsePageCache: ObservableObject {
+    @Published private(set) var matchesByDate: [String: [Match]] = [:]
+
+    fileprivate func replace(with matchesByDate: [String: [Match]]) {
+        guard self.matchesByDate != matchesByDate else { return }
+        self.matchesByDate = matchesByDate
+    }
+
+    fileprivate func set(_ matches: [Match], for dateKey: String) {
+        guard matchesByDate[dateKey] != matches else { return }
+        matchesByDate[dateKey] = matches
+    }
+
+    fileprivate func remove(_ dateKey: String) {
+        guard matchesByDate[dateKey] != nil else { return }
+        matchesByDate.removeValue(forKey: dateKey)
+    }
+}
+
+nonisolated enum FixtureBrowsePrefetchPlanner {
+    static func dateKeys(
+        in days: [FixtureCalendarDay],
+        centeredOn dateKey: String,
+        radius: Int
+    ) -> [String] {
+        guard radius >= 0,
+              let selectedIndex = days.firstIndex(where: { $0.date == dateKey }) else {
+            return [dateKey]
+        }
+        let lowerBound = max(days.startIndex, selectedIndex - radius)
+        let upperBound = min(days.index(before: days.endIndex), selectedIndex + radius)
+        return days[lowerBound...upperBound].map(\.date)
+    }
+
+    static func range(for dateKeys: [String]) -> ClosedRange<String>? {
+        guard let first = dateKeys.min(), let last = dateKeys.max() else { return nil }
+        return first...last
     }
 }
 
@@ -153,6 +195,17 @@ nonisolated enum FixtureBrowseSelectionResolver {
         guard crossesDistanceThreshold || crossesProjectedThreshold else { return nil }
 
         return translationWidth < 0 ? 1 : -1
+    }
+
+    static func hasHorizontalSwipeIntent(
+        translationWidth: CGFloat,
+        translationHeight: CGFloat,
+        activationDistance: CGFloat = 10
+    ) -> Bool {
+        let horizontalDistance = abs(translationWidth)
+        let verticalDistance = abs(translationHeight)
+        return max(horizontalDistance, verticalDistance) >= activationDistance &&
+            horizontalDistance > verticalDistance
     }
 
     static func filterMatches(
@@ -391,18 +444,26 @@ final class FixtureBrowserStore: ObservableObject {
     @Published private(set) var competitions: [CompetitionCatalogEntry] = []
     @Published private(set) var availableDays: [FixtureCalendarDay] = []
     @Published private(set) var visibleMatches: [Match] = []
-    @Published private(set) var cachedMatchesByDate: [String: [Match]] = [:]
     @Published private(set) var selectedDateKey: String?
     @Published private(set) var isLoadingSelectedDate = false
     @Published private(set) var hasLoadedCalendar = false
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var errorMessage: String?
 
+    let pageCache = FixtureBrowsePageCache()
+
+    var cachedMatchesByDate: [String: [Match]] {
+        pageCache.matchesByDate
+    }
+
     private static let cacheFormatVersion = 1
     private static let maximumCachedBuckets = 24
+    private static let prefetchRadius = 3
+    private static let catalogFreshnessInterval: TimeInterval = 24 * 60 * 60
     private var snapshot: PreferencesSnapshot?
     private var contextKey: String?
     private var cachePayload: FixtureBrowseCachePayload?
+    private var catalogFetchedAt: Date?
     private var refreshTask: Task<Void, Never>?
     private var selectedDateTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
@@ -432,8 +493,12 @@ final class FixtureBrowserStore: ObservableObject {
             prefetchRequestID = UUID()
             contextKey = nextContextKey
             cachePayload = Self.loadCache(matching: nextContextKey)
-            competitions = cachePayload?.competitions ?? []
-            cachedMatchesByDate = [:]
+            if let cachedCompetitions = cachePayload?.competitions,
+               !cachedCompetitions.isEmpty {
+                competitions = cachedCompetitions
+                catalogFetchedAt = cachePayload?.catalogFetchedAt
+            }
+            pageCache.replace(with: [:])
             hasLoadedCalendar = !(cachePayload?.calendarDays.isEmpty ?? true)
             CompetitionBadgeCache.shared.warmIfNeeded(entries: competitions)
         }
@@ -451,12 +516,18 @@ final class FixtureBrowserStore: ObservableObject {
         guard availableDays.contains(where: { $0.date == dateKey }), selectedDateKey != dateKey else {
             return
         }
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        prefetchRequestID = UUID()
         selectedDateKey = dateKey
-        let cachedMatches = cachedMatchesByDate[dateKey] ?? []
+        let cachedMatches = pageCache.matchesByDate[dateKey] ?? []
         if visibleMatches != cachedMatches {
             visibleMatches = cachedMatches
         }
         loadSelectedDateIfNeeded(force: false)
+        if isAutoRefreshEnabled {
+            startAutoRefreshLoop(refreshImmediately: true)
+        }
     }
 
     func adjacentDateKey(offset: Int) -> String? {
@@ -533,25 +604,38 @@ final class FixtureBrowserStore: ObservableObject {
         refreshTask = Task { [weak self] in
             guard let self else { return }
             do {
-                async let catalogTask = APIClient(baseURL: baseURL).fetchCompetitionCatalog()
                 async let calendarTask = APIClient(baseURL: baseURL).fetchFixtureCalendar(preferences: snapshot)
-                let (catalog, calendar) = try await (catalogTask, calendarTask)
+                let shouldRefreshCatalog = competitions.isEmpty ||
+                    Date().timeIntervalSince(catalogFetchedAt ?? .distantPast) >= Self.catalogFreshnessInterval
+                let resolvedCompetitions: [CompetitionCatalogEntry]
+                if shouldRefreshCatalog {
+                    resolvedCompetitions = try await APIClient(baseURL: baseURL)
+                        .fetchCompetitionCatalog()
+                        .competitions
+                } else {
+                    resolvedCompetitions = competitions
+                }
+                let calendar = try await calendarTask
                 guard !Task.isCancelled, refreshRequestID == requestID else { return }
 
-                competitions = catalog.competitions
+                competitions = resolvedCompetitions
+                if shouldRefreshCatalog {
+                    catalogFetchedAt = Date()
+                }
                 hasLoadedCalendar = true
                 errorMessage = nil
                 let existingBuckets = cachePayload?.buckets ?? [:]
                 cachePayload = FixtureBrowseCachePayload(
                     formatVersion: Self.cacheFormatVersion,
                     contextKey: Self.contextKey(for: snapshot),
-                    competitions: catalog.competitions,
+                    competitions: resolvedCompetitions,
                     calendarDays: calendar.days,
                     calendarSelectionApplied: calendar.selectionApplied,
+                    catalogFetchedAt: catalogFetchedAt,
                     calendarFetchedAt: Date(),
                     buckets: existingBuckets
                 )
-                CompetitionBadgeCache.shared.warmIfNeeded(entries: catalog.competitions)
+                CompetitionBadgeCache.shared.warmIfNeeded(entries: resolvedCompetitions)
                 recomputeAvailableDays(keepCurrentDate: true)
                 persistCache()
                 loadSelectedDateIfNeeded(force: false)
@@ -630,21 +714,31 @@ final class FixtureBrowserStore: ObservableObject {
         selectedDateTask = Task { [weak self] in
             guard let self else { return }
             do {
-                var removedUnavailableDate = false
+                let targetDateKeys = Self.dateKeysToRefresh(
+                    in: availableDays,
+                    centeredOn: dateKey,
+                    topMatchesOnly: topMatchesOnly,
+                    cachePayload: cachePayload,
+                    forceDateKey: force ? dateKey : nil
+                )
+                guard let range = FixtureBrowsePrefetchPlanner.range(for: targetDateKeys) else { return }
                 let response = try await APIClient(baseURL: baseURL).fetchFixtureBrowseMatches(
-                    on: dateKey,
+                    from: range.lowerBound,
+                    through: range.upperBound,
                     preferences: snapshot,
-                    topMatchesOnly: topMatchesOnly
+                    topMatchesOnly: topMatchesOnly,
+                    hydrateStates: false
                 )
                 guard !Task.isCancelled, selectedDateRequestID == requestID else { return }
-                let bucket = FixtureBrowseBucket(
-                    matches: response.matches,
-                    fetchedAt: Date(),
-                    lastUpdated: response.lastUpdated
+                let buckets = storeRangeResponse(
+                    response,
+                    for: targetDateKeys,
+                    topMatchesOnly: topMatchesOnly
                 )
-                store(bucket: bucket, for: bucketKey)
+                var removedUnavailableDate = false
                 if selectedDateKey == dateKey,
-                   self.snapshot?.fixtureAllMajorMatchesEnabled == topMatchesOnly {
+                   self.snapshot?.fixtureAllMajorMatchesEnabled == topMatchesOnly,
+                   let bucket = buckets[dateKey] {
                     if publish(bucket: bucket, dateKey: dateKey, topMatchesOnly: topMatchesOnly) {
                         removedUnavailableDate = true
                         loadSelectedDateIfNeeded(force: false)
@@ -686,8 +780,8 @@ final class FixtureBrowserStore: ObservableObject {
         if visibleMatches != filtered {
             visibleMatches = filtered
         }
-        if cachedMatchesByDate[dateKey] != filtered {
-            cachedMatchesByDate[dateKey] = filtered
+        if pageCache.matchesByDate[dateKey] != filtered {
+            pageCache.set(filtered, for: dateKey)
         }
         let updatedAt = bucket.lastUpdated ?? bucket.fetchedAt
         if lastUpdated != updatedAt {
@@ -812,7 +906,7 @@ final class FixtureBrowserStore: ObservableObject {
         }
         let removedSelectedDate = selectedDateKey == dateKey
         availableDays.remove(at: removedIndex)
-        cachedMatchesByDate.removeValue(forKey: dateKey)
+        pageCache.remove(dateKey)
         guard removedSelectedDate else { return }
         guard !availableDays.isEmpty else {
             selectedDateKey = nil
@@ -829,57 +923,37 @@ final class FixtureBrowserStore: ObservableObject {
         prefetchTask?.cancel()
         let requestID = UUID()
         prefetchRequestID = requestID
-        let days = availableDays
-        let selectedIndex = days.firstIndex(where: { $0.date == dateKey })
-        var targets: [(String, Bool)] = []
-        if let selectedIndex {
-            for offset in [-1, 1, -2, 2] {
-                let index = selectedIndex + offset
-                guard days.indices.contains(index) else { continue }
-                targets.append((days[index].date, topMatchesOnly))
-            }
-        }
-        if topMatchesOnly {
-            targets.insert((dateKey, false), at: 0)
+        let targets = Self.dateKeysToRefresh(
+            in: availableDays,
+            centeredOn: dateKey,
+            topMatchesOnly: topMatchesOnly,
+            cachePayload: cachePayload
+        )
+        guard let range = FixtureBrowsePrefetchPlanner.range(for: targets) else {
+            prefetchTask = nil
+            return
         }
 
         prefetchTask = Task(priority: .utility) { [weak self] in
             guard let self else { return }
-            for (targetDate, targetTopMatchesOnly) in targets {
-                guard !Task.isCancelled, prefetchRequestID == requestID else { return }
-                let key = Self.bucketKey(
-                    dateKey: targetDate,
-                    topMatchesOnly: targetTopMatchesOnly
-                )
-                if let existing = cachePayload?.buckets[key],
-                   Self.isFresh(bucket: existing, dateKey: targetDate) {
-                    continue
-                }
-                guard let response = try? await APIClient(baseURL: baseURL).fetchFixtureBrowseMatches(
-                    on: targetDate,
+            guard !Task.isCancelled, prefetchRequestID == requestID else { return }
+            if let response = try? await APIClient(baseURL: baseURL).fetchFixtureBrowseMatches(
+                    from: range.lowerBound,
+                    through: range.upperBound,
                     preferences: snapshot,
-                    topMatchesOnly: targetTopMatchesOnly
-                ) else {
-                    continue
+                    topMatchesOnly: topMatchesOnly,
+                    hydrateStates: false
+            ) {
+                guard !Task.isCancelled,
+                      prefetchRequestID == requestID,
+                      self.snapshot == snapshot else {
+                    return
                 }
-                let bucket = FixtureBrowseBucket(
-                    matches: response.matches,
-                    fetchedAt: Date(),
-                    lastUpdated: response.lastUpdated
+                _ = storeRangeResponse(
+                    response,
+                    for: targets,
+                    topMatchesOnly: topMatchesOnly
                 )
-                store(bucket: bucket, for: key)
-                if targetTopMatchesOnly == snapshot.fixtureAllMajorMatchesEnabled {
-                    let filtered = filteredMatches(
-                        in: bucket,
-                        snapshot: snapshot,
-                        topMatchesOnly: targetTopMatchesOnly
-                    )
-                    if filtered.isEmpty {
-                        removeUnavailableDate(targetDate)
-                    } else if cachedMatchesByDate[targetDate] != filtered {
-                        cachedMatchesByDate[targetDate] = filtered
-                    }
-                }
             }
             if prefetchRequestID == requestID {
                 persistCache()
@@ -904,8 +978,8 @@ final class FixtureBrowserStore: ObservableObject {
 
     private func rebuildCachedMatchesByDate() {
         guard let snapshot, let payload = cachePayload else {
-            if !cachedMatchesByDate.isEmpty {
-                cachedMatchesByDate = [:]
+            if !pageCache.matchesByDate.isEmpty {
+                pageCache.replace(with: [:])
             }
             return
         }
@@ -924,8 +998,73 @@ final class FixtureBrowserStore: ObservableObject {
                 rebuilt[dateKey] = filtered
             }
         }
-        if cachedMatchesByDate != rebuilt {
-            cachedMatchesByDate = rebuilt
+        if pageCache.matchesByDate != rebuilt {
+            pageCache.replace(with: rebuilt)
+        }
+    }
+
+    private func storeRangeResponse(
+        _ response: MatchResponse,
+        for dateKeys: [String],
+        topMatchesOnly: Bool
+    ) -> [String: FixtureBrowseBucket] {
+        let matchesByDate = Dictionary(grouping: response.matches, by: \.date)
+        let fetchedAt = Date()
+        var bucketsByDate: [String: FixtureBrowseBucket] = [:]
+        var cachedMatches = pageCache.matchesByDate
+
+        for dateKey in dateKeys {
+            let bucket = FixtureBrowseBucket(
+                matches: matchesByDate[dateKey] ?? [],
+                fetchedAt: fetchedAt,
+                lastUpdated: response.lastUpdated
+            )
+            store(
+                bucket: bucket,
+                for: Self.bucketKey(dateKey: dateKey, topMatchesOnly: topMatchesOnly)
+            )
+            bucketsByDate[dateKey] = bucket
+
+            guard let snapshot,
+                  topMatchesOnly == snapshot.fixtureAllMajorMatchesEnabled else {
+                continue
+            }
+            let filtered = filteredMatches(
+                in: bucket,
+                snapshot: snapshot,
+                topMatchesOnly: topMatchesOnly
+            )
+            if filtered.isEmpty {
+                cachedMatches.removeValue(forKey: dateKey)
+            } else {
+                cachedMatches[dateKey] = filtered
+            }
+        }
+
+        pageCache.replace(with: cachedMatches)
+        return bucketsByDate
+    }
+
+    private static func dateKeysToRefresh(
+        in days: [FixtureCalendarDay],
+        centeredOn dateKey: String,
+        topMatchesOnly: Bool,
+        cachePayload: FixtureBrowseCachePayload?,
+        forceDateKey: String? = nil,
+        now: Date = Date()
+    ) -> [String] {
+        FixtureBrowsePrefetchPlanner.dateKeys(
+            in: days,
+            centeredOn: dateKey,
+            radius: prefetchRadius
+        ).filter { candidateDateKey in
+            if candidateDateKey == forceDateKey { return true }
+            let key = bucketKey(
+                dateKey: candidateDateKey,
+                topMatchesOnly: topMatchesOnly
+            )
+            guard let bucket = cachePayload?.buckets[key] else { return true }
+            return !isFresh(bucket: bucket, dateKey: candidateDateKey, now: now)
         }
     }
 

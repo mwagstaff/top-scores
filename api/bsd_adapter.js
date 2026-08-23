@@ -275,6 +275,9 @@ function mapBsdStatus(event, options = {}) {
   // In progress.
   if (period.includes("penal") || status.includes("penal")) return "Pens";
   if (period.includes("extra")) return minuteStr || "ET";
+  if (["1st_half", "first_half", "1h"].includes(period) && Number(minute) > 45) {
+    return `45+${Number(minute) - 45}`;
+  }
   return minuteStr || "LIVE";
 }
 

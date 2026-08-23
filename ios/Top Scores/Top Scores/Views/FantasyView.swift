@@ -87,13 +87,16 @@ struct FantasyView: View {
     @State private var showFantasySignIn = false
     @State private var shouldPresentFantasySignInAfterDisconnect = false
     @State private var fantasyPitchDetailMode: FantasyPitchPlayerDetailMode = .opponent
+    @State private var expectedPointsMetricGameweekID: Int?
     @FocusState private var isRivalEntryInputFocused: Bool
     @State private var lastObservedClipboardChangeCount = UIPasteboard.general.changeCount
     @State private var pendingFantasyRefreshRequest: PendingFantasyRefreshRequest?
     @State private var inFlightFantasyRefreshRequest: PendingFantasyRefreshRequest?
     @State private var fantasyRefreshTask: Task<Void, Never>?
+    @State private var fantasyScoreRefreshTask: Task<Void, Never>?
     @State private var lastStartedFantasyRefreshRequest: PendingFantasyRefreshRequest?
     @State private var lastStartedFantasyRefreshAt: Date?
+    @State private var lastStartedFantasyScoreRefreshAt: Date?
     @State private var hasLoadedFantasyStorageState = false
     @State private var screenOpenedAt: Date?
     @State private var screenViewSentForActivation = false
@@ -284,6 +287,8 @@ struct FantasyView: View {
                 guard selected else {
                     fantasyRefreshTask?.cancel()
                     fantasyRefreshTask = nil
+                    fantasyScoreRefreshTask?.cancel()
+                    fantasyScoreRefreshTask = nil
                     inFlightFantasyRefreshRequest = nil
                     pendingFantasyRefreshRequest = nil
                     fantasyViewModel.cancelBackgroundRefreshWork()
@@ -312,6 +317,8 @@ struct FantasyView: View {
                 guard newValue == .active else {
                     fantasyRefreshTask?.cancel()
                     fantasyRefreshTask = nil
+                    fantasyScoreRefreshTask?.cancel()
+                    fantasyScoreRefreshTask = nil
                     inFlightFantasyRefreshRequest = nil
                     pendingFantasyRefreshRequest = nil
                     fantasyViewModel.cancelBackgroundRefreshWork()
@@ -432,15 +439,7 @@ struct FantasyView: View {
                 guard isSelected,
                       scenePhase == .active,
                       isFantasySetupReadyForRefresh else { return }
-                if let currentData = fantasyViewModel.data, !currentData.hasActiveFixtures {
-                    guard let lastUpdated = fantasyViewModel.lastUpdated else { return }
-                    guard Date().timeIntervalSince(lastUpdated) >= 15 * 60 else { return }
-                }
-                triggerFantasyRefresh(
-                    force: false,
-                    rivalManagers: rivalManagers,
-                    trackedLeagues: trackedLeagues
-                )
+                triggerFantasyScoreRefresh()
             }
             .task(id: sharedEntryPollingDeadline) {
                 await pollForSharedFantasyEntry()
@@ -621,6 +620,10 @@ struct FantasyView: View {
                         if !playerCreatedLeagues.isEmpty {
                             yourLeaguesSection
                         }
+
+                        if isShowingProvisionalPointsMetric {
+                            provisionalPointsInfoCard
+                        }
                     } else if fantasyViewModel.isLoading {
                         VStack(spacing: 10) {
                             ProgressView()
@@ -683,6 +686,39 @@ struct FantasyView: View {
             .filter(\.isPlayerCreated)
     }
 
+    private var isShowingProvisionalPointsMetric: Bool {
+        guard teamViewMode == .current,
+              let data = fantasyViewModel.data,
+              data.scorePhase == .provisional else {
+            return false
+        }
+        return expectedPointsMetricGameweekID != data.gameweekID
+    }
+
+    private var provisionalPointsInfoCard: some View {
+        Label {
+            Text(
+                "Provisional scores can change. They become final only after every gameweek match finishes and FPL completes its final calculations, including bonus points."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        } icon: {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(Color.accentColor)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
     private var yourLeaguesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
@@ -713,7 +749,14 @@ struct FantasyView: View {
 
             VStack(spacing: 0) {
                 ForEach(Array(playerCreatedLeagues.enumerated()), id: \.element.id) { index, league in
-                    playerLeagueRow(league)
+                    Button {
+                        openPlayerLeague(league)
+                    } label: {
+                        playerLeagueRow(league)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(leagueIDLoadingDetails.contains(league.id))
+                    .accessibilityHint("Opens the league table")
 
                     if index < playerCreatedLeagues.count - 1 {
                         Divider()
@@ -736,6 +779,7 @@ struct FantasyView: View {
     private func playerLeagueRow(_ league: FantasyEntryClassicLeague) -> some View {
         let rank = league.resolvedEntryRank
         let trend = leagueRankTrend(currentRank: rank, lastRank: league.resolvedEntryLastRank)
+        let isLoading = leagueIDLoadingDetails.contains(league.id)
 
         return HStack(spacing: 12) {
             Text(leagueInitial(for: league))
@@ -774,8 +818,21 @@ struct FantasyView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Rank unavailable")
             }
+
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 14)
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 14)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.vertical, 11)
+        .contentShape(Rectangle())
     }
 
     private func leagueInitial(for league: FantasyEntryClassicLeague) -> String {
@@ -800,6 +857,8 @@ struct FantasyView: View {
             movement = "down"
         case .equal:
             movement = "unchanged"
+        case .unavailable:
+            movement = "trend unavailable"
         }
         return "\(league.name), rank \(rank), \(movement)"
     }
@@ -1953,67 +2012,73 @@ struct FantasyView: View {
 
     private func leagueDetailSheet(_ league: FantasyTrackedLeagueStanding) -> some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        Text("Your rank")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Text(league.myRank.map(String.init) ?? "-")
-                            .font(.subheadline.monospacedDigit().weight(.semibold))
-                    }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Text("Your rank")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Text(league.myRank.map(String.init) ?? "-")
+                                .font(.subheadline.monospacedDigit().weight(.semibold))
+                        }
 
-                    if league.standings.isEmpty {
-                        Text("Detailed standings are only loaded for smaller player-created leagues during setup.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color(.secondarySystemGroupedBackground))
-                            )
-                    } else {
-                        VStack(spacing: 0) {
-                            HStack(spacing: 8) {
-                                Text("#")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(width: 30, alignment: .trailing)
-                                Text("Team")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Text("GW")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(width: 44, alignment: .trailing)
-                                Text("Total")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(width: 56, alignment: .trailing)
-                                Text("")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(width: 20, alignment: .trailing)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .foregroundStyle(.secondary)
+                        if league.standings.isEmpty {
+                            Text("League standings are unavailable right now. Please try again shortly.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Color(.secondarySystemGroupedBackground))
+                                )
+                        } else {
+                            LazyVStack(spacing: 0) {
+                                HStack(spacing: 8) {
+                                    Text("#")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(width: 30, alignment: .trailing)
+                                    Text("Team")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Text("GW")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(width: 44, alignment: .trailing)
+                                    Text("Total")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(width: 56, alignment: .trailing)
+                                    Text("")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(width: 20, alignment: .trailing)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .foregroundStyle(.secondary)
 
-                            Rectangle()
-                                .fill(Color.secondary.opacity(0.22))
-                                .frame(height: 1)
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.22))
+                                    .frame(height: 1)
 
-                            ForEach(Array(league.standings.enumerated()), id: \.element.id) { index, row in
-                                leagueStandingRow(row, isCurrentUser: row.entry == league.myEntryID)
-                                if index < league.standings.count - 1 {
-                                    Rectangle()
-                                        .fill(Color.secondary.opacity(0.22))
-                                        .frame(height: 1)
+                                ForEach(Array(league.standings.enumerated()), id: \.element.id) { index, row in
+                                    leagueStandingRow(row, isCurrentUser: row.entry == league.myEntryID)
+                                        .id(row.entry)
+                                    if index < league.standings.count - 1 {
+                                        Rectangle()
+                                            .fill(Color.secondary.opacity(0.22))
+                                            .frame(height: 1)
+                                    }
                                 }
                             }
+                            .background(.thinMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
-                        .background(.thinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                    .padding(14)
                 }
-                .padding(14)
+                .onAppear {
+                    scrollToCurrentLeagueEntry(proxy: proxy, league: league)
+                }
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle(league.leagueName)
@@ -2043,6 +2108,16 @@ struct FantasyView: View {
         }
     }
 
+    private func scrollToCurrentLeagueEntry(
+        proxy: ScrollViewProxy,
+        league: FantasyTrackedLeagueStanding
+    ) {
+        guard league.standings.contains(where: { $0.entry == league.myEntryID }) else { return }
+        DispatchQueue.main.async {
+            proxy.scrollTo(league.myEntryID, anchor: .center)
+        }
+    }
+
     private func leagueStandingRow(_ row: FantasyClassicLeagueStandingEntry, isCurrentUser: Bool) -> some View {
         HStack(spacing: 8) {
             Text("\(row.rank)")
@@ -2051,12 +2126,22 @@ struct FantasyView: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
-                leagueBadgeImage(urlString: row.clubBadgeSrc)
+                leagueBadgeImage(urlString: row.clubBadgeSrc, teamName: row.entryName)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(row.entryName)
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
-                        .foregroundStyle(.primary)
+                    HStack(spacing: 5) {
+                        Text(row.entryName)
+                            .font(.body.weight(.semibold))
+                            .lineLimit(1)
+                            .foregroundStyle(.primary)
+                        if isCurrentUser {
+                            Text("You")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.14), in: Capsule())
+                        }
+                    }
                     Text(row.playerName)
                         .font(.caption)
                         .lineLimit(1)
@@ -2082,12 +2167,13 @@ struct FantasyView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isCurrentUser ? Color.accentColor.opacity(0.15) : Color.clear)
+                .fill(isCurrentUser ? Color.accentColor.opacity(0.22) : Color.clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isCurrentUser ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 1)
+                .stroke(isCurrentUser ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 1)
         )
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -2149,12 +2235,15 @@ struct FantasyView: View {
             Image(systemName: "equal")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.gray)
+        case .unavailable:
+            Image(systemName: "minus")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.gray)
         }
     }
 
     private func leagueRankTrend(currentRank: Int?, lastRank: Int?) -> LeagueRankTrend {
-        guard let currentRank else { return .equal }
-        guard let lastRank else { return .equal }
+        guard let currentRank, let lastRank else { return .unavailable }
         if currentRank < lastRank {
             return .up
         }
@@ -2172,43 +2261,44 @@ struct FantasyView: View {
             return .red.opacity(0.7)
         case .equal:
             return .gray.opacity(0.6)
+        case .unavailable:
+            return .gray.opacity(0.35)
         }
     }
 
     @ViewBuilder
-    private func leagueBadgeImage(urlString: String?) -> some View {
+    private func leagueBadgeImage(urlString: String?, teamName: String) -> some View {
         if let urlString,
            let url = URL(string: urlString) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .empty:
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    Circle()
                         .fill(Color.secondary.opacity(0.2))
-                        .frame(width: 20, height: 20)
+                        .frame(width: 30, height: 30)
                 case .success(let image):
                     image
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 20, height: 20)
-                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .frame(width: 30, height: 30)
                 case .failure:
-                    Image(systemName: "shield")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 20, height: 20)
+                    leagueInitialsBadge(teamName: teamName)
                 @unknown default:
-                    Image(systemName: "shield")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 20, height: 20)
+                    leagueInitialsBadge(teamName: teamName)
                 }
             }
         } else {
-            Image(systemName: "shield")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .frame(width: 20, height: 20)
+            leagueInitialsBadge(teamName: teamName)
         }
+    }
+
+    private func leagueInitialsBadge(teamName: String) -> some View {
+        Text(FantasyLeagueBadgeInitials.make(from: teamName))
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(Color.accentColor.opacity(0.82), in: Circle())
+            .accessibilityHidden(true)
     }
 
     private var reviewAndShareSheet: some View {
@@ -2524,7 +2614,41 @@ struct FantasyView: View {
         isExpectedPointsLoading: Bool = false,
         showsPoints: Bool = true
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let pointsMetricTitle: String
+        let pointsMetricValue: Double?
+        let pointsMetricDisplayValue: String?
+        let pointsMetricTint: Color
+        let pointsMetricIsLoading: Bool
+        let canTogglePointsMetric = data.scorePhase == .provisional
+        let showsExpectedPointsMetric = data.scorePhase == .expected ||
+            (canTogglePointsMetric && expectedPointsMetricGameweekID == data.gameweekID)
+        let pointsMetricFooter = !showsExpectedPointsMetric && data.scorePhase != .expected
+            ? "GW average: \(data.gameweekAverageScore.map(String.init) ?? "—")"
+            : nil
+        if showsExpectedPointsMetric {
+            pointsMetricTitle = "Expected Points (xP)"
+            pointsMetricValue = expectedPoints
+            pointsMetricDisplayValue = expectedPoints.map { "\(fantasyExpectedPointsText($0)) xP" }
+            pointsMetricTint = Color(red: 0.70, green: 0.28, blue: 0.96)
+            pointsMetricIsLoading = isExpectedPointsLoading
+        } else if data.scorePhase == .provisional {
+            pointsMetricTitle = "Provisional Points"
+            pointsMetricValue = Double(data.resolvedCurrentScore)
+            pointsMetricDisplayValue = "\(data.resolvedCurrentScore)"
+            pointsMetricTint = gameweekPerformanceTint(
+                score: data.resolvedCurrentScore,
+                average: data.gameweekAverageScore
+            )
+            pointsMetricIsLoading = false
+        } else {
+            pointsMetricTitle = "Final Points"
+            pointsMetricValue = Double(data.resolvedCurrentScore)
+            pointsMetricDisplayValue = "\(data.resolvedCurrentScore)"
+            pointsMetricTint = Color(red: 0.20, green: 0.55, blue: 1.0)
+            pointsMetricIsLoading = false
+        }
+
+        return VStack(alignment: .leading, spacing: 10) {
 
             ZStack(alignment: .bottomTrailing) {
                 FantasyPitchBackground()
@@ -2535,6 +2659,7 @@ struct FantasyView: View {
                         gameweekID: data.gameweekID,
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
+                        scorePhase: data.scorePhase,
                         showsPoints: showsPoints
                     )
                     positionRow(
@@ -2542,6 +2667,7 @@ struct FantasyView: View {
                         gameweekID: data.gameweekID,
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
+                        scorePhase: data.scorePhase,
                         showsPoints: showsPoints
                     )
                     positionRow(
@@ -2549,6 +2675,7 @@ struct FantasyView: View {
                         gameweekID: data.gameweekID,
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
+                        scorePhase: data.scorePhase,
                         showsPoints: showsPoints
                     )
                     positionRow(
@@ -2556,6 +2683,7 @@ struct FantasyView: View {
                         gameweekID: data.gameweekID,
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
+                        scorePhase: data.scorePhase,
                         showsPoints: showsPoints
                     )
                 }
@@ -2565,14 +2693,42 @@ struct FantasyView: View {
 
                 if let teamValue {
                     HStack(alignment: .top, spacing: 8) {
-                        pitchSummaryMetric(
-                            title: "Expected Points (xP)",
-                            value: expectedPoints,
-                            displayValue: expectedPoints.map { "\(fantasyExpectedPointsText($0)) xP" },
-                            target: 50,
-                            tint: Color(red: 0.70, green: 0.28, blue: 0.96),
-                            isLoading: isExpectedPointsLoading
-                        )
+                        if canTogglePointsMetric {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    expectedPointsMetricGameweekID = showsExpectedPointsMetric
+                                        ? nil
+                                        : data.gameweekID
+                                }
+                            } label: {
+                                pitchSummaryMetric(
+                                    title: pointsMetricTitle,
+                                    value: pointsMetricValue,
+                                    displayValue: pointsMetricDisplayValue,
+                                    target: 50,
+                                    tint: pointsMetricTint,
+                                    isLoading: pointsMetricIsLoading,
+                                    footer: pointsMetricFooter
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint(
+                                showsExpectedPointsMetric
+                                    ? "Shows provisional points"
+                                    : "Shows expected points"
+                            )
+                        } else {
+                            pitchSummaryMetric(
+                                title: pointsMetricTitle,
+                                value: pointsMetricValue,
+                                displayValue: pointsMetricDisplayValue,
+                                target: 50,
+                                tint: pointsMetricTint,
+                                isLoading: pointsMetricIsLoading,
+                                footer: pointsMetricFooter
+                            )
+                            .allowsHitTesting(false)
+                        }
 
                         Spacer(minLength: 44)
 
@@ -2584,16 +2740,23 @@ struct FantasyView: View {
                             tint: Color(red: 0.12, green: 0.73, blue: 0.25),
                             isLoading: false
                         )
+                        .allowsHitTesting(false)
                     }
                     .padding(.horizontal, 8)
                     .padding(.top, 8)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .allowsHitTesting(false)
                 }
 
                 FantasyPitchDetailToggleButton(mode: detailMode)
                     .padding(.bottom, 10)
-                    .padding(.trailing, 10)
+                    .padding(.leading, 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+
+                if data.hasActiveFixtures {
+                    FantasyPitchLivePill()
+                        .padding(.bottom, 12)
+                        .padding(.trailing, 12)
+                }
             }
             .frame(height: 576)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -2611,53 +2774,80 @@ struct FantasyView: View {
         displayValue: String?,
         target: Double,
         tint: Color,
-        isLoading: Bool
+        isLoading: Bool,
+        footer: String? = nil
     ) -> some View {
         let cardShape = RoundedRectangle(cornerRadius: 12, style: .continuous)
 
         return VStack(spacing: 4) {
-            Text(title)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.92))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
+            VStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
 
-            FantasyTeamSummaryRing(
-                ratio: value.map { max($0 / target, 0) },
-                centerText: displayValue,
-                tint: tint,
-                isLoading: isLoading,
-                diameter: 52,
-                lineWidth: 5
-            )
-        }
-        .padding(.vertical, 9)
-        .frame(width: 92)
-        .background {
-            cardShape
-                .fill(.thinMaterial)
-                .overlay {
-                    cardShape
-                        .fill(Color(red: 0.025, green: 0.14, blue: 0.095).opacity(0.22))
-                }
-        }
-        .overlay {
-            cardShape
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.30),
-                            tint.opacity(0.20),
-                            Color.white.opacity(0.12)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
+                FantasyTeamSummaryRing(
+                    ratio: value.map { max($0 / target, 0) },
+                    centerText: displayValue,
+                    tint: tint,
+                    isLoading: isLoading,
+                    diameter: 52,
+                    lineWidth: 5
                 )
+            }
+            .padding(.vertical, 9)
+            .frame(width: 92)
+            .background {
+                cardShape
+                    .fill(.thinMaterial)
+                    .overlay {
+                        cardShape
+                            .fill(Color(red: 0.025, green: 0.14, blue: 0.095).opacity(0.22))
+                    }
+            }
+            .overlay {
+                cardShape
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.30),
+                                tint.opacity(0.20),
+                                Color.white.opacity(0.12)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            }
+            .shadow(color: Color.black.opacity(0.22), radius: 7, x: 0, y: 3)
+
+            if let footer {
+                Text(footer)
+                    .font(.system(size: 8, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.76))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
         }
-        .shadow(color: Color.black.opacity(0.22), radius: 7, x: 0, y: 3)
+        .frame(width: 92)
         .accessibilityElement(children: .combine)
+    }
+
+    private func gameweekPerformanceTint(score: Int, average: Int?) -> Color {
+        guard let average else {
+            return Color(red: 0.95, green: 0.62, blue: 0.16)
+        }
+
+        switch score - average {
+        case ...(-3):
+            return Color(red: 0.92, green: 0.23, blue: 0.20)
+        case 3...:
+            return Color(red: 0.24, green: 0.76, blue: 0.30)
+        default:
+            return Color(red: 0.95, green: 0.62, blue: 0.16)
+        }
     }
 
     private func positionRow(
@@ -2665,6 +2855,7 @@ struct FantasyView: View {
         gameweekID: Int,
         playerSelectionEnabled: Bool,
         detailMode: FantasyPitchPlayerDetailMode,
+        scorePhase: FantasySquadDisplayData.ScorePhase,
         showsPoints: Bool = true
     ) -> some View {
         GeometryReader { proxy in
@@ -2687,6 +2878,7 @@ struct FantasyView: View {
                         gameweekID: gameweekID,
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode,
+                        scorePhase: scorePhase,
                         showsPoints: showsPoints
                     )
                 }
@@ -2726,6 +2918,7 @@ struct FantasyView: View {
                             gameweekID: data.gameweekID,
                             playerSelectionEnabled: playerSelectionEnabled,
                             detailMode: detailMode,
+                            scorePhase: data.scorePhase,
                             showsPoints: showsPoints
                         )
                     }
@@ -2758,6 +2951,7 @@ struct FantasyView: View {
         gameweekID: Int,
         playerSelectionEnabled: Bool,
         detailMode: FantasyPitchPlayerDetailMode,
+        scorePhase: FantasySquadDisplayData.ScorePhase,
         showsPoints: Bool = true
     ) -> some View {
         if playerSelectionEnabled {
@@ -2768,6 +2962,7 @@ struct FantasyView: View {
                     player: player,
                     width: width,
                     detailMode: detailMode,
+                    scorePhase: scorePhase,
                     showsPoints: showsPoints
                 )
             }
@@ -2777,6 +2972,7 @@ struct FantasyView: View {
                 player: player,
                 width: width,
                 detailMode: detailMode,
+                scorePhase: scorePhase,
                 showsPoints: showsPoints
             )
         }
@@ -3098,6 +3294,41 @@ struct FantasyView: View {
             }
         }
         fantasyRefreshTask = task
+    }
+
+    private func triggerFantasyScoreRefresh(force: Bool = false) {
+        guard isFantasySetupReadyForRefresh,
+              isSelected,
+              scenePhase == .active,
+              fantasyViewModel.data != nil,
+              fantasyScoreRefreshTask == nil,
+              fantasyRefreshTask == nil,
+              !fantasyViewModel.isLoading,
+              !fantasyViewModel.isRefreshing else {
+            return
+        }
+
+        if !force,
+           let lastStartedFantasyScoreRefreshAt,
+           Date().timeIntervalSince(lastStartedFantasyScoreRefreshAt) <
+                fantasyViewModel.automaticScoreRefreshMinimumInterval {
+            return
+        }
+
+        lastStartedFantasyScoreRefreshAt = Date()
+        let task = Task {
+            let becameFinal = await fantasyViewModel.refreshCurrentScores()
+            guard !Task.isCancelled else { return }
+            fantasyScoreRefreshTask = nil
+            if becameFinal {
+                triggerFantasyRefresh(
+                    force: true,
+                    rivalManagers: rivalManagers,
+                    trackedLeagues: trackedLeagues
+                )
+            }
+        }
+        fantasyScoreRefreshTask = task
     }
 
     private func migrateLegacyInitialSetupIfNeeded() {
@@ -3508,6 +3739,32 @@ struct FantasyView: View {
                 }
             }
         }
+    }
+
+    private func openPlayerLeague(_ league: FantasyEntryClassicLeague) {
+        if let loadedLeague = fantasyViewModel.trackedLeagueStandings.first(where: {
+            $0.leagueID == league.id
+        }) {
+            openLeagueSummary(loadedLeague)
+            return
+        }
+
+        guard let currentManagerEntryID else { return }
+        openLeagueSummary(
+            FantasyTrackedLeagueStanding(
+                leagueID: league.id,
+                leagueName: league.name,
+                myEntryID: currentManagerEntryID,
+                myRank: league.resolvedEntryRank,
+                myLastRank: league.resolvedEntryLastRank,
+                myEventTotal: nil,
+                myOverallTotal: league.resolvedTotalPoints,
+                myEntryName: fantasyViewModel.myProfile?.name,
+                standings: [],
+                leagueType: league.leagueType,
+                rankCount: league.resolvedMemberCount
+            )
+        )
     }
 
     private func openLeagueTableEntry(_ entry: FantasyLeagueTableEntry) {
@@ -4244,23 +4501,115 @@ private struct FantasyPitchDetailToggleButton: View {
     }
 }
 
+private struct FantasyPitchLivePill: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+            livePill(pulse: fantasyLivePulseIntensity(at: context.date, reduceMotion: reduceMotion))
+        }
+    }
+
+    private func livePill(pulse: Double) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.white)
+                .frame(width: 7, height: 7)
+                .opacity(1 - (0.7 * pulse))
+
+            Text("Live")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
+        .background(
+            ZStack {
+                Capsule(style: .continuous)
+                    .fill(Color.red.opacity(0.92))
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.13 * pulse))
+            }
+        )
+        .overlay {
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(0.68 - (0.46 * pulse)), lineWidth: 1)
+        }
+        .shadow(color: Color.red.opacity(0.38), radius: 10)
+        .accessibilityLabel("Live Fantasy matches")
+    }
+}
+
+private struct FantasyPlayerLiveScorePill: View {
+    let points: Int
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+            liveScorePill(pulse: fantasyLivePulseIntensity(at: context.date, reduceMotion: reduceMotion))
+        }
+    }
+
+    private func liveScorePill(pulse: Double) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(Color.white)
+                .frame(width: 5, height: 5)
+                .opacity(1 - (0.7 * pulse))
+
+            Text("\(points)")
+                .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2.5)
+        .foregroundStyle(.white)
+        .background(
+            ZStack {
+                Capsule(style: .continuous)
+                    .fill(Color.red.opacity(0.92))
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.13 * pulse))
+            }
+        )
+        .overlay {
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(0.68 - (0.44 * pulse)), lineWidth: 0.85)
+        }
+        .shadow(color: Color.red.opacity(0.34), radius: 6)
+        .accessibilityLabel("Live, \(points) points")
+    }
+}
+
+private func fantasyLivePulseIntensity(at date: Date, reduceMotion: Bool) -> Double {
+    guard !reduceMotion else { return 0 }
+    let cycleDuration = 1.44
+    let cyclePosition = date.timeIntervalSinceReferenceDate
+        .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
+    return (1 - cos(cyclePosition * 2 * .pi)) / 2
+}
+
 private struct FantasyPlayerCard: View {
     let player: FantasyDisplayPlayer
     let width: CGFloat
     let detailMode: FantasyPitchPlayerDetailMode
+    let scorePhase: FantasySquadDisplayData.ScorePhase
     let showsPoints: Bool
     @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
-    @State private var isPulsing = false
 
     init(
         player: FantasyDisplayPlayer,
         width: CGFloat,
         detailMode: FantasyPitchPlayerDetailMode,
+        scorePhase: FantasySquadDisplayData.ScorePhase,
         showsPoints: Bool = true
     ) {
         self.player = player
         self.width = width
         self.detailMode = detailMode
+        self.scorePhase = scorePhase
         self.showsPoints = showsPoints
     }
 
@@ -4271,7 +4620,9 @@ private struct FantasyPlayerCard: View {
     private enum ScorePresentation {
         case expected(Double)
         case live(Int)
+        case provisional(Int)
         case confirmed(Int)
+        case pending
         case expectedUnavailable
         case noFixture
 
@@ -4281,8 +4632,12 @@ private struct FantasyPlayerCard: View {
                 return "\(fantasyExpectedPointsText(points)) expected points"
             case .live(let points):
                 return "\(points) live points"
+            case .provisional(let points):
+                return "\(points) provisional points"
             case .confirmed(let points):
                 return "\(points) confirmed points"
+            case .pending:
+                return "has not played yet"
             case .expectedUnavailable:
                 return "calculating expected points"
             case .noFixture:
@@ -4292,18 +4647,31 @@ private struct FantasyPlayerCard: View {
     }
 
     private var scorePresentation: ScorePresentation {
-        switch scoreState {
-        case .live:
-            return .live(player.displayPoints)
-        case .upcoming:
-            if let playerExpectedPoints {
-                return .expected(playerExpectedPoints)
+        switch scorePhase {
+        case .expected:
+            switch scoreState {
+            case .live:
+                return .live(player.displayPoints)
+            case .upcoming:
+                if let playerExpectedPoints {
+                    return .expected(playerExpectedPoints)
+                }
+                return .expectedUnavailable
+            case .completed:
+                return .confirmed(player.displayPoints)
+            case .noFixture:
+                return .noFixture
             }
-            return .expectedUnavailable
-        case .completed:
+        case .provisional:
+            guard player.hasAnyFixtureThisGameweek else { return .noFixture }
+            guard player.hasStartedFixtureThisGameweek else { return .pending }
+            return player.hasActiveFixtureThisGameweek
+                ? .live(player.displayPoints)
+                : .provisional(player.displayPoints)
+        case .final:
+            guard player.hasAnyFixtureThisGameweek else { return .noFixture }
+            guard player.hasStartedFixtureThisGameweek else { return .pending }
             return .confirmed(player.displayPoints)
-        case .noFixture:
-            return .noFixture
         }
     }
 
@@ -4490,32 +4858,13 @@ private struct FantasyPlayerCard: View {
                     lineWidth: 1.15
                 )
         }
-        .overlay {
-            if player.isPlayingNow {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.red.opacity(isPulsing ? 0.45 : 0.9), lineWidth: 1.5)
-                    .scaleEffect(isPulsing ? 1.03 : 1.0)
-            }
-        }
         .opacity(player.isUnavailable ? 0.72 : 1)
         .shadow(
-            color: player.isPlayingNow
-                ? Color.red.opacity(isPulsing ? 0.28 : 0.12)
-                : Color.black.opacity(0.36),
-            radius: player.isPlayingNow ? 6 : 5,
+            color: Color.black.opacity(0.36),
+            radius: 5,
             x: 0,
             y: 3
         )
-        .animation(
-            player.isPlayingNow ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
-            value: isPulsing
-        )
-        .onAppear {
-            isPulsing = player.isPlayingNow
-        }
-        .onChange(of: player.isPlayingNow) { _, newValue in
-            isPulsing = newValue
-        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabelText)
     }
@@ -4592,11 +4941,13 @@ private struct FantasyPlayerCard: View {
                 fillColor: Color(red: 0.27, green: 0.055, blue: 0.37)
             )
         case .live(let points):
+            FantasyPlayerLiveScorePill(points: points)
+        case .provisional(let points):
             statusPill(
                 score: "\(points)",
-                label: "live",
-                primaryColor: liveScorePrimaryColor(points),
-                fillColor: liveScorePrimaryColor(points).opacity(0.31)
+                label: nil,
+                primaryColor: fantasyProvisionalPointsTint(points),
+                fillColor: fantasyProvisionalPointsTint(points).opacity(0.31)
             )
         case .confirmed(let points):
             statusPill(
@@ -4604,6 +4955,13 @@ private struct FantasyPlayerCard: View {
                 label: "confirmed",
                 primaryColor: Color(red: 0.20, green: 0.55, blue: 1.0),
                 fillColor: Color(red: 0.035, green: 0.17, blue: 0.34)
+            )
+        case .pending:
+            statusPill(
+                score: "–",
+                label: nil,
+                primaryColor: Color.white.opacity(0.48),
+                fillColor: Color.white.opacity(0.07)
             )
         case .expectedUnavailable:
             loadingExpectedPointsPill
@@ -4672,17 +5030,6 @@ private struct FantasyPlayerCard: View {
                 .stroke(purple.opacity(0.85), lineWidth: 0.85)
         )
         .accessibilityLabel("Calculating expected points")
-    }
-
-    private func liveScorePrimaryColor(_ points: Int) -> Color {
-        switch points {
-        case ..<3:
-            return Color(red: 0.96, green: 0.55, blue: 0.12)
-        case 3...:
-            return Color(red: 0.24, green: 0.76, blue: 0.30)
-        default:
-            return Color(red: 0.24, green: 0.76, blue: 0.30)
-        }
     }
 
     private func fixtureDifficultyColor(_ difficulty: Int) -> Color {
@@ -4825,6 +5172,7 @@ private enum LeagueRankTrend {
     case up
     case down
     case equal
+    case unavailable
 }
 
 private enum FantasyIDAddMode {
@@ -4950,6 +5298,19 @@ private struct FantasyRivalScorePill: Identifiable, Hashable {
 
 private func fantasyExpectedPointsText(_ value: Double) -> String {
     String(format: "%.1f", value)
+}
+
+private func fantasyProvisionalPointsTint(_ points: Int) -> Color {
+    switch points {
+    case ...2:
+        return Color(red: 0.92, green: 0.23, blue: 0.20)
+    case 3...5:
+        return Color(red: 0.95, green: 0.62, blue: 0.16)
+    case 6...:
+        return Color(red: 0.24, green: 0.76, blue: 0.30)
+    default:
+        return Color(red: 0.92, green: 0.23, blue: 0.20)
+    }
 }
 
 private func fantasyScoreHeatmapColor(_ points: Int) -> Color {
@@ -6284,10 +6645,10 @@ private struct FantasyAssistantManagerSheet: View {
             FantasyPitchBackground()
 
             VStack(spacing: 8) {
-                assistantIdealPositionRow(data.goalkeepers)
-                assistantIdealPositionRow(data.defenders)
-                assistantIdealPositionRow(data.midfielders)
-                assistantIdealPositionRow(data.forwards)
+                assistantIdealPositionRow(data.goalkeepers, scorePhase: data.scorePhase)
+                assistantIdealPositionRow(data.defenders, scorePhase: data.scorePhase)
+                assistantIdealPositionRow(data.midfielders, scorePhase: data.scorePhase)
+                assistantIdealPositionRow(data.forwards, scorePhase: data.scorePhase)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 14)
@@ -6306,7 +6667,8 @@ private struct FantasyAssistantManagerSheet: View {
     }
 
     private func assistantIdealPositionRow(
-        _ players: [FantasyDisplayPlayer]
+        _ players: [FantasyDisplayPlayer],
+        scorePhase: FantasySquadDisplayData.ScorePhase
     ) -> some View {
         GeometryReader { proxy in
             let count = max(players.count, 1)
@@ -6322,7 +6684,12 @@ private struct FantasyAssistantManagerSheet: View {
 
                 HStack(spacing: spacing) {
                     ForEach(players) { player in
-                        FantasyPlayerCard(player: player, width: cardWidth, detailMode: pitchDetailMode)
+                        FantasyPlayerCard(
+                            player: player,
+                            width: cardWidth,
+                            detailMode: pitchDetailMode,
+                            scorePhase: scorePhase
+                        )
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -6349,7 +6716,12 @@ private struct FantasyAssistantManagerSheet: View {
 
                 HStack(spacing: spacing) {
                     ForEach(data.bench) { player in
-                        FantasyPlayerCard(player: player, width: cardWidth, detailMode: pitchDetailMode)
+                        FantasyPlayerCard(
+                            player: player,
+                            width: cardWidth,
+                            detailMode: pitchDetailMode,
+                            scorePhase: data.scorePhase
+                        )
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -6400,6 +6772,7 @@ private struct FantasyAssistantManagerSheet: View {
             deadlineGameweekID: nil,
             deadlineTime: nil,
             totalPoints: squad.displayedTotalPoints,
+            gameweekAverageScore: nil,
             hasActiveFixtures: squad.hasActiveFixtures,
             hasStartedFixturesInGameweek: squad.hasStartedFixturesInGameweek,
             hasFixturesPlayedToday: squad.hasFixturesPlayedToday,

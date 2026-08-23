@@ -78,7 +78,9 @@ test("mapBsdStatus: finished → FT, with pens/ET escalation", () => {
 });
 
 test("mapBsdStatus: in-progress → minute / HT / LIVE", () => {
+  assert.equal(mapBsdStatus({ status: "inprogress", period: "2nd_half", current_minute: 46 }), "46");
   assert.equal(mapBsdStatus({ status: "inprogress", period: "2nd_half", current_minute: 64 }), "64");
+  assert.equal(mapBsdStatus({ status: "inprogress", period: "1st_half", current_minute: 49 }), "45+4");
   assert.equal(mapBsdStatus({ status: "inprogress", period: "halftime" }), "HT");
   assert.equal(mapBsdStatus({ status: "halftime" }), "HT");
   assert.equal(mapBsdStatus({ status: "inprogress", current_minute: null }), "LIVE");

@@ -2253,6 +2253,9 @@ function isAllowedCompetitionMatch(match, options = {}) {
   if (!isAllowedCompetition(league)) return false;
   if (isYouthTeam(match && match.home_team)) return false;
   if (isYouthTeam(match && match.away_team)) return false;
+  // BSD is the canonical match source. A standings snapshot can legitimately
+  // lag behind its fixture feed, so it must not be allowed to hide BSD matches.
+  if (match && match.has_bsd_source === true) return true;
   return matchPassesCompetitionTableValidation(
     match,
     league,
@@ -18505,11 +18508,59 @@ function getCachedMatchQueryPayload(cacheKey) {
 // keyed/TTL cache so it survives cache clears and key changes. Used as the
 // stale-while-revalidate fallback, keyed by the canonical source.
 const matchListLastKnownPublicPayloadBySource = new Map();
+const matchListLastKnownRevisionBySource = new Map();
+let matchListRebuildRevision = 0;
+
+function nextMatchListRebuildRevision() {
+  matchListRebuildRevision += 1;
+  return matchListRebuildRevision;
+}
+
 function getMatchListLastKnownPayload(source) {
   return matchListLastKnownPublicPayloadBySource.get(source || "bsd") || null;
 }
-function setMatchListLastKnownPayload(source, payload) {
-  matchListLastKnownPublicPayloadBySource.set(source || "bsd", payload);
+function setMatchListLastKnownPayload(source, payload, revision = nextMatchListRebuildRevision()) {
+  const key = source || "bsd";
+  const previousRevision = matchListLastKnownRevisionBySource.get(key) || 0;
+  // Rebuilds for successive BSD snapshots may overlap. An older, slower build
+  // must not overwrite a newer live-score payload just because it finishes last.
+  if (revision < previousRevision) return false;
+  matchListLastKnownPublicPayloadBySource.set(key, payload);
+  matchListLastKnownRevisionBySource.set(key, revision);
+  return true;
+}
+
+function overlayCurrentDayBsdProjection(cachedPayload, projectionMatches, dateKey = londonDateKey()) {
+  const output = Array.isArray(cachedPayload) ? cachedPayload.slice() : [];
+  const identityIndex = new Map();
+
+  output.forEach((match, index) => {
+    if (!match || match.date !== dateKey) return;
+    matchListPayloadIdentityKeys(match).forEach((key) => identityIndex.set(key, index));
+  });
+
+  (Array.isArray(projectionMatches) ? projectionMatches : []).forEach((match) => {
+    if (!match || match.date !== dateKey) return;
+    const freshPayload = toMatchListPayload(match);
+    if (!freshPayload) return;
+    const existingIndex = matchListPayloadIdentityKeys(freshPayload)
+      .map((key) => identityIndex.get(key))
+      .find((index) => index !== undefined);
+    if (existingIndex === undefined) {
+      const nextIndex = output.length;
+      output.push(freshPayload);
+      matchListPayloadIdentityKeys(freshPayload).forEach((key) => identityIndex.set(key, nextIndex));
+      return;
+    }
+
+    const merged = stripInternalMatchListPayloadFields(
+      mergeMatchListPayload(output[existingIndex], freshPayload)
+    );
+    output[existingIndex] = merged;
+    matchListPayloadIdentityKeys(merged).forEach((key) => identityIndex.set(key, existingIndex));
+  });
+
+  return output;
 }
 // Coalesces concurrent rebuilds: cacheKey -> Promise
 const matchListInFlightRebuilds = new Map();
@@ -18567,6 +18618,7 @@ function startMatchListRebuild(cacheKey, options) {
     return matchListInFlightRebuilds.get(cacheKey);
   }
   const source = options.source || "bsd";
+  const rebuildRevision = nextMatchListRebuildRevision();
   const rebuildPromise = (async () => {
     try {
       const payload = await canonicalMatchDetailsRecordsToPublicListPayloadsAsync(
@@ -18580,8 +18632,9 @@ function startMatchListRebuild(cacheKey, options) {
         createdAtMs: Date.now(),
         payload,
       });
-      setMatchListLastKnownPayload(source, payload);
-      persistMatchListPayloadThrottled(payload, source);
+      if (setMatchListLastKnownPayload(source, payload, rebuildRevision)) {
+        persistMatchListPayloadThrottled(payload, source);
+      }
       return payload;
     } finally {
       matchListInFlightRebuilds.delete(cacheKey);
@@ -23670,7 +23723,12 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       const fixtureViewContext = fixtureViewOptions.length > 0
         ? currentFixtureViewFilterContext()
         : null;
-      let filtered = (await getCachedCanonicalPublicMatchListPayloads(canonicalListOptions))
+      const cachedListPayload = await getCachedCanonicalPublicMatchListPayloads(canonicalListOptions);
+      const listPayload = overlayCurrentDayBsdProjection(
+        cachedListPayload,
+        mergedDataset.items
+      );
+      let filtered = listPayload
         .filter((match) =>
           matchesFilters(match, {
             leagues,
@@ -24986,6 +25044,12 @@ function fantasyBootstrapLookupPayload() {
         name: String((item && item.name) || "").trim(),
         is_current: Boolean(item && item.is_current === true),
         is_next: Boolean(item && item.is_next === true),
+        finished: Boolean(item && item.finished === true),
+        data_checked: Boolean(item && item.data_checked === true),
+        average_entry_score: item && item.average_entry_score != null
+          && Number.isFinite(Number(item.average_entry_score))
+          ? Number(item.average_entry_score)
+          : null,
         deadline_time: String((item && item.deadline_time) || "").trim() || null,
       }))
       .filter((item) => Number.isFinite(item.id) && item.id > 0)
@@ -31809,6 +31873,9 @@ module.exports = {
     canonicalMatchDetailsToListPayload,
     canonicalMatchDetailsRecordsToListPayloads,
     canonicalMatchDetailsRecordsToPublicListPayloads,
+    getMatchListLastKnownPayload,
+    setMatchListLastKnownPayload,
+    overlayCurrentDayBsdProjection,
     buildMatchQueryResponseCacheKey,
     buildCanonicalMatchWriteAuditEntry,
     transformBbcLiveMatchWithDetails,
@@ -31849,6 +31916,7 @@ module.exports = {
     normalizeCompetitionFilterName,
     normalizeMatchesListMode,
     isAllowedCompetition,
+    isAllowedCompetitionMatch,
     isAllowedMatchDetailsPayload,
     matchPassesCompetitionTableValidation,
     collectDisallowedCompetitionTargets,

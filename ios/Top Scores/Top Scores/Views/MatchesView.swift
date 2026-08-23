@@ -124,6 +124,8 @@ final class FixturesViewCoordinator: ObservableObject {
 
     private var toastTask: Task<Void, Never>?
     private var competitionDockAutoCollapseTask: Task<Void, Never>?
+    private var dateSwipeNavigationReleaseTask: Task<Void, Never>?
+    private var isDateSwipeSuppressingMatchNavigation = false
 
     private static let competitionDockExpandAnimation = Animation.timingCurve(
         0.22,
@@ -150,6 +152,10 @@ final class FixturesViewCoordinator: ObservableObject {
         isFixtureFavouritesMenuExpanded
     }
 
+    var allowsMatchNavigation: Bool {
+        !isDateSwipeSuppressingMatchNavigation
+    }
+
     func resetPresentation() {
         competitionDockAutoCollapseTask?.cancel()
         competitionDockAutoCollapseTask = nil
@@ -160,7 +166,36 @@ final class FixturesViewCoordinator: ObservableObject {
         fixturePickerBaselineOptionIDs = nil
         isFixtureFavouritesMenuExpanded = false
         isTeamPickerPresented = false
+        clearDateSwipeInteraction()
         clearSaveFixtureViewPresentation()
+    }
+
+    func beginDateSwipeInteraction(failSafeNanoseconds: UInt64 = 2_000_000_000) {
+        dateSwipeNavigationReleaseTask?.cancel()
+        isDateSwipeSuppressingMatchNavigation = true
+        dateSwipeNavigationReleaseTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: failSafeNanoseconds)
+            guard !Task.isCancelled, let self else { return }
+            self.isDateSwipeSuppressingMatchNavigation = false
+            self.dateSwipeNavigationReleaseTask = nil
+        }
+    }
+
+    func endDateSwipeInteraction(delayNanoseconds: UInt64 = 75_000_000) {
+        guard isDateSwipeSuppressingMatchNavigation else { return }
+        dateSwipeNavigationReleaseTask?.cancel()
+        dateSwipeNavigationReleaseTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled, let self else { return }
+            self.isDateSwipeSuppressingMatchNavigation = false
+            self.dateSwipeNavigationReleaseTask = nil
+        }
+    }
+
+    private func clearDateSwipeInteraction() {
+        dateSwipeNavigationReleaseTask?.cancel()
+        dateSwipeNavigationReleaseTask = nil
+        isDateSwipeSuppressingMatchNavigation = false
     }
 
     func prepareCompetitionDockForScoresEntry() {
@@ -444,7 +479,14 @@ struct MatchesView: View {
             nextDateKey: fixtureBrowser.adjacentDateKey(offset: 1),
             isSwipeEnabled: fixturesCoordinator.isDateSwipeEnabled,
             reduceMotion: accessibilityReduceMotion,
-            onSelect: fixtureBrowser.selectDate
+            onSelect: fixtureBrowser.selectDate,
+            onSwipeInteractionChanged: { isActive in
+                if isActive {
+                    fixturesCoordinator.beginDateSwipeInteraction()
+                } else {
+                    fixturesCoordinator.endDateSwipeInteraction()
+                }
+            }
         ) {
             activeMatchesContent
         } adjacentContent: { dateKey in
@@ -558,7 +600,7 @@ struct MatchesView: View {
         .onChange(of: fixtureBrowser.visibleMatches) { _, _ in
             rebuildFixtureBrowseGrouping()
         }
-        .onChange(of: fixtureBrowser.cachedMatchesByDate) { _, matchesByDate in
+        .onReceive(fixtureBrowser.pageCache.$matchesByDate) { matchesByDate in
             rebuildFixtureBrowsePageGroupings(from: matchesByDate)
         }
         .onChange(of: fixtureBrowser.hasLoadedCalendar) { _, _ in
@@ -566,11 +608,6 @@ struct MatchesView: View {
         }
         .onChange(of: fixtureBrowser.selectedDateKey) { _, dateKey in
             guard mode == .fixtures, let dateKey else { return }
-            AppMetricsService.shared.fireActivity(
-                "fixture_date_changed",
-                screen: mode.rawValue,
-                apiBaseURL: preferences.apiBaseURL
-            )
             diagnosticLog("[MatchesView] fixture_date_change date=%@", dateKey)
         }
         .onChange(of: preferences.showPostponedGames) { _, _ in
@@ -999,7 +1036,7 @@ struct MatchesView: View {
                 )
         }
         .shadow(color: .black.opacity(0.24), radius: 16, y: 9)
-        .modifier(CompetitionCardEntrance())
+        .modifier(CompetitionCardEntrance(isEnabled: mode == .results))
         .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
@@ -1016,6 +1053,10 @@ struct MatchesView: View {
             fantasyContext: fantasyViewModel.matchRowContext
         )
         Button {
+            guard fixturesCoordinator.allowsMatchNavigation else {
+                diagnosticLog("[MatchesView] suppressed match navigation during date swipe")
+                return
+            }
             navigationMatch = MatchNavigation(
                 match: match,
                 showFantasyBadge: mode == .fixtures,
@@ -2816,15 +2857,16 @@ private struct LeagueBadgeImage: View {
 }
 
 private struct CompetitionCardEntrance: ViewModifier {
+    let isEnabled: Bool
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var hasAppeared = false
 
     func body(content: Content) -> some View {
         content
-            .opacity(hasAppeared ? 1 : 0)
-            .offset(y: hasAppeared || accessibilityReduceMotion ? 0 : 10)
+            .opacity(hasAppeared || !isEnabled ? 1 : 0)
+            .offset(y: hasAppeared || !isEnabled || accessibilityReduceMotion ? 0 : 10)
             .onAppear {
-                guard !hasAppeared else { return }
+                guard isEnabled, !hasAppeared else { return }
                 if accessibilityReduceMotion {
                     hasAppeared = true
                 } else {
@@ -2845,12 +2887,14 @@ private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent:
     let isSwipeEnabled: Bool
     let reduceMotion: Bool
     let onSelect: (String) -> Void
+    let onSwipeInteractionChanged: (Bool) -> Void
     private let currentContent: CurrentContent
     private let adjacentContent: (String) -> AdjacentContent
 
     @State private var dragOffset: CGFloat = 0
     @State private var dragAxis: DragAxis?
     @State private var transitionTask: Task<Void, Never>?
+    @State private var isSuppressingMatchTaps = false
 
     private enum DragAxis {
         case horizontal
@@ -2865,6 +2909,7 @@ private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent:
         isSwipeEnabled: Bool,
         reduceMotion: Bool,
         onSelect: @escaping (String) -> Void,
+        onSwipeInteractionChanged: @escaping (Bool) -> Void,
         @ViewBuilder currentContent: () -> CurrentContent,
         @ViewBuilder adjacentContent: @escaping (String) -> AdjacentContent
     ) {
@@ -2875,6 +2920,7 @@ private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent:
         self.isSwipeEnabled = isSwipeEnabled
         self.reduceMotion = reduceMotion
         self.onSelect = onSelect
+        self.onSwipeInteractionChanged = onSwipeInteractionChanged
         self.currentContent = currentContent()
         self.adjacentContent = adjacentContent
     }
@@ -2890,6 +2936,7 @@ private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent:
 
             currentContent
                 .offset(x: dragOffset)
+                .allowsHitTesting(!isSuppressingMatchTaps)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(FootballVisualStyle.pageBackground)
@@ -2906,6 +2953,9 @@ private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent:
         }
         .onDisappear {
             transitionTask?.cancel()
+            if isSuppressingMatchTaps {
+                onSwipeInteractionChanged(false)
+            }
         }
     }
 
@@ -2932,7 +2982,14 @@ private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent:
                     let horizontalDistance = abs(value.translation.width)
                     let verticalDistance = abs(value.translation.height)
                     guard max(horizontalDistance, verticalDistance) >= 10 else { return }
-                    dragAxis = horizontalDistance > verticalDistance ? .horizontal : .vertical
+                    let isHorizontal = FixtureBrowseSelectionResolver.hasHorizontalSwipeIntent(
+                        translationWidth: value.translation.width,
+                        translationHeight: value.translation.height
+                    )
+                    dragAxis = isHorizontal ? .horizontal : .vertical
+                    if isHorizontal {
+                        beginMatchTapSuppression()
+                    }
                 }
 
                 guard dragAxis == .horizontal else { return }
@@ -2943,7 +3000,10 @@ private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent:
                 dragOffset = value.translation.width * motionScale * (hasAdjacentDate ? 1 : 0.18)
             }
             .onEnded { value in
-                defer { dragAxis = nil }
+                defer {
+                    dragAxis = nil
+                    releaseMatchTapSuppression()
+                }
                 guard canBeginSwipe,
                       dragAxis == .horizontal,
                       let direction = FixtureBrowseSelectionResolver.swipeDateOffset(
@@ -2964,6 +3024,17 @@ private struct FixtureDatePagingContainer<CurrentContent: View, AdjacentContent:
         withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.16)) {
             dragOffset = 0
         }
+    }
+
+    private func beginMatchTapSuppression() {
+        isSuppressingMatchTaps = true
+        onSwipeInteractionChanged(true)
+    }
+
+    private func releaseMatchTapSuppression() {
+        guard isSuppressingMatchTaps else { return }
+        onSwipeInteractionChanged(false)
+        isSuppressingMatchTaps = false
     }
 
     private func completeSwipe(to targetDateKey: String, direction: Int) {
