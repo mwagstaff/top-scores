@@ -1136,6 +1136,25 @@ test("isAllowedMatchDetailsPayload rejects generic competition labels when table
   assert.equal(
     isAllowedMatchDetailsPayload(
       {
+        id: "209543",
+        date: "2026-08-23",
+        time: "16:30",
+        league: "Premier League",
+        home_team: "Newcastle United",
+        away_team: "Liverpool",
+        home_score: 2,
+        away_score: 1,
+        score_status: "71",
+        has_bsd_source: true,
+      },
+      null,
+      { tables }
+    ),
+    true
+  );
+  assert.equal(
+    isAllowedMatchDetailsPayload(
+      {
         id: "cblackburn1",
         date: "2026-04-06",
         time: "15:00",

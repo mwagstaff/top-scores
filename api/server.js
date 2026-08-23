@@ -2291,6 +2291,14 @@ function isAllowedMatchDetailsPayload(payload, fallbackLeague = null, options = 
   const homeTeam = (statePayload && statePayload.home_team) || (payload && payload.home_team) || null;
   const awayTeam = (statePayload && statePayload.away_team) || (payload && payload.away_team) || null;
   if (isYouthTeam(homeTeam) || isYouthTeam(awayTeam)) return false;
+  // Match-state polling uses this gate before serving the operational cache.
+  // Canonical BSD details must not disappear when standings lag the live feed.
+  if (
+    (payload && payload.has_bsd_source === true) ||
+    (statePayload && statePayload.has_bsd_source === true)
+  ) {
+    return true;
+  }
   return matchPassesCompetitionTableValidation(
     { league, home_team: homeTeam, away_team: awayTeam },
     league,
